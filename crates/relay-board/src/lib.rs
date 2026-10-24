@@ -110,6 +110,10 @@ pub fn query_matches(task: &Value, query: &str) -> bool {
     query.split_whitespace().all(|term| {
         let term = term.to_lowercase();
         let Some((key, values)) = term.split_once(':').filter(|(k, v)| !k.is_empty() && !v.is_empty()) else {
+            // A task key as the board shows it (`REL-12`) finds that task, whatever the prefix.
+            if let Some(id) = key_number(&term) {
+                return task["id"].as_i64() == Some(id) || hay.contains(&term);
+            }
             return hay.contains(&term);
         };
         let values: Vec<&str> = values.split(',').filter(|v| !v.is_empty()).collect();
@@ -142,6 +146,37 @@ pub fn query_matches(task: &Value, query: &str) -> bool {
             _ => hay.contains(&term),
         })
     })
+}
+
+/// A project's short prefix for its task keys, as lific and Linear show them: the initials of
+/// its name's first three words ("Native verification work" → `NVW`), or the first three letters
+/// of a one-word name ("RelayV4" → `REL`). Dashes and underscores separate words, as in a folder
+/// name; a name with no letters gives `T`.
+pub fn task_key_prefix(project: &str) -> String {
+    let words: Vec<&str> = project
+        .split(|c: char| c.is_whitespace() || c == '-' || c == '_' || c == '.' || c == '/')
+        .filter(|w| w.chars().any(char::is_alphabetic))
+        .collect();
+    let prefix: String = match words.as_slice() {
+        [] => String::new(),
+        [one] => one.chars().filter(|c| c.is_alphanumeric()).take(3).collect(),
+        many => many.iter().take(3).filter_map(|w| w.chars().find(|c| c.is_alphanumeric())).collect(),
+    };
+    let prefix = prefix.to_uppercase();
+    if prefix.is_empty() { "T".into() } else { prefix }
+}
+
+/// A task's key: its project's prefix and its number, `REL-12`.
+pub fn task_key(project: &str, id: i64) -> String {
+    format!("{}-{id}", task_key_prefix(project))
+}
+
+/// The number in a typed task key (`rel-12`, `NVW-3`), if the term is one.
+fn key_number(term: &str) -> Option<i64> {
+    let (prefix, number) = term.rsplit_once('-')?;
+    (!prefix.is_empty() && prefix.len() <= 4 && prefix.chars().all(|c| c.is_alphanumeric()) && prefix.chars().next()?.is_alphabetic())
+        .then(|| number.parse().ok())
+        .flatten()
 }
 
 /// What the search box matches against, lowercased: the id, title, body, labels, agents and
@@ -451,6 +486,25 @@ pub fn markdown_markup(source: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn task_keys_take_a_prefix_from_the_project_name() {
+        assert_eq!(task_key("RelayV4", 12), "REL-12");
+        assert_eq!(task_key("Native verification with a long name", 3), "NVW-3");
+        assert_eq!(task_key("tally-android", 7), "TA-7");
+        assert_eq!(task_key("", 1), "T-1");
+        assert_eq!(task_key("2026", 1), "T-1");
+    }
+
+    #[test]
+    fn a_typed_task_key_finds_its_task() {
+        let task = json!({"id": 12, "title": "Board revamp", "column": "ready"});
+        assert!(query_matches(&task, "REL-12"));
+        assert!(query_matches(&task, "nvw-12"));
+        assert!(!query_matches(&task, "REL-13"));
+        // A hyphenated word is still a word.
+        assert!(!query_matches(&task, "re-do"));
+    }
 
     fn filters(pairs: &[(&str, &str)]) -> Filters {
         let mut map = Filters::new();

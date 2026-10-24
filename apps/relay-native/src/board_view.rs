@@ -994,6 +994,7 @@ impl Board {
             key.set_child(Some(&view_glyph(list)));
             key.set_tooltip_text(Some(if list { "List view (V)" } else { "Board view (V)" }));
             key.update_property(&[gtk::accessible::Property::Label(if list { "List view" } else { "Board view" })]);
+            key.set_widget_name(if list { "board-view-list" } else { "board-view-board" });
             if list {
                 key.set_group(Some(&views[0]));
             }
@@ -1745,6 +1746,21 @@ impl Board {
                     }
                 }
             }
+            // 1 to 5: straight to Backlog, Ready, Active, In review or Done, as lific's keys.
+            Key::_1 | Key::_2 | Key::_3 | Key::_4 | Key::_5 if task.is_some() => {
+                let task = task.unwrap();
+                let at = match key {
+                    Key::_1 => 0,
+                    Key::_2 => 1,
+                    Key::_3 => 2,
+                    Key::_4 => 3,
+                    _ => 4,
+                };
+                if let Some(column) = COLUMNS.get(at).filter(|c| **c != text(&task, "column")) {
+                    self.focused.set(task["id"].as_i64());
+                    self.move_to(&task, column, None);
+                }
+            }
             Key::p => {
                 if let Some(task) = task {
                     let at = PRIORITIES.iter().position(|p| *p == text(&task, "priority")).unwrap_or(1);
@@ -2041,6 +2057,8 @@ impl Board {
                 .hexpand(true)
                 .child(&grid)
                 .build();
+            // Lanes past the window's edge show a real scrollbar, not one that hides until hovered.
+            scroller.set_overlay_scrolling(false);
             self.scrolls.borrow_mut().push(("board".into(), scroller.hadjustment()));
             self.content.append(&scroller);
             grid
@@ -2067,7 +2085,7 @@ impl Board {
                 let lane = gtk::Box::new(gtk::Orientation::Vertical, 0);
                 lane.add_css_class("board-lane");
                 lane.add_css_class(&format!("lane-{column}"));
-                lane.set_size_request(224, -1);
+                lane.set_size_request(208, -1);
                 lane.append(&head);
                 let cards = gtk::Box::new(gtk::Orientation::Vertical, 6);
                 cards.add_css_class("board-cards");
@@ -2486,14 +2504,18 @@ impl Board {
     /// The band over the lanes: how far the board (or the module) is along, split by column,
     /// then what is open, in flight, waiting on review, blocked and recently shipped. It counts
     /// every task in scope, not only what the search shows: it describes the work, not the view.
+    /// One line of what the board holds, every figure honest: how many tasks, a bar and a share
+    /// of what is done (only done counts as progress), then what is in review, active and with
+    /// how many agents, blocked, shipped this week and the points left.
     fn render_stats(self: &Rc<Self>, tasks: &[Value], everything: &[Value]) {
         let in_column = |column: &str| tasks.iter().filter(|t| text(t, "column") == column).count();
-        let counts: Vec<(&'static str, usize)> = COLUMNS.iter().map(|c| (*c, in_column(c))).collect();
         let done = in_column("done");
         let open: Vec<&Value> = tasks.iter().filter(|t| text(t, "column") != "done").collect();
         let left = relay_board::estimate(open.iter().copied());
         let urgent = open.iter().filter(|t| matches!(text(t, "priority"), "high" | "urgent")).count();
-        let running = tasks.iter().filter(|t| text(t, "state") == "running").count();
+        let active = in_column("active");
+        // The agents on open tasks, each once: what the cards show, not just a running state.
+        let agents: BTreeSet<&str> = open.iter().flat_map(|t| t["sessions"].as_array().into_iter().flatten().filter_map(Value::as_str)).collect();
         let review = in_column("in_review");
         let all = by_id(everything);
         let blocked = open.iter().filter(|t| relay_board::is_blocked(t, &all)).count();
@@ -2501,9 +2523,7 @@ impl Board {
             .iter()
             .filter(|t| text(t, "column") == "done" && within_days(text(t, "updated_at"), 7))
             .count();
-        // Narrow, the lanes need the height more than the numbers: the progress card stays.
-        let narrow = (1..STATS_NARROW).contains(&self.page.width());
-        let key = format!("{counts:?} {left} {urgent} {running} {blocked} {shipped} {narrow} {:?}", scope().is_some());
+        let key = format!("{} {done} {left} {urgent} {active} {} {review} {blocked} {shipped} {:?}", tasks.len(), agents.len(), scope().is_some());
         if !self.redraw("stats", key) {
             return;
         }
@@ -2512,76 +2532,44 @@ impl Board {
         if tasks.is_empty() {
             return;
         }
-        let pct = done as f64 * 100. / tasks.len() as f64;
-
-        let progress = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        progress.add_css_class("stat-tile");
-        progress.add_css_class("stat-progress");
-        progress.set_hexpand(true);
-        let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        head.append(&label(if scope().is_some() { "Module progress" } else { "Progress" }, "stat-caption"));
-        head.append(&spacer());
-        head.append(&label(&format!("{done} of {} done", tasks.len()), "stat-note"));
-        progress.append(&head);
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        row.append(&label(&format!("{pct:.0}%"), "stat-value"));
-        row.append(&flow_bar(&counts, 8));
-        progress.append(&row);
-        let legend = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        legend.add_css_class("stat-legend");
-        for (column, count) in &counts {
-            let part = gtk::Box::new(gtk::Orientation::Horizontal, 5);
-            part.append(&status_icon(column, 10));
-            part.append(&label(&format!("{} {count}", caption(column)), "stat-note"));
-            if *count == 0 {
-                part.add_css_class("stat-zero");
-            }
-            legend.append(&part);
-        }
-        legend.append(&spacer());
-        legend.append(&label(&format!("{left} pt left"), "stat-note"));
-        progress.append(&legend);
-        self.stats.append(&progress);
-
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        line.add_css_class("stats-line");
         let plural = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") };
-        if narrow {
-            return;
+        line.append(&label(&plural(tasks.len(), "task", "tasks"), "stats-figure"));
+        let fraction = done as f64 / tasks.len() as f64;
+        let bar = gtk::ProgressBar::new();
+        bar.add_css_class("stats-bar");
+        bar.set_fraction(fraction);
+        bar.set_valign(gtk::Align::Center);
+        bar.set_tooltip_text(Some(&format!("{done} of {} done", tasks.len())));
+        line.append(&bar);
+        line.append(&label(&format!("{done} done · {:.0}%", fraction * 100.), "stats-figure"));
+        let mut part = |words: String, class: &str, tip: &str| {
+            line.append(&label("·", "stats-dot"));
+            let item = label(&words, "stats-part");
+            if !class.is_empty() {
+                item.add_css_class(class);
+            }
+            if !tip.is_empty() {
+                item.set_tooltip_text(Some(tip));
+            }
+            line.append(&item);
+        };
+        part(format!("{review} in review"), if review > 0 { "stats-review" } else { "" }, "Waiting on you");
+        part(
+            if agents.is_empty() { format!("{active} active") } else { format!("{active} active, {} on it", plural(agents.len(), "agent", "agents")) },
+            "",
+            &agents.iter().copied().collect::<Vec<_>>().join(", "),
+        );
+        part(format!("{blocked} blocked"), if blocked > 0 { "stats-alert" } else { "" }, "Open tasks waiting on another open task");
+        if urgent > 0 {
+            part(format!("{urgent} high or urgent"), "stats-warm", "");
         }
-        let tiles = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        tiles.set_homogeneous(true);
-        tiles.set_hexpand(true);
-        for tile in [
-            stat_tile(
-                "Open",
-                &open.len().to_string(),
-                &if urgent > 0 { format!("{urgent} high or urgent") } else { "None urgent".into() },
-                if urgent > 0 { "stat-warm" } else { "" },
-            ),
-            stat_tile(
-                "In flight",
-                &in_column("active").to_string(),
-                &if running > 0 { format!("{} running", plural(running, "agent", "agents")) } else { "No agents on it".into() },
-                if running > 0 { "stat-live" } else { "" },
-            ),
-            stat_tile(
-                "In review",
-                &review.to_string(),
-                if review > 0 { "Waiting on you" } else { "Nothing waiting" },
-                if review > 0 { "stat-review" } else { "" },
-            ),
-            stat_tile(
-                "Blocked",
-                &blocked.to_string(),
-                if blocked > 0 { "Waiting on other tasks" } else { "Nothing blocked" },
-                if blocked > 0 { "stat-alert" } else { "" },
-            ),
-            // The count in all is Progress's "n of m done"; with it the note was cut to
-            // "This week · 0 in …" at 1440px, the widest the tiles get beside the sidebar.
-            stat_tile("Shipped", &shipped.to_string(), "This week", ""),
-        ] {
-            tiles.append(&tile);
+        part(format!("{shipped} shipped this week"), "", "");
+        if left > 0 {
+            part(format!("{left} pt left"), "", "Estimate of open work (S = 1, M = 3, L = 5)");
         }
-        self.stats.append(&tiles);
+        self.stats.append(&line);
     }
 
     fn render_empty(self: &Rc<Self>) {
@@ -2855,7 +2843,7 @@ impl Board {
     /// an add key; a lane (not a list section) adds the column's one-line meaning under it.
     /// Drawn into `outer`, the lane's head box, replacing what it showed: the box keeps its
     /// place in the lane.
-    fn lane_head(self: &Rc<Self>, outer: &gtk::Box, column: &'static str, shown: &[&Value], total: usize, class: &str) {
+    fn lane_head(self: &Rc<Self>, outer: &gtk::Box, column: &'static str, shown: &[&Value], total: usize) {
         empty_out(outer);
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 7);
         head.add_css_class("lane-head-row");
@@ -2867,13 +2855,11 @@ impl Board {
         let count = label(&if count == total { total.to_string() } else { format!("{count} / {total}") }, "lane-count");
         count.set_valign(gtk::Align::Center);
         head.append(&count);
+        // The estimate rides on the count: on the head row it cut the lane's name ("Back…"), and
+        // "0 pt" on every lane said nothing.
         let points = relay_board::estimate(shown.iter().copied());
-        let estimate = label(&format!("{points} pt"), "lane-estimate");
-        estimate.set_valign(gtk::Align::Center);
-        estimate.set_tooltip_text(Some(&format!("Estimate: {points} points of work shown here (S = 1, M = 3, L = 5)")));
-        // A lane is narrow: its estimate goes on the meaning line, so the name never truncates.
-        if class != "lane-head" {
-            head.append(&estimate);
+        if points > 0 {
+            count.set_tooltip_text(Some(&format!("{points} points of work shown here (S = 1, M = 3, L = 5)")));
         }
         head.append(&spacer());
         let more = gtk::MenuButton::new();
@@ -2942,17 +2928,9 @@ impl Board {
             });
             head.append(&add);
         }
+        // What the lane means is its title's tooltip; a subtitle restating the name took a line.
+        head.set_tooltip_text(Some(lane_meaning(column)));
         outer.append(&head);
-        if class == "lane-head" {
-            let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            let meaning = label(lane_meaning(column), "lane-meaning");
-            meaning.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            meaning.set_hexpand(true);
-            meaning.set_xalign(0.);
-            line.append(&meaning);
-            line.append(&estimate);
-            outer.append(&line);
-        }
     }
 
     fn lane_drop(self: &Rc<Self>, widget: &impl IsA<gtk::Widget>, column: &'static str) {
@@ -3014,7 +2992,7 @@ impl Board {
             let points = relay_board::estimate(shown.iter().copied());
             let key = format!("{} {total} {points}", shown.len());
             if *lane.head_key.borrow() != key {
-                self.lane_head(&lane.head, column, &shown, total, if list { "list-head" } else { "lane-head" });
+                self.lane_head(&lane.head, column, &shown, total);
                 *lane.head_key.borrow_mut() = key;
             }
             let mut wanted: Vec<gtk::Widget> = Vec::new();
@@ -3146,7 +3124,7 @@ impl Board {
     /// A card for task `id`, empty: what it answers (focus, clicks, its menu, drag and drop,
     /// files dropped on it). [`Self::fill_card`] draws the task into it.
     fn card(self: &Rc<Self>, id: i64) -> gtk::Box {
-        let card = gtk::Box::new(gtk::Orientation::Vertical, 5);
+        let card = gtk::Box::new(gtk::Orientation::Vertical, 4);
         card.add_css_class("task-card");
         card.set_widget_name("task-card");
         card.set_focusable(true);
@@ -3157,13 +3135,15 @@ impl Board {
         card
     }
 
-    /// A GitHub project card: status ring and `Project #id`, the title, progress and links,
-    /// then pills for how urgent and how much work it is, its type, module and labels. Drawn
-    /// into the card from [`Self::card`], replacing what it showed: the card itself (its place,
-    /// focus and handlers) stays.
+    /// A dense card, as lific draws one: the task's key (`REL-12`) and any state badge, the
+    /// title, then one wrapped row of chips — priority, size, type, module, labels, sub-task
+    /// progress, relations, attachments and commits, and the agents on it. Drawn into the card
+    /// from [`Self::card`], replacing what it showed: the card itself (its place, focus and
+    /// handlers) stays.
     fn fill_card(self: &Rc<Self>, card: &gtk::Box, task: &Value, all: &BTreeMap<i64, &Value>, project: &str) {
         empty_out(card);
         let id = task["id"].as_i64().unwrap_or(0);
+        let key = relay_board::task_key(project, id);
         let column = text(task, "column");
         let done = column == "done";
         if done {
@@ -3177,7 +3157,7 @@ impl Board {
             card.remove_css_class("task-child");
         }
         card.update_property(&[gtk::accessible::Property::Label(&format!(
-            "#{id} {} · {} · {}",
+            "{key} {} · {} · {}",
             text(task, "title"),
             text(task, "type"),
             text(task, "priority")
@@ -3185,18 +3165,10 @@ impl Board {
 
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 5);
         top.add_css_class("card-top");
-        top.append(&status_icon(column, 12));
-        // `Project #id` as GitHub's cards say it, the name shortened to fit; the number always
-        // whole. Beside a state badge there is no room for the name (the board's crumb says it),
-        // and it was cut to a lone "…" that hid the number too.
-        let badge = state_badge(text(task, "state"));
-        if !project.is_empty() && badge.is_none() {
-            let name = label(project, "card-id");
-            name.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            top.append(&name);
-        }
-        top.append(&label(&format!("#{id}"), "card-id"));
-        if let Some(badge) = badge {
+        let number = label(&key, "card-id");
+        number.set_tooltip_text(Some(&format!("{project} #{id}")));
+        top.append(&number);
+        if let Some(badge) = state_badge(text(task, "state")) {
             top.append(&badge);
         }
         top.append(&spacer());
@@ -3230,7 +3202,7 @@ impl Board {
         let title = label(text(task, "title"), "card-title");
         title.set_wrap(true);
         title.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-        title.set_lines(3);
+        title.set_lines(2);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         title.set_xalign(0.);
         title.set_tooltip_text(Some(text(task, "title")));
@@ -3245,129 +3217,104 @@ impl Board {
             lineage.append(&caption);
             card.append(&lineage);
         }
-        let total = task["rollup"]["total"].as_i64().unwrap_or(0);
-        if total > 0 {
-            let finished = task["rollup"]["done"].as_i64().unwrap_or(0);
-            let fraction = (finished as f64 / total as f64).clamp(0., 1.);
-            let rollup = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            rollup.add_css_class("task-rollup");
-            rollup.append(&label(&format!("{finished} / {total}"), "rollup-count"));
-            let meter = gtk::ProgressBar::new();
-            meter.set_fraction(fraction);
-            meter.set_hexpand(true);
-            meter.set_valign(gtk::Align::Center);
-            meter.set_tooltip_text(Some(&format!("{finished} of {total} sub-tasks done")));
-            rollup.append(&meter);
-            rollup.append(&label(&format!("{:.0}%", fraction * 100.), "rollup-count"));
-            card.append(&rollup);
-        }
-        let blockers = open_blockers(task, all);
-        if !blockers.is_empty() && !done {
-            let line = gtk::Box::new(gtk::Orientation::Horizontal, 5);
-            line.add_css_class("card-blocked");
-            line.append(&lamp("blocked-lamp"));
-            let caption = label(
-                &if blockers.len() == 1 {
-                    format!("Blocked by #{} {}", blockers[0]["id"], text(blockers[0], "title"))
-                } else {
-                    format!("Blocked by {} tasks", blockers.len())
-                },
-                "card-blocked-caption",
-            );
-            caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            line.append(&caption);
-            card.append(&line);
-        }
-        if let Some(duplicate) = task["duplicate_of"].as_i64().and_then(|other| all.get(&other)) {
-            let caption = label(&format!("Duplicate of #{} {}", duplicate["id"], text(duplicate, "title")), "task-lineage");
-            caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            card.append(&caption);
-        }
 
-        // Fields as pills, the way a project card shows its custom fields: urgency and size first.
-        let mut pills: Vec<(gtk::Widget, usize)> = Vec::new();
-        let pill = |icon: Option<gtk::Widget>, caption: &str, class: &str| {
-            let pill = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-            pill.add_css_class("field-pill");
+        // One row of chips, wrapped to the card: what a glance at the board should tell.
+        let mut chips: Vec<(gtk::Widget, usize)> = Vec::new();
+        let chip = |icon: Option<gtk::Widget>, caption: &str, class: &str, tip: &str| {
+            let chip = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            chip.add_css_class("field-pill");
             if !class.is_empty() {
-                pill.add_css_class(class);
+                chip.add_css_class(class);
             }
-            let wide = caption.chars().count().min(16) + if icon.is_some() { 6 } else { 4 };
+            if !tip.is_empty() {
+                chip.set_tooltip_text(Some(tip));
+            }
+            let wide = caption.chars().count().min(18) + if icon.is_some() { 5 } else { 3 };
             if let Some(icon) = icon {
-                pill.append(&icon);
+                chip.append(&icon);
             }
-            let name = label(caption, "field-pill-name");
-            name.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            name.set_max_width_chars(16);
-            pill.append(&name);
-            (pill.upcast::<gtk::Widget>(), wide)
+            if !caption.is_empty() {
+                let name = label(caption, "field-pill-name");
+                name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                name.set_max_width_chars(18);
+                chip.append(&name);
+            }
+            (chip.upcast::<gtk::Widget>(), wide)
         };
         let priority = text(task, "priority");
-        pills.push(pill(Some(priority_icon(priority).upcast()), &titled(priority), &format!("pill-priority-{priority}")));
+        let urgency = priority_icon(priority);
+        urgency.set_tooltip_text(Some(&format!("{} priority", titled(priority))));
+        urgency.add_css_class(&format!("pill-priority-{priority}"));
+        chips.push((urgency.upcast(), 2));
         let size = text(task, "size");
         if !size.is_empty() {
-            pills.push(pill(None, &format!("{size} · {} pt", relay_board::points(size)), "pill-size"));
+            chips.push(chip(None, size, "pill-size", &format!("Size {size} · {} pt", relay_board::points(size))));
         }
         let kind = text(task, "type");
         if kind != "task" && !kind.is_empty() {
-            pills.push(pill(Some(task_mark(kind, 9).upcast()), &titled(kind), ""));
+            chips.push(chip(Some(task_mark(kind, 9).upcast()), &titled(kind), "", ""));
         }
-        // On a module's own board every card is in it: the pill would only repeat the banner.
+        // On a module's own board every card is in it: the chip would only repeat the banner.
         if let Some(module) = task["module_name"].as_str().filter(|_| scope().is_none()) {
-            pills.push(pill(Some(crate::icons::image("modules", 11).upcast()), module, "pill-module"));
+            chips.push(chip(Some(crate::icons::image("modules", 10).upcast()), module, "pill-module", "Module"));
         }
         let tags: Vec<String> = rows(task, "labels").iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
-        for tag in tags.iter().take(3) {
-            pills.push((label_chip(tag).upcast(), tag.chars().count().min(14) + 4));
+        for tag in tags.iter().take(2) {
+            chips.push((label_chip(tag).upcast(), tag.chars().count().min(14) + 4));
         }
-        if tags.len() > 3 {
-            let more = label(&format!("+{}", tags.len() - 3), "label-more");
-            more.set_tooltip_text(Some(&tags[3..].join(", ")));
-            pills.push((more.upcast(), 3));
+        if tags.len() > 2 {
+            let more = label(&format!("+{}", tags.len() - 2), "label-more");
+            more.set_tooltip_text(Some(&tags[2..].join(", ")));
+            chips.push((more.upcast(), 3));
         }
-        let fields = wrapped(pills, 28);
+        let total = task["rollup"]["total"].as_i64().unwrap_or(0);
+        if total > 0 {
+            let finished = task["rollup"]["done"].as_i64().unwrap_or(0);
+            chips.push(chip(Some(crate::icons::image("check", 10).upcast()), &format!("{finished}/{total}"), "pill-rollup", &format!("{finished} of {total} sub-tasks done")));
+        }
+        let blockers = open_blockers(task, all);
+        if !blockers.is_empty() && !done {
+            let caption = if blockers.len() == 1 {
+                format!("blocked by {}", relay_board::task_key(project, blockers[0]["id"].as_i64().unwrap_or(0)))
+            } else {
+                format!("blocked by {}", blockers.len())
+            };
+            let tip = blockers.iter().map(|t| format!("{} {}", relay_board::task_key(project, t["id"].as_i64().unwrap_or(0)), text(t, "title"))).collect::<Vec<_>>().join("\n");
+            chips.push(chip(Some(lamp("blocked-lamp").upcast()), &caption, "pill-blocked", &tip));
+        }
+        if let Some(duplicate) = task["duplicate_of"].as_i64().and_then(|other| all.get(&other)) {
+            let other = relay_board::task_key(project, duplicate["id"].as_i64().unwrap_or(0));
+            chips.push(chip(None, &format!("duplicate of {other}"), "", text(duplicate, "title")));
+        }
+        for (field, icon, one, many) in [("attachments", "file", "attachment", "attachments"), ("commits", "commit", "commit", "commits")] {
+            let n = rows(task, field).len();
+            if n > 0 {
+                chips.push(chip(Some(crate::icons::image(icon, 10).upcast()), &n.to_string(), "pill-count", &format!("{n} {}", if n == 1 { one } else { many })));
+            }
+        }
+        // The agents on it, as initials: the lamp says whether one is running now.
+        let agents: Vec<String> = rows(task, "sessions").iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+        if !agents.is_empty() {
+            let people = gtk::Box::new(gtk::Orientation::Horizontal, 3);
+            people.add_css_class("card-agents");
+            people.set_tooltip_text(Some(&agents.join(", ")));
+            if text(task, "state") == "running" {
+                people.append(&lamp("live-lamp"));
+            }
+            for agent in agents.iter().take(3) {
+                let initials: String = agent.split(['-', '_', ' ']).filter_map(|w| w.chars().next()).take(2).collect::<String>().to_uppercase();
+                let avatar = label(&initials, "card-avatar");
+                avatar.set_xalign(0.5);
+                people.append(&avatar);
+            }
+            if agents.len() > 3 {
+                people.append(&label(&format!("+{}", agents.len() - 3), "label-more"));
+            }
+            chips.push((people.upcast(), 4 + 3 * agents.len().min(3)));
+        }
+        let fields = wrapped(chips, 30);
         fields.add_css_class("card-fields");
         card.append(&fields);
-
-        // What hangs off the task: sub-tasks, attachments and commits, as small counts.
-        let mut extras = Vec::new();
-        for (key, icon, one, many) in [
-            ("attachments", "file", "attachment", "attachments"),
-            ("commits", "commit", "commit", "commits"),
-        ] {
-            let n = rows(task, key).len();
-            if n > 0 {
-                let part = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-                part.append(&crate::icons::image(icon, 11));
-                part.append(&label(&n.to_string(), "card-extra-count"));
-                part.set_tooltip_text(Some(&format!("{n} {}", if n == 1 { one } else { many })));
-                extras.push(part);
-            }
-        }
-        if !extras.is_empty() {
-            let line = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-            line.add_css_class("card-extras");
-            for part in extras {
-                line.append(&part);
-            }
-            card.append(&line);
-        }
-
-        let agents: Vec<String> = rows(task, "sessions")
-            .iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect();
-        if !agents.is_empty() {
-            let strip = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            strip.add_css_class("task-agent");
-            strip.append(&lamp(if text(task, "state") == "running" { "live-lamp" } else { "" }));
-            let names = agents.join(" · ");
-            let caption = label(&names, "");
-            caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            caption.set_tooltip_text(Some(&names));
-            strip.append(&caption);
-            card.append(&strip);
-        }
     }
 
     fn row(self: &Rc<Self>, id: i64) -> gtk::Box {
@@ -3389,8 +3336,8 @@ impl Board {
             row.remove_css_class("done");
         }
         row.append(&priority_icon(text(task, "priority")));
-        let number = label(&format!("#{id}"), "card-id");
-        number.set_width_chars(5);
+        let number = label(&relay_board::task_key(&self.project_name(), id), "card-id");
+        number.set_width_chars(7);
         row.append(&number);
         let mark = task_mark(text(task, "type"), 9);
         mark.set_tooltip_text(Some(text(task, "type")));

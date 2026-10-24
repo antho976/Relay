@@ -48,7 +48,7 @@ entry.board-search, .board-search { min-height: 30px; }
 .board-view-toggle button:checked { background: @glass_selected; color: @ink; }
 
 /* ── Stats band: progress across the columns, then the numbers that need a look ── */
-.board-stats { margin: 0 20px 14px; }
+.board-stats { margin: 0 20px 8px; }
 .stat-tile { min-height: 58px; padding: 12px 16px; border: 1px solid @glass_edge; border-radius: 14px; background: @glass_card; }
 .stat-progress { padding: 12px 18px; }
 .stat-caption { color: @faint; font-size: 12px; font-weight: 500; }
@@ -84,7 +84,7 @@ button.filter-chip:hover { border-color: @glass_line_hover; background: @glass_h
 .board-grid { padding: 0 20px 16px; }
 .board-lane { border: 1px solid @glass_edge; border-radius: 14px; background: @glass_well; }
 .board-lane.drop-lane, .list-section.drop-lane { border-color: @glass_line_hover; background: @glass_hover; }
-.lane-head { padding: 12px 10px 10px 14px; border-bottom: 1px solid @glass_edge; }
+.lane-head { padding: 8px 8px 7px 12px; border-bottom: 1px solid @glass_edge; }
 .list-head { padding: 8px 10px 8px 14px; border-bottom: 1px solid @glass_edge; }
 .lane-head-row { min-height: 26px; }
 .lane-title { color: @ink; font-size: 13.5px; font-weight: 600; }
@@ -101,7 +101,8 @@ button.lane-key:hover, menubutton.lane-key > button:hover { background: @glass_h
 .board-group-heading { margin: 8px 4px 0; color: @faint; font-family: 'Geist'; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; }
 
 /* ── Cards ──────────────────────────────────────────────────────────────── */
-.task-card { margin: 0; padding: 10px 12px 11px; border: 1px solid @glass_line; border-radius: 10px; background: @glass_control; box-shadow: 0 1px 2px alpha(black, 0.18); transition: border-color 120ms ease-out, background 120ms ease-out; }
+/* Dense, as lific's: the key, the title in two lines at most, one row of chips. */
+.task-card { margin: 0; padding: 7px 10px 8px; border: 1px solid @glass_line; border-radius: 10px; background: @glass_control; box-shadow: 0 1px 2px alpha(black, 0.18); transition: border-color 120ms ease-out, background 120ms ease-out; }
 .task-card:hover { border-color: @glass_line_hover; background: @glass_hover; }
 .task-card:focus, .list-row:focus { outline: 0; box-shadow: 0 0 0 2px alpha(@ink, 0.28); border-color: alpha(@ink, 0.4); }
 .task-card:focus-visible, .list-row:focus-visible { outline: 0; }
@@ -110,13 +111,15 @@ button.lane-key:hover, menubutton.lane-key > button:hover { background: @glass_h
 .task-card.drop-before, .list-row.drop-before { box-shadow: inset 0 2px 0 @ink; }
 .task-card.drop-after, .list-row.drop-after { box-shadow: inset 0 -2px 0 @ink; }
 .task-card.drop-into, .list-row.drop-into { border-color: @ink; background: @glass_selected; }
-.card-id { color: @faint; font-size: 11px; }
-.card-title { color: @ink; font-size: 13.5px; font-weight: 500; line-height: 1.3; }
+.card-id { color: @faint; font-family: 'Geist Mono', monospace; font-size: 10.5px; }
+.card-title { color: @ink; font-size: 13px; font-weight: 500; line-height: 1.05; }
 .task-card.done .card-title, .list-row.done .list-title { color: @secondary; }
 .task-card.done { border-color: @glass_edge; background: @glass_well; box-shadow: none; }
 .card-tools { opacity: 0; }
 .task-card:hover .card-tools, .task-card:focus-within .card-tools { opacity: 1; }
-button.card-key { min-height: 22px; min-width: 22px; padding: 0; border-radius: 6px; }
+/* The hover tools sit in the key's line without making it taller: they overlap the padding. */
+.card-tools { margin: -4px -5px -4px 0; }
+button.card-key { min-height: 20px; min-width: 20px; padding: 0; border-radius: 6px; }
 .card-lineage { color: @secondary; }
 .task-lineage { color: @secondary; font-size: 11px; }
 .task-rollup { margin-top: 2px; }
@@ -126,10 +129,28 @@ button.card-key { min-height: 22px; min-width: 22px; padding: 0; border-radius: 
 .task-rollup progressbar progress, progressbar.issue-progress progress { background: #8957e5; }
 .card-blocked-caption { color: @held_text; font-size: 11px; }
 .blocked-lamp { color: @held; }
-.card-fields { margin-top: 3px; }
+.card-fields { margin-top: 1px; }
 .card-extras { margin-top: 2px; color: @faint; }
 .card-extra-count { color: @faint; font-family: 'Geist Mono'; font-size: 10.5px; }
-.field-pill { padding: 2px 8px; border: 1px solid @glass_line; border-radius: 6px; background: @glass_well; }
+.field-pill { padding: 0 6px; min-height: 18px; border: 1px solid @glass_line; border-radius: 999px; background: transparent; }
+.field-pill image { color: @faint; }
+.pill-blocked { border-color: alpha(@held, 0.38); }
+.pill-blocked .field-pill-name { color: @held_text; }
+.pill-count, .pill-rollup { border-color: transparent; padding: 0 2px; }
+.pill-count .field-pill-name, .pill-rollup .field-pill-name { color: @faint; font-family: 'Geist Mono', monospace; font-size: 10.5px; }
+.card-agents { margin-left: 2px; }
+.card-avatar { min-width: 17px; min-height: 17px; border-radius: 999px; background: @track; color: @secondary; font-size: 8.5px; font-weight: 600; }
+/* The board's one line of figures (render_stats). */
+.stats-line { min-height: 30px; padding: 0 4px; }
+.stats-figure { color: @ink; font-size: 13px; font-weight: 500; font-feature-settings: "tnum"; }
+.stats-part { color: @secondary; font-size: 12.5px; font-feature-settings: "tnum"; }
+.stats-dot { color: @ink_dim; }
+.stats-review { color: #c4a5fa; }
+.stats-alert { color: @held_text; }
+.stats-warm { color: @waiting; }
+progressbar.stats-bar { min-width: 140px; }
+progressbar.stats-bar trough { min-height: 5px; min-width: 140px; border: 0; border-radius: 999px; background: alpha(@ink, 0.09); }
+progressbar.stats-bar progress { min-height: 5px; border: 0; border-radius: 999px; background-image: none; box-shadow: none; background: @live; }
 .field-pill-name { color: @secondary; font-size: 11px; }
 .pill-priority-high { border-color: alpha(@waiting, 0.4); background: alpha(@waiting, 0.07); }
 .pill-priority-high .field-pill-name { color: @waiting; }
