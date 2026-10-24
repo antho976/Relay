@@ -374,9 +374,15 @@ button.settings-key:hover image { color: @ink; }
 .view-tabs button.quiet { min-height: 28px; padding: 0 12px; border-radius: 9px; color: @faint; font-size: 13px; font-weight: 500; }
 .view-tabs button.quiet:hover { background: transparent; color: @ink; }
 .view-tabs button.quiet.selected { background: @glass_selected; color: @ink; }
-/* Files and Git open beside the view: a lighter mark than the view that is showing. */
-.view-tabs button.quiet.open { background: alpha(@ink, 0.07); color: @secondary; }
-.view-tabs button.quiet.open:hover { color: @ink; }
+/* Files and Git open beside the view: toggles of their own after it, glass keys lit while their
+   panel is open. */
+.panel-keys { margin-left: 8px; }
+button.panel-key { min-height: 34px; padding: 0 12px; border: 1px solid @glass_edge; border-radius: 10px; background: transparent; color: @faint; font-size: 13px; font-weight: 500; }
+button.panel-key image { color: @faint; }
+button.panel-key:hover { background: @glass_hover; border-color: @glass_line; color: @ink; }
+button.panel-key:hover image { color: @ink; }
+button.panel-key.open { background: @glass_selected; border-color: @glass_line; color: @ink; }
+button.panel-key.open image { color: @ink; }
 /* The terminal panes keep the look they had before this rework: their own text faces, and
    their scrollbar. Only the strip's own labels and keys: a popover opened from a strip key (Agent
    settings) is chrome, in Geist, though it is the key's descendant. */

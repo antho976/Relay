@@ -92,6 +92,8 @@ pub fn image_with_stroke(name: &str, size: i32, stroke: f64) -> gtk::Image {
         "plus" => r##"<path d="M8 3v10M3 8h10" />"##,
         "file" => r##"<path d="M4 2h5l3 3v9H4z" /><path d="M9 2v3h3" />"##,
         "folder" => r##"<path d="M2 4h4l1.5 1.5H14V13H2z" />"##,
+        // The checkout's files: a page in front of another (the Files view key, the row menu).
+        "files" => r##"<path d="M6 2h4.5L13 4.5V11.5H6z" /><path d="M10.5 2v2.5H13" /><path d="M3.5 5v9h6.5" />"##,
         "folder-open" => {
             r##"<path d="M2 4h4l1.5 1.5H13V7" /><path d="M2 13l1.5-5.5H15L13.5 13z" />"##
         }

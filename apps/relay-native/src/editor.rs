@@ -183,11 +183,17 @@ impl Editor {
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
         project_tools.append(&spacer);
-        // The project's views, one segmented control: the one showing is lit.
+        // The project's views, Agents | Design: one segmented control, the one showing lit. Files
+        // and Git open beside whichever shows, so they are keys of their own after it, lit while
+        // their panel is open (`panel_keys`).
         let views = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         views.add_css_class("view-tabs");
         views.set_valign(gtk::Align::Center);
         project_tools.append(&views);
+        let panel_keys = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        panel_keys.add_css_class("panel-keys");
+        panel_keys.set_valign(gtk::Align::Center);
+        project_tools.append(&panel_keys);
         let agents_button = button("Agents", "quiet");
         agents_button.set_widget_name("project-agents");
         agents_button.set_tooltip_text(Some("The project's agents: their terminals, side by side"));
@@ -378,19 +384,19 @@ impl Editor {
         split.set_end_child(Some(&workspace));
         let find_button = crate::app::icon_button("search", "Find in file (Ctrl+F) · replace (Ctrl+H)");
         tools.append(&find_button);
-        let files_button = button("Files", "quiet");
+        let files_button = panel_key("files", "Files");
         files_button.set_widget_name("project-files");
         files_button.set_tooltip_text(Some("Show or hide the explorer: the checkout's files, and a search in them"));
-        views.append(&files_button);
+        panel_keys.append(&files_button);
         let edit_button = crate::app::icon_button("edit", "Edit file");
         // Only a diff has a file to open for editing.
         edit_button.set_visible(false);
         diff_switch.bind_property("visible", &edit_button, "visible").sync_create().build();
         tools.append(&edit_button);
-        let git_button = button("Git", "quiet");
+        let git_button = panel_key("branch", "Git");
         git_button.set_widget_name("project-git");
         git_button.set_tooltip_text(Some("Show or hide the Git panel: changes, commits, branches and the remote"));
-        views.append(&git_button);
+        panel_keys.append(&git_button);
         let mut control = tools.first_child();
         while let Some(widget) = control {
             control = widget.next_sibling();
@@ -580,11 +586,13 @@ impl Editor {
                 editor.toggle_git();
             }
         });
-        // Files and Git open beside the view rather than replacing it, so their keys show
-        // "open" (a lighter mark than the lit view) while their panel is up.
+        // Files and Git open beside the view rather than replacing it: their keys are toggles,
+        // lit while their panel is up.
         for (panel, key) in [(editor.file_sidebar.clone(), files_button), (editor.git.clone(), git_button)] {
             panel.connect_visible_notify(move |panel| {
-                if panel.is_visible() { key.add_css_class("open") } else { key.remove_css_class("open") }
+                let open = panel.is_visible();
+                if open { key.add_css_class("open") } else { key.remove_css_class("open") }
+                key.update_state(&[gtk::accessible::State::Pressed(if open { gtk::AccessibleTristate::True } else { gtk::AccessibleTristate::False })]);
             });
         }
         let weak = Rc::downgrade(&editor);
@@ -2422,6 +2430,18 @@ pub fn replace_all(search: &sourceview5::SearchContext, replace: &str) -> Result
     }
 }
 
+/// A key that opens or closes a panel beside the view (Files, Git): its icon and its name.
+fn panel_key(icon: &str, caption: &str) -> gtk::Button {
+    let key = button("", "quiet");
+    key.add_css_class("panel-key");
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    row.append(&crate::icons::image(icon, 14));
+    row.append(&label(caption, ""));
+    key.set_child(Some(&row));
+    key.update_state(&[gtk::accessible::State::Pressed(gtk::AccessibleTristate::False)]);
+    key
+}
+
 #[cfg(test)]
 mod tests {
     use super::{crlf_dominant, snippet, with_newlines, TreeBadges, SNIPPET_CHARS};
@@ -2478,3 +2498,4 @@ mod tests {
         assert!(!snippet("éé", 2).is_empty());
     }
 }
+
