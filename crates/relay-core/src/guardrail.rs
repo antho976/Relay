@@ -1583,21 +1583,24 @@ fn evaluate_exec(cfg: &GuardrailConfig, request: &GateRequest<'_>) -> Result<Dec
         }
         // Nor this one: it would switch off the check a grant is an exception to.
         if let Some((argv, what)) = hook_bypass(&commands) {
-            return Ok(Decision::Refuse(
-                BusError::refused(
-                    "guardrail.hook_bypass",
-                    format!(
-                        "{} {what}, and Relay's pre-commit hook is where your commits meet the caps and \
-                         protected paths",
-                        argv.join(" ")
-                    ),
+            let (why, hint) = if what == PUSH_SKIPS_CHECK {
+                (
+                    "Relay's pre-push hook is where a push meets the project's check",
+                    "Push with the hook on (plain `git push`). If the check fails, fix what it reports and push \
+                     again; if it cannot pass for a reason outside your work, say so in your report.",
                 )
-                .with_details(json!({"command": command, "argv": argv}))
-                .with_hint(
+            } else {
+                (
+                    "Relay's pre-commit hook is where your commits meet the caps and protected paths",
                     "Commit with the hooks on (plain `git commit`, or git.commit). If the hook refuses, change what it \
                      names, or ask for that cap or path with guardrail.request. session.done checks every commit on \
                      the branch either way.",
-                ),
+                )
+            };
+            return Ok(Decision::Refuse(
+                BusError::refused("guardrail.hook_bypass", format!("{} {what}, and {why}", argv.join(" ")))
+                    .with_details(json!({"command": command, "argv": argv}))
+                    .with_hint(hint),
             ));
         }
         // Nor this one: an upload to Google Play cannot be taken back, and it is the user's.
@@ -1788,7 +1791,9 @@ fn sheds_identity(words: &[&str], runs_relay: bool) -> bool {
 /// commit` meets the caps and protected paths (RA-109)? `git commit -n` / `--no-verify` (also
 /// in a short-flag cluster, `-anm`), a `core.hooksPath` override for one command (`git -c`,
 /// `--config-env`, `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_PARAMETERS`), or a `git config` that sets,
-/// unsets or removes it. Returns the command and what it does. Shell indirection or a commit
+/// unsets or removes it. A `git push --no-verify` likewise skips the pre-push hook, where the
+/// project's check runs (`check_on_push`). Aliases (`git -c alias.ci='commit -n' ci`) are read
+/// through [`git_alias_scripts`]. Returns the command and what it does. Shell indirection or a commit
 /// that never runs pre-commit (`cherry-pick`, `commit-tree`) still gets past this, which is why
 /// `session.done` re-checks the branch's commits ([`recheck_commits`]).
 fn hook_bypass(commands: &[Vec<Word>]) -> Option<(Vec<String>, &'static str)> {
@@ -1807,7 +1812,7 @@ fn hook_bypass(commands: &[Vec<Word>]) -> Option<(Vec<String>, &'static str)> {
         if by_environment {
             return Some((argv(), "overrides core.hooksPath"));
         }
-        for at in (0..words.len()).filter(|&at| (at == 0 || !command[at].quoted) && shell::program(words[at]) == "git") {
+        for at in (0..words.len()).filter(|&at| program_at(command, at) && shell::program(words[at]) == "git") {
             let mut i = at + 1;
             while let Some(&word) = words.get(i) {
                 let value = match word {
@@ -1825,6 +1830,7 @@ fn hook_bypass(commands: &[Vec<Word>]) -> Option<(Vec<String>, &'static str)> {
             let rest = words.get(i + 1..).unwrap_or_default();
             match words.get(i) {
                 Some(&"commit") if commit_skips_hooks(rest) => return Some((argv(), "skips the commit hooks")),
+                Some(&"push") if push_skips_hooks(rest) => return Some((argv(), PUSH_SKIPS_CHECK)),
                 Some(&"config") if config_writes_hooks_path(rest) => return Some((argv(), "rewrites core.hooksPath")),
                 _ => {}
             }
@@ -1882,6 +1888,18 @@ fn commit_skips_hooks(args: &[&str]) -> bool {
     false
 }
 
+const PUSH_SKIPS_CHECK: &str = "skips the pre-push check";
+
+/// `--no-verify` among `git push`'s options, or a unique abbreviation of it (`--no-veri`;
+/// `--no-ve` could also be `--no-verbose`, which git refuses). `-n` is `--dry-run` for push.
+fn push_skips_hooks(args: &[&str]) -> bool {
+    args.iter().take_while(|word| **word != "--").any(|word| {
+        word.strip_prefix("--")
+            .map(|long| long.split('=').next().unwrap_or(long))
+            .is_some_and(|name| name.len() >= "no-veri".len() && "no-verify".starts_with(name))
+    })
+}
+
 /// A `git config` that sets, unsets or removes `core.hooksPath`, in the classic form
 /// (`git config --worktree core.hooksPath /dev/null`, `--unset`, `--remove-section core`) or the
 /// subcommand form (`git config set|unset core.hooksPath`). Reading it is fine.
@@ -1936,6 +1954,44 @@ fn data_only(command: &[Word]) -> bool {
 /// Shells whose script can come from `-c`, standard input or a heredoc.
 const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh", "fish"];
 
+/// Programs that run the command named in their arguments: `env rm`, `timeout 60 git`,
+/// `xargs rm`. A quoted program after one of them still runs (`env 'rm' -rf`).
+const WRAPPERS: &[&str] = &[
+    "env", "sudo", "doas", "run0", "timeout", "nice", "nohup", "ionice", "stdbuf", "time", "command", "exec",
+    "builtin", "xargs", "setsid", "chrt", "taskset", "flock", "unbuffer", "eatmydata", "fakeroot", "strace",
+    "ltrace", "watch", "firejail", "systemd-run", "chroot", "busybox",
+];
+
+/// A `NAME=value` word: an assignment before a command, or an `export`/`env` argument.
+fn is_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+/// Can the word at `at` be the program a command runs? Any unquoted word can (`sudo rm`,
+/// `find -exec rm`), and so can a quoted one as the command's first word (`"rm" -rf`). A
+/// quoted word elsewhere is an argument, which is data, unless only assignments, a wrapper and
+/// the wrapper's options come before it (`env 'rm' -rf`, `timeout 60 "git" reset`,
+/// `FOO=1 'rm'`) or it follows `find -exec`. Quoted text with a space in it is never one.
+fn program_at(command: &[Word], at: usize) -> bool {
+    let word = &command[at];
+    if at == 0 || !word.quoted {
+        return true;
+    }
+    if word.text.contains(char::is_whitespace) {
+        return false;
+    }
+    let before = &command[..at];
+    if before.last().is_some_and(|prev| !prev.quoted && matches!(prev.text.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir")) {
+        return true;
+    }
+    match before.iter().position(|word| !is_assignment(&word.text)) {
+        None => true,
+        Some(first) => WRAPPERS.contains(&canonical_program(&before[first].text).as_str()),
+    }
+}
+
 /// An interpreter whose inline code (`python3 -c`, `perl -e`, `node -e`) can run a command.
 fn is_interpreter(program: &str) -> bool {
     let program = program.to_ascii_lowercase();
@@ -1974,6 +2030,7 @@ fn expand(line: &str, depth: usize, out: &mut Vec<Vec<Word>>) {
         .filter(|command| !command.is_empty())
         .collect();
     let stdin_script = commands.iter().any(|command| reads_stdin_script(command));
+    scripts.extend(git_alias_scripts(&commands));
     for command in &commands {
         if let Some(code) = inline_code(command) {
             scripts.extend(literal_lines(code));
@@ -1993,6 +2050,98 @@ fn expand(line: &str, depth: usize, out: &mut Vec<Vec<Word>>) {
     }
 }
 
+/// What the git aliases a line defines run, each as a command line: `git -c alias.x='!…' x`,
+/// `git config [--global] alias.x '…'` (an alias for later), `--config-env=alias.x=VAR`, and
+/// `GIT_CONFIG_KEY_<n>=alias.x` / `GIT_CONFIG_VALUE_<n>` or `GIT_CONFIG_PARAMETERS`. A `!` alias
+/// is shell (`!rm -rf build` runs `rm -rf build`), any other is git (`reset --hard` runs `git
+/// reset --hard`); where the line also calls the alias, its arguments follow. Every definition
+/// counts, called or not, so an alias of an alias is seen too.
+fn git_alias_scripts(commands: &[Vec<Word>]) -> Vec<String> {
+    let assignments: HashMap<&str, &str> = commands
+        .iter()
+        .flatten()
+        .filter(|word| is_assignment(&word.text))
+        .filter_map(|word| word.text.split_once('='))
+        .collect();
+    let alias = |key: &str| {
+        key.get(..6).filter(|prefix| prefix.eq_ignore_ascii_case("alias.")).map(|_| key[6..].to_ascii_lowercase())
+    };
+    // (alias, what it runs, the git command it was defined on, if any)
+    let mut defined: Vec<(String, String, Option<usize>)> = Vec::new();
+    for (name, value) in &assignments {
+        if let Some(n) = name.strip_prefix("GIT_CONFIG_KEY_") {
+            if let (Some(alias), Some(body)) = (alias(value), assignments.get(format!("GIT_CONFIG_VALUE_{n}").as_str())) {
+                defined.push((alias, body.to_string(), None));
+            }
+        }
+        if *name == "GIT_CONFIG_PARAMETERS" {
+            // `'key'='value' 'key'='value'`, each part single-quoted.
+            let parts: Vec<&str> = value.split('\'').collect();
+            for pair in parts.windows(3).filter(|pair| pair[1] == "=") {
+                if let Some(alias) = alias(pair[0]) {
+                    defined.push((alias, pair[2].to_string(), None));
+                }
+            }
+        }
+    }
+    let mut calls: Vec<(usize, String, String)> = Vec::new();
+    for (index, command) in commands.iter().enumerate() {
+        let words: Vec<&str> = command.iter().map(|word| word.text.as_str()).collect();
+        for at in (0..words.len()).filter(|&at| program_at(command, at) && shell::program(words[at]) == "git") {
+            let mut i = at + 1;
+            while let Some(&word) = words.get(i).filter(|word| word.starts_with('-')) {
+                let setting = match word {
+                    "-c" => words.get(i + 1).and_then(|value| value.split_once('=')).map(|(key, body)| (key, body.to_string())),
+                    _ => word.strip_prefix("--config-env=").or_else(|| (word == "--config-env").then(|| words.get(i + 1).copied()).flatten())
+                        .and_then(|value| value.split_once('='))
+                        .map(|(key, var)| (key, assignments.get(var).copied().unwrap_or_default().to_string())),
+                };
+                if let Some((alias, body)) = setting.and_then(|(key, body)| alias(key).map(|alias| (alias, body))) {
+                    defined.push((alias, body, Some(index)));
+                }
+                i += if matches!(word, "-c" | "--config-env") || takes_value("git", word) { 2 } else { 1 };
+            }
+            let Some(&sub) = words.get(i) else { continue };
+            let rest = words.get(i + 1..).unwrap_or_default();
+            if sub == "config" {
+                let mut positional = Vec::new();
+                let mut words = rest.iter().copied();
+                while let Some(word) = words.next() {
+                    if matches!(word, "-f" | "--file" | "--blob" | "--type" | "--default" | "--comment" | "--value") {
+                        words.next();
+                    } else if !word.starts_with('-') {
+                        positional.push(word);
+                    }
+                }
+                let (key, body) = match positional.as_slice() {
+                    ["set", key, body, ..] => (*key, *body),
+                    [key, body, ..] => (*key, *body),
+                    _ => continue,
+                };
+                if let Some(alias) = alias(key) {
+                    defined.push((alias, body.to_string(), None));
+                }
+            } else {
+                calls.push((index, sub.to_ascii_lowercase(), rest.join(" ")));
+            }
+        }
+    }
+    defined
+        .into_iter()
+        .map(|(alias, body, on)| {
+            let args = calls
+                .iter()
+                .find(|(index, sub, _)| *sub == alias && on.is_none_or(|on| on == *index))
+                .map(|(_, _, args)| format!(" {args}"))
+                .unwrap_or_default();
+            match body.strip_prefix('!') {
+                Some(shell) => format!("{shell}{args}"),
+                None => format!("git {body}{args}"),
+            }
+        })
+        .collect()
+}
+
 /// Is this a shell reading its script from standard input — `sh`, `bash -s`, `bash <<< …` —
 /// rather than from `-c` or a file?
 fn reads_stdin_script(command: &[Word]) -> bool {
@@ -2002,7 +2151,7 @@ fn reads_stdin_script(command: &[Word]) -> bool {
     let Some(at) = command
         .iter()
         .enumerate()
-        .position(|(at, word)| (at == 0 || !word.quoted) && SHELLS.contains(&shell::program(&word.text)))
+        .position(|(at, word)| program_at(command, at) && SHELLS.contains(&shell::program(&word.text)))
     else {
         return false;
     };
@@ -2037,7 +2186,7 @@ fn inline_code(command: &[Word]) -> Option<&str> {
     let at = command
         .iter()
         .enumerate()
-        .position(|(at, word)| (at == 0 || !word.quoted) && is_interpreter(shell::program(&word.text)))?;
+        .position(|(at, word)| program_at(command, at) && is_interpreter(shell::program(&word.text)))?;
     let mut i = at + 1;
     while let Some(word) = command.get(i) {
         let text = word.text.as_str();
@@ -2356,15 +2505,24 @@ struct DeniedPattern {
     flags: Vec<String>,
     /// Any other word the pattern names (`rm -rf /` names `/`), anywhere after the subcommand.
     operands: Vec<String>,
+    /// The long options a command's abbreviation can stand for: the program's destructive ones
+    /// ([`LONG_OPTIONS`]) and the ones the pattern names, as written (`hard`, `force`).
+    long_options: Vec<String>,
 }
 
 impl DeniedPattern {
     fn parse(pattern: &str) -> Option<Self> {
         let mut words = pattern.split_whitespace();
         let program = canonical_program(words.next()?);
-        let mut parsed = Self { program, subcommands: Vec::new(), flags: Vec::new(), operands: Vec::new() };
+        let long_options = LONG_OPTIONS.iter().filter(|(of, _)| *of == program).map(|(_, name)| name.to_string()).collect();
+        let mut parsed = Self { program, subcommands: Vec::new(), flags: Vec::new(), operands: Vec::new(), long_options };
         for word in words {
             if word.starts_with('-') && word.len() > 1 {
+                if let Some(long) = word.strip_prefix("--").map(|long| long.split('=').next().unwrap_or(long).to_ascii_lowercase()) {
+                    if !long.is_empty() && !parsed.long_options.contains(&long) {
+                        parsed.long_options.push(long);
+                    }
+                }
                 parsed.flags.extend(expand_flags(&parsed.program, word));
             } else if parsed.flags.is_empty() && parsed.operands.is_empty() {
                 parsed.subcommands.push(word.to_ascii_lowercase());
@@ -2383,9 +2541,9 @@ impl DeniedPattern {
 
     fn runs_at(&self, command: &[Word], at: usize) -> bool {
         let word = &command[at];
-        // A quoted program still runs (`"rm" -rf`), but only as the command's own first word;
-        // elsewhere a quoted word is an argument, which is data.
-        if word.quoted && at != 0 || canonical_program(&word.text) != self.program {
+        // A quoted program still runs (`"rm" -rf`, `env 'rm' -rf`); elsewhere a quoted word is
+        // an argument, which is data ([`program_at`]).
+        if !program_at(command, at) || canonical_program(&word.text) != self.program {
             return false;
         }
         // Quoted text with a space in it is a string, never a flag or a subcommand (D103).
@@ -2411,7 +2569,7 @@ impl DeniedPattern {
         let flags: Vec<String> = after
             .iter()
             .filter(|word| word.starts_with('-') && word.len() > 1)
-            .flat_map(|word| expand_flags(&self.program, word))
+            .flat_map(|word| self.command_flags(word))
             .collect();
         let operands: Vec<String> = after
             .iter()
@@ -2428,6 +2586,24 @@ impl DeniedPattern {
                 }));
         self.flags.iter().all(|flag| flags.contains(flag) || flag == "-f" && destroys_remote)
             && self.operands.iter().all(|operand| operands.contains(operand))
+    }
+
+    /// A flag word of the command as the flags it sets ([`expand_flags`]), reading a long option
+    /// the way git's parse-options and GNU getopt do: a unique prefix is the option it starts
+    /// (`--dele` is `--delete`, `--har` is `--hard`, `--r` is rm's `--recursive`). A prefix of
+    /// several stands for all of them: the program refuses an ambiguous one itself, so that
+    /// over-matches nothing that would run. An exact name is only itself.
+    fn command_flags(&self, word: &str) -> Vec<String> {
+        let Some(long) = word.strip_prefix("--") else { return expand_flags(&self.program, word) };
+        let name = long.split('=').next().unwrap_or(long).to_ascii_lowercase();
+        if name.is_empty() || self.long_options.contains(&name) {
+            return expand_flags(&self.program, word);
+        }
+        let mut flags = expand_flags(&self.program, word);
+        for option in self.long_options.iter().filter(|option| option.starts_with(&name)) {
+            flags.extend(expand_flags(&self.program, &format!("--{option}")));
+        }
+        flags
     }
 
     /// Gradle reads every word that is not an option as a task, in any order and any number:
@@ -2540,6 +2716,14 @@ fn expand_flags(program: &str, word: &str) -> Vec<String> {
     }
     word.chars().skip(1).map(|c| canonical(format!("-{c}"))).collect()
 }
+
+/// The destructive long options an abbreviation can stand for even when a pattern does not
+/// spell them out: what makes a push forced ([`DeniedPattern::runs_at`]), and the long forms of
+/// the default patterns' short flags (`rm --rec --forc`, `git clean --fo`).
+const LONG_OPTIONS: &[(&str, &str)] = &[
+    ("git", "force"), ("git", "delete"), ("git", "mirror"), ("git", "prune"), ("git", "force-with-lease"),
+    ("git", "force-if-includes"), ("git", "hard"), ("rm", "recursive"), ("rm", "force"),
+];
 
 /// Global options that take the next word as their value, so it is not mistaken for the
 /// subcommand: `git -C ../app reset --hard`, `git -c core.x=y push --force`.
@@ -3387,6 +3571,45 @@ mod denied_tests {
         assert!(!denied("echo hello | sh"));
     }
 
+    /// The 2026-10-24 survey's live bypasses: a unique prefix of a long option (git and GNU
+    /// getopt both take one), a quoted program after a wrapper, and a git alias, inline or
+    /// defined for later.
+    #[test]
+    fn abbreviations_quoted_programs_after_wrappers_and_aliases_are_seen() {
+        for line in [
+            // Abbreviated long options.
+            "git push --dele origin main", "git push --del origin main", "git push --force-w origin main",
+            "git push --force-wi=main origin main", "git push --mir origin", "git push --pru origin", "git push --forc origin main",
+            "git reset --har HEAD~1", "git reset --ha", "git clean --fo -d", "rm --r --f build", "rm --rec --forc build",
+            "rm -r --fo build",
+            // A quoted program after a wrapper, an assignment or `find -exec`.
+            "env 'rm' -rf build", "timeout 60 \"git\" reset --hard HEAD~1", "sudo 'rm' -rf build", "nice -n 5 'rm' -rf build",
+            "FOO=1 'rm' -rf build", "echo build | xargs 'rm' -rf", "find . -exec 'rm' -rf {} ;", "env 'bash' -c 'rm -rf build'",
+            "env 'python3' -c \"import os; os.system('rm -rf build')\"", "sudo env 'git' push --dele origin main",
+            // Git aliases.
+            "git -c alias.nuke='!rm -rf build' nuke", "git -c alias.r='reset --hard' r", "git -c alias.r='reset' r --hard",
+            "git -c Alias.P='push --delete' p origin main", "git -c alias.a=b -c alias.b='!rm -rf build' a",
+            "git config alias.nuke '!rm -rf build'", "git config --global alias.zap 'reset --hard'",
+            "git config set alias.zap 'clean -fd'", "git config --file ../x alias.zap '!rm -rf build'",
+            "X='!rm -rf build' git --config-env=alias.nuke=X nuke",
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.nuke GIT_CONFIG_VALUE_0='!rm -rf build' git nuke",
+            "GIT_CONFIG_PARAMETERS=\"'alias.nuke'='!rm -rf build'\" git nuke",
+            "bash -c \"git -c alias.nuke='!rm -rf build' nuke\"",
+        ] {
+            assert!(denied(line), "{line:?} runs a denied command");
+        }
+        for line in [
+            "git push --dry-run origin main", "git push --tags origin", "git push --porcelain origin main",
+            "git push --no-force origin main", "git reset --soft HEAD~1", "git clean --dry-run -d", "rm --verbose build",
+            "rm --dir build", "git log --hard-to-say", "echo 'rm' -rf build", "rg 'rm' -rf src", "cargo run -- 'rm' -rf",
+            "git commit -m 'rm' -rf", "ls 'rm -rf build'", "env 'rm -rf build'",
+            "git -c alias.st='status -sb' st", "git config alias.lg 'log --oneline --graph'", "git config --get alias.nuke",
+            "git -c user.name=x commit -m 'alias.r=reset --hard'",
+        ] {
+            assert!(!denied(line), "{line:?} does not run a denied command");
+        }
+    }
+
     /// RA-096 / RA-097: the CLI's envelope form, every way of shedding the session identity,
     /// and the raw socket; and a search for the op names is not an invocation.
     #[test]
@@ -3438,6 +3661,11 @@ mod denied_tests {
             "git config --worktree --unset core.hooksPath", "git config --unset-all core.hookspath",
             "git config unset core.hooksPath", "git config set core.hooksPath x", "git config --remove-section core",
             "git config -f .git/config.worktree core.hooksPath x",
+            // The pre-push check, and both hooks through an alias or a quoted program.
+            "git push --no-verify", "git push --no-verify origin relay/x", "git push origin relay/x --no-veri",
+            "git -C app push --no-verify", "env 'git' push --no-verify", "env 'git' commit -n -m x",
+            "git -c alias.ci='commit --no-verify' ci -m x", "git -c alias.ci=commit ci -n -m x",
+            "git -c alias.pu='push --no-verify' pu origin main", "git config alias.ci 'commit -n'",
         ] {
             assert!(bypass(line), "{line:?} switches the hook off");
         }
@@ -3448,6 +3676,8 @@ mod denied_tests {
             "git config core.hooksPath", "git config --get core.hooksPath", "git config get core.hooksPath", "git config --list",
             "git config user.name x", "echo git commit -n", "rg 'commit --no-verify' docs", "grep -rn core.hooksPath crates",
             "relay q guardrail.check '{\"command\":\"git commit -n\"}'",
+            "git push -n origin main", "git push --no-ve origin main", "git push --verify origin main", "git push origin -- --no-verify",
+            "git -c alias.ci=commit ci -m x",
         ] {
             assert!(!bypass(line), "{line:?} leaves the hook on");
         }
