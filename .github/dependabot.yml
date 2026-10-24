@@ -10,3 +10,19 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+
+  # Crates: a weekly look at both locked trees (the workspace and the key proxy's own), so a
+  # RustSec fix arrives as a pull request instead of a red weekly Dependencies run. Security
+  # fixes come grouped in one PR, patch releases in another; a minor or major bump comes on its
+  # own, at most five open at once.
+  - package-ecosystem: cargo
+    directories: ["/", "/crates/relay-key-proxy"]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      crates:
+        update-types: ["patch"]
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
