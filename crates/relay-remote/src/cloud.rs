@@ -395,6 +395,21 @@ impl PairTarget {
             .ok_or_else(|| anyhow!("the link has no rendezvous (`via=`): set one on the server with `relay remote via` first"))?;
         Ok(PairTarget { code, via })
     }
+
+    /// Whether a link handed over by the server at `server` (the connect command) points back
+    /// at that server, encrypted: the whole ledger syncs to where `via` names every minute, so
+    /// a link (or a server) that names another host, or plain `ws://`, is refused rather than
+    /// followed. A link the person pastes into the pair command is theirs to judge.
+    pub fn issued_by(&self, server: &str) -> Result<()> {
+        let host = |url: &str| url.split_once("://").map_or(url, |(_, rest)| rest).split(['/', '?', '#']).next().unwrap_or_default().to_ascii_lowercase();
+        let Some(rest) = self.via.strip_prefix("wss://") else {
+            anyhow::bail!("the server's link points at {}, which is not encrypted (wss://): not pairing", self.via);
+        };
+        if host(rest) != host(server) {
+            anyhow::bail!("the server's link points at {}, not at {}: not pairing", host(rest), host(server));
+        }
+        Ok(())
+    }
 }
 
 fn decode(s: &str) -> String {
@@ -1280,6 +1295,17 @@ mod tests {
     }
 
     /// A held money round still says the gym half ran; a failed gym half is named.
+    #[test]
+    fn a_link_from_the_server_must_lead_back_to_it_encrypted() {
+        let target = |via: &str| PairTarget { code: "ABCD-EFGH".into(), via: via.into() };
+        let server = "https://antho-s-bot.onrender.com";
+        assert!(target("wss://antho-s-bot.onrender.com/join/room1").issued_by(server).is_ok());
+        assert!(target("wss://ANTHO-S-BOT.onrender.com/join/room1").issued_by(server).is_ok());
+        assert!(target("ws://antho-s-bot.onrender.com/join/room1").issued_by(server).is_err(), "not encrypted");
+        assert!(target("wss://elsewhere.example/join/room1").issued_by(server).is_err(), "another host");
+        assert!(target("wss://antho-s-bot.onrender.com.evil.example/join/x").issued_by(server).is_err());
+    }
+
     #[test]
     fn a_round_reports_each_half() {
         let held: Result<Report> = Err(anyhow!("cloud.changes_held"));
