@@ -385,6 +385,12 @@ impl Run<'_> {
             if node.kind.holds_children() {
                 self.parents.insert(node.id.clone(), node.parent.clone());
             }
+            // As an add does: a chart copied before its parts were drawn (in the list that added
+            // it) is drawn, and one that fills is fitted and listed with the others.
+            if node.chart.is_some() {
+                self.chart_changed(&node.id);
+                self.note_fill(node);
+            }
         }
         self.copy_ids.push((self.at, nodes.iter().map(|n| (n.id.clone(), map[n.id.as_str()].clone())).collect()));
         self.inverse.push(vec![NodeOp::Delete { id: new_root.clone() }]);

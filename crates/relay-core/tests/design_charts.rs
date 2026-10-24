@@ -160,3 +160,18 @@ fn dump_a_page_of_charts() {
     std::fs::write(path, serde_json::to_string(&ok(&e, "design.get", json!({"design_id": id}))).unwrap()).unwrap();
 }
 
+
+/// A chart frame copied in the list that adds it (one card, copied per metric) is drawn as the
+/// original is: the copy was taken before any part was drawn.
+#[test]
+fn a_chart_copied_in_its_own_list_is_drawn() {
+    let (e, _root) = project();
+    let id = ok(&e, "design.create", json!({"project_id": 1, "title": "Cards"}))["design"]["id"].as_i64().unwrap();
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "c", "parent": "page-1", "kind": "frame", "w": 300, "h": 200, "chart": {"kind": "bar", "labels": ["A", "B"], "series": [{"values": [1, 2]}]}}},
+        {"op": "copy", "id": "c", "as": "c2", "dy": 300},
+    ]));
+    let (a, b) = (children(&e, id, "c"), children(&e, id, "c2"));
+    assert!(!a.is_empty() && a.len() == b.len(), "original {a:?}, copy {b:?}");
+    assert_eq!(node(&e, id, "c2.label-1").unwrap()["text"], "B");
+}
