@@ -4,6 +4,7 @@ use crate::client::{Client, Notice};
 use gtk::prelude::*;
 use gtk4 as gtk;
 use serde_json::{json, Value};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 pub async fn refresh(ui: &Rc<Ui>, project: i64) {
@@ -195,6 +196,50 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
 struct Targets {
     combo: glib::WeakRef<gtk::ComboBoxText>,
     shown: Vec<(String, String)>,
+    chosen: Rc<Chosen>,
+}
+
+/// Which row a "Target device" refill shows: the device the person chose whenever it is listed
+/// (one that dropped off for a reboot or a reconnect comes back chosen, and a later Run goes
+/// to it), else the one shown before, else the first.
+fn target_row(next: &[(String, String)], chosen: Option<&str>, shown: Option<&str>) -> Option<usize> {
+    let at = |serial: Option<&str>| serial.and_then(|s| next.iter().position(|(n, _)| n == s));
+    at(chosen).or_else(|| at(shown)).or((!next.is_empty()).then_some(0))
+}
+
+/// The device the person picked in a "Target device", told apart from the picks a refill makes.
+#[derive(Default)]
+struct Chosen {
+    serial: RefCell<Option<String>>,
+    refilling: Cell<bool>,
+}
+
+impl Chosen {
+    fn follow(self: &Rc<Self>, combo: &gtk::ComboBoxText) {
+        let chosen = self.clone();
+        combo.connect_changed(move |combo| {
+            if let (false, Some(id)) = (chosen.refilling.get(), combo.active_id()) {
+                *chosen.serial.borrow_mut() = Some(id.to_string());
+            }
+        });
+    }
+
+    /// Put `next` in `combo` (with "No device connected" when `say_none` and nothing is),
+    /// choosing by [`target_row`].
+    fn refill(&self, combo: &gtk::ComboBoxText, next: &[(String, String)], say_none: bool) {
+        self.refilling.set(true);
+        let shown = combo.active_id();
+        combo.remove_all();
+        for (serial, title) in next {
+            combo.append(Some(serial), title);
+        }
+        if say_none {
+            no_target(combo, next.is_empty());
+        }
+        let row = target_row(next, self.serial.borrow().as_deref(), shown.as_deref());
+        combo.set_active(Some(row.unwrap_or(0) as u32));
+        self.refilling.set(false);
+    }
 }
 
 thread_local! {
@@ -254,26 +299,18 @@ fn signing_toggle(ui: &Rc<Ui>, parent: &gtk::Box, project: i64, enabled: bool) {
 /// is still there. Its `changed` handler recomputes the Run button.
 fn sync_targets(devices: &[Value], avds: &[Value]) {
     let next = device_targets(devices, avds);
-    let Some(combo) = TARGETS.with(|targets| {
+    let Some((combo, chosen)) = TARGETS.with(|targets| {
         let mut targets = targets.borrow_mut();
         let targets = targets.as_mut()?;
         if targets.shown == next {
             return None;
         }
         targets.shown = next.clone();
-        targets.combo.upgrade()
+        Some((targets.combo.upgrade()?, targets.chosen.clone()))
     }) else {
         return;
     };
-    let selected = combo.active_id();
-    combo.remove_all();
-    for (serial, title) in &next {
-        combo.append(Some(serial), title);
-    }
-    no_target(&combo, next.is_empty());
-    if !selected.is_some_and(|id| combo.set_active_id(Some(&id))) {
-        combo.set_active(Some(0));
-    }
+    chosen.refill(&combo, &next, true);
 }
 
 /// With nothing connected, the picker says so instead of showing an empty box. Its row has no id,
@@ -650,7 +687,9 @@ fn build_form(ui: &Rc<Ui>, page: &gtk::Box, project: i64, worktrees: &[Value], l
     let target = gtk::ComboBoxText::new();
     no_target(&target, true);
     target.set_active(Some(0));
-    TARGETS.with(|targets| *targets.borrow_mut() = Some(Targets { combo: target.downgrade(), shown: Vec::new() }));
+    let chosen = Rc::new(Chosen::default());
+    chosen.follow(&target);
+    TARGETS.with(|targets| *targets.borrow_mut() = Some(Targets { combo: target.downgrade(), shown: Vec::new(), chosen }));
     field("Target device", &target, &form);
     let variant = gtk::Entry::builder().text("debug").build();
     field("Gradle variant", &variant, &form);
@@ -915,6 +954,10 @@ fn device_row(name: &str, facts: &str, lamp: &str) -> gtk::Box {
 }
 
 // A separate socket keeps noisy Gradle/logcat output away from the UI control plane.
+/// The run log keeps its last `LOG_KEPT` lines once it passes `LOG_LINES`.
+const LOG_LINES: i32 = 2000;
+const LOG_KEPT: i32 = 1500;
+
 fn run_window(ui: &Rc<Ui>, op: &'static str, payload: Value, title: &str) {
     let window = crate::panel::Panel::new(ui, title, 780);
     let page = window.body.clone();
@@ -942,47 +985,58 @@ fn run_window(ui: &Rc<Ui>, op: &'static str, payload: Value, title: &str) {
                         run["id"].clone()
                     }
                     Err(error) => {
-                        status.set_text(&error.to_string());
+                        // The page's words, not the bus's ("In use by …", not "Conflict device.busy: …").
+                        status.set_text(&super::plugins::explain_error(op, &error));
                         return;
                     }
                 };
                 ui.refresh_page();
-                while let Ok(notice) = notices.recv().await {
-                    match notice {
-                        Notice::Event(event) if event.ev == "run.changed" && event.payload["id"] == id => {
-                            status.set_text(&format!("Run #{id} · {}", text(&event.payload, "state")));
-                        }
-                        Notice::Frame(frame) if frame.stream == "logcat" => {
-                            // Follow new output, unless the reader has scrolled up to read.
-                            let at = scroll.vadjustment();
-                            let follow = at.value() + at.page_size() >= at.upper() - 8.;
-                            let buffer = output.buffer();
-                            let mut end = buffer.end_iter();
-                            buffer.insert(
-                                &mut end,
-                                &format!("{}\n", frame.data.as_str().unwrap_or("")),
-                            );
-                            if follow {
-                                output.scroll_mark_onscreen(&bottom);
+                // A busy phone's logcat is hundreds of lines a second: what has queued goes in
+                // with one insert and at most one trim per frame, and the loop yields between.
+                let mut pending = String::new();
+                let mut closed = None;
+                while let Ok(first) = notices.recv().await {
+                    let mut next = Some(first);
+                    while let Some(notice) = next.take() {
+                        match notice {
+                            Notice::Event(event) if event.ev == "run.changed" && event.payload["id"] == id => {
+                                status.set_text(&format!("Run #{id} · {}", text(&event.payload, "state")));
                             }
-                            if buffer.line_count() > 2000 {
-                                if let Some(mut trim) =
-                                    buffer.iter_at_line(buffer.line_count() - 2000)
-                                {
-                                    buffer.delete(&mut buffer.start_iter(), &mut trim);
-                                }
+                            Notice::Frame(frame) if frame.stream == "logcat" => {
+                                pending.push_str(frame.data.as_str().unwrap_or(""));
+                                pending.push('\n');
                             }
+                            Notice::Disconnected(error) => closed = Some(error.to_string()),
+                            _ => {}
                         }
-                        Notice::Disconnected(error) => {
-                            status.set_text(&error.to_string());
-                            break;
-                        }
-                        _ => {}
+                        next = notices.try_recv().ok();
                     }
+                    if !pending.is_empty() {
+                        // Follow new output, unless the reader has scrolled up to read.
+                        let at = scroll.vadjustment();
+                        let follow = at.value() + at.page_size() >= at.upper() - 8.;
+                        let buffer = output.buffer();
+                        buffer.insert(&mut buffer.end_iter(), &pending);
+                        pending.clear();
+                        // Trimmed back to 1 500 lines once past 2 000, not one line per line.
+                        if buffer.line_count() > LOG_LINES {
+                            if let Some(mut trim) = buffer.iter_at_line(buffer.line_count() - LOG_KEPT) {
+                                buffer.delete(&mut buffer.start_iter(), &mut trim);
+                            }
+                        }
+                        if follow {
+                            output.scroll_mark_onscreen(&bottom);
+                        }
+                    }
+                    if let Some(error) = closed.take() {
+                        status.set_text(&error);
+                        break;
+                    }
+                    glib::timeout_future(std::time::Duration::from_millis(16)).await;
                 }
                 drop(client);
             }
-            Err(error) => status.set_text(&error.to_string()),
+            Err(error) => status.set_text(&super::plugins::explain_error(op, &error)),
         }
     });
     window.on_closed(move || task.abort());
@@ -1134,6 +1188,12 @@ struct Live {
     devices: gtk::Box,
     /// "Target device" and its devices: absent without a project, hidden with no device connected.
     target: Option<(gtk::Label, gtk::ComboBoxText)>,
+    /// What the target picker lists, so an event that changes none of it (an agent's adb
+    /// lease, every tool call) does not rebuild it under the pointer; and the person's pick.
+    target_shown: RefCell<Option<Vec<(String, String)>>>,
+    chosen: Rc<Chosen>,
+    /// Says the panel lost the engine and is reconnecting.
+    offline: gtk::Label,
     /// Release signing: absent without a project.
     signing: Option<gtk::Box>,
     run_states: gtk::Box,
@@ -1141,6 +1201,10 @@ struct Live {
 }
 
 impl Live {
+    fn say_offline(&self, offline: bool) {
+        self.offline.set_visible(offline);
+    }
+
     /// Reads what `parts` needs, then redraws it in one go.
     async fn redraw(&self, ui: &Rc<Ui>, project: i64, parts: Parts) {
         let listed = if parts.devices {
@@ -1199,17 +1263,15 @@ impl Live {
         }
     }
 
-    /// Refills "Target device", keeping the chosen device while it is still connected.
+    /// Refills "Target device" when its devices changed, keeping the one the person chose.
     fn sync_target(&self, devices: &[Value], avds: &[Value]) {
         let Some((caption, target)) = &self.target else { return };
-        let selected = target.active_id();
-        target.remove_all();
-        for (serial, title) in device_targets(devices, avds) {
-            target.append(Some(&serial), &title);
+        let next = device_targets(devices, avds);
+        if self.target_shown.borrow().as_ref() == Some(&next) {
+            return;
         }
-        if !selected.is_some_and(|id| target.set_active_id(Some(&id))) {
-            target.set_active(Some(0));
-        }
+        self.chosen.refill(target, &next, false);
+        *self.target_shown.borrow_mut() = Some(next);
         let any = target.active_id().is_some();
         caption.set_visible(any);
         target.set_visible(any);
@@ -1306,6 +1368,10 @@ pub fn open(ui: &Rc<Ui>) {
     run.append(&paragraph("Loading devices…"));
     release.append(&paragraph("Loading worktrees…"));
     let ui = ui.clone();
+    // The engine connection a device watch was taken on, so the panel takes one per engine
+    // and lets it go on close.
+    let watching: Rc<Cell<Option<u64>>> = Rc::default();
+    let (unwatch, closing) = (watching.clone(), Rc::downgrade(&ui));
     let task = glib::spawn_future_local(async move {
         let project = ui.project.get();
         let (trees, last) = tokio::join!(worktrees(&ui, project), last_worktree(&ui, project));
@@ -1318,7 +1384,15 @@ pub fn open(ui: &Rc<Ui>) {
             signing: (project > 0).then(|| gtk::Box::new(gtk::Orientation::Vertical, 12)),
             run_states: gtk::Box::new(gtk::Orientation::Vertical, 12),
             release_states: gtk::Box::new(gtk::Orientation::Vertical, 12),
+            target_shown: RefCell::new(None),
+            chosen: Rc::new(Chosen::default()),
+            offline: paragraph("Connection to Relay lost. Reconnecting…"),
         };
+        if let Some((_, target)) = &live.target {
+            live.chosen.follow(target);
+        }
+        live.offline.set_visible(false);
+        run.append(&live.offline);
         run.append(&label("Devices", "title"));
         live.devices.append(&paragraph("Loading devices…"));
         run.append(&live.devices);
@@ -1409,34 +1483,79 @@ pub fn open(ui: &Rc<Ui>) {
             }
         });
         mark_dirty(&ui, project, pickers);
-        // Subscribe before the first read, so nothing that changes in between is missed. The
-        // panel's own Release, Stop, Boot and signing actions come back this way too.
-        let mut events = Client::connect(&ui.rt, ui.path.clone()).await.ok();
-        if let Some((client, _)) = &events {
-            if client.request(&ui.rt, "bus.subscribe", json!({"events":PANEL_EVENTS})).await.is_err() {
-                events = None;
-            }
-        }
-        live.redraw(&ui, project, Parts::ALL).await;
-        let Some((client, notices)) = events else { return };
-        while let Ok(notice) = notices.recv().await {
-            let mut parts = Parts::default();
-            match notice {
-                Notice::Event(event) => parts.note(&event.ev),
-                Notice::Disconnected(_) => break,
-                Notice::Frame(_) => continue,
-            }
-            // A boot or a build sends several in a row: take what has queued and redraw once.
-            glib::timeout_future(std::time::Duration::from_millis(150)).await;
-            while let Ok(notice) = notices.try_recv() {
-                if let Notice::Event(event) = notice {
-                    parts.note(&event.ev);
+        let mut wait = 1;
+        loop {
+            // Subscribe before the first read, so nothing that changes in between is missed. The
+            // panel's own Release, Stop, Boot and signing actions come back this way too.
+            let mut events = Client::connect(&ui.rt, ui.path.clone()).await.ok();
+            if let Some((client, _)) = &events {
+                if client.request(&ui.rt, "bus.subscribe", json!({"events":PANEL_EVENTS})).await.is_err() {
+                    events = None;
                 }
             }
-            live.redraw(&ui, project, parts).await;
+            // The engine reports devices coming and going only while someone watches (the
+            // Devices page and the mirror do): a phone plugged in now shows here too. Once
+            // per engine connection; the panel's close lets it go.
+            if events.is_some() && watching.get() != Some(ui.generation.get()) && ui.call("device.watch", json!({"on":true})).await.is_ok() {
+                watching.set(Some(ui.generation.get()));
+            }
+            live.redraw(&ui, project, Parts::ALL).await;
+            let Some((client, notices)) = events else {
+                // No events: say the panel is not following, and try again.
+                live.say_offline(true);
+                glib::timeout_future_seconds(wait).await;
+                wait = (wait * 2).min(30);
+                continue;
+            };
+            live.say_offline(false);
+            wait = 1;
+            while let Ok(notice) = notices.recv().await {
+                let mut parts = Parts::default();
+                match notice {
+                    Notice::Event(event) => parts.note(&event.ev),
+                    Notice::Disconnected(_) => break,
+                    Notice::Frame(_) => continue,
+                }
+                // A boot or a build sends several in a row: take what has queued and redraw once.
+                glib::timeout_future(std::time::Duration::from_millis(150)).await;
+                while let Ok(notice) = notices.try_recv() {
+                    if let Notice::Event(event) = notice {
+                        parts.note(&event.ev);
+                    }
+                }
+                live.redraw(&ui, project, parts).await;
+            }
+            drop(client);
+            live.say_offline(true);
         }
-        drop(client);
     });
-    panel.on_closed(move || task.abort());
+    panel.on_closed(move || {
+        task.abort();
+        if let (Some(ui), Some(_)) = (closing.upgrade(), unwatch.get()) {
+            glib::spawn_future_local(async move {
+                let _ = ui.call("device.watch", json!({"on":false})).await;
+            });
+        }
+    });
     panel.present();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::target_row;
+
+    fn listed(serials: &[&str]) -> Vec<(String, String)> {
+        serials.iter().map(|s| (s.to_string(), format!("Phone · {s}"))).collect()
+    }
+
+    #[test]
+    fn the_chosen_device_comes_back_chosen() {
+        // B was chosen, dropped off for a reboot (A shown meanwhile), and came back.
+        assert_eq!(target_row(&listed(&["A"]), Some("B"), Some("B")), Some(0));
+        assert_eq!(target_row(&listed(&["A", "B"]), Some("B"), Some("A")), Some(1));
+        // Nothing chosen yet: the one shown stays, else the first.
+        assert_eq!(target_row(&listed(&["A", "B"]), None, Some("B")), Some(1));
+        assert_eq!(target_row(&listed(&["A", "B"]), None, Some("C")), Some(0));
+        assert_eq!(target_row(&[], Some("B"), None), None);
+    }
 }
