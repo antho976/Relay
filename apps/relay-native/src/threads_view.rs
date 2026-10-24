@@ -4535,6 +4535,7 @@ fn edit_budget(ui: &Rc<Ui>, anchor: &gtk::Button, b: &Value) {
 
     let commit = {
         let (weak, pop, field, error, save) = (Rc::downgrade(ui), pop.downgrade(), field.downgrade(), error.downgrade(), save.downgrade());
+        let name = name.clone();
         move || {
             let (Some(ui), Some(pop), Some(field), Some(error), Some(save)) = (weak.upgrade(), pop.upgrade(), field.upgrade(), error.upgrade(), save.upgrade()) else { return };
             let typed = field.text();
@@ -4550,13 +4551,36 @@ fn edit_budget(ui: &Rc<Ui>, anchor: &gtk::Button, b: &Value) {
                 return;
             }
             save.set_sensitive(false);
-            let mut payload = json!({"amount": value});
-            if let Some(id) = category {
-                payload["category_id"] = json!(id);
-            }
+            let payload = |amount: i64| match category {
+                Some(id) => json!({"amount": amount, "category_id": id}),
+                None => json!({"amount": amount}),
+            };
+            // Said, with Undo (the amount it had), as an entry's save is.
+            let said = if value > 0 {
+                format!("Budget for {name}: {}", super::formatter().format_whole(value))
+            } else {
+                format!("No budget for {name}")
+            };
+            let back = payload(amount);
+            let undo: super::Action = {
+                let weak = Rc::downgrade(&ui);
+                Rc::new(move || {
+                    let Some(ui) = weak.upgrade() else { return };
+                    let back = back.clone();
+                    glib::spawn_future_local(async move {
+                        if let Err(e) = ui.call("money.budget.set", back).await {
+                            ui.show_error(&super::pages::unavailable(&e));
+                        }
+                    });
+                })
+            };
+            let set = payload(value);
             glib::spawn_future_local(async move {
-                match ui.call("money.budget.set", payload).await {
-                    Ok(_) => pop.popdown(),
+                match ui.call("money.budget.set", set).await {
+                    Ok(_) => {
+                        pop.popdown();
+                        super::toast(&ui, &said, Some(undo));
+                    }
                     Err(e) => {
                         error.set_text(&super::pages::unavailable(&e));
                         error.set_visible(true);

@@ -2297,6 +2297,7 @@ fn budget_field(ui: &Rc<Ui>, category: Option<i64>, name: &str, amount: i64) -> 
     let commit = {
         let weak = Rc::downgrade(ui);
         let saved = saved.clone();
+        let name = name.to_string();
         move |field: &gtk::Entry| {
             let Some(ui) = weak.upgrade() else { return };
             if rebuilding() {
@@ -2313,14 +2314,37 @@ fn budget_field(ui: &Rc<Ui>, category: Option<i64>, name: &str, amount: i64) -> 
             if value == saved.get() {
                 return;
             }
-            saved.set(value);
-            let mut payload = json!({"amount":value});
-            if let Some(id) = category {
-                payload["category_id"] = json!(id);
-            }
+            let before = saved.replace(value);
+            let payload = |amount: i64| match category {
+                Some(id) => json!({"amount":amount,"category_id":id}),
+                None => json!({"amount":amount}),
+            };
+            // Said, with Undo, as an entry's save is: a budget typed over by a stray keystroke
+            // comes back with one key.
+            let said = if value > 0 {
+                format!("Budget for {name}: {}", formatter().format_whole(value))
+            } else {
+                format!("No budget for {name}")
+            };
+            let back = payload(before);
+            let undo: super::Action = {
+                let weak = Rc::downgrade(&ui);
+                Rc::new(move || {
+                    let Some(ui) = weak.upgrade() else { return };
+                    let back = back.clone();
+                    glib::spawn_future_local(async move {
+                        if let Err(e) = ui.call("money.budget.set", back).await {
+                            ui.show_error(&unavailable(&e));
+                        }
+                        ui.refresh_page();
+                    });
+                })
+            };
+            let set = payload(value);
             glib::spawn_future_local(async move {
-                if let Err(e) = ui.call("money.budget.set", payload).await {
-                    ui.show_error(&unavailable(&e));
+                match ui.call("money.budget.set", set).await {
+                    Ok(_) => super::toast(&ui, &said, Some(undo)),
+                    Err(e) => ui.show_error(&unavailable(&e)),
                 }
                 ui.refresh_page();
             });
