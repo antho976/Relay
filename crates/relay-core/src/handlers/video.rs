@@ -896,7 +896,10 @@ pub fn register(e: &mut Engine) {
         let (dir, blobs) = (PathBuf::from(&video.dir), video::blobs_dir(ctx.engine()));
         let folder = |e: String| BusError::unavailable("video.folder", format!("could not read the video's folder: {e}"));
         let before = versions::scan(&dir, &blobs).map_err(folder)?;
-        let (_, _, missing) = versions::restore(&dir, &blobs, &entries).map_err(folder)?;
+        let versions::Restored { missing, left, .. } = versions::restore(&dir, &blobs, &entries).map_err(folder)?;
+        if !left.is_empty() {
+            tracing::info!(video = video.id, left = ?left, "video version restore: left files no version could put back");
+        }
         let after = versions::scan(&dir, &blobs).map_err(folder)?;
         Ok(StagedRestore { before, after, missing })
     }, |ctx: &mut Ctx, p, staged| {

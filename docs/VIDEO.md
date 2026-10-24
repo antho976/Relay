@@ -195,7 +195,9 @@ no `contrast`, which needs the pixels; a still's frames have it.
 Agents' edits never pass through Relay, so each check, still and render reads the folder first and
 records a version when its files differ from the newest one's: a manifest of every file but `out/`,
 `public/assets/`, dot-files and files over 2 MiB, with contents kept once by hash. A restore records
-the code as it is, then puts the version's back, and is undone by restoring the one it recorded.
+the code as it is, then puts the version's back, and is undone by restoring the one it recorded. A
+file over 2 MiB, or a link, that the version does not name is left in place: no version keeps a
+copy to put it back.
 
 ## In the Design view
 
