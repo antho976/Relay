@@ -27,7 +27,38 @@ struct Agents {
     focus_keys: HashMap<String, glib::WeakRef<gtk::Button>>,
     /// The last phone install per session: run id and what it last said.
     phone: HashMap<String, Phone>,
+    /// Closing panes, off the wall but alive: a refused close puts each back where it was,
+    /// with its scrollback, instead of a new pane at the end built from the engine's tail.
+    parked: HashMap<String, Parked>,
     next_placeholder: u32,
+}
+
+struct Parked {
+    /// None until the wall takes the pane down (`park_pane`).
+    pane: Option<Rc<Pane>>,
+    /// Its row and its place on the wall when the close began.
+    row: Value,
+    at: usize,
+    focused: bool,
+}
+
+/// The wall took down `name`'s pane while its close is in flight: hold it until the engine
+/// answers. Any other pane is finished with.
+pub(in crate::app) fn park_pane(name: &str, pane: Rc<Pane>) {
+    let left = with(|a| match a.parked.get_mut(name).filter(|_| a.closing.contains(name)) {
+        Some(parked) => parked.pane.replace(pane),
+        None => Some(pane),
+    });
+    if let Some(pane) = left {
+        pane.stop();
+    }
+}
+
+/// The close of `name` went through: its parked pane is finished with.
+fn settle_parked(name: &str) {
+    if let Some(pane) = with(|a| a.parked.remove(name)).and_then(|p| p.pane) {
+        pane.stop();
+    }
 }
 
 #[derive(Clone, Default)]
@@ -194,7 +225,9 @@ impl Ui {
             with(|a| {
                 a.closing.remove(&name);
                 a.phone.remove(&name);
+                a.selected.remove(&name);
             });
+            settle_parked(&name);
         }
         // The board shows a session only as a name on its task, so only a new task link changes it.
         let mut relinked = !closed && payload["task_id"].is_i64();
@@ -244,6 +277,13 @@ impl Ui {
         if !session["name"].is_string() {
             return;
         }
+        // An answer comes on a connection of its own, so the events on the main one may have
+        // passed it: spawn's "running" must not overwrite a "blocked" that came after.
+        let name = text(session, "name");
+        let held = self.sidebar_sessions.borrow().iter().find(|s| text(s, "name") == name).map(|s| text(s, "updated_at").to_string());
+        if held.is_some_and(|held| !held.is_empty() && text(session, "updated_at") < held.as_str()) {
+            return;
+        }
         self.apply_session_event("session.changed", session);
     }
 
@@ -251,12 +291,22 @@ impl Ui {
     /// pane comes back only if the engine refuses. Several are closed one after another, so their
     /// worktree and branch removals do not race on the shared repository. Uncommitted work in any
     /// of them is asked about once, for all of them.
-    pub(super) fn close_agents(self: &Rc<Self>, names: Vec<String>, payload: Value) {
+    pub(in crate::app) fn close_agents(self: &Rc<Self>, names: Vec<String>, payload: Value) {
         let clicked = Instant::now();
+        let (ordered, focused) = (self.ordered.borrow().clone(), self.focused.borrow().clone());
+        let rows = self.sessions.borrow().clone();
         with(|a| {
             for name in &names {
                 a.closing.insert(name.clone());
                 a.selected.remove(name);
+                // A second close (Discard changes after a refusal) keeps the first's place.
+                if let (false, Some(row), Some(at)) = (
+                    a.parked.contains_key(name),
+                    rows.iter().find(|s| text(s, "name") == name),
+                    ordered.iter().position(|n| n == name),
+                ) {
+                    a.parked.insert(name.clone(), Parked { pane: None, row: row.clone(), at, focused: focused.as_deref() == Some(name) });
+                }
             }
         });
         self.sessions.borrow_mut().retain(|s| !names.iter().any(|n| n == text(s, "name")));
@@ -309,6 +359,9 @@ impl Ui {
                 payload["discard_changes"] = json!(true);
                 ui.close_agents(dirty.into_iter().map(|(name, _)| name).collect(), payload);
             } else {
+                for (name, _) in &dirty {
+                    ui.unpark(name);
+                }
                 ui.refresh();
             }
         });
@@ -322,25 +375,25 @@ impl Ui {
         if matches!(result, Err(crate::client::Error::Timeout)) {
             // Removing a large worktree can outlast the request: the close is still running,
             // and its session.changed(closed) settles it. The pane comes back only if that
-            // never arrives. Watched on the side, so the next close in a batch is not held up.
+            // never arrives. The next close in a batch waits for it (its pane is already off
+            // the wall), so two worktree removals never race on the shared repository.
             self.show_error(&format!("Still closing {name}: removing its worktree takes a while."));
-            let (ui, name) = (self.clone(), name.to_string());
-            glib::spawn_future_local(async move {
-                for _ in 0..120 {
-                    glib::timeout_future_seconds(5).await;
-                    if !is_closing(&name) {
-                        return;
-                    }
+            for _ in 0..120 {
+                glib::timeout_future_seconds(5).await;
+                if !is_closing(name) {
+                    return None;
                 }
-                with(|a| a.closing.remove(&name));
-                ui.show_error(&format!("{name} has not finished closing; check its worktree before closing it again."));
-                ui.refresh();
-            });
+            }
+            with(|a| a.closing.remove(name));
+            self.unpark(name);
+            self.show_error(&format!("{name} has not finished closing; check its worktree before closing it again."));
+            self.refresh();
             return None;
         }
         with(|a| a.closing.remove(name));
         match result {
             Ok(_) => {
+                settle_parked(name);
                 self.sidebar_sessions.borrow_mut().retain(|s| text(s, "name") != name);
                 self.render_projects();
                 self.render_status_counts();
@@ -351,11 +404,42 @@ impl Ui {
                 Some((stopped, error.message))
             }
             Err(error) => {
+                self.unpark(name);
                 self.show_error(&format!("Could not close {name}: {error}"));
                 self.refresh();
                 None
             }
         }
+    }
+
+    /// A close that did not happen: the pane goes back to its place on the wall, as it was,
+    /// focus included. One from another project, or never taken down, is just let go.
+    fn unpark(self: &Rc<Self>, name: &str) {
+        let Some(parked) = with(|a| a.parked.remove(name)) else { return };
+        let Some(pane) = parked.pane else { return };
+        if parked.row["project_id"].as_i64() != Some(self.project.get()) || self.panes.borrow().contains_key(name) {
+            pane.stop();
+            return;
+        }
+        self.panes.borrow_mut().insert(name.to_string(), pane);
+        {
+            let mut sessions = self.sessions.borrow_mut();
+            if !sessions.iter().any(|s| text(s, "name") == name) {
+                sessions.push(parked.row);
+            }
+        }
+        {
+            let mut ordered = self.ordered.borrow_mut();
+            if !ordered.iter().any(|n| n == name) {
+                let at = parked.at.min(ordered.len());
+                ordered.insert(at, name.to_string());
+            }
+        }
+        if parked.focused {
+            *self.focused.borrow_mut() = Some(name.to_string());
+        }
+        self.reconcile();
+        self.layout();
     }
 
     /// Start, park, wake or resume from the pane header. Starts show their progress on the pane
@@ -1171,6 +1255,8 @@ impl Ui {
                             url.set_text("");
                             format!("Linked {} at {}", text(repo, "name"), text(repo, "path"))
                         }
+                        // Its outcome is unknown: the clone may still finish, and the list says.
+                        Err(Error::Timeout) => format!("{wanted} is still cloning; it shows here once it is linked."),
                         Err(e) => format!("Could not link it: {e}"),
                     };
                     if let Some(st) = st.upgrade() {

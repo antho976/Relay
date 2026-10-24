@@ -196,6 +196,8 @@ thread_local! {
         const { RefCell::new(crate::editor::find_bar::Memory::new()) };
     static FONT: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
     static TASKS_TIMER: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
+    /// A task changed while the Notes window was hidden.
+    static TASKS_STALE: Cell<bool> = const { Cell::new(false) };
     static SCHEME: OnceCell<Option<sourceview5::StyleScheme>> = const { OnceCell::new() };
     /// Whole notes by id, as `notes.get` returned them: the library lists only previews. A
     /// copy is current while its `updated_at` matches the listed one, as every change sets it.
@@ -1823,9 +1825,15 @@ pub(super) fn open_doc(ui: &Rc<Ui>, note: Value, position: Option<u32>) -> Rc<Do
 
 /// A task changed somewhere: every open note lists its tasks again, once the burst settles.
 pub fn tasks_changed(ui: &Rc<Ui>) {
-    if !owner(ui).is_some_and(|o| o.window.is_visible()) || docs().is_empty() {
+    if docs().is_empty() {
         return;
     }
+    // Nobody sees a hidden window's task chips: they are read again when it shows.
+    if !owner(ui).is_some_and(|o| o.window.is_visible()) {
+        TASKS_STALE.with(|stale| stale.set(true));
+        return;
+    }
+    TASKS_STALE.with(|stale| stale.set(false));
     if let Some(timer) = TASKS_TIMER.with(|t| t.borrow_mut().take()) {
         timer.remove();
     }
@@ -1839,6 +1847,13 @@ pub fn tasks_changed(ui: &Rc<Ui>) {
         }
     });
     TASKS_TIMER.with(|t| *t.borrow_mut() = Some(timer));
+}
+
+/// The Notes window was shown: task chips that went stale while it was hidden are read again.
+pub fn shown(ui: &Rc<Ui>) {
+    if TASKS_STALE.with(|stale| stale.get()) {
+        tasks_changed(ui);
+    }
 }
 
 pub fn edit(ui: &Rc<Ui>, note: Value) {

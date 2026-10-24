@@ -22,7 +22,7 @@ OUT.mkdir(parents=True, exist_ok=True)
 ENGINE = ROOT / "target/debug/relay"
 NATIVE = ROOT / "target/debug/relay-native"
 # The in-app roadmap regressions (apps/relay-native/src/smoke.rs, RELAY_NATIVE_ROADMAP).
-ROADMAP_PARTS = ("notes", "files", "lifecycle", "tools", "registry")
+ROADMAP_PARTS = ("notes", "files", "lifecycle", "tools", "devspace", "registry")
 
 
 def git(repo, *args):

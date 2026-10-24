@@ -1936,6 +1936,8 @@ impl Ui {
                     // app offers to draw them for agents on a connection of its own.
                     crate::design::reconnected(&ui);
                     crate::design::render::lease(&ui);
+                    // So does the open document: a file changed during the outage shows now.
+                    ui.editor.reconnected(&ui);
                     ui.set_connected(true);
                     crate::provider_updates::startup(&ui);
                     ui.status.set_text("");
@@ -2038,6 +2040,8 @@ impl Ui {
                                 // A note lists the tasks made from it, whatever project it shows.
                                 if matches!(e.ev.as_str(), "task.changed" | "task.deleted") {
                                     crate::pages::note_tasks_changed(&ui);
+                                    // An open task page follows its task, whatever the board shows.
+                                    crate::pages::task_event(&e.ev, &e.payload);
                                 }
                                 // Notes retains its own project when the main window switches.
                                 if matches!(e.ev.as_str(), "notes.changed" | "notes.deleted") {
@@ -2391,11 +2395,17 @@ impl Ui {
             .cloned()
             .collect();
         for n in old {
-            self.rendered_sessions.borrow_mut().remove(&n);
-            if let Some(p) = self.panes.borrow_mut().remove(&n) {
-                p.stop();
+            let removed = self.panes.borrow_mut().remove(&n);
+            if let Some(p) = removed {
                 if let Some(grid) = p.root.parent().and_downcast::<gtk::Grid>() {
                     grid.remove(&p.root);
+                }
+                // A pane being closed is held, header and scrollback, until the close answers.
+                if shell::is_closing(&n) {
+                    shell::park_pane(&n, p);
+                } else {
+                    self.rendered_sessions.borrow_mut().remove(&n);
+                    p.stop();
                 }
             }
         }
@@ -2616,6 +2626,18 @@ impl Ui {
             "The launch sheet must block background actions"
         );
     }
+    /// For the smoke harness: the wall in order, each name with its pane's identity, and the
+    /// focused pane.
+    pub(crate) fn smoke_wall(&self) -> (Vec<(String, usize)>, Option<String>) {
+        let panes = self.panes.borrow();
+        let wall = self.ordered.borrow().iter().map(|n| (n.clone(), panes.get(n).map_or(0, |p| Rc::as_ptr(p) as usize))).collect();
+        (wall, self.focused.borrow().clone())
+    }
+    /// For the smoke harness: a close as the pane menu sends it, worktree removed.
+    pub(crate) fn smoke_close(self: &Rc<Self>, name: &str) {
+        self.close_agents(vec![name.to_string()], json!({"session": name, "remove_worktree": true}));
+    }
+
     pub fn verify_terminal_input(&self) {
         use vte4::prelude::TerminalExt;
         for (name, pane) in self.panes.borrow().iter() {

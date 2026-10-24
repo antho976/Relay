@@ -343,12 +343,10 @@ impl Center {
                 crate::pages::open_task(&ui, id);
             }
         }
-        // A session's own notice focuses its terminal, as the tile's focus key does.
+        // A session's own notice focuses its terminal, as the tile's focus key does, and
+        // keeps it focused when the project's saved layout is restored after the switch.
         if let Some(session) = payload["session"].as_str() {
-            if ui.panes.borrow().contains_key(session) {
-                *ui.focused.borrow_mut() = Some(session.to_string());
-                ui.set_mode("focus");
-            }
+            ui.focus_session(session);
         }
     }
 }

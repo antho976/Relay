@@ -318,6 +318,25 @@ impl Panel {
         }
     }
 
+    /// Bring an open panel back to the top, as a link to a page already open under others
+    /// does: the panels over it stay open, now under it, and its Back returns to them.
+    pub fn raise(self: &Rc<Self>) {
+        let Some(panels) = self.panels.upgrade() else { return };
+        let on_top = panels.borrow().last().is_some_and(|top| Rc::ptr_eq(top, self));
+        if self.layer.parent().is_some() && !on_top {
+            panels.borrow_mut().retain(|p| !Rc::ptr_eq(p, self));
+            for other in panels.borrow().iter() {
+                other.layer.set_sensitive(false);
+            }
+            // An overlay draws its children in the order they were added.
+            self.host.remove_overlay(&self.layer);
+            self.host.add_overlay(&self.layer);
+            self.layer.set_sensitive(true);
+            panels.borrow_mut().push(self.clone());
+        }
+        self.present();
+    }
+
     /// Focus the body's first control. A selectable paragraph is passed over: focusing it
     /// selects all of its text.
     fn focus_body(&self) -> bool {

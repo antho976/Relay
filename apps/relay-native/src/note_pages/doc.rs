@@ -57,7 +57,7 @@ pub struct Doc {
     /// Bumped by every `load_tasks`, so a slow answer never overwrites a newer one.
     tasks_generation: Cell<u64>,
     /// The tab was asked to close while a save ran: it closes once that save lands.
-    close_pending: Cell<bool>,
+    pub close_pending: Cell<bool>,
     /// Made empty by New note (which creates it at once) and stored as made since: closing
     /// its tab deletes it, so an untouched Ctrl+N leaves no "Untitled" note behind.
     pub fresh: Cell<bool>,
@@ -382,6 +382,8 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
         }
     }
     doc.view.add_controller(super::inline::drop_target(ui, &doc));
+    doc.view.add_controller(super::inline::picture_drop(&doc));
+    doc.view.add_controller(super::inline::menu_keys(&doc));
     let changed = with(|ui, doc| doc.changed(ui));
     doc.title.connect_changed(move |_| changed());
     let focus_body = with(|_, doc| {
@@ -1454,6 +1456,12 @@ pub fn request_close(ui: &Rc<Ui>, doc: &Rc<Doc>) {
         doc.flash("Closing once saved");
         return;
     }
+    // A pasted picture still being written goes in first, so it is not lost with the tab.
+    if doc.inline.writing.get() > 0 {
+        doc.close_pending.set(true);
+        doc.flash("Closing once the picture is kept");
+        return;
+    }
     if !doc.dirty() {
         doc.draft.close();
         return;
@@ -1501,6 +1509,13 @@ pub fn reconcile(ui: &Rc<Ui>, doc: &Rc<Doc>, latest: Option<&Value>) {
     if doc.deleted.replace(false) {
         doc.hide_notice();
     }
+    // An older copy than the one the tab holds (a read that crossed a save) says nothing new:
+    // loaded, it would put back old text and wipe undo. Stamps are one width and sort in time.
+    let stamp_of = |value: &Value| value["updated_at"].as_str().unwrap_or("").to_string();
+    let held = stamp_of(&doc.draft.base.borrow());
+    if !held.is_empty() && stamp_of(note) < held {
+        return;
+    }
     let same = {
         let base = doc.draft.base.borrow();
         note["title"] == base["title"] && note["body"] == base["body"]
@@ -1518,6 +1533,17 @@ pub fn reconcile(ui: &Rc<Ui>, doc: &Rc<Doc>, latest: Option<&Value>) {
     }
     if !doc.dirty() {
         doc.load(note.clone());
+        doc.refresh_state(ui);
+        return;
+    }
+    // The text on screen is what is stored: this tab's own save, whose answer was lost to a
+    // disconnect. It is adopted as saved, not reported as a change from somewhere else.
+    let shown = (doc.draft.snapshot)();
+    if note["title"] == shown["title"] && note["body"] == shown["body"] {
+        *doc.stored_title.borrow_mut() = note["title"].clone();
+        *doc.draft.base.borrow_mut() = note.clone();
+        doc.sync_pin();
+        doc.update_meta();
         doc.refresh_state(ui);
         return;
     }

@@ -102,6 +102,11 @@ pub(crate) fn prefer_dock() {
 pub fn open_avd(ui: &Rc<Ui>, name: String, cold: bool) {
     let existing = VIEWS.with(|views| views.borrow().iter().find(|view| view.avd.borrow().as_deref() == Some(name.as_str())).cloned());
     if let Some(view) = existing {
+        // A mirror left open on an AVD that was stopped, or died: Start and Cold boot it
+        // again, rather than raise a dead view.
+        if view.phase.get() != Phase::Live && !view.booting.get() {
+            view.boot(cold);
+        }
         view.present();
         return;
     }
@@ -839,7 +844,10 @@ impl MirrorView {
         let weak = Rc::downgrade(self);
         let task = glib::spawn_future_local(async move {
             let alive = || weak.upgrade().filter(|view| view.current(generation));
-            if let Err(error) = ui.call("avd.boot", json!({"name":name,"cold":cold})).await {
+            let booted = ui.call("avd.boot", json!({"name":name,"cold":cold})).await;
+            // Already up (a retry after the mirror alone failed): go straight to its serial.
+            let running = matches!(&booted, Err(crate::client::Error::Bus(e)) if e.code == "avd.already_running");
+            if let (Err(error), false) = (booted, running) {
                 if let Some(view) = alive() {
                     view.booting.set(false);
                     view.ended(&format!("{} didn't boot", view.name()), &error.to_string(), None, Some("Copy details"));
@@ -871,9 +879,10 @@ impl MirrorView {
         *self.task.borrow_mut() = Some(task);
     }
 
-    /// Retry: a view that never reached its AVD boots it again; anything else restarts the mirror.
+    /// Retry: an AVD's view boots it again (one still running is found by its name, as its
+    /// serial may be gone or new); a phone's restarts the mirror.
     fn retry(self: &Rc<Self>) {
-        if self.device.borrow().is_empty() && self.avd.borrow().is_some() {
+        if self.avd.borrow().is_some() {
             self.boot(false);
         } else {
             self.start();
