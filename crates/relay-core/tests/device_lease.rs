@@ -212,8 +212,13 @@ fn a_run_stopped_while_building_keeps_the_device_for_a_grace_period() {
     let e = &f.engine;
     let (a, worktree_a) = session(e);
     let (b, _) = session(e);
+    // Stopped once its build has started: one stopped before (during the checkout's sync) never
+    // ran Gradle and frees the device at once.
+    let marker = f._root.path().join("build-started");
+    ok(e, Actor::User, "project.update", json!({"project_id": 1, "run_cmd": format!("touch '{}'; sleep 30", marker.display())}));
     let run = ok(e, Actor::User, "device.run", json!({"project_id": 1, "worktree": worktree_a, "device": "relay-phone"}));
     let run_id = run["id"].as_i64().unwrap();
+    common::wait_until("the build to start", || marker.exists());
     let mut events = e.subscribe();
     ok(e, Actor::User, "device.run.stop", json!({"run_id": run_id}));
     let gone = released(&mut events);

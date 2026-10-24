@@ -297,13 +297,16 @@ pub fn register(e: &mut Engine) {
 
     e.register::<RunStop>(|ctx: &mut Ctx, p| {
         let run = get_run(ctx.tx(), p.run_id)?;
-        if let Some(runtime) = ctx.engine().device_runs.lock().unwrap().remove(&p.run_id) {
+        let runtime = ctx.engine().device_runs.lock().unwrap().remove(&p.run_id);
+        if let Some(runtime) = &runtime {
             runtime.stop();
         }
         // While it builds, the stop does not reach Gradle's daemon, which may still be running
         // `adb install`: the device stays the holder's a little longer. A running app is long
-        // installed, and its device is free at once.
-        let (released, grace) = if run.state == "building" {
+        // installed, and a build stopped before Gradle started (during its checkout's sync)
+        // installs nothing: either device is free at once.
+        let gradle_ran = runtime.as_ref().is_none_or(|runtime| runtime.started());
+        let (released, grace) = if run.state == "building" && gradle_ran {
             ctx.engine().device_leases.stop_run(p.run_id, crate::device_lease::SHELL_GRACE)
         } else {
             (ctx.engine().device_leases.release_run(p.run_id), None)
@@ -2911,6 +2914,7 @@ fn stream_command(
     if let Some(sdk_root) = sdk_root {
         spawn.env("ANDROID_HOME", sdk_root).env("ANDROID_SDK_ROOT", sdk_root);
     }
+    runtime.mark_started();
     let spawned = spawn.spawn();
     // The parent's copies of the write end go with the Command, or the log never reaches EOF.
     drop(spawn);
