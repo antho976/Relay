@@ -236,8 +236,13 @@ data class BusError(
     val details: JsonObject? = null,
     val confirm: JsonObject? = null,
 ) {
-    /** Worth sending again later: the PC was busy or away, not a verdict on the request. */
-    val transient: Boolean get() = kind == "unavailable" || code == "link.down" || code == "link.timeout" || code == "app.quitting"
+    /**
+     * Worth sending again later: the link was down or timed out, the PC was quitting, or it was
+     * busy for a moment. Every other `unavailable` (a provider not installed, a spawn or a clone
+     * that failed, no Git head) is the PC's lasting answer, and asking again gets it again.
+     */
+    val transient: Boolean get() = code.startsWith("link.") || code == "app.quitting" ||
+        (kind == "unavailable" && (code.endsWith(".busy") || code.endsWith(".rate_limited")))
 
     companion object {
         fun from(o: JsonObject): BusError {

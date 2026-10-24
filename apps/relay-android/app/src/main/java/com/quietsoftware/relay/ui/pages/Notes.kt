@@ -24,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -48,6 +49,7 @@ import com.quietsoftware.relay.core.model.decodeAs
 import com.quietsoftware.relay.core.sync.Kind
 import com.quietsoftware.relay.core.sync.Optimistic
 import com.quietsoftware.relay.core.sync.Refs
+import com.quietsoftware.relay.core.wire.Wire
 import com.quietsoftware.relay.core.wire.arr
 import com.quietsoftware.relay.core.wire.l
 import com.quietsoftware.relay.data.Relay.Live
@@ -207,7 +209,7 @@ private val LINK = Regex("""\[([^\]]*)]\([^)]*\)""")
 private val EMPHASIS = Regex("""\*\*|__|`""")
 
 /** Unsaved text, and what it started from (null for a new note). */
-private data class Draft(val title: String, val body: String, val base: Note?) {
+internal data class Draft(val title: String, val body: String, val base: Note?) {
     val changed: Boolean
         get() = base?.let { title.trim() != (it.title ?: "").trim() || body != it.body } ?: (title.isNotBlank() || body.isNotBlank())
 
@@ -215,6 +217,22 @@ private data class Draft(val title: String, val body: String, val base: Note?) {
     val name: String
         get() = title.trim().ifEmpty { body.lineSequence().firstOrNull { it.isNotBlank() }?.trimStart('#', ' ')?.take(80) ?: "Untitled" }
 }
+
+/**
+ * A draft kept across the process being reclaimed or the activity made again (a font size or
+ * locale change): the text, what it started from, and whether the note was open for editing at
+ * all, as one list of strings.
+ */
+internal val DraftSaver: Saver<Draft?, Any> = Saver(
+    save = { d -> if (d == null) arrayListOf(VIEWING) else arrayListOf(EDITING, d.title, d.body, d.base?.let { Wire.json.encodeToString(Note.serializer(), it) }.orEmpty()) },
+    restore = { saved ->
+        val v = (saved as List<*>).map { it as String }
+        if (v.first() == VIEWING) null else Draft(v[1], v[2], v[3].takeIf { it.isNotEmpty() }?.let { Wire.json.decodeFromString(Note.serializer(), it) })
+    },
+)
+
+private const val VIEWING = "viewing"
+private const val EDITING = "editing"
 
 /**
  * A note's key on the bus: its number, or, for one the PC has not numbered yet, the outbox entry
@@ -234,7 +252,7 @@ fun NoteScreen(id: String?, projectId: Long?, nav: Nav) {
     val pid = projectId ?: s.project?.num
     var ref by rememberSaveable(id) { mutableStateOf(id) }
     var created by remember { mutableStateOf<Note?>(null) }
-    var draft by remember { mutableStateOf(if (id == null) Draft("", "", null) else null) }
+    var draft by rememberSaveable(id, stateSaver = DraftSaver) { mutableStateOf(if (id == null) Draft("", "", null) else null) }
     var leave by remember { mutableStateOf<(() -> Unit)?>(null) }
     // Discard on a changed draft asks first, as the PC's editor does before it drops edits.
     var discarding by remember { mutableStateOf(false) }

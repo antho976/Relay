@@ -141,7 +141,12 @@ private fun OutboxRow(e: OutboxEntry, nav: Nav, scope: CoroutineScope, away: Boo
             else -> {
                 Status(c.waiting, if (e.attempts > 0) "Sent, waiting for an answer" else "Waiting for the PC", c.ink2)
                 // Not sent yet, with the PC away: it can still be taken back, as the board's Undo does.
-                if (e.attempts == 0 && away) {
+                // Sent with no answer: it can be let go of, so it holds nothing up, though the PC may have it.
+                if (e.attempts > 0) {
+                    Gap(4.dp)
+                    T("The PC may already have it. Dropping it stops the phone sending it again.", style = Relay.type.caption, color = c.ink3)
+                }
+                if (e.attempts > 0 || away) {
                     Gap(10.dp)
                     Key("Drop", onDrop, kind = KeyKind.Quiet, compact = true)
                 }

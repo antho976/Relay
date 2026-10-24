@@ -92,6 +92,56 @@ class LedgerTest {
     }
 
     @Test
+    fun `trying a refused create again moves its temp row and what waits on it to the new id`() = runBlocking {
+        val create = ledger.enqueue("task.create", obj("project_id" to 1, "title" to "Refused once"), "New task")
+        val label = ledger.enqueue("task.label.add", obj("task_id" to Refs.ref(create.id), "label" to "phone"), "Label")
+        outbox.update(outbox.get(create.id)!!.copy(state = OutboxEntry.State.Failed, error = BusError("unavailable", "git.head", "no head")))
+
+        val again = ledger.retry(create.id, overwrite = false)!!
+        assertNull("no ghost under the spent id", replica.get(Kind.Task, Optimistic.tempId(create.id)))
+        val temp = Optimistic.tempId(again.id)
+        assertEquals("Refused once", shown(temp).s("title"))
+        assertTrue("the label still shows on it", shown(temp).toString().contains("phone"))
+        assertEquals(setOf(again.id), Refs.of(outbox.get(label.id)!!.payload))
+
+        // Answered this time: the real row replaces the temp one, and nothing is left behind.
+        outbox.update(again.copy(state = OutboxEntry.State.Done, result = task(42, "Refused once")))
+        ledger.applied(outbox.get(again.id)!!, task(42, "Refused once"))
+        assertEquals(listOf("42"), replica.all(Kind.Task).map { it.id })
+        assertTrue(shown("42").toString().contains("phone"))
+    }
+
+    @Test
+    fun `dropping a retried create drops what waits on it`() = runBlocking {
+        val create = ledger.enqueue("task.create", obj("project_id" to 1, "title" to "Refused"), "New task")
+        val label = ledger.enqueue("task.label.add", obj("task_id" to Refs.ref(create.id), "label" to "phone"), "Label")
+        outbox.update(outbox.get(create.id)!!.copy(state = OutboxEntry.State.Failed))
+        val again = ledger.retry(create.id, overwrite = false)!!
+        outbox.update(again.copy(state = OutboxEntry.State.Failed))
+        ledger.discard(again.id)
+        assertNull(outbox.get(label.id))
+        assertTrue(replica.all(Kind.Task).isEmpty())
+    }
+
+    @Test
+    fun `an event that lands while a list is read is not overwritten by the list`() = runBlocking {
+        ledger.replace(Kind.Task, Scope(projectId = 1), listOf(Row.of(Kind.Task, task(7, "running"))!!, Row.of(Kind.Task, task(8, "doomed"))!!))
+        val since = ledger.beginRead()
+        // The PC answers the list, then says #7 changed and #8 is gone; the event's write wins the lock first.
+        ledger.upsert(listOf(Row.of(Kind.Task, task(7, "done on the PC", column = "done"))!!))
+        ledger.remove(Kind.Task, listOf("8"))
+        ledger.replace(Kind.Task, Scope(projectId = 1), listOf(Row.of(Kind.Task, task(7, "running"))!!, Row.of(Kind.Task, task(8, "doomed"))!!, Row.of(Kind.Task, task(9, "new"))!!), since)
+        ledger.endRead()
+        assertEquals("done on the PC", shown("7").s("title"))
+        assertNull("removed by the event, not brought back by the list", replica.get(Kind.Task, "8"))
+        assertEquals("new", shown("9").s("title"))
+
+        // With no read out, a later list is the whole truth again.
+        ledger.replace(Kind.Task, Scope(projectId = 1), listOf(Row.of(Kind.Task, task(7, "running"))!!), ledger.beginRead().also { ledger.endRead() })
+        assertEquals("running", shown("7").s("title"))
+    }
+
+    @Test
     fun `a delete hides the row until the PC confirms it`() = runBlocking {
         ledger.upsert(listOf(Row.of(Kind.Task, task(7, "old"))!!))
         ledger.enqueue("task.delete", obj("task_id" to 7), "Delete #7")
@@ -119,6 +169,85 @@ class LedgerTest {
         assertEquals("[3]", shown("7")["blocked_by"].toString())
         ledger.enqueue("task.unrelate", obj("task_id" to 7, "relation" to "blocked_by", "other_id" to 3), "Unblock")
         assertEquals("[]", shown("7")["blocked_by"].toString())
+    }
+
+    @Test
+    fun `a message queued to a thread made offline follows the thread to its real id`() = runBlocking {
+        val create = ledger.enqueue("thread.create", obj("title" to "Groceries"), "New thread")
+        val sent = ledger.enqueue("thread.send", obj("id" to Refs.ref(create.id), "text" to "And on pace?"), "Message")
+        assertEquals(Optimistic.tempId(create.id), replica.get(Kind.Message, Optimistic.tempId(sent.id))!!.parent)
+
+        val answer = obj("id" to 31, "title" to "Groceries", "updated_at" to "2026-10-24T10:00:00Z")
+        outbox.update(create.copy(state = OutboxEntry.State.Done, result = answer))
+        ledger.applied(outbox.get(create.id)!!, answer)
+        val moved = replica.all(Kind.Message, Scope(parent = "31"))
+        assertEquals(listOf(Optimistic.tempId(sent.id)), moved.map { it.id })
+        assertEquals("31", moved.single().json["thread_id"].toString())
+    }
+
+    @Test
+    fun `a rename's answer stays shown, not the title from before it`() = runBlocking {
+        ledger.upsert(listOf(Row.of(Kind.Thread, obj("id" to 31, "title" to "Groceries", "updated_at" to "2026-10-24T10:00:00Z"))!!))
+        val e = ledger.enqueue("thread.rename", obj("id" to 31, "title" to "Groceries this month"), "Rename")
+        val answer = obj("id" to 31, "title" to "Groceries this month", "updated_at" to "2026-10-24T10:01:00Z")
+        outbox.update(e.copy(state = OutboxEntry.State.Done, result = answer))
+        ledger.applied(outbox.get(e.id)!!, answer)
+        assertEquals("Groceries this month", replica.get(Kind.Thread, "31")!!.json.s("title"))
+    }
+
+    @Test
+    fun `a module's answer is laid over its listed summary`() = runBlocking {
+        ledger.upsert(listOf(Row.of(Kind.Module, obj("id" to 3, "project_id" to 1, "name" to "Phone", "priority" to "medium", "counts" to obj("done" to 4), "progress_pct" to 40.0))!!))
+        val e = ledger.enqueue("module.update", obj("module_id" to 3, "name" to "Phone app"), "Rename")
+        val answer = obj("id" to 3, "project_id" to 1, "name" to "Phone app", "priority" to "medium")
+        outbox.update(e.copy(state = OutboxEntry.State.Done, result = answer))
+        ledger.applied(outbox.get(e.id)!!, answer)
+        val row = replica.get(Kind.Module, "3")!!.json
+        assertEquals("Phone app", row.s("name"))
+        assertEquals("the summary's counts stay", "40.0", row["progress_pct"].toString())
+    }
+
+    @Test
+    fun `mark all read shows at once, outlasts a list read, and goes back when dropped`() = runBlocking {
+        fun note(id: Long, category: String = "agent_done") = Row.of(Kind.Notification, obj("id" to id, "category" to category, "read" to false))!!
+        ledger.replace(Kind.Notification, Scope.All, listOf(note(1), note(2, "guardrail")))
+        val e = ledger.enqueue("notify.ack_all", obj(), "Mark all read")
+        assertTrue(replica.all(Kind.Notification).all { it.json["read"].toString() == "true" })
+        ledger.replace(Kind.Notification, Scope.All, listOf(note(1), note(2, "guardrail"), note(3)))
+        assertTrue("one listed meanwhile is read too", replica.all(Kind.Notification).all { it.json["read"].toString() == "true" })
+        ledger.discard(e.id)
+        assertTrue(replica.all(Kind.Notification).none { it.json["read"].toString() == "true" })
+    }
+
+    @Test
+    fun `starting an agent shows it starting at once`() = runBlocking {
+        ledger.upsert(listOf(Row.of(Kind.Session, obj("id" to 5, "name" to "calm-heron", "state" to "created", "project_id" to 1))!!))
+        ledger.enqueue("session.spawn", obj("session" to "calm-heron"), "Start agent")
+        assertEquals("spawning", replica.get(Kind.Session, "calm-heron")!!.json.s("state"))
+        val create = ledger.enqueue("session.create", obj("project_id" to 1, "provider" to "claude"), "New agent")
+        ledger.enqueue("session.spawn", obj("session" to Refs.ref(create.id, "name")), "Start agent")
+        assertEquals("spawning", replica.get(Kind.Session, Optimistic.tempId(create.id))!!.json.s("state"))
+    }
+
+    @Test
+    fun `rows the phone makes are stamped as the PC stamps its own`() {
+        assertEquals("2025-10-09T08:53:20.000000000Z", Optimistic.stamp(1_760_000_000_000))
+        assertEquals("2025-10-09T08:53:20.123000000Z", Optimistic.stamp(1_760_000_000_123))
+    }
+
+    @Test
+    fun `forgetting the PC clears its rows and what was queued for it, and no list read marks survive`() = runBlocking {
+        ledger.upsert(listOf(Row.of(Kind.Task, task(7, "old PC's"))!!))
+        ledger.enqueue("task.update", obj("task_id" to 7, "title" to "queued"), "Rename")
+        val since = ledger.beginRead()
+        ledger.upsert(listOf(Row.of(Kind.Task, task(8, "event"))!!))
+        ledger.clear()
+        assertTrue(replica.all(Kind.Task).isEmpty())
+        assertTrue(outbox.open().isEmpty())
+        // The new PC's list is the whole truth: no row is held back as newer than it.
+        ledger.replace(Kind.Task, Scope(projectId = 1), listOf(Row.of(Kind.Task, task(8, "new PC's"))!!), since)
+        ledger.endRead()
+        assertEquals("new PC's", shown("8").s("title"))
     }
 
     @Test

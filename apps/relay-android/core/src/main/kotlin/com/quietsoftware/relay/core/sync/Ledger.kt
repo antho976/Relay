@@ -6,6 +6,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
 
 /**
@@ -31,20 +32,59 @@ class Ledger(
         if (rows.isEmpty()) return@withLock
         val open = outbox.open()
         this.rows.upsert(rows.map { overlay(it, open) })
+        wrote(rows.map { it.kind to it.id })
     }
 
-    suspend fun remove(kind: Kind, ids: Collection<String>) = lock.withLock { rows.remove(kind, ids) }
+    suspend fun remove(kind: Kind, ids: Collection<String>) = lock.withLock {
+        rows.remove(kind, ids)
+        wrote(ids.map { kind to it })
+    }
 
     /**
      * A list op's answer is the whole truth for its scope, except for rows the phone made that the
-     * PC has not seen yet: those stay until their create is answered or dropped.
+     * PC has not seen yet: those stay until their create is answered or dropped. With [since]
+     * (from [beginRead] before the list was asked for), a row an event wrote or removed after
+     * that is newer than the answer and stays as the event left it.
      */
-    suspend fun replace(kind: Kind, scope: Scope, server: List<Row>) = lock.withLock {
+    suspend fun replace(kind: Kind, scope: Scope, server: List<Row>, since: Long? = null) = lock.withLock {
         val open = outbox.open()
-        val kept = server.map { overlay(it, open) }
-        val ids = kept.map { it.id }.toSet()
-        val made = rows.all(kind, scope).filter { it.base == null && it.id !in ids }
-        rows.replace(kind, scope, kept + made)
+        val newer = if (since == null) emptySet() else written.filter { (key, at) -> key.first == kind && at > since }.keys.mapTo(HashSet()) { it.second }
+        val kept = server.filter { it.id !in newer }.map { overlay(it, open) }
+        val ids = kept.mapTo(HashSet()) { it.id }
+        val stays = rows.all(kind, scope).filter { it.id !in ids && (it.base == null || it.id in newer) }
+        rows.replace(kind, scope, kept + stays)
+    }
+
+    /** Forget the PC's data and what was queued for it, under the lock, so no write interleaves. */
+    suspend fun clear() = lock.withLock {
+        rows.clear()
+        outbox.open().forEach { outbox.delete(it.id) }
+        written.clear()
+    }
+
+    // ---- Reads that race events ----
+
+    private var clock = 0L
+    private var reading = 0
+    /** When each row was last written, while a list read is out: what its answer must not overwrite. */
+    private val written = HashMap<Pair<Kind, String>, Long>()
+
+    /** A list read is about to be asked for: its mark for [replace]. End it with [endRead], answered or not. */
+    suspend fun beginRead(): Long = lock.withLock {
+        reading++
+        clock
+    }
+
+    suspend fun endRead() = lock.withLock {
+        reading = (reading - 1).coerceAtLeast(0)
+        if (reading == 0) written.clear()
+    }
+
+    /** Under the lock. */
+    private fun wrote(keys: List<Pair<Kind, String>>) {
+        if (reading == 0 || keys.isEmpty()) return
+        clock++
+        for (k in keys) written[k] = clock
     }
 
     // ---- From the phone ----
@@ -64,6 +104,7 @@ class Ledger(
                 createdAt = now(),
             )
             outbox.add(e)
+            layBroad(e, outbox.open(), applied = false)
             val target = Optimistic.target(op, payload, e.id)
             if (target != null) {
                 val (kind, raw) = target
@@ -87,12 +128,23 @@ class Ledger(
     /** The PC applied [entry]: its answer becomes the base, and a create's temp row gives way to the real one. */
     suspend fun applied(entry: OutboxEntry, result: JsonElement) = lock.withLock {
         val open = outbox.open()
-        Optimistic.created(entry.op, entry.id, result)?.let { (temp, _) ->
+        Optimistic.created(entry.op, entry.id, result)?.let { (temp, real) ->
             Optimistic.target(entry.op, entry.payload, entry.id)?.let { (kind, _) -> rows.remove(kind, listOf(temp)) }
+            // Messages queued to a thread made offline follow it to its real id, or the thread
+            // the screen now shows would leave them out.
+            if (entry.op == "thread.create") {
+                val moved = rows.all(Kind.Message, Scope(parent = temp)).map { m ->
+                    val json = JsonObject(LinkedHashMap(m.json).also { it["thread_id"] = real.toLongOrNull()?.let(::JsonPrimitive) ?: JsonPrimitive(real) })
+                    m.copy(parent = real, json = json)
+                }
+                if (moved.isNotEmpty()) rows.upsert(moved)
+            }
         }
-        val fresh = Optimistic.resultRows(entry.op, result)
+        layBroad(entry, open, applied = true)
+        val fresh = Optimistic.resultRows(entry.op, result).ifEmpty { moduleRow(entry.op, result) }
         if (fresh.isNotEmpty()) {
             rows.upsert(fresh.map { overlay(it, open) })
+            wrote(fresh.map { it.kind to it.id })
         } else {
             rebuild(entry, open)
         }
@@ -106,6 +158,7 @@ class Ledger(
         val entry = outbox.get(entryId) ?: return@withLock
         outbox.delete(entryId)
         rebuild(entry, outbox.open())
+        layBroad(entry, outbox.open(), applied = false)
         // Entries that wait on a dropped one's answer (a label on a task made offline, an agent's
         // start after its create) could never be sent: they go with it.
         val gone = mutableSetOf(entryId)
@@ -120,16 +173,48 @@ class Ledger(
         }
     }
 
-    /** Send a parked entry again: a conflict is resent without its `expected` check, so the phone's version wins. */
-    suspend fun retry(entryId: String, overwrite: Boolean) = lock.withLock {
-        val entry = outbox.get(entryId) ?: return@withLock null
+    /**
+     * Send a parked entry again: a conflict is resent without its `expected` check, so the phone's
+     * version wins. It goes under a new id, since the old one is spent on the refusal, which the PC
+     * would only replay; so a create's temp row takes the new id, and entries that wait on its
+     * answer (an agent's start, a message in a thread made offline) wait on the new one.
+     */
+    suspend fun retry(entryId: String, overwrite: Boolean) = lock.withLock { reissue(entryId, overwrite) }?.also { _queued.tryEmit(it) }
+
+    /** [entryId] queued again under a new id, as [retry] does, to be sent at the next flush rather than now. */
+    suspend fun renew(entryId: String): OutboxEntry? = lock.withLock { reissue(entryId, overwrite = false) }
+
+    private suspend fun reissue(entryId: String, overwrite: Boolean): OutboxEntry? {
+        val entry = outbox.get(entryId) ?: return null
         val payload = if (overwrite) JsonObject(entry.payload.filterKeys { it != "expected" && it != "expected_updated_at" }) else entry.payload
-        // A new id: the old one is spent on the refusal, which the PC would only replay.
         outbox.delete(entryId)
         val again = entry.copy(id = UUID.randomUUID().toString(), payload = payload, state = OutboxEntry.State.Pending, error = null, attempts = 0)
         outbox.add(again)
-        again
-    }?.also { _queued.tryEmit(it) }
+        val dependents = outbox.open().filter { entryId in Refs.of(it.payload) }
+        for (d in dependents) outbox.update(d.copy(payload = Refs.rename(d.payload, entryId, again.id)))
+        Optimistic.target(entry.op, entry.payload, entryId)?.let { (kind, id) ->
+            if (id == Optimistic.tempId(entryId)) rows.remove(kind, listOf(id))
+        }
+        val open = outbox.open()
+        remake(again, open)
+        for (d in dependents) open.firstOrNull { it.id == d.id }?.let { remake(it, open) }
+        return again
+    }
+
+    /** The row [entry] makes (its own temp row) built again from its payload, with what is pending on it laid over. */
+    private suspend fun remake(entry: OutboxEntry, open: List<OutboxEntry>) {
+        val (kind, id) = Optimistic.target(entry.op, entry.payload, entry.id) ?: return
+        if (id != Optimistic.tempId(entry.id)) return
+        val made = Optimistic.apply(entry.op, entry.payload, null, entry.id, entry.createdAt) ?: return
+        val row = Row.of(kind, made, projectHint(entry.payload), parentHint(entry.op, entry.payload)) ?: return
+        var json = row.json
+        for (e in open) {
+            if (e.id == entry.id) continue
+            val (k, raw) = Optimistic.target(e.op, e.payload, e.id) ?: continue
+            if (k == kind && raw == id) json = Optimistic.apply(e.op, e.payload, json, e.id, e.createdAt) ?: json.hidden()
+        }
+        rows.upsert(listOf(row.copy(json = json, base = null, pending = true)))
+    }
 
     // ---- Overlays ----
 
@@ -147,13 +232,43 @@ class Ledger(
         rows.upsert(listOf(overlay(current.copy(json = base), open)))
     }
 
+    /**
+     * Lay the rows a [Optimistic.broad] entry covers out again: with it while it is open, from
+     * what the PC said once dropped, and, once [applied], with it as the PC's own state.
+     */
+    private suspend fun layBroad(entry: OutboxEntry, open: List<OutboxEntry>, applied: Boolean) {
+        val kind = Optimistic.broad(entry.op) ?: return
+        val covered = rows.all(kind).filter { Optimistic.covers(entry.op, entry.payload, kind, it.base ?: it.json) }
+        if (covered.isEmpty()) return
+        rows.upsert(covered.map { r ->
+            val base = r.base ?: r.json
+            val server = if (applied) Optimistic.apply(entry.op, entry.payload, base, entry.id, entry.createdAt) ?: base else base
+            overlay(r.copy(json = server), open)
+        })
+    }
+
+    /**
+     * A module op answers with the Module, not the ModuleSummary the list keeps (no task counts,
+     * no progress): its fields laid over the row the PC last listed, so the edit shows as the PC
+     * made it instead of reverting until the next list.
+     */
+    private suspend fun moduleRow(op: String, result: JsonElement): List<Row> {
+        if (!op.startsWith("module.") || op == "module.delete") return emptyList()
+        val obj = result as? JsonObject ?: return emptyList()
+        if (!obj.containsKey("name") || !obj.containsKey("priority")) return emptyList()
+        val id = Kind.Module.idOf(obj) ?: return emptyList()
+        val listed = rows.get(Kind.Module, id)?.base
+        return listOfNotNull(Row.of(Kind.Module, if (listed == null) obj else JsonObject(listed + obj)))
+    }
+
     /** [server] with every open entry that targets it applied in order. */
     private suspend fun overlay(server: Row, open: List<OutboxEntry>): Row {
         var json: JsonObject = server.json
         var touched = false
         for (e in open) {
-            val (kind, raw) = Optimistic.target(e.op, e.payload, e.id) ?: continue
-            if (kind != server.kind || resolveTemp(raw) != server.id) continue
+            val hit = Optimistic.target(e.op, e.payload, e.id)?.let { (kind, raw) -> kind == server.kind && resolveTemp(raw) == server.id }
+                ?: Optimistic.covers(e.op, e.payload, server.kind, server.json)
+            if (!hit) continue
             // A delete hides the row rather than dropping it, so a restore after it brings it back.
             json = Optimistic.apply(e.op, e.payload, json, e.id, e.createdAt) ?: json.hidden()
             touched = true

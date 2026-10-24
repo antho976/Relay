@@ -93,6 +93,15 @@ object Refs {
     private fun refTarget(o: JsonObject): String? =
         if (o.size == 2 && o.containsKey(KEY) && o.containsKey(PATH)) o.s(KEY) else null
 
+    /** [payload] with its references to entry [from] naming entry [to] instead. */
+    fun rename(payload: JsonObject, from: String, to: String): JsonObject = renameElement(payload, from, to) as JsonObject
+
+    private fun renameElement(e: JsonElement, from: String, to: String): JsonElement = when (e) {
+        is JsonObject -> if (refTarget(e) == from) ref(to, e.s(PATH).orEmpty()) else JsonObject(e.mapValues { (_, v) -> renameElement(v, from, to) })
+        is JsonArray -> JsonArray(e.map { renameElement(it, from, to) })
+        else -> e
+    }
+
     /** [payload] with every reference replaced by the value it names; null while one is unanswered. */
     fun resolve(payload: JsonObject, answer: (String) -> JsonElement?): JsonObject? =
         resolveElement(payload, answer) as? JsonObject
@@ -136,7 +145,18 @@ class OutboxRunner(
     private val onApplied: suspend (OutboxEntry, JsonElement) -> Unit,
     private val onParked: suspend (OutboxEntry) -> Unit = {},
     private val now: () -> Long = System::currentTimeMillis,
+    /** A message refused while its thread's agent is still answering: queued again under a new id, sent once it is done. */
+    private val onBusy: suspend (OutboxEntry) -> Unit = {},
 ) {
+    /** Threads whose agent is answering: messages to them wait for [threadFree]. */
+    private val busyThreads: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** The thread's turn ended: true when a message was waiting on it, and the outbox should be sent. */
+    fun threadFree(id: String): Boolean = busyThreads.remove(id)
+
+    /** A new session: whatever was answering then may be done. */
+    fun forgetBusy() = busyThreads.clear()
+
     sealed interface Outcome {
         data class Flushed(val sent: Int, val parked: Int, val waiting: Int) : Outcome
         data class LinkLost(val sent: Int, val error: BusError) : Outcome
@@ -166,6 +186,14 @@ class OutboxRunner(
                 target?.let { blockedTargets += it }
                 continue
             }
+            // A thread answers one message at a time (thread.busy): the rest wait for its turn to end.
+            val thread = if (entry.op == "thread.send") (payload["id"] as? JsonPrimitive)?.content else null
+            if (thread != null && thread in busyThreads) {
+                waiting++
+                blockedEntries += entry.id
+                target?.let { blockedTargets += it }
+                continue
+            }
             val attempt = entry.copy(attempts = entry.attempts + 1)
             store.update(attempt)
             val response = try {
@@ -173,15 +201,36 @@ class OutboxRunner(
             } catch (e: BusException) {
                 return Outcome.LinkLost(sent, e.error)
             }
+            // Dropped by the person while it was on its way: an answer still brings the rows up to
+            // date, but the entry is not written back.
+            val dropped = store.get(entry.id) == null
             if (response.ok) {
                 val done = attempt.copy(state = OutboxEntry.State.Done, result = response.result, error = null)
-                store.update(done)
+                if (!dropped) store.update(done)
                 onApplied(done, response.result)
                 sent++
                 continue
             }
             val error = response.error ?: BusError("internal", "bus.no_error", "The PC refused without saying why")
             if (error.transient) return Outcome.LinkLost(sent, error)
+            if (dropped) continue
+            if (error.code == "thread.busy" && thread != null) {
+                // The refusal is recorded under this id, so the message goes again under a new one.
+                busyThreads += thread
+                onBusy(attempt)
+                waiting++
+                continue
+            }
+            if (error.code == "bus.replay_unavailable" && (error.details?.get("applied") as? JsonPrimitive)?.content == "true") {
+                // It ran the first time; only its answer, too large to keep, is gone. Sending it
+                // again under a new id would run it twice: done, with no answer (JsonNull), and
+                // the row is read again.
+                val done = attempt.copy(state = OutboxEntry.State.Done, result = JsonNull, error = null)
+                store.update(done)
+                onApplied(done, JsonNull)
+                sent++
+                continue
+            }
             val state = when {
                 error.kind == "held" -> OutboxEntry.State.Held
                 error.kind == "conflict" && error.code.endsWith("edit_conflict") -> OutboxEntry.State.Conflict

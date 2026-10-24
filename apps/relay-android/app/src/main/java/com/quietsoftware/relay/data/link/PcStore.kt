@@ -1,6 +1,7 @@
 package com.quietsoftware.relay.data.link
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -10,8 +11,10 @@ import com.quietsoftware.relay.core.wire.Greeting
 import com.quietsoftware.relay.core.wire.Route
 import com.quietsoftware.relay.core.wire.RoutePolicy
 import com.quietsoftware.relay.core.wire.WakeTarget
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -48,10 +51,24 @@ class PcStore(private val context: Context) : Link.ProfileSource {
     @Serializable
     private data class StoredWake(val mac: String, val broadcast: String? = null)
 
+    /** The token as last unsealed, by its sealed text: each connect rewrites the profile, not the token. */
+    @Volatile private var unsealed: Pair<String, String>? = null
+
+    // Off the main thread: unsealing is a keystore call and AES-GCM, and screens collect this on Main.
     val profile: Flow<PcProfile?> = context.pcStore.data.map { prefs ->
         val stored = prefs[PROFILE]?.let { runCatching { json.decodeFromString<Stored>(it) }.getOrNull() } ?: return@map null
-        val token = prefs[TOKEN]?.let { Seal.unseal(KEY_ALIAS, it) } ?: return@map null
+        val sealed = prefs[TOKEN] ?: return@map null
+        val token = unsealed?.takeIf { it.first == sealed }?.second
+            ?: Seal.unseal(KEY_ALIAS, sealed)?.also { unsealed = sealed to it }
+            ?: return@map null
         stored.toProfile(token)
+    }.flowOn(Dispatchers.IO)
+
+    /** The person disconnected on the PC's page: nothing in the background dials it again until they connect. */
+    val disconnected: Flow<Boolean> = context.pcStore.data.map { it[DISCONNECTED] == true }
+
+    suspend fun setDisconnected(on: Boolean) {
+        context.pcStore.edit { if (on) it[DISCONNECTED] = true else it.remove(DISCONNECTED) }
     }
 
     /** When the link last reached the PC (epoch ms), for "last seen" on the PC card. */
@@ -81,6 +98,8 @@ class PcStore(private val context: Context) : Link.ProfileSource {
         context.pcStore.edit { prefs ->
             prefs[PROFILE] = json.encodeToString(storedFrom(profile))
             prefs[TOKEN] = Seal.seal(KEY_ALIAS, profile.token)
+            // Pairing is asking to connect.
+            prefs.remove(DISCONNECTED)
         }
     }
 
@@ -114,6 +133,7 @@ class PcStore(private val context: Context) : Link.ProfileSource {
     private companion object {
         val PROFILE = stringPreferencesKey("profile")
         val TOKEN = stringPreferencesKey("token")
+        val DISCONNECTED = booleanPreferencesKey("disconnected")
         const val KEY_ALIAS = "relay-pc-token"
 
         fun storedFrom(p: PcProfile) = Stored(

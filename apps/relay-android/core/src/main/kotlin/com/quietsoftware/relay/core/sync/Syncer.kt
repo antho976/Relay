@@ -10,6 +10,7 @@ import com.quietsoftware.relay.core.wire.o
 import com.quietsoftware.relay.core.wire.s
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -193,6 +195,11 @@ class Syncer(
     /** When the replica last caught up with the PC in full. */
     val syncedAt: StateFlow<Long> = _syncedAt
 
+    private val _synced = MutableStateFlow<BusSession?>(null)
+
+    /** The session the replica last caught up over in full: the current one once its first read is done. */
+    val synced: StateFlow<BusSession?> = _synced
+
     /** A new session: subscribe, then read everything. Events that arrive meanwhile are applied too. */
     suspend fun attach(s: BusSession) {
         session = s
@@ -213,6 +220,7 @@ class Syncer(
     suspend fun resync(s: BusSession) {
         run(s, Fetch.All)
         _syncedAt.value = now()
+        _synced.value = s
         _stale.tryEmit(setOf("*"))
     }
 
@@ -279,7 +287,7 @@ class Syncer(
             Fetch.Holds -> list(s, "guardrail.holds.list", buildJsonObject { put("open_only", true) }, "holds", Kind.Hold, Scope.All)
             Fetch.Notifications -> list(s, "notify.list", buildJsonObject { put("limit", 200) }, "notifications", Kind.Notification, Scope.All)
             Fetch.Threads -> list(s, "thread.list", JsonObject(emptyMap()), "threads", Kind.Thread, Scope.All)
-            is Fetch.Tasks -> {
+            is Fetch.Tasks -> reading { since ->
                 val rows = mutableListOf<Row>()
                 var offset = 0L
                 while (true) {
@@ -292,7 +300,7 @@ class Syncer(
                     result.arr("tasks").mapNotNullTo(rows) { (it as? JsonObject)?.let { t -> Row.of(Kind.Task, t) } }
                     offset = result.l("next_offset") ?: break
                 }
-                ledger.replace(Kind.Task, Scope(projectId = f.projectId), rows)
+                ledger.replace(Kind.Task, Scope(projectId = f.projectId), rows, since)
             }
             is Fetch.Task -> try {
                 val t = s.result("task.get", buildJsonObject { put("task_id", f.id) }) as? JsonObject
@@ -310,11 +318,11 @@ class Syncer(
             }
             is Fetch.Mail -> list(s, "mailbox.list", buildJsonObject { put("project_id", f.projectId); put("limit", 200) }, "messages", Kind.Mail, Scope(projectId = f.projectId))
             is Fetch.Labels -> list(s, "task.label.list", buildJsonObject { put("project_id", f.projectId) }, "labels", Kind.Label, Scope(projectId = f.projectId), projectId = f.projectId)
-            is Fetch.Thread -> {
-                val out = s.result("thread.get", buildJsonObject { put("id", f.id) }) as? JsonObject ?: return
+            is Fetch.Thread -> reading { since ->
+                val out = s.result("thread.get", buildJsonObject { put("id", f.id) }) as? JsonObject ?: return@reading
                 out.o("thread")?.let { Row.of(Kind.Thread, it) }?.let { ledger.upsert(listOf(it)) }
                 val messages = out.arr("messages").mapNotNull { (it as? JsonObject)?.let { m -> Row.of(Kind.Message, m, parent = f.id.toString()) } }
-                ledger.replace(Kind.Message, Scope(parent = f.id.toString()), messages)
+                ledger.replace(Kind.Message, Scope(parent = f.id.toString()), messages, since)
             }
             Fetch.Dashboard -> cache(s, "dashboard.get")
             Fetch.Usage -> cache(s, "usage.get")
@@ -322,10 +330,23 @@ class Syncer(
         }
     }
 
-    private suspend fun list(s: BusSession, op: String, payload: JsonObject, field: String, kind: Kind, scope: Scope, projectId: Long? = null) {
-        val result = s.result(op, payload) as? JsonObject ?: return
+    private suspend fun list(s: BusSession, op: String, payload: JsonObject, field: String, kind: Kind, scope: Scope, projectId: Long? = null) = reading { since ->
+        val result = s.result(op, payload) as? JsonObject ?: return@reading
         val rows = result.arr(field).mapNotNull { (it as? JsonObject)?.let { o -> Row.of(kind, o, projectId = projectId) } }
-        ledger.replace(kind, scope, rows)
+        ledger.replace(kind, scope, rows, since)
+    }
+
+    /**
+     * A list read: rows an event writes while it is out are newer than its answer, which leaves
+     * them as the event did (an agent that exited meanwhile does not show running again).
+     */
+    private suspend fun reading(block: suspend (since: Long) -> Unit) {
+        val since = ledger.beginRead()
+        try {
+            block(since)
+        } finally {
+            withContext(NonCancellable) { ledger.endRead() }
+        }
     }
 
     private suspend fun cache(s: BusSession, op: String, payload: JsonObject = JsonObject(emptyMap())) {

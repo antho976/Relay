@@ -95,14 +95,19 @@ internal fun Session.shownName(): String = if (pending) "New agent" else name
  * What a slate says under the state word (terminal.rs `slate_hint`), shortened for a phone. The
  * slate and the banner show the word with it, so the hint does not say it again.
  */
-internal fun slateHint(s: Session, online: Boolean): String = when {
+/** What a slate says under the state word; [saved] is whether the phone holds the agent's last screen. */
+internal fun slateHint(s: Session, online: Boolean, saved: Boolean = true): String = when {
     s.pending -> if (online) "The PC is preparing its worktree." else "Starts when the PC is back."
     s.state == "parked" -> "Wake to continue. Scrollback and worktree are kept."
     s.state == "restorable" -> "The process ended. Resume restores its conversation and worktree."
     s.state == "exited" -> "Resume to start it again."
     s.state == "created" -> "Start launches the provider in its worktree."
     s.state == "closed" -> "Taken off the wall."
-    s.attachable -> if (online) "Open it to watch it live." else "The PC is away: its last screen, as this phone saved it."
+    s.attachable -> when {
+        online -> "Open it to watch it live."
+        saved -> "The PC is away: its last screen, as this phone saved it."
+        else -> "The PC is away, and this phone has not saved its screen yet."
+    }
     else -> "No signal from this session."
 }
 

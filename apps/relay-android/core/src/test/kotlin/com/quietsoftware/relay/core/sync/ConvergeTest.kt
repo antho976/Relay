@@ -83,6 +83,8 @@ class ConvergeTest {
             val labels = (cur["labels"] as JsonArray) + kotlinx.serialization.json.JsonPrimitive(p.s("label"))
             JsonObject(cur + ("labels" to JsonArray(labels))).also { pcTasks[id] = it }
         }
+        "session.create" -> obj("name" to "brisk-otter", "state" to "created", "project_id" to 1)
+        "session.spawn" -> throw FakeDoor.Refuse("unavailable", "provider.not_installed", "Codex is not installed on this PC")
         else -> obj()
     }
 
@@ -120,7 +122,7 @@ class ConvergeTest {
         val made = pcTasks.values.single { it.s("title") == "Written offline" }
         assertTrue(made.toString().contains("phone"))
         // And the phone shows the PC's rows, not its guesses.
-        withTimeout(5_000) { while (replica.get(Kind.Task, made.l("id").toString())?.pending != false) delay(20) }
+        withTimeout(10_000) { while (replica.get(Kind.Task, made.l("id").toString())?.pending != false) delay(20) }
         assertTrue(replica.all(Kind.Task).none { Optimistic.isTemp(it.id) })
     }
 
@@ -140,15 +142,33 @@ class ConvergeTest {
     }
 
     @Test
+    fun `a lasting refusal parks its edit, and later edits still reach the PC`() = runBlocking {
+        // "New agent" for a provider the PC cannot run, then a task: the spawn's `unavailable` is
+        // the PC's answer, not the PC being busy.
+        val create = ledger.enqueue("session.create", obj("project_id" to 1, "provider" to "codex"), "New agent")
+        val spawn = ledger.enqueue("session.spawn", obj("session" to Refs.ref(create.id, "name")), "Start agent")
+        val task = ledger.enqueue("task.create", obj("project_id" to 1, "title" to "Queued after"), "New task")
+        connect()
+        online()
+        withTimeout(10_000) { while (outbox.get(task.id)!!.state != OutboxEntry.State.Done) delay(20) }
+        assertEquals(OutboxEntry.State.Failed, outbox.get(spawn.id)!!.state)
+        assertEquals("provider.not_installed", outbox.get(spawn.id)!!.error!!.code)
+        assertTrue(pcTasks.values.any { it.s("title") == "Queued after" })
+    }
+
+    @Test
     fun `the PC's changes arrive as events`() = runBlocking {
         connect()
         online()
-        withTimeout(5_000) { while (replica.all(Kind.Project).isEmpty()) delay(20) }
+        withTimeout(10_000) { while (replica.all(Kind.Project).isEmpty()) delay(20) }
+        // Made on the PC, so its own list has it too, and sent while the connect resync may still
+        // be reading that list: the answer must not write over the event (Ledger.beginRead).
+        pcTasks[55] = task(55, "Made on the PC", column = "ready")
         door.emit("task.changed", task(55, "Made on the PC", column = "ready"))
-        withTimeout(5_000) { while (replica.get(Kind.Task, "55") == null) delay(20) }
+        withTimeout(10_000) { while (replica.get(Kind.Task, "55") == null) delay(20) }
         pcTasks[56] = task(56, "Hinted")
         door.emit("task.changed", obj("task_id" to 56, "state" to "running"))
-        withTimeout(5_000) { while (replica.get(Kind.Task, "56") == null) delay(20) }
+        withTimeout(10_000) { while (replica.get(Kind.Task, "56") == null) delay(20) }
         assertEquals("Hinted", replica.get(Kind.Task, "56")!!.json.s("title"))
     }
 

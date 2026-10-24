@@ -709,10 +709,11 @@ fun DevicesScreen(projectId: Long, nav: Nav) {
     // The first ready device is the usual target; a pick holds while it stays connected.
     val device = ready.firstOrNull { it.serial == picked } ?: ready.firstOrNull()
     var worktree by remember { mutableStateOf<String?>(null) }
-    var variant by remember { mutableStateOf("debug") }
+    // Empty sends none, and the engine picks: debug to run on a device, release to build an artifact.
+    var runVariant by remember { mutableStateOf("") }
+    var buildVariant by remember { mutableStateOf("") }
     var format by remember { mutableStateOf("apk") }
     var starting by remember { mutableStateOf(false) }
-    val variantText = variant.trim().ifEmpty { null }
     val deviceName = device?.let { it.model.ifBlank { it.serial } }
 
     fun runOn(serial: String) {
@@ -722,7 +723,7 @@ fun DevicesScreen(projectId: Long, nav: Nav) {
             buildJsonObject {
                 put("project_id", projectId)
                 put("device", serial)
-                variantText?.let { put("variant", it) }
+                runVariant.trim().ifEmpty { null }?.let { put("variant", it) }
                 worktree?.let { put("worktree", it) }
             },
             busy = { starting = it },
@@ -736,7 +737,7 @@ fun DevicesScreen(projectId: Long, nav: Nav) {
             "device.build",
             buildJsonObject {
                 put("project_id", projectId)
-                variantText?.let { put("variant", it) }
+                buildVariant.trim().ifEmpty { null }?.let { put("variant", it) }
                 worktree?.let { put("worktree", it) }
                 put("format", format)
                 put("publish", false)
@@ -838,8 +839,8 @@ fun DevicesScreen(projectId: Long, nav: Nav) {
                         }
                     }
                     Gap(14.dp)
-                    FieldBlock("Gradle variant", "Empty uses the project's default.") {
-                        Field(variant, { variant = it }, Modifier.fillMaxWidth(), placeholder = "debug", style = Relay.type.mono, keyboardOptions = codeKeys)
+                    FieldBlock("Gradle variant", "Empty runs debug.") {
+                        Field(runVariant, { runVariant = it }, Modifier.fillMaxWidth(), placeholder = "debug", style = Relay.type.mono, keyboardOptions = codeKeys)
                     }
                     Gap(14.dp)
                     ToolKey(
@@ -858,6 +859,10 @@ fun DevicesScreen(projectId: Long, nav: Nav) {
                         selected = format,
                         onSelect = { format = it },
                     )
+                    Gap(8.dp)
+                    FieldBlock("Gradle variant", "Empty builds release.") {
+                        Field(buildVariant, { buildVariant = it }, Modifier.fillMaxWidth(), placeholder = "release", style = Relay.type.mono, keyboardOptions = codeKeys)
+                    }
                     Gap(8.dp)
                     ToolKey(
                         text = if (format == "apk") "Build APK" else "Build App Bundle",

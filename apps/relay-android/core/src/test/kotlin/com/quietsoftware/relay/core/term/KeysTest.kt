@@ -90,4 +90,39 @@ class KeysTest {
         assertEquals("\u001b\u0018", Keys.typed("x", ctrl = true, alt = true))
         assertEquals("", Keys.typed("", ctrl = true))
     }
+
+    @Test fun `the wheel reports in SGR at the finger's cell, as Claude Code asks`() {
+        val t = term(cols = 80, rows = 24)
+        // What Claude Code sets on start: the alternate screen, button and any-motion tracking, SGR.
+        t.feed("$CSI?1049h$CSI?1000h$CSI?1002h$CSI?1003h$CSI?1006h")
+        assertEquals("$CSI<64;5;3M", Keys.wheel(t, up = true, col = 4, row = 2))
+        assertEquals("$CSI<65;80;24M$CSI<65;80;24M", Keys.wheel(t, up = false, col = 200, row = 99, notches = 2))
+        assertEquals("", Keys.wheel(t, up = true, col = 0, row = 0, notches = 0))
+    }
+
+    @Test fun `the wheel uses the encoding the program set`() {
+        val t = term(cols = 200, rows = 24)
+        t.feed("$CSI?1049h$CSI?1000h")
+        assertEquals("X10 bytes: 32 + button, then 32 + column and row from 1", "${CSI}M`&#", Keys.wheel(t, up = true, col = 5, row = 2))
+        assertEquals("X10 positions stop where a byte would need two", "${CSI}Ma\u007f\u0021", Keys.wheel(t, up = false, col = 150, row = 0))
+        t.feed("$CSI?1015h")
+        assertEquals("${CSI}96;6;3M", Keys.wheel(t, up = true, col = 5, row = 2))
+        t.feed("$CSI?1005h")
+        assertEquals("${CSI}Ma" + (32 + 151).toChar() + "!", Keys.wheel(t, up = false, col = 150, row = 0))
+        t.feed("$CSI?1006h")
+        assertEquals("$CSI<65;151;1M", Keys.wheel(t, up = false, col = 150, row = 0))
+    }
+
+    @Test fun `with no mouse asked for the alternate screen scrolls by arrows and the main screen by itself`() {
+        val t = term()
+        assertEquals("the main screen keeps its own scrollback", "", Keys.wheel(t, up = true, col = 0, row = 0))
+        t.feed("$CSI?1049h")
+        assertEquals("${CSI}A${CSI}A${CSI}A", Keys.wheel(t, up = true, col = 0, row = 0, notches = 3))
+        t.feed("$CSI?1h")
+        assertEquals("${ESC}OB", Keys.wheel(t, up = false, col = 0, row = 0))
+        t.feed("$CSI?1000h")
+        assertEquals("tracking turned on wins over arrows", "${CSI}M`!!", Keys.wheel(t, up = true, col = 0, row = 0))
+        t.feed("$CSI?1000l$CSI?1049l")
+        assertEquals("", Keys.wheel(t, up = true, col = 0, row = 0))
+    }
 }

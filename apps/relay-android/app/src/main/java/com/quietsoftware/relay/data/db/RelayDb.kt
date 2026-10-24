@@ -145,7 +145,11 @@ interface OutboxDao {
     @Query("SELECT COALESCE(MAX(seq), 0) + 1 FROM outbox")
     suspend fun nextSeq(): Long
 
-    @Query("DELETE FROM outbox WHERE state = 'Done' AND created_at < :before")
+    /** The contract of [OutboxStore.prune]: a finished entry an open one still names (`{"$ref": "<id>"}`) stays. */
+    @Query(
+        "DELETE FROM outbox WHERE state = 'Done' AND created_at < :before " +
+            "AND NOT EXISTS (SELECT 1 FROM outbox AS o WHERE o.state != 'Done' AND instr(o.payload, '\"' || outbox.id || '\"') > 0)",
+    )
     suspend fun prune(before: Long)
 
     @Query("DELETE FROM outbox")

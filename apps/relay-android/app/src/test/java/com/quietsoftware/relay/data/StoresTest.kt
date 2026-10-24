@@ -59,6 +59,20 @@ class StoresTest {
     }
 
     @Test
+    fun `a finished entry an open one still waits on is not pruned`() = runBlocking {
+        val create = OutboxEntry("4b1c2d3e-0000-4000-8000-000000000001", outbox.nextSeq(), "task.create", Wire.parse("""{"project_id":1,"title":"x"}""")!!, "New", 1, state = OutboxEntry.State.Done, result = Wire.parse("""{"id":42}"""))
+        val old = OutboxEntry("4b1c2d3e-0000-4000-8000-000000000002", outbox.nextSeq(), "task.move", Wire.parse("""{"task_id":7,"column":"done"}""")!!, "Move", 1, state = OutboxEntry.State.Done)
+        val label = OutboxEntry("4b1c2d3e-0000-4000-8000-000000000003", outbox.nextSeq(), "task.label.add", Wire.parse("""{"task_id":{"${'$'}ref":"${create.id}","path":"id"},"label":"phone"}""")!!, "Label", 2)
+        listOf(create, old, label).forEach { outbox.add(it) }
+        outbox.prune(before = 10)
+        assertEquals("still named by the label", OutboxEntry.State.Done, outbox.get(create.id)?.state)
+        assertNull(outbox.get(old.id))
+        outbox.delete(label.id)
+        outbox.prune(before = 10)
+        assertNull(outbox.get(create.id))
+    }
+
+    @Test
     fun `the outbox keeps order, state and the PC's refusal across a reopen`() = runBlocking {
         val first = OutboxEntry("a", outbox.nextSeq(), "task.move", Wire.parse("""{"task_id":1,"column":"done"}""")!!, "Move", 1)
         outbox.add(first)

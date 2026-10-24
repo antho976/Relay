@@ -1,10 +1,10 @@
 package com.quietsoftware.relay.ui.dev
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.lifecycle.compose.LifecycleStartEffect
 import com.quietsoftware.relay.data.Relay
 import com.quietsoftware.relay.data.SessionChat
 import com.quietsoftware.relay.data.TerminalFeed
@@ -79,6 +79,9 @@ internal object Feeds {
         if (idle.size > MAX_IDLE) idle.take(idle.size - MAX_IDLE).forEach(::close)
     }
 
+    /** How many screens hold [name]'s feed now. */
+    fun users(name: String): Int = open[name]?.users ?: 0
+
     /** Once only: a second stop would detach whatever feed holds the session by then. */
     private fun close(e: Entry) {
         if (e.users > 0 || e.closed) return
@@ -92,13 +95,17 @@ internal object Feeds {
     private const val MAX_IDLE = 3
 }
 
-/** The shared feed for [name], held while this composable is on screen. */
+/**
+ * The shared feed for [name], held while this composable is on screen and started: with the app
+ * in the background (Home, the phone locked) the stream is let go, as leaving the screen does,
+ * and taken up again on return.
+ */
 @Composable
 internal fun rememberFeed(relay: Relay, name: String): TerminalFeed {
     val feed = remember(name) { Feeds.of(relay, name) }
-    DisposableEffect(feed) {
+    LifecycleStartEffect(feed) {
         Feeds.hold(feed)
-        onDispose { Feeds.release(feed) }
+        onStopOrDispose { Feeds.release(feed) }
     }
     return feed
 }
@@ -158,6 +165,9 @@ internal object Chats {
         if (idle.size > MAX_IDLE) idle.take(idle.size - MAX_IDLE).forEach(::drop)
     }
 
+    /** Whether [name]'s conversation is being read now. */
+    fun reading(name: String): Boolean = kept[name]?.reading == true
+
     /** Stops reading and saves what was read: once, so letting go of it later never writes it again. */
     private fun pause(e: Entry) {
         if (e.users > 0 || !e.reading) return
@@ -176,13 +186,16 @@ internal object Chats {
     private const val MAX_IDLE = 3
 }
 
-/** The kept conversation for [name], read while this composable is on screen. */
+/**
+ * The kept conversation for [name], read while this composable is on screen and started: in the
+ * background it stops reading (no transcript polling for nobody), and reads on when it is back.
+ */
 @Composable
 internal fun rememberChat(relay: Relay, name: String): SessionChat {
     val chat = remember(name) { Chats.of(relay, name) }
-    DisposableEffect(chat) {
+    LifecycleStartEffect(chat) {
         Chats.hold(relay, chat)
-        onDispose { Chats.release(chat) }
+        onStopOrDispose { Chats.release(chat) }
     }
     return chat
 }

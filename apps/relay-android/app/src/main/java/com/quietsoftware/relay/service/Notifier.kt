@@ -35,6 +35,14 @@ import kotlinx.coroutines.launch
 private val Context.notifyState by preferencesDataStore(name = "notified")
 
 /**
+ * Forget what was announced: another PC's notification ids start from its own count, which the
+ * last one's high mark would otherwise silence until they passed it.
+ */
+suspend fun forgetNotified(context: Context) {
+    context.notifyState.edit { it.clear() }
+}
+
+/**
  * Says on the phone what the PC says needs the person: a held command, a blocked agent, an agent
  * that finished. It reads the replica, not the wire, so the same rule covers the open link and a
  * background sync: anything newer than what was already shown, while the app is not on screen.

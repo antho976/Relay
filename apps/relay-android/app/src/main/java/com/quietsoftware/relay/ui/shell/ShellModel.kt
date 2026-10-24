@@ -125,7 +125,7 @@ class ShellModel @Inject constructor(val relay: Relay, private val settings: Set
         }
     }
 
-    fun connect() = relay.start()
+    fun connect() = relay.connect()
 
     fun disconnect() = relay.disconnect()
 
