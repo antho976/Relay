@@ -1,0 +1,81 @@
+{
+  "date": "2026-10-24",
+  "size": "1440,900",
+  "seconds": 8,
+  "perf": false,
+  "gtk": "4.24.1",
+  "pages": {
+    "board-400": {
+      "page": "board",
+      "tasks": 400,
+      "cold_ms": 351.7,
+      "cold_ms_all": [
+        343.7,
+        351.7,
+        383.3
+      ],
+      "reopen_ms_median": 7.1,
+      "reopen_ms_max": 15.4,
+      "all_ms": [
+        383.3,
+        8.4,
+        9.4,
+        8.4,
+        7.1,
+        7.0,
+        351.7,
+        12.2,
+        15.4,
+        8.2,
+        8.3,
+        6.9,
+        343.7,
+        4.6,
+        4.7,
+        6.1,
+        5.1,
+        5.1
+      ]
+    },
+    "board-2000": {
+      "page": "board",
+      "tasks": 2000,
+      "cold_ms": 576.9,
+      "cold_ms_all": [
+        570.0,
+        576.9,
+        751.0
+      ],
+      "reopen_ms_median": 12.3,
+      "reopen_ms_max": 14.5,
+      "all_ms": [
+        570.0,
+        13.3,
+        11.5,
+        12.6,
+        12.5,
+        11.9,
+        576.9,
+        10.7,
+        10.5,
+        10.5,
+        10.6,
+        10.6,
+        751.0,
+        14.4,
+        13.3,
+        14.5,
+        13.0,
+        12.3
+      ]
+    }
+  },
+  "notes": [],
+  "engine_rss_mb_six_sessions": 30.4,
+  "display": {
+    "GDK_BACKEND": "wayland",
+    "WAYLAND_DISPLAY": "relay-sly-960754",
+    "DISPLAY": "",
+    "XDG_SESSION_TYPE": "wayland"
+  }
+}
