@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
 import com.quietsoftware.relay.R
+import com.quietsoftware.relay.core.term.Keys
 import com.quietsoftware.relay.core.term.Line
 import com.quietsoftware.relay.core.term.Style
 import com.quietsoftware.relay.core.term.TermColor
@@ -66,7 +67,8 @@ import kotlin.math.floor
 
 /**
  * An agent's terminal drawn as the PC draws it (terminal.rs): Fira Mono on the screen colour,
- * the PC's ANSI palette, 1.25 cell height. Output is followed unless the person scrolled back;
+ * the PC's ANSI palette, 1.25 cell height. Output is followed unless the person scrolled back
+ * (in the alternate screen a drag turns the program's wheel instead, [Keys.wheel]);
  * pinch changes the text size. [onFit] gets the columns and rows that fit, whenever they change,
  * so the screen can borrow the PTY at this phone's size. With [onCopy], a long press selects the
  * word under the finger and a drag carries the selection on, for a Copy key; with [onLink], a tap
@@ -164,12 +166,25 @@ fun TerminalView(
                             val row = (first + ((at.y - padY) / rowPx).toInt()).coerceIn(0, total - 1)
                             row to ((at.x - padX) / colPx).toInt().coerceIn(0, t.cols - 1)
                         }
+                        // Where the finger is, for the wheel reports a scroll of the alternate screen sends.
+                        var wheelAt = Offset.Zero
                         /** Moves the view by [dy] pixels of finger travel; false at either end. */
                         fun scrollBy(dy: Float): Boolean {
                             dragCarry += dy
                             val lines = (dragCarry / rowPx).toInt()
                             if (lines == 0) return true
                             dragCarry -= lines * rowPx
+                            // The alternate screen keeps no scrollback here: its program (Claude Code)
+                            // scrolls its own history when the wheel turns, as VTE tells it on the PC.
+                            val wheel = if (feed.status.value != TerminalFeed.Status.Live) null else synchronized(feed.lock) {
+                                val t = feed.terminal
+                                if (!t.altScreen) null
+                                else Keys.wheel(t, up = lines > 0, col = ((wheelAt.x - padX) / colPx).toInt(), row = ((wheelAt.y - padY) / rowPx).toInt(), notches = kotlin.math.abs(lines))
+                            }
+                            if (wheel != null) {
+                                feed.key(wheel)
+                                return true
+                            }
                             val max = synchronized(feed.lock) { feed.terminal.scrollbackSize }
                             val next = (back + lines).coerceIn(0, max)
                             val moved = next != back
@@ -178,6 +193,7 @@ fun TerminalView(
                         }
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
+                            wheelAt = down.position
                             val flung = fling?.isActive == true
                             fling?.cancel()
                             val velocity = VelocityTracker()
@@ -252,6 +268,7 @@ fun TerminalView(
                                     velocity.addPosition(finger.uptimeMillis, finger.position)
                                     val dy = finger.positionChange().y
                                     travel += dy
+                                    wheelAt = finger.position
                                     if (gesture || kotlin.math.abs(travel) > slop) {
                                         gesture = true
                                         scrollBy(dy)

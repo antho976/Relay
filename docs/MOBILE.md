@@ -235,7 +235,10 @@ phone call (see the top of this page):
 
 - **Agents**: the project's agents as terminal plates with a live miniature; a tap opens the
   terminal, which borrows the PTY at the phone's own size (`session.resize {until_detach}`), with
-  a key row and a composer. **New agent** starts one (`session.create` + `session.spawn`), queued
+  a key row and a composer. A drag scrolls the phone's own scrollback; in the alternate screen
+  (Claude Code), which keeps none, it turns the program's wheel instead, as the PC's terminal
+  does: mouse reports at the finger's cell, or arrow keys when the program asked for no mouse.
+  **New agent** starts one (`session.create` + `session.spawn`), queued
   until the PC is back if it is away.
 - **Inbox**: guardrail holds with the exact held action and **Allow once** / **Deny**
   (`guardrail.confirm` / `guardrail.reject`), tasks in review, and the notification feed.
