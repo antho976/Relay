@@ -654,6 +654,8 @@ impl Ledger {
         let to = if ty == TxType::Transfer { p.to_account_id.or(cur.to_account_id) } else { None };
         let category = if ty == TxType::Transfer {
             None
+        } else if p.clear_category == Some(true) && p.category_id.is_none() {
+            None
         } else if p.category_id.is_some() || p.r#type.is_none_or(|t| t == cur.r#type) {
             p.category_id.or(cur.category_id)
         } else {
@@ -1491,6 +1493,21 @@ mod tests {
         assert!(bad(&mut l, TxInput { category_id: Some(salary), ..base.clone() }), "an expense is not filed under an income category");
         assert!(bad(&mut l, TxInput { r#type: TxType::Transfer, to_account_id: Some(acct), ..base.clone() }));
         assert!(l.tx_add(&base).is_ok());
+    }
+
+    /// An absent category keeps the entry's; `clear_category` takes it off, so an Undo can put
+    /// back an entry that had none. Beside a category, the category wins.
+    #[test]
+    fn an_edit_can_take_a_category_off() {
+        let (mut l, acct) = with_account();
+        let dining = category(&l, "Dining");
+        let t = spend(&mut l, acct, dining, 20_00, "2026-10-02");
+        let kept = l.tx_update(t.id, &TxPatch { amount: Some(21_00), ..Default::default() }).unwrap();
+        assert_eq!(kept.category_id, Some(dining));
+        let cleared = l.tx_update(t.id, &TxPatch { clear_category: Some(true), ..Default::default() }).unwrap();
+        assert_eq!(cleared.category_id, None);
+        let both = l.tx_update(t.id, &TxPatch { category_id: Some(dining), clear_category: Some(true), ..Default::default() }).unwrap();
+        assert_eq!(both.category_id, Some(dining));
     }
 
     #[test]

@@ -501,6 +501,10 @@ fn undo_save(ui: &Rc<Ui>, saved: &Value, before: Option<&Value>) -> super::Actio
                     back[key] = t[key].clone();
                 }
             }
+            // An absent category keeps the one the edit gave it: say it goes.
+            if t["category_id"].is_null() {
+                back["clear_category"] = json!(true);
+            }
             ("money.tx.update", back)
         }
     };

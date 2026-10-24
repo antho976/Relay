@@ -50,6 +50,8 @@ op!(TxAdd, "money.tx.add", TxAddIn => Tx, OpMeta::mutation(Scope::Global, 12, "A
 payload!(#[schemars(rename = "MoneyTxUpdateIn")] TxUpdateIn {
     pub id: i64, pub r#type: Option<TxType>, #[schemars(extend("x-unit" = "minor"))] pub amount: Option<i64>, pub date: Option<String>,
     pub account_id: Option<i64>, pub to_account_id: Option<i64>, pub category_id: Option<i64>, pub note: Option<String>,
+    /// True takes the category off (an absent `category_id` keeps it); ignored beside one.
+    pub clear_category: Option<bool>,
 });
 result!(#[schemars(rename = "MoneyTxChanged")] TxChanged {
     #[serde(flatten)]

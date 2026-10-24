@@ -226,7 +226,7 @@ pub fn register(e: &mut Engine) {
     e.register::<TxUpdate>(|ctx, p| {
         let patch = TxPatch {
             r#type: p.r#type, amount: p.amount, date: p.date, account_id: p.account_id,
-            to_account_id: p.to_account_id, category_id: p.category_id, note: p.note,
+            to_account_id: p.to_account_id, category_id: p.category_id, note: p.note, clear_category: p.clear_category,
         };
         let (tx, previous) = ledger(ctx.engine(), |l| {
             let previous = l.tx(p.id)?;

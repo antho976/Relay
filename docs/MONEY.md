@@ -122,7 +122,7 @@ category_id, category, icon, color, note }`.
 | `money.lists` | `{}` | `{ currency, fraction_digits, accounts: [{id,name,type,balance,archived,registration,institution}], categories: [{id,name,kind,icon,color,archived}], devices }` |
 | `money.tx.list` | `{ period_offset?, query?, account_id?, category_id?, limit? }` | `{ period, transactions: [Tx], income, spent }` |
 | `money.tx.add` | `{ type, amount, date, account_id, to_account_id?, category_id?, note? }` | `Tx` |
-| `money.tx.update` | `{ id, type?, amount?, date?, account_id?, to_account_id?, category_id?, note? }` | `Tx` |
+| `money.tx.update` | `{ id, type?, amount?, date?, account_id?, to_account_id?, category_id?, note?, clear_category? }` (absent keeps; `clear_category: true` takes the category off) | `Tx` and its `previous` |
 | `money.tx.delete` | `{ id }` | `{}` |
 | `money.budget.set` | `{ category_id?, amount }` (no category: the overall budget; 0 removes) | `{}` |
 | `money.import` | `{ path }`: a Tally backup (`.json`) replaces the ledger, as a restore does on the phone | `{ kind, transactions, accounts }` |
