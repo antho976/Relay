@@ -666,9 +666,8 @@ impl Ledger {
         let date = p.date.clone().unwrap_or(cur.date);
         let account = p.account_id.unwrap_or(cur.account_id);
         let to = if ty == TxType::Transfer { p.to_account_id.or(cur.to_account_id) } else { None };
-        let category = if ty == TxType::Transfer {
-            None
-        } else if p.clear_category == Some(true) && p.category_id.is_none() {
+        // A transfer has none; `clear_category` without a category takes it off.
+        let category = if ty == TxType::Transfer || p.clear_category == Some(true) && p.category_id.is_none() {
             None
         } else if p.category_id.is_some() || p.r#type.is_none_or(|t| t == cur.r#type) {
             p.category_id.or(cur.category_id)

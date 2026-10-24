@@ -2094,12 +2094,15 @@ fn env_split_string(command: &[Word]) -> Option<String> {
     None
 }
 
+/// A git alias and what it runs, or a git subcommand and its arguments.
+type Pair = (String, String);
+
 /// The git aliases a line defines, as (name, body): `git -c alias.x='!…' x`, `git config
 /// [--global] alias.x '…'` (an alias for later), `--config-env=alias.x=VAR`, and
 /// `GIT_CONFIG_KEY_<n>=alias.x` / `GIT_CONFIG_VALUE_<n>` or `GIT_CONFIG_PARAMETERS` (both its
 /// `'key'='value'` and its older `'key=value'` form). And every git subcommand the line calls,
 /// with its arguments, since any of them may be one of those aliases.
-fn git_aliases(commands: &[Vec<Word>]) -> (Vec<(String, String)>, Vec<(String, String)>) {
+fn git_aliases(commands: &[Vec<Word>]) -> (Vec<Pair>, Vec<Pair>) {
     let assignments: HashMap<&str, &str> = commands
         .iter()
         .flatten()
