@@ -74,6 +74,7 @@ fn what_cannot_be_saved_is_refused() {
         (json!({"name": "a", "path": "M0 0h1", "svg": "<svg/>"}), "path", "not both"),
         (json!({"name": "a", "svg": "<svg viewBox=\"0 0 24 24\"><g transform=\"scale(2)\"/></svg>"}), "svg", "transform"),
         (json!({"name": "a", "path": "M0 0h1", "keywords": ["two words"]}), "keywords", "one word"),
+        (json!({"name": "a", "path": "M1e306 0 h1"}), "path", "does not read back"),
     ] {
         let error = refused(call(&e, "design.icon.save", payload.clone()));
         assert!(error.message.contains(why), "{payload}: {}", error.message);

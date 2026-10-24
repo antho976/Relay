@@ -66,6 +66,11 @@ pub(super) fn register(e: &mut Engine) {
             }
             _ => return Err(invalid("path", "give path (SVG path data on the 24-unit grid) or svg (an SVG document), not both")),
         };
+        // What is stored is read again by every icon node naming it: a number too large to write
+        // back ("inf"), or repeats spelled out past the length cap, would make it unreadable.
+        if p.path.is_some() {
+            path_data::parse(&path).map_err(|why| invalid("path", format!("path: written out, it does not read back: {why}")))?;
+        }
         let keywords = p.keywords.unwrap_or_default();
         if keywords.len() > ICON_KEYWORDS_MAX {
             return Err(invalid("keywords", format!("keywords: at most {ICON_KEYWORDS_MAX}")));

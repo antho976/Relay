@@ -742,8 +742,7 @@ impl Scene {
     ///
     /// The place is what lets a patch follow a move: a node moved among its siblings and changed
     /// in the same read looks, without it, like one only changed, and keeps a z-order the engine
-    /// no longer has. design.get's since_rev answer does not carry it yet; until it does, read
-    /// the design whole. A delta that does not fit the scene (a removed node whose child stays, a
+    /// no longer has: design.get's since_rev answer carries it (`GetOut.indexes`). A delta that does not fit the scene (a removed node whose child stays, a
     /// parent neither holds, a node inside itself, two nodes in one place, a place past the
     /// end) is refused, the scene as it was: read the design whole.
     pub fn patch(&mut self, upserts: Vec<(Node, u32)>, removed: &[String]) -> Result<(), String> {

@@ -1092,8 +1092,11 @@ impl Run<'_> {
             }
             // Into another parent: not one inside the node itself.
             if from.as_deref() != Some(to.as_str()) {
+                // Bounded as every other walk here: a parent loop in stored rows (corrupt, or
+                // another build's) would otherwise spin under the store's lock.
                 let mut up = self.meta(&to)?.and_then(|(parent, _, _)| parent);
-                while let Some(ancestor) = up {
+                for _ in 0..=MAX_NODES {
+                    let Some(ancestor) = up else { break };
                     if ancestor == id {
                         return Err(self.fail_on("parent", ErrorKind::Invalid, "design.cycle", format!("{to:?} is inside {id:?}")));
                     }
