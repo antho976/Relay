@@ -18,12 +18,20 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     /** Set while [instead] runs: the page opened takes the place of the one showing. */
     private var replacing = false
 
-    private fun go(route: String, top: Boolean = false) {
+    /**
+     * Opens [route]. A page already on top is not opened twice; one of the same kind with other
+     * arguments takes its place, unless [stack]: a page that opens others of its kind (a task's
+     * sub-task, a note's link, a thread from a thread) puts the new one over it, so Back returns.
+     */
+    private fun go(route: String, top: Boolean = false, stack: Boolean = false) {
+        // Single-top on the same destination would replace the open task's arguments with the new one's.
+        if (stack && controller.currentBackStackEntry?.savedStateHandle?.get<String>(ROUTE) == route) return
         val here = if (replacing) controller.currentBackStackEntry?.destination?.id else null
         controller.navigate(route) {
-            launchSingleTop = true
+            launchSingleTop = !stack
             if (top) popUpTo(0) { inclusive = true } else if (here != null) popUpTo(here) { inclusive = true }
         }
+        if (stack) controller.currentBackStackEntry?.savedStateHandle?.set(ROUTE, route)
     }
 
     /** Opens what [page] opens in place of this page, so back does not come to it again (Share). */
@@ -65,7 +73,7 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     private fun swap(screen: String, name: String) {
         val below = controller.previousBackStackEntry
         if (below?.destination?.route == "$screen/{name}" && below.arguments?.getString("name") == name) controller.popBackStack()
-        else go("$screen/${Uri.encode(name)}")
+        else go("$screen/${Uri.encode(name)}", stack = true)
     }
     fun session(name: String) = go("session/${Uri.encode(name)}")
     fun launch(projectId: Long? = null, taskId: Long? = null, prompt: String? = null) = go("launch" + q("project" to projectId, "task" to taskId, "prompt" to prompt))
@@ -77,14 +85,14 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
         val shows = below?.arguments?.getString("project")?.toLongOrNull() ?: shell.state.value.project?.num
         if (below?.destination?.route == "board?project={project}" && shows == projectId) controller.popBackStack() else board(projectId)
     }
-    fun task(id: String) = go("task/${Uri.encode(id)}")
+    fun task(id: String) = go("task/${Uri.encode(id)}", stack = true)
     fun newTask(projectId: Long?, parentId: Long? = null, column: String? = null) = go("task-edit" + q("project" to projectId, "parent" to parentId, "column" to column))
     fun editTask(id: String) = go("task-edit" + q("id" to id))
     fun notes(projectId: Long?) = go("notes" + q("project" to projectId))
-    fun note(id: String) = go("note" + q("id" to id))
+    fun note(id: String) = go("note" + q("id" to id), stack = true)
     fun newNote(projectId: Long?) = go("note" + q("project" to projectId))
     fun files(projectId: Long, worktree: String? = null) = go("files/$projectId" + q("worktree" to worktree))
-    fun file(projectId: Long, path: String, worktree: String? = null, line: Int? = null) = go("file/$projectId" + q("path" to path, "worktree" to worktree, "line" to line))
+    fun file(projectId: Long, path: String, worktree: String? = null, line: Int? = null) = go("file/$projectId" + q("path" to path, "worktree" to worktree, "line" to line), stack = true)
     fun git(projectId: Long, worktree: String? = null, session: String? = null) = go("git/$projectId" + q("worktree" to worktree, "session" to session))
     /** A project's design canvases, and one of them (read only). */
     fun designs(projectId: Long) = go("designs/$projectId")
@@ -119,7 +127,7 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     override fun pc() = go("pc")
     override fun settings() = go("settings")
     override fun newThread() = go("threads", top = true)
-    override fun thread(id: String) = go("thread/${Uri.encode(id)}")
+    override fun thread(id: String) = go("thread/${Uri.encode(id)}", stack = true)
     override fun tally() = go("tally")
     override fun arbiter() = go("arbiter")
     override fun avex() = go("avex")
@@ -128,6 +136,9 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     /** One of Arbiter's strategies. */
     fun arbiterStrategy(id: Long) = go("arbiter-strategy/$id")
 }
+
+/** Where a stacked page's entry keeps the route it was opened with. */
+private const val ROUTE = "nav.route"
 
 val LocalNav = staticCompositionLocalOf<Nav> { error("No Nav") }
 
