@@ -31,7 +31,7 @@ env:
 jobs:
   engine:
     name: engine, bus and CLI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       # The image ships toolchains this job never uses; dropping them frees about 20 GB.
@@ -46,7 +46,7 @@ jobs:
       # pinned to what the developer machine runs, since a lint one version reports and another
       # does not is how main went red from #103 to #110. Bump it with `rust-version` (Cargo.toml)
       # and the image in deploy/rendezvous.Dockerfile, in a commit of its own.
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master when pinned; no tag names it (v1 is 683b588c, PR #114)
         with:
           toolchain: "1.99"
           components: clippy
@@ -85,7 +85,7 @@ jobs:
 
   native:
     name: native client (GTK)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     # relay-native pins GTK 4.22, VTE 0.84, GtkSourceView 5.18 and pango 1.56, which Ubuntu does
     # not carry. Arch does, as the developer machine (CachyOS) does; its tests need no display.
@@ -94,11 +94,16 @@ jobs:
       - name: GTK, VTE, GtkSourceView, FFmpeg headers and libclang
         run: pacman -Syu --noconfirm --needed git gtk4 vte4 gtksourceview5 ffmpeg clang
 
+      # The image and its packages float (a rolling distribution): the versions this run built
+      # against are in its log, beside the ones CLAUDE.md pins, for when a failure is Arch's.
+      - name: The GTK stack this run builds against
+        run: pacman -Q gtk4 vte4 gtksourceview5 pango glib2
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master when pinned; no tag names it (v1 is 683b588c, PR #114)
         with:
           toolchain: "1.99"
           components: clippy
