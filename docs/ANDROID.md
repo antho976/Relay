@@ -40,7 +40,9 @@ The phone is a window onto the PC and also holds the PC's data itself:
   waiting to be sent again; any other refusal, `unavailable` ones included (a provider not
   installed, a spawn that failed), is the PC's answer and parks it. Try again sends it under a
   new id, and a create's temp row and the entries that wait on its answer follow that id. An
-  entry sent without an answer can be dropped too; the PC may have it already.
+  entry sent without an answer can be dropped too; the PC may have it already. A thread takes one
+  message at a time: one refused with `thread.busy` (the agent is still answering) is queued
+  again under a new id and sent when `thread.changed` says the turn is over.
 
 The PC stays the authority for this data: it is where the agents, repositories and worktrees
 are. The phone's copy converges on it, and the phone's edits converge into it.

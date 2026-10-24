@@ -145,7 +145,18 @@ class OutboxRunner(
     private val onApplied: suspend (OutboxEntry, JsonElement) -> Unit,
     private val onParked: suspend (OutboxEntry) -> Unit = {},
     private val now: () -> Long = System::currentTimeMillis,
+    /** A message refused while its thread's agent is still answering: queued again under a new id, sent once it is done. */
+    private val onBusy: suspend (OutboxEntry) -> Unit = {},
 ) {
+    /** Threads whose agent is answering: messages to them wait for [threadFree]. */
+    private val busyThreads: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** The thread's turn ended: true when a message was waiting on it, and the outbox should be sent. */
+    fun threadFree(id: String): Boolean = busyThreads.remove(id)
+
+    /** A new session: whatever was answering then may be done. */
+    fun forgetBusy() = busyThreads.clear()
+
     sealed interface Outcome {
         data class Flushed(val sent: Int, val parked: Int, val waiting: Int) : Outcome
         data class LinkLost(val sent: Int, val error: BusError) : Outcome
@@ -175,6 +186,14 @@ class OutboxRunner(
                 target?.let { blockedTargets += it }
                 continue
             }
+            // A thread answers one message at a time (thread.busy): the rest wait for its turn to end.
+            val thread = if (entry.op == "thread.send") (payload["id"] as? JsonPrimitive)?.content else null
+            if (thread != null && thread in busyThreads) {
+                waiting++
+                blockedEntries += entry.id
+                target?.let { blockedTargets += it }
+                continue
+            }
             val attempt = entry.copy(attempts = entry.attempts + 1)
             store.update(attempt)
             val response = try {
@@ -195,6 +214,13 @@ class OutboxRunner(
             val error = response.error ?: BusError("internal", "bus.no_error", "The PC refused without saying why")
             if (error.transient) return Outcome.LinkLost(sent, error)
             if (dropped) continue
+            if (error.code == "thread.busy" && thread != null) {
+                // The refusal is recorded under this id, so the message goes again under a new one.
+                busyThreads += thread
+                onBusy(attempt)
+                waiting++
+                continue
+            }
             if (error.code == "bus.replay_unavailable" && (error.details?.get("applied") as? JsonPrimitive)?.content == "true") {
                 // It ran the first time; only its answer, too large to keep, is gone. Sending it
                 // again under a new id would run it twice: done, with no answer (JsonNull), and

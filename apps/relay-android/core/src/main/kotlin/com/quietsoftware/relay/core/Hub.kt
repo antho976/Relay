@@ -117,6 +117,10 @@ class Hub(
             _outboxChanged.value++
         },
         now = now,
+        onBusy = {
+            ledger.renew(it.id)
+            _outboxChanged.value++
+        },
     )
     private val flushing = Mutex()
 
@@ -125,7 +129,15 @@ class Hub(
 
     init {
         link.onSession = { s ->
-            val holds = scope.launch { s.events.collect { if (it.ev == "guardrail.resolved") resolved(it.payload) } }
+            runner.forgetBusy()
+            val holds = scope.launch {
+                s.events.collect {
+                    when (it.ev) {
+                        "guardrail.resolved" -> resolved(it.payload)
+                        "thread.changed" -> threadChanged(it.payload)
+                    }
+                }
+            }
             scope.launch {
                 s.ended.await()
                 holds.cancel()
@@ -196,6 +208,14 @@ class Hub(
             delay(wait)
             if (link.session.value === s && s.isOpen) flush()
         }
+    }
+
+    /** A thread's turn ended: messages queued behind it go now. */
+    private suspend fun threadChanged(payload: JsonObject) {
+        val t = payload["thread"] as? JsonObject ?: return
+        if ((t["working"] as? JsonPrimitive)?.content == "true") return
+        val id = t.l("id")?.toString() ?: return
+        if (runner.threadFree(id)) flush()
     }
 
     /** Read [kind]'s row [id] (or its list) again from the PC. */
