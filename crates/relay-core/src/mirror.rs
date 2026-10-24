@@ -35,8 +35,11 @@ pub const SCRCPY_VERSION: &str = "4.1";
 pub const SCRCPY_SERVER_SHA256: &str = "deacb991ed2509715160ffdc7907e47b4160eb30d1566217e9047fd5b8850cae";
 
 /// Where the server jar lives on the device. Named distinctly from stock scrcpy's
-/// path so Relay and a host-installed scrcpy never fight over the same file.
-pub const MIRROR_SERVER_DEVICE_PATH: &str = "/data/local/tmp/scrcpy-server-relay.jar";
+/// path so Relay and a host-installed scrcpy never fight over the same file, and by the start
+/// of its pinned SHA-256 ([`SCRCPY_SERVER_SHA256`], checked by a test): `push --sync` compares
+/// only size and mtime, so a different jar left under a fixed name with a newer mtime was kept
+/// and run. Under this name only this jar is pushed, and another version is another file.
+pub const MIRROR_SERVER_DEVICE_PATH: &str = "/data/local/tmp/scrcpy-server-relay-deacb991ed25.jar";
 
 /// Raw codec id the server sends at video-stream start: ASCII "h264".
 pub const CODEC_ID_H264: u32 = 0x6832_3634;
@@ -54,10 +57,7 @@ pub fn push_args(serial: &str, local_jar: &str) -> Vec<String> {
         // adb re-checks the DEVICE, so a file deleted out from under us is re-pushed
         // rather than assumed present.
         //
-        // One answer changes: a device-side jar with a newer mtime than the host's would
-        // be kept rather than overwritten — a Relay downgrade, since the path carries no
-        // version. The failure is loud (the pinned server refuses a protocol it does not
-        // know), not a silently wrong picture.
+        // The path names the jar's hash, so a jar of another version never stands in for it.
         "--sync".into(),
         local_jar.into(),
         MIRROR_SERVER_DEVICE_PATH.into(),
@@ -808,5 +808,18 @@ pub fn encode_input(msg: &InputMsg) -> Vec<u8> {
         InputMsg::DisplayPower { on } => set_display_power(*on).to_vec(),
         InputMsg::SetClipboard { text: s, paste } => set_clipboard(*paste, s),
         InputMsg::ResetVideo => reset_video().to_vec(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The device-side name carries the pinned jar's hash, so a new pin is a new path.
+    #[test]
+    fn the_device_jar_is_named_by_its_hash() {
+        let name = MIRROR_SERVER_DEVICE_PATH.rsplit('/').next().unwrap();
+        let stamp = name.strip_prefix("scrcpy-server-relay-").and_then(|rest| rest.strip_suffix(".jar")).unwrap();
+        assert!(stamp.len() >= 12 && SCRCPY_SERVER_SHA256.starts_with(stamp), "{name}");
     }
 }
