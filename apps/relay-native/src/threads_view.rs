@@ -4063,11 +4063,7 @@ fn refresh_arbiter(ui: &Rc<Ui>, v: &View) {
         clear(&v.panel_body);
         match read {
             Ok(value) => super::arbiter::panel_draw(&ui, &v.panel_body, tab, &value),
-            Err(e) => {
-                let l = label(&super::arbiter::said(&e), "money-muted");
-                l.set_wrap(true);
-                v.panel_body.append(&l);
-            }
+            Err(e) => panel_failed(&ui, &v.panel_body, &super::arbiter::said(&e)),
         }
     });
 }
@@ -4104,13 +4100,25 @@ fn refresh_avex(ui: &Rc<Ui>, v: &View) {
         clear(&v.panel_body);
         match read {
             Ok(value) => super::avex::panel_draw(&ui, &v.panel_body, tab, &value),
-            Err(e) => {
-                let l = label(&super::avex::said(&e), "money-muted");
-                l.set_wrap(true);
-                v.panel_body.append(&l);
-            }
+            Err(e) => panel_failed(&ui, &v.panel_body, &super::avex::said(&e)),
         }
     });
+}
+
+/// A panel read that failed: why, and a key to read it again, as every page has (`failed`).
+fn panel_failed(ui: &Rc<Ui>, body: &gtk::Box, why: &str) {
+    let l = label(why, "money-muted");
+    l.set_wrap(true);
+    body.append(&l);
+    let again = button("Try again", "money-secondary");
+    again.set_halign(gtk::Align::Start);
+    let weak = Rc::downgrade(ui);
+    again.connect_clicked(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            refresh_panel(&ui);
+        }
+    });
+    body.append(&again);
 }
 
 /// Re-read the panel's view, Tally's, Arbiter's or Avex's, if it is open. Only the newest read
@@ -4176,9 +4184,7 @@ pub fn refresh_panel(ui: &Rc<Ui>) {
                     }
                     e => super::pages::unavailable(e),
                 };
-                let l = label(&why, "money-muted");
-                l.set_wrap(true);
-                v.panel_body.append(&l);
+                panel_failed(&ui, &v.panel_body, &why);
             }
         }
     });
