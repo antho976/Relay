@@ -359,6 +359,8 @@ pub struct Ui {
     wall_split: gtk::Paned,
     wall_stack: gtk::Stack,
     empty_title: gtk::Label,
+    /// What the window offers while the engine does not answer (`set_connected`).
+    offline: Offline,
     panes: RefCell<BTreeMap<String, Rc<Pane>>>,
     /// The terminal lent to a design's agent panel (`lend_pane`): off the wall, and attached
     /// while it is shown there whatever page is open.
@@ -570,6 +572,7 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     palette_compact.append(&crate::icons::image("search", 14));
     let compact_keycap = label("Ctrl K", "keycap");
     palette_keycap.bind_property("label", &compact_keycap, "label").sync_create().build();
+    palette_keycap.bind_property("visible", &compact_keycap, "visible").sync_create().build();
     palette_compact.append(&compact_keycap);
     let palette_fold = crate::fold::Fold::new(&palette_row, &palette_compact);
     // It asks for its shortest words and grows into what the bar has left, so the keys after it
@@ -814,23 +817,36 @@ fn more_menu(more: &gtk::Button, tools: &gtk::Box) {
     popover.popup();
 }
 
-/// The notice under the title bar: the label, which stays the notice's source of truth
-/// (`show_error`, smoke checks), and the bar around it, which follows its visibility and
-/// carries the dismiss key.
-fn notice_bar() -> (gtk::Label, gtk::Box) {
+/// The notice: the label, which stays the notice's source of truth (`show_error`, smoke checks),
+/// and the card around it, which follows its visibility and carries a Reconnect key (shown while
+/// the engine does not answer) and the dismiss key. The card floats at the foot of the page, as a
+/// toast does: a notice never pushes the sidebar and the page down, nor covers the bar of keys
+/// at the page's head.
+fn notice_bar() -> (gtk::Label, gtk::Box, gtk::Button) {
     let notice = label("Connecting to the Relay engine…", "notice");
     notice.set_wrap(true);
     notice.set_selectable(true);
     notice.set_hexpand(true);
-    // The label stays the notice's source of truth (`show_error`, smoke checks); the bar
-    // around it follows its visibility and carries the dismiss key.
+    notice.set_xalign(0.0);
+    notice.set_max_width_chars(72);
     let notice_bar = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     notice_bar.add_css_class("notice-bar");
+    notice_bar.set_halign(gtk::Align::Center);
+    notice_bar.set_valign(gtk::Align::End);
+    let lamp = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    lamp.add_css_class("notice-lamp");
+    lamp.set_valign(gtk::Align::Start);
+    notice_bar.append(&lamp);
     notice_bar.append(&notice);
+    let reconnect = button("Reconnect", "notice-action");
+    reconnect.set_widget_name("notice-reconnect");
+    reconnect.set_valign(gtk::Align::Center);
+    reconnect.set_visible(false);
+    notice_bar.append(&reconnect);
     let notice_close = icon_button("close", "Dismiss");
     notice_close.set_widget_name("notice-dismiss");
     notice_close.add_css_class("notice-dismiss");
-    notice_close.set_valign(gtk::Align::Start);
+    notice_close.set_valign(gtk::Align::Center);
     notice_bar.append(&notice_close);
     notice
         .bind_property("visible", &notice_bar, "visible")
@@ -842,7 +858,14 @@ fn notice_bar() -> (gtk::Label, gtk::Box) {
             notice.set_visible(false);
         }
     });
-    (notice, notice_bar)
+    (notice, notice_bar, reconnect)
+}
+
+/// While the engine does not answer, the window offers Reconnect where it offered New agent.
+struct Offline {
+    launch: [gtk::Button; 2],
+    description: gtk::Label,
+    reconnect: [gtk::Button; 2],
 }
 
 /// The sidebar's width as the window opens, and how narrow and wide a drag may take it.
@@ -955,7 +978,9 @@ struct Wall {
     wall_split: gtk::Paned,
     wall_stack: gtk::Stack,
     empty_title: gtk::Label,
+    empty_description: gtk::Label,
     empty_launch: gtk::Button,
+    empty_reconnect: gtk::Button,
 }
 
 fn wall() -> Wall {
@@ -1015,6 +1040,10 @@ fn wall() -> Wall {
     empty_launch.set_child(Some(&empty_action));
     empty_launch.set_halign(gtk::Align::Center);
     empty.append(&empty_launch);
+    let empty_reconnect = button("Reconnect", "");
+    empty_reconnect.set_halign(gtk::Align::Center);
+    empty_reconnect.set_visible(false);
+    empty.append(&empty_reconnect);
     // The terminals' plates top up the page stack's @wall; with none, the page does.
     let empty_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
     empty_page.add_css_class("page-layer");
@@ -1029,7 +1058,7 @@ fn wall() -> Wall {
     let wall_body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     wall_body.append(&wall_stack);
     agents.append(&wall_body);
-    Wall { agents, focus_tabs, wall, wall_right, wall_split, wall_stack, empty_title, empty_launch }
+    Wall { agents, focus_tabs, wall, wall_right, wall_split, wall_stack, empty_title, empty_description, empty_launch, empty_reconnect }
 }
 
 /// Every page but the agent wall, added to `content`. Notes has a box but no place in it.
@@ -1214,8 +1243,7 @@ impl Ui {
         let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let top = top_bar(&window);
         outer.append(&top.handle);
-        let (notice, notice_bar) = notice_bar();
-        outer.append(&notice_bar);
+        let (notice, notice_bar, notice_reconnect) = notice_bar();
         let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         body.set_vexpand(true);
         let side = sidebar();
@@ -1271,7 +1299,12 @@ impl Ui {
         content.set_vexpand(true);
         let page_overlay = gtk::Overlay::new();
         page_overlay.set_child(Some(&content));
-        split.set_end_child(Some(&page_overlay));
+        // Over the page, never the sidebar: the notice is about what you were doing there. Its
+        // own layer, so the panels that open over the page never cover it.
+        let notice_host = gtk::Overlay::new();
+        notice_host.set_child(Some(&page_overlay));
+        notice_host.add_overlay(&notice_bar);
+        split.set_end_child(Some(&notice_host));
         split.set_resize_end_child(true);
         split.set_shrink_end_child(false);
         let wall = wall();
@@ -1370,6 +1403,11 @@ impl Ui {
             wall_split: wall.wall_split,
             wall_stack: wall.wall_stack,
             empty_title: wall.empty_title,
+            offline: Offline {
+                launch: [top.launch_key.clone(), wall.empty_launch.clone()],
+                description: wall.empty_description.clone(),
+                reconnect: [notice_reconnect, wall.empty_reconnect.clone()],
+            },
             panes: RefCell::default(),
             lent: RefCell::default(),
             lent_card: RefCell::default(),
@@ -1565,6 +1603,15 @@ impl Ui {
                 }
             });
         }
+        // The notice's and the empty wall's Reconnect do what the title bar's does.
+        for key in &ui.offline.reconnect {
+            let weak = Rc::downgrade(ui);
+            key.connect_clicked(move |_| {
+                if let Some(ui) = weak.upgrade() {
+                    ui.reconnect.emit_clicked();
+                }
+            });
+        }
         let weak = Rc::downgrade(ui);
         top.reconnect.connect_clicked(move |_| {
             if let Some(ui) = weak.upgrade() {
@@ -1735,6 +1782,7 @@ impl Ui {
     /// `show_error` with its own reading time, in seconds.
     fn show_notice(&self, message: &str, seconds: usize) {
         self.notice.set_text(message);
+        self.notice.set_tooltip_text(None);
         self.notice.set_visible(true);
         if let Some(bar) = self.notice.parent() {
             bar.remove_css_class("info");
@@ -1795,6 +1843,31 @@ impl Ui {
     fn set_connected(&self, connected: bool) {
         self.connected.set(connected);
         self.reconnect.set_visible(!connected);
+        for key in &self.offline.reconnect {
+            key.set_visible(!connected);
+        }
+        for key in &self.offline.launch {
+            key.set_sensitive(connected);
+        }
+        self.offline.launch[1].set_visible(connected);
+        self.offline.launch[0].set_tooltip_text(Some(&if connected {
+            self.shortcut_tip("New agent", "new_session")
+        } else {
+            String::from("Reconnect to Relay's engine to launch agents")
+        }));
+        if connected {
+            self.offline.description.set_text("Launch a solo agent in its own worktree, or a review group on one branch. Each agent lands here as a tile.");
+        } else {
+            self.empty_title.set_text("Not connected");
+            self.offline.description.set_text("Relay's engine isn't answering. Your agents keep running in it; reconnect once it's back.");
+        }
+    }
+    /// While a connection is being made there is nothing to reconnect.
+    fn set_connecting(&self) {
+        self.reconnect.set_visible(false);
+        for key in &self.offline.reconnect {
+            key.set_visible(false);
+        }
     }
     fn connect(self: &Rc<Self>) {
         self.navigation_echoes.borrow_mut().clear();
@@ -1816,6 +1889,7 @@ impl Ui {
         self.launch.set_reveal_child(false);
         self.forget_launch();
         self.layout();
+        self.set_connecting();
         self.show_error("Connecting to the Relay engine…");
         let ui = self.clone();
         glib::spawn_future_local(async move {
@@ -2066,16 +2140,20 @@ impl Ui {
                                 ui.status.set_text(
                                     "Engine disconnected · sessions remain owned by the engine",
                                 );
-                                ui.show_error(&e.to_string());
+                                ui.show_error("Lost the connection to Relay's engine. Your agents keep running in it; reconnect once it's back.");
+                                ui.notice.set_tooltip_text(Some(&e.to_string()));
                                 break;
                             }
                             _ => {}
                         }
                     }
                 }
-                Err(e) if generation == ui.generation.get() => ui.show_error(&format!(
-                    "{e}. Start relay serve for this instance, then reconnect."
-                )),
+                Err(e) if generation == ui.generation.get() => {
+                    ui.set_connected(false);
+                    ui.show_error("Can't reach Relay's engine. Start it with relay serve, then reconnect.");
+                    // The reason, for whoever needs it: the socket and the OS error.
+                    ui.notice.set_tooltip_text(Some(&e.to_string()));
+                }
                 Err(_) => {}
             }
         });

@@ -9,10 +9,14 @@ button.confirm-armed label { color: white; }
 .confirm-caption { font-weight: 600; }
 
 /* The banner under the title bar: dismissible, clears itself. */
-.notice-bar { background: @slab; border-bottom: 1px solid @held; padding-right: 6px; }
-.notice-bar.info { border-bottom-color: @live; }
-.notice-bar .notice { background: transparent; border: 0; padding: 8px 12px; }
-.notice-bar button.notice-dismiss { margin-top: 4px; color: @secondary; }
+/* The notice: a card floating at the foot of the page (app.rs notice_bar), opaque as everything that
+   floats over content is, its lamp the state colour: attention for a refusal, live for good news. */
+.notice-bar { margin: 0 20px 18px; padding: 6px 6px 6px 14px; border: 1px solid @strong; border-radius: 12px; background: @slab_solid; box-shadow: 0 10px 28px alpha(black, 0.42); }
+.notice-lamp { min-width: 7px; min-height: 7px; margin: 12px 10px 0 0; border-radius: 999px; background: @held; }
+.notice-bar.info .notice-lamp { background: @live; }
+.notice-bar .notice { background: transparent; border: 0; padding: 6px 4px 6px 0; color: @ink; font-size: 13px; }
+.notice-bar button.notice-action { min-height: 28px; margin: 0 2px 0 8px; padding: 0 12px; }
+.notice-bar button.notice-dismiss { color: @secondary; }
 .notice-bar button.notice-dismiss:hover { color: @ink; }
 
 /* Notification center: the bell's popover. */
