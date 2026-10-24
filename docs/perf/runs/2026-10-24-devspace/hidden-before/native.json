@@ -1,0 +1,94 @@
+{
+  "date": "2026-10-24",
+  "size": "1440,900",
+  "seconds": 8,
+  "perf": false,
+  "gtk": "4.24.1",
+  "pages": {
+    "agents-hidden": {
+      "page": "agents",
+      "startup": {
+        "cpu_ms_first_2s": 640.0,
+        "rss_mb_at_2s": 228.9,
+        "threads": 15
+      },
+      "steady": {
+        "seconds": 310.01,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 0.2,
+        "rss_mb": 71.0,
+        "threads": 14
+      },
+      "exit_code": 1,
+      "total_wall_s": 330.4,
+      "gdk_frame_log_lines": 12,
+      "screenshot": false,
+      "calls": {
+        "git.fetch": 1,
+        "worktree.drift": 2,
+        "worktree.list": 1
+      },
+      "calls_counted_s": 325,
+      "calls_per_min": 0.74,
+      "state": "Some(ToplevelState(TOP_RESIZABLE | RIGHT_RESIZABLE | BOTTOM_RESIZABLE | LEFT_RESIZABLE | SUSPENDED))"
+    },
+    "agents-shown": {
+      "page": "agents",
+      "startup": {
+        "cpu_ms_first_2s": 490.0,
+        "rss_mb_at_2s": 184.0,
+        "threads": 14
+      },
+      "steady": {
+        "seconds": 310.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 10.0,
+        "wakeups_per_s": 0.2,
+        "rss_mb": 119.7,
+        "threads": 12
+      },
+      "exit_code": 0,
+      "total_wall_s": 328.69,
+      "gdk_frame_log_lines": 31,
+      "screenshot": true,
+      "calls": {
+        "app.status": 1,
+        "arbiter.summary": 1,
+        "bus.subscribe": 1,
+        "design.render.serve": 1,
+        "device.list": 1,
+        "file.tree": 3,
+        "git.fetch": 1,
+        "git.status": 4,
+        "guardrail.requests.list": 1,
+        "notes.list": 1,
+        "notify.list": 3,
+        "project.list": 1,
+        "provider.list": 1,
+        "session.attach": 6,
+        "session.list": 1,
+        "session.resize": 11,
+        "settings.get": 14,
+        "settings.set": 3,
+        "task.list": 1,
+        "ui.page.switch": 1,
+        "usage.get": 1,
+        "workspace.list": 1,
+        "worktree.drift": 2,
+        "worktree.list": 5
+      },
+      "calls_counted_s": 325,
+      "calls_per_min": 12.18,
+      "state": null
+    }
+  },
+  "notes": [],
+  "engine_rss_mb_six_sessions": 33.0,
+  "display": {
+    "GDK_BACKEND": "wayland",
+    "WAYLAND_DISPLAY": "relay-sly-797418",
+    "DISPLAY": "",
+    "XDG_SESSION_TYPE": "wayland"
+  }
+}
