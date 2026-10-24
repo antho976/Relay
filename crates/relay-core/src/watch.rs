@@ -107,6 +107,12 @@ pub fn ensure(engine: &Engine, root: &Path, project_id: relay_bus::types::Id) {
     let callback_slot = slot.clone();
     let index_path = git_dir.join("index");
     let head_path = git_dir.join("HEAD");
+    // A commit, an amend or a `reset --soft` in a linked worktree leaves its index's entries and
+    // its HEAD file alone (HEAD names the branch, whose ref is in the common dir): what moves in
+    // the slot is the reflog, `logs/HEAD`, so that folder is watched too.
+    let logs_path = git_dir.join("logs");
+    let logs_head = logs_path.join("HEAD");
+    let callback_logs = logs_path.clone();
     let watcher: notify::Result<RecommendedWatcher> =
         notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
             let Ok(event) = event else { return };
@@ -133,8 +139,12 @@ pub fn ensure(engine: &Engine, root: &Path, project_id: relay_bus::types::Id) {
                     .collect(),
                 _ => Vec::new(),
             };
-            if gone || !created.is_empty() {
-                let (weak, key, root) = (weak.clone(), callback_key.clone(), callback_root.clone());
+            // The slot's `logs/` arrives with its first reflog entry.
+            let new_logs = callback_slot.is_some()
+                && matches!(event.kind, notify::EventKind::Create(_))
+                && event.paths.iter().any(|path| path == &callback_logs);
+            if gone || !created.is_empty() || new_logs {
+                let (weak, key, root, logs) = (weak.clone(), callback_key.clone(), callback_root.clone(), callback_logs.clone());
                 std::thread::spawn(move || {
                     let Some(engine) = weak.upgrade() else { return };
                     if gone {
@@ -146,6 +156,9 @@ pub fn ensure(engine: &Engine, root: &Path, project_id: relay_bus::types::Id) {
                         let mut watcher = watcher.lock().unwrap();
                         for dir in created.iter().flat_map(|dir| watch_dirs(&root, dir)) {
                             let _ = watcher.watch(&dir, RecursiveMode::NonRecursive);
+                        }
+                        if new_logs {
+                            let _ = watcher.watch(&logs, RecursiveMode::NonRecursive);
                         }
                     }
                 });
@@ -161,7 +174,7 @@ pub fn ensure(engine: &Engine, root: &Path, project_id: relay_bus::types::Id) {
                             last_index = next;
                             unchanged
                         } else if callback_slot.as_ref().is_some_and(|slot| path.starts_with(slot)) {
-                            path != &head_path
+                            path != &head_path && path != &logs_head
                         } else {
                             is_generated_path(&callback_root, path)
                         }
@@ -206,6 +219,7 @@ pub fn ensure(engine: &Engine, root: &Path, project_id: relay_bus::types::Id) {
             }
             if let Some(slot) = &slot {
                 let _ = watcher.watch(slot, RecursiveMode::NonRecursive);
+                let _ = watcher.watch(&logs_path, RecursiveMode::NonRecursive);
             }
             if dirs.len() >= MAX_DIRS {
                 tracing::warn!(root = %key, limit = MAX_DIRS, "worktree has more directories than are watched");
@@ -467,6 +481,15 @@ mod tests {
         let staged = next();
         git(&linked, &["add", "new.txt"]);
         assert_eq!(staged.await.expect("staging in a linked worktree went unseen"), "file.changed");
+        // A commit leaves the index's entries and HEAD alone; its reflog line is what is seen.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let committed = next();
+        git(&linked, &["-c", "user.name=F", "-c", "user.email=f@f", "commit", "-q", "-m", "b"]);
+        assert_eq!(committed.await.expect("a commit in a linked worktree went unseen"), "file.changed");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let reset = next();
+        git(&linked, &["reset", "-q", "--soft", "HEAD~1"]);
+        assert_eq!(reset.await.expect("a soft reset in a linked worktree went unseen"), "file.changed");
     }
 
     #[test]
