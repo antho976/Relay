@@ -265,7 +265,7 @@ button.design-page-fold:hover { color: @ink; background: @wash_solid; }
 menubutton.video-render-key > button { min-height: 28px; padding: 0 10px; border-radius: 8px; font-weight: 600; }
 .video-stage { background: #07080b; }
 .video-pill { padding: 6px 8px 6px 14px; border-radius: 999px; border: 1px solid @glass_edge; background: alpha(#0b0d12, 0.86); color: @ink; font-size: 12.5px; }
-.video-side { border-left: 1px solid @glass_edge; }
+.video-controls { padding: 6px 12px; background: #07080b; }
 .video-row { padding: 4px 0; }
 .video-row-title { color: @ink; font-size: 12.5px; font-weight: 600; }
 .video-warn { color: @held; font-size: 12px; }

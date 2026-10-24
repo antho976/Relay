@@ -74,6 +74,9 @@ pub struct VideoBoard {
     status: gtk::Label,
     stage: gtk::Stack,
     player: gtk::Video,
+    /// Play, pause, the time and a scrubber, always under the picture: GtkVideo's own hide
+    /// until the pointer moves over it, so a playing video showed none.
+    controls: gtk::MediaControls,
     poster: gtk::Picture,
     stage_note: gtk::Label,
     play_key: gtk::Button,
@@ -261,7 +264,12 @@ impl VideoBoard {
                 stream.pause();
             }
         });
-        stage.add_named(&player, Some("player"));
+        let player_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        player_box.append(&player);
+        let controls = gtk::MediaControls::new(None::<&gtk::MediaStream>);
+        controls.add_css_class("video-controls");
+        player_box.append(&controls);
+        stage.add_named(&player_box, Some("player"));
         // The poster takes the height the note and the keys under it leave, so a tall video's
         // never pushes them off the stage.
         let poster_box = gtk::Box::new(gtk::Orientation::Vertical, 14);
@@ -352,8 +360,13 @@ impl VideoBoard {
         side.set_size_request(320, -1);
         side.set_propagate_natural_width(true);
         side.set_max_content_width(340);
-        // Its rows expand within it; it does not take the player's room.
+        // Its rows expand within it; it does not take the player's room. A card inset from the
+        // window's edges, as the design board's inspector is, rather than flush against them.
         side.set_hexpand(false);
+        side.set_margin_top(12);
+        side.set_margin_bottom(12);
+        side.set_margin_end(12);
+        side.set_margin_start(12);
         let side_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let (comp_section, comp_body) = section("Composition");
         let composition = gtk::DropDown::from_strings(&[]);
@@ -398,6 +411,7 @@ impl VideoBoard {
             status,
             stage,
             player,
+            controls,
             poster,
             stage_note,
             play_key: play_key.clone(),
@@ -794,6 +808,7 @@ impl VideoBoard {
         let same = self.playing.borrow().as_ref().is_some_and(|(playing, p)| *playing == id && *p == path);
         if !same {
             self.player.set_media_stream(Some(&gtk::MediaFile::for_filename(&path)));
+            self.controls.set_media_stream(self.player.media_stream().as_ref());
             *self.playing.borrow_mut() = Some((id, path));
         }
         self.stage.set_visible_child_name("player");

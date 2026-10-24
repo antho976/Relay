@@ -1213,7 +1213,10 @@ impl Board {
         }
         pop.set_child(Some(&menu));
         key.set_popover(Some(&pop));
-        body.append(&labelled("Style", key));
+        // A row of its own under the head, in a section's padding as the rows below are.
+        let row = labelled("Style", key);
+        row.add_css_class("design-section");
+        body.append(&row);
     }
 
     /// The most lines a text shows, the rest cut with "…"; emptied, it shows them all.

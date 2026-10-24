@@ -3233,6 +3233,20 @@ impl Board {
             }
             return Some(away);
         }
+        // Too wide for the room beside the inspector even compact (a window near 1080 px): below
+        // it, at the canvas's foot, rather than over its rows (W and Hug were covered), clear of
+        // the zoom keys in the corner.
+        if inspector.is_some_and(|iw| cw - iw - 8.0 - (w as f64) < 8.0) {
+            let below = self.inspector_scroll.compute_bounds(&self.overlay)
+                .map_or(f64::INFINITY, |r| f64::from(r.y() + r.height())) + 8.0;
+            let y = ch - h as f64 - 12.0;
+            if y >= below {
+                let zoom = 200.0;
+                let x = (s.cx() - w as f64 / 2.0).round().clamp(8.0, (cw - zoom - w as f64).max(8.0));
+                self.context_at.set((x as i32, y as i32));
+                return Some(gdk::Rectangle::new(x as i32, y as i32, w, h));
+            }
+        }
         let mut right = cw - 8.0;
         if let Some(iw) = inspector.filter(|iw| cw - iw - 8.0 - w as f64 >= 8.0) {
             right = cw - iw - 8.0;
