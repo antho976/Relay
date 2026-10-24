@@ -777,13 +777,78 @@ impl ThreadStore {
         Ok(MessageView { id, thread_id: thread, role: role.into(), body: body.clone(), created_at: now.into() })
     }
 
-    pub fn messages(&self, thread: Id, after: Option<Id>) -> rusqlite::Result<Vec<MessageView>> {
+    /// One page of a thread's messages as [`page`] describes it, oldest first.
+    pub fn page(&self, thread: Id, after: Option<Id>, before: Option<Id>, budget: usize) -> rusqlite::Result<Page> {
+        let (lo, hi) = (after.unwrap_or(0), before.unwrap_or(Id::MAX));
+        let mut out = Page::default();
+        let mut used = 0;
+        if after.is_some() {
+            // From the cursor on, so a reader that keeps the last id never skips one.
+            let mut stmt = self.conn.prepare_cached(
+                "SELECT id, thread_id, role, body, created_at FROM message WHERE thread_id = ?1 AND id > ?2 AND id < ?3 ORDER BY id",
+            )?;
+            for row in stmt.query_map(params![thread, lo, hi], message)? {
+                let shown = shown(row?);
+                used += size(&shown);
+                if used > budget && !out.messages.is_empty() {
+                    out.later = true;
+                    break;
+                }
+                out.messages.push(shown);
+            }
+            return Ok(out);
+        }
+        // The newest that fit, read newest first and handed back oldest first.
         let mut stmt = self.conn.prepare_cached(
-            "SELECT id, thread_id, role, body, created_at FROM message WHERE thread_id = ?1 AND id > ?2 ORDER BY id",
+            "SELECT id, thread_id, role, body, created_at FROM message WHERE thread_id = ?1 AND id < ?2 ORDER BY id DESC",
         )?;
-        let rows = stmt.query_map(params![thread, after.unwrap_or(0)], message)?;
-        rows.collect()
+        for row in stmt.query_map(params![thread, hi], message)? {
+            let shown = shown(row?);
+            used += size(&shown);
+            if used > budget && !out.messages.is_empty() {
+                out.earlier = true;
+                break;
+            }
+            out.messages.push(shown);
+        }
+        out.messages.reverse();
+        Ok(out)
     }
+}
+
+/// The most of one tool answer [`page`] hands a client, in characters. What people see of a
+/// tool's answer is whether it failed and why, or the small row a write returns; a month of
+/// `money.tx.list` (up to [`MAX_TOOL_TEXT`] kept for the agent) is never drawn.
+const SHOWN_TOOL_TEXT: usize = 8_000;
+/// About how many bytes of messages one `thread.get` answers with: well inside the desktop
+/// client's 2 MiB line, however long the thread grows.
+pub const GET_BUDGET: usize = 1024 * 1024;
+
+/// A page of messages, and whether the thread has more on either side of it.
+#[derive(Default)]
+pub struct Page {
+    pub messages: Vec<MessageView>,
+    /// Older messages exist that this page left out: ask again with `before` the first id.
+    pub earlier: bool,
+    /// Newer messages exist that this page left out: ask again with `after` the last id.
+    pub later: bool,
+}
+
+/// A message as a client is handed it: a tool answer past [`SHOWN_TOOL_TEXT`] is cut, and
+/// marked `"cut": true`.
+fn shown(mut m: MessageView) -> MessageView {
+    if m.role == "tool" {
+        if let Some(text) = m.body["text"].as_str().filter(|text| text.len() > SHOWN_TOOL_TEXT && text.chars().count() > SHOWN_TOOL_TEXT) {
+            m.body["text"] = Value::String(cut(text, SHOWN_TOOL_TEXT));
+            m.body["cut"] = Value::Bool(true);
+        }
+    }
+    m
+}
+
+/// About what a message costs on the wire, escaping aside.
+fn size(m: &MessageView) -> usize {
+    m.body.to_string().len() + m.role.len() + m.created_at.len() + 64
 }
 
 fn sql(e: rusqlite::Error) -> BusError {
@@ -916,9 +981,13 @@ pub fn get(engine: &Engine, id: Id) -> Result<ThreadView, BusError> {
     Ok(view(engine, row))
 }
 
-pub fn messages(engine: &Engine, id: Id, after: Option<Id>) -> Result<Vec<MessageView>, BusError> {
+/// A thread's messages for `thread.get`, oldest first, in about [`GET_BUDGET`] bytes: with
+/// `after`, those after it from the oldest on; otherwise the newest (before `before`, when
+/// given). A long thread's history only grows, and one answer holding all of it would one day
+/// pass what a client reads in one line, and the thread would never open again.
+pub fn page(engine: &Engine, id: Id, after: Option<Id>, before: Option<Id>) -> Result<Page, BusError> {
     get(engine, id)?;
-    with_db(engine, |db| db.messages(id, after))
+    with_db(engine, |db| db.page(id, after, before, GET_BUDGET))
 }
 
 /// A person's message, checked: trimmed, not empty, not too long.
@@ -1653,10 +1722,63 @@ mod tests {
         // Its model failing to load ends nothing of the second, and says nothing.
         fail(&engine, id, first, "The model did not load");
         assert_eq!(token(&engine), Some(second));
-        assert_eq!(messages(&engine, id, None).unwrap().len(), 2);
+        assert_eq!(page(&engine, id, None, None).unwrap().messages.len(), 2);
         fail(&engine, id, second, "The model did not load");
         assert_eq!(token(&engine), None);
-        assert_eq!(messages(&engine, id, None).unwrap().len(), 3);
+        assert_eq!(page(&engine, id, None, None).unwrap().messages.len(), 3);
+    }
+
+    /// A thread of heavy tool calls past the desktop's 2 MiB line still opens: `thread.get`
+    /// answers with its newest messages in about [`GET_BUDGET`], long answers cut, and the
+    /// rest a `before` away; a reader with a cursor moves on through all of it.
+    #[test]
+    fn a_long_thread_opens_in_pages_with_long_answers_cut() {
+        let db = ThreadStore::open_in_memory().unwrap();
+        let now = crate::time::now();
+        let id = db.create(MONEY, "Long", "claude", None, None, &now).unwrap();
+        let heavy = "x".repeat(MAX_TOOL_TEXT);
+        for n in 0..150 {
+            db.add(id, "user", &json!({"text": format!("question {n}")}), &now).unwrap();
+            db.add(id, "tool", &json!({"tool_use_id": format!("tu{n}"), "is_error": false, "text": heavy}), &now).unwrap();
+        }
+        let whole: usize = db.page(id, Some(0), None, usize::MAX).unwrap().messages.len();
+        assert_eq!(whole, 300);
+
+        let first = db.page(id, None, None, GET_BUDGET).unwrap();
+        let bytes: usize = first.messages.iter().map(|m| serde_json::to_string(m).unwrap().len()).sum();
+        assert!(bytes <= GET_BUDGET && bytes > GET_BUDGET / 2, "{bytes}");
+        assert!(first.earlier && !first.later);
+        let last = first.messages.last().unwrap();
+        assert_eq!(last.body["text"].as_str().unwrap().chars().count(), SHOWN_TOOL_TEXT);
+        assert_eq!(last.body["cut"], true);
+        assert!(first.messages.windows(2).all(|w| w[0].id < w[1].id), "oldest first");
+
+        // Page back to the start: every message once, in order.
+        let mut seen = first.messages.clone();
+        let mut earlier = first.earlier;
+        while earlier {
+            let page = db.page(id, None, Some(seen[0].id), GET_BUDGET).unwrap();
+            earlier = page.earlier;
+            seen.splice(0..0, page.messages);
+        }
+        assert_eq!(seen.len(), 300);
+        assert!(seen.windows(2).all(|w| w[0].id < w[1].id));
+
+        // A cursor from the start catches up in pages too, and never skips one.
+        let (mut after, mut count, mut later) = (0, 0, true);
+        while later {
+            let page = db.page(id, Some(after), None, GET_BUDGET).unwrap();
+            assert!(!page.earlier);
+            later = page.later;
+            count += page.messages.len();
+            after = page.messages.last().unwrap().id;
+        }
+        assert_eq!(count, 300);
+
+        // A short answer, an error included, is handed on whole.
+        let small = db.add(id, "tool", &json!({"tool_use_id": "s", "is_error": true, "text": "refused"}), &now).unwrap();
+        let tail = db.page(id, Some(small.id - 1), None, GET_BUDGET).unwrap();
+        assert_eq!(tail.messages[0].body, json!({"tool_use_id": "s", "is_error": true, "text": "refused"}));
     }
 
     #[test]
@@ -1737,7 +1859,7 @@ mod tests {
         let gone = ImageView { id: "e".repeat(32), ..uploaded[0].clone() };
         let rolled = with_db(&engine, |db| db.add_user(other, "Here", &[uploaded[images::THREAD_MAX].clone(), gone.clone()], &now)).unwrap();
         assert_eq!(rolled.unwrap_err(), gone.id);
-        assert!(messages(&engine, other, None).unwrap().is_empty(), "the message and what it carried roll back");
+        assert!(page(&engine, other, None, None).unwrap().messages.is_empty(), "the message and what it carried roll back");
         assert_eq!(post(&engine, other, "Here", std::slice::from_ref(&gone), &now).unwrap_err().code, "thread.image_unknown");
         assert!(post(&engine, other, "Here", &uploaded[images::THREAD_MAX..], &now).is_ok(), "the turn the refusal claimed was given back");
     }
