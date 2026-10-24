@@ -202,6 +202,33 @@ fn one_undo_takes_back_a_change_and_its_instances() {
 
 /// A design is marked as one that holds a main by the copy that makes one, and a duplicate of it
 /// is marked too; a design without one is not, so its lists skip the component rules.
+/// An agent's lenient list (one built from an old read) is followed as a strict one is: the chart
+/// it changed is drawn again, the main it changed brought to its instances, and a shape it added
+/// without a size given one. The person's undo of it puts back what was stored.
+#[test]
+fn an_agents_lenient_list_is_drawn_synced_and_sized() {
+    let (e, _root) = project();
+    let me = agent(&e);
+    let id = ok(&e, "design.create", json!({"project_id": 1, "title": "Lenient"}))["design"]["id"].as_i64().unwrap();
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "c", "parent": "page-1", "kind": "frame", "w": 300, "h": 200, "chart": {"kind": "bar", "values": true, "labels": ["A", "B"], "series": [{"values": [1, 2]}]}}},
+        {"op": "add", "node": {"id": "m", "parent": "page-1", "kind": "frame", "x": 400, "w": 100, "h": 100, "fill": "#FFFFFF"}},
+        {"op": "copy", "id": "m", "as": "m-2", "dx": 200, "instance": true},
+    ]));
+    let before = content(&e, id);
+    let out = ok_as(&e, me, "design.apply", json!({"design_id": id, "lenient": true, "reply": "full", "ops": [
+        {"op": "update", "id": "c", "set": {"chart": {"kind": "bar", "values": true, "labels": ["A", "B"], "series": [{"values": [5, 9]}]}}},
+        {"op": "update", "id": "m", "set": {"fill": "#FF0000"}},
+        {"op": "add", "node": {"id": "r", "parent": "page-1", "kind": "rect", "fill": "#00FF00"}},
+    ]}));
+    assert_eq!(node(&e, id, "c.value-0-1")["text"], "9");
+    assert_eq!(node(&e, id, "m-2")["fill"], "#FF0000");
+    let r = node(&e, id, "r");
+    assert!(r["w"].as_f64() > Some(0.0) && r["h"].as_f64() > Some(0.0), "{r}");
+    ok(&e, "design.apply", json!({"design_id": id, "ops": out["inverse"], "lenient": true, "expect": out["expect"]}));
+    assert_eq!(content(&e, id), before);
+}
+
 #[test]
 fn a_design_is_marked_once_it_holds_a_main() {
     let (e, _root) = project();

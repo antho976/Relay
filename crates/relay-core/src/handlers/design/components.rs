@@ -9,7 +9,8 @@
 //! it lost is deleted, its order is the main's), and a main that holds an instance of another is
 //! brought to its own instances after that one. Every write is an edit like any other, dated,
 //! counted, undone and expected, so one undo takes back the change and what it did to the
-//! instances. A lenient list (an undo, a redo) puts back what was stored and syncs nothing.
+//! instances. The person's lenient list (an undo, a redo) puts back what was stored and syncs
+//! nothing; an agent's is synced as a strict one is (`Run::derives`).
 //!
 //! A design that never held a main component pays nothing for all this: the flag
 //! (`designs.components`, migration v32) is read with the row every list reads.
@@ -158,7 +159,7 @@ impl Run<'_> {
     /// mains to theirs (see the module). Refused (`design.component_cycle`) for an instance
     /// inside its own main, however deep.
     pub(super) fn sync_components(&mut self) -> Result<(), BusError> {
-        if self.lenient || !self.has_mains()? && self.mains_gone.is_empty() {
+        if !self.derives() || !self.has_mains()? && self.mains_gone.is_empty() {
             return Ok(());
         }
         let mut queue: VecDeque<String> = VecDeque::new();

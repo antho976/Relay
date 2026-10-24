@@ -109,7 +109,8 @@ pub(super) struct Run<'a> {
     /// An undo or a redo: a written rule's breach is applied as written, and an edit of a node
     /// that is gone or cannot be read is skipped, where a strict list refuses either.
     pub(super) lenient: bool,
-    /// An agent asked: what a lenient list let through is told it in `warnings`.
+    /// An agent asked: what a lenient list let through is told it in `warnings`, and what it
+    /// changes is drawn, synced and sized as a strict list's is ([`Run::derives`]).
     pub(super) agent: bool,
     pub(super) warnings: Vec<String>,
     pub(super) pages: i64,
@@ -810,7 +811,19 @@ impl Run<'_> {
         }
     }
 
+    /// Whether what the list changes is followed by what it draws from: charts drawn and fitted,
+    /// instances synced, shapes added without a size given one. A strict list's always; a
+    /// lenient one's when an agent sent it (a list built from an old read). The person's undo
+    /// and redo put back exactly what was stored, the follow-ups included.
+    pub(super) fn derives(&self) -> bool {
+        !self.lenient || self.agent
+    }
+
     pub(super) fn add(&mut self, mut node: Node, index: Option<u32>) -> Result<Option<String>, BusError> {
+        if self.lenient && self.agent {
+            node.fill_default_size();
+            node.contain_points();
+        }
         if !self.lenient {
             // B49: a shape, frame or icon added without a size gets one; B3: a free line's or
             // path's box is fitted to its points. An undo puts back exactly what was stored.

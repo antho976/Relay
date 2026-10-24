@@ -4,7 +4,8 @@
 //! moved or changed is updated, a new one is added and one no longer drawn is deleted, the parts
 //! under the frame's other children in the order they paint. Every write is an edit like any
 //! other, so one undo takes back the change and its parts. A chart in an instance is its main's
-//! (the component sync, which runs after, carries the parts); a lenient list draws nothing. An
+//! (the component sync, which runs after, carries the parts); the person's lenient list (an undo,
+//! a redo) draws nothing, its parts being in it (`Run::derives`). An
 //! `impl Run`, as the follow rule is.
 //!
 //! A chart frame that fills its laid-out parent (`w_sizing` or `h_sizing` `fill`) is drawn at the
@@ -59,7 +60,7 @@ impl Run<'_> {
 
     /// Note chart frame `id` to draw again once the list has run.
     pub(super) fn chart_changed(&mut self, id: &str) {
-        if !self.lenient && !self.charts.iter().any(|c| c == id) {
+        if self.derives() && !self.charts.iter().any(|c| c == id) {
             self.charts.push(id.to_string());
         }
     }
@@ -88,7 +89,7 @@ impl Run<'_> {
     /// Give each chart that fills, on a page the list reached, its laid-out size (see the module),
     /// and keep the design's list of them: one gone or no longer filling leaves it.
     pub(super) fn fit_charts(&mut self) -> Result<(), BusError> {
-        if !self.lenient && !self.fill_charts.is_empty() {
+        if self.derives() && !self.fill_charts.is_empty() {
             self.fit()?;
         }
         if std::mem::take(&mut self.fill_charts_changed) {
