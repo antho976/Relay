@@ -60,7 +60,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.quietsoftware.relay.core.model.Lamp
-import com.quietsoftware.relay.data.Relay as RelayData
 import com.quietsoftware.relay.ui.theme.Relay
 
 /** The PC's radii (DESIGN.md "Shapes"). */
@@ -510,11 +509,11 @@ fun Empty(glyph: String, title: String, body: String? = null, modifier: Modifier
  * copy, or what the server's copy answered while the PC was away (docs/CLOUD.md).
  */
 @Composable
-fun StaleNote(at: Long, modifier: Modifier = Modifier) {
+fun StaleNote(at: Long, modifier: Modifier = Modifier, cloud: Boolean = false) {
     if (at <= 0) return
     Row(modifier.padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Dot(Relay.colors.waiting, 5.dp)
-        T(staleText(at), style = Relay.type.caption, color = Relay.colors.ink3)
+        T(staleText(at, cloud), style = Relay.type.caption, color = Relay.colors.ink3)
     }
 }
 
@@ -528,7 +527,7 @@ fun plural(n: Long, word: String): String = if (n == 1L) "1 $word" else "$n ${wo
 fun plural(n: Int, word: String): String = plural(n.toLong(), word)
 
 /** What [StaleNote] says, for a caption laid out its own way; [cloud] when the server's copy answered. */
-fun staleText(at: Long, cloud: Boolean = RelayData.fromServer(at)): String = (if (cloud) "From your server's copy" else "Saved on this phone") + " · ${ago(at)}"
+fun staleText(at: Long, cloud: Boolean = false): String = (if (cloud) "From your server's copy" else "Saved on this phone") + " · ${ago(at)}"
 
 /** "just now", "5m ago", "3h ago", "2d ago", "3w ago", then "on Mar 1": the desktop's (relative.rs `CompactAgo`). */
 fun ago(epochMs: Long, now: Long = System.currentTimeMillis()): String {

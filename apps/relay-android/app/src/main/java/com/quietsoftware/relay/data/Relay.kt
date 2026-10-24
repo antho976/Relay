@@ -227,11 +227,8 @@ class Relay(
         awaitClose()
     }.flowOn(Dispatchers.Default)
 
-    /** A hub answer as a screen holds it; one from the server's copy is remembered for its caption. */
-    private fun shown(a: Hub.Answer): Live {
-        if (a.cloud) serverAnswers += a.at
-        return Live(a.result, a.at, fresh = a.fresh, cloud = a.cloud)
-    }
+    /** A hub answer as a screen holds it; [Live.cloud] says whether the server's copy gave it. */
+    private fun shown(a: Hub.Answer): Live = Live(a.result, a.at, fresh = a.fresh, cloud = a.cloud)
 
     data class Answer(val result: JsonElement, val at: Long, val fresh: Boolean)
 
@@ -326,12 +323,6 @@ class Relay(
     private fun deviceName(): String = listOf(Build.MANUFACTURER.replaceFirstChar { it.uppercase() }, Build.MODEL).distinct().joinToString(" ").take(64)
 
     companion object {
-        /** When each answer the server's copy gave was cached: the caption under a reading says so. */
-        private val serverAnswers: MutableSet<Long> = java.util.concurrent.ConcurrentHashMap.newKeySet()
-
-        /** Whether the answer a screen shows, cached at [at], came from the server's copy (ui/kit `StaleNote`). */
-        fun fromServer(at: Long): Boolean = at in serverAnswers
-
         /** Needs you first, then working, then the rest (the old app's order, and the PC's). */
         private val STATE_ORDER = listOf("blocked", "running", "spawning", "idle", "created", "restorable", "parked", "exited", "closed")
         val SESSION_ORDER: Comparator<Session> = compareBy({ STATE_ORDER.indexOf(it.state).let { i -> if (i < 0) 99 else i } }, { it.name })
