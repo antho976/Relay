@@ -35,7 +35,9 @@ impl Preview {
         let picture = gtk::Picture::new();
         picture.set_widget_name("project-image");
         picture.set_can_shrink(true);
-        picture.set_content_fit(gtk::ContentFit::Contain);
+        // At its own size, fitted only when larger than the pane: a 160x120 icon drawn at 890px
+        // was all blur.
+        picture.set_content_fit(gtk::ContentFit::ScaleDown);
         picture.set_hexpand(true);
         picture.set_vexpand(true);
         picture.set_margin_top(16);
@@ -481,9 +483,14 @@ impl Editor {
                 card.append(&note);
                 popover.set_child(Some(&card));
                 popover.set_parent(&row);
+                // The card says what the row's tooltip says, and more: one at a time.
+                row.set_has_tooltip(false);
                 let closing = shown.clone();
                 popover.connect_closed(move |popover| {
                     closing.borrow_mut().take();
+                    if let Some(row) = popover.parent() {
+                        row.set_has_tooltip(row.tooltip_text().is_some() || row.tooltip_markup().is_some());
+                    }
                     popover.unparent();
                 });
                 *shown.borrow_mut() = Some(popover.clone());

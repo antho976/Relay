@@ -618,6 +618,8 @@ impl Editor {
             branch_popup.set_child(Some(&branches_box));
             picker.set_popover(Some(&branch_popup));
 
+            let upper = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            upper.add_css_class("code-git-upper");
             let panes = gtk::Paned::new(gtk::Orientation::Vertical);
             panes.add_css_class("code-git-split");
             panes.set_vexpand(true);
@@ -626,13 +628,31 @@ impl Editor {
             panes.set_shrink_end_child(false);
             let free = ui.window.height().max(ui.window.default_height()) - 42 - 24 - 36;
             let kept = e.git_split_position.get();
-            panes.set_position(if kept > 0 {
-                kept
+            if kept > 0 {
+                panes.set_position(kept);
             } else if folded("history") {
-                free - 34
+                panes.set_position(free - 34);
             } else {
-                (free - 280).max(120)
-            });
+                // Unless the person placed the split, the sections above take their own height
+                // and History the rest: a fixed split left 150px of nothing above History. It
+                // is placed once, when the panes first have their height.
+                panes.set_position((free - 280).max(120));
+                let placed = Rc::new(Cell::new(false));
+                let fit = upper.downgrade();
+                panes.connect_max_position_notify(move |panes| {
+                    if placed.get() || panes.max_position() <= 0 {
+                        return;
+                    }
+                    placed.set(true);
+                    let (panes, fit) = (panes.downgrade(), fit.clone());
+                    // After this allocation: the sections have their width, so their height.
+                    glib::idle_add_local_once(move || {
+                        let (Some(panes), Some(above)) = (panes.upgrade(), fit.upgrade()) else { return };
+                        let (_, natural, _, _) = above.measure(gtk::Orientation::Vertical, panes.width().max(1));
+                        panes.set_position(natural.clamp(120, (panes.max_position() - 160).max(120)));
+                    });
+                });
+            }
             let (split_position, weak) = (Rc::downgrade(&e), Rc::downgrade(&ui));
             panes.connect_position_notify(move |panes| {
                 if let (Some(ed), Some(ui)) = (split_position.upgrade(), weak.upgrade()) {
@@ -640,8 +660,6 @@ impl Editor {
                     ed.keep_git_view(&ui);
                 }
             });
-            let upper = gtk::Box::new(gtk::Orientation::Vertical, 0);
-            upper.add_css_class("code-git-upper");
             let upper_scroll = scrolled(&upper);
             // Rows cut their names to the panel's width; nothing scrolls sideways.
             upper_scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
@@ -1116,6 +1134,8 @@ impl Editor {
                 .cloned()
                 .collect();
             let merge_section = section("merge", "Merge test", Some(live.len()));
+            // Folded, the name alone did not say what it does.
+            merge_section.toggle.set_tooltip_text(Some("Try agents' branches together in a throwaway worktree; your branch is not touched"));
             e.keeps_fold(&ui, &merge_section);
             let merge = merge_section.body.clone();
             upper.append(&merge_section.root);
