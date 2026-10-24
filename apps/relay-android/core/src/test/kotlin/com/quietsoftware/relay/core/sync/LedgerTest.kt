@@ -124,6 +124,24 @@ class LedgerTest {
     }
 
     @Test
+    fun `an event that lands while a list is read is not overwritten by the list`() = runBlocking {
+        ledger.replace(Kind.Task, Scope(projectId = 1), listOf(Row.of(Kind.Task, task(7, "running"))!!, Row.of(Kind.Task, task(8, "doomed"))!!))
+        val since = ledger.beginRead()
+        // The PC answers the list, then says #7 changed and #8 is gone; the event's write wins the lock first.
+        ledger.upsert(listOf(Row.of(Kind.Task, task(7, "done on the PC", column = "done"))!!))
+        ledger.remove(Kind.Task, listOf("8"))
+        ledger.replace(Kind.Task, Scope(projectId = 1), listOf(Row.of(Kind.Task, task(7, "running"))!!, Row.of(Kind.Task, task(8, "doomed"))!!, Row.of(Kind.Task, task(9, "new"))!!), since)
+        ledger.endRead()
+        assertEquals("done on the PC", shown("7").s("title"))
+        assertNull("removed by the event, not brought back by the list", replica.get(Kind.Task, "8"))
+        assertEquals("new", shown("9").s("title"))
+
+        // With no read out, a later list is the whole truth again.
+        ledger.replace(Kind.Task, Scope(projectId = 1), listOf(Row.of(Kind.Task, task(7, "running"))!!), ledger.beginRead().also { ledger.endRead() })
+        assertEquals("running", shown("7").s("title"))
+    }
+
+    @Test
     fun `a delete hides the row until the PC confirms it`() = runBlocking {
         ledger.upsert(listOf(Row.of(Kind.Task, task(7, "old"))!!))
         ledger.enqueue("task.delete", obj("task_id" to 7), "Delete #7")

@@ -31,20 +31,52 @@ class Ledger(
         if (rows.isEmpty()) return@withLock
         val open = outbox.open()
         this.rows.upsert(rows.map { overlay(it, open) })
+        wrote(rows.map { it.kind to it.id })
     }
 
-    suspend fun remove(kind: Kind, ids: Collection<String>) = lock.withLock { rows.remove(kind, ids) }
+    suspend fun remove(kind: Kind, ids: Collection<String>) = lock.withLock {
+        rows.remove(kind, ids)
+        wrote(ids.map { kind to it })
+    }
 
     /**
      * A list op's answer is the whole truth for its scope, except for rows the phone made that the
-     * PC has not seen yet: those stay until their create is answered or dropped.
+     * PC has not seen yet: those stay until their create is answered or dropped. With [since]
+     * (from [beginRead] before the list was asked for), a row an event wrote or removed after
+     * that is newer than the answer and stays as the event left it.
      */
-    suspend fun replace(kind: Kind, scope: Scope, server: List<Row>) = lock.withLock {
+    suspend fun replace(kind: Kind, scope: Scope, server: List<Row>, since: Long? = null) = lock.withLock {
         val open = outbox.open()
-        val kept = server.map { overlay(it, open) }
-        val ids = kept.map { it.id }.toSet()
-        val made = rows.all(kind, scope).filter { it.base == null && it.id !in ids }
-        rows.replace(kind, scope, kept + made)
+        val newer = if (since == null) emptySet() else written.filter { (key, at) -> key.first == kind && at > since }.keys.mapTo(HashSet()) { it.second }
+        val kept = server.filter { it.id !in newer }.map { overlay(it, open) }
+        val ids = kept.mapTo(HashSet()) { it.id }
+        val stays = rows.all(kind, scope).filter { it.id !in ids && (it.base == null || it.id in newer) }
+        rows.replace(kind, scope, kept + stays)
+    }
+
+    // ---- Reads that race events ----
+
+    private var clock = 0L
+    private var reading = 0
+    /** When each row was last written, while a list read is out: what its answer must not overwrite. */
+    private val written = HashMap<Pair<Kind, String>, Long>()
+
+    /** A list read is about to be asked for: its mark for [replace]. End it with [endRead], answered or not. */
+    suspend fun beginRead(): Long = lock.withLock {
+        reading++
+        clock
+    }
+
+    suspend fun endRead() = lock.withLock {
+        reading = (reading - 1).coerceAtLeast(0)
+        if (reading == 0) written.clear()
+    }
+
+    /** Under the lock. */
+    private fun wrote(keys: List<Pair<Kind, String>>) {
+        if (reading == 0 || keys.isEmpty()) return
+        clock++
+        for (k in keys) written[k] = clock
     }
 
     // ---- From the phone ----
@@ -93,6 +125,7 @@ class Ledger(
         val fresh = Optimistic.resultRows(entry.op, result)
         if (fresh.isNotEmpty()) {
             rows.upsert(fresh.map { overlay(it, open) })
+            wrote(fresh.map { it.kind to it.id })
         } else {
             rebuild(entry, open)
         }
