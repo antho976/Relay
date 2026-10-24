@@ -771,7 +771,7 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value, age: Option<&Age>) {
     // An engine before that reading compares with the whole week, as it did.
     let to_date = s.get("last_week_to_date").filter(|w| w.is_object());
     let prior = num(&to_date.unwrap_or(last)["volume"]).unwrap_or(0.0);
-    let by_now = match (to_date.is_some(), stale) { (false, _) => "", (true, false) => " by now", (true, true) => " by then" };
+    let by_now = match (to_date.is_some(), stale) { (false, _) => "", (true, false) => " by now", (true, true) => ", day for day" };
     // An empty week says so: a percentage of nothing reads as a collapse.
     let change = if vol <= 0.0 {
         String::from(none)
