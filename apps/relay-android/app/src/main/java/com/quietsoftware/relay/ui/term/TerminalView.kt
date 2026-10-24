@@ -61,7 +61,8 @@ import com.quietsoftware.relay.ui.theme.Palette
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
 import kotlin.math.floor
 
@@ -107,12 +108,7 @@ fun TerminalView(
 
     // What has been drawn: held while the program has synchronized output open (DEC 2026).
     var shown by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(feed) {
-        feed.version.collectLatest {
-            delay(FRAME_MS)
-            if (!feed.terminal.synchronizedOutput) shown = it
-        }
-    }
+    LaunchedEffect(feed) { paceFrames(feed.version, { feed.terminal.synchronizedOutput }) { shown = it } }
     // Lines scrolled back from the bottom; 0 follows the output.
     var back by remember { mutableIntStateOf(0) }
     var dragCarry by remember { mutableFloatStateOf(0f) }
@@ -406,7 +402,18 @@ private data class Selection(val startRow: Int, val startCol: Int, val endRow: I
     }
 }
 
-private const val FRAME_MS = 16L
+/**
+ * Shows each new [version] at once, then at most one a frame while it keeps changing: a throttle,
+ * so steady output (frames under [FRAME_MS] apart) still paints. Nothing is shown while [held].
+ */
+internal suspend fun paceFrames(version: Flow<Long>, held: () -> Boolean, show: (Long) -> Unit) {
+    version.conflate().collect {
+        if (!held()) show(it)
+        delay(FRAME_MS)
+    }
+}
+
+internal const val FRAME_MS = 16L
 const val MIN_SP = 6f
 const val MAX_SP = 20f
 
