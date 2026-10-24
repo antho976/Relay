@@ -38,7 +38,7 @@ the plugin's rules. The ops are BUS.md §10.19.
 | `.relay/bundles/<video>/` | the worker | each video's newest bundle |
 | `.relay/blobs/` | versions | file contents by sha-256 |
 | `.relay/posters/<video>.png` | stills | each video's poster |
-| `.relay/worker.log` | the worker | its stderr, from its latest start |
+| `.relay/worker.log` | the worker | its stderr but the page's probe lines, started again past 2 MiB |
 
 Setting up is never automatic: an agent calls `video.kit.install` when a call refuses
 `video.kit.missing`, or you press **Set up** in the gallery. It needs Node.js 20 or newer and npm,

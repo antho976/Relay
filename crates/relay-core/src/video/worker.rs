@@ -24,6 +24,8 @@ use std::time::{Duration, Instant};
 const IDLE: Duration = Duration::from_secs(10 * 60);
 /// Lines of its stderr kept to explain a death.
 const TAIL: usize = 20;
+/// How long `worker.log` grows before it starts again.
+const LOG_MOST: u64 = 2 * 1024 * 1024;
 
 type Reply = Result<Value, BusError>;
 type Progress = Arc<dyn Fn(&Value) + Send + Sync>;
@@ -133,6 +135,12 @@ pub fn unwatch(engine: &Engine, job: &str) {
 /// its process group is killed in case it did not.
 pub fn stop(engine: &Engine) {
     let Some(worker) = lock(&engine.video.worker.live).take() else { return };
+    reap(worker);
+}
+
+/// Close `worker`'s stdin, which it takes as the end, and kill its process group after a grace
+/// in case it does not go (its browser wedged, a close that never settles).
+fn reap(worker: Arc<Worker>) {
     worker.close();
     let pid = worker.pid;
     let _ = std::thread::Builder::new().name("video-worker-stop".into()).spawn(move || {
@@ -152,12 +160,19 @@ pub fn stop(engine: &Engine) {
 
 fn ensure(engine: &Engine) -> Result<Arc<Worker>, BusError> {
     let slot = &engine.video.worker;
-    if let Some(worker) = lock(&slot.live).as_ref().filter(|w| !w.gone.load(Ordering::SeqCst)) {
+    // One whose stdin is closed (put away as idle) takes no more requests, gone or not yet.
+    let usable = |w: &Arc<Worker>| !w.gone.load(Ordering::SeqCst) && lock(&w.stdin).is_some();
+    if let Some(worker) = lock(&slot.live).as_ref().filter(|w| usable(w)) {
         return Ok(worker.clone());
     }
     let _starting = lock(&slot.starting);
-    if let Some(worker) = lock(&slot.live).as_ref().filter(|w| !w.gone.load(Ordering::SeqCst)) {
+    if let Some(worker) = lock(&slot.live).as_ref().filter(|w| usable(w)) {
         return Ok(worker.clone());
+    }
+    // A worker closed but still there is let go of (killed after its grace), and a new one started.
+    let closed = lock(&slot.live).take().filter(|w| !w.gone.load(Ordering::SeqCst));
+    if let Some(worker) = closed {
+        reap(worker);
     }
     super::kit::ready(engine)?;
     let root = engine.store.videos_dir();
@@ -223,15 +238,29 @@ fn spawn(engine: &Engine, root: &std::path::Path, program: &[String]) -> Result<
     });
 
     // Every worker's lines, each with its pid (one engine's may outlive another's in a test run),
-    // and started afresh once the log passes 2 MiB.
+    // and started afresh whenever the log passes 2 MiB, at a start or while it runs. The page's
+    // probe and schema lines (one a frame of every scan, up to 72 KB each) reach the worker on
+    // their own and are left out.
     let log_path = root.join(".relay/worker.log");
     let for_log = worker.clone();
     let _ = std::thread::Builder::new().name("video-worker-log".into()).spawn(move || {
-        let fresh = std::fs::metadata(&log_path).is_ok_and(|m| m.len() > 2 * 1024 * 1024);
-        let mut log = std::fs::OpenOptions::new().create(true).append(!fresh).write(true).truncate(fresh).open(&log_path).ok();
+        let open = |fresh: bool| std::fs::OpenOptions::new().create(true).append(!fresh).write(true).truncate(fresh).open(&log_path).ok();
+        let mut written = std::fs::metadata(&log_path).map_or(0, |m| m.len());
+        let mut log = open(written > LOG_MOST);
+        if written > LOG_MOST {
+            written = 0;
+        }
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if line.contains("__relay_probe__") || line.contains("__relay_schema__") {
+                continue;
+            }
+            if written > LOG_MOST {
+                log = open(true);
+                written = 0;
+            }
             if let Some(log) = log.as_mut() {
                 let _ = writeln!(log, "[{pid}] {line}");
+                written += line.len() as u64 + 16;
             }
             let mut tail = lock(&for_log.tail);
             if tail.len() == TAIL {
@@ -290,7 +319,7 @@ fn spawn(engine: &Engine, root: &std::path::Path, program: &[String]) -> Result<
         }
         let busy = !lock(&worker.pending).is_empty() || !lock(&worker.progress).is_empty();
         if !busy && lock(&worker.last_used).elapsed() > IDLE {
-            worker.close();
+            reap(worker);
             return;
         }
     });

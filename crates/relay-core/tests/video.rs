@@ -123,6 +123,10 @@ fn a_check_builds_and_keeps_the_compositions() {
     assert_eq!(checked["version"], 1);
     let ids: Vec<&str> = checked["compositions"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect();
     assert_eq!(ids, ["main", "wide"]);
+    // The worker's log holds its words, not the page's probe lines.
+    let log_path = e.store.videos_dir().join(".relay/worker.log");
+    wait_until("the log to hold the check", || fs::read_to_string(&log_path).is_ok_and(|l| l.contains("checking ")));
+    assert!(!fs::read_to_string(&log_path).unwrap().contains("__relay_probe__"));
     // The row takes the default composition's size and length from the code.
     let video = &ok(&e, "video.get", json!({"video_id": id}))["video"];
     assert_eq!((video["duration_frames"].as_u64(), video["version"].as_i64()), (Some(90), Some(1)));

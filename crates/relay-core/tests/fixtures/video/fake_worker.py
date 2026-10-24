@@ -64,6 +64,9 @@ def composition(name):
 
 
 def check(a):
+    # As Remotion prints the page's console: a probe line, which the log leaves out, and a word.
+    sys.stderr.write("__relay_probe__{\"frame\": 0}\n" + "checking " + a["dir"] + "\n")
+    sys.stderr.flush()
     if flag(a["dir"], "BROKEN"):
         return {"errors": [{"kind": "syntax", "file": "src/Video.tsx", "line": 3, "col": 7, "message": "Expected \"}\" but found \"<\""}], "compositions": []}
     errors = [{"kind": "type", "file": "src/Video.tsx", "line": 9, "col": 3, "message": "TS2322: Type 'string' is not assignable to type 'number'."}] if flag(a["dir"], "TYPED") else []
