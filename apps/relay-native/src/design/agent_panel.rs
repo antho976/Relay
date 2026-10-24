@@ -243,6 +243,11 @@ impl AgentPanel {
         let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
         card.add_css_class("design-agent-card");
         card.set_overflow(gtk::Overflow::Hidden);
+        // The resize strips lie in a margin around the card, not over its edge, where the
+        // terminal's scrollbar and the conversation's are.
+        for set in [gtk::Widget::set_margin_top, gtk::Widget::set_margin_bottom, gtk::Widget::set_margin_start, gtk::Widget::set_margin_end] {
+            set(card.upcast_ref(), EDGE);
+        }
         root.set_child(Some(&card));
 
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
