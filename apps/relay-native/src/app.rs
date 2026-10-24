@@ -79,6 +79,15 @@ pub fn spinner() -> gtk::Spinner {
     spinner.connect_unmap(|spinner| spinner.stop());
     spinner
 }
+/// Whether the window `widget` is in is on screen, as the compositor says: not minimized,
+/// not suspended (fully covered or on another workspace), and shown.
+pub fn on_screen(widget: &impl IsA<gtk::Widget>) -> bool {
+    let Some(window) = widget.root().and_downcast::<gtk::Window>() else { return false };
+    let state = window.surface().and_downcast::<gtk::gdk::Toplevel>().map(|t| t.state());
+    window.is_visible()
+        && !state.is_some_and(|state| state.intersects(gtk::gdk::ToplevelState::MINIMIZED | gtk::gdk::ToplevelState::SUSPENDED))
+}
+
 pub fn clear(container: &gtk::Box) {
     while let Some(w) = container.first_child() {
         container.remove(&w);
@@ -1623,9 +1632,12 @@ impl Ui {
             if NOTICE_SERIAL.with(Cell::get) != serial || !notice.is_visible() {
                 return glib::ControlFlow::Break;
             }
+            // Nor does it count down while nobody can see it (minimized, covered, another
+            // workspace): an error raised then is still there to read on return.
             let held = notice.parent().is_some_and(|bar| {
                 bar.state_flags().contains(gtk::StateFlags::PRELIGHT)
-            }) || notice.has_focus();
+            }) || notice.has_focus()
+                || !on_screen(&notice);
             if !held {
                 remaining = remaining.saturating_sub(1);
             }
@@ -1680,9 +1692,9 @@ impl Ui {
         // The first refresh after connecting re-applies the saved pane order and focus, and no
         // save writes the cleared wall over them before it has.
         self.restored_project.set(0);
-        // A launch form built for the old connection would no longer submit (RA-470).
+        // A launch form built for the old connection would no longer submit (RA-470): it
+        // hides, and is checked against the new one when opened again.
         self.launch.set_reveal_child(false);
-        self.forget_launch();
         self.layout();
         self.show_error("Connecting to the Relay engine…");
         let ui = self.clone();
@@ -2310,7 +2322,7 @@ impl Ui {
             pane.set_behind(behind, base);
         }
     }
-    /// Follow the compositor's own view of whether this window is on screen.
+    /// Follow the compositor's own view of whether this window is on screen (see [`on_screen`]).
     ///
     /// `SUSPENDED` is the compositor saying the surface is not visible — minimized, fully
     /// covered, or on another workspace — and `MINIMIZED` covers the backends that do not send

@@ -12,6 +12,8 @@ pub(super) struct Card {
     pub(super) root: gtk::Box,
     tabs: Vec<(gtk::ToggleButton, &'static str)>,
     options: gtk::Button,
+    /// Re-reads the limits, as the panel's key does, without opening it.
+    pub(super) refresh: gtk::Button,
     fold: gtk::Button,
     body: gtk::Box,
     /// Set while a render moves the tabs, so their handlers write nothing.
@@ -45,6 +47,10 @@ impl Card {
         options.set_widget_name("sidebar-usage-options");
         options.set_valign(gtk::Align::Center);
         head.append(&options);
+        let refresh = icon_button("refresh", "Re-read usage limits");
+        refresh.set_widget_name("sidebar-usage-refresh");
+        refresh.set_valign(gtk::Align::Center);
+        head.append(&refresh);
         let fold = icon_button("chevron-up", "Fold usage");
         fold.set_widget_name("sidebar-usage-fold");
         fold.set_valign(gtk::Align::Center);
@@ -53,7 +59,7 @@ impl Card {
         let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
         body.add_css_class("usage-card-body");
         root.append(&body);
-        Self { root, tabs, options, fold, body, syncing: Cell::new(false) }
+        Self { root, tabs, options, refresh, fold, body, syncing: Cell::new(false) }
     }
 }
 
@@ -78,19 +84,19 @@ fn reset_line(window: &Window, now: u64) -> String {
     }
 }
 
-/// The plan as the provider names it ("Claude Max"), when the engine reports one; otherwise
-/// how old the report is.
+/// The plan as the provider names it ("Claude Max"), when the engine reports one, and how old
+/// the report is: a plan name alone never said whether the bars were current.
 fn caption(item: Option<&Value>) -> String {
     let Some(item) = item else {
         return "Nothing reported yet".into();
     };
     let plan = text(item, "plan").trim();
-    if !plan.is_empty() {
-        return plan.to_string();
-    }
-    match parse_time(text(item, "taken_at")) {
-        Some(at) => format!("Reported {}", ago(at)),
-        None => String::new(),
+    let age = parse_time(text(item, "taken_at")).map(ago);
+    match (plan.is_empty(), age) {
+        (false, Some(age)) => format!("{plan} · reported {age}"),
+        (false, None) => plan.to_string(),
+        (true, Some(age)) => format!("Reported {age}"),
+        (true, None) => String::new(),
     }
 }
 
@@ -143,6 +149,12 @@ impl Ui {
         card.options.connect_clicked(move |_| {
             if let Some(ui) = weak.upgrade() {
                 ui.usage_panel();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        card.refresh.connect_clicked(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                ui.refresh_usage(true);
             }
         });
         let weak = Rc::downgrade(self);
@@ -241,7 +253,8 @@ mod tests {
     #[test]
     fn the_card_names_the_plan_or_the_report_age() {
         assert_eq!(caption(None), "Nothing reported yet");
-        assert_eq!(caption(Some(&json!({"plan": "Claude Max", "taken_at": "2026-10-08T01:26:55Z"}))), "Claude Max");
+        assert!(caption(Some(&json!({"plan": "Claude Max", "taken_at": "2026-10-08T01:26:55Z"}))).starts_with("Claude Max · reported "));
+        assert_eq!(caption(Some(&json!({"plan": "Claude Max"}))), "Claude Max");
         assert!(caption(Some(&json!({"taken_at": "2026-10-08T01:26:55Z"}))).starts_with("Reported "));
         assert_eq!(caption(Some(&json!({}))), "");
     }

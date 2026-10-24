@@ -31,6 +31,11 @@ pub fn open_note(ui: &Rc<Ui>, note: Value) {
     notes_window::show_project(ui, note["project_id"].as_i64().unwrap_or(ui.project.get()));
     note_pages::edit(ui, note);
 }
+thread_local! {
+    /// What the Modules page was last drawn from.
+    static MODULES_SHOWN: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
 pub fn task_event(ev: &str, payload: &Value) {
     task_pages::event(ev, payload);
 }
@@ -167,11 +172,27 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
         mailbox(ui, &body, &data, older);
         return;
     }
-    clear(&body);
-    // Modules draws its own empty state (`board_view::modules`).
+    // Modules draws its own empty state (`board_view::modules`). Every task and module event
+    // asks again; one that changed nothing leaves the page, and the keyboard, where they are,
+    // and a rebuild puts the focus back on the card it was on.
     if name == "modules" {
+        let shown = Value::Array(data.clone()).to_string();
+        if body.first_child().is_some() && MODULES_SHOWN.with(|s| *s.borrow() == shown) {
+            return;
+        }
+        MODULES_SHOWN.with(|s| *s.borrow_mut() = shown);
+        let focused = gtk::prelude::GtkWindowExt::focus(&ui.window)
+            .filter(|f| f.is_ancestor(&body))
+            .and_then(|f| std::iter::successors(Some(f), |w| w.parent()).find(|w| w.widget_name().starts_with("module-card-")))
+            .map(|card| card.widget_name());
+        clear(&body);
         board_view::modules(ui, &body, &data);
+        if let Some(card) = focused.and_then(|name| widgets(&body).into_iter().find(|w| w.widget_name() == name)) {
+            card.grab_focus();
+        }
+        return;
     }
+    clear(&body);
 }
 
 /// The mailbox's rows, newest first, reconciled by message id as the Guardrails page keeps its

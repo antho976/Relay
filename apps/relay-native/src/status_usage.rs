@@ -259,6 +259,7 @@ impl UsageState {
 
     fn set_busy(&self, busy: bool) {
         self.busy.set(busy);
+        self.card.refresh.set_sensitive(!busy);
         if let Some(key) = self.popup.borrow().as_ref().and_then(|p| p.refresh.upgrade()) {
             key.set_sensitive(!busy);
         }
