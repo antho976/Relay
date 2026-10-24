@@ -3817,7 +3817,9 @@ fn age(updated_at: &str) -> &'static str {
     let Ok(then) = then.to_local() else { return "Earlier" };
     let day = |d: &glib::DateTime| glib::DateTime::from_local(d.year(), d.month(), d.day_of_month(), 0, 0, 0.0).ok();
     let (Some(then), Some(today)) = (day(&then), day(&now)) else { return "Earlier" };
-    match today.difference(&then).as_days() {
+    // Hours over 24, rounded: across a daylight-saving change a day is 23 or 25 hours, and
+    // whole days counted down put yesterday's threads under Today (as `days_between` does).
+    match (today.difference(&then).as_hours() as f64 / 24.0).round() as i64 {
         ..=0 => "Today",
         1 => "Yesterday",
         2..=6 => "This week",

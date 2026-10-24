@@ -114,7 +114,8 @@ fn month_of(month: &str) -> Option<usize> {
 
 fn days_since(day: &str) -> Option<i64> {
     let (then, now) = (date(day)?, date(&today())?);
-    Some(now.difference(&then).as_days())
+    // Rounded hours: a day across a daylight-saving change is 23 or 25 of them.
+    Some((now.difference(&then).as_hours() as f64 / 24.0).round() as i64)
 }
 
 /// "today", "yesterday" or "Fri 8 May", to follow "as of".

@@ -1595,8 +1595,14 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value) {
     if budgets.is_empty() {
         list.append(&icon_row(&tile("plan"), "No budgets yet", "Give each category a monthly budget in Plan", "", ""));
     }
-    for b in budgets.iter().take(8) {
+    for b in budgets.iter().take(BUDGETS_SHOWN) {
         list.append(&budget_key(ui, b, pace_fraction));
+    }
+    // The furthest ahead of pace lead; the card says what it leaves to Plan, as Upcoming does.
+    if budgets.len() > BUDGETS_SHOWN {
+        let more = label(&format!("{} more in Plan", budgets.len() - BUDGETS_SHOWN), "money-row-detail");
+        more.add_css_class("tally-note");
+        list.append(&more);
     }
     let recent = rows(s, "recent");
     let list = card(&pair[1], "Recent", Some(("All entries", go(ui, "money-transactions"))));
@@ -1954,6 +1960,9 @@ impl Past {
         lines
     }
 }
+
+/// How many budgets Overview's card lists, furthest ahead of pace first.
+const BUDGETS_SHOWN: usize = 8;
 
 thread_local! {
     /// Plan's [`Past`], with the start of the period it was read in: kept until the ledger moves
