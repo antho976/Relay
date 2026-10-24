@@ -281,6 +281,8 @@ pub fn install(engine: &Arc<Engine>) -> KitStatus {
                 }
             }
         };
+        // Nothing runs on the packages while they are replaced.
+        super::worker::stop(&engine);
         let result = set_up(&root, &stage);
         let hub = &engine.video;
         *hub.kit.progress.lock().unwrap_or_else(|e| e.into_inner()) = None;

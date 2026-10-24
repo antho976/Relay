@@ -928,6 +928,16 @@ pub fn register(e: &mut Engine) {
     // it has come, and only what needs setting up is set up.
     e.register::<KitInstall>(|ctx: &mut Ctx, p| {
         let mut status = kit::status(ctx.engine());
+        // Setting it up again replaces the packages a render is using and stops the worker,
+        // which would end a render as if someone had stopped it.
+        if status.state == KitState::Ready && p.force == Some(true) {
+            let busy: bool = ctx.tx().prepare_cached("SELECT EXISTS(SELECT 1 FROM video_renders WHERE state IN ('queued', 'rendering'))").bus()?
+                .query_row([], |r| r.get(0)).bus()?;
+            if busy {
+                return Err(BusError::conflict("video.kit.busy", "renders are queued or running; setting the kit up again would stop them")
+                    .with_hint("wait for them (video.render.wait) or stop them, then try again"));
+            }
+        }
         let wanted = match status.state {
             KitState::Ready => p.force == Some(true),
             KitState::NoNode | KitState::Installing => false,

@@ -451,6 +451,13 @@ fn setting_up_a_kit_that_is_ready_answers_ready() {
     with_worker(&e);
     let status = ok(&e, "video.kit.install", json!({}));
     assert_eq!(status["state"], "ready", "nothing to set up, and the answer says so: {status}");
+    // Set up again by force while a render runs: refused, as it would stop the render.
+    let (id, dir) = create(&e);
+    fs::write(dir.join("src/SLOW"), "").unwrap();
+    let render = ok(&e, "video.render", json!({"video_id": id}))["id"].as_i64().unwrap();
+    assert_eq!(code(call(&e, "video.kit.install", json!({"force": true}))), "video.kit.busy");
+    ok(&e, "video.render.cancel", json!({"render_id": render}));
+    wait_until("it to stop", || ok(&e, "video.render.get", json!({"render_id": render}))["state"] == "cancelled");
 }
 
 #[test]

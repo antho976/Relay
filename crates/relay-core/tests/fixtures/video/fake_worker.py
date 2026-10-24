@@ -17,8 +17,6 @@ import zlib
 
 out_lock = threading.Lock()
 cancelled = set()
-# The renders past bundling: the only ones a stop reaches.
-known = set()
 
 COMPOSITIONS = {
     "main": {"id": "main", "width": 1080, "height": 1920, "fps": 30, "duration_frames": 90, "default_props": {"title": "Hello"},
@@ -171,7 +169,8 @@ def render(a):
     job = a["job"]
     if flag(a["dir"], "BUNDLING"):
         time.sleep(1.0)
-    known.add(job)
+        # A stop that came while it bundled is lost, as the worker before 2026-10-24 lost it.
+        cancelled.discard(job)
     slow = flag(a["dir"], "SLOW")
     steps = [0.05, 0.15, 0.35, 0.55, 0.75, 0.95]
     for p in steps:
@@ -190,8 +189,6 @@ def render(a):
 
 
 def cancel(a):
-    if a["job"] not in known:
-        return {"cancelled": False}
     cancelled.add(a["job"])
     return {"cancelled": True}
 

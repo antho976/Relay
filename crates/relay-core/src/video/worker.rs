@@ -160,6 +160,10 @@ fn reap(worker: Arc<Worker>) {
 
 fn ensure(engine: &Engine) -> Result<Arc<Worker>, BusError> {
     let slot = &engine.video.worker;
+    // While the kit is set up again its packages are being replaced: no worker runs on them.
+    if engine.video.kit.installing.load(Ordering::SeqCst) {
+        super::kit::ready(engine)?;
+    }
     // One whose stdin is closed (put away as idle) takes no more requests, gone or not yet.
     let usable = |w: &Arc<Worker>| !w.gone.load(Ordering::SeqCst) && lock(&w.stdin).is_some();
     if let Some(worker) = lock(&slot.live).as_ref().filter(|w| usable(w)) {
