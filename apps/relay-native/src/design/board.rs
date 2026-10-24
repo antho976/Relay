@@ -1655,8 +1655,13 @@ impl Board {
         d.set_absolute_size(size * pango::SCALE as f64);
         d.set_weight(weight);
         l.set_font_description(Some(&d));
-        if labels.len() > 400 {
-            labels.clear();
+        // Kept for the names on show; past the bound (thousands of artboards) half of them go,
+        // not all at once: cleared whole past 400, every name was laid out again each frame.
+        if labels.len() > 2000 {
+            let drop: Vec<String> = labels.keys().take(labels.len() / 2).cloned().collect();
+            for key in drop {
+                labels.remove(&key);
+            }
         }
         labels.insert(key.to_string(), l.clone());
         l
@@ -1677,7 +1682,10 @@ impl Board {
                 continue;
             };
             let s = self.screen(&r);
-            if s.w < 28.0 || s.bottom() < 0.0 || s.y > self.size.get().1 + 20.0 {
+            // Off screen on any side, its name is not laid out (pages of hundreds of artboards
+            // laid every name every frame).
+            let (cw, ch) = self.size.get();
+            if s.w < 28.0 || s.bottom() < 0.0 || s.y > ch + 20.0 || s.right() < 0.0 || s.x > cw {
                 continue;
             }
             let name = frame_label(n);
