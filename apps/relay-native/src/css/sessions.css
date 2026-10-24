@@ -95,15 +95,17 @@ popover.agent-settings button { min-height: 28px; min-width: 0; padding: 0 10px;
 .agent-menu-path { padding: 2px 0; color: @ink_dim; }
 .agent-menu-path label { color: @secondary; }
 
-/* Brief and Designs share the row; the wall-position pair sits apart at its end. */
+/* Brief and Designs share the row; the wall-position pair sits under it, named. */
 .agent-menu-tools { margin-top: 12px; }
 popover.agent-settings button.agent-menu-tool { background: alpha(@ink, 0.055); border: 1px solid alpha(@ink, 0.11); color: @ink; min-height: 30px; padding: 0 10px; border-radius: 10px; }
 popover.agent-settings button.agent-menu-tool:hover { background: alpha(@ink, 0.09); border-color: alpha(@ink, 0.18); }
 button.agent-menu-tool image { color: @faint; }
 button.agent-menu-tool:hover image { color: @ink; }
 button.agent-menu-tool .agent-menu-caption { font-size: 12.5px; font-weight: 500; }
-.agent-menu-move { background: alpha(@ink, 0.03); border: 1px solid alpha(@ink, 0.07); border-radius: 10px; padding: 1px; }
-popover.agent-settings button.agent-menu-move-key { min-width: 30px; min-height: 26px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: @faint; }
+.agent-menu-move { margin-top: 8px; padding: 0 2px 0 4px; }
+.agent-menu-move .agent-menu-caption { color: @secondary; font-size: 12.5px; }
+popover.agent-settings button.agent-menu-move-key { min-height: 26px; padding: 0 9px; border: 1px solid alpha(@ink, 0.09); border-radius: 8px; background: alpha(@ink, 0.04); color: @secondary; font-size: 12px; font-weight: 500; }
+popover.agent-settings button.agent-menu-move-key image { color: @faint; }
 popover.agent-settings button.agent-menu-move-key:hover { background: alpha(@ink, 0.08); color: @ink; }
 popover.agent-settings button.agent-menu-move-key:disabled { opacity: 0.32; background: transparent; }
 
@@ -139,6 +141,11 @@ button.agent-menu-row:hover image { color: @ink; }
 /* On the children, so the line takes no room while it has nothing to say. */
 .agent-menu-phone > label, .agent-menu-phone > button { margin-bottom: 10px; }
 .agent-menu-phone label { font-family: 'Geist Mono', monospace; font-size: 11px; }
+
+/* What scrolls fades into the pinned foot, so rows under it read as more, not as cut. */
+popover.agent-settings scrolledwindow > undershoot.bottom { background: linear-gradient(to top, @slab_solid, alpha(@slab_solid, 0)); background-size: 100% 28px; background-repeat: no-repeat; background-position: bottom; }
+/* The brief, read as a document (agent_menu.rs). */
+.agent-brief { padding: 4px 6px 16px; color: @ink; font-size: 13.5px; line-height: 1.5; }
 
 /* Clear context and Close, pinned under the part that scrolls. */
 .agent-menu-foot { padding: 6px 8px 8px 8px; border-top: 1px solid @edge; }

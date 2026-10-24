@@ -118,13 +118,15 @@ fn tool_key(icon: &str, caption: &str, tooltip: &str) -> gtk::Button {
     key
 }
 
-/// An icon-only key in the wall-position pair; the tooltip carries the words.
-fn icon_key(icon: &str, tooltip: &str) -> gtk::Button {
+/// A key in the wall-position pair: its arrow and its word, the tooltip saying where it moves.
+fn move_key(icon: &str, caption: &str, tooltip: &str) -> gtk::Button {
     let key = gtk::Button::new();
     key.add_css_class("agent-menu-move-key");
-    key.set_child(Some(&crate::icons::image(icon, 14)));
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+    row.append(&crate::icons::image(icon, 12));
+    row.append(&label(caption, ""));
+    key.set_child(Some(&row));
     key.set_tooltip_text(Some(tooltip));
-    key.update_property(&[gtk::accessible::Property::Label(tooltip)]);
     key
 }
 
@@ -802,9 +804,17 @@ impl Ui {
         meta.set_xalign(0.0);
         head.append(&meta);
         body.append(&head);
+        // The worktree from home ("~/…"), cut in its middle: its start says which repository, its
+        // end which worktree, and a start cut split a word.
+        let home = glib::home_dir();
+        let worktree = text(session, "worktree");
+        let worktree = std::path::Path::new(worktree)
+            .strip_prefix(&home)
+            .map(|rest| format!("~/{}", rest.display()))
+            .unwrap_or_else(|_| worktree.to_string());
         for (icon, value, ellipsize) in [
             ("branch", text(session, "branch"), gtk::pango::EllipsizeMode::Middle),
-            ("folder", text(session, "worktree"), gtk::pango::EllipsizeMode::Start),
+            ("folder", worktree.as_str(), gtk::pango::EllipsizeMode::Middle),
         ] {
             if value.is_empty() {
                 continue;
@@ -825,16 +835,20 @@ impl Ui {
             head.append(&line);
         }
 
-        // What it was told and what it drew, then its place on the wall as an up/down pair.
+        // What it was told and what it drew; under them its place on the wall, a labelled pair.
         let tools = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         tools.add_css_class("agent-menu-tools");
-        let place = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let place = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         place.add_css_class("agent-menu-move");
+        let place_caption = label("Place on the wall", "agent-menu-caption");
+        place_caption.set_hexpand(true);
+        place_caption.set_xalign(0.0);
+        place.append(&place_caption);
         let moves = [
-            ("arrow-up", "Move one place earlier on the wall", -1),
-            ("arrow-down", "Move one place later on the wall", 1),
+            ("arrow-up", "Earlier", "Move one place earlier on the wall", -1),
+            ("arrow-down", "Later", "Move one place later on the wall", 1),
         ]
-        .map(|(icon, tip, delta)| (icon_key(icon, tip), delta));
+        .map(|(icon, caption, tip, delta)| (move_key(icon, caption, tip), delta));
         // Off at the wall's ends, where the move would do nothing; set again after each move.
         let ends: Rc<dyn Fn()> = Rc::new({
             let keys = moves.each_ref().map(|(key, delta)| (key.downgrade(), *delta));
@@ -885,12 +899,16 @@ impl Ui {
                 match ui.call("session.brief", json!({"session": n})).await {
                     Ok(v) => {
                         let Some((window, sheet)) = ui.sheet(&format!("Launch brief · {n}"), 760) else { return };
-                        let view = gtk::TextView::new();
-                        view.set_editable(false);
-                        view.set_monospace(true);
-                        view.set_wrap_mode(gtk::WrapMode::WordChar);
-                        view.buffer().set_text(text(&v, "text"));
-                        sheet.append(&scrolled(&view));
+                        // Read as a document, as a task's description is: headings, lists, code.
+                        let brief = label("", "agent-brief");
+                        brief.set_markup(&relay_board::markdown_markup(text(&v, "text")));
+                        brief.set_wrap(true);
+                        brief.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+                        brief.set_selectable(true);
+                        brief.set_focusable(false);
+                        brief.set_xalign(0.0);
+                        brief.set_valign(gtk::Align::Start);
+                        sheet.append(&scrolled(&brief));
                         window.present();
                     }
                     Err(e) => ui.show_error(&e.to_string()),
@@ -912,8 +930,8 @@ impl Ui {
             crate::design::show(&ui, Some(n.clone()));
         });
         tools.append(&designs);
-        tools.append(&place);
         body.append(&tools);
+        body.append(&place);
 
         // Permissions: a switch takes effect when flipped, and flips back if the engine refuses.
         let card = group(body, "Permissions", None);
