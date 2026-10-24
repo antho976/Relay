@@ -969,7 +969,6 @@ impl Editor {
         let Some(changed) = payload["worktree"].as_str().filter(|_| ev == "file.changed") else {
             return true;
         };
-        let canonical = |path: &str| std::fs::canonicalize(path).unwrap_or_else(|_| path.into());
         let changed = canonical(changed);
         let primary = ui
             .projects
@@ -1796,7 +1795,7 @@ impl Editor {
             "" => ui.projects.borrow().iter().find(|p| p["id"] == ui.project.get()).map(|p| text(p, "path").to_owned()),
             worktree => Some(worktree.to_owned()),
         };
-        let Some(root) = root.and_then(|root| std::fs::canonicalize(root).ok()) else {
+        let Some(root) = root.map(|root| canonical(&root)).filter(|root| root.is_absolute()) else {
             return false;
         };
         std::fs::canonicalize(root.join(path)).is_ok_and(|target| target.starts_with(&root) && target.is_dir())
@@ -2621,5 +2620,32 @@ mod tests {
         // A column inside a multi-byte character does not panic.
         assert!(!snippet("éé", 2).is_empty());
     }
+}
+
+thread_local! {
+    /// Checkout roots as the disk resolves them, and when that was asked: every file.changed
+    /// compared up to three paths, each a walk of `lstat`/`readlink` calls on the GTK thread
+    /// (perf lead 10), for paths that hardly ever resolve differently.
+    static CANONICAL: RefCell<std::collections::HashMap<String, (std::path::PathBuf, std::time::Instant)>> = RefCell::default();
+}
+
+/// How long a resolved checkout path stands before it is resolved again (a repository moved
+/// or a link retargeted while Relay runs).
+const CANONICAL_FOR: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// `path` resolved as the disk has it (or as given when it cannot be), cached for a while.
+fn canonical(path: &str) -> std::path::PathBuf {
+    if let Some(known) = CANONICAL.with(|c| c.borrow().get(path).filter(|(_, at)| at.elapsed() < CANONICAL_FOR).map(|(p, _)| p.clone())) {
+        return known;
+    }
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.into());
+    CANONICAL.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cache.len() > 64 {
+            cache.clear();
+        }
+        cache.insert(path.to_string(), (resolved.clone(), std::time::Instant::now()));
+    });
+    resolved
 }
 

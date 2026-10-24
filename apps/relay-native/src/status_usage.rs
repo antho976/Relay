@@ -292,15 +292,8 @@ impl Ui {
             let Some(ui) = weak.upgrade() else {
                 return glib::ControlFlow::Break;
             };
-            if ui.usage_turn_ended() {
-                ui.refresh_usage(false);
-            }
-            let stale = ui.stale_count();
-            if stale != ui.usage.stale_windows.get() {
-                ui.render_usage();
-            } else {
-                ui.render_usage_popup();
-                ui.render_usage_card();
+            if !ui.later_if_hidden("usage") {
+                ui.usage_tick();
             }
             glib::ControlFlow::Continue
         });
@@ -385,6 +378,20 @@ impl Ui {
                 }
             }
         });
+    }
+
+    /// The usage clock's tick: re-read after a turn ended, and rewrite the labels.
+    pub(crate) fn usage_tick(self: &Rc<Self>) {
+        if self.usage_turn_ended() {
+            self.refresh_usage(false);
+        }
+        let stale = self.stale_count();
+        if stale != self.usage.stale_windows.get() {
+            self.render_usage();
+        } else {
+            self.render_usage_popup();
+            self.render_usage_card();
+        }
     }
 
     /// One pending timeout at most, counted from the last refresh.

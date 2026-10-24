@@ -73,9 +73,15 @@ impl Editor {
         );
     }
     pub fn prepare_project(self: &Rc<Self>, ui: &Rc<Ui>) {
+        // A tree load for another project reads the checkouts and the Git status itself;
+        // reading them here as well ran the whole Code refresh twice on every switch.
+        let before = self.scope_project.get();
         self.load_tree(ui);
-        self.refresh_scopes(ui);
-        self.refresh_git(ui);
+        let by_tree = before != ui.project.get() && self.scope_project.get() == ui.project.get();
+        if !by_tree {
+            self.refresh_scopes(ui);
+            self.refresh_git(ui);
+        }
         self.update_scope_label(ui);
     }
     pub(super) fn update_scope_label(self: &Rc<Self>, ui: &Rc<Ui>) {

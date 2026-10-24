@@ -68,7 +68,7 @@ debug = "line-tables-only"
 | Terminal output flood | child writes → rendered; Ctrl-C stays responsive | 1 MiB end to end ≪ 100 ms; input never waits behind output | 37.6 ms / MiB |
 | Any page open (Board, Code, Notes, Money, Threads, Devices) | click → content painted | ≤ 100 ms | not measured end to end yet |
 | Session list refresh after `session.changed` | event → sidebar repainted | ≤ 1 frame | `session.list` 13.7 µs; the GTK rebuild is unmeasured |
-| Board load | open board → cards painted | ≤ 100 ms at 400 tasks | `task.list` 333 µs at 40 tasks |
+| Board load | open board → cards painted | ≤ 100 ms at 400 tasks | cold 352 ms at 400 tasks, 577 ms at 2 000; reopen 7–12 ms (`FIXES-2026-10-24.md`) |
 | New session | create → first output on screen | ≤ 1 s (the worktree checkout is the work) | create 26 ms, first output 8 ms |
 | First build in a new session's worktree | first `cargo test --no-run` → done | dependencies never compiled twice; only the project's own crates | 126.5 s cold → 70.4 s seeded, copy 0.7 s (`FIXES-2026-10-16.md`) |
 | Edit the engine, rebuild its tests | save in `relay-core` → `cargo test --no-run -p relay-core` done | one link per test executable, and few executables: a new test file goes in `tests/all.rs` | 44.0 s → 13.0 s wall (median of 3, load 14–45), CPU 74.9 s → 18.0 s, 12.5 GB → 1.7 GB written, 67 executables → 8 (`FIXES-2026-10-20.md`) |
@@ -190,7 +190,9 @@ several may turn out to be cheap enough not to matter. File paths are current as
    and workspaces to JSON to hash them, then `clear()`s and rebuilds the whole box when anything
    changed (`shell/registry.rs`); status counts rebuild on every reconcile (`status.rs`). With many
    sessions emitting state changes, count widgets created per event and frame time during a burst.
-8. **No `GtkListView` anywhere.** Mailbox (200–1 000 rows) and git files (up to 500 per group)
+8. **Measured 2026-10-24, open** (`FIXES-2026-10-24.md`): the board's first opening is 352 ms at
+   400 tasks and 577 ms at 2 000, all widget construction; `native-baseline.py --board-tasks`
+   times it. Original lead: **No `GtkListView` anywhere.** Mailbox (200–1 000 rows) and git files (up to 500 per group)
    `clear()` and rebuild on change; file-tree rows are "a dozen widgets and controllers" each, 500
    per folder; Money reads a whole period's transactions with no limit. Measure page-open time and
    memory at realistic and 10× sizes; recycle rows (ListView + factory) where it is a measurable win.
@@ -198,10 +200,13 @@ several may turn out to be cheap enough not to matter. File paths are current as
    root then one per expanded folder, one after another; the git panel then runs five reads
    (`editor.rs`, `code_git.rs`). Measure with ten folders expanded; batch or parallelize (they are
    unlocked queries, up to 8 concurrent per connection).
-10. **Synchronous `canonicalize` on the GTK thread** for every `file.changed` event (`editor.rs`
+10. **Fixed 2026-10-24** — 272 → 4 path syscalls on the GTK thread per 100 file changes
+    (`FIXES-2026-10-24.md`, `--events-only`). Original lead: **Synchronous `canonicalize` on the GTK thread** for every `file.changed` event (`editor.rs`
     `concerns()`, up to three per event) and per symlink while filling the tree. Cheap on a local
     disk, a stall on a slow or network one; canonicalize once and cache.
-11. **Timers that run while the window is hidden**: drift fetch (300 s), usage labels (30 s),
+11. **Fixed 2026-10-24** — 0 requests in 325 s minimized (was a fetch and two drift reads per
+    5 minutes); usage clock, wallpaper and Resources wait for the window too (`FIXES-2026-10-24.md`,
+    `--hidden-only`). Original lead: **Timers that run while the window is hidden**: drift fetch (300 s), usage labels (30 s),
     wallpaper rotation (default 15 min), the start screen's endless tick callback. Only terminal
     streams detach when minimized. Measure client CPU and wakeups at rest, minimized and visible;
     the target is zero.
@@ -210,7 +215,8 @@ several may turn out to be cheap enough not to matter. File paths are current as
     connecting; on connect it issues ~20 reads (six `settings.get`, three `notify.list`…).
     Measure launch → first frame → interactive; build pages lazily on first show; batch the
     connect reads.
-13. **Each lifecycle op and each `device.list` opens a new socket connection** (`client.rs`,
+13. **Measured 2026-10-24, no change** — a connection of its own costs ~44 µs over the shared one
+    at p50 (`--connect`). Original lead: **Each lifecycle op and each `device.list` opens a new socket connection** (`client.rs`,
     `status.rs`). Connect + ping is ~24 µs on the engine side, so probably fine — confirm the
     client side.
 14. **Terminal feed on the GTK thread** does base64 decode + a mode scan + `feed` per chunk with
@@ -219,7 +225,8 @@ several may turn out to be cheap enough not to matter. File paths are current as
     (`while let Ok(notice) = notices.recv().await` in `app.rs`) and every `spawn_future_local`
     run at GLib's default priority, above redraw (120) — a burst of events or output that is
     drained without yielding can hold off painting. Check frame gaps during an event burst.
-15. **CSS**: one ~2 600-line static provider; broad selectors (`*`, `window > box, stack,
+15. **Not attributable yet (2026-10-24)**: GTK here has no symbols; get them (debuginfod) before
+    profiling style recalculation. Original lead: **CSS**: one ~2 600-line static provider; broad selectors (`*`, `window > box, stack,
     scrolledwindow`, `> *:not(button)`); transitions on every button. Measure style-recalc cost in
     sysprof during a sidebar rebuild before touching anything.
 

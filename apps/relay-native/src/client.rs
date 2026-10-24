@@ -60,6 +60,26 @@ fn head_string(head: &[u8], prefix: &[u8]) -> Option<String> {
     String::from_utf8(rest[..end].to_vec()).ok()
 }
 
+/// Requests sent, by op, counted only for a measuring run (`RELAY_NATIVE_COUNT_CALLS=1`): the
+/// deterministic half of "what does the client do while nobody looks" (perf lead 11).
+static CALLS: std::sync::Mutex<Option<std::collections::BTreeMap<String, u64>>> = std::sync::Mutex::new(None);
+
+fn count_call(op: &str) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("RELAY_NATIVE_COUNT_CALLS").is_some()) {
+        *CALLS.lock().unwrap().get_or_insert_default().entry(op.to_string()).or_default() += 1;
+    }
+}
+
+/// The counted requests since the last `reset_calls`.
+pub fn calls() -> std::collections::BTreeMap<String, u64> {
+    CALLS.lock().unwrap().clone().unwrap_or_default()
+}
+
+pub fn reset_calls() {
+    CALLS.lock().unwrap().take();
+}
+
 pub fn is_lifecycle_request(op: &str) -> bool {
     // Stock photos reach the network: a search or thumbnail (unlocked) would make the board's
     // next edit wait behind it, and an add (staged) would stop the connection reading for the
@@ -409,6 +429,7 @@ impl Client {
         payload: Value,
         id: Uuid,
     ) -> Result<Value, Error> {
+        count_call(op);
         let mut request = Request::new(Actor::User, op, payload);
         request.id = id;
         let (send, reply) = oneshot::channel();

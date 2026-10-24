@@ -37,6 +37,9 @@ struct Sidebar {
     checked: Vec<(i64, String)>,
     checked_at: Option<std::time::Instant>,
     checking: bool,
+    /// The registry the last signature hashed, and its hash: a session event leaves the
+    /// projects as they were, and comparing them costs less than serializing them again.
+    registry: Option<(Vec<Value>, Vec<Value>, u64)>,
 }
 
 /// How long a check of the projects' paths stands before the next render asks again, so a
@@ -177,8 +180,16 @@ impl Ui {
             use std::hash::{Hash, Hasher};
             let mut hash = std::collections::hash_map::DefaultHasher::new();
             (active, &collapsed, &expanded, &query, &missing).hash(&mut hash);
-            serde_json::to_string(&projects).unwrap_or_default().hash(&mut hash);
-            serde_json::to_string(&workspaces).unwrap_or_default().hash(&mut hash);
+            let held = sidebar(|s| s.registry.as_ref().filter(|(p, w, _)| *p == projects && *w == workspaces).map(|(_, _, h)| *h));
+            let registry = held.unwrap_or_else(|| {
+                let mut inner = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_string(&projects).unwrap_or_default().hash(&mut inner);
+                serde_json::to_string(&workspaces).unwrap_or_default().hash(&mut inner);
+                let h = inner.finish();
+                sidebar(|s| s.registry = Some((projects.clone(), workspaces.clone(), h)));
+                h
+            });
+            registry.hash(&mut hash);
             for project in &projects {
                 let agents = agents_in(&sessions, &[id_of(project)]);
                 (agents.open, agents.held, agents.running).hash(&mut hash);
