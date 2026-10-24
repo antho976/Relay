@@ -15,6 +15,7 @@ mod relative;
 mod roadmap_smoke;
 mod shortcuts;
 mod smoke;
+mod smoke_devspace;
 mod smoke_project_files;
 mod smoke_registry;
 mod sounds;

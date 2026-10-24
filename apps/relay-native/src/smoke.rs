@@ -778,6 +778,7 @@ pub fn install(ui: &Rc<Ui>) {
                 (_, "lifecycle") => crate::smoke_project_files::profile_lifecycle(&ui).await,
                 (_, "registry") => crate::smoke_registry::run(&ui).await,
                 (_, "tools") => crate::roadmap_smoke::run(&ui).await,
+                (_, "devspace") => crate::smoke_devspace::run(&ui).await,
                 _ => Err(format!("Unknown roadmap smoke part: {part}")),
             };
             if let Err(error) = result {

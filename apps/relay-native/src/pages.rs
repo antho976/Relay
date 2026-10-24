@@ -31,6 +31,9 @@ pub fn open_note(ui: &Rc<Ui>, note: Value) {
     notes_window::show_project(ui, note["project_id"].as_i64().unwrap_or(ui.project.get()));
     note_pages::edit(ui, note);
 }
+pub fn task_event(ev: &str, payload: &Value) {
+    task_pages::event(ev, payload);
+}
 pub fn open_task(ui: &Rc<Ui>, id: i64) {
     task_pages::open(ui, id);
 }

@@ -1795,6 +1795,8 @@ impl Ui {
                                 // A note lists the tasks made from it, whatever project it shows.
                                 if matches!(e.ev.as_str(), "task.changed" | "task.deleted") {
                                     crate::pages::note_tasks_changed(&ui);
+                                    // An open task page follows its task, whatever the board shows.
+                                    crate::pages::task_event(&e.ev, &e.payload);
                                 }
                                 // Notes retains its own project when the main window switches.
                                 if matches!(e.ev.as_str(), "notes.changed" | "notes.deleted") {
