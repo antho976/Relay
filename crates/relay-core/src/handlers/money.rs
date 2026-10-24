@@ -280,14 +280,18 @@ pub fn register(e: &mut Engine) {
         ctx.emit("money.changed", json!({}));
         Ok(settings)
     });
-    // The file is read and decoded before the transaction opens; the restore is one ledger call.
+    // The file is read and decoded, and the restore written, before the transaction opens: the
+    // ledger has its own mutex, and a 64 MiB restore under the store's held every other request.
     e.register_staged::<Import, _>(
-        |_, p| read_backup(&p.path),
-        |ctx: &mut Ctx, _, file: BackupFile| {
+        |ctx, p| {
+            let file: BackupFile = read_backup(&p.path)?;
             let accounts = file.accounts.len();
             let transactions = ledger(ctx.engine(), |l| l.import_backup(&file))?;
-            ctx.emit("money.changed", json!({"imported": transactions}));
             Ok(ImportOut { kind: "backup".into(), transactions, accounts })
+        },
+        |ctx: &mut Ctx, _, out: ImportOut| {
+            ctx.emit("money.changed", json!({"imported": out.transactions}));
+            Ok(out)
         },
     );
     // The file is written before the transaction opens, which then only records that it was.
@@ -385,11 +389,14 @@ fn register_invest(e: &mut Engine) {
         let text = read_export(&p.path)?;
         ledger(ctx.engine(), |l| l.invest_preview(&text, p.account_id))
     });
-    // The file is read before the transaction opens; the plan and its writes are one short ledger call.
+    // The file is read, and the plan written, before the transaction opens (the ledger's own
+    // mutex is all it needs).
     e.register_staged::<InvestImport, _>(
-        |_, p| read_export(&p.path),
-        |ctx: &mut Ctx, p, text: String| {
-            let result = ledger(ctx.engine(), |l| l.invest_import(&text, &p.accounts, p.account_id))?;
+        |ctx, p| {
+            let text = read_export(&p.path)?;
+            ledger(ctx.engine(), |l| l.invest_import(&text, &p.accounts, p.account_id))
+        },
+        |ctx: &mut Ctx, _, result| {
             ctx.emit("money.changed", json!({"imported": result.holdings + result.activities}));
             Ok(result)
         },
