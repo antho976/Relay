@@ -23,6 +23,8 @@ const IDS: &str = "SELECT node_id, parent_id, ord FROM design_nodes WHERE design
 const PAGE_BODIES: &str = "SELECT node_id, body FROM design_nodes WHERE design_id = ?1 AND parent_id IS NULL ORDER BY ord, node_id";
 /// The rows written after a rev, through `design_nodes_rev`: what a `since_rev` render pictures.
 const CHANGED: &str = "SELECT node_id FROM design_nodes WHERE design_id = ?1 AND rev > ?2 ORDER BY node_id";
+/// How many ids were removed after a rev: a list that only deleted leaves no row to picture.
+const REMOVED: &str = "SELECT COUNT(*) FROM design_removed WHERE design_id = ?1 AND rev > ?2";
 
 pub(super) fn register(e: &mut Engine) {
     // Both answered by the socket door (socket.rs), which runs the pipeline's checks through these
@@ -157,12 +159,26 @@ pub(crate) fn render_target(conn: &Connection, ask: &Ask, project: Option<Id>) -
                 .collect();
             let whole = on.contains(page.as_str()) || outermost.is_empty() || outermost.len() > RENDER_NODES_MAX;
             let others: Vec<&str> = by_page.iter().filter(|(p, _)| *p != page).map(|(p, _)| p.as_str()).collect();
-            let note = (!others.is_empty()).then(|| format!(
+            // Removals leave no row behind, so where they were is not known here: say so rather
+            // than picture a page that may not be the one they left.
+            let since = ask.since_rev.unwrap_or_default();
+            let removed: i64 = if changed.is_empty() && ask.page.is_none() {
+                conn.prepare_cached(REMOVED).bus()?.query_row(rusqlite::params![design.id, since], |r| r.get(0)).bus()?
+            } else {
+                0
+            };
+            let note = if removed > 0 {
+                Some(format!("since_rev {since}: only removals since ({removed}), which leave nothing to picture; this is page {page:?}. \
+                    To see what they left, picture their page with page"))
+            } else {
+                None
+            };
+            let note = note.or_else(|| (!others.is_empty()).then(|| format!(
                 "since_rev {}: page {} changed too; picture it with page {:?} and since_rev",
                 ask.since_rev.unwrap_or_default(),
                 others.iter().map(|p| format!("{p:?}")).collect::<Vec<_>>().join(", "),
                 others[0],
-            ));
+            )));
             ((!whole).then_some(outermost), note)
         }
     };
