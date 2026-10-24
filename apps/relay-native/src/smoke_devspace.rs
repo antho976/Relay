@@ -14,6 +14,7 @@ async fn call(ui: &Rc<Ui>, op: &str, payload: Value) -> Result<Value, String> {
 pub(crate) async fn run(ui: &Rc<Ui>) -> Result<(), String> {
     task_page_keeps_typing(ui).await?;
     note_pictures_move(ui).await?;
+    refused_close_keeps_its_place(ui).await?;
     Ok(())
 }
 
@@ -181,5 +182,26 @@ async fn note_pictures_move(ui: &Rc<Ui>) -> Result<(), String> {
         require(std::time::Instant::now() < deadline, "The moved note never saved")?;
     }
     println!("Note pictures move between lines: up, down, onto themselves, and back with one undo");
+    Ok(())
+}
+
+/// A close the engine refuses (here a reviewer whose builder still works in the worktree a
+/// removal would delete) puts the pane back where it was: the same pane with its scrollback,
+/// focus included. Before, it came back at the end of the wall, a new pane built from the
+/// engine's tail.
+async fn refused_close_keeps_its_place(ui: &Rc<Ui>) -> Result<(), String> {
+    ui.navigate("agents");
+    wait_for(|| ui.smoke_wall().0.len() >= 3, "Fixture agents on the wall").await?;
+    let (before, _) = ui.smoke_wall();
+    let (name, pane) = before[1].clone();
+    ui.smoke_close(&name);
+    require(!ui.smoke_wall().0.iter().any(|(n, _)| *n == name), "The pane leaves on the click")?;
+    crate::smoke::util::wait_within(Duration::from_secs(30), || ui.notice.text().contains("Could not close"), "The close is refused").await?;
+    wait_for(|| ui.smoke_wall().0.iter().any(|(n, _)| *n == name), "The pane comes back").await?;
+    glib::timeout_future(Duration::from_millis(500)).await;
+    let (after, _) = ui.smoke_wall();
+    require(after.iter().position(|(n, _)| *n == name) == Some(1), &format!("back in its place: {after:?}"))?;
+    require(after.iter().find(|(n, _)| *n == name).map(|(_, p)| *p) == Some(pane), "the same pane, not one rebuilt from the tail")?;
+    println!("A refused close puts the same pane back in its place");
     Ok(())
 }

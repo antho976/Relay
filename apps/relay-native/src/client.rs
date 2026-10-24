@@ -77,14 +77,18 @@ pub fn is_lifecycle_request(op: &str) -> bool {
                 | "session.discard_restorable"
                 | "task.dispatch"
                 // A clone may take many minutes; on the main connection every other request
-                // would wait behind it.
+                // would wait behind it. A linked repository's add clones too (staged: the
+                // connection stops reading meanwhile), and its remove reads git status.
                 | "project.clone"
+                | "session.repo.add"
+                | "session.repo.remove"
         )
 }
 
 fn request_timeout(op: &str) -> Duration {
     match op {
-        "project.clone" => Duration::from_secs(1800),
+        "project.clone" | "session.repo.add" => Duration::from_secs(1800),
+        "session.repo.remove" => Duration::from_secs(120),
         // A new checkout may hydrate large LFS assets after the bounded fetch.
         "session.create" | "worktree.create" | "task.dispatch" => Duration::from_secs(180),
         // A backtest reads up to two years of candles from the exchange, 350 at a time.
@@ -491,6 +495,12 @@ mod tests {
             assert_eq!(request_timeout(op), Duration::from_secs(60), "{op}");
         }
         assert!(!is_lifecycle_request("design.get") && !is_lifecycle_request("design.pictures"));
+        // Linking a repository clones it: never on the main connection, never cut off at 30 s.
+        for op in ["session.repo.add", "session.repo.remove"] {
+            assert!(is_lifecycle_request(op), "{op}");
+            assert!(request_timeout(op) >= Duration::from_secs(120), "{op}");
+        }
+        assert!(!is_lifecycle_request("session.repo.list"));
     }
 
     async fn lifecycle_bypasses_a_stalled_status_request(op: &'static str) {

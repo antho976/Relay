@@ -4,7 +4,7 @@ use vte4::prelude::*;
 mod registry;
 #[path = "agent_menu.rs"]
 mod agent_menu;
-pub(super) use agent_menu::is_closing;
+pub(super) use agent_menu::{is_closing, park_pane};
 
 thread_local! {
     /// The bell's notify.list is in flight; see refresh_notification_count.
@@ -39,6 +39,8 @@ impl Ui {
             }
             self.launch.set_reveal_child(false);
             self.forget_launch();
+            // A Shift+click selection names this wall's panes; another project's could share a name.
+            self.clear_selection();
             self.project.set(project);
             // Switch the visible wall synchronously. The registry already contains
             // all projects' sessions; a slow refresh must never leave the old CLI here.
