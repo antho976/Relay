@@ -878,9 +878,9 @@ impl Editor {
                 upper.append(&clean);
             }
             for (id, title, group, staged_group) in [
-                ("conflicts", "MERGE CHANGES", &conflicts, false),
-                ("staged", "STAGED CHANGES", &staged, true),
-                ("changes", "CHANGES", &unstaged, false),
+                ("conflicts", "Merge changes", &conflicts, false),
+                ("staged", "Staged changes", &staged, true),
+                ("changes", "Changes", &unstaged, false),
             ] {
                 if group.is_empty() {
                     continue;
@@ -926,7 +926,7 @@ impl Editor {
             }
 
             // Remote: push and the pull request, one compact row each.
-            let remote = section("remote", "REMOTE", None);
+            let remote = section("remote", "Remote", None);
             e.keeps_fold(&ui, &remote);
             let can_push = !detached && (upstream.is_none() || (ahead.is_some_and(|n| n > 0) && behind == Some(0)));
             let push_state = match (&upstream, ahead, behind) {
@@ -1000,7 +1000,7 @@ impl Editor {
             // History sits in its own pane below, resizable and foldable.
             let history = gtk::Box::new(gtk::Orientation::Vertical, 0);
             history.add_css_class("code-history-pane");
-            let history_section = section("history", "HISTORY", None);
+            let history_section = section("history", "History", None);
             e.keeps_fold(&ui, &history_section);
             history_section.root.add_css_class("scm-history");
             let graph_key = gtk::ToggleButton::with_label("Graph");
@@ -1092,7 +1092,7 @@ impl Editor {
                 .filter(|s| text(s, "state") != "closed")
                 .cloned()
                 .collect();
-            let merge_section = section("merge", "MERGE TEST", Some(live.len()));
+            let merge_section = section("merge", "Merge test", Some(live.len()));
             e.keeps_fold(&ui, &merge_section);
             let merge = merge_section.body.clone();
             upper.append(&merge_section.root);
@@ -1608,7 +1608,7 @@ impl Editor {
         });
 
         let locals = rows(v, "branches");
-        list.append(&label("LOCAL", "branch-heading"));
+        list.append(&label("Local", "branch-heading"));
         for branch in &locals {
             let name = text(branch, "name").to_string();
             let current = branch["current"] == true;
@@ -1715,7 +1715,7 @@ impl Editor {
             .filter(|remote| remote["local"].is_null())
             .collect();
         if !remotes.is_empty() {
-            list.append(&label("REMOTE", "branch-heading"));
+            list.append(&label("Remote", "branch-heading"));
         }
         for remote in remotes {
             let name = text(&remote, "name").to_string();
