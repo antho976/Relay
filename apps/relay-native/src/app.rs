@@ -1093,12 +1093,26 @@ impl Ui {
             saved: Cell::new(None),
             moves: Cell::new(0),
         };
+        // A drag the person makes counts, to the window's limit too; a squeeze by the window
+        // (the position pinned at its maximum) does not.
+        let dragging = Rc::new(Cell::new(false));
+        let drag = gtk::GestureDrag::new();
+        drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+        drag.connect_drag_begin({
+            let dragging = dragging.clone();
+            move |_, _, _| dragging.set(true)
+        });
+        drag.connect_drag_end({
+            let dragging = dragging.clone();
+            move |_, _, _| dragging.set(false)
+        });
+        split.add_controller(drag);
         split.connect_position_notify({
             let chosen = sidebar_width.chosen.clone();
             move |split| {
                 if split.position() > SIDEBAR_MAX {
                     split.set_position(SIDEBAR_MAX);
-                } else if split.position() < split.max_position() {
+                } else if split.position() < split.max_position() || dragging.get() {
                     chosen.set(split.position());
                 }
             }
