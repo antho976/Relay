@@ -2545,7 +2545,7 @@ impl Board {
         bar.set_tooltip_text(Some(&format!("{done} of {} done", tasks.len())));
         line.append(&bar);
         line.append(&label(&format!("{done} done · {:.0}%", fraction * 100.), "stats-figure"));
-        let mut part = |words: String, class: &str, tip: &str| {
+        let part = |words: String, class: &str, tip: &str| {
             line.append(&label("·", "stats-dot"));
             let item = label(&words, "stats-part");
             if !class.is_empty() {
