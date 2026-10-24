@@ -122,7 +122,9 @@ impl Run<'_> {
         for id in self.fill_charts.clone() {
             // Where it is comes from the parent index; its body is read only where it is reached.
             let top = self.top(&id)?;
-            if top.as_ref().is_some_and(|top| !reached.contains(top)) {
+            // A style or colour edit touches no node but can change any layout that names it
+            // (a label's font size beside the chart): every chart that fills is laid out again.
+            if !self.styles_changed && top.as_ref().is_some_and(|top| !reached.contains(top)) {
                 continue;
             }
             let chart = self.stored(&id)?.filter(|n| fills(n) && n.instance_of.is_none());

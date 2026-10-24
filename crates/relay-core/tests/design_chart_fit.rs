@@ -133,3 +133,23 @@ fn a_copied_fill_chart_is_fitted() {
     assert!(reach(&e, id, "row-2-c") <= 200.5, "drawn to its new width");
     assert_eq!(w(&e, id, "row-c"), 400.0, "the original keeps its own");
 }
+
+/// A style edit that changes the layout around a chart that fills (a label's font size beside
+/// it) fits the chart again, though it touches no node.
+#[test]
+fn a_style_that_moves_the_room_fits_the_chart_again() {
+    let (e, _root) = project();
+    let id = ok(&e, "design.create", json!({"project_id": 1, "title": "Styled"}))["design"]["id"].as_i64().unwrap();
+    apply(&e, id, json!([
+        {"op": "style", "name": "label", "set": {"font_size": 12}},
+        {"op": "add", "node": {"id": "row", "parent": "page-1", "kind": "frame", "w": 400, "h": 200, "layout": "row"}},
+        {"op": "add", "node": {"id": "t", "parent": "row", "kind": "text", "text": "Weekly spend", "style": "label"}},
+        {"op": "add", "node": {"id": "c", "parent": "row", "kind": "frame", "h": 200, "w_sizing": "fill", "chart": {"kind": "bar", "labels": ["A", "B"], "series": [{"values": [1, 2]}]}}},
+    ]));
+    let before = w(&e, id, "c");
+    apply(&e, id, json!([{"op": "style", "name": "label", "set": {"font_size": 32}}]));
+    let after = w(&e, id, "c");
+    assert!(after < before, "{before} then {after}");
+    apply(&e, id, json!([{"op": "update", "id": "t", "set": {"name": "Label"}}]));
+    assert_eq!(w(&e, id, "c"), after, "it was fitted already");
+}
