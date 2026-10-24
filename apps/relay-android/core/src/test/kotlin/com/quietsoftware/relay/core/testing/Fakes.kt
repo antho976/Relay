@@ -5,6 +5,7 @@ import com.quietsoftware.relay.core.link.LineSocket
 import com.quietsoftware.relay.core.sync.Kind
 import com.quietsoftware.relay.core.sync.OutboxEntry
 import com.quietsoftware.relay.core.sync.OutboxStore
+import com.quietsoftware.relay.core.sync.Refs
 import com.quietsoftware.relay.core.sync.ReplicaStore
 import com.quietsoftware.relay.core.sync.Row
 import com.quietsoftware.relay.core.sync.Scope
@@ -51,7 +52,10 @@ class MemoryOutbox : OutboxStore {
     override suspend fun update(entry: OutboxEntry) { entries[entry.id] = entry }
     override suspend fun delete(id: String) { entries.remove(id) }
     override suspend fun nextSeq() = seq.incrementAndGet()
-    override suspend fun prune(before: Long) = Unit
+    override suspend fun prune(before: Long) {
+        val named = open().flatMap { Refs.of(it.payload) }.toSet()
+        entries.values.removeAll { it.state == OutboxEntry.State.Done && it.createdAt < before && it.id !in named }
+    }
 }
 
 /** Two ends of a socket made of channels. */
