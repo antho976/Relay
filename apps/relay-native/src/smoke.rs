@@ -1070,6 +1070,15 @@ pub fn install(ui: &Rc<Ui>) {
                 });
                 return;
             }
+            // The open project's settings sheet, as its row menu opens it.
+            if page == "project-settings" {
+                navigate.navigate("agents");
+                let project = navigate.projects.borrow().iter().find(|p| p["id"].as_i64() == Some(navigate.project.get())).cloned();
+                if let Some(project) = project {
+                    navigate.registry_editor(project, false);
+                }
+                return;
+            }
             // The agents bar's Agent skills and Plugins sheets, over the agents page.
             if matches!(page.as_str(), "project-skills" | "project-plugins") {
                 navigate.navigate("agents");

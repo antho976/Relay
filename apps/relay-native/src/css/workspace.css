@@ -78,6 +78,8 @@ button.registry-action.danger:hover { background: alpha(@held, 0.12); }
 .registry-field-error { color: @held; font-size: 12px; }
 .registry-editor entry.invalid { border-color: @held; }
 .registry-editor entry.registry-mono { font-family: 'Geist Mono', monospace; font-size: 12px; }
+.registry-editor menubutton.registry-pick > button { min-width: 34px; min-height: 30px; padding: 0; }
+.registry-menu scrolledwindow { min-width: 220px; }
 .registry-switch-row { padding-top: 6px; }
 .registry-editor-actions { padding: 0 0 2px; }
 .registry-editor-actions button { min-height: 30px; }

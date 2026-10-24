@@ -883,7 +883,7 @@ impl Ui {
         if workspace {
             meta.insert(0, plural(projects.len(), "project", "projects"));
         } else if let Some(ws) = self.workspaces.borrow().iter().find(|w| w["id"] == value["workspace_id"]) {
-            meta.push(format!("in {}", text(ws, "name")));
+            meta.push(format!("in {}", crate::app::display_name(text(ws, "name"))));
         }
         head.append(&label(&meta.join(" · "), "registry-meta"));
         body.append(&head);
@@ -894,7 +894,7 @@ impl Ui {
         let pinned = gtk::Switch::new();
         let branch = gtk::Entry::builder().text(text(&value, "base_branch")).hexpand(true).build();
         let build = gtk::Entry::builder().text(text(&value, "build_cmd")).hexpand(true).placeholder_text("None").build();
-        let run = gtk::Entry::builder().text(text(&value, "run_cmd")).hexpand(true).placeholder_text("Gradle wrapper install task").build();
+        let run = gtk::Entry::builder().text(text(&value, "run_cmd")).hexpand(true).placeholder_text("None").build();
         let mut branch_error = label("", "registry-field-error");
         if !workspace {
             pinned.set_active(value["pinned"] == true);
@@ -912,7 +912,68 @@ impl Ui {
 
             let branches = section(&body, "Branches");
             branch.add_css_class("registry-mono");
-            branch_error = labeled(&branches, "Base branch", &branch,
+            branch.update_property(&[gtk::accessible::Property::Label("Base branch")]);
+            // Typed, or picked from the repository's own branches (agents' relay/ branches left out).
+            let branch_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            branch_row.append(&branch);
+            let pick = gtk::MenuButton::new();
+            pick.set_child(Some(&crate::icons::image("branch", 13)));
+            pick.set_tooltip_text(Some("Pick a branch"));
+            pick.set_widget_name("registry-branch-pick");
+            pick.add_css_class("registry-pick");
+            let choices = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            let popover = gtk::Popover::new();
+            popover.add_css_class("registry-menu");
+            let list = gtk::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .propagate_natural_height(true)
+                .max_content_height(280)
+                .child(&choices)
+                .build();
+            popover.set_child(Some(&list));
+            pick.set_popover(Some(&popover));
+            let weak = Rc::downgrade(self);
+            let (entry, shown) = (branch.downgrade(), popover.downgrade());
+            pick.set_create_popup_func(move |_| {
+                let Some(ui) = weak.upgrade() else { return };
+                clear(&choices);
+                choices.append(&label("Reading branches…", "registry-meta"));
+                let (choices, entry, shown) = (choices.clone(), entry.clone(), shown.clone());
+                glib::spawn_future_local(async move {
+                    let names: Vec<String> = match ui.call("git.branches", json!({"project_id": id})).await {
+                        Ok(v) => rows(&v, "branches").iter().map(|b| text(b, "name").to_string()).filter(|n| !n.starts_with("relay/")).collect(),
+                        Err(e) => {
+                            clear(&choices);
+                            choices.append(&label(&format!("Couldn't read branches: {e}"), "registry-meta"));
+                            return;
+                        }
+                    };
+                    clear(&choices);
+                    if names.is_empty() {
+                        choices.append(&label("No branches", "registry-meta"));
+                    }
+                    let current = entry.upgrade().map(|e| e.text().to_string()).unwrap_or_default();
+                    for name in names {
+                        let key = button("", "registry-action");
+                        let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                        line.append(&crate::icons::image(if name == current { "check" } else { "branch" }, 13));
+                        line.append(&label(&name, "mono"));
+                        key.set_child(Some(&line));
+                        let (entry, shown) = (entry.clone(), shown.clone());
+                        key.connect_clicked(move |_| {
+                            if let Some(entry) = entry.upgrade() {
+                                entry.set_text(&name);
+                            }
+                            if let Some(popover) = shown.upgrade() {
+                                popover.popdown();
+                            }
+                        });
+                        choices.append(&key);
+                    }
+                });
+            });
+            branch_row.append(&pick);
+            branch_error = labeled(&branches, "Base branch", &branch_row,
                 Some("New agents branch from this base. Existing agent branches stay where they are."));
 
             let commands = section(&body, "Commands");
@@ -921,7 +982,7 @@ impl Ui {
             labeled(&commands, "Build command", &build,
                 Some("Runs in the merged checkout when an integration builds. Empty means no build step."));
             labeled(&commands, "Run command", &run,
-                Some("Installs the build on a device for runs and deploys. Empty uses the Gradle wrapper's install task."));
+                Some("Installs the build on a device for runs and deploys. Empty: an Android project uses its Gradle wrapper's install task; any other has none."));
         }
 
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -1094,6 +1155,7 @@ impl Ui {
                         Ok(_) => {
                             discard.set(true);
                             ui.registry_dirty.set(true);
+                            ui.show_info(if workspace { "Workspace settings saved." } else { "Project settings saved." });
                             ui.refresh();
                             if let Some(panel) = panel.upgrade() {
                                 panel.close();
@@ -1132,7 +1194,7 @@ impl Ui {
 fn section(parent: &gtk::Box, title: &str) -> gtk::Box {
     let section = gtk::Box::new(gtk::Orientation::Vertical, 8);
     section.add_css_class("registry-section");
-    section.append(&label(&title.to_uppercase(), "section-label"));
+    section.append(&label(title, "section-label"));
     parent.append(&section);
     section
 }
