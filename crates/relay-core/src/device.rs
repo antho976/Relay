@@ -32,7 +32,9 @@ impl DeviceWatchRuntime {
     pub fn install(&self, mut child: Child) -> bool {
         let mut slot = self.child.lock().unwrap();
         if self.stopped() {
+            // Reaped too: the orphan reaper skips the engine's own children.
             let _ = child.kill();
+            let _ = child.wait();
             return false;
         }
         *slot = Some(child);

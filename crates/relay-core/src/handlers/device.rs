@@ -57,12 +57,12 @@ pub fn register(e: &mut Engine) {
                 ctx.after_commit(move |engine| { std::thread::spawn(move || device_watch_worker(engine, runtime, adb)); });
             }
         } else {
-            let runtime = {
-                let mut watch = ctx.engine().device_watch.lock().unwrap();
-                watch.clients = watch.clients.saturating_sub(1);
-                if watch.clients == 0 { watch.runtime.take() } else { None }
-            };
-            if let Some(runtime) = runtime { runtime.stop(); }
+            // Stopped inside the lock, as `WatchLease::drop` does: `clients == 0` means stopped.
+            let mut watch = ctx.engine().device_watch.lock().unwrap();
+            watch.clients = watch.clients.saturating_sub(1);
+            if watch.clients == 0 {
+                if let Some(runtime) = watch.runtime.take() { runtime.stop(); }
+            }
         }
         Ok(Empty {})
     });
