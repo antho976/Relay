@@ -97,6 +97,7 @@ class Ledger(
                 createdAt = now(),
             )
             outbox.add(e)
+            layBroad(e, outbox.open(), applied = false)
             val target = Optimistic.target(op, payload, e.id)
             if (target != null) {
                 val (kind, raw) = target
@@ -132,6 +133,7 @@ class Ledger(
                 if (moved.isNotEmpty()) rows.upsert(moved)
             }
         }
+        layBroad(entry, open, applied = true)
         val fresh = Optimistic.resultRows(entry.op, result).ifEmpty { moduleRow(entry.op, result) }
         if (fresh.isNotEmpty()) {
             rows.upsert(fresh.map { overlay(it, open) })
@@ -149,6 +151,7 @@ class Ledger(
         val entry = outbox.get(entryId) ?: return@withLock
         outbox.delete(entryId)
         rebuild(entry, outbox.open())
+        layBroad(entry, outbox.open(), applied = false)
         // Entries that wait on a dropped one's answer (a label on a task made offline, an agent's
         // start after its create) could never be sent: they go with it.
         val gone = mutableSetOf(entryId)
@@ -218,6 +221,21 @@ class Ledger(
     }
 
     /**
+     * Lay the rows a [Optimistic.broad] entry covers out again: with it while it is open, from
+     * what the PC said once dropped, and, once [applied], with it as the PC's own state.
+     */
+    private suspend fun layBroad(entry: OutboxEntry, open: List<OutboxEntry>, applied: Boolean) {
+        val kind = Optimistic.broad(entry.op) ?: return
+        val covered = rows.all(kind).filter { Optimistic.covers(entry.op, entry.payload, kind, it.base ?: it.json) }
+        if (covered.isEmpty()) return
+        rows.upsert(covered.map { r ->
+            val base = r.base ?: r.json
+            val server = if (applied) Optimistic.apply(entry.op, entry.payload, base, entry.id, entry.createdAt) ?: base else base
+            overlay(r.copy(json = server), open)
+        })
+    }
+
+    /**
      * A module op answers with the Module, not the ModuleSummary the list keeps (no task counts,
      * no progress): its fields laid over the row the PC last listed, so the edit shows as the PC
      * made it instead of reverting until the next list.
@@ -236,8 +254,9 @@ class Ledger(
         var json: JsonObject = server.json
         var touched = false
         for (e in open) {
-            val (kind, raw) = Optimistic.target(e.op, e.payload, e.id) ?: continue
-            if (kind != server.kind || resolveTemp(raw) != server.id) continue
+            val hit = Optimistic.target(e.op, e.payload, e.id)?.let { (kind, raw) -> kind == server.kind && resolveTemp(raw) == server.id }
+                ?: Optimistic.covers(e.op, e.payload, server.kind, server.json)
+            if (!hit) continue
             // A delete hides the row rather than dropping it, so a restore after it brings it back.
             json = Optimistic.apply(e.op, e.payload, json, e.id, e.createdAt) ?: json.hidden()
             touched = true

@@ -40,6 +40,13 @@ object Optimistic {
         "project.update", "workspace.update",
     )
 
+    /** The kind of row an op changes many of at once (Mark all read), with no one [target]. */
+    fun broad(op: String): Kind? = if (op == "notify.ack_all") Kind.Notification else null
+
+    /** Whether a [broad] op changes [row], of [kind]. */
+    fun covers(op: String, payload: JsonObject, kind: Kind, row: JsonObject): Boolean =
+        broad(op) == kind && (payload.s("category") == null || row.s("category") == payload.s("category"))
+
     /** The row an entry changes, as (kind, id); a create targets its own temp row. */
     fun target(op: String, payload: JsonObject, entryId: String): Pair<Kind, String>? {
         fun idOf(key: String): String? = when (val v = payload[key]) {
@@ -63,6 +70,7 @@ object Optimistic {
             "thread.send" -> Kind.Message to tempId(entryId)
             "thread.rename", "thread.delete", "thread.set" -> idOf("id")?.let { Kind.Thread to it }
             "session.create" -> Kind.Session to tempId(entryId)
+            "session.spawn" -> idOf("session")?.let { Kind.Session to it }
             "project.update" -> idOf("project_id")?.let { Kind.Project to it }
             "workspace.update" -> idOf("workspace_id")?.let { Kind.Workspace to it }
             else -> null
@@ -164,7 +172,8 @@ object Optimistic {
             "module.update" -> row?.patch(payload, setOf("name", "icon", "priority"), ts)
             "module.complete" -> row?.with("completed_at", JsonPrimitive(ts))
             "module.reopen" -> row?.with("completed_at", JsonNull)
-            "notify.ack" -> row?.with("read", JsonPrimitive(true))
+            "notify.ack", "notify.ack_all" -> row?.with("read", JsonPrimitive(true))
+            "session.spawn" -> row?.with("state", JsonPrimitive("spawning"))
             "mailbox.send" -> buildJsonObject {
                 put("id", tempId(entryId))
                 payload["project_id"]?.let { put("project_id", it) }

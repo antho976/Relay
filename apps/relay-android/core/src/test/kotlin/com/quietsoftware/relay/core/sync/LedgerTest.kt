@@ -208,6 +208,28 @@ class LedgerTest {
     }
 
     @Test
+    fun `mark all read shows at once, outlasts a list read, and goes back when dropped`() = runBlocking {
+        fun note(id: Long, category: String = "agent_done") = Row.of(Kind.Notification, obj("id" to id, "category" to category, "read" to false))!!
+        ledger.replace(Kind.Notification, Scope.All, listOf(note(1), note(2, "guardrail")))
+        val e = ledger.enqueue("notify.ack_all", obj(), "Mark all read")
+        assertTrue(replica.all(Kind.Notification).all { it.json["read"].toString() == "true" })
+        ledger.replace(Kind.Notification, Scope.All, listOf(note(1), note(2, "guardrail"), note(3)))
+        assertTrue("one listed meanwhile is read too", replica.all(Kind.Notification).all { it.json["read"].toString() == "true" })
+        ledger.discard(e.id)
+        assertTrue(replica.all(Kind.Notification).none { it.json["read"].toString() == "true" })
+    }
+
+    @Test
+    fun `starting an agent shows it starting at once`() = runBlocking {
+        ledger.upsert(listOf(Row.of(Kind.Session, obj("id" to 5, "name" to "calm-heron", "state" to "created", "project_id" to 1))!!))
+        ledger.enqueue("session.spawn", obj("session" to "calm-heron"), "Start agent")
+        assertEquals("spawning", replica.get(Kind.Session, "calm-heron")!!.json.s("state"))
+        val create = ledger.enqueue("session.create", obj("project_id" to 1, "provider" to "claude"), "New agent")
+        ledger.enqueue("session.spawn", obj("session" to Refs.ref(create.id, "name")), "Start agent")
+        assertEquals("spawning", replica.get(Kind.Session, Optimistic.tempId(create.id))!!.json.s("state"))
+    }
+
+    @Test
     fun `a message to a thread shows at once, in the thread it was sent to`() = runBlocking {
         val sent = ledger.enqueue("thread.send", obj("id" to 7, "text" to "Am I on pace?"), "Message")
         val row = replica.get(Kind.Message, Optimistic.tempId(sent.id))!!
