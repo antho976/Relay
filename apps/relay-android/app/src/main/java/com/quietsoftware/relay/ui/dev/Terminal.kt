@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.core.Hub
 import com.quietsoftware.relay.core.model.Session
@@ -143,9 +144,11 @@ fun TerminalScreen(name: String, nav: Nav) {
         delay(600)
         if (font != nav.shell.state.value.prefs.terminalFont) nav.shell.update { it.copy(terminalFont = font) }
     }
-    LaunchedEffect(fit, live, phone) {
+    // Out of sight (Home, the phone locked) the PC's terminal is the PC's again; back, it is borrowed again.
+    var started by remember { mutableStateOf(false) }
+    LaunchedEffect(fit, live, phone, started) {
         val size = phone
-        if (fit && live && size != null) {
+        if (fit && live && started && size != null) {
             feed.resize(size.first, size.second, borrow = true)
             hold.borrowed = true
         } else if (!fit && hold.borrowed) {
@@ -154,9 +157,12 @@ fun TerminalScreen(name: String, nav: Nav) {
         }
     }
     // The wall may keep the feed streaming after this screen: the PC gets its own size back now.
-    DisposableEffect(feed) {
-        onDispose {
+    LifecycleStartEffect(feed) {
+        started = true
+        onStopOrDispose {
+            started = false
             if (hold.borrowed) feed.resize(0, 0, borrow = false)
+            hold.borrowed = false
             feed.save()
         }
     }
