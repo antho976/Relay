@@ -10,6 +10,10 @@
 .threads-root { color: @ink; }
 .threads-root, .threads-root stack, .threads-root scrolledwindow, .threads-root viewport { background: transparent; }
 
+/* With more of the conversation above, its top edge fades under the strip, so a line scrolled
+   half out of view does not read as text cut under the header (survey 2026-10-24, 1024 px). */
+.threads-root scrolledwindow.threads-scroll > undershoot.top { background-image: linear-gradient(to bottom, @wall, alpha(@wall, 0)); background-size: 100% 28px; background-position: top; background-repeat: no-repeat; }
+
 /* The strip: the thread's name as Dev's project pill, and the panel's key lit while it is open. */
 .threads-strip { border-bottom: 0; }
 menubutton.threads-title-key > button { min-height: 34px; padding: 0 12px; border: 1px solid @edge; border-radius: 10px; background: @slab; }
