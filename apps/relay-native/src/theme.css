@@ -272,7 +272,8 @@ button.window-close:hover { background: @held; color: @ink; }
 .agent-skill-row { min-height: 35px; padding: 7px 12px; border-bottom: 1px solid @edge; }
 .agent-skill-row .skill-title { font-size: 12px; }
 .agent-skill-row .skill-source { padding: 0; font-family: 'Geist'; font-size: 10px; color: @faint; background: transparent; }
-.notification-count { min-width: 10px; min-height: 16px; padding: 0 4px; border-radius: 999px; background: @ink; color: @wall; font-family: 'Geist Mono'; font-size: 9.5px; font-weight: 500; }
+/* Inside the bell's key, clear of the window's top edge. */
+.notification-count { margin: 3px 1px 0 0; min-width: 10px; min-height: 15px; padding: 0 4px; border-radius: 999px; background: @ink; color: @wall; font-family: 'Geist Mono'; font-size: 9.5px; font-weight: 500; }
 /* The count reads the same whatever it holds; the bell's popover says which need you. */
 .notification-count.held { background: @ink; color: @wall; }
 
