@@ -8,7 +8,7 @@
 
 use super::apply::WALK;
 use crate::engine::IntoBus;
-use relay_bus::design::{Conflict, ConflictReason, NodeOp, SINCE_WINDOW};
+use relay_bus::design::{copy_id_renamed, renamed, Conflict, ConflictReason, NodeOp, MAX_DEPTH, SINCE_WINDOW};
 use relay_bus::error::BusError;
 use relay_bus::types::{Design, Id};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -27,6 +27,14 @@ const INSIDE_IDS: usize = 20;
 const CHANGED: &str = "SELECT node_id, rev FROM design_nodes WHERE design_id = ?1 AND rev > ?2";
 /// The ids of design `?1` removed after rev `?2`, and the rev each went at.
 const GONE: &str = "SELECT node_id, rev FROM design_removed WHERE design_id = ?1 AND rev > ?2";
+/// Node `?2` of design `?1` and every node inside it, as far as `?3` levels down, through the
+/// parent index: the ids a copy of it makes.
+const SUBTREE_IDS: &str = "WITH RECURSIVE down(node_id, n) AS (
+        SELECT ?2, 0
+        UNION ALL
+        SELECT d.node_id, down.n + 1 FROM down CROSS JOIN design_nodes d ON d.design_id = ?1 AND d.parent_id = down.node_id
+        WHERE down.n < ?3)
+    SELECT node_id FROM down";
 /// Every node of design `?1` and its parent, from the parent index alone.
 const PARENTS: &str = "SELECT node_id, parent_id FROM design_nodes WHERE design_id = ?1";
 
@@ -40,17 +48,23 @@ const PARENTS: &str = "SELECT node_id, parent_id FROM design_nodes WHERE design_
 /// One indexed read of the rows written since, one of the removals since, and only when a delete
 /// meets a change, one read of where every node sits (the parent index alone).
 pub(super) fn base_conflicts(tx: &Connection, design: Id, ops: &[NodeOp], base: i64) -> Result<Vec<Conflict>, BusError> {
-    let mut own: HashSet<&str> = HashSet::new();
+    let mut own: HashSet<String> = HashSet::new();
     let mut written: Vec<(usize, &str)> = Vec::new();
     let mut seen: HashSet<&str> = HashSet::new();
     let mut deletes: HashMap<&str, usize> = HashMap::new();
     for (at, op) in ops.iter().enumerate() {
         match op {
             NodeOp::Add { node, .. } if !node.id.is_empty() => {
-                own.insert(&node.id);
+                own.insert(node.id.clone());
             }
-            NodeOp::Copy { as_id: Some(id), .. } => {
-                own.insert(id);
+            NodeOp::Copy { id: from, as_id, rename, .. } => {
+                // Its root, the one `as` or a rename names, and the ids it makes inside it.
+                let Some(root) = as_id.clone().or_else(|| renamed(from, rename.as_ref())) else { continue };
+                let inside: Vec<String> = tx.prepare_cached(SUBTREE_IDS).bus()?
+                    .query_map(params![design, from, MAX_DEPTH as i64], |r| r.get(0)).bus()?
+                    .collect::<rusqlite::Result<_>>().bus()?;
+                own.extend(inside.iter().filter_map(|id| copy_id_renamed(from, &root, id, rename.as_ref())));
+                own.insert(root);
             }
             NodeOp::Update { id, .. } | NodeOp::Move { id, .. } | NodeOp::Delete { id } if !own.contains(id.as_str()) => {
                 if seen.insert(id) {

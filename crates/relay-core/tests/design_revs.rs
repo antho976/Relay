@@ -836,3 +836,32 @@ fn changes_are_announced_with_the_ids_they_touched() {
     let ev = changed_events(&mut rx).remove(0);
     assert!(ev.get("touched").is_none() && ev.get("prev_rev").is_none(), "{ev}");
 }
+
+/// A copy sent against an older rev counts the ids it makes as the list's own, root and inside,
+/// by `as` or by a rename: an edit of one of them after it edits the copy, whatever was removed
+/// under that id since.
+#[test]
+fn a_copy_against_an_older_rev_owns_what_it_makes() {
+    let (e, _root) = project();
+    let d = create(&e);
+    apply(&e, d, json!([
+        {"op": "add", "node": {"id": "card", "parent": "page-1", "kind": "frame", "w": 200, "h": 100}},
+        {"op": "add", "node": {"id": "card-title", "parent": "card", "kind": "text", "text": "Hi"}},
+        {"op": "copy", "id": "card", "as": "card-2", "dx": 300},
+    ]));
+    let base = ok(&e, "design.get", json!({"design_id": d, "pages_only": true}))["design"]["rev"].as_i64().unwrap();
+    apply(&e, d, json!([{"op": "delete", "id": "card-2"}]));
+    apply_at(&e, d, base, json!([
+        {"op": "copy", "id": "card", "as": "card-2", "dx": 300},
+        {"op": "update", "id": "card-2-title", "set": {"text": "Copy"}},
+    ]));
+    let base = ok(&e, "design.get", json!({"design_id": d, "pages_only": true}))["design"]["rev"].as_i64().unwrap();
+    apply(&e, d, json!([{"op": "delete", "id": "card-2"}]));
+    apply_at(&e, d, base, json!([
+        {"op": "copy", "id": "card", "rename": {"card": "card-2"}, "dx": 300},
+        {"op": "update", "id": "card-2-title", "set": {"text": "Again"}},
+    ]));
+    let got = ok(&e, "design.get", json!({"design_id": d}));
+    let title = got["nodes"].as_array().unwrap().iter().find(|n| n["id"] == "card-2-title").cloned().unwrap();
+    assert_eq!(title["text"], "Again");
+}
