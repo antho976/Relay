@@ -21,6 +21,9 @@ struct Center {
     /// When the popover last closed. A press on the bell that closes an open popover reaches
     /// the bell too; without this it would open the popover again at once.
     closed_at: Cell<i64>,
+    /// The rows on the list by notification id, with what each was drawn from: a refresh
+    /// during a burst rebuilds only the rows that changed, so the others stay under the pointer.
+    rows: RefCell<std::collections::HashMap<i64, (String, gtk::Box)>>,
 }
 
 thread_local! {
@@ -72,6 +75,7 @@ pub(super) fn install(ui: &Rc<Ui>, key: &gtk::Button) {
         loading: Cell::new(false),
         stale: Cell::new(false),
         closed_at: Cell::new(0),
+        rows: RefCell::default(),
     });
     let weak = Rc::downgrade(&center);
     center.popover.connect_closed(move |_| {
@@ -164,6 +168,7 @@ impl Center {
 
     fn placeholder(&self, title: &str, detail: &str) {
         clear(&self.list);
+        self.rows.borrow_mut().clear();
         let empty = gtk::Box::new(gtk::Orientation::Vertical, 4);
         empty.add_css_class("notification-empty");
         let glyph = crate::icons::image_with_stroke("bell", 20, 1.25);
@@ -198,8 +203,19 @@ impl Center {
             );
             return;
         }
-        clear(&self.list);
+        // A placeholder, or rows without an id, go; rows still listed stay where they are.
+        let mut rows = std::mem::take(&mut *self.rows.borrow_mut());
+        let mut child = self.list.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            if !rows.values().any(|(_, row)| row.upcast_ref::<gtk::Widget>() == &widget) {
+                self.list.remove(&widget);
+            }
+        }
         let projects = ui.projects.borrow();
+        let here = ui.project.get();
+        let mut kept = std::collections::HashMap::new();
+        let mut previous: Option<gtk::Widget> = None;
         for item in entries {
             let project = item["project_id"].as_i64().and_then(|id| {
                 projects
@@ -207,8 +223,31 @@ impl Center {
                     .find(|p| p["id"].as_i64() == Some(id))
                     .map(|p| text(p, "name").to_string())
             });
-            self.list.append(&self.row(item, project.as_deref()));
+            // Its "5m" too, so a kept row's age does not stand still.
+            let when = crate::relative::ago(text(item, "created_at"), crate::relative::Form::Compact).unwrap_or_default();
+            let key = format!("{item}|{project:?}|{here}|{when}");
+            let id = item["id"].as_i64().unwrap_or(0);
+            let row = match rows.remove(&id) {
+                Some((drawn, row)) if drawn == key => row,
+                old => {
+                    if let Some((_, old)) = old {
+                        self.list.remove(&old);
+                    }
+                    self.row(item, project.as_deref())
+                }
+            };
+            if row.parent().is_some() {
+                self.list.reorder_child_after(&row, previous.as_ref());
+            } else {
+                self.list.insert_child_after(&row, previous.as_ref());
+            }
+            previous = Some(row.clone().upcast());
+            kept.insert(id, (key, row));
         }
+        for (_, (_, gone)) in rows {
+            self.list.remove(&gone);
+        }
+        *self.rows.borrow_mut() = kept;
     }
 
     fn row(self: &Rc<Self>, item: &Value, project: Option<&str>) -> gtk::Box {

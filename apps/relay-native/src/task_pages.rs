@@ -1750,8 +1750,16 @@ impl Detail {
         let description = key(&[field("body"), field("created_at"), format!("{creator:?}")]);
         let attachments = key(&[field("attachments")]);
         // A title or description being typed is never rebuilt under the person: the part
-        // catches up when its editor is saved or cancelled.
-        let typing = |part: &str| self.editing.borrow().iter().any(|(p, changed)| *p == part && changed());
+        // catches up when its editor is saved or cancelled. Saved, its text is the task's own,
+        // and the part is rebuilt (closing the editor) as before.
+        let typing = |part: &str| {
+            let open = self.editing.borrow().iter().any(|(p, changed)| *p == part && changed());
+            let landed = match part {
+                "title" => self.typed_title().is_some_and(|typed| typed.trim() == text(&task, "title")),
+                _ => self.typed_body().is_some_and(|typed| typed == text(&task, "body")),
+            };
+            open && !landed
+        };
         let children: Vec<i64> = rows(&task, "children").iter().filter_map(Value::as_i64).collect();
         let subtasks = key(&[field("children"), field("depth"), field("project_id"), format!("{:?}", children.iter().map(|c| title_of(Some(*c))).collect::<Vec<_>>())]);
         let timeline = self.timeline_key();
@@ -1838,6 +1846,16 @@ impl Detail {
                 field.grab_focus();
             }
         }
+    }
+
+    /// What the title editor holds, while it is drawn.
+    fn typed_title(&self) -> Option<String> {
+        widgets(&self.header).into_iter().find(|w| w.widget_name() == "task-title").and_downcast::<gtk::Entry>().map(|e| e.text().to_string())
+    }
+
+    /// What the description editor holds, while it is drawn.
+    fn typed_body(&self) -> Option<String> {
+        widgets(&self.main).into_iter().find(|w| w.widget_name() == "task-body").and_downcast::<gtk::TextView>().map(|v| buffer_text(&v.buffer()))
     }
 
     /// The add field by that name, as drawn now.

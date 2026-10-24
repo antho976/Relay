@@ -55,20 +55,24 @@ async fn task_page_keeps_typing(ui: &Rc<Ui>) -> Result<(), String> {
     require(entry(ui, "task-title")?.text() == "A title being typed", "The title being typed was rebuilt away")?;
     require(typed(&view(ui, "task-body")?) == "A description being typed", "The description being typed was rebuilt away")?;
 
-    // A page with an edit open refuses to close; cancelling both edits catches up and closes.
+    // A page with an edit open refuses to close.
     let panel = ui.panels.borrow().last().cloned().ok_or("Task page is not a panel")?;
     panel.close();
     require(!ui.panels.borrow().is_empty(), "A page with typed edits closed")?;
-    for cancel in ["Cancel", "Cancel"] {
-        let key = find(ui.window.upcast_ref(), &|w| {
-            w.downcast_ref::<gtk::Button>().is_some_and(|b| b.label().as_deref() == Some(cancel) && b.is_mapped())
-        })
-        .and_downcast::<gtk::Button>()
-        .ok_or("Cancel key")?;
-        key.emit_clicked();
-    }
+    // Saved, the title is the task's own: its editor closes and holds the page no longer.
+    click(&ui.window, "draft-save")?;
+    wait_for(|| named(&ui.window, "task-title").is_none_or(|w| !w.is_mapped()), "The saved title's editor closes").await?;
+    let stored = call(ui, "task.get", json!({"task_id":id})).await?;
+    require(stored["title"] == "A title being typed", "The title was saved")?;
+    // Cancelling the description catches up with the attachment, and the page closes.
+    let key = find(ui.window.upcast_ref(), &|w| {
+        w.downcast_ref::<gtk::Button>().is_some_and(|b| b.label().as_deref() == Some("Cancel") && b.is_mapped())
+    })
+    .and_downcast::<gtk::Button>()
+    .ok_or("Cancel key")?;
+    key.emit_clicked();
     panel.close();
-    require(ui.panels.borrow().is_empty(), "The page closes once its edits are cancelled")?;
+    require(ui.panels.borrow().is_empty(), "The page closes once its edits are saved or cancelled")?;
     println!("Task page keeps a title and description being typed across a move and an attachment");
     Ok(())
 }

@@ -40,7 +40,9 @@ pub async fn run(
 }
 
 /// The decoder thread: one libavcodec context for the whole session, rotations included. It ends
-/// when the pump drops its end of `units`, or the view stops taking pictures.
+/// when the pump drops its end of `units`, which aborting the pump (the view's teardown) does.
+/// It holds a receiver of `frames` itself (`stale`, to drop the picture nobody took), so that
+/// channel never reads as closed while it runs: the view letting go is not what stops it.
 fn spawn_decoder(
     units: async_channel::Receiver<Unit>,
     frames: async_channel::Sender<Picture>,
@@ -68,9 +70,8 @@ fn spawn_decoder(
                                 trace!(stage = "stale", mono_ns = trace::monotonic(), mirror_id = old.mirror, seq = old.seq);
                             }
                         }
-                        if frames.try_send(picture).is_err() && frames.is_closed() {
-                            return;
-                        }
+                        // Full only if the view took nothing since the stale one went: dropped.
+                        let _ = frames.try_send(picture);
                     }
                     Ok(None) => trace!(stage = "nopic", mono_ns = trace::monotonic(), mirror_id = unit.mirror, seq = unit.seq, in_ns = started),
                     Err(avcodec::Damaged(code)) => {

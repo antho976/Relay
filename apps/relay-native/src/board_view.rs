@@ -499,6 +499,7 @@ pub fn modules(ui: &Rc<Ui>, body: &gtk::Box, modules: &[Value]) {
 /// then its open and done counts and when it last changed.
 fn module_card(ui: &Rc<Ui>, module: &Value, total: i64, count_of: &dyn Fn(&Value, &str) -> i64) -> gtk::Button {
     let card = button("", "module-card");
+    card.set_widget_name(&format!("module-card-{}", module["id"]));
     if module["completed_at"].is_string() {
         card.add_css_class("module-complete");
     }

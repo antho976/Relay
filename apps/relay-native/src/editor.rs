@@ -635,6 +635,14 @@ impl Editor {
     }
     /// Unsaved edits, or a write or Git operation in flight. A file that is only loading is
     /// not dirty: whatever replaces the document bumps `revision`, which drops the load.
+    /// A save or Git action is running, which nothing should interrupt.
+    pub fn is_dirty_besides_edits(&self) -> bool {
+        self.writing.get() || self.git_busy.get()
+    }
+    /// Typed edits not yet saved, which a question (Save / Don't Save) can settle.
+    pub fn is_modified(&self) -> bool {
+        self.buffer.is_modified()
+    }
     pub fn is_dirty(&self) -> bool {
         self.buffer.is_modified() || self.writing.get() || self.git_busy.get()
     }
@@ -657,7 +665,7 @@ impl Editor {
     /// save lands; Don't Save puts the file back as it was read first, so an open that fails
     /// leaves no edits passing for saved. Without edits it runs at once, and a save or Git
     /// action in flight is waited for.
-    fn after_unsaved(self: &Rc<Self>, ui: &Rc<Ui>, then: impl FnOnce(&Rc<Self>, &Rc<Ui>) + 'static) {
+    pub(crate) fn after_unsaved(self: &Rc<Self>, ui: &Rc<Ui>, then: impl FnOnce(&Rc<Self>, &Rc<Ui>) + 'static) {
         if let Some(refusal) = self.replace_refusal(None) {
             ui.show_error(refusal);
             return;

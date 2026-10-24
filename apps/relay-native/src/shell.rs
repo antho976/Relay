@@ -41,6 +41,13 @@ impl Ui {
             if !self.dismiss_panels() {
                 return;
             }
+            // Edits ask Save / Don't Save / Cancel, as opening another file does; a save or
+            // Git action in flight is waited for.
+            if self.editor.is_modified() && !self.editor.is_dirty_besides_edits() {
+                let page = page.map(str::to_string);
+                self.editor.after_unsaved(self, move |_, ui| ui.enter_project(project, page.as_deref()));
+                return;
+            }
             if self.editor.is_dirty() {
                 self.show_error("Save or discard editor changes before switching projects.");
                 return;
