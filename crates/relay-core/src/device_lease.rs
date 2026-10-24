@@ -618,6 +618,9 @@ fn adb_command(args: &[String], serial: Option<&str>) -> Option<DeviceCommand> {
             }
             "-H" | "-P" | "-L" => index += 2,
             flag if flag.starts_with('-') => index += 1,
+            // `adb wait-for-device install …` (and wait-for-usb-…, -recovery, -sideload…) waits,
+            // then runs the rest: the command is what follows.
+            wait if wait.starts_with("wait-for-") && index + 1 < args.len() => index += 1,
             _ => break,
         }
     }
@@ -754,6 +757,11 @@ mod tests {
         assert!(device("adb shell 'wm size; input keyevent 3'").is_some());
         assert!(device("timeout 600 npx expo run:android --device R5CT").unwrap().0 == "R5CT");
         assert!(device("adb uninstall com.example").is_some());
+        // Waiting for the device first changes nothing about what runs after.
+        assert_eq!(device("adb wait-for-device install app.apk").unwrap(), (ANY_DEVICE.into(), "adb install app.apk".into()));
+        assert_eq!(device("adb -s R5CT wait-for-usb-device shell am start -n x/.Main").unwrap().0, "R5CT");
+        assert!(device("adb wait-for-device").is_none(), "only waiting, nothing to lease");
+        assert!(device("adb wait-for-device shell getprop ro.build.version.sdk").is_none());
         // Any service's command writes unless it is a known read; a program named by its path
         // is that program; `sh -c` on the device is read inside; no command at all is a shell
         // fed on stdin (or a person's), which can do anything.

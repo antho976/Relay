@@ -2042,10 +2042,57 @@ pub fn open(ui: &Rc<Ui>, id: i64) {
             return;
         }
         match read {
-            Ok(read) => draw_thread(&read),
+            Ok(read) => draw_thread(&read, None),
             Err(e) => failed_open(&ui, id, &super::pages::unavailable(&e)),
         }
     });
+}
+
+/// The key above a long thread's first page: reads the page before it, and whatever arrived
+/// after what `read` holds, and draws the thread again from all of it, the view held where it
+/// was.
+fn earlier_key(read: &Value) -> gtk::Button {
+    let key = button("Show earlier messages", "");
+    key.set_halign(gtk::Align::Center);
+    let read = read.clone();
+    key.connect_clicked(move |key| {
+        let (Some(ui), Some(id)) = (the_ui(), current()) else { return };
+        let messages = read["messages"].as_array().cloned().unwrap_or_default();
+        let (Some(first), Some(last)) = (messages.first().and_then(|m| m["id"].as_i64()), messages.last().and_then(|m| m["id"].as_i64())) else { return };
+        key.set_sensitive(false);
+        key.set_label("Reading…");
+        let (key, thread) = (key.clone(), read["thread"].clone());
+        glib::spawn_future_local(async move {
+            let older = ui.call("thread.get", json!({"id": id, "before": first})).await;
+            let mut newer = Vec::new();
+            let mut after = last;
+            loop {
+                let Ok(page) = ui.call("thread.get", json!({"id": id, "after": after})).await else { break };
+                let got = page["messages"].as_array().cloned().unwrap_or_default();
+                after = got.last().and_then(|m| m["id"].as_i64()).unwrap_or(after);
+                newer.extend(got);
+                if page["later"] != true {
+                    break;
+                }
+            }
+            if current() != Some(id) {
+                return;
+            }
+            let Ok(older) = older else {
+                key.set_sensitive(true);
+                key.set_label("Could not read them. Try again");
+                return;
+            };
+            let mut all = older["messages"].as_array().cloned().unwrap_or_default();
+            all.extend(messages);
+            all.extend(newer);
+            let Some(v) = view() else { return };
+            let adj = v.scroll.vadjustment();
+            let from_bottom = adj.upper() - adj.value();
+            draw_thread(&json!({"thread": thread, "messages": all, "earlier": older["earlier"]}), Some(from_bottom));
+        });
+    });
+    key
 }
 
 /// A thread that could not be read: why, in the column, and a key to read it again.
@@ -2066,7 +2113,9 @@ fn failed_open(ui: &Rc<Ui>, id: i64, why: &str) {
     v.column.append(&again);
 }
 
-fn draw_thread(read: &Value) {
+/// Draw a thread as `thread.get` read it, landing on its newest message, or with `hold` this far
+/// above the end of the conversation (after earlier messages were added above what was shown).
+fn draw_thread(read: &Value, hold: Option<f64>) {
     let Some(v) = view() else { return };
     clear(&v.column);
     STATE.with(|s| {
@@ -2077,11 +2126,20 @@ fn draw_thread(read: &Value) {
         *s.group.borrow_mut() = None;
     });
     header(&v, &read["thread"]);
+    // A long thread is read its newest messages first (about 1 MiB); the rest a key away.
+    if read["earlier"] == true {
+        v.column.append(&earlier_key(read));
+    }
     for message in read["messages"].as_array().into_iter().flatten() {
         draw_message(&v, message);
     }
     if !STATE.with(|s| s.working.get()) {
         settle_tools();
+    }
+    if let Some(from_bottom) = hold {
+        hold_from_bottom(&v, from_bottom);
+        v.input.grab_focus();
+        return;
     }
     show_history(&v);
     stick_to_bottom(&v, true);
@@ -3759,7 +3817,9 @@ fn age(updated_at: &str) -> &'static str {
     let Ok(then) = then.to_local() else { return "Earlier" };
     let day = |d: &glib::DateTime| glib::DateTime::from_local(d.year(), d.month(), d.day_of_month(), 0, 0, 0.0).ok();
     let (Some(then), Some(today)) = (day(&then), day(&now)) else { return "Earlier" };
-    match today.difference(&then).as_days() {
+    // Hours over 24, rounded: across a daylight-saving change a day is 23 or 25 hours, and
+    // whole days counted down put yesterday's threads under Today (as `days_between` does).
+    match (today.difference(&then).as_hours() as f64 / 24.0).round() as i64 {
         ..=0 => "Today",
         1 => "Yesterday",
         2..=6 => "This week",
@@ -4003,11 +4063,7 @@ fn refresh_arbiter(ui: &Rc<Ui>, v: &View) {
         clear(&v.panel_body);
         match read {
             Ok(value) => super::arbiter::panel_draw(&ui, &v.panel_body, tab, &value),
-            Err(e) => {
-                let l = label(&super::arbiter::said(&e), "money-muted");
-                l.set_wrap(true);
-                v.panel_body.append(&l);
-            }
+            Err(e) => panel_failed(&ui, &v.panel_body, &super::arbiter::said(&e)),
         }
     });
 }
@@ -4044,13 +4100,25 @@ fn refresh_avex(ui: &Rc<Ui>, v: &View) {
         clear(&v.panel_body);
         match read {
             Ok(value) => super::avex::panel_draw(&ui, &v.panel_body, tab, &value),
-            Err(e) => {
-                let l = label(&super::avex::said(&e), "money-muted");
-                l.set_wrap(true);
-                v.panel_body.append(&l);
-            }
+            Err(e) => panel_failed(&ui, &v.panel_body, &super::avex::said(&e)),
         }
     });
+}
+
+/// A panel read that failed: why, and a key to read it again, as every page has (`failed`).
+fn panel_failed(ui: &Rc<Ui>, body: &gtk::Box, why: &str) {
+    let l = label(why, "money-muted");
+    l.set_wrap(true);
+    body.append(&l);
+    let again = button("Try again", "money-secondary");
+    again.set_halign(gtk::Align::Start);
+    let weak = Rc::downgrade(ui);
+    again.connect_clicked(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            refresh_panel(&ui);
+        }
+    });
+    body.append(&again);
 }
 
 /// Re-read the panel's view, Tally's, Arbiter's or Avex's, if it is open. Only the newest read
@@ -4116,9 +4184,7 @@ pub fn refresh_panel(ui: &Rc<Ui>) {
                     }
                     e => super::pages::unavailable(e),
                 };
-                let l = label(&why, "money-muted");
-                l.set_wrap(true);
-                v.panel_body.append(&l);
+                panel_failed(&ui, &v.panel_body, &why);
             }
         }
     });
@@ -4475,6 +4541,7 @@ fn edit_budget(ui: &Rc<Ui>, anchor: &gtk::Button, b: &Value) {
 
     let commit = {
         let (weak, pop, field, error, save) = (Rc::downgrade(ui), pop.downgrade(), field.downgrade(), error.downgrade(), save.downgrade());
+        let name = name.clone();
         move || {
             let (Some(ui), Some(pop), Some(field), Some(error), Some(save)) = (weak.upgrade(), pop.upgrade(), field.upgrade(), error.upgrade(), save.upgrade()) else { return };
             let typed = field.text();
@@ -4490,13 +4557,36 @@ fn edit_budget(ui: &Rc<Ui>, anchor: &gtk::Button, b: &Value) {
                 return;
             }
             save.set_sensitive(false);
-            let mut payload = json!({"amount": value});
-            if let Some(id) = category {
-                payload["category_id"] = json!(id);
-            }
+            let payload = |amount: i64| match category {
+                Some(id) => json!({"amount": amount, "category_id": id}),
+                None => json!({"amount": amount}),
+            };
+            // Said, with Undo (the amount it had), as an entry's save is.
+            let said = if value > 0 {
+                format!("Budget for {name}: {}", super::formatter().format_whole(value))
+            } else {
+                format!("No budget for {name}")
+            };
+            let back = payload(amount);
+            let undo: super::Action = {
+                let weak = Rc::downgrade(&ui);
+                Rc::new(move || {
+                    let Some(ui) = weak.upgrade() else { return };
+                    let back = back.clone();
+                    glib::spawn_future_local(async move {
+                        if let Err(e) = ui.call("money.budget.set", back).await {
+                            ui.show_error(&super::pages::unavailable(&e));
+                        }
+                    });
+                })
+            };
+            let set = payload(value);
             glib::spawn_future_local(async move {
-                match ui.call("money.budget.set", payload).await {
-                    Ok(_) => pop.popdown(),
+                match ui.call("money.budget.set", set).await {
+                    Ok(_) => {
+                        pop.popdown();
+                        super::toast(&ui, &said, Some(undo));
+                    }
                     Err(e) => {
                         error.set_text(&super::pages::unavailable(&e));
                         error.set_visible(true);
@@ -4585,15 +4675,16 @@ fn entry_row(ui: &Rc<Ui>, tx: &Value, dated: bool) -> gtk::Button {
     key
 }
 
-/// The Entries view: the period's newest [`ENTRIES_SHOWN`] entries by day, in, out and net over
-/// them, and the key to the Entries page for the rest.
+/// The Entries view: the period's in, out and net (over all of it: `money.tx.list` totals every
+/// entry, listed or not), its newest [`ENTRIES_SHOWN`] entries by day, and the key to the
+/// Entries page for the rest.
 fn panel_entries(ui: &Rc<Ui>, body: &gtk::Box, page: &Value) {
     let rows: Vec<&Value> = page["transactions"].as_array().into_iter().flatten().collect();
     let fmt = super::formatter();
     let (income, spent) = (page["income"].as_i64().unwrap_or(0), page["spent"].as_i64().unwrap_or(0));
     let head = gtk::Box::new(gtk::Orientation::Vertical, 4);
     head.add_css_class("threads-summary");
-    // A full read is only the newest of the period, and its figures count only those.
+    // A full read lists only the newest of the period; its figures count all of it.
     let mut when = super::pages::period_name(&page["period"]);
     if rows.len() >= ENTRIES_SHOWN as usize {
         when.push_str(&format!(" · latest {ENTRIES_SHOWN}"));

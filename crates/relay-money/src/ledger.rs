@@ -549,8 +549,22 @@ impl Ledger {
             Self::tx_row,
         )?;
         let transactions: Vec<Tx> = rows.collect::<std::result::Result<_, _>>()?;
-        let income = transactions.iter().filter(|t| t.r#type == TxType::Income).map(|t| t.amount).sum();
-        let spent = transactions.iter().filter(|t| t.r#type == TxType::Expense).map(|t| t.amount).sum();
+        // Over every matching entry, not the `limit` listed: a panel that lists the newest 60
+        // still says what the period took in and spent.
+        let (income, spent) = self.conn.prepare_cached(
+            "SELECT COALESCE(SUM(CASE WHEN t.type = 'INCOME' THEN t.amount END), 0),
+                    COALESCE(SUM(CASE WHEN t.type = 'EXPENSE' THEN t.amount END), 0)
+             FROM transactions t
+             LEFT JOIN accounts a ON a.id = t.account_id
+             LEFT JOIN categories c ON c.id = t.category_id
+             WHERE t.deleted = 0 AND t.date >= ?1 AND t.date < ?2
+               AND (?3 = '' OR t.note GLOB ?3 OR COALESCE(c.name, '') GLOB ?3 OR COALESCE(a.name, '') GLOB ?3)
+               AND (?4 IS NULL OR t.account_id = ?4 OR t.to_account_id = ?4)
+               AND (?5 IS NULL OR t.category_id = ?5)",
+        )?.query_row(
+            params![period.start.to_string(), period.end_exclusive.to_string(), pattern, q.account_id, q.category_id],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+        )?;
         Ok(TxPage { period: PeriodView::of(&period, today), transactions, income, spent })
     }
 
@@ -652,7 +666,8 @@ impl Ledger {
         let date = p.date.clone().unwrap_or(cur.date);
         let account = p.account_id.unwrap_or(cur.account_id);
         let to = if ty == TxType::Transfer { p.to_account_id.or(cur.to_account_id) } else { None };
-        let category = if ty == TxType::Transfer {
+        // A transfer has none; `clear_category` without a category takes it off.
+        let category = if ty == TxType::Transfer || p.clear_category == Some(true) && p.category_id.is_none() {
             None
         } else if p.category_id.is_some() || p.r#type.is_none_or(|t| t == cur.r#type) {
             p.category_id.or(cur.category_id)
@@ -1036,6 +1051,10 @@ impl Ledger {
         if let Some(problem) = crate::backup::problem(file) {
             return invalid(problem);
         }
+        // The wrong file restored erases this ledger: a copy is kept first, as before a replace.
+        if self.holds_anything()? {
+            self.snapshot()?;
+        }
         let now = now_ms();
         let mut taken: HashSet<(&str, String)> = HashSet::new();
         let mut uid = |table: &'static str, kept: &Option<String>| -> String {
@@ -1044,14 +1063,23 @@ impl Ledger {
                 _ => new_uid(),
             }
         };
+        // A file silent on these leaves this ledger's own (backup.rs): `clear` drops every
+        // setting, so they are read first and written back. The sample, and an older backup
+        // without them, no longer put the budget month back on the 1st.
+        let month_start_day = self.setting("month_start_day")?;
+        let week_starts_monday = self.setting("week_starts_monday")?;
         let tx = self.conn.transaction()?;
         Ledger::clear(&tx, false)?;
         Ledger::set_setting(&tx, "currency", &file.currency)?;
-        if let Some(d) = file.month_start_day {
-            Ledger::set_setting(&tx, "month_start_day", &d.to_string())?;
+        match (file.month_start_day, &month_start_day) {
+            (Some(d), _) => Ledger::set_setting(&tx, "month_start_day", &d.to_string())?,
+            (None, Some(kept)) => Ledger::set_setting(&tx, "month_start_day", kept)?,
+            (None, None) => {}
         }
-        if let Some(m) = file.week_starts_monday {
-            Ledger::set_setting(&tx, "week_starts_monday", if m { "1" } else { "0" })?;
+        match (file.week_starts_monday, &week_starts_monday) {
+            (Some(m), _) => Ledger::set_setting(&tx, "week_starts_monday", if m { "1" } else { "0" })?,
+            (None, Some(kept)) => Ledger::set_setting(&tx, "week_starts_monday", kept)?,
+            (None, None) => {}
         }
         for a in &file.accounts {
             tx.prepare_cached(
@@ -1290,7 +1318,12 @@ impl Ledger {
     }
 
     /// Erases everything, settings included.
+    /// Erases the whole ledger, a copy of it kept first ([`Ledger::snapshot`]) as a sync replace
+    /// keeps one: an erase has no Undo.
     pub fn reset(&mut self) -> Result<()> {
+        if self.holds_anything()? {
+            self.snapshot()?;
+        }
         let tx = self.conn.transaction()?;
         Ledger::clear(&tx, false)?;
         tx.commit()?;
@@ -1484,6 +1517,35 @@ mod tests {
         assert!(l.tx_add(&base).is_ok());
     }
 
+    /// An absent category keeps the entry's; `clear_category` takes it off, so an Undo can put
+    /// back an entry that had none. Beside a category, the category wins.
+    #[test]
+    fn an_edit_can_take_a_category_off() {
+        let (mut l, acct) = with_account();
+        let dining = category(&l, "Dining");
+        let t = spend(&mut l, acct, dining, 20_00, "2026-10-02");
+        let kept = l.tx_update(t.id, &TxPatch { amount: Some(21_00), ..Default::default() }).unwrap();
+        assert_eq!(kept.category_id, Some(dining));
+        let cleared = l.tx_update(t.id, &TxPatch { clear_category: Some(true), ..Default::default() }).unwrap();
+        assert_eq!(cleared.category_id, None);
+        let both = l.tx_update(t.id, &TxPatch { category_id: Some(dining), clear_category: Some(true), ..Default::default() }).unwrap();
+        assert_eq!(both.category_id, Some(dining));
+    }
+
+    /// A page cut short by its limit still says what the whole period took in and spent.
+    #[test]
+    fn a_short_page_still_totals_the_period() {
+        let (mut l, acct) = with_account();
+        let dining = category(&l, "Dining");
+        for day in 1..=5 {
+            spend(&mut l, acct, dining, 10_00, &format!("2026-10-0{day}"));
+        }
+        let page = l.tx_list(&TxQuery { limit: Some(2), ..Default::default() }, date(2026, 10, 6)).unwrap();
+        assert_eq!((page.transactions.len(), page.spent), (2, 50_00));
+        let found = l.tx_list(&TxQuery { query: Some("dining".into()), limit: Some(1), ..Default::default() }, date(2026, 10, 6)).unwrap();
+        assert_eq!(found.spent, 50_00, "the filters count, the limit does not");
+    }
+
     #[test]
     fn edits_and_deletes_change_the_reading() {
         let (mut l, acct) = with_account();
@@ -1538,6 +1600,24 @@ mod tests {
         let t = spend(&mut l, acct, c, 20_00, "2026-10-02");
         let t = l.tx_update(t.id, &TxPatch { r#type: Some(TxType::Income), ..Default::default() }).unwrap();
         assert_eq!(t.category_id, None);
+    }
+
+    /// A file that says nothing of the month's start day or the week's leaves this ledger's own,
+    /// as a restore leaves the phone's; one that says replaces them.
+    #[test]
+    fn a_restore_silent_on_the_month_start_keeps_this_ledgers() {
+        let mut l = Ledger::open_in_memory().unwrap();
+        l.set_month_start_day(15).unwrap();
+        Ledger::set_setting(&l.conn, "week_starts_monday", "1").unwrap();
+        let today = date(2026, 10, 4);
+        let mut sample = crate::sample_data::build(today, 2, "CAD", crate::sample_data::DEFAULT_SEED);
+        (sample.month_start_day, sample.week_starts_monday) = (None, None);
+        l.import_backup(&sample).unwrap();
+        let settings = l.settings().unwrap();
+        assert_eq!((settings.month_start_day, settings.week_starts_monday), (15, true));
+        sample.month_start_day = Some(3);
+        l.import_backup(&sample).unwrap();
+        assert_eq!(l.settings().unwrap().month_start_day, 3);
     }
 
     #[test]

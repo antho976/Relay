@@ -466,7 +466,7 @@ fn sessions_install_git_and_claude_hooks_without_clobbering_local_settings() {
         let groups = settings["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(groups.len(), 2);
         assert!(groups.iter().any(|group| group["matcher"] == "Edit|Write|MultiEdit|Bash"));
-        for event in ["SessionStart", "PostToolUse", "Stop", "Notification"] {
+        for event in ["SessionStart", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop", "Notification"] {
             let groups = settings["hooks"][event].as_array().unwrap();
             assert_eq!(groups.len(), 1, "Relay installed {event} reporting");
             assert!(groups[0]["hooks"][0]["command"].as_str().unwrap().contains("hook claude-report"));
@@ -494,7 +494,7 @@ fn sessions_install_git_and_claude_hooks_without_clobbering_local_settings() {
     let groups = settings["hooks"]["PreToolUse"].as_array().unwrap();
     assert_eq!(groups.len(), 1, "close removed only Relay's Claude hook");
     assert_eq!(groups[0]["matcher"], "Read");
-    for event in ["SessionStart", "PostToolUse", "Stop", "Notification"] {
+    for event in ["SessionStart", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop", "Notification"] {
         assert!(settings["hooks"][event].as_array().unwrap().is_empty(), "close removed Relay's {event} hook");
     }
     assert!(!worktree.join(".relay/relay.mcp.json").exists(), "close removed Relay's MCP config");

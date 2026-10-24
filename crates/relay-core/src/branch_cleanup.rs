@@ -328,11 +328,15 @@ fn keepers_in(dir: &Path, shown: &str, depth: usize, budget: &mut usize, keepers
 
 /// Decide one candidate and, unless `dry_run`, act on it.
 pub fn evaluate(candidate: &Candidate, live_worktrees: &[String], options: &Options) -> BranchCleanupRow {
-    evaluate_as(candidate, live_worktrees, options, false)
+    evaluate_as(candidate, live_worktrees, options, false, &|path| crate::disk_sweep::someone_inside(path).then(|| "a process is working in it".into()))
 }
 
 /// [`evaluate`], keeping any checkout that still holds the branch when `keep_worktree`.
-fn evaluate_as(candidate: &Candidate, live_worktrees: &[String], options: &Options, keep_worktree: bool) -> BranchCleanupRow {
+/// `in_use` is asked about a checkout just before it is removed, with nothing locked: why it is
+/// in use now, if it is. The open sessions were read once for the whole sweep, which can run
+/// for minutes on `gh` calls; a session made since, the other instance's, or a person's shell
+/// inside the checkout would otherwise lose it from under them.
+fn evaluate_as(candidate: &Candidate, live_worktrees: &[String], options: &Options, keep_worktree: bool, in_use: &dyn Fn(&Path) -> Option<String>) -> BranchCleanupRow {
     let git = Git { repo: &candidate.repo };
     let branch = candidate.branch.as_str();
     let mut row = BranchCleanupRow {
@@ -436,7 +440,10 @@ fn evaluate_as(candidate: &Candidate, live_worktrees: &[String], options: &Optio
     row.reason = merged.reason;
     row.merged = true;
 
-    if let Some(path) = &removable {
+    // A pooled folder deleted by hand leaves only git's record of it: nothing in it to keep,
+    // and `status` in it fails, which kept the branch at every sweep for good.
+    let folder_gone = removable.as_ref().is_some_and(|path| !path.exists());
+    if let Some(path) = removable.as_ref().filter(|_| !folder_gone) {
         if keep_worktree {
             return kept(row.clone(), format!("{}, but it is checked out at {}, which was kept at close", row.reason, path.display()));
         }
@@ -459,7 +466,15 @@ fn evaluate_as(candidate: &Candidate, live_worktrees: &[String], options: &Optio
         row.outcome = "would_delete".into();
         return row;
     }
-    if let Some(path) = &removable {
+    if folder_gone {
+        if let Err(error) = git.run(&["worktree", "prune"], GIT_TIMEOUT).map_err(|e| e.to_string()).and_then(|ran| if ran.ok { Ok(()) } else { Err(ran.err) }) {
+            return kept(row.clone(), format!("{}, but its deleted checkout could not be pruned: {error}", row.reason));
+        }
+        row.removed_worktree = true;
+    } else if let Some(path) = &removable {
+        if let Some(why) = in_use(path) {
+            return kept(row.clone(), format!("{}, but {} is in use now: {why}", row.reason, path.display()));
+        }
         if let Err(error) = worktree::remove(&candidate.repo, path, true) {
             return kept(row.clone(), format!("{}, but removing {} failed: {error}", row.reason, path.display()));
         }
@@ -524,10 +539,11 @@ fn evaluate_as(candidate: &Candidate, live_worktrees: &[String], options: &Optio
 type SweepMemo = HashMap<(PathBuf, String), (String, Instant, Duration)>;
 static SWEPT: Mutex<Option<SweepMemo>> = Mutex::new(None);
 
-/// One `for-each-ref` per repo for a sweep: every Relay branch tip and the base's two refs.
+/// One `for-each-ref` per repo for a sweep: every Relay branch tip, the local base and the base
+/// on every remote (a branch is judged against its own remote's, which need not be `origin`).
 /// What a branch is judged by is in here, so an unchanged one needs no git at all.
 fn sweep_refs(repo: &Path, base: &str) -> Option<HashMap<String, String>> {
-    let (local, remote) = (format!("refs/heads/{base}"), format!("refs/remotes/origin/{base}"));
+    let (local, remote) = (format!("refs/heads/{base}"), format!("refs/remotes/*/{base}"));
     let ran = Git { repo }.run(&["for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/relay/", &local, &remote], GIT_TIMEOUT).ok()?;
     ran.ok.then(|| ran.out.lines().filter_map(|line| line.split_once(' ')).map(|(name, sha)| (name.to_string(), sha.to_string())).collect())
 }
@@ -564,7 +580,12 @@ fn run_as(engine: &Engine, project_id: Option<Id>, only: Option<&[String]>, opti
                         continue;
                     };
                     let base = |name: String| refs.get(&name).map(String::as_str).unwrap_or("");
-                    let judged_by = format!("{tip} {} {}", base(format!("refs/heads/{}", candidate.base)), base(format!("refs/remotes/origin/{}", candidate.base)));
+                    let mut remotes: Vec<&str> = refs.iter()
+                        .filter(|(name, _)| name.starts_with("refs/remotes/") && name.ends_with(&format!("/{}", candidate.base)))
+                        .map(|(_, sha)| sha.as_str())
+                        .collect();
+                    remotes.sort_unstable();
+                    let judged_by = format!("{tip} {} {}", base(format!("refs/heads/{}", candidate.base)), remotes.join(" "));
                     let memo = SWEPT.lock().unwrap_or_else(|poison| poison.into_inner());
                     if memo.as_ref().and_then(|memo| memo.get(&memo_key)).is_some_and(|(seen, next, _)| *seen == judged_by && Instant::now() < *next) {
                         continue;
@@ -575,7 +596,17 @@ fn run_as(engine: &Engine, project_id: Option<Id>, only: Option<&[String]>, opti
             },
             false => None,
         };
-        let row = evaluate_as(candidate, live.get(&candidate.project_id).map(Vec::as_slice).unwrap_or_default(), options, keep_worktrees);
+        let in_use = |path: &Path| -> Option<String> {
+            let open: Vec<String> = engine.store.lock()
+                .prepare_cached("SELECT worktree FROM sessions WHERE state != 'closed' AND worktree != ''")
+                .and_then(|mut statement| statement.query_map([], |r| r.get::<_, String>(0))?.collect())
+                .unwrap_or_else(|_| vec![path.display().to_string()]);
+            if open.iter().any(|live| canon(Path::new(live)) == canon(path)) {
+                return Some("an open session works in it".into());
+            }
+            crate::disk_sweep::someone_inside(path).then(|| "a process is working in it".into())
+        };
+        let row = evaluate_as(candidate, live.get(&candidate.project_id).map(Vec::as_slice).unwrap_or_default(), options, keep_worktrees, &in_use);
         if row.outcome == "gone" { continue; }
         if let Some(judged_by) = judged_by {
             let mut memo = SWEPT.lock().unwrap_or_else(|poison| poison.into_inner());

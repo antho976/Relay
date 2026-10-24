@@ -2056,7 +2056,7 @@
       }
     },
     "session.report": {
-      "summary": "Provider hooks calling home: session_start | tool_use | stop | notification | idle | blocked",
+      "summary": "Provider hooks calling home: session_start | tool_use | prompt | stop | notification | idle | blocked",
       "kind": "mutation",
       "audit": "agent_only",
       "undo": "none",
@@ -4914,7 +4914,7 @@
       "audit": "always",
       "undo": "none",
       "scope": "global",
-      "actors": "all",
+      "actors": "user_only",
       "doors": "all",
       "emits": [],
       "since": "1.0",
@@ -5219,7 +5219,7 @@
       }
     },
     "thread.get": {
-      "summary": "One thread and its messages, oldest first",
+      "summary": "One thread and its newest messages (about 1 MiB), oldest first",
       "kind": "query",
       "audit": "never",
       "undo": "none",
@@ -19359,11 +19359,13 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/MoneyTx"
-          }
+          },
+          "description": "The newest matching entries, at most the query's `limit`."
         },
         "income": {
           "type": "integer",
           "format": "int64",
+          "description": "What every matching entry in the period took in and spent, listed or not.",
           "x-unit": "minor"
         },
         "spent": {
@@ -19676,6 +19678,13 @@
             "string",
             "null"
           ]
+        },
+        "clear_category": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True takes the category off (an absent `category_id` keeps it); ignored beside one."
         }
       },
       "required": [
@@ -21375,7 +21384,15 @@
             "null"
           ],
           "format": "int64",
-          "description": "Only the messages stored after this message id."
+          "description": "Only the messages stored after this message id, from the oldest on."
+        },
+        "before": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "Only the messages stored before this message id: the page before one already shown."
         }
       },
       "required": [
@@ -21392,12 +21409,23 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/ThreadMessage"
-          }
+          },
+          "description": "Oldest first, about 1 MiB of them at most: the newest, or with `after` the oldest after\nit. A tool answer longer than 8,000 characters is cut, and its body says `\"cut\": true`."
+        },
+        "earlier": {
+          "type": "boolean",
+          "description": "Older messages were left out: `before` the first id reads them."
+        },
+        "later": {
+          "type": "boolean",
+          "description": "Newer messages were left out (only with `after`): `after` the last id reads them."
         }
       },
       "required": [
         "thread",
-        "messages"
+        "messages",
+        "earlier",
+        "later"
       ]
     },
     "ThreadMessage": {
@@ -24773,6 +24801,10 @@
         "last_week": {
           "$ref": "#/$defs/GymWeek"
         },
+        "last_week_to_date": {
+          "$ref": "#/$defs/GymWeek",
+          "description": "Last week up to the same day as today: what this week so far compares with, since a\nTuesday's one workout against all of last week reads as a collapse every week."
+        },
         "weeks": {
           "type": "array",
           "items": {
@@ -24827,6 +24859,7 @@
         "totals",
         "this_week",
         "last_week",
+        "last_week_to_date",
         "weeks",
         "streak_weeks",
         "recent",
@@ -25684,6 +25717,13 @@
             "null"
           ],
           "description": "A lift by name, as Avex shows it; a unique part of the name is enough."
+        },
+        "today": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Count the periods back from this day (`YYYY-MM-DD`), as gym.summary's `today`: a copy\nread as of its export, whose charts would otherwise end in empty weeks."
         }
       },
       "description": "What [`series`] reads. Every field is optional."

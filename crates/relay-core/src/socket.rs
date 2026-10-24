@@ -463,17 +463,14 @@ impl Drop for WatchLease {
             }
             return;
         }
-        let runtime = {
-            let mut watch = self.engine.device_watch.lock().unwrap();
-            watch.clients = watch.clients.saturating_sub(1);
-            if watch.clients == 0 {
-                watch.runtime.take()
-            } else {
-                None
+        // Stopped under the lock, so no one ever reads `clients == 0` with the watcher still
+        // running. `stop()` only stores a flag and kills; nothing waits on the child here.
+        let mut watch = self.engine.device_watch.lock().unwrap();
+        watch.clients = watch.clients.saturating_sub(1);
+        if watch.clients == 0 {
+            if let Some(runtime) = watch.runtime.take() {
+                runtime.stop();
             }
-        };
-        if let Some(runtime) = runtime {
-            runtime.stop();
         }
     }
 }

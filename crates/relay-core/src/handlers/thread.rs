@@ -15,8 +15,8 @@ pub fn register(e: &mut Engine) {
     e.register_unlocked::<List>(|ctx, p| Ok(ListOut { threads: threads::list(ctx.engine(), threads::checked_kind(p.kind.as_deref())?)? }));
     e.register_unlocked::<Get>(|ctx, p| {
         let engine = ctx.engine();
-        let messages = threads::messages(engine, p.id, p.after)?;
-        Ok(GetOut { thread: threads::get(engine, p.id)?, messages })
+        let page = threads::page(engine, p.id, p.after, p.before)?;
+        Ok(GetOut { thread: threads::get(engine, p.id)?, messages: page.messages, earlier: page.earlier, later: page.later })
     });
     // A message's pictures are only looked up here, in `threads.db`; the agent is handed their
     // bytes after the handler (`threads::deliver`).

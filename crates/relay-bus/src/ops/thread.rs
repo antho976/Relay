@@ -69,11 +69,22 @@ op!(List, "thread.list", ListIn => ListOut, OpMeta::query(Scope::Global, 5, "Eve
 
 payload!(#[schemars(rename = "ThreadGetIn")] GetIn {
     pub id: Id,
-    /// Only the messages stored after this message id.
+    /// Only the messages stored after this message id, from the oldest on.
     pub after: Option<Id>,
+    /// Only the messages stored before this message id: the page before one already shown.
+    pub before: Option<Id>,
 });
-result!(#[schemars(rename = "ThreadGetOut")] GetOut { pub thread: ThreadView, pub messages: Vec<MessageView> });
-op!(Get, "thread.get", GetIn => GetOut, OpMeta::query(Scope::Global, 5, "One thread and its messages, oldest first"));
+result!(#[schemars(rename = "ThreadGetOut")] GetOut {
+    pub thread: ThreadView,
+    /// Oldest first, about 1 MiB of them at most: the newest, or with `after` the oldest after
+    /// it. A tool answer longer than 8,000 characters is cut, and its body says `"cut": true`.
+    pub messages: Vec<MessageView>,
+    /// Older messages were left out: `before` the first id reads them.
+    pub earlier: bool,
+    /// Newer messages were left out (only with `after`): `after` the last id reads them.
+    pub later: bool,
+});
+op!(Get, "thread.get", GetIn => GetOut, OpMeta::query(Scope::Global, 5, "One thread and its newest messages (about 1 MiB), oldest first"));
 
 payload!(#[schemars(rename = "ThreadCreateIn")] CreateIn {
     /// The first message; the thread is named after it and the agent starts on it.

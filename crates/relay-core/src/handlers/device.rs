@@ -54,15 +54,15 @@ pub fn register(e: &mut Engine) {
                 } else { None }
             };
             if let Some(runtime) = runtime {
-                ctx.after_commit(move |engine| { std::thread::spawn(move || device_watch_worker(engine, runtime, adb)); });
+                ctx.after_commit(move |engine| { let engine = Arc::downgrade(&engine); std::thread::spawn(move || device_watch_worker(engine, runtime, adb)); });
             }
         } else {
-            let runtime = {
-                let mut watch = ctx.engine().device_watch.lock().unwrap();
-                watch.clients = watch.clients.saturating_sub(1);
-                if watch.clients == 0 { watch.runtime.take() } else { None }
-            };
-            if let Some(runtime) = runtime { runtime.stop(); }
+            // Stopped inside the lock, as `WatchLease::drop` does: `clients == 0` means stopped.
+            let mut watch = ctx.engine().device_watch.lock().unwrap();
+            watch.clients = watch.clients.saturating_sub(1);
+            if watch.clients == 0 {
+                if let Some(runtime) = watch.runtime.take() { runtime.stop(); }
+            }
         }
         Ok(Empty {})
     });
@@ -297,13 +297,16 @@ pub fn register(e: &mut Engine) {
 
     e.register::<RunStop>(|ctx: &mut Ctx, p| {
         let run = get_run(ctx.tx(), p.run_id)?;
-        if let Some(runtime) = ctx.engine().device_runs.lock().unwrap().remove(&p.run_id) {
+        let runtime = ctx.engine().device_runs.lock().unwrap().remove(&p.run_id);
+        if let Some(runtime) = &runtime {
             runtime.stop();
         }
         // While it builds, the stop does not reach Gradle's daemon, which may still be running
         // `adb install`: the device stays the holder's a little longer. A running app is long
-        // installed, and its device is free at once.
-        let (released, grace) = if run.state == "building" {
+        // installed, and a build stopped before Gradle started (during its checkout's sync)
+        // installs nothing: either device is free at once.
+        let gradle_ran = runtime.as_ref().is_none_or(|runtime| runtime.started());
+        let (released, grace) = if run.state == "building" && gradle_ran {
             ctx.engine().device_leases.stop_run(p.run_id, crate::device_lease::SHELL_GRACE)
         } else {
             (ctx.engine().device_leases.release_run(p.run_id), None)
@@ -515,7 +518,9 @@ const WATCH_RETRY_MAX: Duration = Duration::from_secs(10);
 /// Follow `adb track-devices` for as long as any client holds a watch. The stream ends when the
 /// adb server restarts (another adb of a different version, `adb kill-server`, a crash); the
 /// worker then starts it again, which also starts the server, until the last client lets go.
-fn device_watch_worker(engine: Arc<Engine>, runtime: Arc<DeviceWatchRuntime>, adb: PathBuf) {
+/// Holds the engine weakly: a strong hold kept an engine with a live watch from ever being
+/// dropped, and `adb track-devices` running after it.
+fn device_watch_worker(engine: std::sync::Weak<Engine>, runtime: Arc<DeviceWatchRuntime>, adb: PathBuf) {
     let mut retry = WATCH_RETRY_MIN;
     while !runtime.stopped() {
         let started = Instant::now();
@@ -529,7 +534,10 @@ fn device_watch_worker(engine: Arc<Engine>, runtime: Arc<DeviceWatchRuntime>, ad
                     let mut reader = BufReader::new(stdout);
                     while !runtime.stopped() {
                         match read_track_frame(&mut reader) {
-                            Ok(Some(_)) => engine.emit_system("device.changed", json!({"reason":"system"})),
+                            Ok(Some(_)) => match engine.upgrade() {
+                                Some(engine) => engine.emit_system("device.changed", json!({"reason":"system"})),
+                                None => runtime.stop(),
+                            },
                             Ok(None) | Err(_) => break,
                         }
                     }
@@ -544,7 +552,9 @@ fn device_watch_worker(engine: Arc<Engine>, runtime: Arc<DeviceWatchRuntime>, ad
         while !runtime.stopped() && Instant::now() < until { std::thread::sleep(Duration::from_millis(50)); }
         retry = (retry * 2).min(WATCH_RETRY_MAX);
     }
-    clear_device_watch(&engine, &runtime);
+    if let Some(engine) = engine.upgrade() {
+        clear_device_watch(&engine, &runtime);
+    }
 }
 
 /// One message of `adb track-devices`: a `%04x` byte count, then that many bytes of device
@@ -935,7 +945,8 @@ fn connect_mirror_video(port: u16, deadline: Instant) -> Result<TcpStream, Strin
 fn drain_server_lines(pipe: Option<impl Read + Send + 'static>, ring: Arc<Mutex<Vec<String>>>) {
     let Some(pipe) = pipe else { return };
     std::thread::spawn(move || {
-        for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+        let (mut reader, mut buffer) = (BufReader::new(pipe), Vec::new());
+        while let Ok(Some(line)) = read_lossy_line(&mut reader, &mut buffer) {
             let mut lines = ring.lock().unwrap();
             lines.push(line);
             let overflow = lines.len().saturating_sub(30);
@@ -2791,10 +2802,37 @@ fn crash_line(line: &str) -> bool {
     line.contains("FATAL EXCEPTION") || line.contains("Fatal signal")
 }
 
-/// Read one line, invalid UTF-8 replaced rather than refused. `Ok(None)` at end of stream.
+/// The most of one log line kept: a run command that prints a huge blob with no newline would
+/// otherwise grow the engine without end, and the 512-line ring hold and broadcast it whole.
+const MAX_LOG_LINE: usize = 64 * 1024;
+
+/// Read one line, invalid UTF-8 replaced rather than refused, cut at [`MAX_LOG_LINE`] bytes
+/// (the rest of it read and dropped). `Ok(None)` at end of stream.
 fn read_lossy_line(reader: &mut impl BufRead, buffer: &mut Vec<u8>) -> std::io::Result<Option<String>> {
     buffer.clear();
-    if reader.read_until(b'\n', buffer)? == 0 {
+    let mut read = 0;
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(available) => available,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if available.is_empty() {
+            break;
+        }
+        let (taken, ended) = match available.iter().position(|b| *b == b'\n') {
+            Some(at) => (at + 1, true),
+            None => (available.len(), false),
+        };
+        let room = MAX_LOG_LINE.saturating_sub(buffer.len());
+        buffer.extend_from_slice(&available[..taken.min(room)]);
+        reader.consume(taken);
+        read += taken;
+        if ended {
+            break;
+        }
+    }
+    if read == 0 {
         return Ok(None);
     }
     while matches!(buffer.last(), Some(b'\n' | b'\r')) {
@@ -2876,6 +2914,7 @@ fn stream_command(
     if let Some(sdk_root) = sdk_root {
         spawn.env("ANDROID_HOME", sdk_root).env("ANDROID_SDK_ROOT", sdk_root);
     }
+    runtime.mark_started();
     let spawned = spawn.spawn();
     // The parent's copies of the write end go with the Command, or the log never reaches EOF.
     drop(spawn);
@@ -3342,6 +3381,19 @@ fn run_row(row: &Row) -> rusqlite::Result<Run> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A line past the cap is cut there, the rest of it dropped, and the next line read whole;
+    /// invalid UTF-8 is replaced, a last line without a newline still read.
+    #[test]
+    fn a_log_line_is_cut_at_the_cap() {
+        let mut text = vec![b'x'; MAX_LOG_LINE * 3];
+        text.extend_from_slice(b"\r\nnext \xff\nlast");
+        let (mut reader, mut buffer) = (std::io::BufReader::with_capacity(4096, &text[..]), Vec::new());
+        assert_eq!(read_lossy_line(&mut reader, &mut buffer).unwrap().unwrap().len(), MAX_LOG_LINE);
+        assert_eq!(read_lossy_line(&mut reader, &mut buffer).unwrap().unwrap(), "next \u{fffd}");
+        assert_eq!(read_lossy_line(&mut reader, &mut buffer).unwrap().unwrap(), "last");
+        assert_eq!(read_lossy_line(&mut reader, &mut buffer).unwrap(), None);
+    }
 
     fn git(root: &Path, args: &[&str]) -> String {
         let output = Command::new("git")

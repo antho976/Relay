@@ -254,6 +254,9 @@ pub struct Summary {
     pub totals: Totals,
     pub this_week: Week,
     pub last_week: Week,
+    /// Last week up to the same day as today: what this week so far compares with, since a
+    /// Tuesday's one workout against all of last week reads as a collapse every week.
+    pub last_week_to_date: Week,
     /// The last 12 weeks, oldest first, this one last.
     pub weeks: Vec<Week>,
     /// Weeks in a row with a workout, counting back from this week (or last, while this one is
@@ -285,6 +288,9 @@ pub struct SeriesQuery {
     pub periods: Option<u32>,
     /// A lift by name, as Avex shows it; a unique part of the name is enough.
     pub lift: Option<String>,
+    /// Count the periods back from this day (`YYYY-MM-DD`), as gym.summary's `today`: a copy
+    /// read as of its export, whose charts would otherwise end in empty weeks.
+    pub today: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -490,11 +496,21 @@ fn goal_row(h: &History, g: &crate::model::Goal, clock: &Clock) -> GoalRow {
 
 /// Each period starting at one of `starts` with its totals; `of` is the period a day falls in.
 fn buckets(h: &History, clock: &Clock, starts: &[Date], of: impl Fn(Date) -> Date) -> Vec<Week> {
+    buckets_until(h, clock, starts, of, None)
+}
+
+/// [`buckets`], counting only what happened on or before `until` when it is given.
+fn buckets_until(h: &History, clock: &Clock, starts: &[Date], of: impl Fn(Date) -> Date, until: Option<Date>) -> Vec<Week> {
     let kg = h.meta.use_kg;
     let mut out: Vec<Week> = starts.iter().map(|d| Week { start: d.to_string(), ..Week::default() }).collect();
     let index: HashMap<Date, usize> = starts.iter().enumerate().map(|(i, d)| (*d, i)).collect();
+    let counted = |day: Date| until.is_none_or(|until| day <= until);
     for s in tracked(h) {
-        if let Some(&i) = index.get(&of(date_of(s.started_at, &clock.tz))) {
+        let day = date_of(s.started_at, &clock.tz);
+        if !counted(day) {
+            continue;
+        }
+        if let Some(&i) = index.get(&of(day)) {
             let r = row(h, s, clock);
             let w = &mut out[i];
             w.sessions += 1;
@@ -504,7 +520,7 @@ fn buckets(h: &History, clock: &Clock, starts: &[Date], of: impl Fn(Date) -> Dat
             w.volume += if s.volume_lb > 0.0 { s.volume_lb } else { s.exercises.iter().filter(|e| !e.skipped).map(lift_volume_lb).sum() };
         }
     }
-    for c in &h.cardio {
+    for c in h.cardio.iter().filter(|c| counted(date_of(c.date, &clock.tz))) {
         if let Some(&i) = index.get(&of(date_of(c.date, &clock.tz))) {
             out[i].cardio_minutes = out[i].cardio_minutes.saturating_add(c.duration_min);
         }
@@ -537,6 +553,10 @@ pub fn summary(h: &History, clock: &Clock, imported: bool) -> Summary {
     let weeks = weeks(h, clock, 12);
     let this_week = weeks.last().cloned().unwrap_or_default();
     let last_week = weeks.get(weeks.len().wrapping_sub(2)).cloned().unwrap_or_default();
+    let last_week_to_date = clock.today.checked_sub(7.days()).ok().and_then(|day| {
+        let monday = h.meta.first_day_monday;
+        buckets_until(h, clock, &[week_start(day, monday)], |d| week_start(d, monday), Some(day)).pop()
+    }).unwrap_or_default();
     // The streak may run past the twelve weeks shown, so it counts from every session.
     let monday = h.meta.first_day_monday;
     let trained: std::collections::HashSet<Date> = tracked(h).map(|s| week_start(date_of(s.started_at, &clock.tz), monday)).collect();
@@ -597,6 +617,7 @@ pub fn summary(h: &History, clock: &Clock, imported: bool) -> Summary {
         totals,
         this_week,
         last_week,
+        last_week_to_date,
         weeks,
         streak_weeks: streak,
         days_since_last,
@@ -1070,6 +1091,12 @@ mod tests {
         let s = summary(&h, &then, true);
         assert_eq!((s.this_week.start.as_str(), s.this_week.sessions), ("2026-10-05", 1));
         assert_eq!(s.last_week.sessions, 1);
+        // Last week up to Thursday holds its Tuesday workout; up to Monday, nothing yet.
+        assert_eq!((s.last_week_to_date.start.as_str(), s.last_week_to_date.sessions), ("2026-09-28", 1));
+        assert_eq!(s.last_week_to_date.volume, s.last_week.volume);
+        let monday = summary(&h, &Clock { tz: TimeZone::UTC, today: "2026-10-05".parse().unwrap() }, true);
+        assert_eq!((monday.last_week.sessions, monday.last_week_to_date.sessions), (1, 0));
+        assert_eq!(monday.last_week_to_date.volume, 0.0);
         assert_eq!(s.days_since_last, Some(1));
         // A day before the last workout reads it as today, never as a day to come.
         let early = Clock { tz: TimeZone::UTC, today: "2026-10-06".parse().unwrap() };

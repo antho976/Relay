@@ -32,7 +32,9 @@ impl DeviceWatchRuntime {
     pub fn install(&self, mut child: Child) -> bool {
         let mut slot = self.child.lock().unwrap();
         if self.stopped() {
+            // Reaped too: the orphan reaper skips the engine's own children.
             let _ = child.kill();
+            let _ = child.wait();
             return false;
         }
         *slot = Some(child);
@@ -417,6 +419,9 @@ pub struct RunRuntime {
     /// shell (`fish -lc`) whose real work — the Gradle client, `adb install` — runs in its
     /// children, so stopping it has to reach the whole group, not just the shell.
     child: Mutex<Option<(Child, bool)>>,
+    /// Whether a child was ever started: a run stopped during its checkout's sync never started
+    /// Gradle, and nothing of it can still be installing.
+    started: AtomicBool,
     /// The checkout this run is fast-forwarding to its upstream, from the moment `device.run`
     /// records it until the sync is over. A build in that checkout waits for it (D152).
     syncing: Mutex<Option<PathBuf>>,
@@ -431,6 +436,7 @@ impl RunRuntime {
             id,
             stop: AtomicBool::new(false),
             child: Mutex::new(None),
+            started: AtomicBool::new(false),
             syncing: Mutex::new(None),
             buffer: Mutex::new(LogBuffer {
                 seq: 0,
@@ -450,7 +456,16 @@ impl RunRuntime {
     pub fn set_group_child(&self, child: Child) {
         self.track(child, true);
     }
+    /// Whether this run ever started a child (the build, the app's log).
+    pub fn started(&self) -> bool {
+        self.started.load(Ordering::SeqCst)
+    }
+    /// Said just before a child is spawned: from then on a stop cannot know it never ran.
+    pub fn mark_started(&self) {
+        self.started.store(true, Ordering::SeqCst);
+    }
     fn track(&self, child: Child, group: bool) {
+        self.started.store(true, Ordering::SeqCst);
         let mut slot = self.child.lock().unwrap();
         *slot = Some((child, group));
         // A stop that landed before the child existed found nothing to signal.

@@ -395,6 +395,21 @@ impl PairTarget {
             .ok_or_else(|| anyhow!("the link has no rendezvous (`via=`): set one on the server with `relay remote via` first"))?;
         Ok(PairTarget { code, via })
     }
+
+    /// Whether a link handed over by the server at `server` (the connect command) points back
+    /// at that server, encrypted: the whole ledger syncs to where `via` names every minute, so
+    /// a link (or a server) that names another host, or plain `ws://`, is refused rather than
+    /// followed. A link the person pastes into the pair command is theirs to judge.
+    pub fn issued_by(&self, server: &str) -> Result<()> {
+        let host = |url: &str| url.split_once("://").map_or(url, |(_, rest)| rest).split(['/', '?', '#']).next().unwrap_or_default().to_ascii_lowercase();
+        let Some(rest) = self.via.strip_prefix("wss://") else {
+            anyhow::bail!("the server's link points at {}, which is not encrypted (wss://): not pairing", self.via);
+        };
+        if host(rest) != host(server) {
+            anyhow::bail!("the server's link points at {}, not at {}: not pairing", host(rest), host(server));
+        }
+        Ok(())
+    }
 }
 
 fn decode(s: &str) -> String {
@@ -738,8 +753,10 @@ async fn from_cloud(
 /// Fewest of this PC's accounts and entries a round from the cloud must take away to be held.
 const SWEEP_MIN: usize = 20;
 
-/// Whether the cloud's `theirs` would delete or rewrite at least half of this PC's accounts and
-/// entries ([`SWEEP_MIN`] at least). A replace from scratch is held when it would leave this PC
+/// Whether the cloud's `theirs` would delete or blank at least half of this PC's accounts and
+/// entries ([`SWEEP_MIN`] at least). An ordinary edit (a recategorised entry, a renamed account)
+/// takes nothing away and is not counted: a young ledger's first weeks of fixes in Tally while
+/// the PC was off held every round. A rewrite that empties a row ([`blanked`]) is. A replace from scratch is held when it would leave this PC
 /// with too little ([`from_cloud`]), but the same loss sent as ordinary changes, a tombstone or a
 /// rewrite at a time, from any credential the cloud lets sync or from the server itself, passed
 /// unchecked and left no copy behind. No phone's own editing comes near it. Held, it waits on the
@@ -754,10 +771,11 @@ async fn sweeping(pc: &mut impl Bus, cloud_name: &str, theirs: &SyncOut) -> std:
     let (mut lost, mut gone, mut new) = (0, 0, 0);
     for c in theirs.changes.iter().filter(counted) {
         match (here.contains(&(c.table.as_str(), c.uid.as_str())), c.deleted) {
-            (true, deleted) => {
+            (true, true) => {
                 lost += 1;
-                gone += usize::from(deleted);
+                gone += 1;
             }
+            (true, false) => lost += usize::from(blanked(c)),
             (false, false) => new += 1,
             (false, true) => {}
         }
@@ -769,6 +787,18 @@ async fn sweeping(pc: &mut impl Bus, cloud_name: &str, theirs: &SyncOut) -> std:
         lost: Some(lost),
         accept: None,
     }))
+}
+
+/// A row rewritten to nothing: every field but its identity empty, zero or null.
+fn blanked(c: &Change) -> bool {
+    c.row.iter().filter(|(key, _)| !matches!(key.as_str(), "uid" | "id" | "updated_at" | "updatedAt")).all(|(_, value)| match value {
+        Value::Null => true,
+        Value::Bool(b) => !b,
+        Value::Number(n) => n.as_f64() == Some(0.0),
+        Value::String(s) => s.trim().is_empty(),
+        Value::Array(a) => a.is_empty(),
+        Value::Object(o) => o.is_empty(),
+    })
 }
 
 /// Writes the person's choice for a replace the link holds ([`Held`]) into `cloud.json`, for the
@@ -862,6 +892,10 @@ pub async fn merge_money(
         changes = back.changes;
     }
     link.pc = pc_side;
+    // A clean round settles whatever was held: the changes no longer sweep, or the ledger is
+    // not the replaced one any more. Left set, `relay cloud status` kept showing a hold, and a
+    // later `relay cloud accept` carried out a wholesale replace on that stale record.
+    link.held = None;
     Ok(report)
 }
 
@@ -962,9 +996,11 @@ pub async fn round(socket: &Path, path: &Path, pc_name: &str) -> Result<Report> 
         let mut cloud = Remote::connect(&link).await?;
         let cloud_name = device_name("Cloud", &link.host);
         let mut save = |l: &Link| if keep(l, path)? { Ok(()) } else { Err(anyhow!("the cloud link was removed during the round")) };
-        let mut report = merge_money(&mut pc, &mut cloud, &mut link, pc_name, &cloud_name, &mut save).await.map_err(anyhow::Error::from)?;
-        report.gym = fetch_gym(&mut pc, &mut cloud, &mut link, Some(&path.with_file_name("cloud-gym"))).await.map_err(anyhow::Error::from)?;
-        anyhow::Ok(report)
+        // The two halves are independent: a held or refused money round must not keep Avex's
+        // newest export sitting on the cloud copy every minute until the money is settled.
+        let money = merge_money(&mut pc, &mut cloud, &mut link, pc_name, &cloud_name, &mut save).await.map_err(anyhow::Error::from);
+        let gym = fetch_gym(&mut pc, &mut cloud, &mut link, Some(&path.with_file_name("cloud-gym"))).await.map_err(anyhow::Error::from);
+        both(money, gym)
     }
     .await;
     let now = jiff::Timestamp::now().to_string();
@@ -977,6 +1013,20 @@ pub async fn round(socket: &Path, path: &Path, pc_name: &str) -> Result<Report> 
     }
     keep(&link, path)?;
     outcome
+}
+
+/// A round's outcome from its two halves, each run whatever the other did: the money report
+/// with whether a newer Avex export came home, or what failed (both, when both did).
+fn both(money: Result<Report>, gym: Result<bool>) -> Result<Report> {
+    match (money, gym) {
+        (Ok(mut report), Ok(gym)) => {
+            report.gym = gym;
+            Ok(report)
+        }
+        (Err(money), Ok(_)) => Err(money),
+        (Ok(_), Err(gym)) => Err(gym.context("bringing the training history home")),
+        (Err(money), Err(gym)) => Err(money.context(format!("and bringing the training history home: {gym:#}"))),
+    }
 }
 
 /// Whether a line from the listening connection asks for a round: a change the cloud copy took
@@ -1242,6 +1292,30 @@ mod tests {
         for i in 0..n {
             l.account_add(&format!("{prefix}{i:04}"), AccountType::Cash, 0, None, "").unwrap();
         }
+    }
+
+    /// A held money round still says the gym half ran; a failed gym half is named.
+    #[test]
+    fn a_link_from_the_server_must_lead_back_to_it_encrypted() {
+        let target = |via: &str| PairTarget { code: "ABCD-EFGH".into(), via: via.into() };
+        let server = "https://antho-s-bot.onrender.com";
+        assert!(target("wss://antho-s-bot.onrender.com/join/room1").issued_by(server).is_ok());
+        assert!(target("wss://ANTHO-S-BOT.onrender.com/join/room1").issued_by(server).is_ok());
+        assert!(target("ws://antho-s-bot.onrender.com/join/room1").issued_by(server).is_err(), "not encrypted");
+        assert!(target("wss://elsewhere.example/join/room1").issued_by(server).is_err(), "another host");
+        assert!(target("wss://antho-s-bot.onrender.com.evil.example/join/x").issued_by(server).is_err());
+    }
+
+    #[test]
+    fn a_round_reports_each_half() {
+        let held: Result<Report> = Err(anyhow!("cloud.changes_held"));
+        assert!(format!("{:#}", both(held, Ok(true)).unwrap_err()).contains("cloud.changes_held"));
+        let report = both(Ok(Report { to_pc: 2, ..Report::default() }), Ok(true)).unwrap();
+        assert!(report.gym && report.to_pc == 2);
+        let gym = format!("{:#}", both(Ok(Report::default()), Err(anyhow!("gym.raw timed out"))).unwrap_err());
+        assert!(gym.contains("training history") && gym.contains("gym.raw timed out"), "{gym}");
+        let two = format!("{:#}", both(Err(anyhow!("cloud.replace_held")), Err(anyhow!("gym.raw timed out"))).unwrap_err());
+        assert!(two.contains("cloud.replace_held") && two.contains("gym.raw timed out"), "{two}");
     }
 
     #[tokio::test]
@@ -1529,6 +1603,61 @@ mod tests {
         assert_eq!(names(&pc.0).len(), 45);
         let quiet = merge(&mut pc, &mut cloud, &mut link).await;
         assert_eq!((quiet.to_pc, quiet.to_cloud, quiet.replaced_by), (0, 0, None), "{quiet:?}");
+    }
+
+    /// Held changes that stop sweeping (this PC's ledger grew past twice the loss) go through on
+    /// the next clean round, and the hold goes with them: no stale hold for `accept` to act on.
+    /// A young ledger's ordinary fixes from the phone (most of its entries recategorised while
+    /// the PC was off) go through; the same rows blanked are held.
+    #[tokio::test]
+    async fn ordinary_edits_are_not_a_sweep_but_blanked_rows_are() {
+        let (mut pc, mut cloud) = (Ledgered(Ledger::open_in_memory().unwrap()), Ledgered(Ledger::open_in_memory().unwrap()));
+        accounts(&mut pc.0, "Mine", 40);
+        let mut link = link();
+        merge(&mut pc, &mut cloud, &mut link).await;
+        let rows = cloud.0.sync("probe", false, 0, None, &[], "t").unwrap().changes;
+        let live: Vec<Change> = rows.into_iter().filter(|c| c.table == "accounts" && !c.deleted).take(30).collect();
+        let renamed: Vec<Change> = live.iter().cloned().map(|mut c| {
+            c.updated_at += 1;
+            for (key, value) in c.row.iter_mut() {
+                if key == "name" { *value = json!(format!("{} (fixed)", value.as_str().unwrap_or(""))); }
+            }
+            c
+        }).collect();
+        cloud.0.sync("Pixel", false, 0, None, &renamed, "t").unwrap();
+        merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!(link.held, None, "edits are not a loss");
+        assert_eq!(names(&pc.0).iter().filter(|n| n.ends_with("(fixed)")).count(), 30);
+        let blank: Vec<Change> = live.into_iter().map(|mut c| {
+            c.updated_at += 2;
+            for (key, value) in c.row.iter_mut() {
+                if !matches!(key.as_str(), "uid" | "updated_at" | "updatedAt") { *value = Value::Null; }
+            }
+            c
+        }).collect();
+        assert!(blank.iter().all(blanked));
+        // A ledger refuses such rows, so only a server sending them itself gets this far.
+        let theirs = SyncOut { cursor: 0, generation: "g".into(), changes: blank, replaced: false, applied: 0, skipped: 0, more: false };
+        let held = sweeping(&mut pc, "Cloud (render)", &theirs).await.unwrap();
+        assert_eq!(held.map(|h| h.lost), Some(Some(30)), "rows blanked by the cloud are held");
+    }
+
+    #[tokio::test]
+    async fn a_clean_round_clears_a_hold_it_no_longer_needs() {
+        let (mut pc, mut cloud) = (Ledgered(Ledger::open_in_memory().unwrap()), Ledgered(Ledger::open_in_memory().unwrap()));
+        accounts(&mut pc.0, "Mine", 45);
+        let mut link = link();
+        merge(&mut pc, &mut cloud, &mut link).await;
+        let rows = cloud.0.sync("probe", false, 0, None, &[], "t").unwrap().changes;
+        let most: Vec<Change> = rows.into_iter().filter(|c| c.table == "accounts" && !c.deleted).take(30)
+            .map(|c| Change { updated_at: c.updated_at + 1, deleted: true, row: Default::default(), ..c }).collect();
+        cloud.0.sync("Avex (S21)", false, 0, None, &most, "t").unwrap();
+        assert!(merge_money(&mut pc, &mut cloud, &mut link, "PC (desk)", "Cloud (render)", &mut |_| Ok(())).await.is_err());
+        assert!(link.held.is_some());
+        accounts(&mut pc.0, "More", 30);
+        merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!(link.held, None, "the round that went through settled the hold");
+        assert_eq!(names(&pc.0).len(), 45);
     }
 
     #[tokio::test]

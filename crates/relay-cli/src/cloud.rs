@@ -150,9 +150,18 @@ fn print_held(link: &Link) {
             Some(cloud::Whole::Pc) => " (sending this PC's on the next round)",
             None => "",
         };
+        let what = match held.lost {
+            Some(lost) => format!(
+                "the cloud copy sent changes that delete or rewrite {lost} of the {} accounts and entries here",
+                held.pc_rows
+            ),
+            None => format!(
+                "the cloud's ledger was replaced by one with {} accounts and entries, against {} here",
+                held.cloud_rows, held.pc_rows
+            ),
+        };
         println!(
-            "held:      the cloud's ledger was replaced by one with {} accounts and entries, against {} here{chosen}: `relay cloud accept cloud` takes it, `relay cloud accept pc` keeps this PC's",
-            held.cloud_rows, held.pc_rows
+            "held:      {what}{chosen}: `relay cloud accept cloud` takes the cloud's, `relay cloud accept pc` keeps this PC's"
         );
     }
 }
@@ -181,6 +190,9 @@ pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
     match cmd {
         CloudCommand::Connect { server } => {
             let api = Server::new(&server);
+            if api.base().starts_with("http://") {
+                eprintln!("warning: {} is plain http: the pairing code and this PC's token travel to it unencrypted", api.base());
+            }
             let a = api.clone();
             let hello = blocking(move || a.hello()).await??;
             if !hello.cloud {
@@ -200,6 +212,7 @@ pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
             // Linked with the cloud copy already (`relay cloud pair`), this only adds the server.
             // Looked at again: `relay cloud off` may have run while this waited.
             if Link::load(&path)?.is_none() {
+                cloud::PairTarget::parse(&pair_link)?.issued_by(api.base())?;
                 println!("Allowed. Pairing with the cloud copy…");
                 cloud::pair(&path, &pair_link, &pc_name(instance)).await?;
             }

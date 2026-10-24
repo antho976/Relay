@@ -212,8 +212,13 @@ fn a_run_stopped_while_building_keeps_the_device_for_a_grace_period() {
     let e = &f.engine;
     let (a, worktree_a) = session(e);
     let (b, _) = session(e);
+    // Stopped once its build has started: one stopped before (during the checkout's sync) never
+    // ran Gradle and frees the device at once.
+    let marker = f._root.path().join("build-started");
+    ok(e, Actor::User, "project.update", json!({"project_id": 1, "run_cmd": format!("touch '{}'; sleep 30", marker.display())}));
     let run = ok(e, Actor::User, "device.run", json!({"project_id": 1, "worktree": worktree_a, "device": "relay-phone"}));
     let run_id = run["id"].as_i64().unwrap();
+    common::wait_until("the build to start", || marker.exists());
     let mut events = e.subscribe();
     ok(e, Actor::User, "device.run.stop", json!({"run_id": run_id}));
     let gone = released(&mut events);
@@ -224,4 +229,19 @@ fn a_run_stopped_while_building_keeps_the_device_for_a_grace_period() {
     assert!(lease["expires_in_s"].as_u64().unwrap() <= 90, "{leases}");
     assert_eq!(refusal(gate(e, &b, "adb install other.apk")).code, "device.busy");
     ok(e, Actor::agent(&a), "guardrail.gate", json!({"session": a, "kind": "exec", "command": "adb -s relay-phone install x.apk"}));
+}
+
+/// An install stopped with Esc sends neither PostToolUse nor Stop: the next prompt ends that
+/// turn, so its lease keeps only the grace period instead of the whole term.
+#[test]
+fn a_new_prompt_ends_the_lease_of_an_interrupted_command() {
+    let f = fixture();
+    let e = &f.engine;
+    let (a, _) = session(e);
+    ok(e, Actor::agent(&a), "guardrail.gate", json!({"session": a, "kind": "exec", "command": "adb -s relay-phone install -r app-debug.apk"}));
+    let leases = ok(e, Actor::User, "device.leases", json!({}));
+    assert!(leases["leases"][0]["expires_in_s"].as_u64().unwrap() > 90, "{leases}");
+    ok(e, Actor::agent(&a), "session.report", json!({"session": a, "kind": "prompt", "data": {"prompt": "try again"}}));
+    let leases = ok(e, Actor::User, "device.leases", json!({}));
+    assert!(leases["leases"].as_array().unwrap().iter().all(|lease| lease["expires_in_s"].as_u64().unwrap() <= 90), "{leases}");
 }

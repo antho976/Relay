@@ -1697,7 +1697,12 @@ pub fn register(e: &mut Engine) {
             let cfg = crate::guardrail::config(conn, Some(s.project_id))?;
             Ok(Some((PathBuf::from(&s.worktree), project.base_branch, cfg)))
         })?;
-        Ok(measure.and_then(|(worktree, base, cfg)| crate::guardrail::measure_branch(&cfg, &worktree, &base)))
+        // Against the freshest base tip (its remote one when the local branch is behind), as
+        // the session was cut from: never other people's merged work counted as this task's.
+        Ok(measure.and_then(|(worktree, base, cfg)| {
+            let base = crate::handlers::git::freshest_base_sha(&worktree, &base).unwrap_or(base);
+            crate::guardrail::measure_branch(&cfg, &worktree, &base)
+        }))
     }, |ctx: &mut Ctx, p, work: Option<crate::guardrail::BranchWork>| {
         let row = sessions::by_name(ctx.tx(), &p.session)?;
         assert_own(ctx, &row, false)?;
@@ -1943,7 +1948,7 @@ pub fn register(e: &mut Engine) {
                 .with_hint("provider_ref is the provider's own conversation id: letters, digits, '-' and '_', starting with a letter or digit"));
         }
         let state = match p.kind.as_str() {
-            "session_start" | "tool_use" => "running",
+            "session_start" | "tool_use" | "prompt" => "running",
             "stop" | "idle" => "idle",
             "blocked" => "blocked",
             "notification" => {
@@ -1952,7 +1957,7 @@ pub fn register(e: &mut Engine) {
                 // minute later: the turn's Stop already said so, and it needs nothing new.
                 if matches!(type_, "permission_prompt" | "elicitation_dialog" | "agent_needs_input" | "blocked") { "blocked" } else { sessions::state_str(s.state) }
             }
-            _ => return Err(BusError::invalid("session.report_kind", "kind must be session_start, tool_use, stop, notification, idle, or blocked")),
+            _ => return Err(BusError::invalid("session.report_kind", "kind must be session_start, tool_use, prompt, stop, notification, idle, or blocked")),
         };
         let provider_ref_changed = provider_ref.is_some_and(|value| s.provider_ref.as_deref() != Some(value));
         // A hook that lands after its session was parked, exited or closed speaks for a process
@@ -1969,7 +1974,7 @@ pub fn register(e: &mut Engine) {
         // turn — the done call's own PostToolUse among them — and the turn's Stop keep that
         // outcome: a blocked done stays blocked.
         let state = match (done, p.kind.as_str()) {
-            (Some(_), "tool_use" | "idle") => sessions::state_str(s.state),
+            (Some(_), "tool_use" | "prompt" | "idle") => sessions::state_str(s.state),
             (Some(_), "stop") if s.state == SessionState::Blocked => "blocked",
             _ => state,
         };
@@ -1983,9 +1988,10 @@ pub fn register(e: &mut Engine) {
              WHERE id=?4",
         ).bus()?.execute(params![state, provider_ref, ctx.now, s.id, p.kind, ASSIGNMENT_AT_STOP]).bus()?;
         note_pty_state(ctx, s.id, state);
-        if matches!(p.kind.as_str(), "tool_use" | "stop") {
-            // The command behind a device lease has finished; keep the lease only briefly.
-            crate::handlers::device_lease::command_finished(ctx.engine(), s.id, data.get("tool_input"), p.kind == "stop");
+        if matches!(p.kind.as_str(), "tool_use" | "stop" | "prompt") {
+            // The command behind a device lease has finished; keep the lease only briefly. A new
+            // prompt ends the turn before it, however it ended.
+            crate::handlers::device_lease::command_finished(ctx.engine(), s.id, data.get("tool_input"), p.kind != "tool_use");
         }
         if p.kind == "stop" {
             if let (Some(completed), Some(current)) = (pending_stop, s.task_id) {

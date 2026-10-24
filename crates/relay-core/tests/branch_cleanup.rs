@@ -235,6 +235,14 @@ fn a_worktree_kept_at_close_and_its_ignored_files_survive_cleanup() {
     assert!(work.worktree.join(".env").exists());
 
     std::fs::remove_file(work.worktree.join(".env")).unwrap();
+    // A shell working inside the checkout keeps it, however the sweep judged the branch.
+    let mut shell = std::process::Command::new("sleep").arg("30").current_dir(&work.worktree).spawn().unwrap();
+    let row = cleanup(&f, &work.branch, None);
+    let _ = shell.kill();
+    let _ = shell.wait();
+    assert_eq!(row.outcome, "kept", "{row:?}");
+    assert!(row.reason.contains("in use now"), "{row:?}");
+    assert!(work.worktree.exists());
     let row = cleanup(&f, &work.branch, None);
     assert_eq!(row.outcome, "deleted", "Relay's own hook files are not the user's: {row:?}");
     assert!(row.removed_worktree && !work.worktree.exists());
@@ -281,4 +289,19 @@ fn a_branch_being_rebased_or_bisected_is_kept() {
     assert_eq!(cleanup(&f, &work.branch, None).outcome, "kept");
     std::fs::remove_file(f.repo.join(".git/BISECT_START")).unwrap();
     assert_eq!(cleanup(&f, &work.branch, None).outcome, "deleted");
+}
+
+/// A merged branch whose pooled checkout was deleted by hand goes: git's record of the folder
+/// is pruned, where `status` in the missing folder kept the branch at every sweep for good.
+#[test]
+fn a_merged_branch_whose_checkout_was_deleted_by_hand_goes() {
+    let f = fixture();
+    let work = session_with_commit(&f, "gone.txt");
+    git(&f.repo, &["merge", "--no-verify", "-q", "--no-ff", "-m", "merge", &work.branch]);
+    ok(&f.engine, "session.close", json!({"session": work.name, "remove_worktree": false}));
+    std::fs::remove_dir_all(&work.worktree).unwrap();
+    let row = cleanup(&f, &work.branch, None);
+    assert_eq!(row.outcome, "deleted", "{row:?}");
+    assert!(row.removed_worktree, "{row:?}");
+    assert!(!has_ref(&f.repo, &format!("refs/heads/{}", work.branch)));
 }

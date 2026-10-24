@@ -41,7 +41,7 @@ fn last_account(kind: &str) -> Option<i64> {
 
 fn field(body: &gtk::Box, caption: &str, widget: &impl IsA<gtk::Widget>) -> gtk::Box {
     let block = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    block.append(&label(&caption.to_uppercase(), "money-label"));
+    block.append(&label(caption, "money-label"));
     block.append(widget);
     body.append(&block);
     block
@@ -109,6 +109,13 @@ pub fn open(ui: &Rc<Ui>, tx: Option<Value>) {
         // The first new entry of a run also reads the newest entries, for the account to start on.
         let lists = if tx.is_none() && !SEEDED.with(Cell::get) {
             let (lists, recent) = tokio::join!(ui.call("money.lists", json!({})), ui.call("money.tx.list", json!({"limit":60})));
+            // Early in a period this one may hold nothing yet: the one before says where the
+            // person last spent from.
+            let empty = |page: &Value| page["transactions"].as_array().is_none_or(|rows| rows.is_empty());
+            let recent = match recent {
+                Ok(page) if empty(&page) => ui.call("money.tx.list", json!({"limit":60,"period_offset":-1})).await,
+                other => other,
+            };
             if let Ok(recent) = &recent {
                 seed_accounts(recent);
             }
@@ -373,12 +380,16 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, lists: &Value, tx: Option<Value>) {
     let submit = {
         let ui = ui.clone();
         let sheet = Rc::downgrade(panel);
-        let (amount, problem, kind, category, category_items, category_choice, from, to, day, note) =
-            (amount.clone(), problem.clone(), kind.clone(), category.clone(), category_items.clone(), category_choice.clone(), from.clone(), to.clone(), day.clone(), note.clone());
+        // The keys and fields whose own handlers hold `submit` are held weakly here, or each
+        // would keep the other alive and every sheet opened would stay in memory (fffb19e).
+        let (amount_ref, note_ref, save_ref, another_ref) = (amount.downgrade(), note.downgrade(), save.downgrade(), another.downgrade());
+        let (problem, kind, category, category_items, category_choice, from, to, day) =
+            (problem.clone(), kind.clone(), category.clone(), category_items.clone(), category_choice.clone(), from.clone(), to.clone(), day.clone());
         let accounts = accounts.clone();
         let before = tx.clone();
-        let (save, another, added, added_text, added_undo, added_id) = (save.clone(), another.clone(), added.clone(), added_text.clone(), added_undo.clone(), added_id.clone());
+        let (added, added_text, added_undo, added_id) = (added.clone(), added_text.clone(), added_undo.clone(), added_id.clone());
         move |keep_open: bool| {
+            let (Some(amount), Some(note), Some(save), Some(another)) = (amount_ref.upgrade(), note_ref.upgrade(), save_ref.upgrade(), another_ref.upgrade()) else { return };
             let keep_open = keep_open && before.is_none();
             let refuse = |text: &str, culprit: &gtk::Widget| {
                 problem.set_text(text);
@@ -500,6 +511,10 @@ fn undo_save(ui: &Rc<Ui>, saved: &Value, before: Option<&Value>) -> super::Actio
                 if !t[key].is_null() {
                     back[key] = t[key].clone();
                 }
+            }
+            // An absent category keeps the one the edit gave it: say it goes.
+            if t["category_id"].is_null() {
+                back["clear_category"] = json!(true);
             }
             ("money.tx.update", back)
         }

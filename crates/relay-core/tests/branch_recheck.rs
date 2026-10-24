@@ -109,6 +109,13 @@ fn the_exec_gate_refuses_an_agent_switching_the_commit_hook_off() {
         assert_eq!(refused.code, "guardrail.hook_bypass", "{command:?}");
         assert!(refused.hint.unwrap().contains("session.done"), "the hint says why it does not help");
     }
+    // The pre-push check, and a hook switched off through an alias.
+    for command in ["git push --no-verify origin relay/x", "git -c alias.ci='commit --no-verify' ci -m wip"] {
+        let refused = call_as(&f.engine, f.agent(), "guardrail.gate", json!({"session": f.name, "kind": "exec", "command": command}))
+            .error.unwrap_or_else(|| panic!("{command:?} must be refused"));
+        assert_eq!(refused.code, "guardrail.hook_bypass", "{command:?}");
+    }
+    ok_as(&f.engine, f.agent(), "guardrail.gate", json!({"session": f.name, "kind": "exec", "command": "git push origin relay/x"}));
     ok_as(&f.engine, f.agent(), "guardrail.gate", json!({"session": f.name, "kind": "exec", "command": "git commit -m 'wip -n'"}));
     // A person's own commit is theirs to make.
     ok(&f.engine, "guardrail.gate", json!({"session": f.name, "kind": "exec", "command": "git commit -n -m wip"}));
@@ -253,4 +260,52 @@ fn an_agent_cannot_move_its_task_to_review_past_the_done() {
     // The person still moves it as they like.
     ok(&f.engine, "task.move", json!({"task_id": f.task, "column": "in_review"}));
     assert_eq!(f.column(), "in_review");
+}
+
+/// Relay fetches but never moves a local base, so `main` can sit far behind `origin/main`. A
+/// session cut from the remote tip is measured against that tip at done: other people's merged
+/// work (here a protected path and more lines than the cap) is not the task's.
+#[test]
+fn done_measures_against_the_remote_base_when_the_local_one_is_behind() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let upstream = root.join("upstream");
+    std::fs::create_dir_all(&upstream).unwrap();
+    git(&upstream, &["init", "-q", "-b", "main"]);
+    git(&upstream, &["config", "user.email", "t@t"]);
+    git(&upstream, &["config", "user.name", "t"]);
+    std::fs::write(upstream.join("README.md"), "hi\n").unwrap();
+    git(&upstream, &["add", "."]);
+    git(&upstream, &["commit", "-q", "-m", "init"]);
+    let ws = root.join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    let repo = ws.join("app");
+    git(&ws, &["clone", "-q", upstream.to_str().unwrap(), repo.to_str().unwrap()]);
+    git(&repo, &["config", "user.email", "t@t"]);
+    git(&repo, &["config", "user.name", "t"]);
+    // Merged by someone else after the clone, and fetched: local main stays where it was.
+    std::fs::create_dir_all(upstream.join("secret")).unwrap();
+    std::fs::write(upstream.join("secret/key"), "theirs\n").unwrap();
+    std::fs::write(upstream.join("big.txt"), "line\n".repeat(2500)).unwrap();
+    git(&upstream, &["add", "."]);
+    git(&upstream, &["commit", "-q", "-m", "someone else's work"]);
+    git(&repo, &["fetch", "-q", "origin"]);
+
+    let engine = Engine::new(Instance::Test, Store::open(&root.join("store").join("store.db"), false).unwrap());
+    ok(&engine, "workspace.create", json!({"path": ws}));
+    ok(&engine, "project.add", json!({"workspace_id": 1, "path": repo}));
+    ok(&engine, "guardrail.config.set", json!({"project_id": 1, "patch": {"protected_paths": ["secret/**"]}}));
+    let task = ok(&engine, "task.create", json!({"project_id": 1, "title": "work"}))["id"].as_i64().unwrap();
+    let s = ok(&engine, "session.create", json!({"project_id": 1, "provider": "claude", "task_id": task}));
+    let name = s["name"].as_str().unwrap().to_string();
+    engine.store.lock().execute("UPDATE tasks SET col='active' WHERE id=?1", [task]).unwrap();
+    let worktree = PathBuf::from(s["worktree"].as_str().unwrap());
+    assert!(worktree.join("secret/key").exists(), "the session starts from the remote tip");
+    ok_as(&engine, Actor::agent(&name), "session.report", json!({"session": name, "kind": "session_start"}));
+    std::fs::write(worktree.join("mine.txt"), "small\n").unwrap();
+    git(&worktree, &["add", "-A"]);
+    git(&worktree, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--no-verify", "-m", "my work"]);
+
+    ok_as(&engine, Actor::agent(&name), "session.done", json!({"session": name, "summary": "done"}));
+    assert_eq!(ok(&engine, "task.get", json!({"task_id": task}))["column"], "in_review");
 }

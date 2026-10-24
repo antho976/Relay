@@ -43,6 +43,11 @@ Claude (you) ──x-api-key: <pass token>──▶ 127.0.0.1:7445  relay-key-pr
   tampered build could send anything, but it is no defence on its own (it could still answer its
   caller, reach a local listener or use DNS): reading the code before it is installed is. Should
   Anthropic move its API, the service fails closed; widen `IPAddressAllow=` in the unit.
+- **DNS needs a resolver on loopback.** The service looks up Anthropic's address through
+  `/etc/resolv.conf`, and loopback is the only other place it may reach: a stub on `127.0.0.53`
+  (systemd-resolved) or another local one works, a resolver on the LAN or the router does not,
+  and then every request fails with a 502 that does not say why. The installer checks this before
+  it starts anything.
 - **The program** is `crates/relay-key-proxy`, its own workspace with its own `Cargo.lock`: about
   700 lines (about 40% of them tests), 22 crates from crates.io, no proc macros, and no build script of
   its own (four of its crates have one: `httparse`, `libc`, `ring`, `rustls`). Root builds that

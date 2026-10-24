@@ -1595,8 +1595,14 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value) {
     if budgets.is_empty() {
         list.append(&icon_row(&tile("plan"), "No budgets yet", "Give each category a monthly budget in Plan", "", ""));
     }
-    for b in budgets.iter().take(8) {
+    for b in budgets.iter().take(BUDGETS_SHOWN) {
         list.append(&budget_key(ui, b, pace_fraction));
+    }
+    // The furthest ahead of pace lead; the card says what it leaves to Plan, as Upcoming does.
+    if budgets.len() > BUDGETS_SHOWN {
+        let more = label(&format!("{} more in Plan", budgets.len() - BUDGETS_SHOWN), "money-row-detail");
+        more.add_css_class("tally-note");
+        list.append(&more);
     }
     let recent = rows(s, "recent");
     let list = card(&pair[1], "Recent", Some(("All entries", go(ui, "money-transactions"))));
@@ -1932,10 +1938,12 @@ fn transactions(ui: &Rc<Ui>, page: &Page, list: &Value, offset: i64, query: &str
 
 /// What each expense category spent in the three budget periods before this one, oldest first,
 /// and how many of those periods the ledger has entries in (a ledger two months old averages
-/// two).
+/// two); and what each spent in this one, which `money.summary` only reads for a category with
+/// a budget.
 pub(super) struct Past {
     by: std::collections::HashMap<i64, Vec<i64>>,
     months: usize,
+    now: std::collections::HashMap<i64, i64>,
 }
 
 impl Past {
@@ -1952,6 +1960,9 @@ impl Past {
         lines
     }
 }
+
+/// How many budgets Overview's card lists, furthest ahead of pace first.
+const BUDGETS_SHOWN: usize = 8;
 
 thread_local! {
     /// Plan's [`Past`], with the start of the period it was read in: kept until the ledger moves
@@ -1996,17 +2007,36 @@ async fn past(ui: &Rc<Ui>, s: &Value, lists: &Value) -> Rc<Past> {
     // This period and the three before it, oldest first.
     let reads = join_all(categories.iter().map(|(_, name)| ui.call("money.series", json!({"measure":"spending","by":"period","periods":4,"category":name}))).collect()).await;
     let mut by = std::collections::HashMap::new();
+    let mut now = std::collections::HashMap::new();
     for ((id, _), read) in categories.iter().zip(reads) {
         let Ok(read) = read else { continue };
         let values: Vec<i64> = read["series"][0]["values"].as_array().map(|v| v.iter().map(|x| x.as_i64().unwrap_or(0)).collect()).unwrap_or_default();
         if values.len() == 4 {
             by.insert(*id, values[..3].to_vec());
+            now.insert(*id, values[3]);
         }
     }
     let first = (0..3).find(|i| by.values().any(|values: &Vec<i64>| values[*i] > 0));
-    let past = Rc::new(Past { months: first.map_or(0, |i| 3 - i), by });
+    let past = Rc::new(Past { months: first.map_or(0, |i| 3 - i), by, now });
     PAST.with(|p| *p.borrow_mut() = Some((start, past.clone())));
     past
+}
+
+/// A category's budget, what it spent this period and the words for it, on Plan. `money.summary`
+/// reads spending only for a category with a budget row (`reading`); any other's comes from
+/// this period's `money.series` (`spent_now`), so Groceries with no budget and $300 spent reads
+/// "$300 spent, no budget", never "Nothing spent" folded away.
+fn plan_reading(reading: Option<&Value>, spent_now: i64, fmt: &relay_money::money::MoneyFormatter) -> (i64, i64, String) {
+    let amount = reading.map_or(0, |b| n(b, "budget"));
+    let used = reading.map_or(spent_now, |b| n(b, "spent"));
+    let detail = if amount > 0 {
+        copy::of_budget(used, amount, fmt)
+    } else if used > 0 {
+        format!("{} spent, no budget", fmt.format_whole(used))
+    } else {
+        String::from("Nothing spent")
+    };
+    (amount, used, detail)
 }
 
 /// Plan's head: the title with Suggest budgets, which asks in a thread, and its context line.
@@ -2098,13 +2128,7 @@ fn plan(ui: &Rc<Ui>, page: &Page, s: &Value, lists: &Value, past: &Past) {
     for category in &categories {
         let id = n(category, "id");
         let reading = spent.get(&id);
-        let amount = reading.map_or(0, |b| n(b, "budget"));
-        let used = reading.map_or(0, |b| n(b, "spent"));
-        let detail = match reading {
-            Some(b) if amount > 0 => copy::of_budget(n(b, "spent"), amount, &fmt),
-            _ if used > 0 => format!("{} spent, no budget", fmt.format_whole(used)),
-            _ => String::from("Nothing spent"),
-        };
+        let (amount, used, detail) = plan_reading(reading, past.now.get(&id).copied().unwrap_or(0), &fmt);
         let status = reading.map_or("", |b| text(b, "status"));
         let meter = (amount > 0).then(|| (used as f64 / amount as f64, tone(status, category["color"].as_i64())));
         let lead = badge_sized(text(category, "icon"), n(category, "color"), 28);
@@ -2273,6 +2297,7 @@ fn budget_field(ui: &Rc<Ui>, category: Option<i64>, name: &str, amount: i64) -> 
     let commit = {
         let weak = Rc::downgrade(ui);
         let saved = saved.clone();
+        let name = name.to_string();
         move |field: &gtk::Entry| {
             let Some(ui) = weak.upgrade() else { return };
             if rebuilding() {
@@ -2289,14 +2314,37 @@ fn budget_field(ui: &Rc<Ui>, category: Option<i64>, name: &str, amount: i64) -> 
             if value == saved.get() {
                 return;
             }
-            saved.set(value);
-            let mut payload = json!({"amount":value});
-            if let Some(id) = category {
-                payload["category_id"] = json!(id);
-            }
+            let before = saved.replace(value);
+            let payload = |amount: i64| match category {
+                Some(id) => json!({"amount":amount,"category_id":id}),
+                None => json!({"amount":amount}),
+            };
+            // Said, with Undo, as an entry's save is: a budget typed over by a stray keystroke
+            // comes back with one key.
+            let said = if value > 0 {
+                format!("Budget for {name}: {}", formatter().format_whole(value))
+            } else {
+                format!("No budget for {name}")
+            };
+            let back = payload(before);
+            let undo: super::Action = {
+                let weak = Rc::downgrade(&ui);
+                Rc::new(move || {
+                    let Some(ui) = weak.upgrade() else { return };
+                    let back = back.clone();
+                    glib::spawn_future_local(async move {
+                        if let Err(e) = ui.call("money.budget.set", back).await {
+                            ui.show_error(&unavailable(&e));
+                        }
+                        ui.refresh_page();
+                    });
+                })
+            };
+            let set = payload(value);
             glib::spawn_future_local(async move {
-                if let Err(e) = ui.call("money.budget.set", payload).await {
-                    ui.show_error(&unavailable(&e));
+                match ui.call("money.budget.set", set).await {
+                    Ok(_) => super::toast(&ui, &said, Some(undo)),
+                    Err(e) => ui.show_error(&unavailable(&e)),
                 }
                 ui.refresh_page();
             });
@@ -2498,16 +2546,18 @@ fn ledger_settings(ui: &Rc<Ui>, column: &gtk::Box, summary: &Value) {
     save.set_halign(gtk::Align::End);
     save.add_css_class("tally-save");
     list.append(&save);
-    // Enter in either field saves, as the key does; not again while a save is on its way.
-    let key = save.clone();
+    // Enter in either field saves, as the key does; not again while a save is on its way. The
+    // key is held weakly: its own handler holds both fields, and a strong hold back would keep
+    // all three alive after every refresh of the Data page.
+    let key = save.downgrade();
     currency.connect_activate(move |_| {
-        if key.is_sensitive() {
+        if let Some(key) = key.upgrade().filter(|key| key.is_sensitive()) {
             key.emit_clicked();
         }
     });
-    let key = save.clone();
+    let key = save.downgrade();
     start.connect_activate(move |_| {
-        if key.is_sensitive() {
+        if let Some(key) = key.upgrade().filter(|key| key.is_sensitive()) {
             key.emit_clicked();
         }
     });
@@ -2542,7 +2592,7 @@ fn load_sample(ui: &Rc<Ui>, key: &gtk::Button) {
     let key = key.clone();
     glib::spawn_future_local(async move {
         match ui.call("money.sample", json!({})).await {
-            Ok(v) => super::toast(&ui, &format!("Loaded a sample household: {}.", plural(n(&v, "transactions").max(0) as usize, "entry").replace("entrys", "entries")), None),
+            Ok(v) => super::toast(&ui, &format!("Loaded a sample household: {}.", copy::plural_as(n(&v, "transactions").max(0), "entry", "entries")), None),
             Err(e) => ui.show_error(&unavailable(&e)),
         }
         key.set_sensitive(true);
@@ -2588,7 +2638,7 @@ fn import(ui: &Rc<Ui>, empty: bool, syncs: bool) {
                 &ui,
                 &format!(
                     "Imported {} and {}.",
-                    plural(n(&v, "transactions").max(0) as usize, "entry").replace("entrys", "entries"),
+                    copy::plural_as(n(&v, "transactions").max(0), "entry", "entries"),
                     plural(n(&v, "accounts").max(0) as usize, "account")
                 ),
                 None,
@@ -2611,7 +2661,7 @@ fn export(ui: &Rc<Ui>) {
                 &ui,
                 &format!(
                     "Saved {} to {}.",
-                    plural(n(&v, "transactions").max(0) as usize, "entry").replace("entrys", "entries"),
+                    copy::plural_as(n(&v, "transactions").max(0), "entry", "entries"),
                     text(&v, "path")
                 ),
                 None,
@@ -2619,4 +2669,27 @@ fn export(ui: &Rc<Ui>) {
             Err(e) => ui.show_error(&unavailable(&e)),
         }
     });
+}
+
+#[cfg(test)]
+#[allow(clippy::inconsistent_digit_grouping)]
+mod tests {
+    use super::plan_reading;
+    use relay_money::money::{Locale, MoneyFormatter};
+    use serde_json::json;
+
+    /// A category with no budget row reads this period's spending from its series, so it is
+    /// never "Nothing spent" while it spent; a budgeted one reads `money.summary`'s figure.
+    #[test]
+    fn an_unbudgeted_category_shows_what_it_spent() {
+        let fmt = MoneyFormatter::new("CAD", Locale::new("en-CA"));
+        let (amount, used, detail) = plan_reading(None, 300_00, &fmt);
+        assert_eq!((amount, used), (0, 300_00));
+        assert_eq!(detail, format!("{} spent, no budget", fmt.format_whole(300_00)));
+        assert_eq!(plan_reading(None, 0, &fmt).2, "Nothing spent");
+        let budgeted = json!({"category_id": 1, "budget": 400_00, "spent": 250_00, "status": "ON_TRACK"});
+        let (amount, used, detail) = plan_reading(Some(&budgeted), 999_00, &fmt);
+        assert_eq!((amount, used), (400_00, 250_00), "the summary's figure wins over the series");
+        assert_eq!(detail, format!("{} of {}", fmt.format_whole(250_00), fmt.format_whole(400_00)));
+    }
 }

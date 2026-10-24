@@ -29,13 +29,18 @@ fn protocol(message: &Value) -> &'static str {
 
 pub async fn serve(instance: Instance, actor: Actor, token: Option<String>) -> Result<u8> {
     let output = Output::stdout();
-    let watcher = tokio::spawn(watch_tools(instance, actor.clone(), token.clone(), output.clone()));
+    // A server started for a set (a thread's agent, RELAY_MCP_OPS) answers that set whatever a
+    // plugin does, and its peer may not call bus.whoami or bus.subscribe: watching only made
+    // the door log a refused user claim from inside Relay's tree, twice, at every start.
+    let watcher = selection().is_none().then(|| tokio::spawn(watch_tools(instance, actor.clone(), token.clone(), output.clone())));
     let code = dispatch(stdin_lines(), output, move |message| {
         let (actor, token) = (actor.clone(), token.clone());
         async move { handle(instance, &actor, token.as_deref(), message).await }
     })
     .await;
-    watcher.abort();
+    if let Some(watcher) = watcher {
+        watcher.abort();
+    }
     code
 }
 

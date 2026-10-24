@@ -105,11 +105,13 @@ with a one-row `money.sync` and reads neither ledger whole; a later wholesale ac
 **So may changes that amount to one.** The same loss can come as ordinary changes: tombstones, or
 every row rewritten, from any credential the cloud lets sync or from the server itself, and these
 used to pass unchecked, with no copy kept (copies are taken before a replace only). A round whose
-changes from the cloud would delete or rewrite at least half of this PC's accounts and entries,
-and at least 20 of them, is held the same way, with `cloud.changes_held` and `held.lost` (how many
-it would take away); `relay cloud accept cloud` applies it as the replace it amounts to, `relay
-cloud accept pc` sends this PC's ledger to the cloud instead. A phone's own deletes and edits come
-nowhere near it.
+changes from the cloud would delete or blank (rewrite to nothing) at least half of this PC's
+accounts and entries, and at least 20 of them, is held the same way, with `cloud.changes_held` and
+`held.lost` (how many it would take away); `relay cloud accept cloud` applies it as the replace it
+amounts to, `relay cloud accept pc` sends this PC's ledger to the cloud instead. An ordinary edit
+(a recategorised entry, a renamed account) takes nothing away and is not counted, so a phone's own
+deletes and edits come nowhere near it, in a young ledger too. A round that goes through clears a
+hold it no longer needs, and the money half failing never stops the training history coming home.
 
 Before a replace clears either side, `cloud.json` records which side is going over (`replacing`).
 Once the first batch has landed, it also records where the side being filled then stood

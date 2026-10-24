@@ -407,10 +407,6 @@ pub fn list(conn: &Connection) -> Result<Vec<ProviderInfo>, BusError> {
     }).collect()
 }
 
-/// Probe and record in one step, for a caller that already holds a transaction.
-pub fn refresh(tx: &Transaction, now: &str) -> Result<Vec<Discovery>, BusError> {
-    record(tx, now, probe(paths(tx)))
-}
 
 /// Where each provider's binary is, read under the store lock: the input to [`probe`].
 pub fn paths(conn: &Connection) -> Vec<(Provider, Option<PathBuf>)> {

@@ -50,6 +50,8 @@ op!(TxAdd, "money.tx.add", TxAddIn => Tx, OpMeta::mutation(Scope::Global, 12, "A
 payload!(#[schemars(rename = "MoneyTxUpdateIn")] TxUpdateIn {
     pub id: i64, pub r#type: Option<TxType>, #[schemars(extend("x-unit" = "minor"))] pub amount: Option<i64>, pub date: Option<String>,
     pub account_id: Option<i64>, pub to_account_id: Option<i64>, pub category_id: Option<i64>, pub note: Option<String>,
+    /// True takes the category off (an absent `category_id` keeps it); ignored beside one.
+    pub clear_category: Option<bool>,
 });
 result!(#[schemars(rename = "MoneyTxChanged")] TxChanged {
     #[serde(flatten)]
@@ -108,7 +110,9 @@ result!(#[schemars(rename = "MoneyImportOut")] ImportOut {
 op!(Import, "money.import", PathIn => ImportOut,
     OpMeta::mutation(Scope::Global, 12, "Restore a Tally backup (.json): it replaces the whole ledger, as a restore does on the phone").actors(Actors::UserOnly).emits(&["money.changed"]));
 result!(#[schemars(rename = "MoneyExportOut")] ExportOut { pub path: String, pub transactions: usize });
-op!(Export, "money.export", PathIn => ExportOut, OpMeta::mutation(Scope::Global, 12, "Write the ledger as a Tally backup the phone can restore"));
+// It writes the whole ledger over any file the person owns: the person's alone, as import is.
+op!(Export, "money.export", PathIn => ExportOut,
+    OpMeta::mutation(Scope::Global, 12, "Write the ledger as a Tally backup the phone can restore").actors(Actors::UserOnly));
 result!(#[schemars(rename = "MoneySampleOut")] SampleOut { pub transactions: usize });
 op!(Sample, "money.sample", Empty => SampleOut,
     OpMeta::mutation(Scope::Global, 12, "Load Tally's sample household, only into an empty ledger; its accounts are named Sample").actors(Actors::UserOnly).emits(&["money.changed"]));

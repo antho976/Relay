@@ -766,14 +766,19 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value, age: Option<&Age>) {
     let earlier = last["sessions"].as_i64().unwrap_or(0);
     cell(&cells, "calendar", &caption, &format!("{sessions}{of}"), &format!("{earlier_name} {earlier}"), None);
     let vol = num(&week["volume"]).unwrap_or(0.0);
-    let prior = num(&last["volume"]).unwrap_or(0.0);
+    // The same stretch of the week before (up to the same weekday), never all of it: a
+    // Tuesday's one workout against a whole week read as a collapse every week until Sunday.
+    // An engine before that reading compares with the whole week, as it did.
+    let to_date = s.get("last_week_to_date").filter(|w| w.is_object());
+    let prior = num(&to_date.unwrap_or(last)["volume"]).unwrap_or(0.0);
+    let by_now = match (to_date.is_some(), stale) { (false, _) => "", (true, false) => " by now", (true, true) => ", day for day" };
     // An empty week says so: a percentage of nothing reads as a collapse.
     let change = if vol <= 0.0 {
         String::from(none)
     } else if prior > 0.0 {
-        format!("{} on {before}", whole_pct((vol / prior - 1.0) * 100.0))
+        format!("{} on {before}{by_now}", whole_pct((vol / prior - 1.0) * 100.0))
     } else {
-        format!("Nothing {before}")
+        format!("Nothing {before}{by_now}")
     };
     cell(&cells, "chart", "Volume", &volume(&week["volume"], &unit), &change, None);
     if let Some(volume_cell) = cells.last_child() {

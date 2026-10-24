@@ -1229,9 +1229,18 @@ fn clone_destination(workspace: &str, url: &str, requested: Option<&str>) -> Res
 /// crafted one can name `refs/heads/--output=/some/path`: the base branch reaches git's command
 /// line in several places, where that would read as an option. So a name that is not a
 /// [`plausible_branch`] is not taken.
+/// The branch sessions start from and are measured against: the remote's default
+/// (`refs/remotes/origin/HEAD`, which a clone writes), else whatever the checkout has out. A
+/// checkout added while it sits on a feature branch otherwise made that branch every
+/// session's base, every done's and every sweep's. Two file reads: this runs under the lock.
 fn detect_default_branch(repo: &Path) -> String {
-    let head = std::fs::read_to_string(repo.join(".git").join("HEAD")).unwrap_or_default();
-    head.trim().strip_prefix("ref: refs/heads/").filter(|name| plausible_branch(name)).map(str::to_string).unwrap_or_else(|| "main".to_string())
+    let git = repo.join(".git");
+    let read = |path: PathBuf, prefix: &str| {
+        std::fs::read_to_string(path).ok()?.trim().strip_prefix(prefix).filter(|name| plausible_branch(name)).map(str::to_string)
+    };
+    read(git.join("refs/remotes/origin/HEAD"), "ref: refs/remotes/origin/")
+        .or_else(|| read(git.join("HEAD"), "ref: refs/heads/"))
+        .unwrap_or_else(|| "main".to_string())
 }
 
 /// A branch name git would accept that cannot be read as an option: `git check-ref-format
@@ -1266,6 +1275,21 @@ mod tests {
 
     fn call(engine: &Engine, op: &str, payload: serde_json::Value) -> Result<serde_json::Value, BusError> {
         engine.dispatch(Request::new(Actor::User, op, payload), Door::InProcess).into_result()
+    }
+
+    /// A checkout added while it sits on a feature branch still gets the remote's default as
+    /// its base; without a remote, what it has out.
+    #[test]
+    fn the_base_is_the_remotes_default_before_the_checkouts_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = dir.path().join(".git");
+        fs::create_dir_all(git.join("refs/remotes/origin")).unwrap();
+        fs::write(git.join("HEAD"), "ref: refs/heads/relay/feature\n").unwrap();
+        assert_eq!(detect_default_branch(dir.path()), "relay/feature");
+        fs::write(git.join("refs/remotes/origin/HEAD"), "ref: refs/remotes/origin/trunk\n").unwrap();
+        assert_eq!(detect_default_branch(dir.path()), "trunk");
+        fs::write(git.join("refs/remotes/origin/HEAD"), "ref: refs/remotes/origin/--output=x\n").unwrap();
+        assert_eq!(detect_default_branch(dir.path()), "relay/feature", "never a name git reads as an option");
     }
 
     /// An engine on a store on disk, with workspace 1 holding project 1 (one commit), and the

@@ -1745,6 +1745,15 @@ fn freshest_base(repo: &gix::Repository, base: &str) -> Result<Tip, BusError> {
     }
 }
 
+/// The commit id of the freshest `base` as `checkout` sees it, from the refs on disk: what
+/// `session.done` measures a branch against. Relay fetches but never moves a local base, so a
+/// local `main` far behind `origin/main` would count everyone's merged work as the task's.
+/// `None` when the base cannot be read; the caller measures against the name, which fails.
+pub fn freshest_base_sha(checkout: &Path, base: &str) -> Option<String> {
+    let repo = gix::open(checkout).ok()?;
+    freshest_base(&repo, base).ok().map(|(_, tip)| tip.to_string())
+}
+
 /// How far each worktree of `root` is behind (and ahead of) the freshest `base`, from the refs
 /// already on disk: `worktree.drift`.
 pub fn drift(root: &Path, base: &str) -> Result<DriftOut, BusError> {

@@ -226,7 +226,7 @@ pub fn register(e: &mut Engine) {
     e.register::<TxUpdate>(|ctx, p| {
         let patch = TxPatch {
             r#type: p.r#type, amount: p.amount, date: p.date, account_id: p.account_id,
-            to_account_id: p.to_account_id, category_id: p.category_id, note: p.note,
+            to_account_id: p.to_account_id, category_id: p.category_id, note: p.note, clear_category: p.clear_category,
         };
         let (tx, previous) = ledger(ctx.engine(), |l| {
             let previous = l.tx(p.id)?;
@@ -280,14 +280,18 @@ pub fn register(e: &mut Engine) {
         ctx.emit("money.changed", json!({}));
         Ok(settings)
     });
-    // The file is read and decoded before the transaction opens; the restore is one ledger call.
+    // The file is read and decoded, and the restore written, before the transaction opens: the
+    // ledger has its own mutex, and a 64 MiB restore under the store's held every other request.
     e.register_staged::<Import, _>(
-        |_, p| read_backup(&p.path),
-        |ctx: &mut Ctx, _, file: BackupFile| {
+        |ctx, p| {
+            let file: BackupFile = read_backup(&p.path)?;
             let accounts = file.accounts.len();
             let transactions = ledger(ctx.engine(), |l| l.import_backup(&file))?;
-            ctx.emit("money.changed", json!({"imported": transactions}));
             Ok(ImportOut { kind: "backup".into(), transactions, accounts })
+        },
+        |ctx: &mut Ctx, _, out: ImportOut| {
+            ctx.emit("money.changed", json!({"imported": out.transactions}));
+            Ok(out)
         },
     );
     // The file is written before the transaction opens, which then only records that it was.
@@ -301,7 +305,11 @@ pub fn register(e: &mut Engine) {
         ctx.emit("money.changed", json!({}));
         Ok(SampleOut { transactions })
     });
-    e.register::<Sync>(|ctx, p| {
+    // The ledger has its own mutex and needs nothing from the store: the whole sync runs before
+    // the store's transaction opens. A replace's VACUUM INTO copies the whole money.db, and a
+    // cloud round applies up to 2000 changes; neither holds every other request (keystrokes
+    // included) behind it.
+    e.register_staged::<Sync, _>(|ctx, p| {
         let device = p.device.trim();
         if device.is_empty() || device.chars().count() > 64 || device.contains(char::is_control) {
             return Err(BusError::invalid("money.invalid", "A device name is 1 to 64 printable characters"));
@@ -317,11 +325,12 @@ pub fn register(e: &mut Engine) {
         if out_of_range > 0 {
             tracing::warn!(device, out_of_range, "money.sync: changes stamped below 0 or more than a day ahead were not applied");
         }
-        let out = ledger(ctx.engine(), |l| {
+        ledger(ctx.engine(), |l| {
             l.sync_page(device, p.replace.unwrap_or(false), p.since, p.generation.as_deref(), &p.changes, limit, &crate::time::now())
-        })?;
+        })
+    }, |ctx: &mut Ctx, p, out: relay_money::views::SyncOut| {
         if out.applied > 0 || out.replaced {
-            ctx.emit("money.changed", json!({"synced": device, "applied": out.applied}));
+            ctx.emit("money.changed", json!({"synced": p.device.trim(), "applied": out.applied}));
         }
         Ok(out)
     });
@@ -380,11 +389,14 @@ fn register_invest(e: &mut Engine) {
         let text = read_export(&p.path)?;
         ledger(ctx.engine(), |l| l.invest_preview(&text, p.account_id))
     });
-    // The file is read before the transaction opens; the plan and its writes are one short ledger call.
+    // The file is read, and the plan written, before the transaction opens (the ledger's own
+    // mutex is all it needs).
     e.register_staged::<InvestImport, _>(
-        |_, p| read_export(&p.path),
-        |ctx: &mut Ctx, p, text: String| {
-            let result = ledger(ctx.engine(), |l| l.invest_import(&text, &p.accounts, p.account_id))?;
+        |ctx, p| {
+            let text = read_export(&p.path)?;
+            ledger(ctx.engine(), |l| l.invest_import(&text, &p.accounts, p.account_id))
+        },
+        |ctx: &mut Ctx, _, result| {
             ctx.emit("money.changed", json!({"imported": result.holdings + result.activities}));
             Ok(result)
         },

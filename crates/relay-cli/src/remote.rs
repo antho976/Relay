@@ -52,9 +52,15 @@ pub enum RemoteCommand {
     },
     /// Let in the phone waiting on an open pairing window (one allowed on Discord, when the
     /// desktop could not ask)
-    Approve,
+    Approve {
+        /// The window's code, as the toast names it; needed when more than one phone waits
+        code: Option<String>,
+    },
     /// Turn away the phone waiting on an open pairing window
-    Decline,
+    Decline {
+        /// The window's code; needed when more than one phone waits
+        code: Option<String>,
+    },
     /// List paired phones
     Devices,
     /// Forget a paired phone by id
@@ -334,8 +340,8 @@ const SESSION_VARS: &[&str] = &["RELAY_SESSION", "RELAY_TOKEN"];
 fn person_only(cmd: &RemoteCommand) -> Option<&'static str> {
     match cmd {
         RemoteCommand::Pair { .. } | RemoteCommand::Serve { pair: true, .. } => Some("pair"),
-        RemoteCommand::Approve => Some("approve"),
-        RemoteCommand::Decline => Some("decline"),
+        RemoteCommand::Approve { .. } => Some("approve"),
+        RemoteCommand::Decline { .. } => Some("decline"),
         RemoteCommand::Revoke { .. } => Some("revoke"),
         RemoteCommand::Via { .. } => Some("via"),
         _ => None,
@@ -451,18 +457,37 @@ pub async fn run(requested: Instance, cmd: RemoteCommand) -> Result<u8> {
             }
             Ok(0)
         }
-        RemoteCommand::Approve | RemoteCommand::Decline => {
-            let yes = matches!(cmd, RemoteCommand::Approve);
+        RemoteCommand::Approve { ref code } | RemoteCommand::Decline { ref code } => {
+            let yes = matches!(cmd, RemoteCommand::Approve { .. });
+            let wanted = code.as_deref().map(normalize_code);
+            // Never a guess: with several phones waiting (one window per phone allowed on
+            // Discord), the first in the file may not be the one the toast named.
             let answered = Registry::update(&ctx.registry_path, |r| {
-                let waiting = r.pending.iter().find_map(|p| {
-                    p.request.as_ref().filter(|q| q.approved.is_none()).map(|q| (p.code.clone(), q.device_name.clone()))
-                });
-                Ok::<_, anyhow::Error>(waiting.map(|(code, name)| (r.decide(&code, yes), name)))
+                let waiting: Vec<(String, String)> = r.pending.iter()
+                    .filter_map(|p| p.request.as_ref().filter(|q| q.approved.is_none()).map(|q| (p.code.clone(), q.device_name.clone())))
+                    .filter(|(code, _)| wanted.as_ref().is_none_or(|wanted| normalize_code(code) == *wanted))
+                    .collect();
+                Ok::<_, anyhow::Error>(match waiting.as_slice() {
+                    [(code, name)] => Ok((r.decide(code, yes), name.clone())),
+                    _ => Err(waiting),
+                })
             })?;
             match answered {
-                Some((true, name)) if yes => println!("Approved \"{name}\". `relay remote devices` lists it; `relay remote revoke <id>` removes it."),
-                Some((true, name)) => println!("Declined \"{name}\"; nothing was paired."),
-                _ => println!("No phone is waiting on a pairing window."),
+                Ok((true, name)) if yes => println!("Approved \"{name}\". `relay remote devices` lists it; `relay remote revoke <id>` removes it."),
+                Ok((true, name)) => println!("Declined \"{name}\"; nothing was paired."),
+                Ok((false, _)) => println!("That pairing window closed before it was answered."),
+                Err(waiting) if waiting.is_empty() => {
+                    let with = code.as_deref().map(|code| format!(" with the code {code}")).unwrap_or_default();
+                    println!("No phone is waiting on a pairing window{with}.");
+                }
+                Err(waiting) => {
+                    let verb = if yes { "approve" } else { "decline" };
+                    println!("{} phones are waiting; name the one with its code:", waiting.len());
+                    for (code, name) in &waiting {
+                        println!("  relay remote {verb} {code}    \"{name}\"");
+                    }
+                    return Ok(1);
+                }
             }
             Ok(0)
         }
@@ -568,8 +593,8 @@ mod tests {
         let refused = [
             RemoteCommand::Pair { no_confirm: true, via_only: true },
             serve(true),
-            RemoteCommand::Approve,
-            RemoteCommand::Decline,
+            RemoteCommand::Approve { code: None },
+            RemoteCommand::Decline { code: Some("ABCD-EFGH".into()) },
             RemoteCommand::Revoke { id: "abc".into() },
             RemoteCommand::Via { url: "wss://evil.example".into(), public: None },
             RemoteCommand::Via { url: "off".into(), public: None },

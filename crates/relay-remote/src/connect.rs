@@ -228,7 +228,10 @@ pub fn parse_claim(status: u16, o: &Value) -> Claim {
 pub fn spawn_host(ctx: Arc<Ctx>, server: String, token: String) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let api = Server::new(&server);
-        let mut seen: HashSet<String> = HashSet::new();
+        // A phone with a window open for it. Taken out again when the window is done with, however
+        // it went: a hand-over that failed once (a cold server past its deadline, a blip) is
+        // offered again on a later poll instead of never until Relay restarts.
+        let seen: Arc<std::sync::Mutex<HashSet<String>>> = Arc::default();
         let mut forgotten = false;
         loop {
             let (a, t) = (api.clone(), token.clone());
@@ -236,12 +239,14 @@ pub fn spawn_host(ctx: Arc<Ctx>, server: String, token: String) -> tokio::task::
                 Ok(Ok(Some(phones))) => {
                     forgotten = false;
                     for phone in phones {
-                        if seen.insert(phone.id.clone()) {
-                            let (ctx, api, token) = (ctx.clone(), api.clone(), token.clone());
+                        if seen.lock().unwrap_or_else(|p| p.into_inner()).insert(phone.id.clone()) {
+                            let (ctx, api, token, seen) = (ctx.clone(), api.clone(), token.clone(), seen.clone());
                             tokio::spawn(async move {
+                                let id = phone.id.clone();
                                 if let Err(e) = open_for_phone(ctx, api, token, phone).await {
                                     tracing::warn!(error = %format!("{e:#}"), "opening a pairing window for a phone failed");
                                 }
+                                seen.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
                             });
                         }
                     }
@@ -308,9 +313,11 @@ async fn confirm(ctx: &Ctx, code: &str, phone: &WaitingPhone) -> Result<()> {
             if request.approved.is_some() {
                 return Ok(());
             }
+            // The names are whatever the presenter sent, and most notification daemons read the
+            // body as markup: escaped, a `<…>` in one cannot hide or fake part of the question.
             let body = format!(
                 "\"{}\" ({}) asks to pair with this PC. You allowed {} on Discord with the code {}. It gets full control of this PC as you.",
-                request.device_name, request.origin, phone.device, phone.code
+                markup_escaped(&request.device_name), markup_escaped(&request.origin), markup_escaped(&phone.device), markup_escaped(&phone.code)
             );
             let answer = tokio::task::spawn_blocking(move || ask_desktop("Pair a phone with Relay?", &body)).await.ok().flatten();
             match answer {
@@ -321,7 +328,7 @@ async fn confirm(ctx: &Ctx, code: &str, phone: &WaitingPhone) -> Result<()> {
                 None => {
                     crate::bridge::toast(
                         ctx.socket_path.clone(),
-                        format!("\"{}\" waits to pair with this PC. Run `relay remote approve` within a minute to let it in.", request.device_name),
+                        format!("\"{}\" waits to pair with this PC. Run `relay remote approve {}` within a minute to let it in.", request.device_name, pending.code),
                         "warn",
                         60_000,
                     )
@@ -352,6 +359,11 @@ fn capitalized(s: &str) -> String {
 /// libnotify 0.7.9 or later). `RELAY_ASK` names another program to ask with: it is given the
 /// title and the question, and prints `accept` or `deny`. `None` when nobody answered, or there is
 /// nothing to ask with.
+/// `text` with `&`, `<` and `>` escaped, for a notification body read as markup.
+fn markup_escaped(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
 fn ask_desktop(title: &str, body: &str) -> Option<bool> {
     let mut cmd = match std::env::var_os("RELAY_ASK") {
         Some(program) => {
@@ -378,6 +390,11 @@ fn ask_desktop(title: &str, body: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_cannot_write_markup_into_the_question() {
+        assert_eq!(markup_escaped("Pixel <b>ok</b> & co"), "Pixel &lt;b&gt;ok&lt;/b&gt; &amp; co");
+    }
 
     #[test]
     fn every_way_of_naming_the_server_reaches_its_root() {

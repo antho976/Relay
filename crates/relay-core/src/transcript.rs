@@ -116,25 +116,58 @@ pub fn read(provider: Provider, path: &Path, worktree: &Path, after: Option<u64>
     let end = len.min(start + MAX_READ);
     file.seek(SeekFrom::Start(start))?;
     let mut bytes = Vec::with_capacity((end - start) as usize);
-    file.take(end - start).read_to_end(&mut bytes)?;
+    file.by_ref().take(end - start).read_to_end(&mut bytes)?;
     // The reply goes to whoever asked, a phone included.
     crate::redact::Redactor::default().redact(&mut bytes);
     // A tail read begins mid-line; a read of any kind may end mid-line while the agent writes.
     let first = if resumed.is_none() && start > 0 { bytes.iter().position(|b| *b == b'\n').map_or(bytes.len(), |i| i + 1) } else { 0 };
     let last = bytes.iter().rposition(|b| *b == b'\n').map_or(first, |i| i + 1).max(first);
     let mut messages = Vec::new();
+    if resumed.is_some() && last == first && end - start == MAX_READ {
+        // One line longer than a whole read (a tool result of many images, logged as base64
+        // twice): passed over once it ends, or every later read would read it again for nothing.
+        if let Some(past) = line_end(&mut file, end)? {
+            messages.push(TranscriptMessage { id: format!("o{start}"), role: "note".into(), body: json!({"text": "A long entry was skipped"}), created_at: String::new() });
+            return Ok(TranscriptOut { messages, cursor: (tag << OFFSET_BITS) | past, reset, found: true });
+        }
+    }
     let mut offset = start + first as u64;
+    let mut cursor = start + last as u64;
     for line in bytes[first..last].split(|b| *b == b'\n') {
         let at = offset;
         offset += line.len() as u64 + 1;
+        // Resumed, the oldest `limit` are kept and the cursor stops after the line that holds
+        // the last of them, so the rest come next time rather than never.
+        if resumed.is_some() && messages.len() >= limit {
+            cursor = at;
+            break;
+        }
         let Ok(record) = serde_json::from_slice::<Value>(line) else { continue };
         match provider {
             Provider::Claude => claude_record(&record, at, worktree, &mut messages),
             Provider::Codex => codex_record(&record, at, &mut messages),
         }
     }
-    if messages.len() > limit { messages.drain(..messages.len() - limit); }
-    Ok(TranscriptOut { messages, cursor: (tag << OFFSET_BITS) | (start + last as u64), reset, found: true })
+    if messages.len() > limit && resumed.is_none() { messages.drain(..messages.len() - limit); }
+    Ok(TranscriptOut { messages, cursor: (tag << OFFSET_BITS) | cursor, reset, found: true })
+}
+
+/// The offset just past the first newline at or after `from`, or `None` when the file ends first
+/// (the line is still being written).
+fn line_end(file: &mut File, from: u64) -> std::io::Result<Option<u64>> {
+    file.seek(SeekFrom::Start(from))?;
+    let mut chunk = vec![0u8; 64 * 1024];
+    let mut at = from;
+    loop {
+        let n = file.read(&mut chunk)?;
+        if n == 0 {
+            return Ok(None);
+        }
+        if let Some(i) = chunk[..n].iter().position(|b| *b == b'\n') {
+            return Ok(Some(at + i as u64 + 1));
+        }
+        at += n as u64;
+    }
 }
 
 fn message(id: String, role: &str, body: Value, record: &Value) -> TranscriptMessage {
@@ -558,6 +591,54 @@ mod tests {
         assert_eq!(out.messages[3].body["text"], "ok");
         assert_eq!(out.messages[5].body["text"], "/compact");
         assert!(out.found && !out.reset);
+    }
+
+    /// A resumed read keeps the oldest `limit` and leaves its cursor after them, so a phone that
+    /// was away for 300 messages gets them all over its next reads, with no hole.
+    #[test]
+    fn a_resumed_read_past_its_limit_leaves_the_rest_for_the_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("c.jsonl");
+        let say = |n: usize| json!({"type": "user", "uuid": format!("u{n}"), "message": {"content": format!("message {n}")}});
+        fs::write(&path, lines(&[say(0)])).unwrap();
+        let wt = Path::new("/wt");
+        let first = read(Provider::Claude, &path, wt, None, 2).unwrap();
+        let more: Vec<Value> = (1..=5).map(say).collect();
+        fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(lines(&more).as_bytes()).unwrap();
+        let (mut cursor, mut seen) = (first.cursor, Vec::new());
+        for _ in 0..4 {
+            let out = read(Provider::Claude, &path, wt, Some(cursor), 2).unwrap();
+            assert!(!out.reset && out.messages.len() <= 2);
+            seen.extend(out.messages.into_iter().map(|m| m.id));
+            cursor = out.cursor;
+        }
+        assert_eq!(seen, ["u1", "u2", "u3", "u4", "u5"]);
+        // A tail read still takes the newest.
+        let tail = read(Provider::Claude, &path, wt, None, 2).unwrap();
+        assert_eq!(tail.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["u4", "u5"]);
+    }
+
+    /// One line longer than a whole read is passed over with a note, once it has ended; before
+    /// that, the cursor waits for it.
+    #[test]
+    fn a_line_longer_than_a_read_is_skipped_once_it_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("c.jsonl");
+        let wt = Path::new("/wt");
+        fs::write(&path, lines(&[json!({"type": "user", "uuid": "u0", "message": {"content": "before"}})])).unwrap();
+        let cursor = read(Provider::Claude, &path, wt, None, 50).unwrap().cursor;
+        let huge = format!("{{\"type\":\"user\",\"uuid\":\"big\",\"message\":{{\"content\":\"{}\"}}}}", "x".repeat(MAX_READ as usize + 10));
+        fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(huge.as_bytes()).unwrap();
+        let waiting = read(Provider::Claude, &path, wt, Some(cursor), 50).unwrap();
+        assert!(waiting.messages.is_empty());
+        assert_eq!(waiting.cursor, cursor, "the line is still being written");
+        let after = lines(&[json!({"type": "user", "uuid": "u1", "message": {"content": "after"}})]);
+        fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(format!("\n{after}").as_bytes()).unwrap();
+        let skipped = read(Provider::Claude, &path, wt, Some(cursor), 50).unwrap();
+        assert_eq!(skipped.messages.len(), 1);
+        assert_eq!((skipped.messages[0].role.as_str(), &skipped.messages[0].body["text"]), ("note", &json!("A long entry was skipped")));
+        let next = read(Provider::Claude, &path, wt, Some(skipped.cursor), 50).unwrap();
+        assert_eq!(next.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["u1"]);
     }
 
     #[test]

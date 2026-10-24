@@ -211,7 +211,9 @@ pub struct TxQuery {
 #[schemars(rename = "MoneyTxPage")]
 pub struct TxPage {
     pub period: PeriodView,
+    /// The newest matching entries, at most the query's `limit`.
     pub transactions: Vec<Tx>,
+    /// What every matching entry in the period took in and spent, listed or not.
     #[schemars(extend("x-unit" = "minor"))]
     pub income: i64,
     #[schemars(extend("x-unit" = "minor"))]
@@ -245,6 +247,9 @@ pub struct TxPatch {
     pub to_account_id: Option<i64>,
     pub category_id: Option<i64>,
     pub note: Option<String>,
+    /// True takes the entry's category off (an absent `category_id` keeps it): what an Undo needs
+    /// to put back an entry that had none. Ignored when `category_id` is given.
+    pub clear_category: Option<bool>,
 }
 
 /// What an account edit changes; absent fields keep their value. A registration is kept only on

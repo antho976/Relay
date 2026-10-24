@@ -81,10 +81,17 @@ claude -p --input-format stream-json --output-format stream-json --verbose
 - An agent idle for 15 minutes is closed; at most four run at once, the one used longest ago closing
   first. An agent that exits mid-turn leaves an `error` message saying so, with its last stderr line.
 
-**Ops.** `thread.list`, `thread.get` (messages after an id, for catching up), and, the person's
+**Ops.** `thread.list`, `thread.get`, and, the person's
 alone: `thread.create` (optionally with the first message, which also names the thread),
 `thread.send`, `thread.stop`, `thread.rename`, `thread.delete`, and a message's pictures,
 `thread.upload` and `thread.image` (below).
+
+`thread.get` answers with about 1 MiB of messages, oldest first: the newest, or with `after` an id
+the ones after it from the oldest on (for catching up). `earlier` says older ones were left out
+(`before` the first id reads them; the desktop shows a "Show earlier messages" key), and `later`
+that newer ones were (`after` the last id). A tool answer past 8,000 characters is cut there and
+marked `"cut": true`; the agent keeps up to 20,000. A thread's history only grows, and a reply
+holding all of it would one day pass the desktop's 2 MiB line, and the thread would never open.
 
 **Events.** `thread.changed` (`{"thread"}`, or `{"id", "deleted": true}`), `thread.message`
 (`{"thread", "message"}`), `thread.delta` (`{"thread", "text"}`, not stored), `thread.proposal`

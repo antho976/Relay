@@ -227,7 +227,7 @@ fn read(l: &mut Ledger, action: &Action) -> Result<Vec<Item>, LedgerError> {
                     Ok(entry) => {
                         let patch = TxPatch {
                             r#type: p.r#type, amount: p.amount, date: p.date.clone(), account_id: p.account_id,
-                            to_account_id: p.to_account_id, category_id: p.category_id, note: p.note.clone(),
+                            to_account_id: p.to_account_id, category_id: p.category_id, note: p.note.clone(), clear_category: p.clear_category,
                         };
                         let after = l.trial(|l| l.tx_update(p.id, &patch)).ok();
                         same(Item { entry: Some(entry), entry_after: after, ..Default::default() })
@@ -293,7 +293,7 @@ fn apply(l: &mut Ledger, action: &Action) -> Result<(), LedgerError> {
         Action::TxUpdate(patches) => patches.iter().try_for_each(|p| {
             let patch = TxPatch {
                 r#type: p.r#type, amount: p.amount, date: p.date.clone(), account_id: p.account_id,
-                to_account_id: p.to_account_id, category_id: p.category_id, note: p.note.clone(),
+                to_account_id: p.to_account_id, category_id: p.category_id, note: p.note.clone(), clear_category: p.clear_category,
             };
             l.tx_update(p.id, &patch).map(|_| ()).map_err(|e| about(e, &format!("Entry {}", p.id)))
         }),
@@ -334,10 +334,11 @@ fn put_back(l: &mut Ledger, action: &Action, items: &[Item]) -> Result<(), Ledge
             let patch = TxPatch {
                 r#type: Some(was.r#type), amount: Some(was.amount), date: Some(was.date.clone()), account_id: Some(was.account_id),
                 to_account_id: was.to_account_id, category_id: was.category_id, note: Some(was.note.clone()),
+                clear_category: Some(was.category_id.is_none()),
             };
             let back = l.tx_update(was.id, &patch)?;
             if probe(&back) != probe(was) {
-                return Err(LedgerError::Invalid(format!("Entry {} cannot be put back exactly (an entry cannot lose its category here): change it in Tally", was.id)));
+                return Err(LedgerError::Invalid(format!("Entry {} cannot be put back exactly: change it in Tally", was.id)));
             }
             Ok(())
         }),
