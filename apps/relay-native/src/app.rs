@@ -914,8 +914,8 @@ struct Sidebar {
     root: gtk::Box,
     nav: gtk::Box,
     money_nav: gtk::Box,
-    /// The workspace heading and project list, which the Money space hides.
-    workspaces: [gtk::Widget; 2],
+    /// The workspace heading, the project filter and list, which the Money space hides.
+    workspaces: gtk::Widget,
     add_project: gtk::Button,
     projects_box: gtk::Box,
     /// The foot: the usage card (placed once usage exists) above you and Settings.
@@ -940,11 +940,16 @@ fn sidebar() -> Sidebar {
     section.append(&heading);
     let add_project = icon_button("plus", "Add workspace");
     section.append(&add_project);
-    sidebar.append(&section);
+    // One block, so the filter the registry puts between the heading and the list
+    // (`registry_filter`) hides with them in the Threads space.
+    let workspaces = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    workspaces.set_vexpand(true);
+    workspaces.append(&section);
     let projects_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let project_scroll = scrolled(&projects_box);
     project_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    sidebar.append(&project_scroll);
+    workspaces.append(&project_scroll);
+    sidebar.append(&workspaces);
     // You, at the foot: your initial and first name, and the gear that opens Settings.
     let settings_key = button("", "nav");
     settings_key.add_css_class("settings-key");
@@ -965,7 +970,7 @@ fn sidebar() -> Sidebar {
     sidebar_footer.add_css_class("sidebar-footer");
     sidebar_footer.append(&settings_key);
     sidebar.append(&sidebar_footer);
-    let workspaces = [section.upcast(), project_scroll.upcast()];
+    let workspaces = workspaces.upcast();
     Sidebar { root: sidebar, nav, money_nav, workspaces, add_project, projects_box, footer: sidebar_footer, settings_key }
 }
 
@@ -1150,6 +1155,8 @@ struct StatusBar {
     device_status: gtk::Label,
     resources_key: gtk::Button,
     resource_status: gtk::Box,
+    /// The project, its branch and the machine, and the phone: the dev space's, hidden in Threads.
+    dev_only: Vec<gtk::Widget>,
 }
 
 /// The bar, and the usage state behind the sidebar's card (placed by `Ui::new`).
@@ -1162,17 +1169,19 @@ fn status_bar() -> (StatusBar, status::UsageState) {
     let status_branch = label("", "mono");
     status_branch.set_ellipsize(gtk::pango::EllipsizeMode::End);
     status_branch.set_max_width_chars(18);
-    bottom.append(&status_project);
-    bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+    let project_cells = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    bottom.append(&project_cells);
+    project_cells.append(&status_project);
+    project_cells.append(&gtk::Separator::new(gtk::Orientation::Vertical));
     // The branch, when there is a project to have one: no bare branch mark beside "No project".
     let branch_cell = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     branch_cell.append(&crate::icons::image("branch", 11));
     branch_cell.append(&status_branch);
     branch_cell.append(&gtk::Separator::new(gtk::Orientation::Vertical));
     branch_cell.set_visible(false);
-    bottom.append(&branch_cell);
+    project_cells.append(&branch_cell);
     status_branch.connect_label_notify(move |l| branch_cell.set_visible(!l.label().is_empty()));
-    bottom.append(&label("linux · local", "status-platform"));
+    project_cells.append(&label("linux · local", "status-platform"));
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     bottom.append(&spacer);
@@ -1195,10 +1204,12 @@ fn status_bar() -> (StatusBar, status::UsageState) {
     let usage = status::UsageState::new();
     bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
     bottom.append(&gaming_key::build());
-    bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+    let devices_rule = gtk::Separator::new(gtk::Orientation::Vertical);
+    bottom.append(&devices_rule);
     bottom.append(&devices_key);
     bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
     bottom.append(&resources_key);
+    let dev_only = vec![project_cells.upcast(), devices_rule.upcast(), devices_key.clone().upcast()];
     let bar = StatusBar {
         root: bottom,
         status_project,
@@ -1208,6 +1219,7 @@ fn status_bar() -> (StatusBar, status::UsageState) {
         device_status,
         resources_key,
         resource_status,
+        dev_only,
     };
     (bar, usage)
 }
@@ -1441,7 +1453,8 @@ impl Ui {
         // The title bar keeps one set of keys on every page of a space (Window presets takes you
         // to the wall it arranges); the Threads space has none of them.
         let mut dev_only: Vec<gtk::Widget> = vec![side.nav.clone().upcast(), top.skills_key.clone().upcast(), top.plugins_key.clone().upcast(), top.layouts_key.clone().upcast(), top.assistant_key.clone().upcast(), top.launch_key.clone().upcast()];
-        dev_only.extend(side.workspaces.iter().cloned());
+        dev_only.push(side.workspaces.clone());
+        dev_only.extend(bar.dev_only.iter().cloned());
         crate::money::install(&ui, &side.money_nav, &top.money_add, dev_only);
         crate::design::install(&ui);
         ui
