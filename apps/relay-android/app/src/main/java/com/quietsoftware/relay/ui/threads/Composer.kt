@@ -1,42 +1,19 @@
 package com.quietsoftware.relay.ui.threads
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -49,10 +26,7 @@ import com.quietsoftware.relay.ui.LocalNav
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.dev.Attachment
 import com.quietsoftware.relay.ui.dev.AttachmentStrip
-import com.quietsoftware.relay.ui.dev.Chip
 import com.quietsoftware.relay.ui.dev.MAX_PICTURES
-import com.quietsoftware.relay.ui.kit.Glyph
-import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.TOUCH
 import com.quietsoftware.relay.ui.theme.Relay
@@ -167,17 +141,18 @@ internal fun Nav.pickModel(model: String, local: LocalModels) {
 }
 
 /**
- * The message box (threads.css `.threads-composer`): raised, a strong edge that lights when
- * focused, the text growing to about six lines, and under it the model and effort chips, what
- * the agent may do, and the send key, which stops the reply while the agent works. [hint] is the
- * placeholder: an open question on a new thread, what the thread is about in an open one.
+ * The message box, as Claude's app draws its bar ([TalkBar]): the words on top, growing to about
+ * eight lines, and under them a round key for pictures and one for the effort on the left, the
+ * model on the right, and the round key: clay to send, the microphone with nothing typed, a stop
+ * square while the agent works. [hint] is the placeholder: an open question on a new thread, what
+ * the thread is about in an open one.
  *
- * With [onPick], a picture key leads the chips, as in an agent's conversation: the [pictures]
- * picked show over the text, each sent to the PC as it is picked, so the key needs the PC
- * ([online]). A model on the PC itself ([local]) cannot read them, so on one the key steps aside
- * and the box says why; it has no effort either.
+ * With [onPick], the picture key leads: the [pictures] picked show over the text, each sent to the
+ * PC as it is picked, so the key needs the PC ([online]). A model on the PC itself ([local])
+ * cannot read them, so on one the key steps aside and the box says why; it has no effort either.
+ * The model and the effort wait while a reply is written (`thread.set` closes a running agent).
  *
- * [limits] is the line on what the agent may do, under the box.
+ * [limits] is the line on what the agent may do, under the bar.
  */
 @Composable
 internal fun Composer(
@@ -205,8 +180,6 @@ internal fun Composer(
 ) {
     val c = Relay.colors
     val nav = LocalNav.current
-    val source = remember { MutableInteractionSource() }
-    val focused by source.collectIsFocusedAsState()
     // The text with its cursor: a change from outside (Edit, dictation) puts the cursor at its end.
     var field by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
     val shown = if (field.text == value) field else TextFieldValue(value, TextRange(value.length))
@@ -215,123 +188,72 @@ internal fun Composer(
     // The models a thread may run on, the PC's own under their heading.
     val models = remember(local) { MODELS + local.present }
     val groups = remember(local) { local.present.firstOrNull()?.let { mapOf(it.first to "On this PC") }.orEmpty() }
-    BoxWithConstraints(modifier.fillMaxWidth()) {
-        val wide = maxWidth >= 440.dp
-        Column {
-            Column(
-                Modifier.fillMaxWidth().clip(Radii.card).background(c.raised)
-                    .border(1.dp, if (focused) c.lineFocus else c.strong, Radii.card)
-                    .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 6.dp),
-            ) {
-                if (pictures.isNotEmpty()) AttachmentStrip(pictures, onUnpick)
-                BasicTextField(
-                    value = shown,
-                    onValueChange = {
-                        field = it
-                        if (it.text != value) onValue(it.text)
-                    },
-                    modifier = Modifier.fillMaxWidth().padding(end = 8.dp).heightIn(min = 24.dp).then(if (focus != null) Modifier.focusRequester(focus) else Modifier),
-                    textStyle = Relay.type.body.copy(color = c.ink),
-                    cursorBrush = SolidColor(c.ink),
-                    minLines = 1,
-                    maxLines = 6,
-                    interactionSource = source,
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                    decorationBox = { inner ->
-                        Box {
-                            if (value.isEmpty()) T(hint, style = Relay.type.body, color = c.ink3, maxLines = 1)
-                            inner()
-                        }
-                    },
-                )
-                Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    // The chips scroll on a narrow phone, as the agent chat's do; the keys stay put.
-                    Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        if (onPick != null && reads) Chip(
-                            "",
-                            if (online) "Attach a photo or a screenshot" else "Attach a photo or a screenshot: needs the PC",
-                            enabled = online && pictures.size < MAX_PICTURES,
-                            glyph = "file-image",
-                            whyOff = { nav.shell.toast(if (!online) "Pictures go to the PC as they are picked, and it is out of reach" else "Up to $MAX_PICTURES pictures in one message") },
-                            onClick = { onPick() },
-                        )
-                        // `thread.set` closes a running agent: a choice waits for the reply to end, and says so.
-                        val modelSpoken = "Model: ${modelChip(model, local)}" + if (onPick != null && !reads) ". $PICTURES_NEED_CLAUDE" else ""
-                        Picker("claude", modelChip(model, local), modelSpoken, models, model, onModel, canPick, whyOff = WAITS.takeIf { working }, groups = groups)
-                        Picker(
-                            "sliders", effortChip(effort), "Effort: ${effortName(effort)}", EFFORTS, effort, onEffort, canPick && !onPc,
-                            whyOff = if (onPc) "A model on this PC has no effort setting" else WAITS.takeIf { working },
-                        )
-                        if (wide) T(limits.substringBefore(" · "), Modifier.padding(start = 4.dp), Relay.type.caption, c.ink3, maxLines = 1)
-                    }
-                    if (onDictate != null && !working) {
-                        Box(
-                            Modifier.size(TOUCH).clip(Radii.key).clickable(onClickLabel = "Dictate", role = Role.Button, onClick = onDictate)
-                                .semantics { contentDescription = "Dictate a message" },
-                            contentAlignment = Alignment.Center,
-                        ) { com.quietsoftware.relay.ui.dev.MicGlyph(18.dp, c.ink3) }
-                    }
-                    SendKey(working, enabled = working || (canSend && (value.isNotBlank() || pictures.isNotEmpty())), onClick = { if (working) onStop() else onSend() })
+    val empty = value.isBlank() && pictures.isEmpty()
+    val key = when {
+        working -> BarKey.Stop
+        empty && onDictate != null -> BarKey.Speak
+        else -> BarKey.Send
+    }
+    var choosingModel by remember { mutableStateOf(false) }
+    var choosingEffort by remember { mutableStateOf(false) }
+    Column(modifier.fillMaxWidth()) {
+        TalkBar(
+            field = shown,
+            onField = {
+                field = it
+                if (it.text != value) onValue(it.text)
+            },
+            placeholder = hint,
+            key = key,
+            keyEnabled = when (key) {
+                BarKey.Stop, BarKey.Speak -> true
+                else -> canSend && !empty
+            },
+            onKey = {
+                when (key) {
+                    BarKey.Stop -> onStop()
+                    BarKey.Speak -> onDictate?.invoke()
+                    else -> onSend()
                 }
-            }
-            val caption = Relay.type.caption.copy(fontSize = 11.5.sp, textAlign = TextAlign.Center)
-            if (!wide) T(limits, Modifier.fillMaxWidth().padding(top = 6.dp), caption, c.ink3, maxLines = 1)
-            if (onPick != null && !reads) {
-                T(if (onPc) LOCAL_CANNOT_READ else "$PICTURES_NEED_CLAUDE: this one runs on the PC itself", Modifier.fillMaxWidth().padding(top = if (wide) 6.dp else 2.dp), caption, c.ink3, maxLines = 2)
-            }
-        }
-    }
-}
-
-/**
- * A chip that opens its list of choices above it; [spoken] names it and its choice for a screen
- * reader. Off, a tap says [whyOff] (a reply to wait for) instead of nothing. [groups] heads the
- * options they name: the PC's own models.
- */
-@Composable
-private fun Picker(
-    glyph: String,
-    caption: String,
-    spoken: String,
-    options: List<Pair<String, String>>,
-    selected: String,
-    onPick: (String) -> Unit,
-    enabled: Boolean,
-    whyOff: String?,
-    groups: Map<String, String> = emptyMap(),
-) {
-    val c = Relay.colors
-    val nav = LocalNav.current
-    var open by remember { mutableStateOf(false) }
-    Box(
-        Modifier.heightIn(min = TOUCH).clickable(enabled = enabled || whyOff != null, role = Role.Button) { if (enabled) open = true else whyOff?.let { nav.shell.toast(it) } }
-            .semantics { contentDescription = spoken },
-        contentAlignment = Alignment.Center,
-    ) {
-        Row(
-            Modifier.alpha(if (enabled) 1f else .45f).heightIn(min = 30.dp).clip(Radii.pill).background(c.slab).border(1.dp, c.strong, Radii.pill).padding(start = 8.dp, end = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            },
+            focus = focus,
+            above = { if (pictures.isNotEmpty()) AttachmentStrip(pictures, onUnpick) },
+            trailing = {
+                // `thread.set` closes a running agent: a choice waits for the reply to end, and says so.
+                val spoken = "Model: ${modelChip(model, local)}" + if (onPick != null && !reads) ". $PICTURES_NEED_CLAUDE" else ""
+                BarLabel(modelChip(model, local), spoken, enabled = canPick, whyOff = if (working) { { nav.shell.toast(WAITS) } } else null, onClick = { choosingModel = true }) {
+                    Choices(choosingModel, { choosingModel = false }, models, model, onModel, above = true, anchor = TOUCH, groups = groups)
+                }
+            },
         ) {
-            Glyph(glyph, 13.dp, c.ink3)
-            T(caption, style = Relay.type.caption, color = c.ink2, maxLines = 1, weight = FontWeight.Medium)
-            Glyph("chevron-down", 11.dp, c.ink3)
+            if (onPick != null && reads) BarButton(
+                "plus",
+                if (online) "Attach a photo or a screenshot" else "Attach a photo or a screenshot: needs the PC",
+                enabled = online && pictures.size < MAX_PICTURES,
+                whyOff = { nav.shell.toast(if (!online) "Pictures go to the PC as they are picked, and it is out of reach" else "Up to $MAX_PICTURES pictures in one message") },
+                onClick = { onPick() },
+            )
+            Box {
+                BarButton(
+                    "sliders",
+                    "Effort: ${effortName(effort)}",
+                    enabled = canPick && !onPc,
+                    whyOff = when {
+                        onPc -> { { nav.shell.toast("A model on this PC has no effort setting") } }
+                        working -> { { nav.shell.toast(WAITS) } }
+                        else -> null
+                    },
+                    onClick = { choosingEffort = true },
+                )
+                Choices(choosingEffort, { choosingEffort = false }, EFFORTS, effort, onEffort, above = true, anchor = TOUCH)
+            }
+            // A chosen effort shows beside its key, as Claude's app names a tool that is on.
+            if (effort.isNotEmpty() && !onPc) T(effortChip(effort), Modifier.padding(start = 2.dp), Relay.type.caption, c.ink3, maxLines = 1)
         }
-        Choices(open, { open = false }, options, selected, onPick, above = true, anchor = TOUCH, groups = groups)
-    }
-}
-
-/** The send key: 34dp, the surface's one primary; `stop` while the agent works. */
-@Composable
-private fun SendKey(working: Boolean, enabled: Boolean, onClick: () -> Unit) {
-    val c = Relay.colors
-    Box(
-        Modifier.size(TOUCH).clip(Radii.key).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = if (working) "Stop the reply" else "Send" },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(Modifier.size(34.dp).clip(Radii.key).background(if (enabled) c.ink else c.track), contentAlignment = Alignment.Center) {
-            Glyph(if (working) "stop" else "arrow-up", 16.dp, if (enabled) c.wall else c.ink3)
+        val caption = Relay.type.caption.copy(fontSize = 11.5.sp, textAlign = TextAlign.Center)
+        T(limits, Modifier.fillMaxWidth().padding(top = 6.dp), caption, c.inkDim, maxLines = 1)
+        if (onPick != null && !reads) {
+            T(if (onPc) LOCAL_CANNOT_READ else "$PICTURES_NEED_CLAUDE: this one runs on the PC itself", Modifier.fillMaxWidth().padding(top = 2.dp), caption, c.ink3, maxLines = 2)
         }
     }
 }

@@ -129,7 +129,6 @@ import com.quietsoftware.relay.ui.term.TerminalView
 import com.quietsoftware.relay.ui.theme.Fonts
 import com.quietsoftware.relay.ui.theme.Relay
 import com.quietsoftware.relay.ui.threads.Spinner
-import com.quietsoftware.relay.ui.threads.WorkingLamp
 import com.quietsoftware.relay.ui.threads.dayOf
 import com.quietsoftware.relay.ui.threads.humanDay
 import com.quietsoftware.relay.ui.threads.said
@@ -147,6 +146,21 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.time.LocalDate
+import androidx.compose.foundation.layout.statusBarsPadding
+import com.quietsoftware.relay.core.model.Session
+import com.quietsoftware.relay.ui.kit.LampDot
+import com.quietsoftware.relay.ui.threads.BUBBLE
+import com.quietsoftware.relay.ui.threads.BarButton
+import com.quietsoftware.relay.ui.threads.BarKey
+import com.quietsoftware.relay.ui.threads.BarLabel
+import com.quietsoftware.relay.ui.threads.CLAY
+import com.quietsoftware.relay.ui.threads.ReplyKeys
+import com.quietsoftware.relay.ui.threads.TalkBar
+import com.quietsoftware.relay.ui.threads.Working
+import com.quietsoftware.relay.ui.threads.bubbleFill
+import com.quietsoftware.relay.ui.threads.bubbleStyle
+import com.quietsoftware.relay.ui.threads.rememberToday
+import com.quietsoftware.relay.ui.threads.replyStyle
 
 /**
  * One terminal agent as a conversation, drawn as a thread is: the person's messages, the agent's
@@ -175,6 +189,7 @@ fun ChatScreen(name: String, nav: Nav) {
     val focus = remember { FocusRequester() }
     var menu by remember { mutableStateOf(false) }
     var mailing by remember { mutableStateOf(false) }
+    var controls by remember { mutableStateOf(false) }
     var peek by rememberSaveable(name) { mutableStateOf(false) }
     // What is being written to this agent outlives the screen: away and back, it is still here.
     val draft = remember(name) { ChatDrafts.of(name) }
@@ -196,7 +211,8 @@ fun ChatScreen(name: String, nav: Nav) {
     val working = session?.state == "running" || session?.state == "spawning"
     val held = session?.state == "blocked"
     // Held at a prompt, the turn is still open: its last call waits on the answer, it was not cut off.
-    val pieces = remember(messages, sending, working, held) { chatPieces(messages, sending, working || held, LocalDate.now()) }
+    val today = rememberToday()
+    val pieces = remember(messages, sending, working, held, today) { chatPieces(messages, sending, working || held, today) }
     val askTool = remember(pieces) { waitsOnAsk(pieces) }
 
     // The agent's own screen, followed while it can be answered: a menu on it is a question even
@@ -257,7 +273,7 @@ fun ChatScreen(name: String, nav: Nav) {
 
     Page {
         Column(Modifier.fillMaxSize()) {
-            Header(session, name, onBack = nav::back, onDetails = { nav.session(name) }, onMenu = { menu = true }) {
+            AgentBar(session, name, onBack = nav::back, onDetails = { nav.session(name) }, onMenu = { menu = true }) {
                 if (ready) IconKey("focus", { peek = !peek }, size = 18.dp, tint = c.ink2, selected = peek, label = if (peek) "Hide the agent's screen" else "Show the agent's screen")
                 IconKey("terminal", { nav.console(name) }, size = 18.dp, tint = c.ink2)
             }
@@ -273,7 +289,7 @@ fun ChatScreen(name: String, nav: Nav) {
                 }
                 when {
                     pieces.isNotEmpty() || asking -> Conversation(
-                        pieces, doing, since, asking, screen, chat, s.online,
+                        pieces, doing, since, asking, screen, chat, s.online, session?.provider == "codex",
                         onEdit = { words ->
                             type(joinDraft(field.text, words))
                             focus.requestFocus()
@@ -299,35 +315,54 @@ fun ChatScreen(name: String, nav: Nav) {
             if (s.prefs.chatKeys) QuickKeys(chat, ready)
             val asked = commandAsked(text)
             if (asked != null && ready) Commands(nav, session?.provider, session?.projectId, asked) { type("/$it ") }
-            ChatComposer(
-                field,
-                { field = it },
-                ready,
-                working && !asking,
-                placeholder = when {
-                    session == null -> "This agent is closed"
-                    !s.online -> "Needs the PC to talk to the agent"
-                    !ready -> "The agent is not running"
-                    else -> "Message ${session?.name ?: "the agent"}"
-                },
-                focus,
-                ::send,
-                pictures = attached.isNotEmpty(),
-                above = { AttachmentStrip(attached) { id -> attached.removeAll { it.id == id } } },
-            ) {
-                Chip("", "Attach a photo or a screenshot", ready && attached.size < MAX_PICTURES, glyph = "file-image", onClick = pickPictures)
-                if (dictate != null) Chip("", "Dictate a message", ready, icon = { MicGlyph(15.dp, c.ink2) }, onClick = dictate)
-                Chip("/", "The agent's commands", ready) {
-                    if (text.isBlank()) type("/")
-                    focus.requestFocus()
-                }
-                Chip(mode ?: "Mode", "Shift Tab: the agent's next mode", ready, glyph = "shield") { chat.key(Keys.SHIFT_TAB) }
-                Chip("Esc", "Escape", ready) { chat.key(Keys.ESC) }
-                Chip("Keys", if (s.prefs.chatKeys) "Hide the extra keys" else "Show the extra keys", true, trailing = if (s.prefs.chatKeys) "chevron-down" else "chevron-up") {
-                    nav.shell.update { it.copy(chatKeys = !it.chatKeys) }
+            // Claude's bar: the words, the keys for pictures and for the agent's own keys, its mode, and the round key.
+            val empty = text.isBlank() && attached.isEmpty()
+            val barKey = when {
+                !empty -> BarKey.Send
+                working && !asking -> BarKey.Stop
+                asking || dictate == null -> BarKey.Enter
+                else -> BarKey.Speak
+            }
+            Box(Modifier.fillMaxWidth().background(c.wall).navigationBarsPadding().padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 8.dp)) {
+                TalkBar(
+                    field = field,
+                    onField = { field = it },
+                    placeholder = when {
+                        session == null -> "This agent is closed"
+                        !s.online -> "Needs the PC to talk to the agent"
+                        !ready -> "The agent is not running"
+                        else -> "Reply to ${session?.name ?: "the agent"}"
+                    },
+                    key = barKey,
+                    keyEnabled = ready,
+                    onKey = { if (barKey == BarKey.Speak) dictate?.invoke() else send() },
+                    enabled = ready,
+                    focus = focus,
+                    lines = 6,
+                    above = { if (attached.isNotEmpty()) AttachmentStrip(attached) { id -> attached.removeAll { it.id == id } } },
+                    trailing = {
+                        // The agent's mode where Claude's app names its model: a tap moves to the next, as Shift Tab does.
+                        mode?.takeIf { ready }?.let { m -> BarLabel(m, "Mode: $m. Tap for the next mode", chevron = false, onClick = { chat.key(Keys.SHIFT_TAB) }) }
+                    },
+                ) {
+                    BarButton("plus", "Attach a photo or a screenshot", ready && attached.size < MAX_PICTURES, onClick = pickPictures)
+                    BarButton("sliders", "The agent's keys and commands", onClick = { controls = true })
                 }
             }
         }
+    }
+
+    // The agent's own keys, out of the bar: its commands, its next mode, Escape, and the row of extra keys.
+    if (controls) DevSheet({ controls = false }, session?.provider?.let(::providerName) ?: "The agent", "Keys the agent's screen asks for") { close ->
+        SheetRow("Commands", "code", {
+            close {
+                if (text.isBlank()) type("/")
+                focus.requestFocus()
+            }
+        }, detail = "/", enabled = ready)
+        SheetRow("Next mode", "shield", { close { chat.key(Keys.SHIFT_TAB) } }, detail = mode ?: "Shift Tab", enabled = ready)
+        SheetRow("Escape", "close", { close { chat.key(Keys.ESC) } }, detail = "Esc", enabled = ready)
+        SheetRow(if (s.prefs.chatKeys) "Hide the extra keys" else "Show the extra keys", "grid", { close { nav.shell.update { it.copy(chatKeys = !it.chatKeys) } } }, selected = s.prefs.chatKeys)
     }
 
     LifecycleSheets(life)
@@ -359,6 +394,45 @@ fun ChatScreen(name: String, nav: Nav) {
     if (mailing) {
         session?.let { ss -> MailSheet(ss, nav) { mailing = false } }
     }
+}
+
+/**
+ * The conversation's top bar, drawn as a thread's: back, the agent's name over what it is in
+ * plain words (its provider, its state, its branch when that is not its own), its keys and ⋯.
+ * A tap on the name opens its details.
+ */
+@Composable
+private fun AgentBar(session: Session?, name: String, onBack: () -> Unit, onDetails: () -> Unit, onMenu: () -> Unit, extra: @Composable () -> Unit = {}) {
+    val c = Relay.colors
+    val held = session?.state == "blocked"
+    Row(
+        Modifier.fillMaxWidth().background(c.wall).statusBarsPadding().heightIn(min = 56.dp).padding(start = 4.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconKey("arrow-left", onBack, size = 18.dp, tint = c.ink2)
+        Column(Modifier.weight(1f).clip(Radii.icon).clickable(onClickLabel = "Session details", onClick = onDetails).padding(horizontal = 2.dp, vertical = 4.dp)) {
+            T(name, style = Relay.type.title, color = c.ink, maxLines = 1)
+            if (session != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                LampDot(session.lamp, 6.dp)
+                T(agentLine(session), style = Relay.type.caption, color = if (held) c.heldText else c.ink3, maxLines = 1)
+            }
+        }
+        extra()
+        IconKey("more", onMenu, size = 18.dp, tint = c.ink2)
+    }
+}
+
+/** "Claude Code · Working · relay/other-branch": an agent in words, under its name. */
+internal fun agentLine(session: Session): String {
+    val state = when (session.state) {
+        "running" -> "Working"
+        "spawning" -> "Starting"
+        "idle" -> "Ready"
+        "blocked" -> "Needs you"
+        else -> session.stateLabel.lowercase().replaceFirstChar(Char::uppercase)
+    }
+    val branch = session.branch.takeIf { it.isNotBlank() && it != "relay/${session.name}" }
+    return listOfNotNull(providerName(session.provider), state, branch).joinToString(" · ")
 }
 
 // ---- The conversation as pieces ----
@@ -577,6 +651,7 @@ private fun Conversation(
     screen: State<String?>,
     chat: SessionChat,
     online: Boolean,
+    codex: Boolean,
     onEdit: (String) -> Unit,
     onResend: ((String) -> Unit)?,
 ) {
@@ -601,13 +676,13 @@ private fun Conversation(
             val cell = Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(horizontal = 16.dp)
             item(key = "end") { Box(Modifier.height(12.dp)) }
             if (asking) item(key = "ask") { AskCard(chat, screen, online, cell.padding(top = 14.dp)) }
-            if (doing != null) item(key = "doing") { WorkingRow(doing, since, cell.padding(top = 12.dp)) }
+            if (doing != null) item(key = "doing") { WorkingRow(doing, since, codex, cell.padding(top = 14.dp)) }
             items(shown, key = { it.key }, contentType = { it::class }) { p ->
                 if (p is ChatPiece.User) UserBubble(
                     p.text,
                     p.sending,
                     online,
-                    cell.padding(top = 18.dp),
+                    cell.padding(top = 22.dp),
                     open = opened == p.key,
                     onOpen = { opened = if (opened == p.key) null else p.key },
                     onEdit = { opened = null; onEdit(it) },
@@ -641,9 +716,9 @@ private fun PieceView(p: ChatPiece, cell: Modifier, online: Boolean) {
     val c = Relay.colors
     when (p) {
         is ChatPiece.Day -> T(p.label, cell.padding(top = 18.dp, bottom = 2.dp), Relay.type.caption.copy(textAlign = TextAlign.Center), c.ink3)
-        is ChatPiece.User -> UserBubble(p.text, p.sending, online, cell.padding(top = 18.dp))
-        is ChatPiece.Reply -> SelectionContainer(cell.padding(top = 12.dp)) { Markdown(p.text) }
-        is ChatPiece.Thought -> Box(cell.padding(top = 10.dp, bottom = 2.dp)) { ThoughtView(p) }
+        is ChatPiece.User -> UserBubble(p.text, p.sending, online, cell.padding(top = 22.dp))
+        is ChatPiece.Reply -> Markdown(p.text, cell.padding(top = 12.dp), replyStyle())
+        is ChatPiece.Thought -> Box(cell.padding(top = 8.dp)) { ThoughtView(p) }
         is ChatPiece.Tool -> Box(cell.padding(top = 2.dp)) {
             when {
                 isEdit(p.call.name) -> EditView(p.call)
@@ -657,28 +732,7 @@ private fun PieceView(p: ChatPiece, cell: Modifier, online: Boolean) {
             Glyph("close", 13.dp, c.heldText, Modifier.padding(top = 4.dp))
             SelectionContainer { T(p.text, style = Relay.type.ui.copy(fontSize = 13.5.sp, lineHeight = 20.sp), color = c.heldText) }
         }
-        is ChatPiece.Copy -> Box(cell) { CopyKey(p.text) }
-    }
-}
-
-/** A finished turn's Copy key: the agent's words in it, as Markdown. */
-@Composable
-private fun CopyKey(text: String) {
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
-    var copied by remember { mutableStateOf(false) }
-    Box(
-        Modifier.size(TOUCH).clip(Radii.icon).clickable(onClickLabel = "Copy the reply", role = Role.Button) {
-            scope.launch {
-                clipboard.copy(text)
-                copied = true
-                delay(1400)
-                copied = false
-            }
-        },
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        Glyph(if (copied) "check" else "copy", 15.dp, Relay.colors.inkDim)
+        is ChatPiece.Copy -> ReplyKeys(p.text, cell)
     }
 }
 
@@ -758,10 +812,10 @@ private fun UserBubble(
         }
         if (words.isNotEmpty()) Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
             Box(
-                Modifier.clip(Radii.card).background(c.wash).then(if (open) Modifier.border(1.dp, c.strong, Radii.card) else Modifier).then(touch)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                Modifier.clip(BUBBLE).background(bubbleFill).then(if (open) Modifier.border(1.dp, c.lineFocus, BUBBLE) else Modifier).then(touch)
+                    .padding(horizontal = 16.dp, vertical = 11.dp),
             ) {
-                T(words, style = Relay.type.body, color = c.ink)
+                T(words, style = bubbleStyle(), color = c.ink)
             }
         }
         if (sending) Row(Modifier.padding(top = 5.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -810,9 +864,9 @@ internal fun MessageKeys(open: Boolean, words: String, onClose: () -> Unit, onEd
     }
 }
 
-/** The working row: the lamp, the step running now, and how long the turn has run, as Claude Code counts it. */
+/** The working row: Claude's spark (Codex's mark for Codex), the step running now, and how long the turn has run, as Claude Code counts it. */
 @Composable
-private fun WorkingRow(text: String, since: Long?, modifier: Modifier) {
+private fun WorkingRow(text: String, since: Long?, codex: Boolean, modifier: Modifier) {
     val c = Relay.colors
     val now by produceState(System.currentTimeMillis(), since) {
         while (since != null) {
@@ -821,9 +875,7 @@ private fun WorkingRow(text: String, since: Long?, modifier: Modifier) {
         }
     }
     val took = since?.let { took(now - it) }
-    Row(modifier.heightIn(min = 24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-        WorkingLamp()
-        T(text, Modifier.weight(1f, fill = false), Relay.type.caption, c.ink3, maxLines = 1)
+    Working(text, modifier, glyph = if (codex) "codex" else "claude", tint = if (codex) c.ink2 else CLAY) {
         if (took != null) T(took, style = Relay.type.mono.copy(fontSize = 11.sp), color = c.inkDim, maxLines = 1)
     }
 }
@@ -908,33 +960,38 @@ private fun CodeBox(text: String, color: Color, maxHeight: Dp) {
     }
 }
 
-/** Reasoning: a few lines in quiet italics beside a rule, opening to all of it. */
+/**
+ * Reasoning, folded as Claude's app folds it: one quiet line, "Thought process" and how it began,
+ * opening to all of it in italics beside a rule.
+ */
 @Composable
 private fun ThoughtView(p: ChatPiece.Thought) {
     val c = Relay.colors
     var open by rememberSaveable(p.key) { mutableStateOf(false) }
-    val long = remember(p.text) { p.text.length > THOUGHT_PREVIEW_CHARS || p.text.lines().size > THOUGHT_PREVIEW_LINES }
+    val gist = remember(p.text) { p.text.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().trim() }
     val style = Relay.type.ui.copy(fontSize = 13.5.sp, lineHeight = 20.sp, fontStyle = FontStyle.Italic)
     val rule = c.edge
-    Column(
-        Modifier.fillMaxWidth()
-            .drawBehind { drawRect(rule, size = Size(2.dp.toPx(), size.height)) }
-            .clip(Radii.icon)
-            .clickable(enabled = long, onClickLabel = if (open) "Fold the reasoning" else "Show all the reasoning") { open = !open }
-            .padding(start = 12.dp, end = 6.dp, top = 2.dp, bottom = 2.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            T("Thinking", Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
-            if (long) Glyph(if (open) "chevron-up" else "chevron-down", 12.dp, c.inkDim)
+    Column {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 34.dp).clip(Radii.icon)
+                .clickable(onClickLabel = if (open) "Fold the reasoning" else "Show the reasoning") { open = !open }.padding(end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            T("Thought process", style = Relay.type.ui, color = c.ink3, maxLines = 1)
+            T(if (open) "" else gist, Modifier.weight(1f), Relay.type.caption, c.inkDim, maxLines = 1)
+            Glyph(if (open) "chevron-up" else "chevron-down", 12.dp, c.inkDim)
         }
-        if (open || !long) Markdown(p.text, style = style, color = c.ink3)
-        else T(p.text, style = style, color = c.ink3, maxLines = THOUGHT_PREVIEW_LINES)
+        AnimatedVisibility(open) {
+            Box(
+                Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 6.dp)
+                    .drawBehind { drawRect(rule, size = Size(2.dp.toPx(), size.height)) }
+                    .padding(start = 12.dp, end = 6.dp),
+            ) { Markdown(p.text, style = style, color = c.ink3) }
+        }
     }
 }
 
-private const val THOUGHT_PREVIEW_LINES = 3
-private const val THOUGHT_PREVIEW_CHARS = 240
 private const val EDIT_PREVIEW_LINES = 12
 
 /**
@@ -1206,8 +1263,9 @@ private const val ARROW_DOWN = "\u001b[B"
 private const val ARROW_RIGHT = "\u001b[C"
 private const val ARROW_LEFT = "\u001b[D"
 
-/** The keys an agent CLI still asks for in a conversation besides Esc and the mode switch, which the message box holds: a menu's arrows and ticks. */
+/** The keys an agent CLI still asks for in a conversation: Escape, a menu's arrows and ticks. The mode switch is the bar's. */
 private val CHAT_KEYS = listOf(
+    ChatKey("Esc", "Escape", Keys.ESC),
     ChatKey("↑", "Up", ARROW_UP),
     ChatKey("↓", "Down", ARROW_DOWN),
     ChatKey("←", "Left: the question before", ARROW_LEFT),

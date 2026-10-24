@@ -107,17 +107,22 @@ cursor: about once a second while the agent works, less while it waits. Nothing 
 PC and nothing streams.
 
 Typing still goes to the agent's terminal (`session.input`): the text, then Enter, several lines
-as one bracketed paste. With nothing typed, the send key stops a working agent (Esc). Under the
-message box, chips hold the agent's own keys: a photo or screenshot (shrunk to 2048 px, sent to
-the agent's checkout with `session.upload` as soon as it is picked, and named in the message by
-its path, which both CLIs read as the picture), `/` for its slash commands and the project's
-skills, its permission mode as Claude Code's footer says it (a tap cycles it, Shift-Tab), and Esc.
+as one bracketed paste. Both conversations, an agent's and a thread's, are drawn as Claude's own
+app draws one (`ui/threads/Talk.kt`): the person's words in a rounded bubble, the agent's in a
+serif across the column, reasoning folded to a "Thought process" line, Claude's spark while it
+works, and Claude's bar at the foot: one rounded box, the words on top, round keys under them.
+In an agent's bar, **+** attaches a photo or screenshot (shrunk to 2048 px, sent to the agent's
+checkout with `session.upload` as soon as it is picked, and named in the message by its path,
+which both CLIs read as the picture); the settings key opens the agent's own keys in a sheet:
+`/` for its slash commands and the project's skills, the next mode (Shift-Tab), Esc, and the row
+of extra keys; its permission mode as Claude Code's footer says it sits where Claude's app names
+its model, and a tap cycles it. The round key sends, stops a working agent (Esc) with nothing
+typed, is Enter while the agent asks something, and is the microphone otherwise.
 Its plan (Claude Code's to-do list, Codex's `update_plan`) is pinned under the header while any
 of it is left: how far along it is and the step under way, opening to every step. When the
 agent is held at a question in its terminal (a permission, a menu), the screen streams the
 terminal while the question shows, reads the question off it, and offers a key per numbered
-answer, and Esc. A row of keys (Esc,
-Shift-Tab for the mode, arrows, Enter, `/`, Ctrl-C) covers the rest, and the terminal itself is
+answer, and Esc. A row of keys (Esc, arrows, Enter, Tab, Space, `/`, Ctrl-C) covers the rest, and the terminal itself is
 one tap away in the header for whatever a conversation cannot show. The conversation is kept on
 the phone, so it opens with the PC away.
 

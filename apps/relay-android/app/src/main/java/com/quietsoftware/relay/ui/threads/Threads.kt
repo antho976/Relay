@@ -1,6 +1,5 @@
 package com.quietsoftware.relay.ui.threads
 
-import android.content.ClipData
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -60,8 +59,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.ClipEntry
-import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -813,8 +810,8 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
         streamed = ""
     }
 
-    val today = remember { LocalDate.now() }
-    val rows = remember(messages, working) { pieces(messages, working, today) }
+    val today = rememberToday()
+    val rows = remember(messages, working, today) { pieces(messages, working, today) }
     // The first message of a thread made here: from its create while it waits, and still shown
     // after the PC names the thread until the PC's copy of the message arrives.
     var first by rememberSaveable(opened) { mutableStateOf<String?>(null) }
@@ -1056,7 +1053,7 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                     stopped?.let { text ->
                         item("stopped") {
                             Column(cell.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                if (text.isNotBlank()) Markdown(text)
+                                if (text.isNotBlank()) Markdown(text, style = replyStyle())
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     T("Stopped", style = Relay.type.caption, color = c.ink3)
                                     retry?.let { RetryKey(!working, it) }
@@ -1064,8 +1061,8 @@ private fun Conversation(tid: String, opened: String, nav: Nav) {
                             }
                         }
                     }
-                    if (hasStream) item("stream") { Markdown(streamed, cell.padding(top = 12.dp)) }
-                    if (showWorking) item("working") { WorkingRow(doingText, cell.padding(top = 12.dp)) }
+                    if (hasStream) item("stream") { StreamedReply(streamed, cell.padding(top = 12.dp)) }
+                    if (showWorking) item("working") { Working(doingText, cell.padding(top = 14.dp)) }
                     if (temp) item("waiting") { Waiting(create, s.online, cell.padding(top = 14.dp)) { nav.outbox() } }
                 }
             }
@@ -1191,7 +1188,7 @@ private fun PieceView(
             refused = refused?.why,
             onView = onView,
         )
-        is Piece.Reply -> Markdown(p.text, cell.padding(top = 12.dp))
+        is Piece.Reply -> Markdown(p.text, cell.padding(top = 12.dp), replyStyle())
         is Piece.Tool -> Box(cell.padding(top = if (p.call.card != null) 10.dp else 2.dp)) { ToolView(p.call, money, proposals, asked) }
         is Piece.Reads -> Box(cell.padding(top = 2.dp)) { ReadsView(p, money, proposals, asked) }
         is Piece.Error -> Column(cell.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1201,7 +1198,7 @@ private fun PieceView(
             }
             retry?.let { RetryKey(idle, it) }
         }
-        is Piece.Copy -> Box(cell) { CopyKey(p.text) }
+        is Piece.Copy -> ReplyKeys(p.text, cell)
     }
 }
 
@@ -1235,10 +1232,10 @@ private fun UserBubble(
         }
         if (text.isNotBlank() || pictures.isEmpty()) Box(Modifier.fillMaxWidth(.86f), contentAlignment = Alignment.CenterEnd) {
             Box(
-                Modifier.clip(Radii.card).background(c.wash).then(if (open) Modifier.border(1.dp, c.strong, Radii.card) else Modifier)
-                    .messageTouch(open, LocalHapticFeedback.current, onOpen).padding(horizontal = 14.dp, vertical = 10.dp),
+                Modifier.clip(BUBBLE).background(bubbleFill).then(if (open) Modifier.border(1.dp, c.lineFocus, BUBBLE) else Modifier)
+                    .messageTouch(open, LocalHapticFeedback.current, onOpen).padding(horizontal = 16.dp, vertical = 11.dp),
             ) {
-                T(text, style = Relay.type.body, color = c.ink)
+                T(text, style = bubbleStyle(), color = c.ink)
             }
         }
         MessageKeys(open, text, onClose = { onOpen?.invoke() }, onEdit = onEdit, onResend = onResend)
@@ -1249,15 +1246,6 @@ private fun UserBubble(
             Dot(c.waiting, 5.dp)
             T(if (online) "Sending…" else "Waiting for the PC", style = Relay.type.caption.copy(fontSize = 11.5.sp), color = c.ink3)
         }
-    }
-}
-
-/** The working row: the live lamp and what the agent is doing. */
-@Composable
-private fun WorkingRow(text: String, modifier: Modifier) {
-    Row(modifier.heightIn(min = 24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-        WorkingLamp()
-        T(text, style = Relay.type.caption, color = Relay.colors.ink3)
     }
 }
 
@@ -1347,28 +1335,6 @@ private fun ReadsView(g: Piece.Reads, money: Money, proposals: Map<Long, JsonObj
         AnimatedVisibility(open) {
             Column(Modifier.padding(start = 2.dp, bottom = 4.dp)) { for (t in g.calls) ToolView(t, money, proposals, asked) }
         }
-    }
-}
-
-/** A finished turn's Copy key. */
-@Composable
-private fun CopyKey(text: String) {
-    val c = Relay.colors
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
-    var copied by remember { mutableStateOf(false) }
-    Box(
-        Modifier.size(TOUCH).clip(Radii.icon).clickable(role = Role.Button) {
-            scope.launch {
-                clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("reply", text)))
-                copied = true
-                delay(1400)
-                copied = false
-            }
-        }.semantics { contentDescription = if (copied) "Copied" else "Copy reply" },
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        Glyph(if (copied) "check" else "copy", 15.dp, c.inkDim)
     }
 }
 
