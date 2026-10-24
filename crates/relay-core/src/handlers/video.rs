@@ -312,7 +312,12 @@ fn constant_rate(engine: &Engine, dir: &Path, source: &Path, fps: f64) -> Result
     let tmp = dir.join("public").join(format!(".{}-cfr", uuid::Uuid::new_v4()));
     fs::create_dir_all(&tmp).map_err(|e| BusError::unavailable("video.folder", format!("{}: {e}", tmp.display())))?;
     let out = tmp.join(format!("{stem}.mp4"));
-    video::media::constant_rate(engine, source, &out, fps)?;
+    // A failed or timed-out conversion leaves nothing behind (a partial clip can be GBs, and the
+    // worker would link it into every bundle).
+    if let Err(e) = video::media::constant_rate(engine, source, &out, fps) {
+        let _ = fs::remove_dir_all(&tmp);
+        return Err(e);
+    }
     Ok(out)
 }
 

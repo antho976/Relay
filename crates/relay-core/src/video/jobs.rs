@@ -267,20 +267,34 @@ pub fn cancel(engine: &Engine, render: &VideoRender) {
     }
 }
 
-/// Renders still queued or running when Relay last stopped did not finish: they are failed, so a
-/// row never says rendering with nothing behind it.
-pub fn reconcile(engine: &Engine) {
-    let ids: Vec<(Id, Id)> = engine.read_store("video.render.reconcile", |conn| {
-        conn.prepare_cached("SELECT id, project_id FROM video_renders WHERE state IN ('queued', 'rendering')").bus()?
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).bus()?
+/// Renders still running when Relay last stopped did not finish: they are failed, so a row never
+/// says rendering with nothing behind it, and the partial files they were drawing are removed.
+/// Those still queued never started: the queue takes them now.
+pub fn reconcile(engine: &Arc<Engine>) {
+    let rows: Vec<(Id, Id, String)> = engine.read_store("video.render.reconcile", |conn| {
+        conn.prepare_cached("SELECT r.id, r.project_id, v.dir FROM video_renders r JOIN videos v ON v.id = r.video_id WHERE r.state = 'rendering'").bus()?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).bus()?
             .collect::<rusqlite::Result<Vec<_>>>().bus()
     }).unwrap_or_default();
-    for (id, project_id) in ids {
+    for (id, project_id, dir) in rows {
         let _ = advance(engine, id, project_id, |tx, now| {
             tx.prepare_cached("UPDATE video_renders SET state = 'failed', error = 'Relay stopped before it finished', finished_at = ?2
-                WHERE id = ?1 AND state IN ('queued', 'rendering')").bus()?.execute(params![id, now]).bus()?;
+                WHERE id = ?1 AND state = 'rendering'").bus()?.execute(params![id, now]).bus()?;
             Ok(())
         });
+        let out = std::path::Path::new(&dir).join("out");
+        let prefix = format!(".{id}.partial.");
+        for entry in std::fs::read_dir(&out).into_iter().flatten().flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    let queued = engine.read_store("video.render.reconcile", |conn| {
+        conn.prepare_cached("SELECT EXISTS(SELECT 1 FROM video_renders WHERE state = 'queued')").bus()?.query_row([], |r| r.get::<_, bool>(0)).bus()
+    }).unwrap_or(false);
+    if queued {
+        enqueue(engine);
     }
 }
 

@@ -133,6 +133,9 @@ const inUse = new Map();
 const mirror = (from, to) => {
   fs.mkdirSync(to, { recursive: true });
   for (const e of safeReaddir(from)) {
+    // Relay's own staging (a conversion, a capture, a voice being made) is hidden and never
+    // the video's: left out of every bundle.
+    if (e.startsWith('.')) continue;
     const source = path.join(from, e);
     let stat;
     let linked;

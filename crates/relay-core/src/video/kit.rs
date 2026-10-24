@@ -152,6 +152,17 @@ pub fn node_version(hub: &Hub) -> Option<String> {
     found
 }
 
+/// Find Node once at start, off every lock: `video.create` and `video.kit.install` read the kit's
+/// status with the store held, and the first look would otherwise run `node --version` there.
+pub fn warm(engine: &std::sync::Arc<Engine>) {
+    let weak = std::sync::Arc::downgrade(engine);
+    let _ = std::thread::Builder::new().name("video-kit-warm".into()).spawn(move || {
+        if let Some(engine) = weak.upgrade() {
+            node_version(&engine.video);
+        }
+    });
+}
+
 /// Whether the kit is set up, and what setting it up would do.
 pub fn status(engine: &Engine) -> KitStatus {
     let root = engine.store.videos_dir();

@@ -8,6 +8,7 @@ mod common;
 use common::{call, call_as, code, committed_repo, engine_with_project, ok, ok_as, refused, wait_until};
 use relay_bus::{Actor, Event};
 use relay_core::engine::Engine;
+use rusqlite::params;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -297,14 +298,22 @@ fn a_render_stopped_while_it_bundles_is_stopped() {
 #[test]
 fn renders_left_running_by_a_stopped_relay_are_failed_at_start() {
     let (e, _root) = project();
-    let (id, _) = create(&e);
-    e.store.lock().execute(
-        "INSERT INTO video_renders(video_id, project_id, composition, format, quality, state, version, actor, created_at) VALUES (?1, 1, 'main', 'mp4', 'standard', 'rendering', 0, 'user', '2026-10-21T00:00:00Z')",
-        [id],
-    ).unwrap();
+    with_worker(&e);
+    let (id, dir) = create(&e);
+    for state in ["rendering", "queued"] {
+        e.store.lock().execute(
+            "INSERT INTO video_renders(video_id, project_id, composition, format, quality, state, version, actor, created_at) VALUES (?1, 1, 'main', 'mp4', 'standard', ?2, 0, 'user', '2026-10-21T00:00:00Z')",
+            params![id, state],
+        ).unwrap();
+    }
+    fs::create_dir_all(dir.join("out")).unwrap();
+    fs::write(dir.join("out/.1.partial.main-1.mp4"), "half").unwrap();
     relay_core::video::jobs::reconcile(&e);
     let render = ok(&e, "video.render.get", json!({"render_id": 1}));
     assert_eq!((render["state"].as_str(), render["error"].as_str()), (Some("failed"), Some("Relay stopped before it finished")));
+    assert!(!dir.join("out/.1.partial.main-1.mp4").exists(), "what it was drawing is removed");
+    // The one queued never started: it runs now.
+    wait_until("the queued one to run", || ok(&e, "video.render.get", json!({"render_id": 2}))["state"] == "done");
 }
 
 #[test]
