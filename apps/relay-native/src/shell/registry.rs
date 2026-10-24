@@ -30,7 +30,18 @@ struct Sidebar {
     filter: Option<gtk::SearchEntry>,
     /// Hash of what the tree last rendered; `None` forces the next render to rebuild.
     rendered: Option<u64>,
+    /// Projects whose repository is not at its path, as a worker last found: a stat on an
+    /// unreachable mount blocks, and the tree is rebuilt on every lamp change and keystroke.
+    missing: BTreeSet<i64>,
+    /// The paths that check was of, when it ran, and whether one is running.
+    checked: Vec<(i64, String)>,
+    checked_at: Option<std::time::Instant>,
+    checking: bool,
 }
+
+/// How long a check of the projects' paths stands before the next render asks again, so a
+/// repository moved while Relay runs shows as moved without an unrelated change.
+const PATHS_STALE: std::time::Duration = std::time::Duration::from_secs(30);
 
 thread_local! {
     static SIDEBAR: RefCell<Sidebar> = RefCell::default();
@@ -103,7 +114,41 @@ fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
+/// The project's repository was not at its path when last checked (`Ui::check_paths`).
+fn is_missing(project: i64) -> bool {
+    sidebar(|s| s.missing.contains(&project))
+}
+
 impl Ui {
+    /// Look at the projects' paths on a worker when they changed or the last look is stale,
+    /// and draw the tree again when what is missing changed.
+    fn check_paths(self: &Rc<Self>, projects: &[Value]) {
+        let paths: Vec<(i64, String)> = projects.iter().map(|p| (id_of(p), text(p, "path").to_string())).collect();
+        let due = sidebar(|s| !s.checking && (s.checked != paths || s.checked_at.is_none_or(|at| at.elapsed() >= PATHS_STALE)));
+        if !due {
+            return;
+        }
+        sidebar(|s| s.checking = true);
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let looked = paths.clone();
+            let missing = gtk::gio::spawn_blocking(move || {
+                looked.iter().filter(|(_, path)| !std::path::Path::new(path).exists()).map(|(id, _)| *id).collect::<BTreeSet<i64>>()
+            })
+            .await
+            .unwrap_or_default();
+            let changed = sidebar(|s| {
+                s.checking = false;
+                s.checked = paths;
+                s.checked_at = Some(std::time::Instant::now());
+                std::mem::replace(&mut s.missing, missing.clone()) != missing
+            });
+            if let Some(ui) = weak.upgrade().filter(|_| changed) {
+                ui.render_projects();
+            }
+        });
+    }
+
     pub(crate) fn render_projects(self: &Rc<Self>) {
         if !self.sidebar_ready() {
             return;
@@ -123,14 +168,15 @@ impl Ui {
                 self.save_collapsed();
             }
         }
-        let (collapsed, expanded) = sidebar(|s| (s.collapsed.clone(), s.expanded.clone()));
+        self.check_paths(&projects);
+        let (collapsed, expanded, missing) = sidebar(|s| (s.collapsed.clone(), s.expanded.clone(), s.missing.clone()));
         let sessions = self.sidebar_sessions.borrow().clone();
         // Only registry, lamp, folding or filter changes rebuild the tree: an agent going
         // idle in a project that still has one running leaves its lamp, and the tree, as is.
         let signature = {
             use std::hash::{Hash, Hasher};
             let mut hash = std::collections::hash_map::DefaultHasher::new();
-            (active, &collapsed, &expanded, &query).hash(&mut hash);
+            (active, &collapsed, &expanded, &query, &missing).hash(&mut hash);
             serde_json::to_string(&projects).unwrap_or_default().hash(&mut hash);
             serde_json::to_string(&workspaces).unwrap_or_default().hash(&mut hash);
             for project in &projects {
@@ -411,7 +457,7 @@ impl Ui {
             tip.push_str(&format!("\n{} open", plural(agents.open, "agent", "agents")));
         }
         // A repository that moved reads as gone here too, not only in its ⋯ menu (Relink…).
-        if !std::path::Path::new(text(project, "path")).exists() {
+        if is_missing(id) {
             title.add_css_class("missing");
             tip.push_str("\nRepository not found at this path. Relink it from the ⋯ menu.");
         }
@@ -498,7 +544,7 @@ impl Ui {
             ]
         };
         // A repository that moved: point the project at its new place instead of removing it.
-        if !workspace && !std::path::Path::new(text(value, "path")).exists() {
+        if !workspace && is_missing(id) {
             entries.push(("folder", "Relink…", false, Rc::new(move |ui: &Rc<Ui>| ui.relink_project(id))));
         }
         entries.sort_by_key(|entry| entry.2);
@@ -661,11 +707,16 @@ impl Ui {
         const DISCARD: &str = "Discard changes and remove";
         let discard = Rc::new(Cell::new(false));
         {
-            let (discard, accept, caption, error) = (discard.clone(), accept.clone(), caption.clone(), error.clone());
+            // Weak: the accept key's handler holds the check, and a cycle kept every dialog.
+            let (discard, accept, caption, error) = (discard.clone(), accept.downgrade(), caption.clone(), error.downgrade());
             worktrees.connect_toggled(move |check| {
                 if !check.is_active() && discard.replace(false) {
-                    accept.set_label(&caption);
-                    error.set_visible(false);
+                    if let Some(accept) = accept.upgrade() {
+                        accept.set_label(&caption);
+                    }
+                    if let Some(error) = error.upgrade() {
+                        error.set_visible(false);
+                    }
                 }
             });
         }

@@ -1439,13 +1439,18 @@ impl Ui {
             }));
         }
 
-        let p = palette.clone();
+        // The list's own funcs hold the palette weakly: it holds the list, and a strong
+        // reference here kept every palette ever opened, rows and all (tasks, notes' text).
+        // The search's handlers own it, and go with the panel's body.
+        let p = Rc::downgrade(&palette);
         list.set_filter_func(move |row| {
+            let Some(p) = p.upgrade() else { return false };
             let q = p.query.borrow();
             p.entry(row, |e| if q.is_empty() { !e.typed } else { q.split_whitespace().all(|w| e.words.contains(w)) }).unwrap_or(false)
         });
-        let p = palette.clone();
+        let p = Rc::downgrade(&palette);
         list.set_header_func(move |row, before| {
+            let Some(p) = p.upgrade() else { return };
             let here = p.entry(row, |e| e.section);
             if here.is_some() && before.and_then(|b| p.entry(b, |e| e.section)) != here {
                 let head = label(here.unwrap_or_default(), "palette-section");
@@ -1456,12 +1461,13 @@ impl Ui {
             }
         });
         let run = {
-            let (p, window, weak) = (palette.clone(), window.clone(), Rc::downgrade(self));
+            let (p, window, weak) = (Rc::downgrade(&palette), Rc::downgrade(&window), Rc::downgrade(self));
             move |row: &gtk::ListBoxRow| {
-                let Some(ui) = weak.upgrade() else { return };
+                let (Some(ui), Some(p), Some(window)) = (weak.upgrade(), p.upgrade(), window.upgrade()) else { return };
                 let Ok(i) = usize::try_from(row.index()) else { return };
                 window.close();
-                if let Some(entry) = p.entries.borrow().get(i) {
+                let entries = p.entries.borrow();
+                if let Some(entry) = entries.get(i) {
                     (entry.run)(&ui);
                 }
             }

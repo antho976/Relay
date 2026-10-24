@@ -16,6 +16,7 @@ pub(crate) async fn run(ui: &Rc<Ui>) -> Result<(), String> {
     note_pictures_move(ui).await?;
     refused_close_keeps_its_place(ui).await?;
     board_scope_follows_the_project(ui).await?;
+    palette_is_freed(ui).await?;
     Ok(())
 }
 
@@ -242,5 +243,26 @@ async fn board_scope_follows_the_project(ui: &Rc<Ui>) -> Result<(), String> {
     ui.open_project(project, "agents");
     wait_for(|| ui.project.get() == project, "back on the fixture project").await?;
     println!("Switching project from a module's board shows the new project's whole board");
+    Ok(())
+}
+
+/// A command palette closed is gone, list and rows: before, the list's own filter, header
+/// and activate handlers held the palette that holds the list, so every Ctrl+K kept its rows.
+async fn palette_is_freed(ui: &Rc<Ui>) -> Result<(), String> {
+    ui.navigate("agents");
+    let mut freed = Vec::new();
+    for _ in 0..3 {
+        click(&ui.window, "command-palette")?;
+        wait_for(|| find(ui.window.upcast_ref(), &|w| w.has_css_class("palette-list") && w.is_mapped()).is_some(), "palette open").await?;
+        let list = find(ui.window.upcast_ref(), &|w| w.has_css_class("palette-list")).ok_or("palette list")?;
+        freed.push(list.downgrade());
+        drop(list);
+        let panel = ui.panels.borrow().last().cloned().ok_or("palette is not a panel")?;
+        panel.close();
+        drop(panel);
+        wait_for(|| ui.panels.borrow().is_empty(), "palette closed").await?;
+    }
+    wait_for(|| freed.iter().all(|list| list.upgrade().is_none()), "every closed palette's list freed").await?;
+    println!("A closed command palette frees its list");
     Ok(())
 }
