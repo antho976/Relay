@@ -98,8 +98,10 @@ object Handshake {
             for (route in routes) {
                 if (winner.isCompleted) break
                 attempts += launch {
+                    var opened: LineSocket? = null
+                    var won = false
                     try {
-                        val socket = dialer.dial(route.url, DIAL_TIMEOUT_MS)
+                        val socket = dialer.dial(route.url, DIAL_TIMEOUT_MS).also { opened = it }
                         val first = withTimeoutOrNull(GREETING_TIMEOUT_MS) { socket.incoming.receiveCatching().getOrNull() }
                         val greeting = first?.let { Wire.greeting(it) }
                         if (greeting == null) {
@@ -107,8 +109,12 @@ object Handshake {
                             socket.close()
                             throw IllegalStateException("no greeting from ${route.url}")
                         }
-                        if (!winner.complete(Greeted(socket, route, greeting))) socket.close()
+                        won = winner.complete(Greeted(socket, route, greeting))
+                        if (!won) socket.close()
                     } catch (e: CancellationException) {
+                        // Another route won while this one was still waiting for its greeting:
+                        // close it, or the door holds it open until its hello timeout.
+                        if (!won) opened?.close()
                         throw e
                     } catch (_: Throwable) {
                         if (failures.incrementAndGet() == routes.size) winner.complete(null)
