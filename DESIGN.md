@@ -187,7 +187,11 @@ Task and module details occupy the content page. The command palette is centered
 inside the app and window presets open below the title bar. Only Notes and the
 emulator use separate app windows.
 
-The default window is 1440 by 900. Pages and the right-side launch sheet use
+The default window is 1440 by 900, and it can be made as narrow as the folded title bar
+(about 800px with the sidebar at its default width): as the bar narrows, its four utility keys
+fold into a More menu, then the search key keeps only its glass and Ctrl K, then New agent only
+its plus (`fold.rs`, `app::fold_top_bar`); nothing is clipped on the way. The bar keeps one
+set of keys on every page of a space. Pages and the right-side launch sheet use
 20px insets; the sheet overlays the wall at 780px including its insets. It does not shrink
 the terminal wall. A scrim blocks background actions and Escape dismisses an idle sheet.
 
@@ -215,7 +219,10 @@ Tally's pages center their content in at most 1200px: under a 980px page their s
 stack, under 900px a table's less needed columns (Holdings' price and weight) hide, and under 760px
 a strip's figures stack with their rules hidden, as do rows of keys and filters.
 
-Code uses resizable file-tree, editor and Git regions with a worktree selector.
+Code uses resizable file-tree, editor and Git regions with a worktree selector. The editor is
+a workbench (`editor_tabs.rs`): a strip of the files opened (a click previews a file in an italic
+tab the next click replaces; editing or double-clicking keeps it), the path as a breadcrumb, and
+a status line of caret, language, encoding, line endings and indent.
 Its tree split starts at 240px; file and Git regions can be hidden. Notes uses a
 list beside a scrollable native tab strip and editor. Tabs identify project and
 note, can reorder, and can open in separate windows.
@@ -300,10 +307,12 @@ Closed without launching, the sheet comes back as it was left, its tasks read ag
 project switch, a reconnect or opening it from a task starts a fresh one.
 
 ### Navigation
-Sidebar navigation (36px rows) selects with the selected fill and ink. Project rows have a 34px
-minimum height and select with the selected fill, no rail; counts are plain Geist Mono. Above
-the wall, the project crumb is a surface pill and Agents, Editor, Files and Git are one
-segmented control whose showing view is lit with track. Focus-session tabs use
+Sidebar navigation (32px rows) selects with the selected fill and ink. Workspace groups take
+28px and project rows 30px, select with the selected fill, no rail; counts are plain Geist Mono.
+A workspace whose name is its folder's lower-case slug reads as words ("Northwind traders
+client work"). The project list fades at whichever edge has more. Above the wall, the project
+crumb is a glass pill; Agents | Design is the segmented view switch, its showing view lit, and
+Files and Git are glass toggle keys after it, lit while their panel is open. Focus-session tabs use
 neutral wash for selection. The main window draws its own minimize, maximize
 and close keys in the top bar (`.window-control`: transparent, wash on hover,
 held red when hovering close). The Notes window styles its own titlebar
@@ -322,7 +331,11 @@ matching path geometry alone is not proof of complete rendering fidelity.
 
 ### Records / Containers
 Records are flat square slabs with 12px padding. Board lanes use console fill
-and 8px padding. Notices use slab, ink and an attention-colored bottom rule.
+and 8px padding. The notice is a card floating at the foot of the page (never over the sidebar,
+never pushing anything down): opaque slab, a hairline, a soft shadow, a lamp in its state's
+colour (attention or live), plain words with the raw error in the tooltip, and Reconnect while
+the engine does not answer. A primary key not yet available is an outline in faint ink, not a
+grey slab.
 
 ### Terminal plate
 VTE owns rendering and scrolling. Terminal margins are 10px left, 2px right,
@@ -341,7 +354,9 @@ staging, commits, history and branch tools stay in the Git region.
 
 Notes is a desktop text editor in the KWrite mould, in its own window. Its compact
 titlebar carries a File/Edit/Search/View menu bar (menus show their shortcuts)
-and the open note's name; below it sit a toolbar, a resizable library (search,
+and the open note's name (shown there and on its tab; the page's title row appears only while
+renaming); below it sit a toolbar (its icons centred in their keys, bold, italic, headings,
+quote and code under one Format key, names on every key or none), a resizable library (search,
 pinned and dated rows, sort, a context menu) and tabbed GtkSourceView documents
 with Markdown highlighting and list continuation. A find/replace bar (match case,
 whole words, regular expressions, "3 of 12"), go-to-line and a status bar (save
