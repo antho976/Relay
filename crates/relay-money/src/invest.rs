@@ -220,6 +220,9 @@ pub struct PortfolioInput {
     pub fx_rates: Vec<FxRow>,
     pub room_facts: Vec<RoomRow>,
     pub transfers: Vec<TransferRow>,
+    /// The archived investment accounts: they hold nothing the reading values, but what went into
+    /// one this year still used the person's room.
+    pub archived_accounts: Vec<AccountRow>,
 }
 
 impl PortfolioInput {
@@ -235,6 +238,7 @@ impl PortfolioInput {
             prices: vec![],
             fx_rates: vec![],
             room_facts: vec![],
+            archived_accounts: vec![],
             transfers: vec![],
         }
     }
@@ -1003,13 +1007,15 @@ fn account_return(input: &PortfolioInput, account: i64, value: i64) -> (Option<i
 }
 
 /// TFSA, RRSP and FHSA room in the year each reads today ([`room_year`]), for each that has an
-/// account or a room figure. In RRSP season an RRSP reads last year: what goes in then counts toward it.
+/// account (open or archived) or a room figure. In RRSP season an RRSP reads last year: what goes in then counts toward it.
 fn room(input: &PortfolioInput) -> Vec<RoomView> {
     let ledger = input.currency.as_str();
     let mut out = Vec::new();
     for registration in ROOM_REGISTRATIONS {
         let year = room_year(registration, input.today);
-        let accounts: Vec<&AccountRow> = input.accounts.iter().filter(|a| a.registration == Some(registration)).collect();
+        // Archived accounts too: a TFSA closed in June took its deposits' room with it.
+        let accounts: Vec<&AccountRow> =
+            input.accounts.iter().chain(&input.archived_accounts).filter(|a| a.registration == Some(registration)).collect();
         let fact = input.room_facts.iter().find(|r| r.registration == registration && r.year == year).map(|r| r.amount);
         if accounts.is_empty() && fact.is_none() {
             continue;
@@ -1316,6 +1322,29 @@ mod tests {
         assert_eq!((r.over, r.over_taxed, r.left), (150_000, 0, Some(0)));
         assert_eq!("2027-03-01", r.deadline);
         assert_eq!(100_000, rrsp(2_300_000).over_taxed);
+    }
+
+    #[test]
+    fn r10_an_archived_account_still_used_the_room() {
+        let mut i = input(date(2026, 10, 9));
+        i.room_facts.push(RoomRow { registration: Registration::Tfsa, year: 2026, amount: 700_000 });
+        let archived = |id: i64| AccountRow { id, uid: format!("a{id}"), name: "Old TFSA".into(), registration: Some(Registration::Tfsa), institution: String::new() };
+        i.archived_accounts.push(archived(2));
+        i.archived_accounts.push(archived(3));
+        let mut deposit = act("d", Deposit, date(2026, 3, 1), 0, 650_000, 0);
+        deposit.account_id = 2;
+        i.activities.push(deposit);
+        i.transfers.push(TransferRow { account_id: 3, date: date(2026, 5, 1), amount: 100_000 });
+        let p = portfolio(&i);
+        let tfsa = p.room.iter().find(|r| r.registration == Registration::Tfsa).unwrap();
+        assert_eq!((tfsa.contributed, tfsa.left, tfsa.over), (750_000, Some(0), 50_000));
+        // Only the open account is listed and valued.
+        assert_eq!(p.accounts.iter().map(|a| a.id).collect::<Vec<_>>(), [1]);
+        // An archived account alone still gives its registration a row.
+        let mut only = PortfolioInput::new("CAD", date(2026, 10, 9));
+        only.archived_accounts.push(archived(2));
+        only.transfers.push(TransferRow { account_id: 2, date: date(2026, 5, 1), amount: 100_000 });
+        assert_eq!(portfolio(&only).room.iter().find(|r| r.registration == Registration::Tfsa).map(|r| r.contributed), Some(100_000));
     }
 
     // ── X: money-weighted return ─────────────────────────────────────────

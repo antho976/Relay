@@ -218,7 +218,9 @@ For `TFSA`, `FHSA` and `RRSP`, in the row's year `Y`:
   in a leap year), moved to the Monday when it falls on a weekend.
 - **Contributed / withdrawn.** For an account with activities: `DEPOSIT` and `TRANSFER_IN` amounts /
   `WITHDRAWAL` and `TRANSFER_OUT` amounts. For one without: Tally `TRANSFER`s into it / out of it.
-  In the ledger currency, summed over the accounts of that registration.
+  In the ledger currency, summed over the accounts of that registration, archived ones included: a
+  TFSA closed in June took its deposits' room with it. A registration whose only account is
+  archived still has a row.
 - **Room** is the `room_facts` amount for (registration, `Y`), or none. `left = max(0, room −
   contributed)`, `over = max(0, contributed − room)`; an RRSP's first $2,000 over is a buffer
   (`over_taxed = max(0, over − 200000)`).
@@ -237,8 +239,9 @@ One pure function on each side, `invest::portfolio(&PortfolioInput) -> Portfolio
 `Invest.portfolio(PortfolioInput): Portfolio`, so the phone and the PC read the same numbers from
 the same rows. Its input is the ledger currency, today, the investment accounts (`id`, `uid`,
 `name`, `registration`, `institution`), the securities, holdings, activities, prices, FX rates and
-room facts as plain rows, and the Tally transfers touching those accounts (`account_id`, `date`,
-signed `amount`: + into the account).
+room facts as plain rows, the Tally transfers touching those accounts (`account_id`, `date`,
+signed `amount`: + into the account), and the archived investment accounts with a registration
+(`archived_accounts` / `archivedAccounts`, read for room only).
 
 `Portfolio` (PC: also the bus result `MoneyPortfolio`, `views.rs` re-exports it):
 
@@ -480,6 +483,11 @@ embed the same CSV text.
 - **R8** `rrsp_deadline(2025) = 2026-03-02`, `(2026) = 2027-03-01`, `(2027) = 2028-02-29`.
 - **R9** RRSP room 2_000_000 and 2_150_000 contributed → over 150_000, taxed 0; 2_300_000 → taxed
   100_000.
+- **R10** `an archived account still used the room`: TFSA room 2026 700_000, the open TFSA (id 1),
+  and two archived TFSAs: id 2 with a DEPOSIT of 650_000 on 2026-03-01, id 3 with a Tally transfer
+  in of 100_000 on 2026-05-01. Today 2026-10-09: contributed 750_000, left 0, over 50_000, and only
+  account 1 among the accounts. An archived TFSA alone with a 100_000 transfer in: a TFSA row with
+  contributed 100_000.
 - **RRSP season** `in RRSP season the RRSP row reads last year`: one RRSP account, DEPOSITs of 30000
   on 2026-02-20, 50000 on 2026-06-01 and 100000 on 2027-01-15. Today 2027-02-10: the RRSP row has
   year 2026, contributed 150000, deadline 2027-03-01. Today 2027-03-02: year 2027, contributed 0.

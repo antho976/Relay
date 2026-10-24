@@ -138,19 +138,29 @@ impl Ledger {
     /// The rows the reading takes: the investment accounts in use and everything touching them.
     pub fn portfolio_input(&self, today: Date) -> Result<PortfolioInput> {
         let c = &self.conn;
-        let accounts = rows(
-            c,
+        let account_rows = |sql: &str| {
+            rows(
+                c,
+                sql,
+                |r| {
+                    Ok(Some(AccountRow {
+                        id: r.get(0)?,
+                        uid: r.get(1)?,
+                        name: r.get(2)?,
+                        registration: r.get::<_, Option<String>>(3)?.as_deref().and_then(parse_name),
+                        institution: r.get(4)?,
+                    }))
+                },
+            )
+        };
+        let accounts = account_rows(
             "SELECT id, uid, name, registration, institution FROM accounts
              WHERE deleted = 0 AND archived = 0 AND type = 'INVESTMENT' ORDER BY sort_order, id",
-            |r| {
-                Ok(Some(AccountRow {
-                    id: r.get(0)?,
-                    uid: r.get(1)?,
-                    name: r.get(2)?,
-                    registration: r.get::<_, Option<String>>(3)?.as_deref().and_then(parse_name),
-                    institution: r.get(4)?,
-                }))
-            },
+        )?;
+        // Only for room: what went into an account that has since been archived still counts.
+        let archived_accounts = account_rows(
+            "SELECT id, uid, name, registration, institution FROM accounts
+             WHERE deleted = 0 AND archived <> 0 AND type = 'INVESTMENT' AND registration IS NOT NULL ORDER BY sort_order, id",
         )?;
         let securities = rows(c, "SELECT id, uid, symbol, name, currency, kind, exchange FROM securities WHERE deleted = 0", |r| {
             Ok(Some(SecurityRow {
@@ -222,6 +232,7 @@ impl Ledger {
             fx_rates,
             room_facts,
             transfers,
+            archived_accounts,
         })
     }
 
@@ -729,6 +740,19 @@ mod tests {
         assert_eq!(vec![("AAPL", 10 * QTY_SCALE, 1_000_00), ("XEQT", 10 * QTY_SCALE, 250_00), ("ARKK", QTY_SCALE, 50_00)], held);
         assert_eq!(Some(100 * PRICE_SCALE), p.holdings[0].price);
         assert_eq!(account.id, l.invest_preview(HOLDINGS_REPORT, None).unwrap().accounts[0].account_id.unwrap(), "the account holds the number now");
+    }
+
+    /// R10 from the ledger: an archived account leaves the reading's accounts but stays in its
+    /// room, where what went into it this year still counts.
+    #[test]
+    fn an_archived_account_is_read_for_room_only() {
+        let mut l = ledger();
+        let open = tfsa(&mut l);
+        let closed = tfsa(&mut l);
+        l.conn.execute("UPDATE accounts SET archived = 1 WHERE id = ?1", [closed]).unwrap();
+        let input = l.portfolio_input(date(2026, 10, 9)).unwrap();
+        assert_eq!(input.accounts.iter().map(|a| a.id).collect::<Vec<_>>(), [open]);
+        assert_eq!(input.archived_accounts.iter().map(|a| a.id).collect::<Vec<_>>(), [closed]);
     }
 
     #[test]
