@@ -700,7 +700,7 @@ async fn verify_exception_requests(ui: &Rc<Ui>, session: &str) -> Result<(), Str
     util::press(&send, "Send denial")?;
     settled(denied, |r| r["state"] == "rejected", "denied").await?;
 
-    // The session grant is listed under ACTIVE EXCEPTIONS with its own Revoke key.
+    // The session grant is listed under Active exceptions with its own Revoke key.
     ui.refresh_page();
     let grant = || {
         util::find(&page, &|w| {

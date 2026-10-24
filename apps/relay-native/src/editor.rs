@@ -244,7 +244,7 @@ impl Editor {
         let file_header = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         file_header.add_css_class("code-bar");
         file_header.add_css_class("explorer-head");
-        let explorer_title = label("EXPLORER", "section-label");
+        let explorer_title = label("Explorer", "section-label");
         explorer_title.set_hexpand(true);
         file_header.append(&explorer_title);
         file_sidebar.append(&file_header);

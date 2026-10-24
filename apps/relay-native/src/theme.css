@@ -53,6 +53,22 @@
 /* Attention red for text: @held on @wall is about 3.6:1, too low for 12-13px words; this is 6.7:1. */
 @define-color held_text #f0786f;
 * { -gtk-icon-style: symbolic; }
+/* One focus and accent language (DESIGN.md, Buttons and Inputs): ink, never the toolkit theme's
+   blue. The theme's accents read these names (Adwaita's and Breeze's) and its variables (GTK's
+   own); a filled accent is the lit track, as the view switch draws it. */
+@define-color accent_color @ink;
+@define-color accent_bg_color @track;
+@define-color accent_fg_color @ink;
+:root { --accent-color: @ink; --accent-bg-color: @track; --accent-fg-color: @ink; }
+*:focus-visible { outline-color: alpha(@ink, 0.35); }
+/* A field shows focus with its own stroke and faint ring (entry:focus-within below), not an outline. */
+entry:focus-within, spinbutton:focus-within, searchbar entry:focus-within { outline: none; }
+label link, label link:visited { color: @ink; text-decoration-line: underline; text-decoration-color: alpha(@ink, 0.45); }
+label link:hover { text-decoration-color: @ink; }
+/* A menu bar's open title: the row's wash, not the theme's coloured underline. */
+popovermenubar > item { box-shadow: none; border-radius: 7px; }
+popovermenubar > item:hover, popovermenubar > item:selected { background: @wash; box-shadow: none; color: @ink; }
+check:checked, radio:checked { background: @ink; border-color: @ink; color: @wall; -gtk-icon-shadow: none; }
 window { background: @wall; color: @ink; font-family: 'Geist', sans-serif; font-size: 13px; font-feature-settings: "tnum"; }
 window > box, stack, scrolledwindow { background: @wall; }
 /* Panel opacity, one value for every page: each page in the page stack (a direct child)
@@ -67,7 +83,8 @@ window > box, stack, scrolledwindow { background: @wall; }
 .titlebar { min-height: 0; background: @console; padding: 0; border: 0; box-shadow: none; }
 .topbar { min-height: 52px; padding: 0; background: @console; border-bottom: 1px solid @edge; }
 .brand-mark { margin: 0 2px 0 4px; }
-.section-label { font-family: 'Geist', sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; }
+/* Section labels are sentence case (DESIGN.md, Typography), so they take no capitals' tracking. */
+.section-label { font-family: 'Geist', sans-serif; font-size: 12px; font-weight: 600; letter-spacing: 0; }
 /* The wordmark: Sora 600, tight, beside the drawn mark (app.rs top_bar). */
 .brand { font-family: 'Sora', sans-serif; font-size: 17px; font-weight: 600; letter-spacing: -0.5px; color: @ink; }
 .sidebar { background: @console; }

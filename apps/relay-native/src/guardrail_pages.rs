@@ -1089,14 +1089,14 @@ pub async fn page(ui: &Rc<Ui>, body: &gtk::Box, project: i64, holds: Vec<Value>)
         cards.push((key, card));
     };
     if !requests.is_empty() {
-        section(body, "EXCEPTION REQUESTS", "Agents that cannot progress without passing a guardrail. Approving lifts only the named rule, for that session.");
+        section(body, "Exception requests", "Agents that cannot progress without passing a guardrail. Approving lifts only the named rule, for that session.");
         for request in &requests {
             let key = format!("request-{}", as_request(request)["id"]);
             place(key, &|| exception_card(ui, request, false).0);
         }
     }
     if !held.is_empty() {
-        section(body, "HELD ACTIONS", "Paused until you decide. Review the exact action before allowing it.");
+        section(body, "Held actions", "Paused until you decide. Review the exact action before allowing it.");
         for hold in &held {
             place(format!("hold-{}", hold["id"]), &|| hold_row(ui, hold.clone()));
         }
@@ -1105,7 +1105,7 @@ pub async fn page(ui: &Rc<Ui>, body: &gtk::Box, project: i64, holds: Vec<Value>)
         Ok(active) => {
             let active = rows(&active, "requests");
             if !active.is_empty() {
-                section(body, "ACTIVE EXCEPTIONS", "Approved exceptions still in force. Revoke one to put the rule back immediately.");
+                section(body, "Active exceptions", "Approved exceptions still in force. Revoke one to put the rule back immediately.");
                 for grant in active {
                     body.append(&grant_row(ui, &grant));
                 }
@@ -1116,7 +1116,7 @@ pub async fn page(ui: &Rc<Ui>, body: &gtk::Box, project: i64, holds: Vec<Value>)
     if let Ok(overlaps) = overlaps {
         let overlaps = rows(&overlaps, "overlaps");
         if !overlaps.is_empty() {
-            section(body, "SHARED FILE ACTIVITY", "Files that more than one agent is changing.");
+            section(body, "Shared file activity", "Files that more than one agent is changing.");
         }
         for overlap in overlaps {
             let flag = hidden_flag();

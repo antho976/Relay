@@ -54,7 +54,7 @@
 
 /* ---- Explorer ---- */
 .explorer-head { min-height: 35px; padding: 0 4px 0 12px; }
-.explorer-head .section-label { padding: 0; color: @secondary; letter-spacing: 0.1em; }
+.explorer-head .section-label { padding: 0; color: @secondary; }
 .explorer-actions button.explorer-key, .code-bar .explorer-actions button.explorer-key {
   min-width: 24px; min-height: 24px; padding: 0; border-radius: 2px; color: @faint;
 }

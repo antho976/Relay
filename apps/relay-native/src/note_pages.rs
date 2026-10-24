@@ -174,7 +174,7 @@ struct Shell {
     welcome: gtk::Box,
     rows: RefCell<Vec<Row>>,
     notes: RefCell<Vec<Value>>,
-    /// Some row is pinned, so the list shows PINNED / NOTES headers.
+    /// Some row is pinned, so the list shows Pinned / Notes headers.
     any_pinned: Cell<bool>,
     /// What the project picker was last built from; it is rebuilt only when that changes.
     picker_key: RefCell<String>,
@@ -1158,7 +1158,7 @@ fn shell(ui: &Rc<Ui>) -> Rc<Shell> {
         let show = shell.any_pinned.get()
             && before.is_none_or(|before| pinned(before) != this);
         // A header already saying the same is kept: a new one restyles and remeasures.
-        let wanted = show.then_some(if this { "PINNED" } else { "NOTES" });
+        let wanted = show.then_some(if this { "Pinned" } else { "Notes" });
         let shown = row.header().and_downcast::<gtk::Label>().map(|l| l.text());
         if shown.as_deref() != wanted {
             match wanted {

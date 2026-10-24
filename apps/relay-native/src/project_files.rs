@@ -147,7 +147,7 @@ impl Editor {
         body.append(&search);
         let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let mut searchable: Vec<(gtk::Widget, String)> = Vec::new();
-        list.append(&label("PROJECTS", "section-label"));
+        list.append(&label("Projects", "section-label"));
         for project in ui.projects.borrow().iter() {
             let spaces = ui.workspaces.borrow();
             let space = spaces.iter().find(|w| w["id"] == project["workspace_id"]);
@@ -208,7 +208,7 @@ impl Editor {
             list.append(&key);
         }
         let branch_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        branch_list.append(&label("LOCAL BRANCHES", "section-label"));
+        branch_list.append(&label("Local branches", "section-label"));
         list.append(&branch_list);
         let ed = self.clone();
         let weak = Rc::downgrade(ui);
