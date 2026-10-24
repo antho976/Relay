@@ -18,8 +18,6 @@
 .guardrail-keys { margin-top: 4px; }
 .guardrail-deny entry { min-height: 28px; }
 .guardrail-expander title { color: @secondary; font-size: 12px; }
-/* The theme's disclosure arrow is heavier than the icon set: small and faint. */
-.guardrail-expander arrow { -gtk-icon-size: 12px; min-width: 12px; min-height: 12px; color: @faint; }
 .guardrail-details { margin: 6px 0 2px 18px; }
 .guardrail-details .faint { font-size: 11px; }
 .guardrail-details .body { font-size: 12px; }

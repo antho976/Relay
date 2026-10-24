@@ -24,6 +24,7 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
     if ui.page_projects.borrow().get("devices") != Some(&project) {
         ui.page_projects.borrow_mut().remove("devices");
         clear(page);
+        page.add_css_class("devices-page");
         // The title with its refresh key at the end of the line, as the other pages' headers:
         // alone in the middle of the page it read as a stray link.
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -690,13 +691,18 @@ fn build_form(ui: &Rc<Ui>, page: &gtk::Box, project: i64, worktrees: &[Value], l
     let chosen = Rc::new(Chosen::default());
     chosen.follow(&target);
     TARGETS.with(|targets| *targets.borrow_mut() = Some(Targets { combo: target.downgrade(), shown: Vec::new(), chosen }));
+    // Sized to what they hold, not the page's width: a device name, "debug", "APK".
+    target.set_halign(gtk::Align::Start);
+    target.set_size_request(320, -1);
     field("Target device", &target, &form);
-    let variant = gtk::Entry::builder().text("debug").build();
+    let variant = gtk::Entry::builder().text("debug").width_chars(18).halign(gtk::Align::Start).build();
     field("Gradle variant", &variant, &form);
     let format = gtk::ComboBoxText::new();
     format.append(Some("apk"), "APK");
     format.append(Some("bundle"), "Android App Bundle");
     format.set_active(Some(0));
+    format.set_halign(gtk::Align::Start);
+    format.set_size_request(240, -1);
     field("Artifact format", &format, &form);
     // Gradle Play Publisher's upload (D152): a published release cannot be recalled.
     let publish = gtk::CheckButton::with_label("Publish to Google Play (Gradle Play Publisher)");

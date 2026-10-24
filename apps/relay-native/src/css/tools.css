@@ -211,8 +211,12 @@
 
 /* ── Devices (tools_devices.rs) ───────────────────────────────────────────────
    Phones and virtual devices share one list: lamp, name over facts, actions. */
+/* Device control on glass (the Glass Rule): its sections are cards, its devices rows in them. */
+.devices-page .record { padding: 16px 18px; background: @glass_card; border: 1px solid @glass_edge; border-radius: 14px; }
+.devices-page .record > .title { font-size: 14px; }
+.devices-page .record entry, .devices-page .record combobox > box > button, .devices-page .record dropdown > button { background: @glass_control; border-color: @glass_line; }
 .device-list { margin-top: 2px; }
-.device-row { min-height: 40px; padding: 6px 8px 6px 10px; background: @console; border: 1px solid @edge; border-radius: 2px; }
+.device-row { min-height: 40px; padding: 6px 8px 6px 12px; background: @glass_control; border: 1px solid @glass_line; border-radius: 10px; }
 .device-row button { min-height: 28px; }
 .device-row-name { color: @ink; font-size: 13px; font-weight: 600; }
 .device-row-facts { color: @faint; font-family: 'Geist Mono', monospace; font-size: 10px; }

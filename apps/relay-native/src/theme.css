@@ -93,6 +93,11 @@ button { min-height: 28px; padding: 0 10px; border: 1px solid @strong; border-ra
 button:hover { background: @wash; border-color: @line_emphasis; }
 button:focus-visible { outline: 2px solid alpha(@ink, 0.35); outline-offset: 1px; }
 button:disabled { opacity: 0.4; }
+/* A primary key not yet available is drawn as one: an outline, not a grey slab. */
+button.primary:disabled { opacity: 1; background: transparent; border-color: @strong; color: @faint; }
+button.primary:disabled label, button.primary:disabled image { color: @faint; }
+/* Disclosure arrows at the icon set's weight. */
+expander-widget > box > title > expander { -gtk-icon-size: 12px; min-width: 12px; min-height: 12px; color: @faint; }
 button.primary { background: @ink; border-color: @ink; color: @wall; font-weight: 600; }
 button.primary:active { background: shade(@ink, 0.92); }
 button.primary:hover { background: white; border-color: white; }
