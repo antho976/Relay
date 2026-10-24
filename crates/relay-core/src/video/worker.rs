@@ -159,13 +159,43 @@ fn reap(worker: Arc<Worker>) {
             std::thread::sleep(Duration::from_millis(100));
         }
         if !worker.gone.load(Ordering::SeqCst) {
+            // Remotion starts its browser detached, in a group of its own, which the worker's
+            // SIGKILL would not reach (it closes the browser itself only on a gentle end): the
+            // groups its children lead go too, read before it dies.
+            #[cfg(target_os = "linux")]
+            let groups = child_groups(pid);
             #[cfg(unix)]
             // SAFETY: a signal to the process group the worker leads; nothing else is touched.
             unsafe {
                 libc::killpg(pid as i32, libc::SIGKILL);
             }
+            #[cfg(target_os = "linux")]
+            for group in groups {
+                // SAFETY: a signal to a group one of the worker's own children leads.
+                unsafe {
+                    libc::killpg(group, libc::SIGKILL);
+                }
+            }
         }
     });
+}
+
+/// The process groups `pid`'s children lead apart from its own (a detached browser's), from
+/// `/proc`: each child whose group is itself.
+#[cfg(target_os = "linux")]
+fn child_groups(pid: u32) -> Vec<i32> {
+    let mut groups = Vec::new();
+    for task in std::fs::read_dir(format!("/proc/{pid}/task")).into_iter().flatten().flatten() {
+        let children = std::fs::read_to_string(task.path().join("children")).unwrap_or_default();
+        for child in children.split_whitespace().filter_map(|c| c.parse::<i32>().ok()) {
+            // SAFETY: getpgid reads a process's group; it touches nothing.
+            let group = unsafe { libc::getpgid(child) };
+            if group == child && group != pid as i32 && !groups.contains(&group) {
+                groups.push(group);
+            }
+        }
+    }
+    groups
 }
 
 fn ensure(engine: &Engine) -> Result<Arc<Worker>, BusError> {
@@ -338,4 +368,33 @@ fn spawn(engine: &Engine, root: &std::path::Path, program: &[String]) -> Result<
         }
     });
     Ok(worker)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    /// A child that leads a group of its own (as Remotion's detached browser does) is found;
+    /// one in its parent's group is not.
+    #[test]
+    fn a_detached_childs_group_is_found() {
+        use std::os::unix::process::CommandExt;
+        let mut parent = Command::new("sh").args(["-c", "setsid sleep 30 & sleep 30 & wait"]).process_group(0).spawn().unwrap();
+        let pid = parent.id();
+        let mut groups = Vec::new();
+        for _ in 0..50 {
+            groups = child_groups(pid);
+            if !groups.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        // SAFETY: the test's own children.
+        unsafe {
+            libc::killpg(groups[0], libc::SIGKILL);
+            libc::killpg(pid as i32, libc::SIGKILL);
+        }
+        let _ = parent.wait();
+    }
 }
