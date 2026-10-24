@@ -160,3 +160,9 @@ popover.agent-settings button.agent-menu-confirm-go:hover { background: shade(@h
 /* A pane's checkout behind the freshest base: the commits a rebase would bring in. */
 .terminal-plate .umd .session-behind { color: @waiting; }
 .terminal-plate .umd .session-behind label { font-family: 'Fira Mono', monospace; font-size: 11px; }
+
+/* The Mailbox (pages.rs): a column of glass, the composer's fields bordered like every field. */
+.mail-row.record { padding: 12px 14px; background: @glass_card; border: 1px solid @glass_edge; border-radius: 12px; }
+.mail-message { padding: 2px; border: 1px solid @strong; border-radius: 10px; background: @raised; }
+.mail-message.focused { border-color: @line_focus; box-shadow: 0 0 0 3px alpha(@ink, 0.06); }
+.mail-message textview, .mail-message textview text { background: transparent; }

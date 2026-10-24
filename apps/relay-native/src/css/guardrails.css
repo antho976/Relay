@@ -1,20 +1,25 @@
 /* guardrails area styles: loaded after theme.css, so rules here override it. */
 
-/* Cards: a held action is red (it stopped something), an exception request amber (it waits on
-   you). State color stays a 2px rule, per the Tally Rule; the slab itself stays neutral. */
+/* Cards: glass on the page (the Glass Rule), the state a chip in its colour: a held action red
+   (it stopped something), an exception request amber (it waits on you), an exception in force
+   plain. The card itself stays neutral, per the Tally Rule. */
 .guardrail-card { padding: 14px 16px; }
-.guardrail-card.record { border-left: 2px solid @held; }
-.guardrail-request.record { border-left-color: @waiting; }
+.guardrail-card.record, .guardrail-grant.record { background: @glass_card; border: 1px solid @glass_edge; border-radius: 14px; }
 .guardrail-card .title { font-size: 14px; }
-.guardrail-mark { color: @held; }
+.guardrail-mark { color: @held_text; }
 .guardrail-request .guardrail-mark { color: @waiting; }
-.guardrail-eyebrow { padding: 0; color: @secondary; }
-.guardrail-subject { background: @screen; border: 1px solid @edge; padding: 7px 9px; color: @ink; font-size: 12px; }
+.guardrail-state { padding: 3px 10px 3px 8px; border-radius: 999px; background: alpha(@held, 0.13); }
+.guardrail-request .guardrail-state { background: alpha(@waiting, 0.13); }
+.guardrail-eyebrow { color: @held_text; font-size: 12px; font-weight: 600; }
+.guardrail-request .guardrail-eyebrow { color: @waiting; }
+.guardrail-subject { background: alpha(@screen, 0.6); border: 1px solid @glass_line; border-radius: 8px; padding: 7px 10px; color: @ink; font-size: 12px; }
 .guardrail-reason { color: @ink; font-style: italic; }
 .guardrail-exact { color: @secondary; font-size: 11px; }
 .guardrail-keys { margin-top: 4px; }
 .guardrail-deny entry { min-height: 28px; }
 .guardrail-expander title { color: @secondary; font-size: 12px; }
+/* The theme's disclosure arrow is heavier than the icon set: small and faint. */
+.guardrail-expander arrow { -gtk-icon-size: 12px; min-width: 12px; min-height: 12px; color: @faint; }
 .guardrail-details { margin: 6px 0 2px 18px; }
 .guardrail-details .faint { font-size: 11px; }
 .guardrail-details .body { font-size: 12px; }
@@ -23,7 +28,7 @@
 .guardrail-actions { margin: 2px 0 6px; }
 .guardrail-section { margin: 14px 0 2px; }
 .guardrail-section .section-label { padding: 0; }
-.guardrail-grant { border-left: 2px solid @live; padding: 10px 14px; }
+.guardrail-grant { padding: 12px 16px; }
 .guardrail-grant .body { font-weight: 600; }
 
 /* The prompt: floats bottom-right over whatever you are doing, never takes focus. It is the one

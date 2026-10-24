@@ -1,5 +1,6 @@
 mod app;
 mod assistant;
+mod clamp;
 mod client;
 mod design;
 mod editor;

@@ -315,15 +315,22 @@ fn details_grid(details: &Value, flag: &gtk::Label) -> Option<gtk::Expander> {
     Some(expander)
 }
 
+/// A card's state as a chip (the rule that held it, or "Exception request"), and its age.
 fn head(eyebrow: &str, when: &str) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let mark = crate::icons::image("shield", 14);
+    let chip = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    chip.add_css_class("guardrail-state");
+    chip.set_halign(gtk::Align::Start);
+    chip.set_hexpand(true);
+    let mark = crate::icons::image("shield", 13);
     mark.add_css_class("guardrail-mark");
-    row.append(&mark);
-    let title = label(eyebrow, "section-label");
-    title.add_css_class("guardrail-eyebrow");
-    title.set_hexpand(true);
-    row.append(&title);
+    chip.append(&mark);
+    let title = label(eyebrow, "guardrail-eyebrow");
+    chip.append(&title);
+    let holder = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    holder.set_hexpand(true);
+    holder.append(&chip);
+    row.append(&holder);
     if !when.is_empty() {
         row.append(&label(when, "faint"));
     }
@@ -373,12 +380,14 @@ pub fn hold_row(ui: &Rc<Ui>, hold: Value) -> gtk::Box {
     allow.set_sensitive(false);
     allow.set_tooltip_text(Some("Review the exact action first"));
     let reject = button("Deny…", "");
+    // In the order you take them: read the exact action, which arms Allow once.
+    inspect.remove_css_class("quiet");
+    keys.append(&inspect);
     keys.append(&allow);
-    keys.append(&reject);
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     keys.append(&spacer);
-    keys.append(&inspect);
+    keys.append(&reject);
     card.append(&keys);
     let id = hold["id"].clone();
     let denial = denial_form(ui, &card, &keys, id.clone(), "Reason (sent to the agent, optional)");
