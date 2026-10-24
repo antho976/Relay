@@ -54,7 +54,7 @@ pub fn register(e: &mut Engine) {
                 } else { None }
             };
             if let Some(runtime) = runtime {
-                ctx.after_commit(move |engine| { std::thread::spawn(move || device_watch_worker(engine, runtime, adb)); });
+                ctx.after_commit(move |engine| { let engine = Arc::downgrade(&engine); std::thread::spawn(move || device_watch_worker(engine, runtime, adb)); });
             }
         } else {
             // Stopped inside the lock, as `WatchLease::drop` does: `clients == 0` means stopped.
@@ -515,7 +515,9 @@ const WATCH_RETRY_MAX: Duration = Duration::from_secs(10);
 /// Follow `adb track-devices` for as long as any client holds a watch. The stream ends when the
 /// adb server restarts (another adb of a different version, `adb kill-server`, a crash); the
 /// worker then starts it again, which also starts the server, until the last client lets go.
-fn device_watch_worker(engine: Arc<Engine>, runtime: Arc<DeviceWatchRuntime>, adb: PathBuf) {
+/// Holds the engine weakly: a strong hold kept an engine with a live watch from ever being
+/// dropped, and `adb track-devices` running after it.
+fn device_watch_worker(engine: std::sync::Weak<Engine>, runtime: Arc<DeviceWatchRuntime>, adb: PathBuf) {
     let mut retry = WATCH_RETRY_MIN;
     while !runtime.stopped() {
         let started = Instant::now();
@@ -529,7 +531,10 @@ fn device_watch_worker(engine: Arc<Engine>, runtime: Arc<DeviceWatchRuntime>, ad
                     let mut reader = BufReader::new(stdout);
                     while !runtime.stopped() {
                         match read_track_frame(&mut reader) {
-                            Ok(Some(_)) => engine.emit_system("device.changed", json!({"reason":"system"})),
+                            Ok(Some(_)) => match engine.upgrade() {
+                                Some(engine) => engine.emit_system("device.changed", json!({"reason":"system"})),
+                                None => runtime.stop(),
+                            },
                             Ok(None) | Err(_) => break,
                         }
                     }
@@ -544,7 +549,9 @@ fn device_watch_worker(engine: Arc<Engine>, runtime: Arc<DeviceWatchRuntime>, ad
         while !runtime.stopped() && Instant::now() < until { std::thread::sleep(Duration::from_millis(50)); }
         retry = (retry * 2).min(WATCH_RETRY_MAX);
     }
-    clear_device_watch(&engine, &runtime);
+    if let Some(engine) = engine.upgrade() {
+        clear_device_watch(&engine, &runtime);
+    }
 }
 
 /// One message of `adb track-devices`: a `%04x` byte count, then that many bytes of device

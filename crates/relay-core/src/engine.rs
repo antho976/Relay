@@ -858,6 +858,14 @@ impl Engine {
         for (_, mirror) in self.mirrors.lock().unwrap().drain() {
             mirror.stop();
         }
+        // The device watch: `adb track-devices` stops with it, and its worker lets go.
+        {
+            let mut watch = self.device_watch.lock().unwrap();
+            watch.clients = 0;
+            if let Some(runtime) = watch.runtime.take() {
+                runtime.stop();
+            }
+        }
         let runs: Vec<_> = self.device_runs.lock().unwrap().drain().collect();
         for (_, run) in &runs {
             run.stop();
