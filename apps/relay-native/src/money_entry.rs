@@ -109,6 +109,13 @@ pub fn open(ui: &Rc<Ui>, tx: Option<Value>) {
         // The first new entry of a run also reads the newest entries, for the account to start on.
         let lists = if tx.is_none() && !SEEDED.with(Cell::get) {
             let (lists, recent) = tokio::join!(ui.call("money.lists", json!({})), ui.call("money.tx.list", json!({"limit":60})));
+            // Early in a period this one may hold nothing yet: the one before says where the
+            // person last spent from.
+            let empty = |page: &Value| page["transactions"].as_array().is_none_or(|rows| rows.is_empty());
+            let recent = match recent {
+                Ok(page) if empty(&page) => ui.call("money.tx.list", json!({"limit":60,"period_offset":-1})).await,
+                other => other,
+            };
             if let Ok(recent) = &recent {
                 seed_accounts(recent);
             }
