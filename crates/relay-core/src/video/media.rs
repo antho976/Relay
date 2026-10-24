@@ -65,6 +65,34 @@ fn run(cmd: &mut Command, what: &str) -> Result<std::process::Output, BusError> 
     Ok(out)
 }
 
+/// A file ffmpeg writes what it decodes to, under the videos' `.relay/sound`, removed when dropped.
+/// Over a pipe `proc::output_with_timeout` keeps at most 64 MiB of it and drops the rest: 5 min
+/// 50 s of stereo sound at 48 kHz, 109 s of a phone capture's grey frames.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(engine: &Engine, ext: &str) -> Result<Scratch, BusError> {
+        let dir = engine.store.videos_dir().join(".relay/sound");
+        std::fs::create_dir_all(&dir).map_err(|e| BusError::internal(format!("{}: {e}", dir.display())))?;
+        Ok(Scratch(dir.join(format!(".decode-{}.{ext}", uuid::Uuid::new_v4()))))
+    }
+
+    /// What ffmpeg wrote; nothing when it wrote nothing.
+    fn read(&self) -> Result<Vec<u8>, BusError> {
+        match std::fs::read(&self.0) {
+            Ok(bytes) => Ok(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(BusError::internal(format!("{}: {e}", self.0.display()))),
+        }
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 fn stderr_tail(out: &std::process::Output) -> String {
     let text = String::from_utf8_lossy(&out.stderr);
     let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
@@ -88,8 +116,8 @@ impl Pcm {
     }
 }
 
-/// The samples of a WAV ffmpeg wrote to a pipe: after its `data` chunk's header, to the end (a
-/// pipe's header cannot say how long the data is).
+/// The samples of a WAV ffmpeg wrote: after its `data` chunk's header, to the end (a pipe's
+/// header cannot say how long the data is, so its length is not read).
 fn wav_data(bytes: &[u8]) -> &[u8] {
     let mut at = 12;
     while at + 8 <= bytes.len() {
@@ -103,12 +131,13 @@ fn wav_data(bytes: &[u8]) -> &[u8] {
 }
 
 /// The first sound stream of `input` at `rate` Hz in `channels` channels (a mono file is spread
-/// over both, as a player does); `None` when it has none. It comes over a pipe as a WAV: Remotion's
-/// ffmpeg has no raw muxers.
+/// over both, as a player does); `None` when it has none. It comes as a WAV (Remotion's ffmpeg has
+/// no raw muxers), written to a file however long it is.
 pub fn decode(engine: &Engine, input: &Path, rate: u32, channels: usize) -> Result<Option<Pcm>, BusError> {
     let ffmpeg = tool(engine, "ffmpeg")?;
-    let out = run(ffmpeg.command().arg("-nostdin").arg("-i").arg(input)
-        .args(["-vn", "-sn", "-dn", "-ac", &channels.to_string(), "-ar", &rate.to_string(), "-c:a", "pcm_s16le", "-f", "wav", "pipe:1"]),
+    let scratch = Scratch::new(engine, "wav")?;
+    let out = run(ffmpeg.command().arg("-nostdin").arg("-y").arg("-i").arg(input)
+        .args(["-vn", "-sn", "-dn", "-ac", &channels.to_string(), "-ar", &rate.to_string(), "-c:a", "pcm_s16le", "-f", "wav"]).arg(&scratch.0),
         "decoding the sound")?;
     if !out.status.success() {
         let why = stderr_tail(&out);
@@ -117,7 +146,8 @@ pub fn decode(engine: &Engine, input: &Path, rate: u32, channels: usize) -> Resu
         }
         return Err(BusError::invalid("video.media", format!("{} cannot be read as sound: {why}", input.display())));
     }
-    let data = wav_data(&out.stdout);
+    let bytes = scratch.read()?;
+    let data = wav_data(&bytes);
     if data.is_empty() {
         return Ok(None);
     }
@@ -202,13 +232,14 @@ pub fn grey_frames(engine: &Engine, input: &Path, width: u32) -> Result<(Vec<u8>
     }
     let height = ((h / w * width as f64 / 2.0).round() as u32 * 2).max(2);
     let ffmpeg = tool(engine, "ffmpeg")?;
-    let out = run(ffmpeg.command().arg("-nostdin").arg("-i").arg(input)
-        .args(["-an", "-sn", "-fps_mode", "passthrough", "-vf", &format!("scale={width}:{height}"), "-pix_fmt", "gray", "-c:v", "rawvideo", "-f", "image2pipe", "pipe:1"]),
+    let scratch = Scratch::new(engine, "gray")?;
+    let out = run(ffmpeg.command().arg("-nostdin").arg("-y").arg("-i").arg(input)
+        .args(["-an", "-sn", "-fps_mode", "passthrough", "-vf", &format!("scale={width}:{height}"), "-pix_fmt", "gray", "-c:v", "rawvideo", "-f", "image2pipe"]).arg(&scratch.0),
         "reading the picture")?;
     if !out.status.success() {
         return Err(BusError::invalid("video.media", format!("{} cannot be decoded: {}", input.display(), stderr_tail(&out))));
     }
-    Ok((out.stdout, height))
+    Ok((scratch.read()?, height))
 }
 
 /// The first video stream of a probe's answer.

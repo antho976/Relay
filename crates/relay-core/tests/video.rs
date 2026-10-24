@@ -645,6 +645,31 @@ fn an_android_capture_holds_the_device_records_the_steps_and_adds_an_even_clip()
     assert_eq!((inspected["fps"].as_f64(), inspected["frames"].as_u64(), inspected.get("variable_rate")), (Some(30.0), Some(60), None), "{inspected}");
 }
 
+/// Sound longer than a pipe's 64 MiB (5 min 50 s of stereo at 48 kHz) is read whole: a render's
+/// loudness preset, a timeline's mix and an asset's inspection all decode through it. The store is
+/// on disk under the target folder, the decode being about 70 MB.
+#[test]
+fn sound_past_six_minutes_is_read_whole() {
+    if which::which("ffmpeg").is_err() {
+        eprintln!("no ffmpeg: skipped");
+        return;
+    }
+    let root = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let (ws, repo) = (root.path().join("ws"), root.path().join("ws/app"));
+    committed_repo(&repo, &[("README.md", "# app\n")]);
+    let e = engine_with_project(root.path(), &ws, &repo);
+    let (id, dir) = create(&e);
+    fs::create_dir_all(dir.join("public/assets")).unwrap();
+    let made = std::process::Command::new("ffmpeg").args(["-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=400", "-c:a", "libopus", "-b:a", "24k"])
+        .arg(dir.join("public/assets/long.ogg")).status().unwrap();
+    assert!(made.success());
+    let inspected = ok(&e, "video.asset.inspect", json!({"video_id": id, "asset": "assets/long.ogg"}));
+    let seconds = inspected["audio"]["seconds"].as_f64().unwrap_or_default();
+    assert!((seconds - 400.0).abs() < 1.0, "read {seconds} s of 400: {inspected}");
+    let scratch = fs::read_dir(e.store.videos_dir().join(".relay/sound")).map(|d| d.count()).unwrap_or(0);
+    assert_eq!(scratch, 0, "the decode's file is removed");
+}
+
 #[test]
 fn a_preview_runs_one_at_a_time_and_answers_its_link() {
     let (e, _root) = project();
