@@ -184,6 +184,21 @@ fn a_still_answers_a_picture_and_the_issues_across_its_frames() {
     assert!(refusal.message.starts_with("src/Video.tsx:12: boom"), "{}", refusal.message);
 }
 
+/// A still of many frames at full scale is drawn smaller, within the pixels a still may hold:
+/// 24 frames of a 1080 x 1920 composition come to 50 MP at full scale.
+#[test]
+fn a_still_of_many_full_frames_is_held_to_its_pixels() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let (id, _) = create(&e);
+    let at: Vec<String> = (0..24).map(|i| format!("f{}", i * 3)).collect();
+    let still = ok(&e, "video.still", json!({"video_id": id, "at": at, "scale": 1.0}));
+    let (w, h) = png_size(Path::new(still["png"].as_str().unwrap()));
+    let pixels = w as f64 * h as f64;
+    assert!(pixels < 50_500_000.0, "{w} x {h}");
+    assert!(pixels > 40_000_000.0, "only as much smaller as it needs: {w} x {h}");
+}
+
 #[test]
 fn each_read_records_a_version_when_the_code_changed_and_a_restore_puts_it_back() {
     let (e, _root) = project();
