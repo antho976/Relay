@@ -1583,7 +1583,14 @@ fn evaluate_exec(cfg: &GuardrailConfig, request: &GateRequest<'_>) -> Result<Dec
         }
         // Nor this one: it would switch off the check a grant is an exception to.
         if let Some((argv, what)) = hook_bypass(&commands) {
-            let (why, hint) = if what == PUSH_SKIPS_CHECK {
+            let (why, hint) = if what == DEFINES_ALIAS {
+                (
+                    "the guardrail cannot follow an alias into the commands that later use it, so an agent spells \
+                     its git commands out",
+                    "Run the git command itself (`git log --oneline`, not an alias for it). A person's own aliases \
+                     are theirs to set.",
+                )
+            } else if what == PUSH_SKIPS_CHECK {
                 (
                     "Relay's pre-push hook is where a push meets the project's check",
                     "Push with the hook on (plain `git push`). If the check fails, fix what it reports and push \
@@ -1792,8 +1799,9 @@ fn sheds_identity(words: &[&str], runs_relay: bool) -> bool {
 /// in a short-flag cluster, `-anm`), a `core.hooksPath` override for one command (`git -c`,
 /// `--config-env`, `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_PARAMETERS`), or a `git config` that sets,
 /// unsets or removes it. A `git push --no-verify` likewise skips the pre-push hook, where the
-/// project's check runs (`check_on_push`). Aliases (`git -c alias.ci='commit -n' ci`) are read
-/// through [`git_alias_scripts`]. Returns the command and what it does. Shell indirection or a commit
+/// project's check runs (`check_on_push`). Defining a git alias at all ([`git_aliases`]) is
+/// refused as well: a `git config alias.ci commit` now makes a `git ci -n` later that no reader
+/// of that later line can tell from any other command. Returns the command and what it does. Shell indirection or a commit
 /// that never runs pre-commit (`cherry-pick`, `commit-tree`) still gets past this, which is why
 /// `session.done` re-checks the branch's commits ([`recheck_commits`]).
 fn hook_bypass(commands: &[Vec<Word>]) -> Option<(Vec<String>, &'static str)> {
@@ -1835,9 +1843,20 @@ fn hook_bypass(commands: &[Vec<Word>]) -> Option<(Vec<String>, &'static str)> {
                 _ => {}
             }
         }
+        if !git_aliases(std::slice::from_ref(command)).0.is_empty() {
+            return Some((argv(), DEFINES_ALIAS));
+        }
+    }
+    // An alias whose name and body are set by separate words (`export GIT_CONFIG_KEY_0=…`).
+    let running: Vec<Vec<Word>> = commands.iter().filter(|command| !data_only(command)).cloned().collect();
+    if !git_aliases(&running).0.is_empty() {
+        let argv = running.first().map(|command| command.iter().map(|word| word.text.clone()).collect()).unwrap_or_default();
+        return Some((argv, DEFINES_ALIAS));
     }
     None
 }
+
+const DEFINES_ALIAS: &str = "defines a git alias";
 
 /// `git commit` options that take the next word as their value, so a `-n` there is a value.
 const COMMIT_VALUE_OPTIONS: &[&str] = &[
@@ -1893,11 +1912,19 @@ const PUSH_SKIPS_CHECK: &str = "skips the pre-push check";
 /// `--no-verify` among `git push`'s options, or a unique abbreviation of it (`--no-veri`;
 /// `--no-ve` could also be `--no-verbose`, which git refuses). `-n` is `--dry-run` for push.
 fn push_skips_hooks(args: &[&str]) -> bool {
-    args.iter().take_while(|word| **word != "--").any(|word| {
-        word.strip_prefix("--")
-            .map(|long| long.split('=').next().unwrap_or(long))
-            .is_some_and(|name| name.len() >= "no-veri".len() && "no-verify".starts_with(name))
-    })
+    let mut words = args.iter().take_while(|word| **word != "--");
+    while let Some(word) = words.next() {
+        // A value, not an option: `-o --no-verify` hands the server that text.
+        if matches!(*word, "-o" | "--push-option" | "--repo" | "--receive-pack" | "--exec") {
+            words.next();
+            continue;
+        }
+        let name = word.strip_prefix("--").map(|long| long.split('=').next().unwrap_or(long));
+        if name.is_some_and(|name| name.len() >= "no-veri".len() && "no-verify".starts_with(name)) {
+            return true;
+        }
+    }
+    false
 }
 
 /// A `git config` that sets, unsets or removes `core.hooksPath`, in the classic form
@@ -1954,14 +1981,6 @@ fn data_only(command: &[Word]) -> bool {
 /// Shells whose script can come from `-c`, standard input or a heredoc.
 const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh", "fish"];
 
-/// Programs that run the command named in their arguments: `env rm`, `timeout 60 git`,
-/// `xargs rm`. A quoted program after one of them still runs (`env 'rm' -rf`).
-const WRAPPERS: &[&str] = &[
-    "env", "sudo", "doas", "run0", "timeout", "nice", "nohup", "ionice", "stdbuf", "time", "command", "exec",
-    "builtin", "xargs", "setsid", "chrt", "taskset", "flock", "unbuffer", "eatmydata", "fakeroot", "strace",
-    "ltrace", "watch", "firejail", "systemd-run", "chroot", "busybox",
-];
-
 /// A `NAME=value` word: an assignment before a command, or an `export`/`env` argument.
 fn is_assignment(word: &str) -> bool {
     word.split_once('=').is_some_and(|(name, _)| {
@@ -1969,27 +1988,15 @@ fn is_assignment(word: &str) -> bool {
     })
 }
 
-/// Can the word at `at` be the program a command runs? Any unquoted word can (`sudo rm`,
-/// `find -exec rm`), and so can a quoted one as the command's first word (`"rm" -rf`). A
-/// quoted word elsewhere is an argument, which is data, unless only assignments, a wrapper and
-/// the wrapper's options come before it (`env 'rm' -rf`, `timeout 60 "git" reset`,
-/// `FOO=1 'rm'`) or it follows `find -exec`. Quoted text with a space in it is never one.
+/// Can the word at `at` be the program a command runs? Any word can, quoted or not, wherever
+/// it stands: `"rm" -rf`, `env 'rm' -rf`, `if 'rm' -rf x; then`, `find -exec sudo 'rm' -rf`,
+/// and wrappers no list keeps up with (`uv run`, `pkexec`). Only quoted text with a space in it
+/// is never one: that is a string (a commit message, a JSON payload), which names a command
+/// without running it (D103). The commands whose arguments are all data (`echo`, `rg`) are
+/// told apart by [`data_only`].
 fn program_at(command: &[Word], at: usize) -> bool {
     let word = &command[at];
-    if at == 0 || !word.quoted {
-        return true;
-    }
-    if word.text.contains(char::is_whitespace) {
-        return false;
-    }
-    let before = &command[..at];
-    if before.last().is_some_and(|prev| !prev.quoted && matches!(prev.text.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir")) {
-        return true;
-    }
-    match before.iter().position(|word| !is_assignment(&word.text)) {
-        None => true,
-        Some(first) => WRAPPERS.contains(&canonical_program(&before[first].text).as_str()),
-    }
+    at == 0 || !word.quoted || !word.text.contains(char::is_whitespace)
 }
 
 /// An interpreter whose inline code (`python3 -c`, `perl -e`, `node -e`) can run a command.
@@ -2031,6 +2038,7 @@ fn expand(line: &str, depth: usize, out: &mut Vec<Vec<Word>>) {
         .collect();
     let stdin_script = commands.iter().any(|command| reads_stdin_script(command));
     scripts.extend(git_alias_scripts(&commands));
+    scripts.extend(commands.iter().filter_map(|command| env_split_string(command)));
     for command in &commands {
         if let Some(code) = inline_code(command) {
             scripts.extend(literal_lines(code));
@@ -2050,13 +2058,48 @@ fn expand(line: &str, depth: usize, out: &mut Vec<Vec<Word>>) {
     }
 }
 
-/// What the git aliases a line defines run, each as a command line: `git -c alias.x='!…' x`,
-/// `git config [--global] alias.x '…'` (an alias for later), `--config-env=alias.x=VAR`, and
-/// `GIT_CONFIG_KEY_<n>=alias.x` / `GIT_CONFIG_VALUE_<n>` or `GIT_CONFIG_PARAMETERS`. A `!` alias
-/// is shell (`!rm -rf build` runs `rm -rf build`), any other is git (`reset --hard` runs `git
-/// reset --hard`); where the line also calls the alias, its arguments follow. Every definition
-/// counts, called or not, so an alias of an alias is seen too.
-fn git_alias_scripts(commands: &[Vec<Word>]) -> Vec<String> {
+/// The command line GNU `env -S` / `--split-string` splits and runs (`env -S 'rm -rf build'`,
+/// `env -iS"…"`), with the words after it.
+fn env_split_string(command: &[Word]) -> Option<String> {
+    let at = (0..command.len()).find(|&at| program_at(command, at) && shell::program(&command[at].text) == "env")?;
+    let words: Vec<&str> = command[at + 1..].iter().map(|word| word.text.as_str()).collect();
+    let mut i = 0;
+    while let Some(&word) = words.get(i) {
+        i += 1;
+        if matches!(word, "-u" | "-C" | "--unset" | "--chdir") {
+            i += 1;
+            continue;
+        }
+        let split = if word == "--split-string" {
+            i += 1;
+            words.get(i - 1).copied()
+        } else if let Some(value) = word.strip_prefix("--split-string=") {
+            Some(value)
+        } else if let Some(cluster) = word.strip_prefix('-').filter(|cluster| !cluster.starts_with('-') && cluster.contains('S')) {
+            let value = &cluster[cluster.find('S').unwrap_or(0) + 1..];
+            if value.is_empty() {
+                i += 1;
+                words.get(i - 1).copied()
+            } else {
+                Some(value)
+            }
+        } else if word.starts_with('-') || is_assignment(word) {
+            continue;
+        } else {
+            return None;
+        };
+        let rest = words.get(i..).unwrap_or_default().join(" ");
+        return split.map(|line| format!("{line} {rest}"));
+    }
+    None
+}
+
+/// The git aliases a line defines, as (name, body): `git -c alias.x='!…' x`, `git config
+/// [--global] alias.x '…'` (an alias for later), `--config-env=alias.x=VAR`, and
+/// `GIT_CONFIG_KEY_<n>=alias.x` / `GIT_CONFIG_VALUE_<n>` or `GIT_CONFIG_PARAMETERS` (both its
+/// `'key'='value'` and its older `'key=value'` form). And every git subcommand the line calls,
+/// with its arguments, since any of them may be one of those aliases.
+fn git_aliases(commands: &[Vec<Word>]) -> (Vec<(String, String)>, Vec<(String, String)>) {
     let assignments: HashMap<&str, &str> = commands
         .iter()
         .flatten()
@@ -2066,26 +2109,33 @@ fn git_alias_scripts(commands: &[Vec<Word>]) -> Vec<String> {
     let alias = |key: &str| {
         key.get(..6).filter(|prefix| prefix.eq_ignore_ascii_case("alias.")).map(|_| key[6..].to_ascii_lowercase())
     };
-    // (alias, what it runs, the git command it was defined on, if any)
-    let mut defined: Vec<(String, String, Option<usize>)> = Vec::new();
+    let mut defined: Vec<(String, String)> = Vec::new();
     for (name, value) in &assignments {
         if let Some(n) = name.strip_prefix("GIT_CONFIG_KEY_") {
             if let (Some(alias), Some(body)) = (alias(value), assignments.get(format!("GIT_CONFIG_VALUE_{n}").as_str())) {
-                defined.push((alias, body.to_string(), None));
+                defined.push((alias, body.to_string()));
             }
         }
         if *name == "GIT_CONFIG_PARAMETERS" {
-            // `'key'='value' 'key'='value'`, each part single-quoted.
+            // Single-quoted parts: `'key'='value'`, or `'key=value'`.
             let parts: Vec<&str> = value.split('\'').collect();
-            for pair in parts.windows(3).filter(|pair| pair[1] == "=") {
-                if let Some(alias) = alias(pair[0]) {
-                    defined.push((alias, pair[2].to_string(), None));
+            let mut i = 1;
+            while let Some(part) = parts.get(i) {
+                let pair = if parts.get(i + 1) == Some(&"=") {
+                    i += 2;
+                    parts.get(i).map(|body| (*part, *body))
+                } else {
+                    part.split_once('=')
+                };
+                if let Some((alias, body)) = pair.and_then(|(key, body)| alias(key).map(|alias| (alias, body))) {
+                    defined.push((alias, body.to_string()));
                 }
+                i += 2;
             }
         }
     }
-    let mut calls: Vec<(usize, String, String)> = Vec::new();
-    for (index, command) in commands.iter().enumerate() {
+    let mut calls: Vec<(String, String)> = Vec::new();
+    for command in commands {
         let words: Vec<&str> = command.iter().map(|word| word.text.as_str()).collect();
         for at in (0..words.len()).filter(|&at| program_at(command, at) && shell::program(words[at]) == "git") {
             let mut i = at + 1;
@@ -2097,7 +2147,7 @@ fn git_alias_scripts(commands: &[Vec<Word>]) -> Vec<String> {
                         .map(|(key, var)| (key, assignments.get(var).copied().unwrap_or_default().to_string())),
                 };
                 if let Some((alias, body)) = setting.and_then(|(key, body)| alias(key).map(|alias| (alias, body))) {
-                    defined.push((alias, body, Some(index)));
+                    defined.push((alias, body));
                 }
                 i += if matches!(word, "-c" | "--config-env") || takes_value("git", word) { 2 } else { 1 };
             }
@@ -2119,27 +2169,49 @@ fn git_alias_scripts(commands: &[Vec<Word>]) -> Vec<String> {
                     _ => continue,
                 };
                 if let Some(alias) = alias(key) {
-                    defined.push((alias, body.to_string(), None));
+                    defined.push((alias, body.to_string()));
                 }
             } else {
-                calls.push((index, sub.to_ascii_lowercase(), rest.join(" ")));
+                calls.push((sub.to_ascii_lowercase(), rest.join(" ")));
             }
         }
     }
-    defined
-        .into_iter()
-        .map(|(alias, body, on)| {
-            let args = calls
-                .iter()
-                .find(|(index, sub, _)| *sub == alias && on.is_none_or(|on| on == *index))
-                .map(|(_, _, args)| format!(" {args}"))
-                .unwrap_or_default();
-            match body.strip_prefix('!') {
-                Some(shell) => format!("{shell}{args}"),
-                None => format!("git {body}{args}"),
+    (defined, calls)
+}
+
+/// What the git aliases a line defines run, each as a command line ([`git_aliases`]). A `!`
+/// alias is shell (`!rm -rf build` runs `rm -rf build`), any other is git (`reset --hard` runs
+/// `git reset --hard`), an alias of an alias is followed, and each call of one on the line gets
+/// its own line with its arguments after (`git r --hard`). Every definition counts called or
+/// not, bare.
+fn git_alias_scripts(commands: &[Vec<Word>]) -> Vec<String> {
+    let (defined, calls) = git_aliases(commands);
+    if defined.is_empty() {
+        return Vec::new();
+    }
+    let body_of = |name: &str| defined.iter().rev().find(|(alias, _)| alias == name).map(|(_, body)| body.as_str());
+    let resolve = |body: &str, args: &str| -> String {
+        let mut body = body.to_string();
+        // git refuses a loop; the bound only stops one here.
+        for _ in 0..8 {
+            if let Some(shell) = body.strip_prefix('!') {
+                return format!("{shell} {args}");
             }
-        })
-        .collect()
+            let (first, rest) = body.trim_start().split_once(char::is_whitespace).unwrap_or((body.trim(), ""));
+            match body_of(&first.to_ascii_lowercase()) {
+                Some(next) => body = format!("{next} {rest}"),
+                None => break,
+            }
+        }
+        format!("git {body} {args}")
+    };
+    let mut scripts: Vec<String> = defined.iter().map(|(_, body)| resolve(body, "")).collect();
+    for (sub, args) in &calls {
+        if let Some(body) = body_of(sub) {
+            scripts.push(resolve(body, args));
+        }
+    }
+    scripts
 }
 
 /// Is this a shell reading its script from standard input — `sh`, `bash -s`, `bash <<< …` —
@@ -2728,7 +2800,8 @@ const LONG_OPTIONS: &[(&str, &str)] = &[
 /// Global options that take the next word as their value, so it is not mistaken for the
 /// subcommand: `git -C ../app reset --hard`, `git -c core.x=y push --force`.
 fn takes_value(program: &str, word: &str) -> bool {
-    program == "git" && matches!(word, "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path" | "--config-env")
+    program == "git"
+        && matches!(word, "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path" | "--config-env" | "--attr-source")
 }
 
 /// Is `line` one command that changes nothing but what the bus itself authorizes: a Relay CLI
@@ -3586,6 +3659,13 @@ mod denied_tests {
             "env 'rm' -rf build", "timeout 60 \"git\" reset --hard HEAD~1", "sudo 'rm' -rf build", "nice -n 5 'rm' -rf build",
             "FOO=1 'rm' -rf build", "echo build | xargs 'rm' -rf", "find . -exec 'rm' -rf {} ;", "env 'bash' -c 'rm -rf build'",
             "env 'python3' -c \"import os; os.system('rm -rf build')\"", "sudo env 'git' push --dele origin main",
+            // After a shell keyword, a wrapper no list names, a nested wrapper; and `env -S`.
+            "if 'rm' -rf build; then :; fi", "for d in a; do 'rm' -rf build; done", "{ 'rm' -rf build; }", "! 'rm' -rf build",
+            "uv run 'rm' -rf build", "pkexec 'rm' -rf build", "find . -exec sudo 'rm' -rf {} ;", "find . -exec env 'rm' -rf {} +",
+            "env -S 'rm -rf build'", "env -S\"rm -rf build\"", "env -iS 'git reset --hard'", "env --split-string='rm -rf build'",
+            "env -u HOME -S 'rm -rf build'",
+            // A global option that takes the next word.
+            "git --attr-source HEAD reset --hard", "git --attr-source HEAD push --dele origin main",
             // Git aliases.
             "git -c alias.nuke='!rm -rf build' nuke", "git -c alias.r='reset --hard' r", "git -c alias.r='reset' r --hard",
             "git -c Alias.P='push --delete' p origin main", "git -c alias.a=b -c alias.b='!rm -rf build' a",
@@ -3595,14 +3675,19 @@ mod denied_tests {
             "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.nuke GIT_CONFIG_VALUE_0='!rm -rf build' git nuke",
             "GIT_CONFIG_PARAMETERS=\"'alias.nuke'='!rm -rf build'\" git nuke",
             "bash -c \"git -c alias.nuke='!rm -rf build' nuke\"",
+            // An alias of an alias with the arguments on the call, an alias called twice, the
+            // older `'key=value'` form.
+            "git -c alias.a=b -c alias.b=reset a --hard", "git config alias.r reset && git r --soft HEAD && git r --hard",
+            "GIT_CONFIG_PARAMETERS=\"'alias.nuke=!rm -rf build'\" git nuke",
         ] {
             assert!(denied(line), "{line:?} runs a denied command");
         }
         for line in [
             "git push --dry-run origin main", "git push --tags origin", "git push --porcelain origin main",
             "git push --no-force origin main", "git reset --soft HEAD~1", "git clean --dry-run -d", "rm --verbose build",
-            "rm --dir build", "git log --hard-to-say", "echo 'rm' -rf build", "rg 'rm' -rf src", "cargo run -- 'rm' -rf",
-            "git commit -m 'rm' -rf", "ls 'rm -rf build'", "env 'rm -rf build'",
+            "rm --dir build", "git log --hard-to-say", "echo 'rm' -rf build", "rg 'rm' -rf src",
+            "ls 'rm -rf build'", "env 'rm -rf build'", "sudo apt install 'git'", "env -S 'cargo test'",
+            "git commit -m 'rm -rf build was slow'",
             "git -c alias.st='status -sb' st", "git config alias.lg 'log --oneline --graph'", "git config --get alias.nuke",
             "git -c user.name=x commit -m 'alias.r=reset --hard'",
         ] {
@@ -3666,6 +3751,11 @@ mod denied_tests {
             "git -C app push --no-verify", "env 'git' push --no-verify", "env 'git' commit -n -m x",
             "git -c alias.ci='commit --no-verify' ci -m x", "git -c alias.ci=commit ci -n -m x",
             "git -c alias.pu='push --no-verify' pu origin main", "git config alias.ci 'commit -n'",
+            "if 'git' commit -n -m x; then :; fi", "git --attr-source HEAD commit -n", "git --attr-source HEAD push --no-verify",
+            // Any alias at all: a later line calling it cannot be told from another command.
+            "git config alias.ci commit", "git config --global alias.r reset", "git -c alias.st=status st",
+            "git -c alias.ci=commit ci -m x", "GIT_CONFIG_PARAMETERS=\"'alias.x=!true'\" git x",
+            "export GIT_CONFIG_KEY_0=alias.x; export GIT_CONFIG_VALUE_0=commit",
         ] {
             assert!(bypass(line), "{line:?} switches the hook off");
         }
@@ -3677,7 +3767,8 @@ mod denied_tests {
             "git config user.name x", "echo git commit -n", "rg 'commit --no-verify' docs", "grep -rn core.hooksPath crates",
             "relay q guardrail.check '{\"command\":\"git commit -n\"}'",
             "git push -n origin main", "git push --no-ve origin main", "git push --verify origin main", "git push origin -- --no-verify",
-            "git -c alias.ci=commit ci -m x",
+            "git push -o --no-verify origin main", "git config --get alias.ci", "git config alias.ci", "git log --grep alias.x=y",
+            "echo GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0=commit",
         ] {
             assert!(!bypass(line), "{line:?} leaves the hook on");
         }
