@@ -15,6 +15,7 @@ pub(crate) async fn run(ui: &Rc<Ui>) -> Result<(), String> {
     task_page_keeps_typing(ui).await?;
     note_pictures_move(ui).await?;
     refused_close_keeps_its_place(ui).await?;
+    board_scope_follows_the_project(ui).await?;
     Ok(())
 }
 
@@ -203,5 +204,43 @@ async fn refused_close_keeps_its_place(ui: &Rc<Ui>) -> Result<(), String> {
     require(after.iter().position(|(n, _)| *n == name) == Some(1), &format!("back in its place: {after:?}"))?;
     require(after.iter().find(|(n, _)| *n == name).map(|(_, p)| *p) == Some(pane), "the same pane, not one rebuilt from the tail")?;
     println!("A refused close puts the same pane back in its place");
+    Ok(())
+}
+
+fn shows_text(ui: &Ui, wanted: &str) -> bool {
+    find(ui.window.upcast_ref(), &|w| w.is_mapped() && w.downcast_ref::<gtk::Label>().is_some_and(|l| l.text() == wanted)).is_some()
+}
+
+/// A project switched to from a module's board shows that project's whole board. Before, the
+/// old module's scope stayed: every lane empty, the counts 0, until another event came.
+async fn board_scope_follows_the_project(ui: &Rc<Ui>) -> Result<(), String> {
+    let project = ui.project.get();
+    let workspace = ui.workspaces.borrow().first().cloned().ok_or("Fixture workspace")?;
+    let root = std::path::PathBuf::from(workspace["path"].as_str().ok_or("workspace path")?).join("devspace-board-scope");
+    require(root.starts_with(std::env::temp_dir()), "Fixture repository must be temporary")?;
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    for args in [vec!["init", "-q", "-b", "main"], vec!["-c", "user.name=Fixture", "-c", "user.email=fixture@relay.test", "commit", "--allow-empty", "-qm", "Fixture"]] {
+        let done = std::process::Command::new("git").arg("-C").arg(&root).args(args).output().map_err(|e| e.to_string())?;
+        require(done.status.success(), "fixture git")?;
+    }
+    let other = call(ui, "project.add", json!({"workspace_id":workspace["id"],"path":root,"name":"Board scope fixture"})).await?;
+    let other = other["id"].as_i64().ok_or("project id")?;
+    call(ui, "task.create", json!({"project_id":other,"title":"A task of the other project","column":"ready"})).await?;
+    let module = call(ui, "module.create", json!({"project_id":project,"name":"Scope fixture module","priority":"medium"})).await?;
+    let module = module["id"].as_i64().ok_or("module id")?;
+    call(ui, "task.create", json!({"project_id":project,"title":"A task in the module","column":"ready","module_id":module})).await?;
+    ui.refresh();
+    wait_for(|| ui.projects.borrow().iter().any(|p| p["id"].as_i64() == Some(other)), "second project listed").await?;
+    ui.navigate("board");
+    crate::pages::open_module_board(ui, module);
+    wait_for(|| shows_text(ui, "Scope fixture module") && shows_text(ui, "A task in the module"), "The module's board").await?;
+    // The creates' events have all landed: the switch is the only thing that redraws.
+    glib::timeout_future(Duration::from_millis(1000)).await;
+    ui.open_project(other, "board");
+    wait_for(|| shows_text(ui, "A task of the other project"), "The other project's board, all of it").await?;
+    require(!shows_text(ui, "Scope fixture module"), "The old module's banner is gone")?;
+    ui.open_project(project, "agents");
+    wait_for(|| ui.project.get() == project, "back on the fixture project").await?;
+    println!("Switching project from a module's board shows the new project's whole board");
     Ok(())
 }

@@ -38,9 +38,9 @@ const VIEW_KEY: &str = "native.board";
 
 thread_local! {
     static BOARD: RefCell<Option<Rc<Board>>> = const { RefCell::new(None) };
-    /// The module the board is narrowed to: a module is a bundle of tasks, shown on the same
-    /// board with the same create, timeline and done.
-    static SCOPE: Cell<Option<i64>> = const { Cell::new(None) };
+    /// The module the board is narrowed to, with its project: a module is a bundle of tasks,
+    /// shown on the same board with the same create, timeline and done.
+    static SCOPE: Cell<Option<(i64, i64)>> = const { Cell::new(None) };
     /// The view as last read from or written to [`VIEW_KEY`]; `None` until it has been read,
     /// so a board drawn before then never writes its defaults over a saved view.
     static SAVED_VIEW: RefCell<Option<Value>> = const { RefCell::new(None) };
@@ -75,7 +75,7 @@ fn view_of(list: bool, group: &str, hidden: &BTreeSet<String>) -> Value {
 }
 /// Opens the board narrowed to one module.
 pub fn open_module(ui: &Rc<Ui>, module: i64) {
-    SCOPE.with(|scope| scope.set(Some(module)));
+    SCOPE.with(|scope| scope.set(Some((ui.project.get(), module))));
     if ui.page.borrow().as_str() == "board" {
         ui.refresh_page();
     } else {
@@ -87,7 +87,7 @@ pub fn leave_module() {
     SCOPE.with(|scope| scope.set(None));
 }
 fn scope() -> Option<i64> {
-    SCOPE.with(|scope| scope.get())
+    SCOPE.with(|scope| scope.get()).map(|(_, module)| module)
 }
 fn current() -> Option<Rc<Board>> {
     BOARD.with(|board| board.borrow().clone())
@@ -859,6 +859,10 @@ fn copy_task(ui: &std::rc::Weak<Ui>, id: i64, clipboard: gdk::Clipboard) {
 
 /// Mounts the board on `page` for `project` the first time, then re-renders it with `tasks`.
 pub fn show(ui: &Rc<Ui>, page: &gtk::Box, project: i64, tasks: Vec<Value>) {
+    // Another project's board starts on all of its tasks, not narrowed to a module it lacks.
+    if SCOPE.with(|scope| scope.get()).is_some_and(|(owner, _)| owner != project) {
+        leave_module();
+    }
     let owner = ui.page_projects.borrow().get("board").copied();
     let mut fresh = false;
     let board = match current() {
@@ -1811,14 +1815,21 @@ impl Board {
             return;
         };
         if !self.deferred.replace(true) {
-            let weak = Rc::downgrade(self);
-            popover.connect_closed(move |_| {
+            // One close, one render: the handler goes once it has run, or a long-lived menu
+            // (View, a lane's, the workspace picker) would gather one per deferral.
+            let handler: Rc<RefCell<Option<glib::SignalHandlerId>>> = Rc::default();
+            let (weak, slot) = (Rc::downgrade(self), handler.clone());
+            let id = popover.connect_closed(move |popover| {
+                if let Some(id) = slot.borrow_mut().take() {
+                    popover.disconnect(id);
+                }
                 let Some(board) = weak.upgrade() else { return };
                 if board.deferred.get() {
                     // The popover is still mapped while `closed` runs.
                     glib::idle_add_local_once(move || board.render_when_closed());
                 }
             });
+            *handler.borrow_mut() = Some(id);
         }
     }
 
@@ -2168,8 +2179,13 @@ impl Board {
             let Ok(list) = ui.call("module.list", json!({"project_id":project,"include_archived":true})).await else { return };
             let found = rows(&list, "modules").into_iter().find(|m| m["id"].as_i64() == Some(id));
             if found.is_none() {
-                // Deleted elsewhere, or another project's: back to every task.
-                leave_module();
+                // Deleted elsewhere, or another project's: back to every task, drawn now.
+                if scope() == Some(id) {
+                    leave_module();
+                    *board.module.borrow_mut() = None;
+                    board.render_when_closed();
+                }
+                return;
             }
             if *board.module.borrow() != found {
                 *board.module.borrow_mut() = found;
@@ -2181,7 +2197,13 @@ impl Board {
     /// A module's head over its board: back to every task, its name and priority, how far
     /// along it is, and adding tasks, marking it done, renaming and deleting it.
     fn render_banner(self: &Rc<Self>, tasks: &[Value]) {
-        let key = json!([scope(), *self.module.borrow(), tasks.is_empty()]).to_string();
+        // Only what the banner shows: the module row also counts its tasks, which every task
+        // move changes, and a redraw would close a rename being typed.
+        let key = {
+            let module = self.module.borrow();
+            let shown = module.as_ref().map(|m| json!([m["id"], m["name"], m["priority"], m["completed_at"]]));
+            json!([scope(), shown, tasks.is_empty()]).to_string()
+        };
         if !self.redraw("banner", key) {
             return;
         }
