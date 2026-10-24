@@ -574,6 +574,8 @@ impl Editor {
         *self.path.borrow_mut() = path.clone();
         self.project.set(project);
         self.image.loading(&path);
+        self.note_opened(ui, &path);
+        self.facts.set_text("");
         self.position.set_text("Image preview");
         self.find.hide();
         self.set_busy(true);

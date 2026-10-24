@@ -256,6 +256,9 @@ paned.sidebar-split > separator:hover { background-color: @line_focus; }
 .code-bar { padding: 0 6px 0 10px; border-bottom: 1px solid @edge; background: @console; }
 .code-bar button { min-height: 24px; font-size: 11px; padding: 0 6px; }
 .code-source { font-family: 'Geist Mono'; font-size: 12.5px; }
+/* The code on its own ground, the gutter's: the fields' @raised made the text grey beside a
+   screen-black gutter. */
+textview.code-source > text { background-color: @screen; }
 .code-commit .dim { font-size: 10px; }
 
 .small-key { min-height: 22px; min-width: 22px; padding: 0; font-size: 11px; }
@@ -302,7 +305,9 @@ switch:checked > slider { background: @wall; }
 .code-bar { min-height: 35px; }
 button.window-control, .topbar button.icon-key { margin: 0; }
 .code-bar .title { font-size: 12px; }
-.code-position { min-height: 23px; padding: 0 9px; border-top: 1px solid @edge; background: @console; font-size: 11px; }
+.code-position { min-height: 24px; padding: 0 12px; border-top: 1px solid @edge; background: @console; font-size: 11px; }
+.code-position label { font-family: 'Geist Mono', monospace; font-size: 11px; }
+.code-facts { color: @faint; }
 .code-commit-form { padding: 8px 12px; }
 .code-merge-action { margin: 8px 12px 6px; }
 .device-release-state { padding: 9px 10px; border: 1px solid @edge; background: @console; }

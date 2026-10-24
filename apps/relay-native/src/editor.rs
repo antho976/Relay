@@ -9,6 +9,8 @@ mod project_files;
 pub(crate) mod image_preview;
 #[path = "find_bar.rs"]
 pub mod find_bar;
+#[path = "editor_tabs.rs"]
+mod editor_tabs;
 use sourceview5::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -90,6 +92,12 @@ pub struct Editor {
     buffer: sourceview5::Buffer,
     view: sourceview5::View,
     caption: gtk::Label,
+    /// The workbench strip of opened files (`editor_tabs`), and the files on it.
+    tab_strip: gtk::Box,
+    tab_scroll: gtk::ScrolledWindow,
+    tabs: RefCell<Vec<editor_tabs::Tab>>,
+    /// The status line's facts about the open file: language, encoding, endings, indent.
+    facts: gtk::Label,
     path: RefCell<String>,
     original: RefCell<String>,
     project: Cell<i64>,
@@ -289,11 +297,24 @@ impl Editor {
         view.set_highlight_current_line(true);
         view.set_tab_width(4);
         view.set_auto_indent(true);
+        // Room between the line numbers and the code, which touched it.
+        view.set_left_margin(12);
         view.set_editable(false);
         if let Some(scheme) = sourceview5::StyleSchemeManager::default().scheme("relay-matte") {
             buffer.set_style_scheme(Some(&scheme));
         }
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        // The files opened, above the open file's breadcrumb (`editor_tabs`).
+        let tab_strip = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        tab_strip.add_css_class("editor-tabs");
+        let tab_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::External)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .child(&tab_strip)
+            .build();
+        tab_scroll.add_css_class("editor-tab-scroll");
+        tab_scroll.set_visible(false);
+        content.append(&tab_scroll);
         content.append(&tools);
         let find = find_bar::FindBar::new(&view, &buffer, "code", "Find in file", &FIND_QUERY);
         find.bar.add_css_class("toolbar");
@@ -375,8 +396,15 @@ impl Editor {
         });
         content.add_css_class("page-layer");
         let position = label("Select a file to edit", "dim");
-        position.add_css_class("code-position");
-        content.append(&position);
+        position.set_hexpand(true);
+        position.set_xalign(0.0);
+        let facts = label("", "code-facts");
+        let status = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+        status.add_css_class("code-position");
+        status.append(&position);
+        status.append(&facts);
+        position.bind_property("visible", &status, "visible").sync_create().build();
+        content.append(&status);
         let workspace = gtk::Paned::new(gtk::Orientation::Horizontal);
         workspace.add_css_class("code-split");
         workspace.set_start_child(Some(&content));
@@ -477,6 +505,10 @@ impl Editor {
             buffer,
             view,
             caption,
+            tab_strip,
+            tab_scroll,
+            tabs: RefCell::default(),
+            facts,
             path: RefCell::default(),
             original: RefCell::default(),
             project: Cell::new(0),
@@ -540,9 +572,20 @@ impl Editor {
                     .set_sensitive(b.is_modified() && e.view.is_editable());
                 e.discard.set_sensitive(b.is_modified() && !e.busy.get());
                 // Unsaved edits show by the name too, as a note's do in Notes.
-                let path = e.path.borrow();
+                let path = e.path.borrow().clone();
                 if !path.is_empty() && !e.diff.get() && !e.image_mode.get() {
-                    e.caption.set_text(&if b.is_modified() { format!("{path}  •") } else { path.clone() });
+                    e.caption.set_markup(&editor_tabs::crumb(&path, b.is_modified()));
+                }
+            }
+        });
+        // A file the person edits is no longer only previewed: its tab is kept. Typing and
+        // pasting are user actions; the editor's own loads (set_text) are not.
+        let weak = Rc::downgrade(&editor);
+        editor.buffer.connect_begin_user_action(move |_| {
+            if let Some(e) = weak.upgrade() {
+                let path = e.path.borrow().clone();
+                if !path.is_empty() && !e.diff.get() && !e.image_mode.get() {
+                    e.keep_shown_tab(&path);
                 }
             }
         });
@@ -625,6 +668,7 @@ impl Editor {
                     if editor.agents_visible() { agents_tab.add_css_class("selected") } else { agents_tab.remove_css_class("selected") }
                     if design { design_tab.add_css_class("selected") } else { design_tab.remove_css_class("selected") }
                     editor.document_tools.set_visible(document && !editor.image_mode.get());
+                    editor.tab_scroll.set_visible(document && !editor.tabs.borrow().is_empty());
                     editor.position.set_visible(document);
                     if !document || editor.image_mode.get() {
                         editor.find.hide();
@@ -772,6 +816,7 @@ impl Editor {
         // As before any file was opened: emptying the text put the caret at "Ln 1, Col 1".
         self.caption.set_text("No file open");
         self.position.set_text("Select a file to edit");
+        self.facts.set_text("");
     }
     /// A file, git, worktree or integration event: `event` is its name and payload, and
     /// `None` refreshes unconditionally.
@@ -1176,7 +1221,9 @@ impl Editor {
                     let manager = sourceview5::LanguageManager::default();
                     e.buffer
                         .set_language(manager.guess_language(Some(&path), None).as_ref());
-                    e.caption.set_text(&path);
+                    e.caption.set_markup(&editor_tabs::crumb(&path, false));
+                    e.describe(content);
+                    e.note_opened(&ui, &path);
                     // set_text leaves the caret after the inserted text (RA-456).
                     if let Some((line, col, length)) = goto {
                         e.reveal(line, col, length);
@@ -1873,6 +1920,10 @@ impl Editor {
         ] {
             let action = crate::app::icon_button(icon, title);
             action.add_css_class("explorer-key");
+            // New is the explorer's own action; the rest act on a selection or the view.
+            if op == "file.create" {
+                action.add_css_class("explorer-primary");
+            }
             action.set_widget_name(&format!("project-{op}"));
             let e = self.clone();
             let weak = Rc::downgrade(ui);
@@ -1883,6 +1934,10 @@ impl Editor {
             });
             self.file_actions.append(&action);
         }
+        // What the keys do to files, then what they do to the view.
+        let rule = gtk::Separator::new(gtk::Orientation::Vertical);
+        rule.add_css_class("explorer-rule");
+        self.file_actions.append(&rule);
         let refresh = crate::app::icon_button("refresh", "Refresh the explorer");
         refresh.add_css_class("explorer-key");
         refresh.set_widget_name("project-files-refresh");

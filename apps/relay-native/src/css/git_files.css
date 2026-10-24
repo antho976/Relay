@@ -271,3 +271,19 @@ button.code-history-more { margin: 4px 8px 8px; font-size: 12px; }
 .change-bar .bar-added { background: #4fae70; }
 .change-bar .bar-removed { background: #d4574d; }
 .change-bar .bar-empty { background: alpha(@ink, 0.12); }
+
+/* The workbench's tabs (editor_tabs.rs): the open file lit with an ink underline, a preview in
+   italics, each closable. */
+.editor-tab-scroll { background: @console; border-bottom: 1px solid @edge; }
+.editor-tabs { min-height: 34px; }
+.editor-tab { min-height: 34px; padding: 0 4px 0 12px; border-right: 1px solid @edge; color: @faint; }
+.editor-tab:hover { background: alpha(@ink, 0.03); color: @secondary; }
+.editor-tab.open { background: @slab; color: @ink; box-shadow: inset 0 -2px @ink; }
+.editor-tab.preview .editor-tab-name { font-style: italic; }
+.editor-tab-name { font-size: 12px; }
+.editor-tab button.editor-tab-close { min-width: 20px; min-height: 20px; padding: 0; border-radius: 5px; opacity: 0; }
+.editor-tab:hover button.editor-tab-close, .editor-tab.open button.editor-tab-close { opacity: 1; }
+/* The explorer's keys: New in ink, the others quiet, files' actions apart from the view's. */
+button.explorer-key { color: @faint; }
+button.explorer-key.explorer-primary { color: @ink; }
+.explorer-rule { min-width: 1px; margin: 7px 4px; background: @edge; }
