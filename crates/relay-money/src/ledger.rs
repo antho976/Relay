@@ -1051,6 +1051,10 @@ impl Ledger {
         if let Some(problem) = crate::backup::problem(file) {
             return invalid(problem);
         }
+        // The wrong file restored erases this ledger: a copy is kept first, as before a replace.
+        if self.holds_anything()? {
+            self.snapshot()?;
+        }
         let now = now_ms();
         let mut taken: HashSet<(&str, String)> = HashSet::new();
         let mut uid = |table: &'static str, kept: &Option<String>| -> String {
@@ -1314,7 +1318,12 @@ impl Ledger {
     }
 
     /// Erases everything, settings included.
+    /// Erases the whole ledger, a copy of it kept first ([`Ledger::snapshot`]) as a sync replace
+    /// keeps one: an erase has no Undo.
     pub fn reset(&mut self) -> Result<()> {
+        if self.holds_anything()? {
+            self.snapshot()?;
+        }
         let tx = self.conn.transaction()?;
         Ledger::clear(&tx, false)?;
         tx.commit()?;

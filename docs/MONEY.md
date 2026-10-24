@@ -175,7 +175,8 @@ Change = { table, uid, updated_at, deleted, row }
   deleted before pairing is not posted or imported again on the PC.
   The phone is where the ledger lives; the PC is a second view of it. After that, both sides
   merge. Tally says so on its pairing page before the first sync runs.
-  Before a replace erases a ledger that holds anything but categories, the PC (or a cloud copy,
+  Before a replace, a restore (`money.import`) or an erase (`money.reset`) clears a ledger that
+  holds anything but categories, the PC (or a cloud copy,
   docs/CLOUD.md) copies it whole to `money-backups/money-<time>-<n>.db` beside `money.db`: a
   0700 folder, 0600 files, the newest ten kept and the first of each of the last fourteen days, so
   a burst of replaces from one leaked credential cannot push out the copy from before it (names

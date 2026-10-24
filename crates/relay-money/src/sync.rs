@@ -275,7 +275,7 @@ impl Ledger {
     }
 
     /// Whether any row is live here but the categories, which every new ledger is given.
-    fn holds_anything(&self) -> Result<bool> {
+    pub(crate) fn holds_anything(&self) -> Result<bool> {
         for (table, _) in TABLES.iter().filter(|(t, _)| *t != "categories") {
             if self.conn.prepare_cached(&format!("SELECT 1 FROM {table} WHERE deleted = 0 LIMIT 1"))?.exists([])? {
                 return Ok(true);
@@ -909,6 +909,27 @@ mod tests {
         assert_eq!((kind.as_str(), at), ("integer", crate::ledger::STAMP_CEILING + 1));
         l.reset().unwrap();
         assert!(l.sync("Other", false, 0, None, &[], "t").is_ok());
+    }
+
+    /// A restore of the wrong file and an erase each keep a copy of the ledger they erase, as a
+    /// replace does; neither has anything to keep in a new ledger.
+    #[test]
+    fn a_restore_and_an_erase_keep_a_copy_first() {
+        let dir = std::env::temp_dir().join(format!("relay-money-{}", crate::ledger::new_uid()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let backups = dir.join("money-backups");
+        let mut l = Ledger::open(&dir.join("money.db")).unwrap();
+        l.reset().unwrap();
+        assert!(!backups.exists(), "nothing to keep");
+        l.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        let file = crate::sample_data::build(date(2026, 10, 4), 2, "CAD", crate::sample_data::DEFAULT_SEED);
+        l.import_backup(&file).unwrap();
+        l.reset().unwrap();
+        let mut copies: Vec<PathBuf> = std::fs::read_dir(&backups).unwrap().map(|e| e.unwrap().path()).collect();
+        copies.sort();
+        assert_eq!(copies.len(), 2);
+        assert_eq!(Ledger::open(&copies[0]).unwrap().accounts().unwrap()[0].name, "Chequing", "the ledger the restore erased");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[cfg(unix)]
