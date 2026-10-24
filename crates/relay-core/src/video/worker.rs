@@ -125,6 +125,16 @@ pub fn watch(engine: &Engine, job: &str, f: impl Fn(&Value) + Send + Sync + 'sta
     Ok(())
 }
 
+/// Have a running worker forget the video in `dir` (its bundle and TypeScript service, which
+/// otherwise stay until the worker's idle stop); no worker is started for it.
+pub fn forget(engine: &Engine, dir: &str) {
+    let Some(worker) = lock(&engine.video.worker.live).clone().filter(|w| !w.gone.load(Ordering::SeqCst)) else { return };
+    let dir = dir.to_string();
+    let _ = std::thread::Builder::new().name("video-worker-forget".into()).spawn(move || {
+        let _ = worker.request("forget", json!({"dir": dir}), Duration::from_secs(10));
+    });
+}
+
 pub fn unwatch(engine: &Engine, job: &str) {
     if let Some(worker) = lock(&engine.video.worker.live).clone() {
         lock(&worker.progress).remove(job);

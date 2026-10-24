@@ -657,6 +657,7 @@ const commands = {
 
   /** Forget a video (deleted): its bundle and service. */
   async forget({ dir }) {
+    videos.get(dir)?.ls?.dispose?.();
     videos.delete(dir);
     return {};
   },

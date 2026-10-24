@@ -495,6 +495,8 @@ pub fn register(e: &mut Engine) {
         let by = actor_name(ctx)?;
         ctx.tx().execute("UPDATE videos SET deleted_at = ?2, updated_at = ?2, updated_by = ?3 WHERE id = ?1", params![video.id, ctx.now, by]).bus()?;
         ctx.set_undo("video.restore", json!({"video_id": video.id}), None);
+        let dir = video.dir.clone();
+        ctx.after_commit(move |engine| video::worker::forget(&engine, &dir));
         emit(ctx, video.id)?;
         Ok(Empty {})
     });

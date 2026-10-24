@@ -465,7 +465,11 @@ fn a_deleted_video_is_listed_only_when_asked_and_comes_back() {
     let (e, _root) = project();
     with_worker(&e);
     let (id, dir) = create(&e);
+    ok(&e, "video.check", json!({"video_id": id}));
     ok(&e, "video.delete", json!({"video_id": id}));
+    // The running worker lets go of what it kept for it.
+    let log_path = e.store.videos_dir().join(".relay/worker.log");
+    wait_until("the worker to forget it", || fs::read_to_string(&log_path).is_ok_and(|l| l.contains(&format!("forgot {}", dir.display()))));
     assert_eq!(ok(&e, "video.list", json!({"project_id": 1}))["videos"], json!([]));
     assert_eq!(ok(&e, "video.list", json!({"project_id": 1, "include_deleted": true}))["videos"].as_array().unwrap().len(), 1);
     assert_eq!(code(call(&e, "video.still", json!({"video_id": id}))), "video.deleted");

@@ -188,13 +188,19 @@ def render(a):
     return {"path": a["out"], "bytes": os.path.getsize(a["out"]), "frames": 90, "ms": 5}
 
 
+def forget(a):
+    sys.stderr.write("forgot " + a["dir"] + "\n")
+    sys.stderr.flush()
+    return {}
+
+
 def cancel(a):
     cancelled.add(a["job"])
     return {"cancelled": True}
 
 
 COMMANDS = {"hello": lambda a: {"node": "fake", "remotion": "4.0.534"}, "check": check, "meta": meta, "still": still, "scan": scan,
-            "timeline": timeline, "render": render, "cancel": cancel, "forget": lambda a: {}}
+            "timeline": timeline, "render": render, "cancel": cancel, "forget": forget}
 
 
 def handle(request):
