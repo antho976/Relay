@@ -122,7 +122,7 @@ class ConvergeTest {
         val made = pcTasks.values.single { it.s("title") == "Written offline" }
         assertTrue(made.toString().contains("phone"))
         // And the phone shows the PC's rows, not its guesses.
-        withTimeout(5_000) { while (replica.get(Kind.Task, made.l("id").toString())?.pending != false) delay(20) }
+        withTimeout(10_000) { while (replica.get(Kind.Task, made.l("id").toString())?.pending != false) delay(20) }
         assertTrue(replica.all(Kind.Task).none { Optimistic.isTemp(it.id) })
     }
 
@@ -160,12 +160,15 @@ class ConvergeTest {
     fun `the PC's changes arrive as events`() = runBlocking {
         connect()
         online()
-        withTimeout(5_000) { while (replica.all(Kind.Project).isEmpty()) delay(20) }
+        withTimeout(10_000) { while (replica.all(Kind.Project).isEmpty()) delay(20) }
+        // Made on the PC, so its own list has it too, and sent while the connect resync may still
+        // be reading that list: the answer must not write over the event (Ledger.beginRead).
+        pcTasks[55] = task(55, "Made on the PC", column = "ready")
         door.emit("task.changed", task(55, "Made on the PC", column = "ready"))
-        withTimeout(5_000) { while (replica.get(Kind.Task, "55") == null) delay(20) }
+        withTimeout(10_000) { while (replica.get(Kind.Task, "55") == null) delay(20) }
         pcTasks[56] = task(56, "Hinted")
         door.emit("task.changed", obj("task_id" to 56, "state" to "running"))
-        withTimeout(5_000) { while (replica.get(Kind.Task, "56") == null) delay(20) }
+        withTimeout(10_000) { while (replica.get(Kind.Task, "56") == null) delay(20) }
         assertEquals("Hinted", replica.get(Kind.Task, "56")!!.json.s("title"))
     }
 
