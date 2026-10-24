@@ -31,6 +31,10 @@ pub struct Queue {
     running: Mutex<bool>,
     changes: Mutex<u64>,
     changed: Condvar,
+    /// The renders asked to stop while running: the worker knows a render only once it has
+    /// bundled, and drops it before its sound is measured, so a stop that lands outside that
+    /// window is kept here and honoured when the worker answers.
+    stopping: Mutex<std::collections::HashSet<Id>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -167,9 +171,25 @@ fn render_one(engine: &Arc<Engine>, id: Id, project_id: Id) {
     });
     let render = match started {
         Ok(render) if render.state == RenderState::Rendering => render,
-        _ => return,
+        Ok(_) => return,
+        Err(e) => {
+            // Its row cannot be written (a full disk, an I/O error): the queue would take it
+            // again at once, forever. A pause, then once more; then it is failed if it can be.
+            tracing::warn!(render = id, error = %e.message, "video render: could not start it");
+            std::thread::sleep(Duration::from_secs(2));
+            if engine.is_quitting() {
+                return;
+            }
+            let _ = advance(engine, id, project_id, |tx, now| {
+                tx.prepare_cached("UPDATE video_renders SET state = 'failed', error = ?2, finished_at = ?3 WHERE id = ?1 AND state = 'queued'").bus()?
+                    .execute(params![id, format!("could not be started: {}", e.message), now]).bus()?;
+                Ok(())
+            });
+            return;
+        }
     };
     let outcome = render_with_worker(engine, &render);
+    lock(&engine.video.jobs.stopping).remove(&id);
     let _ = advance(engine, id, project_id, |tx, now| {
         match &outcome {
             Ok((path, bytes, audio)) => tx.prepare_cached("UPDATE video_renders SET state = 'done', progress = 1, path = ?2, bytes = ?3, audio = ?4, finished_at = ?5 WHERE id = ?1").bus()?
@@ -222,7 +242,10 @@ fn render_with_worker(engine: &Arc<Engine>, render: &VideoRender) -> Result<(Str
         "crf": crf, "props": serde_json::from_str::<Value>(&props).unwrap_or(json!({})), "range": range,
     }), RENDER_WITHIN);
     worker::unwatch(engine, &job(render.id));
-    let finished = result.and_then(|_| super::audio::finish(engine, render, std::path::Path::new(&drawn)));
+    let stopped = || if lock(&engine.video.jobs.stopping).contains(&render.id) { Err(BusError::new(relay_bus::ErrorKind::Conflict, "video.render.cancelled", "the render was stopped")) } else { Ok(()) };
+    let finished = result.and_then(|_| stopped())
+        .and_then(|_| super::audio::finish(engine, render, std::path::Path::new(&drawn)))
+        .and_then(|audio| stopped().map(|_| audio));
     let audio = match finished {
         Ok(audio) => audio,
         Err(e) => {
@@ -239,6 +262,7 @@ fn render_with_worker(engine: &Arc<Engine>, render: &VideoRender) -> Result<(Str
 /// marking it stopped.
 pub fn cancel(engine: &Engine, render: &VideoRender) {
     if render.state == RenderState::Rendering {
+        lock(&engine.video.jobs.stopping).insert(render.id);
         let _ = worker::call(engine, "cancel", json!({"job": job(render.id)}), Duration::from_secs(10));
     }
 }

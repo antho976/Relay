@@ -258,6 +258,23 @@ fn a_render_is_cancelled_queued_or_running() {
     assert_eq!(ok(&e, "video.render.get", json!({"render_id": queued}))["started_at"], Value::Null);
 }
 
+/// A stop that lands while the worker still bundles (it does not know the render yet, and
+/// answers that nothing was stopped) is kept, and the render ends stopped, not done.
+#[test]
+fn a_render_stopped_while_it_bundles_is_stopped() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let (id, dir) = create(&e);
+    fs::write(dir.join("src/BUNDLING"), "").unwrap();
+    let render = ok(&e, "video.render", json!({"video_id": id}))["id"].as_i64().unwrap();
+    wait_until("it to start", || ok(&e, "video.render.get", json!({"render_id": render}))["state"] == "rendering");
+    ok(&e, "video.render.cancel", json!({"render_id": render}));
+    wait_until("it to end", || ok(&e, "video.render.get", json!({"render_id": render}))["state"] != "rendering");
+    let row = ok(&e, "video.render.get", json!({"render_id": render}));
+    assert_eq!(row["state"], "cancelled", "{row}");
+    assert!(!dir.join("out/main-1.mp4").exists());
+}
+
 #[test]
 fn renders_left_running_by_a_stopped_relay_are_failed_at_start() {
     let (e, _root) = project();

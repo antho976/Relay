@@ -3,7 +3,8 @@
 It speaks the same JSON lines on stdin and stdout and answers as Remotion would for a video with
 two compositions: `main` (1080x1920, 30 fps, 3 s) and `wide` (1920x1080). A file in the video's
 `src/` changes what it does: `BROKEN` fails the build, `THROWS` throws on every frame, `SLOW`
-makes a render run until it is cancelled, `SOUND` gives `main` a sound track: a 120 BPM grid, music
+makes a render run until it is cancelled, `BUNDLING` makes a render bundle for a second first, when
+a stop does not reach it (as the worker before 2026-10-24 behaved), `SOUND` gives `main` a sound track: a 120 BPM grid, music
 that does not duck, a voice line from 1 s to 2 s and a tap cue at frame 20, five frames off the beat.
 """
 import json
@@ -16,6 +17,8 @@ import zlib
 
 out_lock = threading.Lock()
 cancelled = set()
+# The renders past bundling: the only ones a stop reaches.
+known = set()
 
 COMPOSITIONS = {
     "main": {"id": "main", "width": 1080, "height": 1920, "fps": 30, "duration_frames": 90, "default_props": {"title": "Hello"},
@@ -163,6 +166,9 @@ def timeline(a):
 
 def render(a):
     job = a["job"]
+    if flag(a["dir"], "BUNDLING"):
+        time.sleep(1.0)
+    known.add(job)
     slow = flag(a["dir"], "SLOW")
     steps = [0.05, 0.15, 0.35, 0.55, 0.75, 0.95]
     for p in steps:
@@ -181,6 +187,8 @@ def render(a):
 
 
 def cancel(a):
+    if a["job"] not in known:
+        return {"cancelled": False}
     cancelled.add(a["job"])
     return {"cancelled": True}
 
