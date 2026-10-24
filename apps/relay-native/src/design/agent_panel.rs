@@ -33,7 +33,12 @@ thread_local! {
     static LAST: Cell<Option<Place>> = const { Cell::new(None) };
     /// How large the card shows its terminal and conversation, for every design.
     static ZOOM: Cell<f64> = const { Cell::new(1.0) };
+    /// Whether the place and size kept in the settings have been asked for, once a launch.
+    static RECALLED: Cell<bool> = const { Cell::new(false) };
 }
+
+/// Where the card's place, size, view and text size are kept from one launch to the next.
+const KEPT: &str = "native.design.agent_panel";
 
 /// The card's place on the canvas (its top left corner, from the canvas's) and size, and
 /// whether it shows the conversation rather than the terminal.
@@ -267,7 +272,7 @@ impl AgentPanel {
         zoom_key.add_css_class("quiet");
         zoom_key.add_css_class("design-agent-zoom");
         zoom_key.set_cursor_from_name(Some("default"));
-        zoom_key.set_tooltip_text(Some("Text size: Ctrl and the wheel, or Ctrl = and Ctrl -, over the panel. Click for 100%"));
+        zoom_key.set_tooltip_text(Some("Text size: Ctrl and the wheel over the panel, or Ctrl = and Ctrl - while typing in it. Click for 100%"));
         zoom_key.set_visible(false);
         head.append(&zoom_key);
         let close = crate::app::icon_button("close", "Close the agent panel");
@@ -292,9 +297,16 @@ impl AgentPanel {
         missing_note.set_max_width_chars(40);
         missing_note.set_justify(gtk::Justification::Center);
         missing.append(&missing_note);
+        // The Terminal key is on already, so pressing it again does nothing: this asks again
+        // (the other design's panel closed, the terminal opened on the wall).
+        let missing_keys = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        missing_keys.set_halign(gtk::Align::Center);
+        let try_again = gtk::Button::with_label("Try again");
+        try_again.set_widget_name("design-agent-try-again");
+        missing_keys.append(&try_again);
         let to_chat = gtk::Button::with_label("Show the conversation");
-        to_chat.set_halign(gtk::Align::Center);
-        missing.append(&to_chat);
+        missing_keys.append(&to_chat);
+        missing.append(&missing_keys);
         missing.set_visible(false);
         terminal_page.add_overlay(&missing);
         stack.add_named(&terminal_page, Some("terminal"));
@@ -426,6 +438,12 @@ impl AgentPanel {
                 p.set_place(Place { x: start.x + dx, y: start.y + dy, ..p.place.get() });
             }
         });
+        let weak = Rc::downgrade(&panel);
+        moving.connect_drag_end(move |_, _, _| {
+            if let Some(p) = weak.upgrade() {
+                p.keep();
+            }
+        });
         head.add_controller(moving);
         // Invisible strips along each edge and at each corner: the cursor says what they do.
         for edges in [Edges::TOP, Edges::BOTTOM, Edges::LEFT, Edges::RIGHT, Edges::TOP_LEFT, Edges::TOP_RIGHT, Edges::BOTTOM_LEFT, Edges::BOTTOM_RIGHT] {
@@ -497,6 +515,12 @@ impl AgentPanel {
             }
         });
         let weak = Rc::downgrade(&panel);
+        try_again.connect_clicked(move |_| {
+            if let Some(p) = weak.upgrade() {
+                p.borrow_terminal();
+            }
+        });
+        let weak = Rc::downgrade(&panel);
         to_chat.connect_clicked(move |_| {
             if let Some(p) = weak.upgrade() {
                 p.chat_key.set_active(true);
@@ -528,6 +552,7 @@ impl AgentPanel {
             }
         });
         panel.input.add_controller(keys);
+        panel.recall();
         panel
     }
 
@@ -640,8 +665,12 @@ impl AgentPanel {
     }
 
     fn show_mode(self: &Rc<Self>, chat: bool) {
+        let was = self.place.get().chat;
         self.place.set(Place { chat, ..self.place.get() });
         LAST.with(|l| l.set(Some(self.place.get())));
+        if was != chat {
+            self.keep();
+        }
         self.stack.set_visible_child_name(if chat { "chat" } else { "terminal" });
         if chat {
             self.give_back();
@@ -771,6 +800,7 @@ impl AgentPanel {
                 return;
             };
             p.sizing.set(false);
+            p.keep();
             let lent = p.lent.borrow().clone();
             if let Some((_, pane)) = lent {
                 pane.schedule_resize();
@@ -792,16 +822,78 @@ impl AgentPanel {
         ZOOM.with(Cell::get)
     }
 
-    /// Show the terminal and the conversation at `zoom` times their size, as every card will.
-    fn set_zoom(&self, zoom: f64) {
-        if ZOOM.with(|z| z.replace(zoom)) == zoom {
+    /// The place, size, view and text size as the settings keep them.
+    fn kept(&self) -> Value {
+        let p = self.place.get();
+        json!({"x": p.x.round(), "y": p.y.round(), "w": p.w.round(), "h": p.h.round(), "chat": p.chat, "zoom": self.zoom()})
+    }
+
+    /// Keep where the card was left, its size, view and text size for the next launch.
+    fn keep(&self) {
+        let Some(ui) = self.ui.upgrade() else {
             return;
+        };
+        let value = self.kept();
+        glib::spawn_future_local(async move {
+            let _ = ui.call("settings.set", json!({"path": KEPT, "value": value})).await;
+        });
+    }
+
+    /// Once a launch: take the card's last place and text size from the settings, for this card
+    /// unless the person has moved or sized it meanwhile, and for the cards after it.
+    fn recall(self: &Rc<Self>) {
+        if RECALLED.with(|r| r.replace(true)) {
+            return;
+        }
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let (weak, opened) = (Rc::downgrade(self), self.place.get());
+        glib::spawn_future_local(async move {
+            let Ok(got) = ui.call("settings.get", json!({"path": KEPT})).await else {
+                return;
+            };
+            let v = &got["value"];
+            let num = |k: &str| v[k].as_f64().filter(|n| n.is_finite());
+            if let (Some(x), Some(y), Some(w), Some(h)) = (num("x"), num("y"), num("w"), num("h")) {
+                let kept = Place { x, y, w, h, chat: v["chat"].as_bool().unwrap_or(opened.chat) };
+                if LAST.with(Cell::get).is_none_or(|last| last == opened) {
+                    LAST.with(|l| l.set(Some(kept)));
+                }
+                if let Some(p) = weak.upgrade().filter(|p| p.place.get() == opened) {
+                    p.set_place(Place { chat: opened.chat, ..kept });
+                }
+            }
+            if let Some(zoom) = num("zoom").filter(|z| (0.5..=3.0).contains(z)) {
+                match weak.upgrade() {
+                    Some(p) => {
+                        p.apply_zoom(zoom);
+                    }
+                    None => ZOOM.with(|z| z.set(zoom)),
+                }
+            }
+        });
+    }
+
+    /// Show the terminal and the conversation at `zoom` times their size, as every card will,
+    /// and keep it for the next launch.
+    fn set_zoom(&self, zoom: f64) {
+        if self.apply_zoom(zoom) {
+            self.keep();
+        }
+    }
+
+    /// [`set_zoom`] without keeping it: whether it changed.
+    fn apply_zoom(&self, zoom: f64) -> bool {
+        if ZOOM.with(|z| z.replace(zoom)) == zoom {
+            return false;
         }
         if let Some((_, pane)) = self.lent.borrow().as_ref() {
             pane.terminal.set_font_scale(zoom);
         }
         scale_labels(self.column.upcast_ref(), zoom);
         self.show_zoom();
+        true
     }
 
     /// The size key: shown, with the size, while it is not 100%.
