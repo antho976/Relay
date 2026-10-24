@@ -131,6 +131,10 @@ class InvestRepository @Inject constructor(
             accounts = db.accounts().all().filter { it.type == AccountType.INVESTMENT && !it.archived }.map {
                 InvestAccountRow(id = it.id, uid = it.uid, name = it.name, registration = it.registration, institution = it.institution)
             },
+            // Only for room, as on the PC: what went into an account since archived still counts.
+            archivedAccounts = db.accounts().all().filter { it.type == AccountType.INVESTMENT && it.archived && it.registration != null }.map {
+                InvestAccountRow(id = it.id, uid = it.uid, name = it.name, registration = it.registration, institution = it.institution)
+            },
             securities = dao.securities().map {
                 SecurityRow(id = it.id, uid = it.uid, symbol = it.symbol, name = it.name, currency = it.currency, kind = it.kind, exchange = it.exchange)
             },
