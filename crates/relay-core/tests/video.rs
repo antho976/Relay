@@ -647,6 +647,21 @@ fn voice_lines_sounds_and_music_come_from_elevenlabs_with_how_they_were_made() {
 }
 
 /// A transcription sends the sound alone, small: ten seconds of stereo WAV go as a mono MP3.
+/// The keyring's "no key" is its answer for a minute, so every agent call does not ask it again
+/// (a locked one raises a prompt each time); saving a key asks again at once.
+#[test]
+fn a_missing_elevenlabs_key_is_not_looked_up_on_every_call() {
+    let (e, root) = project();
+    let (id, _) = create(&e);
+    with_elevenlabs(&e);
+    assert_eq!(code(call(&e, "video.sfx", json!({"video_id": id, "prompt": "tap"}))), "video.elevenlabs.no_key");
+    // Written behind Relay's back: not seen until the minute is up.
+    fs::write(root.path().join("store").join(relay_core::video::eleven::TEST_FILE), "sk_behind").unwrap();
+    assert_eq!(code(call(&e, "video.sfx", json!({"video_id": id, "prompt": "tap"}))), "video.elevenlabs.no_key");
+    ok(&e, "video.elevenlabs.key_set", json!({"key": "sk_test_123"}));
+    ok(&e, "video.sfx", json!({"video_id": id, "prompt": "tap"}));
+}
+
 #[test]
 fn a_transcription_sends_only_the_sound() {
     if which::which("ffmpeg").is_err() {

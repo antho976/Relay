@@ -72,8 +72,18 @@ pub type Fake = Arc<dyn Fn(&Call) -> Answer + Send + Sync>;
 #[derive(Default)]
 pub struct State {
     key: Mutex<Option<SecretKey>>,
+    /// Counts the keys saved and removed: a lookup that started before one keeps nothing it
+    /// read, or a removed key would come back until restart.
+    generation: std::sync::atomic::AtomicU64,
+    /// When the keyring last said there is no key, or could not be read, and what it said: asked
+    /// again only after [`ASK_AGAIN`], so a locked keyring is not asked (and an unlock prompt not
+    /// raised) by every call.
+    missed: Mutex<Option<(std::time::Instant, BusError)>>,
     pub(super) fake: Mutex<Option<Fake>>,
 }
+
+/// How long a keyring's "no key" or failure is taken as its answer.
+const ASK_AGAIN: Duration = Duration::from_secs(60);
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -116,13 +126,42 @@ fn load(engine: &Engine) -> Result<Option<SecretKey>, BusError> {
 
 /// The saved key, read once and kept; refused when none is saved.
 fn key(engine: &Engine) -> Result<SecretKey, BusError> {
-    if let Some(key) = lock(&engine.video.eleven.key).clone() {
+    use std::sync::atomic::Ordering;
+    let state = &engine.video.eleven;
+    if let Some(key) = lock(&state.key).clone() {
         return Ok(key);
     }
-    let key = load(engine)?.ok_or_else(|| BusError::unavailable("video.elevenlabs.no_key", "no ElevenLabs key is saved")
-        .with_hint("ask the person to save their ElevenLabs API key in the Design view (Videos, ElevenLabs); never ask for the key itself"))?;
-    *lock(&engine.video.eleven.key) = Some(key.clone());
-    Ok(key)
+    if let Some((at, why)) = lock(&state.missed).as_ref() {
+        if at.elapsed() < ASK_AGAIN {
+            return Err(why.clone());
+        }
+    }
+    let generation = state.generation.load(Ordering::SeqCst);
+    let found = load(engine).and_then(|key| key.ok_or_else(|| BusError::unavailable("video.elevenlabs.no_key", "no ElevenLabs key is saved")
+        .with_hint("ask the person to save their ElevenLabs API key in the Design view (Videos, ElevenLabs); never ask for the key itself")));
+    // Saved or removed while it looked: what it read is already out of date.
+    if state.generation.load(Ordering::SeqCst) != generation {
+        return lock(&state.key).clone().ok_or_else(|| BusError::unavailable("video.elevenlabs.no_key", "no ElevenLabs key is saved"));
+    }
+    match found {
+        Ok(key) => {
+            *lock(&state.key) = Some(key.clone());
+            Ok(key)
+        }
+        Err(why) => {
+            *lock(&state.missed) = Some((std::time::Instant::now(), why.clone()));
+            Err(why)
+        }
+    }
+}
+
+/// A key was saved or removed: lookups already running keep nothing, and the keyring is asked
+/// again.
+fn changed(engine: &Engine, key: Option<SecretKey>) {
+    let state = &engine.video.eleven;
+    state.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    *lock(&state.missed) = None;
+    *lock(&state.key) = key;
 }
 
 /// The key as pasted, checked for shape only: printable ASCII with no spaces.
@@ -157,7 +196,7 @@ pub fn save(engine: &Engine, key: SecretKey) -> Result<ElevenStatus, BusError> {
             }
         }
     }
-    *lock(&engine.video.eleven.key) = Some(key);
+    changed(engine, Some(key));
     Ok(status)
 }
 
@@ -175,7 +214,7 @@ fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
 
 /// Forget the key.
 pub fn remove(engine: &Engine) -> Result<ElevenStatus, BusError> {
-    *lock(&engine.video.eleven.key) = None;
+    changed(engine, None);
     match keyring(engine) {
         None => {}
         Some(Ok(file)) => {
@@ -189,6 +228,8 @@ pub fn remove(engine: &Engine) -> Result<ElevenStatus, BusError> {
             }
         }
     }
+    // Again once it is gone: a lookup that began while it was being cleared read it still.
+    changed(engine, None);
     Ok(ElevenStatus { saved: false, tier: None, characters_left: None })
 }
 
