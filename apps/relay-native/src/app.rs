@@ -1693,6 +1693,8 @@ impl Ui {
                     // app offers to draw them for agents on a connection of its own.
                     crate::design::reconnected(&ui);
                     crate::design::render::lease(&ui);
+                    // So does the open document: a file changed during the outage shows now.
+                    ui.editor.reconnected(&ui);
                     ui.set_connected(true);
                     crate::provider_updates::startup(&ui);
                     ui.status.set_text("");

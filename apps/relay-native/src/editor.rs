@@ -74,6 +74,9 @@ pub struct Editor {
     diff_switch: gtk::Box,
     diff_inline: Cell<bool>,
     diff_data: RefCell<Option<Value>>,
+    /// What the open diff compares: the index (a staged row) or the working tree, and a
+    /// rename's old path. A disk change reads it again (`refresh_diff`).
+    diff_target: RefCell<(bool, Option<String>)>,
     before: sourceview5::Buffer,
     before_scroll: gtk::ScrolledWindow,
     content_stack: gtk::Stack,
@@ -123,9 +126,17 @@ pub struct Editor {
     /// Shown when the open document changed on disk while it has unsaved edits.
     conflict_bar: gtk::Box,
     conflict_label: gtk::Label,
+    reload_key: gtk::Button,
     /// The on-disk text the conflict bar was raised for.
     disk_text: RefCell<Option<String>>,
+    /// The open file was removed from disk under edits: the conflict bar says so, and Keep
+    /// my edits lets the next Save write it back (without the base check, which no missing
+    /// file can pass).
+    missing: Cell<bool>,
+    recreate: Cell<bool>,
     disk_check_pending: Cell<bool>,
+    /// A disk change came in while a check was reading: it runs again when that lands.
+    disk_check_again: Cell<bool>,
 }
 /// Entries of one folder the explorer draws before a "Show more" row.
 const TREE_PAGE: usize = 500;
@@ -447,6 +458,7 @@ impl Editor {
             diff_switch,
             diff_inline: Cell::new(false),
             diff_data: RefCell::new(None),
+            diff_target: RefCell::new((false, None)),
             before,
             before_scroll,
             content_stack,
@@ -479,8 +491,12 @@ impl Editor {
             undo_trash: Cell::new(0),
             conflict_bar,
             conflict_label,
+            reload_key: reload_key.clone(),
             disk_text: RefCell::new(None),
+            missing: Cell::new(false),
+            recreate: Cell::new(false),
             disk_check_pending: Cell::new(false),
+            disk_check_again: Cell::new(false),
         });
         let weak = Rc::downgrade(&editor);
         keep_key.connect_clicked(move |_| {
@@ -490,6 +506,8 @@ impl Editor {
                 if let Some(disk) = e.disk_text.borrow_mut().take() {
                     *e.original.borrow_mut() = disk;
                 }
+                // A removed file is written back whole by the next Save.
+                e.recreate.set(e.missing.replace(false));
                 e.conflict_bar.set_visible(false);
             }
         });
@@ -731,8 +749,7 @@ impl Editor {
         self.original.borrow_mut().clear();
         self.view.set_editable(false);
         self.set_busy(false);
-        self.disk_text.borrow_mut().take();
-        self.conflict_bar.set_visible(false);
+        self.clear_conflict();
         clear(&self.tree);
         self.tree_rows.borrow_mut().clear();
         self.tree_signature.set(0);
@@ -769,12 +786,14 @@ impl Editor {
     /// new text in place; an edited one raises the conflict bar once per disk version.
     fn check_disk(self: &Rc<Self>, ui: &Rc<Ui>) {
         let path = self.path.borrow().clone();
-        if path.is_empty()
-            || self.diff.get()
-            || self.image_mode.get()
-            || self.busy.get()
-            || self.disk_check_pending.replace(true)
-        {
+        if !path.is_empty() && self.diff.get() && !self.busy.get() {
+            return self.refresh_diff(ui);
+        }
+        if path.is_empty() || self.diff.get() || self.image_mode.get() || self.busy.get() {
+            return;
+        }
+        if self.disk_check_pending.replace(true) {
+            self.disk_check_again.set(true);
             return;
         }
         let project = ui.project.get();
@@ -790,6 +809,10 @@ impl Editor {
                 )
                 .await;
             e.disk_check_pending.set(false);
+            // What this read saw may be older than the change that asked again.
+            if e.disk_check_again.take() {
+                return e.check_disk(&ui);
+            }
             if e.revision.get() != revision
                 || e.busy.get()
                 || !e.matches(&ui, project, &worktree)
@@ -797,7 +820,21 @@ impl Editor {
             {
                 return;
             }
-            // A removed, binary or oversized file is left to Save, whose check reports it.
+            // Removed under edits: Save would fail its base check for good, and New file is
+            // refused while dirty, so say so and offer to write it back.
+            let removed = matches!(&result, Err(crate::client::Error::Bus(bus)) if bus.kind == relay_bus::ErrorKind::NotFound);
+            if removed && e.buffer.is_modified() && !e.recreate.get() {
+                if !e.missing.replace(true) {
+                    e.disk_text.borrow_mut().take();
+                    e.conflict_label.set_text(&format!(
+                        "{path} was removed from disk while you were editing it. Keep your edits to write it back when you save."
+                    ));
+                    e.reload_key.set_visible(false);
+                    e.conflict_bar.set_visible(true);
+                }
+                return;
+            }
+            // A binary or oversized file is left to Save, whose check reports it.
             let Some(disk) = result
                 .ok()
                 .filter(|v| v["truncated"] != true)
@@ -805,6 +842,12 @@ impl Editor {
             else {
                 return;
             };
+            // Back on disk: whatever is there now is what the edits are compared with.
+            e.recreate.set(false);
+            if e.missing.replace(false) {
+                e.reload_key.set_visible(true);
+                e.conflict_bar.set_visible(false);
+            }
             if disk == *e.original.borrow() {
                 e.disk_text.borrow_mut().take();
                 e.conflict_bar.set_visible(false);
@@ -824,6 +867,18 @@ impl Editor {
             e.conflict_bar.set_visible(true);
         });
     }
+    /// After a reconnect: what an agent changed during the outage shows now.
+    pub fn reconnected(self: &Rc<Self>, ui: &Rc<Ui>) {
+        self.check_disk(ui);
+    }
+    /// No disagreement with the disk any more: another file, or the disk's text taken.
+    fn clear_conflict(&self) {
+        self.disk_text.borrow_mut().take();
+        self.missing.set(false);
+        self.recreate.set(false);
+        self.reload_key.set_visible(true);
+        self.conflict_bar.set_visible(false);
+    }
     /// Replace a clean document's text with the disk's, keeping the caret line and scroll.
     fn reload_in_place(&self, disk: &str) {
         let cursor = self.buffer.iter_at_mark(&self.buffer.get_insert());
@@ -832,8 +887,7 @@ impl Editor {
         self.buffer.set_text(disk);
         self.buffer.set_modified(false);
         *self.original.borrow_mut() = disk.into();
-        self.disk_text.borrow_mut().take();
-        self.conflict_bar.set_visible(false);
+        self.clear_conflict();
         let at = self
             .buffer
             .iter_at_line_offset(line, offset)
@@ -1101,8 +1155,7 @@ impl Editor {
                     *e.selected_path.borrow_mut() = path.clone();
                     e.selected_directory.set(false);
                     *e.original.borrow_mut() = content.into();
-                    e.disk_text.borrow_mut().take();
-                    e.conflict_bar.set_visible(false);
+                    e.clear_conflict();
                     e.set_busy(false);
                     let manager = sourceview5::LanguageManager::default();
                     e.buffer
@@ -1157,7 +1210,12 @@ impl Editor {
                 .map(|b| format!("{b:02x}"))
                 .collect::<String>();
             // A held write (a protected path) is offered for confirmation here, as Git's are.
-            let result = code_git::guarded(&ui, "file.write", json!({"project_id":project,"worktree":optional_scope(&worktree),"path":path,"text":content,"expected_sha256":expected})).await;
+            // A file removed under the edits, kept on purpose, is written with no base check.
+            let mut payload = json!({"project_id":project,"worktree":optional_scope(&worktree),"path":path,"text":content,"expected_sha256":expected});
+            if e.recreate.get() {
+                payload.as_object_mut().map(|p| p.remove("expected_sha256"));
+            }
+            let result = code_git::guarded(&ui, "file.write", payload).await;
             e.writing.set(false);
             if e.revision.get() != revision {
                 return;
@@ -1172,6 +1230,9 @@ impl Editor {
                     *e.original.borrow_mut() = content;
                     e.buffer.set_modified(false);
                     e.disk_text.borrow_mut().take();
+                    e.recreate.set(false);
+                    e.missing.set(false);
+                    e.reload_key.set_visible(true);
                     e.conflict_bar.set_visible(false);
                     e.refresh_git(&ui);
                     if let Some(then) = then {

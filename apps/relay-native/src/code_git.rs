@@ -153,6 +153,9 @@ fn git_signature(ui: &Ui, e: &Editor, status: &Value, results: &GitResults) -> u
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     status.to_string().hash(&mut hash);
+    // How many commits were asked for: "Show more" that brings nothing new still redraws, so
+    // its key goes instead of staying greyed.
+    e.git_history.get().hash(&mut hash);
     for result in [&results.0, &results.1, &results.2] {
         match result {
             Ok(value) => value.to_string().hash(&mut hash),
@@ -645,6 +648,18 @@ impl Editor {
             panes.set_start_child(Some(&upper_scroll));
             e.git.append(&panes);
 
+            // The engine lists at most 5 000 changes: past that, the counts and the "all" keys
+            // speak for the whole tree, not the list.
+            let truncated = status["truncated"] == true;
+            let total = status["total"].as_u64().map_or(files.len(), |n| n as usize).max(files.len());
+            if truncated {
+                let cut = label(&format!("Showing the first {} of {total} changes.", files.len()), "dim");
+                cut.set_xalign(0.);
+                cut.set_wrap(true);
+                cut.set_margin_start(12);
+                cut.set_margin_top(6);
+                upper.append(&cut);
+            }
             let conflicts: Vec<Value> = files.iter().filter(|f| is_conflict(f)).cloned().collect();
             let staged: Vec<Value> =
                 files.iter().filter(|f| !is_conflict(f) && is_staged(f)).cloned().collect();
@@ -746,7 +761,7 @@ impl Editor {
                 &if files.is_empty() {
                     String::from("Commit")
                 } else if smart_all {
-                    format!("Commit all {}", files.len())
+                    format!("Commit all {total}")
                 } else {
                     format!("Commit {} staged", staged.len())
                 },
@@ -890,8 +905,13 @@ impl Editor {
                 if id == "changes" {
                     group_section.toggle.set_tooltip_text(Some(&change_summary(group)));
                 }
-                let paths: Vec<String> =
-                    group.iter().map(|file| text(file, "path").to_owned()).collect();
+                // A cut list's "all" is the whole tree (`.`), unless a conflict is in it: staging
+                // that would mark it resolved unseen.
+                let paths: Vec<String> = if truncated && id != "conflicts" && conflicts.is_empty() {
+                    vec![".".to_string()]
+                } else {
+                    group.iter().map(|file| text(file, "path").to_owned()).collect()
+                };
                 let (icon, caption, op) = if staged_group {
                     ("minus", "Unstage all changes", "git.unstage")
                 } else if id == "conflicts" {
@@ -982,7 +1002,8 @@ impl Editor {
             }));
             let ed = e.clone();
             let weak = Rc::downgrade(&ui);
-            push.connect_clicked(move |_| {
+            // Asked on the key itself, as Discard is: a second click pushes.
+            crate::app::confirm_inline(&push, "Push?", move |_| {
                 if let Some(ui) = weak.upgrade() {
                     ed.git_action(&ui, "git.push", json!({}), None);
                 }
@@ -1067,7 +1088,9 @@ impl Editor {
             e.prs.borrow_mut().row = Some(target);
             let ed = e.clone();
             let weak = Rc::downgrade(&ui);
-            pr.connect_clicked(move |_| {
+            // Opening one that exists needs no question; publishing one is asked on the key.
+            let unpublished = url.clone();
+            crate::app::confirm_inline_if(&pr, "Open PR?", move || unpublished.borrow().is_none(), move |_| {
                 if let Some(ui) = weak.upgrade() {
                     if let Some(url) = url.borrow().as_deref() {
                         let uri = gtk::UriLauncher::new(url);
@@ -1438,25 +1461,14 @@ impl Editor {
         let ed = self.clone();
         let weak = Rc::downgrade(ui);
         let diff_path = path.clone();
-        // git.diff.file compares HEAD with the working tree only; say when that is not the
-        // change this row lists, until it can diff the index and a rename's old path.
-        let caveat = if let Some(from) = file["renamed_from"].as_str() {
-            Some(format!("The diff compares {path} with HEAD, not with {from}, so it shows as new."))
-        } else if staged && is_unstaged(file) {
-            Some(format!("The diff of {path} also shows edits that are not staged."))
-        } else {
-            None
-        };
+        // The change this row lists: a staged row's against the index, a rename's against
+        // the path it had.
+        let renamed = file["renamed_from"].as_str().map(str::to_string);
         open.connect_clicked(move |_| {
             if let Some(ui) = weak.upgrade() {
-                let (path, caveat) = (diff_path.clone(), caveat.clone());
+                let (path, renamed) = (diff_path.clone(), renamed.clone());
                 ed.after_unsaved(&ui, move |ed, ui| {
-                    // open_diff says why it refused, and shows an image instead: keep its message.
-                    if ed.open_diff(ui, path) {
-                        if let Some(caveat) = caveat {
-                            ui.show_info(&caveat);
-                        }
-                    }
+                    ed.open_diff(ui, path, staged, renamed);
                 });
             }
         });
@@ -1697,7 +1709,8 @@ impl Editor {
                 let weak = Rc::downgrade(ui);
                 let pop = popover.downgrade();
                 let target = name.clone();
-                delete.connect_clicked(move |_| {
+                delete.set_tooltip_text(Some("Delete this merged branch. The engine refuses protected, checked-out and session-owned branches"));
+                crate::app::confirm_inline(&delete, "Delete?", move |_| {
                     if let Some(pop) = pop.upgrade() {
                         pop.popdown();
                     }
@@ -1821,17 +1834,8 @@ impl Editor {
             self.view.set_editable(false);
         }
         glib::spawn_future_local(async move {
-            let result=async {
-                if matches!(op,"git.push"|"git.pr.open"|"git.branch.delete"){
-                    let (title,copy,accept)=match op{
-                        "git.push"=>("Push branch",String::from("Push this worktree's branch to its remote?"),"Push"),
-                        "git.pr.open"=>("Open pull request",String::from("Publish a pull request for this worktree?"),"Open pull request"),
-                        _=>("Delete branch",format!("Delete the merged local branch {}? The engine refuses protected, checked-out and session-owned branches.",text(&payload,"name")),"Delete branch"),
-                    };
-                    if !ask(&ui,title,&copy,accept).await {return Ok(None);}
-                }
-                guarded(&ui,op,payload).await
-            }.await;
+            // Push, Open PR and Delete branch were confirmed on their keys (confirm_inline).
+            let result = guarded(&ui, op, payload).await;
             e.git_busy.set(false);
             e.git.set_sensitive(true);
             // It comes back to that key (a rebuild then moves it to the same row or the next,
@@ -1983,9 +1987,9 @@ impl Editor {
             e.git_action(&ui, "git.stage", json!({"paths":paths}), None);
         });
     }
-    /// Show `path`'s changes against HEAD; false when it was refused, or is a picture, which
-    /// shows instead.
-    fn open_diff(self: &Rc<Self>, ui: &Rc<Ui>, path: String) -> bool {
+    /// Show `path`'s changes against HEAD: what is staged when `staged`, from `old_path` for a
+    /// rename. False when it was refused, or is a picture, which shows instead.
+    fn open_diff(self: &Rc<Self>, ui: &Rc<Ui>, path: String, staged: bool, old_path: Option<String>) -> bool {
         if let Some(refusal) = self.replace_refusal(Some("Save or discard your edits before opening a diff.")) {
             ui.show_error(refusal);
             return false;
@@ -1999,7 +2003,7 @@ impl Editor {
         let revision = self.revision.get();
         let project = ui.project.get();
         let worktree = self.worktree.borrow().clone();
-        let payload = self.payload(ui, json!({"path":path}));
+        let payload = self.payload(ui, json!({"path":path,"staged":staged,"old_path":old_path}));
         self.set_busy(true);
         let e = self.clone();
         let ui = ui.clone();
@@ -2023,6 +2027,7 @@ impl Editor {
                     e.diff.set(true);
                     e.image_mode.set(false);
                     e.image.clear();
+                    *e.diff_target.borrow_mut() = (staged, old_path);
                     *e.path.borrow_mut() = path.clone();
                     e.project.set(project);
                     *e.diff_data.borrow_mut() = Some(v);
@@ -2033,6 +2038,24 @@ impl Editor {
             }
         });
         true
+    }
+    /// The open diff read again after a file or git change, and drawn only when it differs:
+    /// "HEAD ↔ working tree" and its counts follow an agent's edits.
+    pub(super) fn refresh_diff(self: &Rc<Self>, ui: &Rc<Ui>) {
+        let path = self.path.borrow().clone();
+        let (staged, old_path) = self.diff_target.borrow().clone();
+        let (revision, project, worktree) = (self.revision.get(), ui.project.get(), self.worktree.borrow().clone());
+        let payload = self.payload(ui, json!({"path":path,"staged":staged,"old_path":old_path}));
+        let (e, ui) = (self.clone(), ui.clone());
+        glib::spawn_future_local(async move {
+            let Ok(v) = ui.call("git.diff.file", payload).await else { return };
+            let current = e.revision.get() == revision && e.diff.get() && *e.path.borrow() == path && e.matches(&ui, project, &worktree);
+            if !current || e.diff_data.borrow().as_ref() == Some(&v) || text(&v, "old").len() + text(&v, "new").len() > 1048576 {
+                return;
+            }
+            *e.diff_data.borrow_mut() = Some(v);
+            e.rerender_diff();
+        });
     }
     /// Draw the open diff split or inline, with removed lines red and added lines green
     /// over the file's own syntax colours.
@@ -2330,16 +2353,6 @@ async fn confirm(ui: &Ui, title: &str, copy: &str, accept: &str) -> bool {
     view.set_wrap_mode(gtk::WrapMode::WordChar);
     view.buffer().set_text(copy);
     dialog.body.append(&scrolled(&view));
-    dialog.response(accept).await
-}
-
-/// A yes or no in plain words; `accept` names what yes does.
-async fn ask(ui: &Ui, title: &str, copy: &str, accept: &str) -> bool {
-    let dialog = crate::panel::Panel::new(ui, title, 480);
-    let words = label(copy, "body");
-    words.set_wrap(true);
-    words.set_xalign(0.0);
-    dialog.body.append(&words);
     dialog.response(accept).await
 }
 

@@ -9,6 +9,9 @@ pub(super) use agent_menu::{is_closing, park_pane};
 thread_local! {
     /// The bell's notify.list is in flight; see refresh_notification_count.
     static BELL_LOADING: Cell<bool> = const { Cell::new(false) };
+    /// An agent asked for along with its project (a notice followed, an agent's ui.changed):
+    /// the project's saved layout, restored a moment later, must not focus another over it.
+    static WANTED_FOCUS: RefCell<Option<(i64, String)>> = const { RefCell::new(None) };
 }
 
 /// The window presets sheet's list before any preset is saved.
@@ -19,6 +22,15 @@ impl Ui {
     /// does not override.
     pub fn open_project(self: &Rc<Self>, project: i64, page: &str) {
         self.enter_project(project, Some(page));
+    }
+    /// Focus `session`'s terminal, as its tile's focus key does, on the project now shown;
+    /// a layout that project restores afterwards keeps it.
+    pub fn focus_session(self: &Rc<Self>, session: &str) {
+        WANTED_FOCUS.with(|wanted| *wanted.borrow_mut() = Some((self.project.get(), session.to_string())));
+        if self.panes.borrow().contains_key(session) {
+            *self.focused.borrow_mut() = Some(session.to_string());
+            self.set_mode("focus");
+        }
     }
     /// Switch to `project` on the page it was last left on.
     pub fn switch_project(self: &Rc<Self>, project: i64) {
@@ -41,6 +53,7 @@ impl Ui {
             self.forget_launch();
             // A Shift+click selection names this wall's panes; another project's could share a name.
             self.clear_selection();
+            WANTED_FOCUS.with(|wanted| wanted.borrow_mut().take());
             self.project.set(project);
             // Switch the visible wall synchronously. The registry already contains
             // all projects' sessions; a slow refresh must never leave the old CLI here.
@@ -552,6 +565,13 @@ impl Ui {
         if let Some(n) = state["focused"].as_str() {
             *self.focused.borrow_mut() = Some(n.into());
         }
+        // An explicit destination's agent wins over the one the layout last focused.
+        let project = self.project.get();
+        let wanted = WANTED_FOCUS.with(|wanted| wanted.borrow_mut().take()).filter(|(p, _)| keep_page && *p == project);
+        if let Some((_, session)) = wanted {
+            *self.focused.borrow_mut() = Some(session);
+            *self.mode.borrow_mut() = "focus".into();
+        }
         if let Some(order) = state["order"].as_array() {
             let current = self.ordered.borrow().clone();
             let mut order: Vec<String> = order
@@ -644,7 +664,7 @@ impl Ui {
                         // ui.changed carries all panes even when switching pages.
                         // Only a new terminal focus on Agents should change its layout.
                         if changed && state["page"].as_str().is_none_or(|page| page == "agents") {
-                            self.set_mode("focus");
+                            self.focus_session(session);
                             self.navigate("agents");
                         }
                     }

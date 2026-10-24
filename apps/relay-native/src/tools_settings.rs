@@ -273,6 +273,8 @@ struct Mounted {
     detected: RefCell<Value>,
     /// The category keys, for [`open_on`].
     nav: glib::WeakRef<gtk::Box>,
+    /// Whether the guardrail editor in Safety holds unsaved edits.
+    guardrails_dirty: RefCell<Option<Rc<dyn Fn() -> bool>>>,
 }
 
 thread_local! {
@@ -321,7 +323,7 @@ fn show_category(nav: &gtk::Box, name: &str) {
 impl Mounted {
     /// Whether a control or the wallpaper draft differs from what was loaded or saved.
     fn dirty(&self) -> bool {
-        self.page.upgrade().is_some() && self.autosave.dirty()
+        self.page.upgrade().is_some() && (self.autosave.dirty() || self.guardrails_dirty.borrow().as_ref().is_some_and(|dirty| dirty()))
     }
 
     /// Redraws the provider rows when `provider.list` or `provider.refresh` says something new.
@@ -416,12 +418,13 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
         providers: providers.downgrade(),
         detected: RefCell::new(data["detected"].clone()),
         nav: nav.downgrade(),
+        guardrails_dirty: RefCell::new(None),
     });
     MOUNTED.with(|m| *m.borrow_mut() = Some(mounted.clone()));
     appearance(ui, &stack, &form, &data, &wallpapers, &saved_wallpapers);
     notifications(ui, &stack, &form, &data);
     agents(ui, &stack, &form, &data, &providers, &mounted);
-    safety(ui, &stack);
+    safety(ui, &stack, &mounted);
     android(&stack, &form, &data);
     keyboard(&stack, &form, &data);
     maintenance(ui, &stack);
@@ -994,9 +997,11 @@ fn provider_rows(card: &gtk::Box, detected: &Value) {
     }
 }
 
-fn safety(ui: &Rc<Ui>, stack: &gtk::Stack) {
+fn safety(ui: &Rc<Ui>, stack: &gtk::Stack, mounted: &Mounted) {
     let page = category(stack, "safety", None);
-    page.append(&crate::pages::guardrail_settings(ui));
+    let (editor, dirty) = crate::pages::guardrail_settings(ui);
+    page.append(&editor);
+    *mounted.guardrails_dirty.borrow_mut() = Some(dirty);
 }
 
 fn android(stack: &gtk::Stack, form: &Form, data: &Value) {

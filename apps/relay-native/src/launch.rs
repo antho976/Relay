@@ -1039,12 +1039,6 @@ impl Ui {
                 }
                 return;
             }
-            // A failed check says so and leaves both providers open: session.create still
-            // refuses one that is not installed.
-            let (provider_data, provider_error) = match providers {
-                Ok(v) => (rows(&v, "providers"), None),
-                Err(e) => (Vec::new(), Some(e.to_string())),
-            };
             let tasks = match task_result {
                 Ok(v) => rows(&v, "tasks"),
                 Err(e) => {
@@ -1053,44 +1047,7 @@ impl Ui {
                     return;
                 }
             };
-            for profile in &sheet.profiles {
-                for (i, (key, status)) in profile.provider_cards.iter().enumerate() {
-                    let name = if i == 0 { "claude" } else { "codex" };
-                    let info = provider_data.iter().find(|p| text(p, "provider") == name);
-                    let installed = info.is_some_and(|p| p["installed"] == true);
-                    key.set_sensitive(installed || provider_error.is_some());
-                    let account = info
-                        .and_then(|p| p["signed_in_as"].as_str())
-                        .map(|s| format!("Signed in as {s}"))
-                        .unwrap_or_else(|| {
-                            if provider_error.is_some() {
-                                "Could not check the CLI".into()
-                            } else if installed {
-                                "Not signed in".into()
-                            } else {
-                                "CLI not installed".into()
-                            }
-                        });
-                    let version = info.and_then(|p| p["version"].as_str());
-                    status.set_text(&match version {
-                        Some(version) => format!("{account} · {version}"),
-                        None => account.clone(),
-                    });
-                    key.set_tooltip_text(Some(&format!(
-                        "{account}\n{}\n{}",
-                        version.map(|v| format!("Version {v}")).unwrap_or_else(|| "Version unavailable".into()),
-                        if info.is_some_and(|p| p["guarded"] == true) { "Guarded by Relay's guardrails" } else { "Unguarded" }
-                    )));
-                }
-                // Start on an installed provider: a Codex-only machine opens on Codex.
-                let cards = &profile.provider_cards;
-                if !cards[profile.provider.selected() as usize].0.is_sensitive() {
-                    if let Some((key, _)) = cards.iter().find(|(key, _)| key.is_sensitive()) {
-                        key.set_active(true);
-                    }
-                }
-            }
-            *sheet.provider_error.borrow_mut() = provider_error;
+            show_providers(&sheet, providers);
             // Agent 1 now, with the task the sheet was opened for; any other agent when it is
             // first chosen.
             sheet.profiles[0].fill_tasks(&tasks, task);
@@ -1106,8 +1063,14 @@ impl Ui {
     fn reread_launch_tasks(self: &Rc<Self>, sheet: &Rc<Sheet>) {
         let (ui, weak, project, generation) = (self.clone(), Rc::downgrade(sheet), sheet.project, sheet.generation);
         glib::spawn_future_local(async move {
-            let Ok(v) = ui.call("task.list", json!({"project_id": project})).await else { return };
+            // A CLI installed or signed in to since the draft was made shows as it is now.
+            let (tasks, providers) = tokio::join!(ui.call("task.list", json!({"project_id": project})), ui.call("provider.list", json!({})));
             let Some(sheet) = weak.upgrade().filter(|sheet| launch_is_current(&ui, project, generation, &sheet.form)) else { return };
+            if providers.is_ok() {
+                show_providers(&sheet, providers);
+                sheet.render();
+            }
+            let Ok(v) = tasks else { return };
             let tasks = rows(&v, "tasks");
             if sheet.open_tasks.borrow().as_deref().is_some_and(|before| shown(before) == shown(&tasks)) {
                 return;
@@ -1412,8 +1375,10 @@ impl Ui {
         let key = key.clone();
         ui.launch_box.set_sensitive(false);
         let clicked = std::time::Instant::now();
-        // Launched, the draft is spent: the sheet hides without keeping it.
-        SHEET.with(|s| s.borrow_mut().take());
+        // Launched, the draft is spent: the sheet hides without keeping it, unless the launch
+        // fails before any agent exists (a dirty project, a branch clash, a failed fetch).
+        // Held only until the first agent exists: past that there is nothing to give back.
+        let draft = RefCell::new(SHEET.with(|s| s.borrow_mut().take()));
         ui.launch.set_reveal_child(false);
         ui.open_project(project, "agents");
         let payloads: Vec<Value> = crew.iter().map(|(payload, _, _)| payload.clone()).collect();
@@ -1445,6 +1410,7 @@ impl Ui {
                     ui.launch_adopt(&placeholders[index], &session, "Worktree ready · waiting to start…");
                     touched.push(name.clone());
                     created.push(name.clone());
+                    draft.borrow_mut().take();
                     tracing::debug!(session = %name, elapsed_ms = clicked.elapsed().as_millis() as u64, "launch: session created");
                     // Stage this agent's queue now, so a later agent's failure cannot cost it.
                     unstaged.extend(&tasks);
@@ -1470,8 +1436,9 @@ impl Ui {
             .await;
             ui.launch_abort(&touched);
             if let Err(e) = result {
+                let kept = draft.borrow_mut().take().is_some_and(|sheet| ui.keep_launch_draft(sheet));
                 let mut message = if created.is_empty() {
-                    format!("Launch failed: {e}. No session was created.")
+                    format!("Launch failed: {e}. No session was created.{}", if kept { " New agents keeps what you filled in." } else { "" })
                 } else {
                     format!("Launch incomplete: {e}. Created {}; start them individually from the wall.", created.join(", "))
                 };
@@ -1489,6 +1456,72 @@ impl Ui {
             ui.refresh();
         });
     }
+}
+
+impl Ui {
+    /// A launch that created nothing gives its draft back: the next New agents opens on it,
+    /// instructions and all. False when the draft no longer fits (another project, a reconnect,
+    /// or a newer sheet).
+    fn keep_launch_draft(&self, sheet: Rc<Sheet>) -> bool {
+        if sheet.project != self.project.get() || sheet.generation != self.generation.get() || SHEET.with(|s| s.borrow().is_some()) {
+            return false;
+        }
+        if sheet.form.parent().is_none() {
+            clear(&self.launch_box);
+            self.launch_box.append(&sheet.form);
+        }
+        SHEET.with(|s| *s.borrow_mut() = Some(sheet));
+        true
+    }
+}
+
+/// The provider cards from `provider.list`: which CLI is installed and signed in, as whom,
+/// and which version. Each agent starts on an installed one.
+fn show_providers(sheet: &Sheet, providers: Result<Value, Error>) {
+    // A failed check says so and leaves both providers open: session.create still
+    // refuses one that is not installed.
+    let (provider_data, provider_error) = match providers {
+        Ok(v) => (rows(&v, "providers"), None),
+        Err(e) => (Vec::new(), Some(e.to_string())),
+    };
+    for profile in &sheet.profiles {
+        for (i, (key, status)) in profile.provider_cards.iter().enumerate() {
+            let name = if i == 0 { "claude" } else { "codex" };
+            let info = provider_data.iter().find(|p| text(p, "provider") == name);
+            let installed = info.is_some_and(|p| p["installed"] == true);
+            key.set_sensitive(installed || provider_error.is_some());
+            let account = info
+                .and_then(|p| p["signed_in_as"].as_str())
+                .map(|s| format!("Signed in as {s}"))
+                .unwrap_or_else(|| {
+                    if provider_error.is_some() {
+                        "Could not check the CLI".into()
+                    } else if installed {
+                        "Not signed in".into()
+                    } else {
+                        "CLI not installed".into()
+                    }
+                });
+            let version = info.and_then(|p| p["version"].as_str());
+            status.set_text(&match version {
+                Some(version) => format!("{account} · {version}"),
+                None => account.clone(),
+            });
+            key.set_tooltip_text(Some(&format!(
+                "{account}\n{}\n{}",
+                version.map(|v| format!("Version {v}")).unwrap_or_else(|| "Version unavailable".into()),
+                if info.is_some_and(|p| p["guarded"] == true) { "Guarded by Relay's guardrails" } else { "Unguarded" }
+            )));
+        }
+        // Start on an installed provider: a Codex-only machine opens on Codex.
+        let cards = &profile.provider_cards;
+        if !cards[profile.provider.selected() as usize].0.is_sensitive() {
+            if let Some((key, _)) = cards.iter().find(|(key, _)| key.is_sensitive()) {
+                key.set_active(true);
+            }
+        }
+    }
+    *sheet.provider_error.borrow_mut() = provider_error;
 }
 
 const STALE: &str = "This form is out of date after a reconnect. Close it and open New agents again.";
