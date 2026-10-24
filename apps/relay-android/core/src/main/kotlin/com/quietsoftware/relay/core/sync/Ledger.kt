@@ -120,16 +120,43 @@ class Ledger(
         }
     }
 
-    /** Send a parked entry again: a conflict is resent without its `expected` check, so the phone's version wins. */
+    /**
+     * Send a parked entry again: a conflict is resent without its `expected` check, so the phone's
+     * version wins. It goes under a new id, since the old one is spent on the refusal, which the PC
+     * would only replay; so a create's temp row takes the new id, and entries that wait on its
+     * answer (an agent's start, a message in a thread made offline) wait on the new one.
+     */
     suspend fun retry(entryId: String, overwrite: Boolean) = lock.withLock {
         val entry = outbox.get(entryId) ?: return@withLock null
         val payload = if (overwrite) JsonObject(entry.payload.filterKeys { it != "expected" && it != "expected_updated_at" }) else entry.payload
-        // A new id: the old one is spent on the refusal, which the PC would only replay.
         outbox.delete(entryId)
         val again = entry.copy(id = UUID.randomUUID().toString(), payload = payload, state = OutboxEntry.State.Pending, error = null, attempts = 0)
         outbox.add(again)
+        val dependents = outbox.open().filter { entryId in Refs.of(it.payload) }
+        for (d in dependents) outbox.update(d.copy(payload = Refs.rename(d.payload, entryId, again.id)))
+        Optimistic.target(entry.op, entry.payload, entryId)?.let { (kind, id) ->
+            if (id == Optimistic.tempId(entryId)) rows.remove(kind, listOf(id))
+        }
+        val open = outbox.open()
+        remake(again, open)
+        for (d in dependents) open.firstOrNull { it.id == d.id }?.let { remake(it, open) }
         again
     }?.also { _queued.tryEmit(it) }
+
+    /** The row [entry] makes (its own temp row) built again from its payload, with what is pending on it laid over. */
+    private suspend fun remake(entry: OutboxEntry, open: List<OutboxEntry>) {
+        val (kind, id) = Optimistic.target(entry.op, entry.payload, entry.id) ?: return
+        if (id != Optimistic.tempId(entry.id)) return
+        val made = Optimistic.apply(entry.op, entry.payload, null, entry.id, entry.createdAt) ?: return
+        val row = Row.of(kind, made, projectHint(entry.payload), parentHint(entry.op, entry.payload)) ?: return
+        var json = row.json
+        for (e in open) {
+            if (e.id == entry.id) continue
+            val (k, raw) = Optimistic.target(e.op, e.payload, e.id) ?: continue
+            if (k == kind && raw == id) json = Optimistic.apply(e.op, e.payload, json, e.id, e.createdAt) ?: json.hidden()
+        }
+        rows.upsert(listOf(row.copy(json = json, base = null, pending = true)))
+    }
 
     // ---- Overlays ----
 

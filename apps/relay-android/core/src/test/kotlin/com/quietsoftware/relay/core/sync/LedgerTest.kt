@@ -92,6 +92,38 @@ class LedgerTest {
     }
 
     @Test
+    fun `trying a refused create again moves its temp row and what waits on it to the new id`() = runBlocking {
+        val create = ledger.enqueue("task.create", obj("project_id" to 1, "title" to "Refused once"), "New task")
+        val label = ledger.enqueue("task.label.add", obj("task_id" to Refs.ref(create.id), "label" to "phone"), "Label")
+        outbox.update(outbox.get(create.id)!!.copy(state = OutboxEntry.State.Failed, error = BusError("unavailable", "git.head", "no head")))
+
+        val again = ledger.retry(create.id, overwrite = false)!!
+        assertNull("no ghost under the spent id", replica.get(Kind.Task, Optimistic.tempId(create.id)))
+        val temp = Optimistic.tempId(again.id)
+        assertEquals("Refused once", shown(temp).s("title"))
+        assertTrue("the label still shows on it", shown(temp).toString().contains("phone"))
+        assertEquals(setOf(again.id), Refs.of(outbox.get(label.id)!!.payload))
+
+        // Answered this time: the real row replaces the temp one, and nothing is left behind.
+        outbox.update(again.copy(state = OutboxEntry.State.Done, result = task(42, "Refused once")))
+        ledger.applied(outbox.get(again.id)!!, task(42, "Refused once"))
+        assertEquals(listOf("42"), replica.all(Kind.Task).map { it.id })
+        assertTrue(shown("42").toString().contains("phone"))
+    }
+
+    @Test
+    fun `dropping a retried create drops what waits on it`() = runBlocking {
+        val create = ledger.enqueue("task.create", obj("project_id" to 1, "title" to "Refused"), "New task")
+        val label = ledger.enqueue("task.label.add", obj("task_id" to Refs.ref(create.id), "label" to "phone"), "Label")
+        outbox.update(outbox.get(create.id)!!.copy(state = OutboxEntry.State.Failed))
+        val again = ledger.retry(create.id, overwrite = false)!!
+        outbox.update(again.copy(state = OutboxEntry.State.Failed))
+        ledger.discard(again.id)
+        assertNull(outbox.get(label.id))
+        assertTrue(replica.all(Kind.Task).isEmpty())
+    }
+
+    @Test
     fun `a delete hides the row until the PC confirms it`() = runBlocking {
         ledger.upsert(listOf(Row.of(Kind.Task, task(7, "old"))!!))
         ledger.enqueue("task.delete", obj("task_id" to 7), "Delete #7")
