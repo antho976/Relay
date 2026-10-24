@@ -46,14 +46,14 @@ jobs:
       # pinned to what the developer machine runs, since a lint one version reports and another
       # does not is how main went red from #103 to #110. Bump it with `rust-version` (Cargo.toml)
       # and the image in deploy/rendezvous.Dockerfile, in a commit of its own.
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master when pinned; no tag names it (v1 is 683b588c, PR #114)
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master when pinned; no tag names it (v1 is 683b588c, PR #114)
         with:
           toolchain: "1.99"
           components: clippy
 
       # Saved from main only: a pull request restores main's cache, and its own would only
       # crowd main's out of the repository's 10 GB.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -103,12 +103,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master when pinned; no tag names it (v1 is 683b588c, PR #114)
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master when pinned; no tag names it (v1 is 683b588c, PR #114)
         with:
           toolchain: "1.99"
           components: clippy
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
