@@ -2514,5 +2514,8 @@ mod graph_tests {
         assert_eq!(project_files::file_glyph("web/App.tsx").0, "file-react");
         assert_eq!(project_files::file_glyph(".env.local").0, "file-config");
         assert_eq!(project_files::file_glyph("notes").0, "file");
+        assert_eq!(project_files::file_glyph("project-smoke-folder/"), ("folder", "ft-folder"));
+        assert_eq!(project_files::file_glyph("cmd/main.go").0, "file-go");
+        assert_eq!(project_files::file_glyph("schema.sql").0, "file-data");
     }
 }

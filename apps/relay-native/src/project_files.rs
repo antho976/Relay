@@ -417,6 +417,10 @@ fn button_row(title: &str, icon: &str) -> gtk::Button {
 }
 /// The explorer glyph for a path and the CSS class that tints it.
 pub(super) fn file_glyph(path: &str) -> (&'static str, &'static str) {
+    // Git lists an untracked folder as one path ending in a slash: a folder, not a file.
+    if path.ends_with('/') {
+        return ("folder", "ft-folder");
+    }
     let file = std::path::Path::new(path);
     let name = file
         .file_name()
@@ -465,14 +469,14 @@ pub(super) fn file_glyph(path: &str) -> (&'static str, &'static str) {
         "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "nu" => ("file-shell", "ft-shell"),
         "lock" => ("file-lock", "ft-lock"),
         "txt" | "rst" | "log" | "csv" | "tsv" => ("file-text", "ft-text"),
-        "zip" | "gz" | "tar" | "xz" | "7z" | "zst" | "bz2" | "tgz" | "rar" => ("modules", "ft-archive"),
-        "go" => ("code", "ft-go"),
-        "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hh" | "m" | "mm" => ("code", "ft-c"),
-        "java" | "kt" | "kts" | "scala" | "groovy" | "gradle" => ("code", "ft-java"),
+        "zip" | "gz" | "tar" | "xz" | "7z" | "zst" | "bz2" | "tgz" | "rar" => ("file-archive", "ft-archive"),
+        "go" => ("file-go", "ft-go"),
+        "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hh" | "m" | "mm" => ("file-c", "ft-c"),
+        "java" | "kt" | "kts" | "scala" | "groovy" | "gradle" => ("file-java", "ft-java"),
         "cs" | "fs" | "swift" | "rb" | "php" | "lua" | "zig" | "dart" | "ex" | "exs" | "hs"
         | "ml" | "nim" | "r" | "jl" | "pl" => ("code", "ft-code"),
-        "sql" | "graphql" | "gql" | "proto" | "prisma" => ("file-config", "ft-data"),
-        "glsl" | "wgsl" | "hlsl" | "frag" | "vert" | "shader" => ("code", "ft-shader"),
+        "sql" | "graphql" | "gql" | "proto" | "prisma" | "db" | "sqlite" => ("file-data", "ft-data"),
+        "glsl" | "wgsl" | "hlsl" | "frag" | "vert" | "shader" => ("file-shader", "ft-shader"),
         _ if super::image_preview::is_image(path) => ("file-image", "ft-image"),
         _ => ("file", "ft-plain"),
     }

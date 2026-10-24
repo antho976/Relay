@@ -136,6 +136,17 @@ pub fn image_with_stroke(name: &str, size: i32, stroke: f64) -> gtk::Image {
         "file-git" => {
             r##"<path d="M8 1.75L14.25 8 8 14.25 1.75 8z" /><circle cx="6.5" cy="6.5" r="1" /><circle cx="9.5" cy="9.5" r="1" /><path d="M7.2 7.2l1.6 1.6M6.5 7.5v3" />"##
         }
+        // The explorer's remaining families, drawn rather than one generic code mark.
+        "file-go" => r##"<path d="M4 2h5l3 3v9H4z" /><path d="M9 2v3h3" /><path d="M5.75 9h3M5.75 11h4.5" />"##,
+        "file-c" => r##"<path d="M4 2h5l3 3v9H4z" /><path d="M9 2v3h3" /><path d="M9.5 8.75a1.9 1.9 0 1 0 0 2.5" />"##,
+        "file-java" => {
+            r##"<path d="M3.5 7h7v3.25a3 3 0 0 1-3 3h-1a3 3 0 0 1-3-3z" /><path d="M10.5 8h.75a1.4 1.4 0 0 1 0 2.8h-.9" /><path d="M6 2.5c-.6 1 .6 1.5 0 2.75M8.25 2.5c-.6 1 .6 1.5 0 2.75" />"##
+        }
+        "file-archive" => r##"<path d="M4 2h5l3 3v9H4z" /><path d="M7 2.5v.75M7 4.25V5M7 6v.75M7 7.75v.75" /><path d="M6.25 9.5h1.5v2.25h-1.5z" />"##,
+        "file-data" => {
+            r##"<ellipse cx="8" cy="4" rx="4.5" ry="1.75" /><path d="M3.5 4v8c0 1 2 1.75 4.5 1.75s4.5-.75 4.5-1.75V4" /><path d="M3.5 8c0 1 2 1.75 4.5 1.75s4.5-.75 4.5-1.75" />"##
+        }
+        "file-shader" => r##"<path d="M8 2.5l5.5 10h-11z" /><path d="M8 2.5v10M5.25 7.5h5.5" />"##,
         "file-text" => {
             r##"<path d="M4 2h5l3 3v9H4z" /><path d="M9 2v3h3M6 8.25h4M6 10.75h4" />"##
         }
