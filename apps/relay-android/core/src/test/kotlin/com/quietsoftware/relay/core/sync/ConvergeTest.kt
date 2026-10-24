@@ -83,6 +83,8 @@ class ConvergeTest {
             val labels = (cur["labels"] as JsonArray) + kotlinx.serialization.json.JsonPrimitive(p.s("label"))
             JsonObject(cur + ("labels" to JsonArray(labels))).also { pcTasks[id] = it }
         }
+        "session.create" -> obj("name" to "brisk-otter", "state" to "created", "project_id" to 1)
+        "session.spawn" -> throw FakeDoor.Refuse("unavailable", "provider.not_installed", "Codex is not installed on this PC")
         else -> obj()
     }
 
@@ -137,6 +139,21 @@ class ConvergeTest {
         assertEquals("Renamed on the PC", pcTasks[7]!!.s("title"))
         // Unrelated work went through behind it.
         assertTrue(pcTasks.values.any { it.s("title") == "Unrelated" })
+    }
+
+    @Test
+    fun `a lasting refusal parks its edit, and later edits still reach the PC`() = runBlocking {
+        // "New agent" for a provider the PC cannot run, then a task: the spawn's `unavailable` is
+        // the PC's answer, not the PC being busy.
+        val create = ledger.enqueue("session.create", obj("project_id" to 1, "provider" to "codex"), "New agent")
+        val spawn = ledger.enqueue("session.spawn", obj("session" to Refs.ref(create.id, "name")), "Start agent")
+        val task = ledger.enqueue("task.create", obj("project_id" to 1, "title" to "Queued after"), "New task")
+        connect()
+        online()
+        withTimeout(10_000) { while (outbox.get(task.id)!!.state != OutboxEntry.State.Done) delay(20) }
+        assertEquals(OutboxEntry.State.Failed, outbox.get(spawn.id)!!.state)
+        assertEquals("provider.not_installed", outbox.get(spawn.id)!!.error!!.code)
+        assertTrue(pcTasks.values.any { it.s("title") == "Queued after" })
     }
 
     @Test

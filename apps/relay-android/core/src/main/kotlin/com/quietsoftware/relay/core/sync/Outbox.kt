@@ -93,6 +93,15 @@ object Refs {
     private fun refTarget(o: JsonObject): String? =
         if (o.size == 2 && o.containsKey(KEY) && o.containsKey(PATH)) o.s(KEY) else null
 
+    /** [payload] with its references to entry [from] naming entry [to] instead. */
+    fun rename(payload: JsonObject, from: String, to: String): JsonObject = renameElement(payload, from, to) as JsonObject
+
+    private fun renameElement(e: JsonElement, from: String, to: String): JsonElement = when (e) {
+        is JsonObject -> if (refTarget(e) == from) ref(to, e.s(PATH).orEmpty()) else JsonObject(e.mapValues { (_, v) -> renameElement(v, from, to) })
+        is JsonArray -> JsonArray(e.map { renameElement(it, from, to) })
+        else -> e
+    }
+
     /** [payload] with every reference replaced by the value it names; null while one is unanswered. */
     fun resolve(payload: JsonObject, answer: (String) -> JsonElement?): JsonObject? =
         resolveElement(payload, answer) as? JsonObject
@@ -173,15 +182,19 @@ class OutboxRunner(
             } catch (e: BusException) {
                 return Outcome.LinkLost(sent, e.error)
             }
+            // Dropped by the person while it was on its way: an answer still brings the rows up to
+            // date, but the entry is not written back.
+            val dropped = store.get(entry.id) == null
             if (response.ok) {
                 val done = attempt.copy(state = OutboxEntry.State.Done, result = response.result, error = null)
-                store.update(done)
+                if (!dropped) store.update(done)
                 onApplied(done, response.result)
                 sent++
                 continue
             }
             val error = response.error ?: BusError("internal", "bus.no_error", "The PC refused without saying why")
             if (error.transient) return Outcome.LinkLost(sent, error)
+            if (dropped) continue
             val state = when {
                 error.kind == "held" -> OutboxEntry.State.Held
                 error.kind == "conflict" && error.code.endsWith("edit_conflict") -> OutboxEntry.State.Conflict

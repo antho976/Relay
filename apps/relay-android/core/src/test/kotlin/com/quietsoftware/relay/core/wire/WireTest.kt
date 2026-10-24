@@ -4,6 +4,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -74,5 +75,17 @@ class WireTest {
     fun `errors without a body still parse`() {
         val e = BusError.from(Wire.parse("""{"kind":"unavailable","code":"app.quitting","message":"bye"}""")!!.jsonObject)
         assertTrue(e.transient)
+    }
+
+    @Test
+    fun `only the link, a quitting PC and a busy one are worth waiting for`() {
+        assertTrue(BusError.link("link.down", "gone").transient)
+        assertTrue(BusError.link("link.timeout", "slow").transient)
+        assertTrue(BusError("unavailable", "design.render.busy", "busy").transient)
+        assertTrue(BusError("unavailable", "arbiter.rate_limited", "slow down").transient)
+        assertFalse(BusError("unavailable", "provider.not_installed", "no codex").transient)
+        assertFalse(BusError("unavailable", "session.spawn_failed", "failed").transient)
+        assertFalse(BusError("unavailable", "git.head", "no head").transient)
+        assertFalse(BusError("conflict", "thread.busy", "answering").transient)
     }
 }

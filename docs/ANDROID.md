@@ -35,7 +35,12 @@ The phone is a window onto the PC and also holds the PC's data itself:
   (`*.edit_conflict`) and the entry is parked, not retried: the Outbox page offers **Keep mine**
   (sent again without the check) or **Use the PC's** (dropped; the row goes back to the PC's).
   Fields nobody else touched simply merge. Other refusals are parked the same way with **Try
-  again** / **Drop**. A parked entry never blocks unrelated ones behind it.
+  again** / **Drop**. A parked entry never blocks unrelated ones behind it. Only the link being
+  down or timing out, the PC quitting, or a `*.busy` / `*.rate_limited` answer leaves an entry
+  waiting to be sent again; any other refusal, `unavailable` ones included (a provider not
+  installed, a spawn that failed), is the PC's answer and parks it. Try again sends it under a
+  new id, and a create's temp row and the entries that wait on its answer follow that id. An
+  entry sent without an answer can be dropped too; the PC may have it already.
 
 The PC stays the authority for this data: it is where the agents, repositories and worktrees
 are. The phone's copy converges on it, and the phone's edits converge into it.
