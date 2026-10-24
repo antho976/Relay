@@ -301,7 +301,11 @@ pub fn register(e: &mut Engine) {
         ctx.emit("money.changed", json!({}));
         Ok(SampleOut { transactions })
     });
-    e.register::<Sync>(|ctx, p| {
+    // The ledger has its own mutex and needs nothing from the store: the whole sync runs before
+    // the store's transaction opens. A replace's VACUUM INTO copies the whole money.db, and a
+    // cloud round applies up to 2000 changes; neither holds every other request (keystrokes
+    // included) behind it.
+    e.register_staged::<Sync, _>(|ctx, p| {
         let device = p.device.trim();
         if device.is_empty() || device.chars().count() > 64 || device.contains(char::is_control) {
             return Err(BusError::invalid("money.invalid", "A device name is 1 to 64 printable characters"));
@@ -317,11 +321,12 @@ pub fn register(e: &mut Engine) {
         if out_of_range > 0 {
             tracing::warn!(device, out_of_range, "money.sync: changes stamped below 0 or more than a day ahead were not applied");
         }
-        let out = ledger(ctx.engine(), |l| {
+        ledger(ctx.engine(), |l| {
             l.sync_page(device, p.replace.unwrap_or(false), p.since, p.generation.as_deref(), &p.changes, limit, &crate::time::now())
-        })?;
+        })
+    }, |ctx: &mut Ctx, p, out: relay_money::views::SyncOut| {
         if out.applied > 0 || out.replaced {
-            ctx.emit("money.changed", json!({"synced": device, "applied": out.applied}));
+            ctx.emit("money.changed", json!({"synced": p.device.trim(), "applied": out.applied}));
         }
         Ok(out)
     });
