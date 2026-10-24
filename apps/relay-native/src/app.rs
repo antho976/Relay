@@ -22,6 +22,20 @@ mod gaming_key;
 pub fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or("")
 }
+/// A workspace's name as a person reads it: a folder's lower-case slug
+/// ("northwind-traders-client-work") in words ("Northwind traders client work"). A name with a
+/// space or a capital in it was chosen, and stays as it is.
+pub fn display_name(name: &str) -> String {
+    let slug = !name.is_empty()
+        && !name.contains(char::is_whitespace)
+        && !name.chars().any(char::is_uppercase);
+    if !slug {
+        return name.to_string();
+    }
+    let words = name.split(['-', '_']).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ");
+    let mut chars = words.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
 pub fn rows(v: &Value, key: &str) -> Vec<Value> {
     v[key].as_array().cloned().unwrap_or_default()
 }
@@ -79,6 +93,15 @@ pub fn spinner() -> gtk::Spinner {
     spinner.connect_unmap(|spinner| spinner.stop());
     spinner
 }
+/// Whether the window `widget` is in is on screen, as the compositor says: not minimized,
+/// not suspended (fully covered or on another workspace), and shown.
+pub fn on_screen(widget: &impl IsA<gtk::Widget>) -> bool {
+    let Some(window) = widget.root().and_downcast::<gtk::Window>() else { return false };
+    let state = window.surface().and_downcast::<gtk::gdk::Toplevel>().map(|t| t.state());
+    window.is_visible()
+        && !state.is_some_and(|state| state.intersects(gtk::gdk::ToplevelState::MINIMIZED | gtk::gdk::ToplevelState::SUSPENDED))
+}
+
 pub fn clear(container: &gtk::Box) {
     while let Some(w) = container.first_child() {
         container.remove(&w);
@@ -295,7 +318,10 @@ pub struct Ui {
     /// need its output: the engine keeps the scrollback ring either way, so detaching costs
     /// nothing and saves the whole per-frame chain — socket read, parse, VTE feed and redraw —
     /// for as long as the window is minimized or covered.
-    window_visible: Cell<bool>,
+    pub(crate) window_visible: Cell<bool>,
+    /// Periodic work that came due while the window was hidden, run once when it shows
+    /// (`catch_up`): the drift fetch, the usage clock, a wallpaper turn.
+    pub(crate) due_while_hidden: RefCell<BTreeSet<&'static str>>,
     applying_ui: Cell<bool>,
     navigation_pending: RefCell<Option<(i64, String)>>,
     navigation_sending: Cell<bool>,
@@ -329,6 +355,9 @@ pub struct Ui {
     /// contents. The bars themselves stay, wearing the start screen's ground.
     pub start_chrome: Vec<gtk::Widget>,
     pub page_overlay: gtk::Overlay,
+    /// The row the sidebar and page share, where a dock (the device mirror) takes its place
+    /// beside the page (`panel::Dock`).
+    pub dock_host: gtk::Box,
     pub panels: Rc<RefCell<Vec<Rc<crate::panel::Panel>>>>,
     registry_dirty: Cell<bool>,
     pub(crate) workspaces: RefCell<Vec<Value>>,
@@ -359,6 +388,8 @@ pub struct Ui {
     wall_split: gtk::Paned,
     wall_stack: gtk::Stack,
     empty_title: gtk::Label,
+    /// What the window offers while the engine does not answer (`set_connected`).
+    offline: Offline,
     panes: RefCell<BTreeMap<String, Rc<Pane>>>,
     /// The terminal lent to a design's agent panel (`lend_pane`): off the wall, and attached
     /// while it is shown there whatever page is open.
@@ -562,11 +593,24 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     palette_row.append(&palette_text);
     let palette_keycap = label("Ctrl K", "keycap");
     palette_row.append(&palette_keycap);
-    palette_key.set_child(Some(&palette_row));
+    // Narrower still, the words go and the key is its glass and its chord.
+    let palette_compact = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    palette_compact.append(&crate::icons::image("search", 14));
+    let compact_keycap = label("Ctrl K", "keycap");
+    palette_keycap.bind_property("label", &compact_keycap, "label").sync_create().build();
+    palette_keycap.bind_property("visible", &compact_keycap, "visible").sync_create().build();
+    palette_compact.append(&compact_keycap);
+    let palette_fold = crate::fold::Fold::new(&palette_row, &palette_compact);
+    // It asks for its shortest words and grows into what the bar has left, so the keys after it
+    // get their full width first.
+    palette_fold.set_grows(true);
+    palette_fold.set_hexpand(true);
+    palette_key.set_child(Some(&palette_fold));
     palette_key.set_valign(gtk::Align::Center);
     let layouts_key = icon_button("view-grid-symbolic", "Window presets");
     layouts_key.set_widget_name("window-presets");
     let skills_key = icon_button("skills", "Skills for this project");
+    skills_key.set_widget_name("project-skills-key");
     let plugins_key = icon_button("plugins", "Plugins for this project");
     plugins_key.set_widget_name("project-plugins");
     // The assistant: a drawer over the page, about Relay itself (`assistant.rs`).
@@ -585,16 +629,28 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     for (key, icon) in [(&skills_key, "skills"), (&plugins_key, "plugins"), (&layouts_key, "layout"), (&assistant_key, "assistant")] {
         key.set_child(Some(&crate::icons::image(icon, 18)));
     }
-    for key in [
-        &palette_key,
-        &skills_key,
-        &plugins_key,
-        &layouts_key,
-        &assistant_key,
-        &notifications_key,
-    ] {
-        top_actions.append(key);
+    top_actions.append(&palette_key);
+    // Skills, Plugins, Window presets and the Assistant; on a narrow bar, one More key that lists
+    // whichever of them the page shows.
+    let tools = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    for key in [&skills_key, &plugins_key, &layouts_key, &assistant_key] {
+        tools.append(key);
     }
+    let more_key = icon_button("more", "More");
+    more_key.set_widget_name("topbar-more");
+    more_key.set_child(Some(&crate::icons::image("more", 18)));
+    more_key.connect_clicked({
+        let tools = tools.downgrade();
+        move |more| {
+            if let Some(tools) = tools.upgrade() {
+                more_menu(more, &tools);
+            }
+        }
+    });
+    let tools_fold = crate::fold::Fold::new(&tools, &more_key);
+    tools_fold.add_css_class("topbar-tools");
+    top_actions.append(&tools_fold);
+    top_actions.append(&notifications_key);
     let reconnect = icon_button("view-refresh-symbolic", "Reconnect to engine");
     top_actions.append(&reconnect);
     reconnect.set_visible(false);
@@ -604,7 +660,9 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     launch_label.append(&crate::icons::image_with_stroke("plus", 14, 2.0));
     let launch_caption = label("New agent", "");
     launch_label.append(&launch_caption);
-    launch_key.set_child(Some(&launch_label));
+    // On the narrowest bar the plus alone, its caption in the tooltip.
+    let launch_fold = crate::fold::Fold::new(&launch_label, &crate::icons::image_with_stroke("plus", 14, 2.0));
+    launch_key.set_child(Some(&launch_fold));
     launch_key.set_valign(gtk::Align::Center);
     launch_key.add_css_class("launch-key");
     top_actions.append(&launch_key);
@@ -640,8 +698,50 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
         window_controls.append(&key);
     }
     top.append(&window_controls);
+    // The bar folds as it narrows. A probe over it reports its width after each layout; the
+    // sidebar's width and the keys a page shows move what fits without resizing it.
+    let folds = [palette_fold.clone(), tools_fold.clone(), launch_fold.clone()];
+    let refold = Rc::new({
+        let (top, tools) = (top.downgrade(), tools.downgrade());
+        let pending = Rc::new(Cell::new(false));
+        move || {
+            if pending.replace(true) {
+                return;
+            }
+            let (top, tools, folds, pending) = (top.clone(), tools.clone(), folds.clone(), pending.clone());
+            // Never inside size-allocate: the next frame takes the new requests.
+            glib::idle_add_local_once(move || {
+                pending.set(false);
+                if let (Some(top), Some(tools)) = (top.upgrade(), tools.upgrade()) {
+                    fold_top_bar(&top, &tools, &folds);
+                }
+            });
+        }
+    });
+    let probe = gtk::DrawingArea::new();
+    probe.set_can_target(false);
+    probe.set_focusable(false);
+    probe.connect_resize({
+        let refold = refold.clone();
+        move |_, _, _| refold()
+    });
+    for key in [&skills_key, &plugins_key, &layouts_key, &assistant_key, &reconnect, &launch_key, &money_add] {
+        let refold = refold.clone();
+        key.connect_visible_notify(move |_| refold());
+    }
+    for watched in [top_left.upcast_ref::<gtk::Widget>(), launch_caption.upcast_ref()] {
+        let refold = refold.clone();
+        watched.connect_notify_local(None, move |_, spec| {
+            if matches!(spec.name(), "width-request" | "label") {
+                refold();
+            }
+        });
+    }
+    let bar = gtk::Overlay::new();
+    bar.set_child(Some(&top));
+    bar.add_overlay(&probe);
     let handle = gtk::WindowHandle::new();
-    handle.set_child(Some(&top));
+    handle.set_child(Some(&bar));
     // The bar lives inside the wallpaper backdrop so panel opacity shows the wallpaper
     // behind it, like the status bar. A hidden titlebar keeps client-side decorations
     // and their resize edges; the WindowHandle still drags and maximizes the window.
@@ -671,23 +771,107 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     }
 }
 
-/// The notice under the title bar: the label, which stays the notice's source of truth
-/// (`show_error`, smoke checks), and the bar around it, which follows its visibility and
-/// carries the dismiss key.
-fn notice_bar() -> (gtk::Label, gtk::Box) {
+/// Fold the title bar to the width it has: first the utility keys into More, then the search
+/// key's words, then New agent's caption. Each step is taken only when the bar, asking for every
+/// key's full width, would not fit; the folds ask for their compact width alone, so the window
+/// can always be made as narrow as the folded bar.
+fn fold_top_bar(top: &gtk::Box, tools: &gtk::Box, folds: &[crate::fold::Fold; 3]) {
+    let any_tool = std::iter::successors(tools.first_child(), |w| w.next_sibling()).any(|w| w.is_visible());
+    let [search, tools_fold, launch] = folds;
+    // Nothing to list under More: no key at all, rather than an empty menu.
+    tools_fold.set_visible(any_tool);
+    let width = top.width();
+    if width <= 0 || !top.is_mapped() {
+        return;
+    }
+    let (_, natural, _, _) = top.measure(gtk::Orientation::Horizontal, -1);
+    let shown = |f: &crate::fold::Fold| if f.is_visible() { f.measure(gtk::Orientation::Horizontal, -1).1 } else { 0 };
+    let fixed = natural - folds.iter().map(shown).sum::<i32>();
+    let need = |f: &crate::fold::Fold, full: bool| if f.is_visible() { f.width_of(full) } else { 0 };
+    let stages = [(true, true, true), (true, false, true), (false, false, true), (false, false, false)];
+    let (words, keys, caption) = stages
+        .into_iter()
+        .find(|&(words, keys, caption)| {
+            fixed + need(search, words) + need(tools_fold, keys) + need(launch, caption) <= width
+        })
+        .unwrap_or((false, false, false));
+    search.set_prefer_full(words);
+    tools_fold.set_prefer_full(keys || !any_tool);
+    launch.set_prefer_full(caption);
+}
+
+/// The More key's menu: the utility keys the bar has folded away, those the page shows.
+fn more_menu(more: &gtk::Button, tools: &gtk::Box) {
+    let popover = gtk::Popover::new();
+    popover.add_css_class("registry-menu");
+    popover.set_has_arrow(false);
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    body.set_size_request(220, -1);
+    for key in std::iter::successors(tools.first_child(), |w| w.next_sibling()) {
+        let Ok(key) = key.downcast::<gtk::Button>() else { continue };
+        if !key.is_visible() {
+            continue;
+        }
+        let icon = match key.widget_name().as_str() {
+            "project-skills-key" => "skills",
+            "project-plugins" => "plugins",
+            "window-presets" => "layout",
+            _ => "assistant",
+        };
+        let row = button("", "registry-action");
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 9);
+        line.append(&crate::icons::image(icon, 15));
+        line.append(&label(&key.tooltip_text().unwrap_or_default(), ""));
+        row.set_child(Some(&line));
+        let pop = popover.downgrade();
+        row.connect_clicked(move |_| {
+            if let Some(pop) = pop.upgrade() {
+                pop.popdown();
+            }
+            key.emit_clicked();
+        });
+        body.append(&row);
+    }
+    popover.set_child(Some(&body));
+    popover.set_parent(more);
+    popover.connect_closed(|popover| {
+        let popover = popover.clone();
+        // After the row's click has run.
+        glib::idle_add_local_once(move || popover.unparent());
+    });
+    popover.popup();
+}
+
+/// The notice: the label, which stays the notice's source of truth (`show_error`, smoke checks),
+/// and the card around it, which follows its visibility and carries a Reconnect key (shown while
+/// the engine does not answer) and the dismiss key. The card floats at the foot of the page, as a
+/// toast does: a notice never pushes the sidebar and the page down, nor covers the bar of keys
+/// at the page's head.
+fn notice_bar() -> (gtk::Label, gtk::Box, gtk::Button) {
     let notice = label("Connecting to the Relay engine…", "notice");
     notice.set_wrap(true);
     notice.set_selectable(true);
     notice.set_hexpand(true);
-    // The label stays the notice's source of truth (`show_error`, smoke checks); the bar
-    // around it follows its visibility and carries the dismiss key.
+    notice.set_xalign(0.0);
+    notice.set_max_width_chars(72);
     let notice_bar = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     notice_bar.add_css_class("notice-bar");
+    notice_bar.set_halign(gtk::Align::Center);
+    notice_bar.set_valign(gtk::Align::End);
+    let lamp = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    lamp.add_css_class("notice-lamp");
+    lamp.set_valign(gtk::Align::Start);
+    notice_bar.append(&lamp);
     notice_bar.append(&notice);
+    let reconnect = button("Reconnect", "notice-action");
+    reconnect.set_widget_name("notice-reconnect");
+    reconnect.set_valign(gtk::Align::Center);
+    reconnect.set_visible(false);
+    notice_bar.append(&reconnect);
     let notice_close = icon_button("close", "Dismiss");
     notice_close.set_widget_name("notice-dismiss");
     notice_close.add_css_class("notice-dismiss");
-    notice_close.set_valign(gtk::Align::Start);
+    notice_close.set_valign(gtk::Align::Center);
     notice_bar.append(&notice_close);
     notice
         .bind_property("visible", &notice_bar, "visible")
@@ -699,7 +883,14 @@ fn notice_bar() -> (gtk::Label, gtk::Box) {
             notice.set_visible(false);
         }
     });
-    (notice, notice_bar)
+    (notice, notice_bar, reconnect)
+}
+
+/// While the engine does not answer, the window offers Reconnect where it offered New agent.
+struct Offline {
+    launch: [gtk::Button; 2],
+    description: gtk::Label,
+    reconnect: [gtk::Button; 2],
 }
 
 /// The sidebar's width as the window opens, and how narrow and wide a drag may take it.
@@ -748,8 +939,8 @@ struct Sidebar {
     root: gtk::Box,
     nav: gtk::Box,
     money_nav: gtk::Box,
-    /// The workspace heading and project list, which the Money space hides.
-    workspaces: [gtk::Widget; 2],
+    /// The workspace heading, the project filter and list, which the Money space hides.
+    workspaces: gtk::Widget,
     add_project: gtk::Button,
     projects_box: gtk::Box,
     /// The foot: the usage card (placed once usage exists) above you and Settings.
@@ -774,11 +965,16 @@ fn sidebar() -> Sidebar {
     section.append(&heading);
     let add_project = icon_button("plus", "Add workspace");
     section.append(&add_project);
-    sidebar.append(&section);
+    // One block, so the filter the registry puts between the heading and the list
+    // (`registry_filter`) hides with them in the Threads space.
+    let workspaces = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    workspaces.set_vexpand(true);
+    workspaces.append(&section);
     let projects_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let project_scroll = scrolled(&projects_box);
     project_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    sidebar.append(&project_scroll);
+    workspaces.append(&project_scroll);
+    sidebar.append(&workspaces);
     // You, at the foot: your initial and first name, and the gear that opens Settings.
     let settings_key = button("", "nav");
     settings_key.add_css_class("settings-key");
@@ -799,7 +995,7 @@ fn sidebar() -> Sidebar {
     sidebar_footer.add_css_class("sidebar-footer");
     sidebar_footer.append(&settings_key);
     sidebar.append(&sidebar_footer);
-    let workspaces = [section.upcast(), project_scroll.upcast()];
+    let workspaces = workspaces.upcast();
     Sidebar { root: sidebar, nav, money_nav, workspaces, add_project, projects_box, footer: sidebar_footer, settings_key }
 }
 
@@ -812,7 +1008,9 @@ struct Wall {
     wall_split: gtk::Paned,
     wall_stack: gtk::Stack,
     empty_title: gtk::Label,
+    empty_description: gtk::Label,
     empty_launch: gtk::Button,
+    empty_reconnect: gtk::Button,
 }
 
 fn wall() -> Wall {
@@ -872,6 +1070,10 @@ fn wall() -> Wall {
     empty_launch.set_child(Some(&empty_action));
     empty_launch.set_halign(gtk::Align::Center);
     empty.append(&empty_launch);
+    let empty_reconnect = button("Reconnect", "");
+    empty_reconnect.set_halign(gtk::Align::Center);
+    empty_reconnect.set_visible(false);
+    empty.append(&empty_reconnect);
     // The terminals' plates top up the page stack's @wall; with none, the page does.
     let empty_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
     empty_page.add_css_class("page-layer");
@@ -886,7 +1088,7 @@ fn wall() -> Wall {
     let wall_body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     wall_body.append(&wall_stack);
     agents.append(&wall_body);
-    Wall { agents, focus_tabs, wall, wall_right, wall_split, wall_stack, empty_title, empty_launch }
+    Wall { agents, focus_tabs, wall, wall_right, wall_split, wall_stack, empty_title, empty_description, empty_launch, empty_reconnect }
 }
 
 /// Every page but the agent wall, added to `content`. Notes has a box but no place in it.
@@ -978,6 +1180,8 @@ struct StatusBar {
     device_status: gtk::Label,
     resources_key: gtk::Button,
     resource_status: gtk::Box,
+    /// The project, its branch and the machine, and the phone: the dev space's, hidden in Threads.
+    dev_only: Vec<gtk::Widget>,
 }
 
 /// The bar, and the usage state behind the sidebar's card (placed by `Ui::new`).
@@ -990,17 +1194,19 @@ fn status_bar() -> (StatusBar, status::UsageState) {
     let status_branch = label("", "mono");
     status_branch.set_ellipsize(gtk::pango::EllipsizeMode::End);
     status_branch.set_max_width_chars(18);
-    bottom.append(&status_project);
-    bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+    let project_cells = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    bottom.append(&project_cells);
+    project_cells.append(&status_project);
+    project_cells.append(&gtk::Separator::new(gtk::Orientation::Vertical));
     // The branch, when there is a project to have one: no bare branch mark beside "No project".
     let branch_cell = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     branch_cell.append(&crate::icons::image("branch", 11));
     branch_cell.append(&status_branch);
     branch_cell.append(&gtk::Separator::new(gtk::Orientation::Vertical));
     branch_cell.set_visible(false);
-    bottom.append(&branch_cell);
+    project_cells.append(&branch_cell);
     status_branch.connect_label_notify(move |l| branch_cell.set_visible(!l.label().is_empty()));
-    bottom.append(&label("linux · local", "status-platform"));
+    project_cells.append(&label("linux · local", "status-platform"));
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     bottom.append(&spacer);
@@ -1023,10 +1229,12 @@ fn status_bar() -> (StatusBar, status::UsageState) {
     let usage = status::UsageState::new();
     bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
     bottom.append(&gaming_key::build());
-    bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+    let devices_rule = gtk::Separator::new(gtk::Orientation::Vertical);
+    bottom.append(&devices_rule);
     bottom.append(&devices_key);
     bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
     bottom.append(&resources_key);
+    let dev_only = vec![project_cells.upcast(), devices_rule.upcast(), devices_key.clone().upcast()];
     let bar = StatusBar {
         root: bottom,
         status_project,
@@ -1036,6 +1244,7 @@ fn status_bar() -> (StatusBar, status::UsageState) {
         device_status,
         resources_key,
         resource_status,
+        dev_only,
     };
     (bar, usage)
 }
@@ -1071,8 +1280,7 @@ impl Ui {
         let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let top = top_bar(&window);
         outer.append(&top.handle);
-        let (notice, notice_bar) = notice_bar();
-        outer.append(&notice_bar);
+        let (notice, notice_bar, notice_reconnect) = notice_bar();
         let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         body.set_vexpand(true);
         let side = sidebar();
@@ -1093,12 +1301,26 @@ impl Ui {
             saved: Cell::new(None),
             moves: Cell::new(0),
         };
+        // A drag the person makes counts, to the window's limit too; a squeeze by the window
+        // (the position pinned at its maximum) does not.
+        let dragging = Rc::new(Cell::new(false));
+        let drag = gtk::GestureDrag::new();
+        drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+        drag.connect_drag_begin({
+            let dragging = dragging.clone();
+            move |_, _, _| dragging.set(true)
+        });
+        drag.connect_drag_end({
+            let dragging = dragging.clone();
+            move |_, _, _| dragging.set(false)
+        });
+        split.add_controller(drag);
         split.connect_position_notify({
             let chosen = sidebar_width.chosen.clone();
             move |split| {
                 if split.position() > SIDEBAR_MAX {
                     split.set_position(SIDEBAR_MAX);
-                } else if split.position() < split.max_position() {
+                } else if split.position() < split.max_position() || dragging.get() {
                     chosen.set(split.position());
                 }
             }
@@ -1128,7 +1350,12 @@ impl Ui {
         content.set_vexpand(true);
         let page_overlay = gtk::Overlay::new();
         page_overlay.set_child(Some(&content));
-        split.set_end_child(Some(&page_overlay));
+        // Over the page, never the sidebar: the notice is about what you were doing there. Its
+        // own layer, so the panels that open over the page never cover it.
+        let notice_host = gtk::Overlay::new();
+        notice_host.set_child(Some(&page_overlay));
+        notice_host.add_overlay(&notice_bar);
+        split.set_end_child(Some(&notice_host));
         split.set_resize_end_child(true);
         split.set_shrink_end_child(false);
         let wall = wall();
@@ -1163,6 +1390,7 @@ impl Ui {
             projects: RefCell::default(),
             page: RefCell::new("agents".into()),
             window_visible: Cell::new(true),
+            due_while_hidden: RefCell::default(),
             applying_ui: Cell::new(false),
             navigation_pending: RefCell::default(),
             navigation_sending: Cell::new(false),
@@ -1194,6 +1422,7 @@ impl Ui {
                 .chain(bar.root.observe_children().into_iter().filter_map(|c| c.ok()?.downcast::<gtk::Widget>().ok()))
                 .collect(),
             page_overlay,
+            dock_host: body.clone(),
             panels: Rc::default(),
             registry_dirty: Cell::new(true),
             workspaces: RefCell::default(),
@@ -1227,6 +1456,11 @@ impl Ui {
             wall_split: wall.wall_split,
             wall_stack: wall.wall_stack,
             empty_title: wall.empty_title,
+            offline: Offline {
+                launch: [top.launch_key.clone(), wall.empty_launch.clone()],
+                description: wall.empty_description.clone(),
+                reconnect: [notice_reconnect, wall.empty_reconnect.clone()],
+            },
             panes: RefCell::default(),
             lent: RefCell::default(),
             lent_card: RefCell::default(),
@@ -1257,8 +1491,11 @@ impl Ui {
         ui.wire_keys(&top, &bar, &wall.empty_launch, &side.add_project, &sheet.scrim);
         ui.wire_window();
         ui.remember_sidebar_width();
-        let mut dev_only: Vec<gtk::Widget> = vec![side.nav.clone().upcast(), top.layouts_key.clone().upcast(), top.assistant_key.clone().upcast(), top.launch_key.clone().upcast()];
-        dev_only.extend(side.workspaces.iter().cloned());
+        // The title bar keeps one set of keys on every page of a space (Window presets takes you
+        // to the wall it arranges); the Threads space has none of them.
+        let mut dev_only: Vec<gtk::Widget> = vec![side.nav.clone().upcast(), top.skills_key.clone().upcast(), top.plugins_key.clone().upcast(), top.layouts_key.clone().upcast(), top.assistant_key.clone().upcast(), top.launch_key.clone().upcast()];
+        dev_only.push(side.workspaces.clone());
+        dev_only.extend(bar.dev_only.iter().cloned());
         crate::money::install(&ui, &side.money_nav, &top.money_add, dev_only);
         crate::design::install(&ui);
         ui
@@ -1320,7 +1557,7 @@ impl Ui {
         let ui = self;
         let (back_key, top_actions) = (top.sidebar_key.clone(), top.actions.clone());
         let (crumb, switcher, settings_tools) = (top.crumb.clone(), top.switcher.clone(), top.settings_tools.clone());
-        let (skills_key, plugins_key, bottom) = (top.skills_key.clone(), top.plugins_key.clone(), bottom.clone());
+        let bottom = bottom.clone();
         // The page Settings was opened from, which its back key returns to.
         let settings_return = Rc::new(RefCell::new(String::from("agents")));
         let return_state = settings_return.clone();
@@ -1353,8 +1590,6 @@ impl Ui {
             }));
             top_actions.set_visible(!settings);
             bottom.set_visible(!settings);
-            skills_key.set_visible(page == "agents");
-            plugins_key.set_visible(page == "agents");
             *mut_previous.borrow_mut() = page.into();
         });
         let weak = Rc::downgrade(ui);
@@ -1392,6 +1627,9 @@ impl Ui {
         let weak = Rc::downgrade(ui);
         top.layouts_key.connect_clicked(move |_| {
             if let Some(ui) = weak.upgrade() {
+                if ui.page.borrow().as_str() != "agents" {
+                    ui.navigate("agents");
+                }
                 ui.layout_menu();
             }
         });
@@ -1416,6 +1654,15 @@ impl Ui {
                     } else {
                         ui.show_launch(None);
                     }
+                }
+            });
+        }
+        // The notice's and the empty wall's Reconnect do what the title bar's does.
+        for key in &ui.offline.reconnect {
+            let weak = Rc::downgrade(ui);
+            key.connect_clicked(move |_| {
+                if let Some(ui) = weak.upgrade() {
+                    ui.reconnect.emit_clicked();
                 }
             });
         }
@@ -1589,6 +1836,7 @@ impl Ui {
     /// `show_error` with its own reading time, in seconds.
     fn show_notice(&self, message: &str, seconds: usize) {
         self.notice.set_text(message);
+        self.notice.set_tooltip_text(None);
         self.notice.set_visible(true);
         if let Some(bar) = self.notice.parent() {
             bar.remove_css_class("info");
@@ -1609,9 +1857,12 @@ impl Ui {
             if NOTICE_SERIAL.with(Cell::get) != serial || !notice.is_visible() {
                 return glib::ControlFlow::Break;
             }
+            // Nor does it count down while nobody can see it (minimized, covered, another
+            // workspace): an error raised then is still there to read on return.
             let held = notice.parent().is_some_and(|bar| {
                 bar.state_flags().contains(gtk::StateFlags::PRELIGHT)
-            }) || notice.has_focus();
+            }) || notice.has_focus()
+                || !on_screen(&notice);
             if !held {
                 remaining = remaining.saturating_sub(1);
             }
@@ -1649,6 +1900,31 @@ impl Ui {
     fn set_connected(&self, connected: bool) {
         self.connected.set(connected);
         self.reconnect.set_visible(!connected);
+        for key in &self.offline.reconnect {
+            key.set_visible(!connected);
+        }
+        for key in &self.offline.launch {
+            key.set_sensitive(connected);
+        }
+        self.offline.launch[1].set_visible(connected);
+        self.offline.launch[0].set_tooltip_text(Some(&if connected {
+            self.shortcut_tip("New agent", "new_session")
+        } else {
+            String::from("Reconnect to Relay's engine to launch agents")
+        }));
+        if connected {
+            self.offline.description.set_text("Launch a solo agent in its own worktree, or a review group on one branch. Each agent lands here as a tile.");
+        } else {
+            self.empty_title.set_text("Not connected");
+            self.offline.description.set_text("Relay's engine isn't answering. Your agents keep running in it; reconnect once it's back.");
+        }
+    }
+    /// While a connection is being made there is nothing to reconnect.
+    fn set_connecting(&self) {
+        self.reconnect.set_visible(false);
+        for key in &self.offline.reconnect {
+            key.set_visible(false);
+        }
     }
     fn connect(self: &Rc<Self>) {
         self.navigation_echoes.borrow_mut().clear();
@@ -1666,10 +1942,11 @@ impl Ui {
         // The first refresh after connecting re-applies the saved pane order and focus, and no
         // save writes the cleared wall over them before it has.
         self.restored_project.set(0);
-        // A launch form built for the old connection would no longer submit (RA-470).
+        // A launch form built for the old connection would no longer submit (RA-470): it
+        // hides, and is checked against the new one when opened again.
         self.launch.set_reveal_child(false);
-        self.forget_launch();
         self.layout();
+        self.set_connecting();
         self.show_error("Connecting to the Relay engine…");
         let ui = self.clone();
         glib::spawn_future_local(async move {
@@ -1693,6 +1970,8 @@ impl Ui {
                     // app offers to draw them for agents on a connection of its own.
                     crate::design::reconnected(&ui);
                     crate::design::render::lease(&ui);
+                    // So does the open document: a file changed during the outage shows now.
+                    ui.editor.reconnected(&ui);
                     ui.set_connected(true);
                     crate::provider_updates::startup(&ui);
                     ui.status.set_text("");
@@ -1795,6 +2074,8 @@ impl Ui {
                                 // A note lists the tasks made from it, whatever project it shows.
                                 if matches!(e.ev.as_str(), "task.changed" | "task.deleted") {
                                     crate::pages::note_tasks_changed(&ui);
+                                    // An open task page follows its task, whatever the board shows.
+                                    crate::pages::task_event(&e.ev, &e.payload);
                                 }
                                 // Notes retains its own project when the main window switches.
                                 if matches!(e.ev.as_str(), "notes.changed" | "notes.deleted") {
@@ -1920,16 +2201,20 @@ impl Ui {
                                 ui.status.set_text(
                                     "Engine disconnected · sessions remain owned by the engine",
                                 );
-                                ui.show_error(&e.to_string());
+                                ui.show_error("Lost the connection to Relay's engine. Your agents keep running in it; reconnect once it's back.");
+                                ui.notice.set_tooltip_text(Some(&e.to_string()));
                                 break;
                             }
                             _ => {}
                         }
                     }
                 }
-                Err(e) if generation == ui.generation.get() => ui.show_error(&format!(
-                    "{e}. Start relay serve for this instance, then reconnect."
-                )),
+                Err(e) if generation == ui.generation.get() => {
+                    ui.set_connected(false);
+                    ui.show_error("Can't reach Relay's engine. Start it with relay serve, then reconnect.");
+                    // The reason, for whoever needs it: the socket and the OS error.
+                    ui.notice.set_tooltip_text(Some(&e.to_string()));
+                }
                 Err(_) => {}
             }
         });
@@ -2144,11 +2429,17 @@ impl Ui {
             .cloned()
             .collect();
         for n in old {
-            self.rendered_sessions.borrow_mut().remove(&n);
-            if let Some(p) = self.panes.borrow_mut().remove(&n) {
-                p.stop();
+            let removed = self.panes.borrow_mut().remove(&n);
+            if let Some(p) = removed {
                 if let Some(grid) = p.root.parent().and_downcast::<gtk::Grid>() {
                     grid.remove(&p.root);
+                }
+                // A pane being closed is held, header and scrollback, until the close answers.
+                if shell::is_closing(&n) {
+                    shell::park_pane(&n, p);
+                } else {
+                    self.rendered_sessions.borrow_mut().remove(&n);
+                    p.stop();
                 }
             }
         }
@@ -2230,7 +2521,7 @@ impl Ui {
         let weak = Rc::downgrade(self);
         glib::timeout_add_seconds_local(DRIFT_FETCH_SECS, move || {
             let Some(ui) = weak.upgrade() else { return glib::ControlFlow::Break };
-            if ui.connected.get() {
+            if ui.connected.get() && !ui.later_if_hidden("drift") {
                 ui.fetch_for_drift();
             }
             glib::ControlFlow::Continue
@@ -2243,9 +2534,10 @@ impl Ui {
         }
         let ui = self.clone();
         glib::spawn_future_local(async move {
-            // Offline or no remote: the counts stay against the refs already fetched.
+            // Offline or no remote: the counts stay against the refs already fetched. A fetch
+            // that went through says so with git.changed, which reads the drift again: reading
+            // it here as well made two reads of it every 5 minutes.
             let _ = ui.call("git.fetch", json!({"project_id": project})).await;
-            ui.refresh_drift();
         });
     }
     /// Re-read `worktree.drift` for the current project; calls while one is out coalesce.
@@ -2286,7 +2578,7 @@ impl Ui {
             pane.set_behind(behind, base);
         }
     }
-    /// Follow the compositor's own view of whether this window is on screen.
+    /// Follow the compositor's own view of whether this window is on screen (see [`on_screen`]).
     ///
     /// `SUSPENDED` is the compositor saying the surface is not visible — minimized, fully
     /// covered, or on another workspace — and `MINIMIZED` covers the backends that do not send
@@ -2314,9 +2606,33 @@ impl Ui {
                 let visible = !hidden(toplevel.state());
                 if ui.window_visible.replace(visible) != visible {
                     ui.update_attachments();
+                    if visible {
+                        ui.catch_up();
+                    }
                 }
             });
         });
+    }
+    /// Periodic work asks this first: true, and noted for `catch_up`, while nobody can see the
+    /// window (lead 11: a git fetch every 5 minutes and a card redrawn every 30 s while minimized).
+    pub(crate) fn later_if_hidden(&self, what: &'static str) -> bool {
+        if self.window_visible.get() {
+            return false;
+        }
+        self.due_while_hidden.borrow_mut().insert(what);
+        true
+    }
+    /// The window shows again: what came due while it was hidden runs once now.
+    fn catch_up(self: &Rc<Self>) {
+        let due = std::mem::take(&mut *self.due_while_hidden.borrow_mut());
+        for what in due {
+            match what {
+                "drift" if self.connected.get() => self.fetch_for_drift(),
+                "usage" => self.usage_tick(),
+                "wallpaper" => crate::wallpaper_rotation::turn(self),
+                _ => {}
+            }
+        }
     }
     fn update_attachments(&self) {
         let focus = self.focused.borrow();
@@ -2369,6 +2685,18 @@ impl Ui {
             "The launch sheet must block background actions"
         );
     }
+    /// For the smoke harness: the wall in order, each name with its pane's identity, and the
+    /// focused pane.
+    pub(crate) fn smoke_wall(&self) -> (Vec<(String, usize)>, Option<String>) {
+        let panes = self.panes.borrow();
+        let wall = self.ordered.borrow().iter().map(|n| (n.clone(), panes.get(n).map_or(0, |p| Rc::as_ptr(p) as usize))).collect();
+        (wall, self.focused.borrow().clone())
+    }
+    /// For the smoke harness: a close as the pane menu sends it, worktree removed.
+    pub(crate) fn smoke_close(self: &Rc<Self>, name: &str) {
+        self.close_agents(vec![name.to_string()], json!({"session": name, "remove_worktree": true}));
+    }
+
     pub fn verify_terminal_input(&self) {
         use vte4::prelude::TerminalExt;
         for (name, pane) in self.panes.borrow().iter() {
@@ -2472,7 +2800,17 @@ impl Ui {
 
 #[cfg(test)]
 mod tests {
-    use super::rotation_setting;
+    use super::{display_name, rotation_setting};
+
+    #[test]
+    fn a_folder_slug_reads_as_words_and_a_chosen_name_stays() {
+        assert_eq!(display_name("northwind-traders-client-work"), "Northwind traders client work");
+        assert_eq!(display_name("game_jam-2026"), "Game jam 2026");
+        assert_eq!(display_name("RelayV4"), "RelayV4");
+        assert_eq!(display_name("Open source"), "Open source");
+        assert_eq!(display_name("personal"), "Personal");
+        assert_eq!(display_name("my-App"), "my-App");
+    }
 
     #[test]
     fn only_rotation_keys_refresh_rotation() {

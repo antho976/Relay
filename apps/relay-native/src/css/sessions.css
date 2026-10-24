@@ -9,10 +9,14 @@ button.confirm-armed label { color: white; }
 .confirm-caption { font-weight: 600; }
 
 /* The banner under the title bar: dismissible, clears itself. */
-.notice-bar { background: @slab; border-bottom: 1px solid @held; padding-right: 6px; }
-.notice-bar.info { border-bottom-color: @live; }
-.notice-bar .notice { background: transparent; border: 0; padding: 8px 12px; }
-.notice-bar button.notice-dismiss { margin-top: 4px; color: @secondary; }
+/* The notice: a card floating at the foot of the page (app.rs notice_bar), opaque as everything that
+   floats over content is, its lamp the state colour: attention for a refusal, live for good news. */
+.notice-bar { margin: 0 20px 18px; padding: 6px 6px 6px 14px; border: 1px solid @strong; border-radius: 12px; background: @slab_solid; box-shadow: 0 10px 28px alpha(black, 0.42); }
+.notice-lamp { min-width: 7px; min-height: 7px; margin: 12px 10px 0 0; border-radius: 999px; background: @held; }
+.notice-bar.info .notice-lamp { background: @live; }
+.notice-bar .notice { background: transparent; border: 0; padding: 6px 4px 6px 0; color: @ink; font-size: 13px; }
+.notice-bar button.notice-action { min-height: 28px; margin: 0 2px 0 8px; padding: 0 12px; }
+.notice-bar button.notice-dismiss { color: @secondary; }
 .notice-bar button.notice-dismiss:hover { color: @ink; }
 
 /* Notification center: the bell's popover. */
@@ -91,15 +95,17 @@ popover.agent-settings button { min-height: 28px; min-width: 0; padding: 0 10px;
 .agent-menu-path { padding: 2px 0; color: @ink_dim; }
 .agent-menu-path label { color: @secondary; }
 
-/* Brief and Designs share the row; the wall-position pair sits apart at its end. */
+/* Brief and Designs share the row; the wall-position pair sits under it, named. */
 .agent-menu-tools { margin-top: 12px; }
 popover.agent-settings button.agent-menu-tool { background: alpha(@ink, 0.055); border: 1px solid alpha(@ink, 0.11); color: @ink; min-height: 30px; padding: 0 10px; border-radius: 10px; }
 popover.agent-settings button.agent-menu-tool:hover { background: alpha(@ink, 0.09); border-color: alpha(@ink, 0.18); }
 button.agent-menu-tool image { color: @faint; }
 button.agent-menu-tool:hover image { color: @ink; }
 button.agent-menu-tool .agent-menu-caption { font-size: 12.5px; font-weight: 500; }
-.agent-menu-move { background: alpha(@ink, 0.03); border: 1px solid alpha(@ink, 0.07); border-radius: 10px; padding: 1px; }
-popover.agent-settings button.agent-menu-move-key { min-width: 30px; min-height: 26px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: @faint; }
+.agent-menu-move { margin-top: 8px; padding: 0 2px 0 4px; }
+.agent-menu-move .agent-menu-caption { color: @secondary; font-size: 12.5px; }
+popover.agent-settings button.agent-menu-move-key { min-height: 26px; padding: 0 9px; border: 1px solid alpha(@ink, 0.09); border-radius: 8px; background: alpha(@ink, 0.04); color: @secondary; font-size: 12px; font-weight: 500; }
+popover.agent-settings button.agent-menu-move-key image { color: @faint; }
 popover.agent-settings button.agent-menu-move-key:hover { background: alpha(@ink, 0.08); color: @ink; }
 popover.agent-settings button.agent-menu-move-key:disabled { opacity: 0.32; background: transparent; }
 
@@ -136,6 +142,11 @@ button.agent-menu-row:hover image { color: @ink; }
 .agent-menu-phone > label, .agent-menu-phone > button { margin-bottom: 10px; }
 .agent-menu-phone label { font-family: 'Geist Mono', monospace; font-size: 11px; }
 
+/* What scrolls fades into the pinned foot, so rows under it read as more, not as cut. */
+popover.agent-settings scrolledwindow > undershoot.bottom { background: linear-gradient(to top, @slab_solid, alpha(@slab_solid, 0)); background-size: 100% 28px; background-repeat: no-repeat; background-position: bottom; }
+/* The brief, read as a document (agent_menu.rs). */
+.agent-brief { padding: 4px 6px 16px; color: @ink; font-size: 13.5px; line-height: 1.5; }
+
 /* Clear context and Close, pinned under the part that scrolls. */
 .agent-menu-foot { padding: 6px 8px 8px 8px; border-top: 1px solid @edge; }
 popover.agent-settings button.agent-menu-danger:hover { background: alpha(@held, 0.12); }
@@ -156,3 +167,9 @@ popover.agent-settings button.agent-menu-confirm-go:hover { background: shade(@h
 /* A pane's checkout behind the freshest base: the commits a rebase would bring in. */
 .terminal-plate .umd .session-behind { color: @waiting; }
 .terminal-plate .umd .session-behind label { font-family: 'Fira Mono', monospace; font-size: 11px; }
+
+/* The Mailbox (pages.rs): a column of glass, the composer's fields bordered like every field. */
+.mail-row.record { padding: 12px 14px; background: @glass_card; border: 1px solid @glass_edge; border-radius: 12px; }
+.mail-message { padding: 2px; border: 1px solid @strong; border-radius: 10px; background: @raised; }
+.mail-message.focused { border-color: @line_focus; box-shadow: 0 0 0 3px alpha(@ink, 0.06); }
+.mail-message textview, .mail-message textview text { background: transparent; }

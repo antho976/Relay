@@ -2,17 +2,19 @@
 
 /* Sidebar tree. Calm by default: names and lamps only; counts, pins and menus surface under the
    pointer or keyboard focus. Children's names align with their group's name (28px). */
-.workspace-heading { padding: 18px 12px 8px 20px; }
+.workspace-heading { padding: 12px 12px 6px 20px; }
 /* The heading reads in sentence case, like the rest of the sidebar. */
 .workspace-heading .section-label { color: @faint; font-size: 12.5px; font-weight: 500; letter-spacing: 0; }
-.registry-filter { margin: 0 8px 6px; min-height: 26px; font-size: 12px; }
+/* On the rows' 12px gutter, so its edges line up with theirs. */
+.registry-filter { margin: 0 12px 6px; min-height: 28px; font-size: 12.5px; }
 .registry-filter image { color: @faint; }
 
-.workspace-row { min-height: 0; margin-top: 12px; padding: 0 12px 0 0; color: @ink; font-size: 14px; font-weight: 600; }
+/* Compact rows, so many workspaces fit: 28px groups, 30px projects. */
+.workspace-row { min-height: 0; margin-top: 8px; padding: 0 12px 0 0; color: @ink; font-size: 13.5px; font-weight: 600; }
 .workspace-row:first-child { margin-top: 2px; }
-button.workspace-toggle { min-height: 32px; min-width: 0; padding: 0 4px 0 14px; border: 0; border-radius: 0; background: transparent; color: @ink; }
+button.workspace-toggle { min-height: 28px; min-width: 0; padding: 0 4px 0 14px; border: 0; border-radius: 0; background: transparent; color: @ink; }
 button.workspace-toggle:hover { background: transparent; color: @ink; }
-.workspace-name { font-size: 14px; font-weight: 600; }
+.workspace-name { font-size: 13.5px; font-weight: 600; }
 .workspace-chevron { color: @faint; }
 button.workspace-toggle:hover .workspace-chevron { color: @secondary; }
 .workspace-row.has-active .workspace-name { color: @ink; }
@@ -23,21 +25,24 @@ button.workspace-toggle:hover .workspace-chevron { color: @secondary; }
 .project-row:hover .project-tools, .project-row:focus-within .project-tools { opacity: 1; }
 .workspace-row .add-project, .workspace-row .manage, .project-row .manage { opacity: 1; }
 
-.project-row { margin: 1px 12px 1px 16px; }
-.project-row button.project { min-height: 34px; padding: 0 8px 0 12px; border: 0; border-radius: 10px; background: transparent; color: @secondary; font-size: 14px; }
+.project-row { margin: 0 12px 1px 16px; }
+.project-row button.project { min-height: 30px; padding: 0 8px 0 12px; border: 0; border-radius: 9px; background: transparent; color: @secondary; font-size: 13.5px; }
 .project-row:hover button.project { background: @wash; color: @ink; }
-.project-row.selected button.project, .project-row button.project.selected { min-height: 34px; padding: 0 8px 0 12px; background: @wash; color: @ink; }
+.project-row.selected button.project, .project-row button.project.selected { min-height: 30px; padding: 0 8px 0 12px; background: @wash; color: @ink; }
 .project-row.selected:hover button.project { background: @wash; }
 .project-name { font-weight: 400; }
 /* Its repository is not at its path (moved or deleted): Relink… in its menu. */
 .project-name.missing { color: @faint; }
 .project-pin-mark { color: @faint; }
 .project-count { min-width: 8px; min-height: 16px; padding: 0 2px; background: transparent; color: @faint; font-family: 'Geist Mono', monospace; font-size: 11.5px; }
-/* The tools cover the row's end with the row's own ground, so they never sit on the text. */
-.project-tools { margin: 0 4px 0 0; padding-left: 6px; }
-.project-row:hover .project-tools, .project-row:focus-within .project-tools { background: @wash; border-radius: 0 10px 10px 0; }
-.project-row.selected:focus-within .project-tools { background: @wash; }
-.project-row.selected:hover .project-tools { background: @wash; }
+/* The tools cover the row's end with the row's own ground, so they never sit on the text; the
+   name fades out under their leading edge rather than being cut through. */
+.project-tools { margin: 0 4px 0 0; padding-left: 16px; }
+.project-row:hover .project-tools, .project-row:focus-within .project-tools { background: linear-gradient(to right, alpha(@wash, 0), @wash 14px); border-radius: 0 9px 9px 0; }
+.project-row.selected:focus-within .project-tools, .project-row.selected:hover .project-tools { background: linear-gradient(to right, alpha(@wash, 0), @wash 14px); }
+/* The project list fades at whichever edge has more above or below it. */
+.sidebar scrolledwindow > undershoot.top { background: linear-gradient(to bottom, @console, alpha(@console, 0)); background-size: 100% 20px; background-repeat: no-repeat; }
+.sidebar scrolledwindow > undershoot.bottom { background: linear-gradient(to top, @console, alpha(@console, 0)); background-size: 100% 28px; background-repeat: no-repeat; background-position: bottom; }
 
 button.registry-more { min-height: 30px; padding: 0 8px 0 34px; border: 0; border-radius: 0; background: transparent; color: @faint; font-size: 12px; font-weight: 500; }
 button.registry-more:hover { background: transparent; color: @ink; }
@@ -73,6 +78,8 @@ button.registry-action.danger:hover { background: alpha(@held, 0.12); }
 .registry-field-error { color: @held; font-size: 12px; }
 .registry-editor entry.invalid { border-color: @held; }
 .registry-editor entry.registry-mono { font-family: 'Geist Mono', monospace; font-size: 12px; }
+.registry-editor menubutton.registry-pick > button { min-width: 34px; min-height: 30px; padding: 0; }
+.registry-menu scrolledwindow { min-width: 220px; }
 .registry-switch-row { padding-top: 6px; }
 .registry-editor-actions { padding: 0 0 2px; }
 .registry-editor-actions button { min-height: 30px; }

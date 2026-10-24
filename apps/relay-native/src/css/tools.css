@@ -15,12 +15,15 @@
 .ext-page switch.settings-switch:hover { background: @glass_line_hover; }
 .ext-page switch.settings-switch:checked { background: @ink; }
 .ext-page switch.settings-switch:checked:hover { background: white; }
+/* Off still reads as a switch: an edge around its well, and a lighter knob. */
+.ext-page switch.settings-switch:not(:checked) { box-shadow: inset 0 0 0 1px @glass_line_hover; }
+.ext-page switch.settings-switch:not(:checked) > slider { background: @secondary; }
 
 .page.ext-page { padding: 0; }
 
 /* Header */
 .ext-page .ext-head { padding: 26px 32px 22px; background: transparent; border-bottom: 1px solid @glass_edge; }
-.ext-page .ext-tile { min-width: 44px; min-height: 44px; background: @glass_control; border: 1px solid @glass_line; border-radius: 12px; color: @ink; }
+.ext-page .ext-tile { margin-top: 2px; min-width: 44px; min-height: 44px; background: @glass_control; border: 1px solid @glass_line; border-radius: 12px; color: @ink; }
 .ext-page .ext-title { font-size: 25px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; color: @ink; }
 .ext-page .ext-subtitle { font-size: 13.5px; line-height: 1.35; color: @secondary; }
 .ext-page .ext-scope { margin-left: 8px; }
@@ -88,6 +91,7 @@
 .ext-page list.ext-list > row:selected .ext-summary, .ext-page list.ext-list > row:selected .ext-meta { color: @secondary; }
 .ext-page .ext-mark { min-width: 36px; min-height: 36px; background: @glass_control; border: 1px solid @glass_line; border-radius: 10px; color: @ink; font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
 .ext-page .ext-mark.large { min-width: 56px; min-height: 56px; border-radius: 14px; font-size: 19px; }
+.ext-page .ext-mark.drawn image { color: @secondary; }
 .ext-page list.ext-list > row:selected .ext-mark { border-color: @glass_line_hover; }
 
 /* Chips: small pills */
@@ -181,7 +185,7 @@
 
 /* ── The agents bar's Agent skills and Plugins sheets (shell.rs switch_sheet) ──
    The usage panel's floating sheet: rounded, lifted off the edge, one rounded card of rows. */
-.agent-skills-popover.floating-panel { border: 1px solid alpha(@ink, 0.09); border-radius: 16px; background: @backbox_chrome; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45); }
+.agent-skills-popover.floating-panel { border: 1px solid alpha(@ink, 0.09); border-radius: 16px; background: @console_solid; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45); }
 .agent-skills-popover .panel-heading { min-height: 46px; padding: 0 10px 0 18px; border-bottom: 0; }
 .agent-skills-popover .panel-heading .section-title { color: @ink; font-size: 14px; font-weight: 600; letter-spacing: -0.005em; }
 .agent-skills-popover .panel-heading button.icon-key { min-width: 28px; min-height: 28px; border-radius: 8px; color: @faint; }
@@ -207,8 +211,12 @@
 
 /* ── Devices (tools_devices.rs) ───────────────────────────────────────────────
    Phones and virtual devices share one list: lamp, name over facts, actions. */
+/* Device control on glass (the Glass Rule): its sections are cards, its devices rows in them. */
+.devices-page .record { padding: 16px 18px; background: @glass_card; border: 1px solid @glass_edge; border-radius: 14px; }
+.devices-page .record > .title { font-size: 14px; }
+.devices-page .record entry, .devices-page .record combobox > box > button, .devices-page .record dropdown > button { background: @glass_control; border-color: @glass_line; }
 .device-list { margin-top: 2px; }
-.device-row { min-height: 40px; padding: 6px 8px 6px 10px; background: @console; border: 1px solid @edge; border-radius: 2px; }
+.device-row { min-height: 40px; padding: 6px 8px 6px 12px; background: @glass_control; border: 1px solid @glass_line; border-radius: 10px; }
 .device-row button { min-height: 28px; }
 .device-row-name { color: @ink; font-size: 13px; font-weight: 600; }
 .device-row-facts { color: @faint; font-family: 'Geist Mono', monospace; font-size: 10px; }

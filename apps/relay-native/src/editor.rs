@@ -9,6 +9,8 @@ mod project_files;
 pub(crate) mod image_preview;
 #[path = "find_bar.rs"]
 pub mod find_bar;
+#[path = "editor_tabs.rs"]
+mod editor_tabs;
 use sourceview5::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -74,6 +76,9 @@ pub struct Editor {
     diff_switch: gtk::Box,
     diff_inline: Cell<bool>,
     diff_data: RefCell<Option<Value>>,
+    /// What the open diff compares: the index (a staged row) or the working tree, and a
+    /// rename's old path. A disk change reads it again (`refresh_diff`).
+    diff_target: RefCell<(bool, Option<String>)>,
     before: sourceview5::Buffer,
     before_scroll: gtk::ScrolledWindow,
     content_stack: gtk::Stack,
@@ -87,6 +92,12 @@ pub struct Editor {
     buffer: sourceview5::Buffer,
     view: sourceview5::View,
     caption: gtk::Label,
+    /// The workbench strip of opened files (`editor_tabs`), and the files on it.
+    tab_strip: gtk::Box,
+    tab_scroll: gtk::ScrolledWindow,
+    tabs: RefCell<Vec<editor_tabs::Tab>>,
+    /// The status line's facts about the open file: language, encoding, endings, indent.
+    facts: gtk::Label,
     path: RefCell<String>,
     original: RefCell<String>,
     project: Cell<i64>,
@@ -123,9 +134,17 @@ pub struct Editor {
     /// Shown when the open document changed on disk while it has unsaved edits.
     conflict_bar: gtk::Box,
     conflict_label: gtk::Label,
+    reload_key: gtk::Button,
     /// The on-disk text the conflict bar was raised for.
     disk_text: RefCell<Option<String>>,
+    /// The open file was removed from disk under edits: the conflict bar says so, and Keep
+    /// my edits lets the next Save write it back (without the base check, which no missing
+    /// file can pass).
+    missing: Cell<bool>,
+    recreate: Cell<bool>,
     disk_check_pending: Cell<bool>,
+    /// A disk change came in while a check was reading: it runs again when that lands.
+    disk_check_again: Cell<bool>,
 }
 /// Entries of one folder the explorer draws before a "Show more" row.
 const TREE_PAGE: usize = 500;
@@ -183,11 +202,17 @@ impl Editor {
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
         project_tools.append(&spacer);
-        // The project's views, one segmented control: the one showing is lit.
+        // The project's views, Agents | Design: one segmented control, the one showing lit. Files
+        // and Git open beside whichever shows, so they are keys of their own after it, lit while
+        // their panel is open (`panel_keys`).
         let views = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         views.add_css_class("view-tabs");
         views.set_valign(gtk::Align::Center);
         project_tools.append(&views);
+        let panel_keys = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        panel_keys.add_css_class("panel-keys");
+        panel_keys.set_valign(gtk::Align::Center);
+        project_tools.append(&panel_keys);
         let agents_button = button("Agents", "quiet");
         agents_button.set_widget_name("project-agents");
         agents_button.set_tooltip_text(Some("The project's agents: their terminals, side by side"));
@@ -244,7 +269,7 @@ impl Editor {
         let file_header = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         file_header.add_css_class("code-bar");
         file_header.add_css_class("explorer-head");
-        let explorer_title = label("EXPLORER", "section-label");
+        let explorer_title = label("Explorer", "section-label");
         explorer_title.set_hexpand(true);
         file_header.append(&explorer_title);
         file_sidebar.append(&file_header);
@@ -272,11 +297,24 @@ impl Editor {
         view.set_highlight_current_line(true);
         view.set_tab_width(4);
         view.set_auto_indent(true);
+        // Room between the line numbers and the code, which touched it.
+        view.set_left_margin(12);
         view.set_editable(false);
         if let Some(scheme) = sourceview5::StyleSchemeManager::default().scheme("relay-matte") {
             buffer.set_style_scheme(Some(&scheme));
         }
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        // The files opened, above the open file's breadcrumb (`editor_tabs`).
+        let tab_strip = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        tab_strip.add_css_class("editor-tabs");
+        let tab_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::External)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .child(&tab_strip)
+            .build();
+        tab_scroll.add_css_class("editor-tab-scroll");
+        tab_scroll.set_visible(false);
+        content.append(&tab_scroll);
         content.append(&tools);
         let find = find_bar::FindBar::new(&view, &buffer, "code", "Find in file", &FIND_QUERY);
         find.bar.add_css_class("toolbar");
@@ -358,8 +396,15 @@ impl Editor {
         });
         content.add_css_class("page-layer");
         let position = label("Select a file to edit", "dim");
-        position.add_css_class("code-position");
-        content.append(&position);
+        position.set_hexpand(true);
+        position.set_xalign(0.0);
+        let facts = label("", "code-facts");
+        let status = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+        status.add_css_class("code-position");
+        status.append(&position);
+        status.append(&facts);
+        position.bind_property("visible", &status, "visible").sync_create().build();
+        content.append(&status);
         let workspace = gtk::Paned::new(gtk::Orientation::Horizontal);
         workspace.add_css_class("code-split");
         workspace.set_start_child(Some(&content));
@@ -378,19 +423,19 @@ impl Editor {
         split.set_end_child(Some(&workspace));
         let find_button = crate::app::icon_button("search", "Find in file (Ctrl+F) · replace (Ctrl+H)");
         tools.append(&find_button);
-        let files_button = button("Files", "quiet");
+        let files_button = panel_key("files", "Files");
         files_button.set_widget_name("project-files");
         files_button.set_tooltip_text(Some("Show or hide the explorer: the checkout's files, and a search in them"));
-        views.append(&files_button);
+        panel_keys.append(&files_button);
         let edit_button = crate::app::icon_button("edit", "Edit file");
         // Only a diff has a file to open for editing.
         edit_button.set_visible(false);
         diff_switch.bind_property("visible", &edit_button, "visible").sync_create().build();
         tools.append(&edit_button);
-        let git_button = button("Git", "quiet");
+        let git_button = panel_key("branch", "Git");
         git_button.set_widget_name("project-git");
         git_button.set_tooltip_text(Some("Show or hide the Git panel: changes, commits, branches and the remote"));
-        views.append(&git_button);
+        panel_keys.append(&git_button);
         let mut control = tools.first_child();
         while let Some(widget) = control {
             control = widget.next_sibling();
@@ -447,6 +492,7 @@ impl Editor {
             diff_switch,
             diff_inline: Cell::new(false),
             diff_data: RefCell::new(None),
+            diff_target: RefCell::new((false, None)),
             before,
             before_scroll,
             content_stack,
@@ -459,6 +505,10 @@ impl Editor {
             buffer,
             view,
             caption,
+            tab_strip,
+            tab_scroll,
+            tabs: RefCell::default(),
+            facts,
             path: RefCell::default(),
             original: RefCell::default(),
             project: Cell::new(0),
@@ -479,8 +529,12 @@ impl Editor {
             undo_trash: Cell::new(0),
             conflict_bar,
             conflict_label,
+            reload_key: reload_key.clone(),
             disk_text: RefCell::new(None),
+            missing: Cell::new(false),
+            recreate: Cell::new(false),
             disk_check_pending: Cell::new(false),
+            disk_check_again: Cell::new(false),
         });
         let weak = Rc::downgrade(&editor);
         keep_key.connect_clicked(move |_| {
@@ -490,6 +544,8 @@ impl Editor {
                 if let Some(disk) = e.disk_text.borrow_mut().take() {
                     *e.original.borrow_mut() = disk;
                 }
+                // A removed file is written back whole by the next Save.
+                e.recreate.set(e.missing.replace(false));
                 e.conflict_bar.set_visible(false);
             }
         });
@@ -516,9 +572,20 @@ impl Editor {
                     .set_sensitive(b.is_modified() && e.view.is_editable());
                 e.discard.set_sensitive(b.is_modified() && !e.busy.get());
                 // Unsaved edits show by the name too, as a note's do in Notes.
-                let path = e.path.borrow();
+                let path = e.path.borrow().clone();
                 if !path.is_empty() && !e.diff.get() && !e.image_mode.get() {
-                    e.caption.set_text(&if b.is_modified() { format!("{path}  •") } else { path.clone() });
+                    e.caption.set_markup(&editor_tabs::crumb(&path, b.is_modified()));
+                }
+            }
+        });
+        // A file the person edits is no longer only previewed: its tab is kept. Typing and
+        // pasting are user actions; the editor's own loads (set_text) are not.
+        let weak = Rc::downgrade(&editor);
+        editor.buffer.connect_begin_user_action(move |_| {
+            if let Some(e) = weak.upgrade() {
+                let path = e.path.borrow().clone();
+                if !path.is_empty() && !e.diff.get() && !e.image_mode.get() {
+                    e.keep_shown_tab(&path);
                 }
             }
         });
@@ -580,11 +647,13 @@ impl Editor {
                 editor.toggle_git();
             }
         });
-        // Files and Git open beside the view rather than replacing it, so their keys show
-        // "open" (a lighter mark than the lit view) while their panel is up.
+        // Files and Git open beside the view rather than replacing it: their keys are toggles,
+        // lit while their panel is up.
         for (panel, key) in [(editor.file_sidebar.clone(), files_button), (editor.git.clone(), git_button)] {
             panel.connect_visible_notify(move |panel| {
-                if panel.is_visible() { key.add_css_class("open") } else { key.remove_css_class("open") }
+                let open = panel.is_visible();
+                if open { key.add_css_class("open") } else { key.remove_css_class("open") }
+                key.update_state(&[gtk::accessible::State::Pressed(if open { gtk::AccessibleTristate::True } else { gtk::AccessibleTristate::False })]);
             });
         }
         let weak = Rc::downgrade(&editor);
@@ -599,6 +668,7 @@ impl Editor {
                     if editor.agents_visible() { agents_tab.add_css_class("selected") } else { agents_tab.remove_css_class("selected") }
                     if design { design_tab.add_css_class("selected") } else { design_tab.remove_css_class("selected") }
                     editor.document_tools.set_visible(document && !editor.image_mode.get());
+                    editor.tab_scroll.set_visible(document && !editor.tabs.borrow().is_empty());
                     editor.position.set_visible(document);
                     if !document || editor.image_mode.get() {
                         editor.find.hide();
@@ -609,6 +679,14 @@ impl Editor {
     }
     /// Unsaved edits, or a write or Git operation in flight. A file that is only loading is
     /// not dirty: whatever replaces the document bumps `revision`, which drops the load.
+    /// A save or Git action is running, which nothing should interrupt.
+    pub fn is_dirty_besides_edits(&self) -> bool {
+        self.writing.get() || self.git_busy.get()
+    }
+    /// Typed edits not yet saved, which a question (Save / Don't Save) can settle.
+    pub fn is_modified(&self) -> bool {
+        self.buffer.is_modified()
+    }
     pub fn is_dirty(&self) -> bool {
         self.buffer.is_modified() || self.writing.get() || self.git_busy.get()
     }
@@ -631,7 +709,7 @@ impl Editor {
     /// save lands; Don't Save puts the file back as it was read first, so an open that fails
     /// leaves no edits passing for saved. Without edits it runs at once, and a save or Git
     /// action in flight is waited for.
-    fn after_unsaved(self: &Rc<Self>, ui: &Rc<Ui>, then: impl FnOnce(&Rc<Self>, &Rc<Ui>) + 'static) {
+    pub(crate) fn after_unsaved(self: &Rc<Self>, ui: &Rc<Ui>, then: impl FnOnce(&Rc<Self>, &Rc<Ui>) + 'static) {
         if let Some(refusal) = self.replace_refusal(None) {
             ui.show_error(refusal);
             return;
@@ -731,14 +809,14 @@ impl Editor {
         self.original.borrow_mut().clear();
         self.view.set_editable(false);
         self.set_busy(false);
-        self.disk_text.borrow_mut().take();
-        self.conflict_bar.set_visible(false);
+        self.clear_conflict();
         clear(&self.tree);
         self.tree_rows.borrow_mut().clear();
         self.tree_signature.set(0);
         // As before any file was opened: emptying the text put the caret at "Ln 1, Col 1".
         self.caption.set_text("No file open");
         self.position.set_text("Select a file to edit");
+        self.facts.set_text("");
     }
     /// A file, git, worktree or integration event: `event` is its name and payload, and
     /// `None` refreshes unconditionally.
@@ -769,12 +847,14 @@ impl Editor {
     /// new text in place; an edited one raises the conflict bar once per disk version.
     fn check_disk(self: &Rc<Self>, ui: &Rc<Ui>) {
         let path = self.path.borrow().clone();
-        if path.is_empty()
-            || self.diff.get()
-            || self.image_mode.get()
-            || self.busy.get()
-            || self.disk_check_pending.replace(true)
-        {
+        if !path.is_empty() && self.diff.get() && !self.busy.get() {
+            return self.refresh_diff(ui);
+        }
+        if path.is_empty() || self.diff.get() || self.image_mode.get() || self.busy.get() {
+            return;
+        }
+        if self.disk_check_pending.replace(true) {
+            self.disk_check_again.set(true);
             return;
         }
         let project = ui.project.get();
@@ -790,6 +870,10 @@ impl Editor {
                 )
                 .await;
             e.disk_check_pending.set(false);
+            // What this read saw may be older than the change that asked again.
+            if e.disk_check_again.take() {
+                return e.check_disk(&ui);
+            }
             if e.revision.get() != revision
                 || e.busy.get()
                 || !e.matches(&ui, project, &worktree)
@@ -797,7 +881,21 @@ impl Editor {
             {
                 return;
             }
-            // A removed, binary or oversized file is left to Save, whose check reports it.
+            // Removed under edits: Save would fail its base check for good, and New file is
+            // refused while dirty, so say so and offer to write it back.
+            let removed = matches!(&result, Err(crate::client::Error::Bus(bus)) if bus.kind == relay_bus::ErrorKind::NotFound);
+            if removed && e.buffer.is_modified() && !e.recreate.get() {
+                if !e.missing.replace(true) {
+                    e.disk_text.borrow_mut().take();
+                    e.conflict_label.set_text(&format!(
+                        "{path} was removed from disk while you were editing it. Keep your edits to write it back when you save."
+                    ));
+                    e.reload_key.set_visible(false);
+                    e.conflict_bar.set_visible(true);
+                }
+                return;
+            }
+            // A binary or oversized file is left to Save, whose check reports it.
             let Some(disk) = result
                 .ok()
                 .filter(|v| v["truncated"] != true)
@@ -805,6 +903,12 @@ impl Editor {
             else {
                 return;
             };
+            // Back on disk: whatever is there now is what the edits are compared with.
+            e.recreate.set(false);
+            if e.missing.replace(false) {
+                e.reload_key.set_visible(true);
+                e.conflict_bar.set_visible(false);
+            }
             if disk == *e.original.borrow() {
                 e.disk_text.borrow_mut().take();
                 e.conflict_bar.set_visible(false);
@@ -824,6 +928,18 @@ impl Editor {
             e.conflict_bar.set_visible(true);
         });
     }
+    /// After a reconnect: what an agent changed during the outage shows now.
+    pub fn reconnected(self: &Rc<Self>, ui: &Rc<Ui>) {
+        self.check_disk(ui);
+    }
+    /// No disagreement with the disk any more: another file, or the disk's text taken.
+    fn clear_conflict(&self) {
+        self.disk_text.borrow_mut().take();
+        self.missing.set(false);
+        self.recreate.set(false);
+        self.reload_key.set_visible(true);
+        self.conflict_bar.set_visible(false);
+    }
     /// Replace a clean document's text with the disk's, keeping the caret line and scroll.
     fn reload_in_place(&self, disk: &str) {
         let cursor = self.buffer.iter_at_mark(&self.buffer.get_insert());
@@ -832,8 +948,7 @@ impl Editor {
         self.buffer.set_text(disk);
         self.buffer.set_modified(false);
         *self.original.borrow_mut() = disk.into();
-        self.disk_text.borrow_mut().take();
-        self.conflict_bar.set_visible(false);
+        self.clear_conflict();
         let at = self
             .buffer
             .iter_at_line_offset(line, offset)
@@ -854,7 +969,6 @@ impl Editor {
         let Some(changed) = payload["worktree"].as_str().filter(|_| ev == "file.changed") else {
             return true;
         };
-        let canonical = |path: &str| std::fs::canonicalize(path).unwrap_or_else(|_| path.into());
         let changed = canonical(changed);
         let primary = ui
             .projects
@@ -1101,13 +1215,14 @@ impl Editor {
                     *e.selected_path.borrow_mut() = path.clone();
                     e.selected_directory.set(false);
                     *e.original.borrow_mut() = content.into();
-                    e.disk_text.borrow_mut().take();
-                    e.conflict_bar.set_visible(false);
+                    e.clear_conflict();
                     e.set_busy(false);
                     let manager = sourceview5::LanguageManager::default();
                     e.buffer
                         .set_language(manager.guess_language(Some(&path), None).as_ref());
-                    e.caption.set_text(&path);
+                    e.caption.set_markup(&editor_tabs::crumb(&path, false));
+                    e.describe(content);
+                    e.note_opened(&ui, &path);
                     // set_text leaves the caret after the inserted text (RA-456).
                     if let Some((line, col, length)) = goto {
                         e.reveal(line, col, length);
@@ -1157,7 +1272,12 @@ impl Editor {
                 .map(|b| format!("{b:02x}"))
                 .collect::<String>();
             // A held write (a protected path) is offered for confirmation here, as Git's are.
-            let result = code_git::guarded(&ui, "file.write", json!({"project_id":project,"worktree":optional_scope(&worktree),"path":path,"text":content,"expected_sha256":expected})).await;
+            // A file removed under the edits, kept on purpose, is written with no base check.
+            let mut payload = json!({"project_id":project,"worktree":optional_scope(&worktree),"path":path,"text":content,"expected_sha256":expected});
+            if e.recreate.get() {
+                payload.as_object_mut().map(|p| p.remove("expected_sha256"));
+            }
+            let result = code_git::guarded(&ui, "file.write", payload).await;
             e.writing.set(false);
             if e.revision.get() != revision {
                 return;
@@ -1172,6 +1292,9 @@ impl Editor {
                     *e.original.borrow_mut() = content;
                     e.buffer.set_modified(false);
                     e.disk_text.borrow_mut().take();
+                    e.recreate.set(false);
+                    e.missing.set(false);
+                    e.reload_key.set_visible(true);
                     e.conflict_bar.set_visible(false);
                     e.refresh_git(&ui);
                     if let Some(then) = then {
@@ -1672,7 +1795,7 @@ impl Editor {
             "" => ui.projects.borrow().iter().find(|p| p["id"] == ui.project.get()).map(|p| text(p, "path").to_owned()),
             worktree => Some(worktree.to_owned()),
         };
-        let Some(root) = root.and_then(|root| std::fs::canonicalize(root).ok()) else {
+        let Some(root) = root.map(|root| canonical(&root)).filter(|root| root.is_absolute()) else {
             return false;
         };
         std::fs::canonicalize(root.join(path)).is_ok_and(|target| target.starts_with(&root) && target.is_dir())
@@ -1796,6 +1919,10 @@ impl Editor {
         ] {
             let action = crate::app::icon_button(icon, title);
             action.add_css_class("explorer-key");
+            // New is the explorer's own action; the rest act on a selection or the view.
+            if op == "file.create" {
+                action.add_css_class("explorer-primary");
+            }
             action.set_widget_name(&format!("project-{op}"));
             let e = self.clone();
             let weak = Rc::downgrade(ui);
@@ -1806,6 +1933,10 @@ impl Editor {
             });
             self.file_actions.append(&action);
         }
+        // What the keys do to files, then what they do to the view.
+        let rule = gtk::Separator::new(gtk::Orientation::Vertical);
+        rule.add_css_class("explorer-rule");
+        self.file_actions.append(&rule);
         let refresh = crate::app::icon_button("refresh", "Refresh the explorer");
         refresh.add_css_class("explorer-key");
         refresh.set_widget_name("project-files-refresh");
@@ -2422,6 +2553,18 @@ pub fn replace_all(search: &sourceview5::SearchContext, replace: &str) -> Result
     }
 }
 
+/// A key that opens or closes a panel beside the view (Files, Git): its icon and its name.
+fn panel_key(icon: &str, caption: &str) -> gtk::Button {
+    let key = button("", "quiet");
+    key.add_css_class("panel-key");
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    row.append(&crate::icons::image(icon, 14));
+    row.append(&label(caption, ""));
+    key.set_child(Some(&row));
+    key.update_state(&[gtk::accessible::State::Pressed(gtk::AccessibleTristate::False)]);
+    key
+}
+
 #[cfg(test)]
 mod tests {
     use super::{crlf_dominant, snippet, with_newlines, TreeBadges, SNIPPET_CHARS};
@@ -2478,3 +2621,31 @@ mod tests {
         assert!(!snippet("éé", 2).is_empty());
     }
 }
+
+thread_local! {
+    /// Checkout roots as the disk resolves them, and when that was asked: every file.changed
+    /// compared up to three paths, each a walk of `lstat`/`readlink` calls on the GTK thread
+    /// (perf lead 10), for paths that hardly ever resolve differently.
+    static CANONICAL: RefCell<std::collections::HashMap<String, (std::path::PathBuf, std::time::Instant)>> = RefCell::default();
+}
+
+/// How long a resolved checkout path stands before it is resolved again (a repository moved
+/// or a link retargeted while Relay runs).
+const CANONICAL_FOR: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// `path` resolved as the disk has it (or as given when it cannot be), cached for a while.
+fn canonical(path: &str) -> std::path::PathBuf {
+    if let Some(known) = CANONICAL.with(|c| c.borrow().get(path).filter(|(_, at)| at.elapsed() < CANONICAL_FOR).map(|(p, _)| p.clone())) {
+        return known;
+    }
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.into());
+    CANONICAL.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cache.len() > 64 {
+            cache.clear();
+        }
+        cache.insert(path.to_string(), (resolved.clone(), std::time::Instant::now()));
+    });
+    resolved
+}
+

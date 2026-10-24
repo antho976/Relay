@@ -53,6 +53,22 @@
 /* Attention red for text: @held on @wall is about 3.6:1, too low for 12-13px words; this is 6.7:1. */
 @define-color held_text #f0786f;
 * { -gtk-icon-style: symbolic; }
+/* One focus and accent language (DESIGN.md, Buttons and Inputs): ink, never the toolkit theme's
+   blue. The theme's accents read these names (Adwaita's and Breeze's) and its variables (GTK's
+   own); a filled accent is the lit track, as the view switch draws it. */
+@define-color accent_color @ink;
+@define-color accent_bg_color @track;
+@define-color accent_fg_color @ink;
+:root { --accent-color: @ink; --accent-bg-color: @track; --accent-fg-color: @ink; }
+*:focus-visible { outline-color: alpha(@ink, 0.35); }
+/* A field shows focus with its own stroke and faint ring (entry:focus-within below), not an outline. */
+entry:focus-within, spinbutton:focus-within, searchbar entry:focus-within { outline: none; }
+label link, label link:visited { color: @ink; text-decoration-line: underline; text-decoration-color: alpha(@ink, 0.45); }
+label link:hover { text-decoration-color: @ink; }
+/* A menu bar's open title: the row's wash, not the theme's coloured underline. */
+popovermenubar > item { box-shadow: none; border-radius: 7px; }
+popovermenubar > item:hover, popovermenubar > item:selected { background: @wash; box-shadow: none; color: @ink; }
+check:checked, radio:checked { background: @ink; border-color: @ink; color: @wall; -gtk-icon-shadow: none; }
 window { background: @wall; color: @ink; font-family: 'Geist', sans-serif; font-size: 13px; font-feature-settings: "tnum"; }
 window > box, stack, scrolledwindow { background: @wall; }
 /* Panel opacity, one value for every page: each page in the page stack (a direct child)
@@ -67,7 +83,8 @@ window > box, stack, scrolledwindow { background: @wall; }
 .titlebar { min-height: 0; background: @console; padding: 0; border: 0; box-shadow: none; }
 .topbar { min-height: 52px; padding: 0; background: @console; border-bottom: 1px solid @edge; }
 .brand-mark { margin: 0 2px 0 4px; }
-.section-label { font-family: 'Geist', sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; }
+/* Section labels are sentence case (DESIGN.md, Typography), so they take no capitals' tracking. */
+.section-label { font-family: 'Geist', sans-serif; font-size: 12px; font-weight: 600; letter-spacing: 0; }
 /* The wordmark: Sora 600, tight, beside the drawn mark (app.rs top_bar). */
 .brand { font-family: 'Sora', sans-serif; font-size: 17px; font-weight: 600; letter-spacing: -0.5px; color: @ink; }
 .sidebar { background: @console; }
@@ -76,13 +93,18 @@ button { min-height: 28px; padding: 0 10px; border: 1px solid @strong; border-ra
 button:hover { background: @wash; border-color: @line_emphasis; }
 button:focus-visible { outline: 2px solid alpha(@ink, 0.35); outline-offset: 1px; }
 button:disabled { opacity: 0.4; }
+/* A primary key not yet available is drawn as one: an outline, not a grey slab. */
+button.primary:disabled { opacity: 1; background: transparent; border-color: @strong; color: @faint; }
+button.primary:disabled label, button.primary:disabled image { color: @faint; }
+/* Disclosure arrows at the icon set's weight. */
+expander-widget > box > title > expander { -gtk-icon-size: 12px; min-width: 12px; min-height: 12px; color: @faint; }
 button.primary { background: @ink; border-color: @ink; color: @wall; font-weight: 600; }
 button.primary:active { background: shade(@ink, 0.92); }
 button.primary:hover { background: white; border-color: white; }
 button.quiet, button.nav, button.file { background: transparent; border-color: transparent; color: @secondary; }
 button.quiet:hover, button.nav:hover, button.file:hover { background: @wash; border-color: transparent; color: @ink; }
 button.file { border-radius: 0; }
-button.nav { border: 0; min-height: 36px; padding: 0 12px; font-size: 14px; font-weight: 400; border-radius: 10px; }
+button.nav { border: 0; min-height: 32px; padding: 0 12px; font-size: 14px; font-weight: 400; border-radius: 10px; }
 button.nav image { color: @faint; }
 button.nav:hover image, button.nav.selected image { color: @ink; }
 button.nav.selected { background: @wash; color: @ink; }
@@ -130,7 +152,7 @@ scrollbar slider:hover { background: @line_focus; }
 /* Breeze's negative fill margins rely on borders that Relay removes. */
 progressbar progress, scale highlight { margin: 0; }
 
-.navigation { padding: 14px 12px 12px; }
+.navigation { padding: 12px 12px 6px; }
 .workspace-heading .section-label { padding: 0; }
 .mono { font-family: 'Geist Mono', monospace; font-size: 11.5px; }
 .session-branch { font-family: 'Fira Mono', monospace; font-size: 11px; }
@@ -234,6 +256,9 @@ paned.sidebar-split > separator:hover { background-color: @line_focus; }
 .code-bar { padding: 0 6px 0 10px; border-bottom: 1px solid @edge; background: @console; }
 .code-bar button { min-height: 24px; font-size: 11px; padding: 0 6px; }
 .code-source { font-family: 'Geist Mono'; font-size: 12.5px; }
+/* The code on its own ground, the gutter's: the fields' @raised made the text grey beside a
+   screen-black gutter. */
+textview.code-source > text { background-color: @screen; }
 .code-commit .dim { font-size: 10px; }
 
 .small-key { min-height: 22px; min-width: 22px; padding: 0; font-size: 11px; }
@@ -255,7 +280,8 @@ button.window-close:hover { background: @held; color: @ink; }
 .agent-skill-row { min-height: 35px; padding: 7px 12px; border-bottom: 1px solid @edge; }
 .agent-skill-row .skill-title { font-size: 12px; }
 .agent-skill-row .skill-source { padding: 0; font-family: 'Geist'; font-size: 10px; color: @faint; background: transparent; }
-.notification-count { min-width: 10px; min-height: 16px; padding: 0 4px; border-radius: 999px; background: @ink; color: @wall; font-family: 'Geist Mono'; font-size: 9.5px; font-weight: 500; }
+/* Inside the bell's key, clear of the window's top edge. */
+.notification-count { margin: 3px 1px 0 0; min-width: 10px; min-height: 15px; padding: 0 4px; border-radius: 999px; background: @ink; color: @wall; font-family: 'Geist Mono'; font-size: 9.5px; font-weight: 500; }
 /* The count reads the same whatever it holds; the bell's popover says which need you. */
 .notification-count.held { background: @ink; color: @wall; }
 
@@ -279,7 +305,9 @@ switch:checked > slider { background: @wall; }
 .code-bar { min-height: 35px; }
 button.window-control, .topbar button.icon-key { margin: 0; }
 .code-bar .title { font-size: 12px; }
-.code-position { min-height: 23px; padding: 0 9px; border-top: 1px solid @edge; background: @console; font-size: 11px; }
+.code-position { min-height: 24px; padding: 0 12px; border-top: 1px solid @edge; background: @console; font-size: 11px; }
+.code-position label { font-family: 'Geist Mono', monospace; font-size: 11px; }
+.code-facts { color: @faint; }
 .code-commit-form { padding: 8px 12px; }
 .code-merge-action { margin: 8px 12px 6px; }
 .device-release-state { padding: 9px 10px; border: 1px solid @edge; background: @console; }
@@ -309,6 +337,10 @@ button.task-choice:hover { background: @slab; }
    opacity shows the wallpaper, never the desktop. Its containers stay clear; css/notes.css
    paints each surface once, so translucent layers never stack. */
 window.notes-window { padding: 0; margin: 0; border: 0; box-shadow: none; background: @wall_solid; }
+/* Its own window over Relay's: a hairline edge and a soft shadow, so it never reads as part of
+   the page under it. Maximized or full screen, neither. */
+window.notes-window.csd { box-shadow: 0 0 0 1px @line_emphasis, 0 18px 46px alpha(black, 0.55), 0 3px 10px alpha(black, 0.3); }
+window.notes-window.csd.maximized, window.notes-window.csd.fullscreen, window.notes-window.csd.tiled { box-shadow: 0 0 0 1px @line_emphasis; }
 .notes-window .notes-page, .notes-window .notes-page stack, .notes-window .notes-page scrolledwindow, .notes-window .notes-page viewport { background: transparent; }
 .notes-window-loading { padding: 24px; color: @secondary; }
 .notes-window .notes-page { padding: 0; }
@@ -322,8 +354,9 @@ window.notes-window { padding: 0; margin: 0; border: 0; box-shadow: none; backgr
 .layout-preset:hover, .layout-preset.selected { border-color: @strong; background: @wash; }
 .task-metadata flowboxchild { padding: 0; }
 
-/* The title bar's palette key, drawn as the search field it stands for. */
-button.command-search { min-width: 120px; min-height: 34px; padding: 0 6px 0 12px; margin-right: 10px; border: 1px solid @strong; border-radius: 10px; background: @raised; color: @faint; font-weight: 400; }
+/* The title bar's palette key, drawn as the search field it stands for. Its width is the fold's
+   (app.rs fold_top_bar): the words, "Search", or the glass and chord alone. */
+button.command-search { min-width: 0; min-height: 34px; padding: 0 6px 0 12px; margin-right: 10px; border: 1px solid @strong; border-radius: 10px; background: @raised; color: @faint; font-weight: 400; }
 button.command-search:hover { border-color: @line_emphasis; background: @raised; color: @secondary; }
 button.command-search image { color: @faint; }
 .command-search-text { font-size: 13px; }
@@ -356,12 +389,19 @@ button.settings-key:hover image { color: @ink; }
 .view-tabs button.quiet { min-height: 28px; padding: 0 12px; border-radius: 9px; color: @faint; font-size: 13px; font-weight: 500; }
 .view-tabs button.quiet:hover { background: transparent; color: @ink; }
 .view-tabs button.quiet.selected { background: @glass_selected; color: @ink; }
-/* Files and Git open beside the view: a lighter mark than the view that is showing. */
-.view-tabs button.quiet.open { background: alpha(@ink, 0.07); color: @secondary; }
-.view-tabs button.quiet.open:hover { color: @ink; }
+/* Files and Git open beside the view: toggles of their own after it, glass keys lit while their
+   panel is open. */
+.panel-keys { margin-left: 8px; }
+button.panel-key { min-height: 34px; padding: 0 12px; border: 1px solid @glass_edge; border-radius: 10px; background: transparent; color: @faint; font-size: 13px; font-weight: 500; }
+button.panel-key image { color: @faint; }
+button.panel-key:hover { background: @glass_hover; border-color: @glass_line; color: @ink; }
+button.panel-key:hover image { color: @ink; }
+button.panel-key.open { background: @glass_selected; border-color: @glass_line; color: @ink; }
+button.panel-key.open image { color: @ink; }
 /* The terminal panes keep the look they had before this rework: their own text faces, and
-   their scrollbar. */
-.terminal-plate .umd label { font-family: 'Fira Sans', sans-serif; }
+   their scrollbar. Only the strip's own labels and keys: a popover opened from a strip key (Agent
+   settings) is chrome, in Geist, though it is the key's descendant. */
+.terminal-plate > .umd > label, .terminal-plate > .umd > box > label, .terminal-plate > .umd > box > button > label { font-family: 'Fira Sans', sans-serif; }
 .terminal-plate .umd .terminal-identity, .terminal-plate .umd .session-state { font-family: 'Fira Sans Condensed'; }
 .terminal-plate .umd .session-branch { font-family: 'Fira Mono', monospace; }
 .terminal-scrollbar slider { background: #2c2c30; border-radius: 0; }

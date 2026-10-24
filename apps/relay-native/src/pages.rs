@@ -31,6 +31,14 @@ pub fn open_note(ui: &Rc<Ui>, note: Value) {
     notes_window::show_project(ui, note["project_id"].as_i64().unwrap_or(ui.project.get()));
     note_pages::edit(ui, note);
 }
+thread_local! {
+    /// What the Modules page was last drawn from.
+    static MODULES_SHOWN: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+pub fn task_event(ev: &str, payload: &Value) {
+    task_pages::event(ev, payload);
+}
 pub fn open_task(ui: &Rc<Ui>, id: i64) {
     task_pages::open(ui, id);
 }
@@ -132,11 +140,19 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
             head.append(&add);
             page.append(&head);
         }
+        // The mailbox reads as a column: its form and messages at most 760px wide.
+        let holder = if name == "mailbox" {
+            let column = gtk::Box::new(gtk::Orientation::Vertical, page.spacing());
+            page.append(&crate::clamp::Clamp::new(&column, 760));
+            column
+        } else {
+            page.clone()
+        };
         if name != "modules" {
         // A page's title and the line under it, as Tally's, Skills' and Settings' pages have them.
         let heading = label(if name == "mailbox" { "Mailbox" } else { "Guardrails" }, "page-title");
         heading.set_xalign(0.0);
-        page.append(&heading);
+        holder.append(&heading);
         let lede = paragraph(if name == "mailbox" {
             "Write to one agent in this project, or to every one with *. Messages between agents show here too."
         } else {
@@ -144,16 +160,20 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
         });
         lede.remove_css_class("body");
         lede.add_css_class("page-lede");
-        page.append(&lede);
+        holder.append(&lede);
         if name == "mailbox" {
-            mail_composer(ui, page, project);
+            mail_composer(ui, &holder, project);
         }
         }
         let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
         body.set_vexpand(true);
-        page.append(&body);
+        holder.append(&body);
     }
-    let body = page.last_child().unwrap().downcast::<gtk::Box>().unwrap();
+    let mut last = page.last_child().unwrap();
+    if last.is::<crate::clamp::Clamp>() {
+        last = last.first_child().and_then(|column| column.last_child()).unwrap();
+    }
+    let body = last.downcast::<gtk::Box>().unwrap();
     // Guardrails reconciles its cards instead of rebuilding them (`guardrail_pages::page`).
     if name == "guardrails" {
         guardrail_pages::page(ui, &body, project, data).await;
@@ -164,11 +184,27 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
         mailbox(ui, &body, &data, older);
         return;
     }
-    clear(&body);
-    // Modules draws its own empty state (`board_view::modules`).
+    // Modules draws its own empty state (`board_view::modules`). Every task and module event
+    // asks again; one that changed nothing leaves the page, and the keyboard, where they are,
+    // and a rebuild puts the focus back on the card it was on.
     if name == "modules" {
+        let shown = Value::Array(data.clone()).to_string();
+        if body.first_child().is_some() && MODULES_SHOWN.with(|s| *s.borrow() == shown) {
+            return;
+        }
+        MODULES_SHOWN.with(|s| *s.borrow_mut() = shown);
+        let focused = gtk::prelude::GtkWindowExt::focus(&ui.window)
+            .filter(|f| f.is_ancestor(&body))
+            .and_then(|f| std::iter::successors(Some(f), |w| w.parent()).find(|w| w.widget_name().starts_with("module-card-")))
+            .map(|card| card.widget_name());
+        clear(&body);
         board_view::modules(ui, &body, &data);
+        if let Some(card) = focused.and_then(|name| widgets(&body).into_iter().find(|w| w.widget_name() == name)) {
+            card.grab_focus();
+        }
+        return;
     }
+    clear(&body);
 }
 
 /// The mailbox's rows, newest first, reconciled by message id as the Guardrails page keeps its
@@ -211,6 +247,7 @@ fn mailbox(ui: &Rc<Ui>, body: &gtk::Box, data: &[Value], older: bool) {
             None => {
                 let row = gtk::Box::new(gtk::Orientation::Vertical, 6);
                 row.add_css_class("record");
+                row.add_css_class("mail-row");
                 row.set_widget_name(&format!("mail-{}", message["id"]));
                 row.append(&label(
                     &format!(
@@ -218,7 +255,7 @@ fn mailbox(ui: &Rc<Ui>, body: &gtk::Box, data: &[Value], older: bool) {
                         who(text(message, "from")),
                         who(text(message, "to")),
                         if message["priority"].as_bool() == Some(true) {
-                            " · PRIORITY"
+                            " · priority"
                         } else {
                             ""
                         }
@@ -434,6 +471,17 @@ fn mail_composer(ui: &Rc<Ui>, page: &gtk::Box, project: i64) {
     let message = gtk::TextView::new();
     message.set_wrap_mode(gtk::WrapMode::WordChar);
     message.set_size_request(-1, 90);
+    message.update_property(&[gtk::accessible::Property::Placeholder("What should they know?")]);
+    // A text view draws no edge of its own: the field around it does, as an entry's would.
+    let message_field = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    message_field.add_css_class("mail-message");
+    message_field.append(&message);
+    let focus = gtk::EventControllerFocus::new();
+    let field_ref = message_field.downgrade();
+    focus.connect_enter(move |_| if let Some(f) = field_ref.upgrade() { f.add_css_class("focused") });
+    let field_ref = message_field.downgrade();
+    focus.connect_leave(move |_| if let Some(f) = field_ref.upgrade() { f.remove_css_class("focused") });
+    message.add_controller(focus);
     // Who there is to write to, a click away: everyone, or one of the project's agents.
     let to_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     to.set_hexpand(true);
@@ -475,12 +523,16 @@ fn mail_composer(ui: &Rc<Ui>, page: &gtk::Box, project: i64) {
     });
     to_row.append(&pick);
     field("To", &to_row, &form);
-    field("Message", &message, &form);
+    field("Message", &message_field, &form);
+    // Send on the right of its row, as a composer's key is, the priority choice beside it.
     let priority =
         gtk::CheckButton::with_label("Priority: ask this agent to read it at the next safe point");
-    form.append(&priority);
+    priority.set_hexpand(true);
     let send = button("Send message", "primary");
-    form.append(&send);
+    let send_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    send_row.append(&priority);
+    send_row.append(&send);
+    form.append(&send_row);
     page.append(&form);
     let weak = Rc::downgrade(ui);
     send.connect_clicked(move |b| {

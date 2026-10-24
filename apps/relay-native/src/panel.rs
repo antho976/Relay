@@ -318,6 +318,25 @@ impl Panel {
         }
     }
 
+    /// Bring an open panel back to the top, as a link to a page already open under others
+    /// does: the panels over it stay open, now under it, and its Back returns to them.
+    pub fn raise(self: &Rc<Self>) {
+        let Some(panels) = self.panels.upgrade() else { return };
+        let on_top = panels.borrow().last().is_some_and(|top| Rc::ptr_eq(top, self));
+        if self.layer.parent().is_some() && !on_top {
+            panels.borrow_mut().retain(|p| !Rc::ptr_eq(p, self));
+            for other in panels.borrow().iter() {
+                other.layer.set_sensitive(false);
+            }
+            // An overlay draws its children in the order they were added.
+            self.host.remove_overlay(&self.layer);
+            self.host.add_overlay(&self.layer);
+            self.layer.set_sensitive(true);
+            panels.borrow_mut().push(self.clone());
+        }
+        self.present();
+    }
+
     /// Focus the body's first control. A selectable paragraph is passed over: focusing it
     /// selects all of its text.
     fn focus_body(&self) -> bool {
@@ -418,13 +437,14 @@ impl Panel {
     }
 }
 
-/// A non-modal surface docked to the right edge of the main window. It sits outside the panel
-/// stack on purpose: navigation and other panels leave it alone, the wall beside it stays
-/// clickable (only the dock's own strip is covered), and its body is not scrolled — a live view
-/// sizes itself to the height it is given. The device mirror is its one user.
+/// A non-modal surface docked to the right edge of the main window, beside the page rather than
+/// over it: the page narrows to make room, so nothing of it (the view switch, a page's text) is
+/// hidden under the dock. It sits outside the panel stack on purpose: navigation and other panels
+/// leave it alone, and its body is not scrolled — a live view sizes itself to the height it is
+/// given. The device mirror is its one user.
 pub struct Dock {
     pub body: gtk::Box,
-    host: gtk::Overlay,
+    host: gtk::Box,
 }
 
 impl Dock {
@@ -432,19 +452,19 @@ impl Dock {
         let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
         body.add_css_class("app-panel");
         body.add_css_class("dock-panel");
-        body.set_halign(gtk::Align::End);
         body.set_valign(gtk::Align::Fill);
+        body.set_hexpand(false);
         body.set_size_request(width, -1);
-        ui.overlay.add_overlay(&body);
+        ui.dock_host.append(&body);
         Self {
             body,
-            host: ui.overlay.clone(),
+            host: ui.dock_host.clone(),
         }
     }
 
     pub fn close(&self) {
         if self.body.parent().is_some() {
-            self.host.remove_overlay(&self.body);
+            self.host.remove(&self.body);
         }
     }
 }

@@ -552,7 +552,8 @@ fn accept_attachments(widget: &impl IsA<gtk::Widget>, take: impl Fn(Vec<Incoming
             && mods.contains(gdk::ModifierType::CONTROL_MASK)
             && !mods.intersects(gdk::ModifierType::ALT_MASK | gdk::ModifierType::SUPER_MASK);
         match source.upgrade() {
-            Some(widget) if paste && widget.is_mapped() => paste_attachments(&widget, take.clone()),
+            // A page covered by another (made insensitive, still mapped) leaves the paste to it.
+            Some(widget) if paste && widget.is_mapped() && widget.is_sensitive() => paste_attachments(&widget, take.clone()),
             _ => glib::Propagation::Proceed,
         }
     });
@@ -946,8 +947,9 @@ pub fn compose(ui: &Rc<Ui>, project: i64, column: &str, module: Option<i64>) {
     let permit_close = Rc::new(Cell::new(false));
     let busy = Rc::new(Cell::new(false));
     let empty = {
-        let (title, body, queued) = (title.downgrade(), description.view.buffer(), queued.clone());
-        move || title.upgrade().is_none_or(|t| t.text().trim().is_empty()) && buffer_text(&body).trim().is_empty() && queued.borrow().is_empty()
+        let (title, body, queued, tags) = (title.downgrade(), description.view.buffer(), queued.clone(), labels.downgrade());
+        let blank = |field: &glib::WeakRef<gtk::Entry>| field.upgrade().is_none_or(|f| f.text().trim().is_empty());
+        move || blank(&title) && blank(&tags) && buffer_text(&body).trim().is_empty() && queued.borrow().is_empty()
     };
     let empty = Rc::new(empty);
     let (guard_status, permit, working, is_empty) = (status.downgrade(), permit_close.clone(), busy.clone(), empty.clone());
@@ -1187,10 +1189,33 @@ pub fn compose_module(ui: &Rc<Ui>, project: i64) {
             list.append(&row);
         }
     });
-    let p = Rc::downgrade(&panel);
-    cancel.connect_clicked(move |_| {
-        if let Some(p) = p.upgrade() {
-            p.close();
+    // A typed name or ticked tasks are a draft, guarded as New task's is.
+    let permit_close = Rc::new(Cell::new(false));
+    let busy = Rc::new(Cell::new(false));
+    let empty = {
+        let (field, picked) = (name.downgrade(), picked.clone());
+        Rc::new(move || field.upgrade().is_none_or(|f| f.text().trim().is_empty()) && picked.borrow().is_empty())
+    };
+    let (guard_status, permit, working, is_empty) = (status.downgrade(), permit_close.clone(), busy.clone(), empty.clone());
+    panel.set_guard(move || {
+        if working.get() {
+            return false;
+        }
+        if permit.get() || is_empty() {
+            return true;
+        }
+        if let Some(status) = guard_status.upgrade() {
+            status.set_text("Create the module, or Cancel to discard it.");
+        }
+        false
+    });
+    let (p, permit, working, is_empty) = (Rc::downgrade(&panel), permit_close.clone(), busy.clone(), empty);
+    crate::app::confirm_inline_if(&cancel, "Discard draft", move || !is_empty(), move |_| {
+        if !working.get() {
+            permit.set(true);
+            if let Some(p) = p.upgrade() {
+                p.close();
+            }
         }
     });
     let (weak, p, field) = (Rc::downgrade(ui), Rc::downgrade(&panel), name.downgrade());
@@ -1203,10 +1228,14 @@ pub fn compose_module(ui: &Rc<Ui>, project: i64) {
             return;
         }
         key.set_sensitive(false);
+        busy.set(true);
         status.set_text("Creating…");
         let (tasks, priority, p, status, key) = (picked.borrow().clone(), priority.borrow().clone(), p.clone(), status.clone(), key.clone());
+        let (permit, working) = (permit_close.clone(), busy.clone());
         glib::spawn_future_local(async move {
-            match ui.call("module.create", json!({"project_id":project,"name":value,"priority":priority})).await {
+            let created = ui.call("module.create", json!({"project_id":project,"name":value,"priority":priority})).await;
+            working.set(false);
+            match created {
                 Ok(module) => {
                     let id = module["id"].as_i64().unwrap_or(0);
                     for task in tasks {
@@ -1214,6 +1243,7 @@ pub fn compose_module(ui: &Rc<Ui>, project: i64) {
                             ui.show_error(&e.to_string());
                         }
                     }
+                    permit.set(true);
                     if let Some(p) = p.upgrade() {
                         p.close();
                     }
@@ -1249,6 +1279,32 @@ fn open_detail(id: i64) -> Option<Rc<Detail>> {
         open.borrow_mut().retain(|(_, d)| d.strong_count() > 0);
         open.borrow().iter().find(|(task, _)| *task == id).and_then(|(_, d)| d.upgrade())
     })
+}
+
+/// An engine event about tasks: every open page it touches reads itself again, a moment
+/// later and once for a burst, and a page whose task was deleted says so. A part being
+/// typed in stays as it is (`Detail::draw`).
+pub fn event(ev: &str, payload: &Value) {
+    let mut ids: Vec<i64> = ["id", "task_id", "parent_id"].iter().filter_map(|k| payload[*k].as_i64()).collect();
+    ids.extend(payload["task_ids"].as_array().into_iter().flatten().filter_map(Value::as_i64));
+    let open: Vec<Rc<Detail>> = OPEN_DETAILS.with(|open| open.borrow().iter().filter_map(|(_, d)| d.upgrade()).collect());
+    for detail in open {
+        let task = detail.task.borrow().clone();
+        let related = |other: i64| other == detail.id || task["parent_id"].as_i64() == Some(other) || rows(&task, "children").iter().any(|c| c.as_i64() == Some(other));
+        if !ids.is_empty() && !ids.iter().any(|&other| related(other)) {
+            continue;
+        }
+        if ev == "task.deleted" && payload["id"].as_i64() == Some(detail.id) {
+            detail.gone();
+            continue;
+        }
+        // The task's own row, as the page already holds it (this page's own op), needs no
+        // read. `updated_at` alone cannot say so: an attachment leaves it as it was.
+        let current = payload["id"].as_i64() == Some(detail.id) && *payload == task;
+        if !current {
+            detail.reload_soon();
+        }
+    }
 }
 
 /// The task page's add fields, by widget name: an add rebuilds them, and focus returns to them.
@@ -1295,7 +1351,7 @@ async fn load(ui: &Rc<Ui>, id: i64, project: i64) -> Result<Loaded, String> {
 
 pub fn open(ui: &Rc<Ui>, id: i64) {
     if let Some(d) = open_detail(id) {
-        return d.panel.present();
+        return d.panel.raise();
     }
     let serial = OPEN_SERIAL.with(|s| { s.set(s.get() + 1); s.get() });
     let (project, page) = (ui.project.get(), ui.page.borrow().clone());
@@ -1309,7 +1365,7 @@ pub fn open(ui: &Rc<Ui>, id: i64) {
             return;
         }
         if let Some(d) = open_detail(id) {
-            return d.panel.present();
+            return d.panel.raise();
         }
         match loaded {
             Ok(loaded) => Detail::show(&ui, id, loaded),
@@ -1326,7 +1382,9 @@ pub struct Detail {
     id: i64,
     project: Cell<i64>,
     panel: Rc<crate::panel::Panel>,
+    /// The title line and its editor, then the status line under it, each redrawn alone.
     header: gtk::Box,
+    meta: gtk::Box,
     main: gtk::Box,
     side: gtk::Box,
     actions: gtk::Box,
@@ -1351,6 +1409,8 @@ pub struct Detail {
     /// The add field (by widget name) an add was made from: the redraw rebuilds it, and the
     /// caret goes back into the new one, so the next label or sub-task needs no click.
     refocus: Cell<Option<&'static str>>,
+    /// A reload asked for by engine events is waiting to run.
+    reload_pending: Cell<bool>,
 }
 
 impl Detail {
@@ -1364,6 +1424,10 @@ impl Detail {
         page.add_css_class("issue-detail");
         let header = gtk::Box::new(gtk::Orientation::Vertical, 8);
         header.add_css_class("issue-header");
+        let title = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let meta = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        header.append(&title);
+        header.append(&meta);
         page.append(&header);
         let status = paragraph("");
         status.add_css_class("issue-status");
@@ -1399,7 +1463,8 @@ impl Detail {
             id,
             project: Cell::new(project),
             panel: panel.clone(),
-            header,
+            header: title,
+            meta,
             main: content,
             side,
             actions,
@@ -1417,6 +1482,7 @@ impl Detail {
             comments: RefCell::new(Vec::new()),
             cursors: Cell::new((None, None)),
             refocus: Cell::new(None),
+            reload_pending: Cell::new(false),
         });
         let weak = Rc::downgrade(&detail);
         refresh.connect_clicked(move |_| {
@@ -1438,6 +1504,10 @@ impl Detail {
                 d.say("Save or cancel your edit before leaving.");
                 return false;
             }
+            if !d.add_fields().is_empty() {
+                d.say("Add or clear the sub-task or label you typed before leaving.");
+                return false;
+            }
             true
         });
         OPEN_DETAILS.with(|open| open.borrow_mut().push((id, Rc::downgrade(&detail))));
@@ -1448,7 +1518,6 @@ impl Detail {
         panel.on_closed(move || {
             owner.editing.borrow_mut().clear();
         });
-        unsafe { panel.body.set_data("relay-task-detail", detail.clone()) };
         let weak = Rc::downgrade(&detail);
         on_ctrl_enter(&detail.comment.view, move || {
             if let Some(d) = weak.upgrade() {
@@ -1482,6 +1551,33 @@ impl Detail {
     fn say(&self, message: &str) {
         self.status.set_text(message);
         self.status.set_visible(!message.is_empty());
+    }
+
+    /// A reload for engine events: one for a burst, and after any op of the page's own.
+    fn reload_soon(self: &Rc<Self>) {
+        if self.reload_pending.replace(true) {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
+            let Some(d) = weak.upgrade() else { return glib::ControlFlow::Break };
+            if d.busy.get() {
+                return glib::ControlFlow::Continue;
+            }
+            d.reload_pending.set(false);
+            if d.panel.body.root().is_some() {
+                d.reload();
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
+    /// The task was deleted elsewhere: its fields can no longer be changed, but anything
+    /// typed on the page stays to be copied.
+    fn gone(&self) {
+        self.side.set_sensitive(false);
+        self.actions.set_sensitive(false);
+        self.say("This task was deleted. Undo on the board restores it.");
     }
 
     fn reload(self: &Rc<Self>) {
@@ -1537,7 +1633,8 @@ impl Detail {
     fn act_then(self: &Rc<Self>, op: &'static str, payload: Value, after: impl FnOnce(&Rc<Self>) + 'static) {
         let Some(ui) = self.ui.upgrade() else { return };
         if self.busy.replace(true) {
-            return;
+            // Dropped while another op runs: a pill lit by the click goes back.
+            return self.redraw_side();
         }
         self.say("Saving…");
         let detail = self.clone();
@@ -1560,6 +1657,7 @@ impl Detail {
                 }
                 Err(e) => {
                     detail.say(&e.to_string());
+                    detail.redraw_side();
                     return;
                 }
             };
@@ -1568,6 +1666,14 @@ impl Detail {
             }
         });
     }
+    /// The sidebar drawn again from the task as it stands, for a pick that was not applied.
+    fn redraw_side(self: &Rc<Self>) {
+        self.drawn.borrow_mut().side = None;
+        if self.panel.body.root().is_some() {
+            self.draw();
+        }
+    }
+
     /// `task.update` of one field, checked against the value this page shows; false when the
     /// value is unchanged and nothing was sent.
     fn update(self: &Rc<Self>, field: &str, value: Value) -> bool {
@@ -1596,10 +1702,14 @@ impl Detail {
         *self.task.borrow_mut() = task;
         match &activity {
             Ok(data) => {
-                *self.history.borrow_mut() = rows(data, "history");
-                *self.messages.borrow_mut() = rows(data, "messages");
+                // The newest page, with what "Load older" fetched under it kept.
+                let (history_at, messages_at) = self.cursors.get();
+                let (history, history_at) = keep_older(&self.history.borrow(), history_at, rows(data, "history"), data["next_audit"].as_i64());
+                let (messages, messages_at) = keep_older(&self.messages.borrow(), messages_at, rows(data, "messages"), data["next_message"].as_i64());
+                *self.history.borrow_mut() = history;
+                *self.messages.borrow_mut() = messages;
                 *self.comments.borrow_mut() = rows(data, "comments");
-                self.cursors.set((data["next_audit"].as_i64(), data["next_message"].as_i64()));
+                self.cursors.set((history_at, messages_at));
             }
             Err(e) => self.say(&format!("Could not load the timeline: {e}")),
         }
@@ -1634,9 +1744,22 @@ impl Detail {
             })
             .unwrap_or_default();
         let field = |name: &str| task[name].to_string();
-        let header = key(&[field("title"), field("column"), field("state"), field("parent_id"), field("created_at"), format!("{:?}", title_of(task["parent_id"].as_i64()))]);
+        let header = key(&[field("title")]);
+        let meta = key(&[field("column"), field("state"), field("parent_id"), field("created_at"), format!("{:?}", title_of(task["parent_id"].as_i64()))]);
         let creator = self.history.borrow().iter().find(|row| text(row, "op") == "task.create").map(|row| actor_name(text(row, "actor")));
-        let description = key(&[field("body"), field("attachments"), field("created_at"), format!("{creator:?}")]);
+        let description = key(&[field("body"), field("created_at"), format!("{creator:?}")]);
+        let attachments = key(&[field("attachments")]);
+        // A title or description being typed is never rebuilt under the person: the part
+        // catches up when its editor is saved or cancelled. Saved, its text is the task's own,
+        // and the part is rebuilt (closing the editor) as before.
+        let typing = |part: &str| {
+            let open = self.editing.borrow().iter().any(|(p, changed)| *p == part && changed());
+            let landed = match part {
+                "title" => self.typed_title().is_some_and(|typed| typed.trim() == text(&task, "title")),
+                _ => self.typed_body().is_some_and(|typed| typed == text(&task, "body")),
+            };
+            open && !landed
+        };
         let children: Vec<i64> = rows(&task, "children").iter().filter_map(Value::as_i64).collect();
         let subtasks = key(&[field("children"), field("depth"), field("project_id"), format!("{:?}", children.iter().map(|c| title_of(Some(*c))).collect::<Vec<_>>())]);
         let timeline = self.timeline_key();
@@ -1645,24 +1768,41 @@ impl Detail {
             field("column"), field("priority"), field("size"), field("type"), field("module_id"), field("labels"),
             field("note_id"), field("sessions"), Value::Array(modules.clone()).to_string(), format!("{live:?}"),
         ]);
+        // A sub-task or label typed in an add field goes into the rebuilt field.
+        let carried = self.add_fields();
         let mut drawn = std::mem::take(&mut *self.drawn.borrow_mut());
         let mut changed = false;
-        if drawn.header != Some(header) {
+        if drawn.header != Some(header) && !typing("title") {
             self.editing.borrow_mut().retain(|(part, _)| *part != "title");
-            drawn.opened = Some(self.render_header(&task, tasks));
+            self.render_header(&task);
             drawn.header = Some(header);
+            changed = true;
+        }
+        if drawn.meta != Some(meta) {
+            drawn.opened = Some(self.render_meta(&task, tasks));
+            drawn.meta = Some(meta);
             changed = true;
         }
         // "updated …" moves with every edit, and the clock: set in place, not a rebuild.
         if let Some(opened) = &drawn.opened {
             opened.set_text(&format!("opened {} · updated {}", since(text(&task, "created_at")), since(text(&task, "updated_at"))));
         }
-        if drawn.description != Some(description) {
+        if drawn.description != Some(description) && !typing("body") {
             self.editing.borrow_mut().retain(|(part, _)| *part != "body");
-            let card: gtk::Widget = self.description(&task).upcast();
+            let (card, tray) = self.description(&task);
+            let card: gtk::Widget = card.upcast();
             replace_in(&self.main, drawn.parts[0].take(), Some(&card), None);
             drawn.parts[0] = Some(card);
+            drawn.tray = Some(tray);
             drawn.description = Some(description);
+            drawn.attachments = None;
+            changed = true;
+        }
+        if drawn.attachments != Some(attachments) {
+            if let Some(tray) = &drawn.tray {
+                self.fill_tray(tray, &task);
+            }
+            drawn.attachments = Some(attachments);
             changed = true;
         }
         if drawn.subtasks != Some(subtasks) {
@@ -1691,6 +1831,12 @@ impl Detail {
         }
         *self.drawn.borrow_mut() = drawn;
         drop(tasks_held);
+        let added = self.refocus.get();
+        for (name, typed) in carried.into_iter().filter(|(name, _)| Some(*name) != added) {
+            if let Some(entry) = self.add_field(name).filter(|e| e.text().is_empty()) {
+                entry.set_text(&typed);
+            }
+        }
         if let Some((value, adjustment)) = scroll.filter(|_| changed) {
             adjustment.set_value(value);
             glib::idle_add_local_once(move || adjustment.set_value(value));
@@ -1702,15 +1848,38 @@ impl Detail {
         }
     }
 
+    /// What the title editor holds, while it is drawn.
+    fn typed_title(&self) -> Option<String> {
+        widgets(&self.header).into_iter().find(|w| w.widget_name() == "task-title").and_downcast::<gtk::Entry>().map(|e| e.text().to_string())
+    }
+
+    /// What the description editor holds, while it is drawn.
+    fn typed_body(&self) -> Option<String> {
+        widgets(&self.main).into_iter().find(|w| w.widget_name() == "task-body").and_downcast::<gtk::TextView>().map(|v| buffer_text(&v.buffer()))
+    }
+
+    /// The add field by that name, as drawn now.
+    fn add_field(&self, name: &str) -> Option<gtk::Entry> {
+        widgets(&self.side).into_iter().chain(widgets(&self.main)).find(|w| w.widget_name() == name).and_downcast()
+    }
+
+    /// The add fields holding typed text, with that text.
+    fn add_fields(&self) -> Vec<(&'static str, String)> {
+        [SUBTASK_FIELD, LABEL_FIELD]
+            .into_iter()
+            .filter_map(|name| self.add_field(name).map(|e| (name, e.text().to_string())))
+            .filter(|(_, typed)| !typed.trim().is_empty())
+            .collect()
+    }
+
     /// What the timeline is drawn from.
     fn timeline_key(&self) -> u64 {
         let all = |rows: &RefCell<Vec<Value>>| Value::Array(rows.borrow().clone()).to_string();
         key(&[all(&self.history), all(&self.messages), all(&self.comments), format!("{:?}", self.cursors.get())])
     }
 
-    /// The title line and its editor, and the status line; returns the "opened … · updated …"
-    /// label, which `draw` keeps current.
-    fn render_header(self: &Rc<Self>, task: &Value, tasks: &[Value]) -> gtk::Label {
+    /// The title line and its editor.
+    fn render_header(self: &Rc<Self>, task: &Value) {
         clear(&self.header);
         let id = self.id;
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 10);
@@ -1749,6 +1918,7 @@ impl Detail {
         });
         let original = text(task, "title").to_string();
         let (shown, pane, field, was, pencil) = (line.downgrade(), editor.downgrade(), entry.downgrade(), original.clone(), edit.downgrade());
+        let weak = Rc::downgrade(self);
         cancel.connect_clicked(move |_| {
             if let (Some(line), Some(editor), Some(entry)) = (shown.upgrade(), pane.upgrade(), field.upgrade()) {
                 entry.set_text(&was);
@@ -1757,6 +1927,10 @@ impl Detail {
                 if let Some(pencil) = pencil.upgrade() {
                     pencil.grab_focus();
                 }
+            }
+            // A change that arrived while the title was being typed shows now.
+            if let Some(d) = weak.upgrade() {
+                d.draw();
             }
         });
         let (weak, field, close) = (Rc::downgrade(self), entry.downgrade(), cancel.downgrade());
@@ -1784,7 +1958,12 @@ impl Detail {
         cancel_on_escape(&entry, &cancel);
         let field = entry.downgrade();
         self.editing.borrow_mut().push(("title", Box::new(move || field.upgrade().is_some_and(|e| e.text().trim() != original))));
+    }
 
+    /// The status line under the title; returns the "opened … · updated …" label, which
+    /// `draw` keeps current.
+    fn render_meta(self: &Rc<Self>, task: &Value, tasks: &[Value]) -> gtk::Label {
+        clear(&self.meta);
         let meta = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         meta.add_css_class("issue-meta");
         let column = text(task, "column");
@@ -1815,12 +1994,13 @@ impl Detail {
         let opened = label(&format!("opened {} · updated {}", since(text(task, "created_at")), since(text(task, "updated_at"))), "issue-opened");
         opened.set_tooltip_text(Some(text(task, "created_at")));
         meta.append(&opened);
-        self.header.append(&meta);
+        self.meta.append(&meta);
         opened
     }
 
-    /// The first comment of the thread: the description, with its own Edit.
-    fn description(self: &Rc<Self>, task: &Value) -> gtk::Box {
+    /// The first comment of the thread: the description, with its own Edit, and the box that
+    /// holds its attachments, which `fill_tray` fills and refills in place.
+    fn description(self: &Rc<Self>, task: &Value) -> (gtk::Box, gtk::Box) {
         let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
         card.add_css_class("issue-comment");
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -1863,27 +2043,8 @@ impl Detail {
         editor.append(&keys);
         editor.set_visible(false);
         card.append(&editor);
-        let files = rows(task, "attachments");
-        let tray = gtk::FlowBox::new();
-        tray.add_css_class("attachment-tray");
-        tray.set_selection_mode(gtk::SelectionMode::None);
-        tray.set_max_children_per_line(8);
-        tray.set_column_spacing(8);
-        tray.set_row_spacing(8);
-        tray.set_halign(gtk::Align::Start);
-        for file in &files {
-            let attachment = file["id"].clone();
-            let weak = Rc::downgrade(self);
-            let tile = attachment_tile(text(file, "name"), text(file, "mime"), None, Some(text(file, "path")), move || {
-                if let Some(d) = weak.upgrade() {
-                    d.act("task.detach", json!({"task_id":d.id,"attachment_id":attachment}));
-                }
-            });
-            tray.insert(&tile, -1);
-        }
-        if !files.is_empty() {
-            card.append(&tray);
-        }
+        let tray = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        card.append(&tray);
         let hint = label("Paste or drop images and files anywhere on this page to attach them", "attachment-hint");
         card.append(&hint);
         let (display, pane, key, view) = (shown.downgrade(), editor.downgrade(), edit.downgrade(), field.view.downgrade());
@@ -1898,7 +2059,7 @@ impl Detail {
             }
         });
         let view = field.view.downgrade();
-        let (display, pane, key, was) = (shown.downgrade(), editor.downgrade(), edit.downgrade(), body.clone());
+        let (display, pane, key, was, redraw) = (shown.downgrade(), editor.downgrade(), edit.downgrade(), body.clone(), Rc::downgrade(self));
         cancel.connect_clicked(move |_| {
             if let (Some(display), Some(editor), Some(key), Some(view)) = (display.upgrade(), pane.upgrade(), key.upgrade(), view.upgrade()) {
                 view.buffer().set_text(&was);
@@ -1906,6 +2067,10 @@ impl Detail {
                 display.set_visible(true);
                 key.set_visible(true);
                 key.grab_focus();
+            }
+            // A change that arrived while the description was being typed shows now.
+            if let Some(d) = redraw.upgrade() {
+                d.draw();
             }
         });
         let (weak, view, close) = (Rc::downgrade(self), field.view.downgrade(), cancel.downgrade());
@@ -1930,7 +2095,35 @@ impl Detail {
         });
         let view = field.view.downgrade();
         self.editing.borrow_mut().push(("body", Box::new(move || view.upgrade().is_some_and(|v| buffer_text(&v.buffer()) != body))));
-        card
+        (card, tray)
+    }
+
+    /// The description's attachments, redrawn alone so an attachment added or removed while
+    /// the description is being edited leaves the edit as it is.
+    fn fill_tray(self: &Rc<Self>, holder: &gtk::Box, task: &Value) {
+        clear(holder);
+        let files = rows(task, "attachments");
+        if files.is_empty() {
+            return;
+        }
+        let tray = gtk::FlowBox::new();
+        tray.add_css_class("attachment-tray");
+        tray.set_selection_mode(gtk::SelectionMode::None);
+        tray.set_max_children_per_line(8);
+        tray.set_column_spacing(8);
+        tray.set_row_spacing(8);
+        tray.set_halign(gtk::Align::Start);
+        for file in &files {
+            let attachment = file["id"].clone();
+            let weak = Rc::downgrade(self);
+            let tile = attachment_tile(text(file, "name"), text(file, "mime"), None, Some(text(file, "path")), move || {
+                if let Some(d) = weak.upgrade() {
+                    d.act("task.detach", json!({"task_id":d.id,"attachment_id":attachment}));
+                }
+            });
+            tray.insert(&tile, -1);
+        }
+        holder.append(&tray);
     }
 
     fn subtasks(self: &Rc<Self>, task: &Value, tasks: &[Value]) -> Option<gtk::Box> {
@@ -2428,9 +2621,17 @@ impl Detail {
         let weak = Rc::downgrade(self);
         crate::app::confirm_inline(&delete, "Delete this task?", move |_| {
             if let Some(d) = weak.upgrade() {
-                d.editing.borrow_mut().clear();
+                // Once the task is gone, nothing typed on its page can be kept: the guard
+                // would otherwise hold the page open on a deleted task.
                 d.act_then("task.delete", json!({"task_id":id}), |d| {
                     d.busy.set(false);
+                    d.editing.borrow_mut().clear();
+                    d.comment.clear();
+                    for (name, _) in d.add_fields() {
+                        if let Some(entry) = d.add_field(name) {
+                            entry.set_text("");
+                        }
+                    }
                     d.panel.close();
                 });
             }
@@ -2440,17 +2641,37 @@ impl Detail {
     }
 }
 
+/// A timeline stream after a read of its newest page (`newest`, whose next older page starts
+/// below `cursor`): rows already held from older pages, below the newest page's oldest row,
+/// stay under it with the cursor they were fetched to.
+fn keep_older(held: &[Value], held_cursor: Option<i64>, newest: Vec<Value>, cursor: Option<i64>) -> (Vec<Value>, Option<i64>) {
+    let Some(floor) = cursor.and(newest.iter().filter_map(|row| row["id"].as_i64()).min()) else {
+        return (newest, cursor);
+    };
+    let older: Vec<Value> = held.iter().filter(|row| row["id"].as_i64().is_some_and(|id| id < floor)).cloned().collect();
+    if older.is_empty() {
+        return (newest, cursor);
+    }
+    let mut rows = newest;
+    rows.extend(older);
+    (rows, held_cursor)
+}
+
 /// What one part of a task page was drawn from, and the parts of its main column.
 #[derive(Default)]
 struct Drawn {
     header: Option<u64>,
+    meta: Option<u64>,
     description: Option<u64>,
+    attachments: Option<u64>,
     subtasks: Option<u64>,
     timeline: Option<u64>,
     actions: Option<u64>,
     side: Option<u64>,
     /// The header's "opened … · updated …" label.
     opened: Option<gtk::Label>,
+    /// The description's attachment box.
+    tray: Option<gtk::Box>,
     /// The description, the sub-tasks (when shown) and the timeline, in `main`'s order.
     parts: [Option<gtk::Widget>; 3],
 }
@@ -2512,4 +2733,34 @@ fn timeline_row(icon: gtk::Widget, content: &impl IsA<gtk::Widget>, closed: bool
     content.set_valign(gtk::Align::Center);
     row.append(content);
     row
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keep_older;
+    use serde_json::{json, Value};
+
+    fn ids(rows: &[Value]) -> Vec<i64> {
+        rows.iter().filter_map(|r| r["id"].as_i64()).collect()
+    }
+
+    #[test]
+    fn older_activity_survives_a_reread_of_the_newest_page() {
+        let page = |range: std::ops::RangeInclusive<i64>| range.rev().map(|id| json!({"id": id})).collect::<Vec<_>>();
+        // Newest 10..=6 (next below 6), then "Load older" fetched 5..=1, complete.
+        let mut held = page(6..=10);
+        held.extend(page(1..=5));
+        // An op adds row 11: the newest page is now 11..=7, next below 7.
+        let (rows, cursor) = keep_older(&held, None, page(7..=11), Some(7));
+        assert_eq!(ids(&rows), vec![11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
+        assert_eq!(cursor, None, "everything older was already fetched");
+        // Older rows were fetched only part way: the held cursor stays.
+        let (rows, cursor) = keep_older(&page(4..=10), Some(4), page(7..=11), Some(7));
+        assert_eq!(ids(&rows), vec![11, 10, 9, 8, 7, 6, 5, 4]);
+        assert_eq!(cursor, Some(4));
+        // Nothing older was held: the new page as it came.
+        assert_eq!(keep_older(&page(9..=10), Some(9), page(8..=11), Some(8)).1, Some(8));
+        // A complete newest page needs nothing kept.
+        assert_eq!(ids(&keep_older(&held, None, page(1..=3), None).0), vec![3, 2, 1]);
+    }
 }

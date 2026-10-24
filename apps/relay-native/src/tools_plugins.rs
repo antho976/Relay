@@ -181,7 +181,7 @@ fn card(ui: &Rc<Ui>, market: &Rc<Market>, plugin: &Value) -> gtk::Widget {
     let id = text(plugin, "id");
     let card = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     card.add_css_class("ext-card");
-    card.append(&market::monogram(text(plugin, "name"), false));
+    card.append(&market::plugin_mark(plugin, false));
     let words = gtk::Box::new(gtk::Orientation::Vertical, 4);
     words.set_hexpand(true);
     let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -231,7 +231,7 @@ fn card(ui: &Rc<Ui>, market: &Rc<Market>, plugin: &Value) -> gtk::Widget {
 fn detail(ui: &Rc<Ui>, market: &Rc<Market>, plugin: &Value, parent: &gtk::Box) {
     let id = text(plugin, "id").to_string();
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 14);
-    head.append(&market::monogram(text(plugin, "name"), true));
+    head.append(&market::plugin_mark(plugin, true));
     let words = gtk::Box::new(gtk::Orientation::Vertical, 4);
     words.set_valign(gtk::Align::Center);
     words.set_hexpand(true);

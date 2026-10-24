@@ -419,8 +419,29 @@ impl Editor {
         }
     }
 
+    /// Unsaved edits hold the editor on its level and target: switching would load the other
+    /// one's values over them. Says so and puts the toggles and target back; true when held.
+    fn hold_for_edits(&self) -> bool {
+        if self.dirty() == 0 {
+            return false;
+        }
+        self.status.set_text("Save or discard your changes before switching to another level or target.");
+        let current = self.scope.get();
+        self.filling.set(true);
+        self.toggles[current.index()].set_active(true);
+        let at = match current {
+            Scope::Global => None,
+            Scope::Workspace(id) | Scope::Project(id) => self.targets.borrow().iter().position(|candidate| *candidate == id),
+        };
+        if let Some(at) = at {
+            self.target.set_selected(at as u32);
+        }
+        self.filling.set(false);
+        true
+    }
+
     fn set_scope(self: &Rc<Self>, scope: Scope) {
-        if self.scope.get() == scope {
+        if self.scope.get() == scope || self.hold_for_edits() {
             return;
         }
         self.scope.set(scope);
@@ -459,8 +480,10 @@ fn default_target(ui: &Ui, kind: usize) -> Scope {
 }
 
 /// The editor, opened on the global layer, for the Settings page. The scope picker moves it.
-pub fn editor(ui: &Rc<Ui>) -> gtk::Box {
-    build(ui, Scope::Global).0
+/// With it, whether it holds unsaved edits, which the page keeps across a reconnect.
+pub fn editor(ui: &Rc<Ui>) -> (gtk::Box, Rc<dyn Fn() -> bool>) {
+    let (root, editor) = build(ui, Scope::Global);
+    (root, Rc::new(move || editor.upgrade().is_some_and(|e| e.dirty() > 0)))
 }
 
 /// Build the editor. The returned widget keeps the editor alive; nothing else needs to.
@@ -674,6 +697,9 @@ fn build(ui: &Rc<Ui>, scope: Scope) -> (gtk::Box, Weak<Editor>) {
             Scope::Workspace(_) => Scope::Workspace(id),
             Scope::Project(_) => Scope::Project(id),
         };
+        if next == editor.scope.get() || editor.hold_for_edits() {
+            return;
+        }
         editor.scope.set(next);
         editor.load("");
     });

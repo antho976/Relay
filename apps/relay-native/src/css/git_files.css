@@ -54,7 +54,7 @@
 
 /* ---- Explorer ---- */
 .explorer-head { min-height: 35px; padding: 0 4px 0 12px; }
-.explorer-head .section-label { padding: 0; color: @secondary; letter-spacing: 0.1em; }
+.explorer-head .section-label { padding: 0; color: @secondary; }
 .explorer-actions button.explorer-key, .code-bar .explorer-actions button.explorer-key {
   min-width: 24px; min-height: 24px; padding: 0; border-radius: 2px; color: @faint;
 }
@@ -128,7 +128,7 @@ popover.branch-popover > contents { padding: 0; border: 1px solid @strong; borde
 .branch-list { padding: 0 0 6px; }
 .branch-heading {
   padding: 10px 12px 4px; color: @faint; font-family: 'Geist', sans-serif;
-  font-size: 10.5px; font-weight: 600; letter-spacing: 0.1em;
+  font-size: 11.5px; font-weight: 600;
 }
 .branch-note { padding: 14px 12px; color: @secondary; font-size: 12px; }
 button.branch-row {
@@ -192,8 +192,8 @@ button.scm-toggle {
 button.scm-toggle:hover { background: transparent; color: @ink; }
 .scm-chevron { color: @faint; min-width: 14px; }
 .scm-title {
-  font-family: 'Geist', sans-serif; font-size: 11px;
-  font-weight: 600; letter-spacing: 0.08em; color: @secondary;
+  font-family: 'Geist', sans-serif; font-size: 12px;
+  font-weight: 600; color: @secondary;
 }
 .scm-count {
   min-width: 16px; margin-left: 4px; padding: 0 5px; border-radius: 2px;
@@ -224,7 +224,7 @@ button.scm-open:focus-visible { outline: 1px solid alpha(@ink, 0.38); outline-of
 .code-merge-pick { padding: 4px 14px; }
 
 /* ---- Remote rows ---- */
-.scm-remote-row { min-height: 40px; padding: 4px 10px 4px 22px; color: @secondary; }
+.scm-remote-row { min-height: 40px; padding: 4px 14px 4px 22px; color: @secondary; }
 .scm-remote-title { font-size: 12px; color: @ink; }
 .scm-remote-hint { font-size: 11px; color: @faint; }
 .scm-tag { padding: 1px 7px; border-radius: 2px; font-size: 10.5px; font-weight: 600; background: alpha(@ink, 0.08); color: @secondary; }
@@ -234,7 +234,7 @@ button.scm-open:focus-visible { outline: 1px solid alpha(@ink, 0.38); outline-of
 .scm-tag.pr-closed { background: alpha(@held, 0.16); color: @git_removed; }
 
 /* ---- History ---- */
-.code-git-split > separator { min-height: 1px; background: @edge; }
+.code-git-split > separator { min-height: 1px; margin: 0; padding: 0; border: 0; background: @edge; }
 .scm-history { border-bottom: 0; }
 button.code-graph-toggle { min-height: 20px; margin-right: 2px; padding: 0 7px; font-size: 10.5px; border-radius: 2px; }
 button.code-commit { min-height: 40px; padding: 0 10px 0 8px; border: 0; border-radius: 0; background: transparent; }
@@ -271,3 +271,19 @@ button.code-history-more { margin: 4px 8px 8px; font-size: 12px; }
 .change-bar .bar-added { background: #4fae70; }
 .change-bar .bar-removed { background: #d4574d; }
 .change-bar .bar-empty { background: alpha(@ink, 0.12); }
+
+/* The workbench's tabs (editor_tabs.rs): the open file lit with an ink underline, a preview in
+   italics, each closable. */
+.editor-tab-scroll { background: @console; border-bottom: 1px solid @edge; }
+.editor-tabs { min-height: 34px; }
+.editor-tab { min-height: 34px; padding: 0 4px 0 12px; border-right: 1px solid @edge; color: @faint; }
+.editor-tab:hover { background: alpha(@ink, 0.03); color: @secondary; }
+.editor-tab.open { background: @slab; color: @ink; box-shadow: inset 0 -2px @ink; }
+.editor-tab.preview .editor-tab-name { font-style: italic; }
+.editor-tab-name { font-size: 12px; }
+.editor-tab button.editor-tab-close { min-width: 20px; min-height: 20px; padding: 0; border-radius: 5px; opacity: 0; }
+.editor-tab:hover button.editor-tab-close, .editor-tab.open button.editor-tab-close { opacity: 1; }
+/* The explorer's keys: New in ink, the others quiet, files' actions apart from the view's. */
+button.explorer-key { color: @faint; }
+button.explorer-key.explorer-primary { color: @ink; }
+.explorer-rule { min-width: 1px; margin: 7px 4px; background: @edge; }

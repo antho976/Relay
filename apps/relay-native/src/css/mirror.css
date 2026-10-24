@@ -5,7 +5,8 @@
    lamp and on problems, per the Tally Rule. */
 
 .mirror { background: @wall; }
-.dock-panel { background: @wall; border-left: 1px solid @edge; box-shadow: -10px 0 28px alpha(black, 0.38); }
+/* Beside the page, not over it: an edge, no shadow. */
+.dock-panel { background: @wall; border-left: 1px solid @edge; }
 
 /* -- device switcher: the rail's head, its lamp on the glyph's shoulder ----------- */
 menubutton.mirror-picker > button { min-width: 30px; min-height: 30px; padding: 0; background: transparent; border-color: transparent; border-radius: 2px; color: @secondary; }
@@ -17,7 +18,8 @@ menubutton.mirror-picker > button:hover, menubutton.mirror-picker > button:check
 
 button.mirror-key { min-width: 30px; min-height: 30px; padding: 0; color: @secondary; }
 button.mirror-key:hover { color: @ink; }
-button.mirror-key:disabled { opacity: 0.32; }
+/* Off until a device answers, but still legible as the keys it will have. */
+button.mirror-key:disabled { opacity: 0.55; }
 
 /* -- stage ----------------------------------------------------------------------- */
 .mirror-stage { padding: 16px 12px 16px 16px; }

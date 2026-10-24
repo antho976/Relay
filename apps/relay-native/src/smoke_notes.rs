@@ -310,7 +310,7 @@ async fn features(ui: &Rc<Ui>, project: i64, owner: &Rc<crate::pages::NotesWindo
     buffer.place_cursor(&buffer.iter_at_line(1).ok_or("Line 2")?);
     owner.window.activate_action("notes.toggle-check", None).map_err(|_| "toggle-check action missing")?;
     require(text().contains("- [ ] milk"), "Toggle check did not untick the line")?;
-    // Names under the toolbar's icons (formatting keys keep to theirs), and a hidden key.
+    // Names under every toolbar key or none (the marks are one Format key), and a hidden key.
     let mut prefs = crate::pages::notes_prefs();
     prefs.toolbar_labels = true;
     prefs.toolbar_hidden = 0b111 << 4;
@@ -321,7 +321,8 @@ async fn features(ui: &Rc<Ui>, project: i64, owner: &Rc<crate::pages::NotesWindo
         find(&root, &move |w| w.downcast_ref::<gtk::Label>().is_some_and(|l| l.has_css_class("notes-tool-caption") && l.text() == name))
     };
     require(caption("Undo").is_some_and(|l| l.is_mapped()), "Toolbar labels did not show")?;
-    require(caption("Bold").is_some_and(|l| !l.is_mapped()), "A formatting key shows its name")?;
+    require(caption("Format").is_some_and(|l| l.is_mapped()), "The Format key is not named with the others")?;
+    require(caption("Bold").is_none(), "Bold is a key again; it belongs under Format")?;
     require(caption("Paste").is_some_and(|l| !l.is_mapped()), "Hidden Paste key still shows")?;
     if owner.rail_collapsed.get() {
         owner.window.activate_action("notes.sidebar", None).map_err(|_| "sidebar action missing")?;

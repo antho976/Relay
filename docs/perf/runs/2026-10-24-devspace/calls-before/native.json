@@ -1,0 +1,100 @@
+{
+  "date": "2026-10-24",
+  "size": "1440,900",
+  "seconds": 8,
+  "perf": false,
+  "gtk": "4.24.1",
+  "pages": {
+    "calls-code-0": {
+      "page": "code",
+      "startup_calls": {
+        "app.status": 1,
+        "arbiter.summary": 1,
+        "bus.subscribe": 1,
+        "design.render.serve": 1,
+        "device.list": 1,
+        "file.tree": 3,
+        "git.status": 4,
+        "guardrail.requests.list": 1,
+        "notes.list": 1,
+        "notify.list": 3,
+        "project.list": 1,
+        "provider.list": 1,
+        "session.attach": 6,
+        "session.list": 1,
+        "session.resize": 12,
+        "settings.get": 14,
+        "settings.set": 2,
+        "task.list": 1,
+        "ui.page.switch": 1,
+        "usage.get": 1,
+        "workspace.list": 1,
+        "worktree.drift": 1,
+        "worktree.list": 4
+      },
+      "startup_total": 63
+    },
+    "calls-code-1": {
+      "page": "code",
+      "startup_calls": {
+        "app.status": 1,
+        "arbiter.summary": 1,
+        "bus.subscribe": 1,
+        "design.render.serve": 1,
+        "device.list": 1,
+        "file.tree": 3,
+        "git.status": 4,
+        "guardrail.requests.list": 1,
+        "notes.list": 1,
+        "notify.list": 3,
+        "project.list": 1,
+        "provider.list": 1,
+        "session.list": 1,
+        "settings.get": 14,
+        "settings.set": 3,
+        "task.list": 1,
+        "ui.page.switch": 1,
+        "usage.get": 1,
+        "workspace.list": 1,
+        "worktree.drift": 1,
+        "worktree.list": 4
+      },
+      "startup_total": 46
+    },
+    "calls-code-2": {
+      "page": "code",
+      "startup_calls": {
+        "app.status": 1,
+        "arbiter.summary": 1,
+        "bus.subscribe": 1,
+        "design.render.serve": 1,
+        "device.list": 1,
+        "file.tree": 3,
+        "git.status": 3,
+        "guardrail.requests.list": 1,
+        "notes.list": 1,
+        "notify.list": 3,
+        "project.list": 1,
+        "provider.list": 1,
+        "session.list": 1,
+        "settings.get": 14,
+        "settings.set": 3,
+        "task.list": 1,
+        "ui.page.switch": 1,
+        "usage.get": 1,
+        "workspace.list": 1,
+        "worktree.drift": 1,
+        "worktree.list": 4
+      },
+      "startup_total": 45
+    }
+  },
+  "notes": [],
+  "engine_rss_mb_six_sessions": 31.2,
+  "display": {
+    "GDK_BACKEND": "wayland",
+    "WAYLAND_DISPLAY": "relay-sly-952195",
+    "DISPLAY": "",
+    "XDG_SESSION_TYPE": "wayland"
+  }
+}

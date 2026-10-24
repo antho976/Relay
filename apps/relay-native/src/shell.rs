@@ -4,11 +4,14 @@ use vte4::prelude::*;
 mod registry;
 #[path = "agent_menu.rs"]
 mod agent_menu;
-pub(super) use agent_menu::is_closing;
+pub(super) use agent_menu::{is_closing, park_pane};
 
 thread_local! {
     /// The bell's notify.list is in flight; see refresh_notification_count.
     static BELL_LOADING: Cell<bool> = const { Cell::new(false) };
+    /// An agent asked for along with its project (a notice followed, an agent's ui.changed):
+    /// the project's saved layout, restored a moment later, must not focus another over it.
+    static WANTED_FOCUS: RefCell<Option<(i64, String)>> = const { RefCell::new(None) };
 }
 
 /// The window presets sheet's list before any preset is saved.
@@ -20,6 +23,15 @@ impl Ui {
     pub fn open_project(self: &Rc<Self>, project: i64, page: &str) {
         self.enter_project(project, Some(page));
     }
+    /// Focus `session`'s terminal, as its tile's focus key does, on the project now shown;
+    /// a layout that project restores afterwards keeps it.
+    pub fn focus_session(self: &Rc<Self>, session: &str) {
+        WANTED_FOCUS.with(|wanted| *wanted.borrow_mut() = Some((self.project.get(), session.to_string())));
+        if self.panes.borrow().contains_key(session) {
+            *self.focused.borrow_mut() = Some(session.to_string());
+            self.set_mode("focus");
+        }
+    }
     /// Switch to `project` on the page it was last left on.
     pub fn switch_project(self: &Rc<Self>, project: i64) {
         self.enter_project(project, None);
@@ -27,6 +39,13 @@ impl Ui {
     fn enter_project(self: &Rc<Self>, project: i64, page: Option<&str>) {
         if project != self.project.get() {
             if !self.dismiss_panels() {
+                return;
+            }
+            // Edits ask Save / Don't Save / Cancel, as opening another file does; a save or
+            // Git action in flight is waited for.
+            if self.editor.is_modified() && !self.editor.is_dirty_besides_edits() {
+                let page = page.map(str::to_string);
+                self.editor.after_unsaved(self, move |_, ui| ui.enter_project(project, page.as_deref()));
                 return;
             }
             if self.editor.is_dirty() {
@@ -39,6 +58,9 @@ impl Ui {
             }
             self.launch.set_reveal_child(false);
             self.forget_launch();
+            // A Shift+click selection names this wall's panes; another project's could share a name.
+            self.clear_selection();
+            WANTED_FOCUS.with(|wanted| wanted.borrow_mut().take());
             self.project.set(project);
             // Switch the visible wall synchronously. The registry already contains
             // all projects' sessions; a slow refresh must never leave the old CLI here.
@@ -552,6 +574,13 @@ impl Ui {
         if let Some(n) = state["focused"].as_str() {
             *self.focused.borrow_mut() = Some(n.into());
         }
+        // An explicit destination's agent wins over the one the layout last focused.
+        let project = self.project.get();
+        let wanted = WANTED_FOCUS.with(|wanted| wanted.borrow_mut().take()).filter(|(p, _)| keep_page && *p == project);
+        if let Some((_, session)) = wanted {
+            *self.focused.borrow_mut() = Some(session);
+            *self.mode.borrow_mut() = "focus".into();
+        }
         if let Some(order) = state["order"].as_array() {
             let current = self.ordered.borrow().clone();
             let mut order: Vec<String> = order
@@ -644,7 +673,7 @@ impl Ui {
                         // ui.changed carries all panes even when switching pages.
                         // Only a new terminal focus on Agents should change its layout.
                         if changed && state["page"].as_str().is_none_or(|page| page == "agents") {
-                            self.set_mode("focus");
+                            self.focus_session(session);
                             self.navigate("agents");
                         }
                     }
@@ -1419,13 +1448,18 @@ impl Ui {
             }));
         }
 
-        let p = palette.clone();
+        // The list's own funcs hold the palette weakly: it holds the list, and a strong
+        // reference here kept every palette ever opened, rows and all (tasks, notes' text).
+        // The search's handlers own it, and go with the panel's body.
+        let p = Rc::downgrade(&palette);
         list.set_filter_func(move |row| {
+            let Some(p) = p.upgrade() else { return false };
             let q = p.query.borrow();
             p.entry(row, |e| if q.is_empty() { !e.typed } else { q.split_whitespace().all(|w| e.words.contains(w)) }).unwrap_or(false)
         });
-        let p = palette.clone();
+        let p = Rc::downgrade(&palette);
         list.set_header_func(move |row, before| {
+            let Some(p) = p.upgrade() else { return };
             let here = p.entry(row, |e| e.section);
             if here.is_some() && before.and_then(|b| p.entry(b, |e| e.section)) != here {
                 let head = label(here.unwrap_or_default(), "palette-section");
@@ -1436,12 +1470,13 @@ impl Ui {
             }
         });
         let run = {
-            let (p, window, weak) = (palette.clone(), window.clone(), Rc::downgrade(self));
+            let (p, window, weak) = (Rc::downgrade(&palette), Rc::downgrade(&window), Rc::downgrade(self));
             move |row: &gtk::ListBoxRow| {
-                let Some(ui) = weak.upgrade() else { return };
+                let (Some(ui), Some(p), Some(window)) = (weak.upgrade(), p.upgrade(), window.upgrade()) else { return };
                 let Ok(i) = usize::try_from(row.index()) else { return };
                 window.close();
-                if let Some(entry) = p.entries.borrow().get(i) {
+                let entries = p.entries.borrow();
+                if let Some(entry) = entries.get(i) {
                     (entry.run)(&ui);
                 }
             }

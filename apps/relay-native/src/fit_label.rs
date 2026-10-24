@@ -40,9 +40,10 @@ mod imp {
             };
             let (lmin, lnat, _, _) = long.measure(orientation, for_size);
             let (smin, snat, _, _) = short.measure(orientation, for_size);
-            // As narrow as the short wording allows, as wide as the long one wants.
+            // As narrow as the short wording, whole ("Search", never "Sear…"), as wide as the long
+            // one wants.
             match orientation {
-                gtk::Orientation::Horizontal => (smin, lnat.max(snat), -1, -1),
+                gtk::Orientation::Horizontal => (snat, lnat.max(snat), -1, -1),
                 _ => (lmin.max(smin), lnat.max(snat), -1, -1),
             }
         }

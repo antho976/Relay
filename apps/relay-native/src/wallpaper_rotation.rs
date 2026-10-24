@@ -177,21 +177,30 @@ fn configure(ui: &Rc<Ui>, config: &Value, library: &Value) {
             };
             // No engine connection: skip the tick. The banner already says the engine is gone,
             // and a rotation error every interval would only cover that up.
-            if ui.wallpaper_rotation.borrow().running || ui.client.borrow().is_none() {
-                return glib::ControlFlow::Continue;
+            // Hidden: one turn when the window shows again, not one per interval meanwhile.
+            if !ui.later_if_hidden("wallpaper") {
+                turn(&ui);
             }
-            ui.wallpaper_rotation.borrow_mut().running = true;
-            glib::spawn_future_local(async move {
-                match rotate_once(&ui).await {
-                    // The connection dropped mid-tick: the disconnect is reported already.
-                    Ok(_) | Err(Error::Disconnected) => {}
-                    Err(error) => ui.show_error(&format!("Wallpaper rotation failed: {error}")),
-                }
-                ui.wallpaper_rotation.borrow_mut().running = false;
-            });
             glib::ControlFlow::Continue
         },
     ));
+}
+
+/// One rotation, unless one is running or there is no engine connection.
+pub(crate) fn turn(ui: &Rc<Ui>) {
+    if ui.wallpaper_rotation.borrow().running || ui.client.borrow().is_none() {
+        return;
+    }
+    ui.wallpaper_rotation.borrow_mut().running = true;
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        match rotate_once(&ui).await {
+            // The connection dropped mid-tick: the disconnect is reported already.
+            Ok(_) | Err(Error::Disconnected) => {}
+            Err(error) => ui.show_error(&format!("Wallpaper rotation failed: {error}")),
+        }
+        ui.wallpaper_rotation.borrow_mut().running = false;
+    });
 }
 
 pub(crate) async fn rotate_once(ui: &Rc<Ui>) -> Result<bool, Error> {

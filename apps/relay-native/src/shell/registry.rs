@@ -30,7 +30,21 @@ struct Sidebar {
     filter: Option<gtk::SearchEntry>,
     /// Hash of what the tree last rendered; `None` forces the next render to rebuild.
     rendered: Option<u64>,
+    /// Projects whose repository is not at its path, as a worker last found: a stat on an
+    /// unreachable mount blocks, and the tree is rebuilt on every lamp change and keystroke.
+    missing: BTreeSet<i64>,
+    /// The paths that check was of, when it ran, and whether one is running.
+    checked: Vec<(i64, String)>,
+    checked_at: Option<std::time::Instant>,
+    checking: bool,
+    /// The registry the last signature hashed, and its hash: a session event leaves the
+    /// projects as they were, and comparing them costs less than serializing them again.
+    registry: Option<(Vec<Value>, Vec<Value>, u64)>,
 }
+
+/// How long a check of the projects' paths stands before the next render asks again, so a
+/// repository moved while Relay runs shows as moved without an unrelated change.
+const PATHS_STALE: std::time::Duration = std::time::Duration::from_secs(30);
 
 thread_local! {
     static SIDEBAR: RefCell<Sidebar> = RefCell::default();
@@ -103,7 +117,41 @@ fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
+/// The project's repository was not at its path when last checked (`Ui::check_paths`).
+fn is_missing(project: i64) -> bool {
+    sidebar(|s| s.missing.contains(&project))
+}
+
 impl Ui {
+    /// Look at the projects' paths on a worker when they changed or the last look is stale,
+    /// and draw the tree again when what is missing changed.
+    fn check_paths(self: &Rc<Self>, projects: &[Value]) {
+        let paths: Vec<(i64, String)> = projects.iter().map(|p| (id_of(p), text(p, "path").to_string())).collect();
+        let due = sidebar(|s| !s.checking && (s.checked != paths || s.checked_at.is_none_or(|at| at.elapsed() >= PATHS_STALE)));
+        if !due {
+            return;
+        }
+        sidebar(|s| s.checking = true);
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let looked = paths.clone();
+            let missing = gtk::gio::spawn_blocking(move || {
+                looked.iter().filter(|(_, path)| !std::path::Path::new(path).exists()).map(|(id, _)| *id).collect::<BTreeSet<i64>>()
+            })
+            .await
+            .unwrap_or_default();
+            let changed = sidebar(|s| {
+                s.checking = false;
+                s.checked = paths;
+                s.checked_at = Some(std::time::Instant::now());
+                std::mem::replace(&mut s.missing, missing.clone()) != missing
+            });
+            if let Some(ui) = weak.upgrade().filter(|_| changed) {
+                ui.render_projects();
+            }
+        });
+    }
+
     pub(crate) fn render_projects(self: &Rc<Self>) {
         if !self.sidebar_ready() {
             return;
@@ -123,16 +171,25 @@ impl Ui {
                 self.save_collapsed();
             }
         }
-        let (collapsed, expanded) = sidebar(|s| (s.collapsed.clone(), s.expanded.clone()));
+        self.check_paths(&projects);
+        let (collapsed, expanded, missing) = sidebar(|s| (s.collapsed.clone(), s.expanded.clone(), s.missing.clone()));
         let sessions = self.sidebar_sessions.borrow().clone();
         // Only registry, lamp, folding or filter changes rebuild the tree: an agent going
         // idle in a project that still has one running leaves its lamp, and the tree, as is.
         let signature = {
             use std::hash::{Hash, Hasher};
             let mut hash = std::collections::hash_map::DefaultHasher::new();
-            (active, &collapsed, &expanded, &query).hash(&mut hash);
-            serde_json::to_string(&projects).unwrap_or_default().hash(&mut hash);
-            serde_json::to_string(&workspaces).unwrap_or_default().hash(&mut hash);
+            (active, &collapsed, &expanded, &query, &missing).hash(&mut hash);
+            let held = sidebar(|s| s.registry.as_ref().filter(|(p, w, _)| *p == projects && *w == workspaces).map(|(_, _, h)| *h));
+            let registry = held.unwrap_or_else(|| {
+                let mut inner = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_string(&projects).unwrap_or_default().hash(&mut inner);
+                serde_json::to_string(&workspaces).unwrap_or_default().hash(&mut inner);
+                let h = inner.finish();
+                sidebar(|s| s.registry = Some((projects.clone(), workspaces.clone(), h)));
+                h
+            });
+            registry.hash(&mut hash);
             for project in &projects {
                 let agents = agents_in(&sessions, &[id_of(project)]);
                 (agents.open, agents.held, agents.running).hash(&mut hash);
@@ -325,7 +382,7 @@ impl Ui {
         let chevron = crate::icons::image(if folded { "chevron-right" } else { "chevron-down" }, 12);
         chevron.add_css_class("workspace-chevron");
         line.append(&chevron);
-        let caption = label(name, "workspace-name");
+        let caption = label(&crate::app::display_name(name), "workspace-name");
         caption.set_hexpand(true);
         caption.set_width_chars(1);
         caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -411,7 +468,7 @@ impl Ui {
             tip.push_str(&format!("\n{} open", plural(agents.open, "agent", "agents")));
         }
         // A repository that moved reads as gone here too, not only in its ⋯ menu (Relink…).
-        if !std::path::Path::new(text(project, "path")).exists() {
+        if is_missing(id) {
             title.add_css_class("missing");
             tip.push_str("\nRepository not found at this path. Relink it from the ⋯ menu.");
         }
@@ -498,7 +555,7 @@ impl Ui {
             ]
         };
         // A repository that moved: point the project at its new place instead of removing it.
-        if !workspace && !std::path::Path::new(text(value, "path")).exists() {
+        if !workspace && is_missing(id) {
             entries.push(("folder", "Relink…", false, Rc::new(move |ui: &Rc<Ui>| ui.relink_project(id))));
         }
         entries.sort_by_key(|entry| entry.2);
@@ -661,11 +718,16 @@ impl Ui {
         const DISCARD: &str = "Discard changes and remove";
         let discard = Rc::new(Cell::new(false));
         {
-            let (discard, accept, caption, error) = (discard.clone(), accept.clone(), caption.clone(), error.clone());
+            // Weak: the accept key's handler holds the check, and a cycle kept every dialog.
+            let (discard, accept, caption, error) = (discard.clone(), accept.downgrade(), caption.clone(), error.downgrade());
             worktrees.connect_toggled(move |check| {
                 if !check.is_active() && discard.replace(false) {
-                    accept.set_label(&caption);
-                    error.set_visible(false);
+                    if let Some(accept) = accept.upgrade() {
+                        accept.set_label(&caption);
+                    }
+                    if let Some(error) = error.upgrade() {
+                        error.set_visible(false);
+                    }
                 }
             });
         }
@@ -832,7 +894,7 @@ impl Ui {
         if workspace {
             meta.insert(0, plural(projects.len(), "project", "projects"));
         } else if let Some(ws) = self.workspaces.borrow().iter().find(|w| w["id"] == value["workspace_id"]) {
-            meta.push(format!("in {}", text(ws, "name")));
+            meta.push(format!("in {}", crate::app::display_name(text(ws, "name"))));
         }
         head.append(&label(&meta.join(" · "), "registry-meta"));
         body.append(&head);
@@ -843,7 +905,7 @@ impl Ui {
         let pinned = gtk::Switch::new();
         let branch = gtk::Entry::builder().text(text(&value, "base_branch")).hexpand(true).build();
         let build = gtk::Entry::builder().text(text(&value, "build_cmd")).hexpand(true).placeholder_text("None").build();
-        let run = gtk::Entry::builder().text(text(&value, "run_cmd")).hexpand(true).placeholder_text("Gradle wrapper install task").build();
+        let run = gtk::Entry::builder().text(text(&value, "run_cmd")).hexpand(true).placeholder_text("None").build();
         let mut branch_error = label("", "registry-field-error");
         if !workspace {
             pinned.set_active(value["pinned"] == true);
@@ -861,7 +923,68 @@ impl Ui {
 
             let branches = section(&body, "Branches");
             branch.add_css_class("registry-mono");
-            branch_error = labeled(&branches, "Base branch", &branch,
+            branch.update_property(&[gtk::accessible::Property::Label("Base branch")]);
+            // Typed, or picked from the repository's own branches (agents' relay/ branches left out).
+            let branch_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            branch_row.append(&branch);
+            let pick = gtk::MenuButton::new();
+            pick.set_child(Some(&crate::icons::image("branch", 13)));
+            pick.set_tooltip_text(Some("Pick a branch"));
+            pick.set_widget_name("registry-branch-pick");
+            pick.add_css_class("registry-pick");
+            let choices = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            let popover = gtk::Popover::new();
+            popover.add_css_class("registry-menu");
+            let list = gtk::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .propagate_natural_height(true)
+                .max_content_height(280)
+                .child(&choices)
+                .build();
+            popover.set_child(Some(&list));
+            pick.set_popover(Some(&popover));
+            let weak = Rc::downgrade(self);
+            let (entry, shown) = (branch.downgrade(), popover.downgrade());
+            pick.set_create_popup_func(move |_| {
+                let Some(ui) = weak.upgrade() else { return };
+                clear(&choices);
+                choices.append(&label("Reading branches…", "registry-meta"));
+                let (choices, entry, shown) = (choices.clone(), entry.clone(), shown.clone());
+                glib::spawn_future_local(async move {
+                    let names: Vec<String> = match ui.call("git.branches", json!({"project_id": id})).await {
+                        Ok(v) => rows(&v, "branches").iter().map(|b| text(b, "name").to_string()).filter(|n| !n.starts_with("relay/")).collect(),
+                        Err(e) => {
+                            clear(&choices);
+                            choices.append(&label(&format!("Couldn't read branches: {e}"), "registry-meta"));
+                            return;
+                        }
+                    };
+                    clear(&choices);
+                    if names.is_empty() {
+                        choices.append(&label("No branches", "registry-meta"));
+                    }
+                    let current = entry.upgrade().map(|e| e.text().to_string()).unwrap_or_default();
+                    for name in names {
+                        let key = button("", "registry-action");
+                        let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                        line.append(&crate::icons::image(if name == current { "check" } else { "branch" }, 13));
+                        line.append(&label(&name, "mono"));
+                        key.set_child(Some(&line));
+                        let (entry, shown) = (entry.clone(), shown.clone());
+                        key.connect_clicked(move |_| {
+                            if let Some(entry) = entry.upgrade() {
+                                entry.set_text(&name);
+                            }
+                            if let Some(popover) = shown.upgrade() {
+                                popover.popdown();
+                            }
+                        });
+                        choices.append(&key);
+                    }
+                });
+            });
+            branch_row.append(&pick);
+            branch_error = labeled(&branches, "Base branch", &branch_row,
                 Some("New agents branch from this base. Existing agent branches stay where they are."));
 
             let commands = section(&body, "Commands");
@@ -870,7 +993,7 @@ impl Ui {
             labeled(&commands, "Build command", &build,
                 Some("Runs in the merged checkout when an integration builds. Empty means no build step."));
             labeled(&commands, "Run command", &run,
-                Some("Installs the build on a device for runs and deploys. Empty uses the Gradle wrapper's install task."));
+                Some("Installs the build on a device for runs and deploys. Empty: an Android project uses its Gradle wrapper's install task; any other has none."));
         }
 
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -1043,6 +1166,7 @@ impl Ui {
                         Ok(_) => {
                             discard.set(true);
                             ui.registry_dirty.set(true);
+                            ui.show_info(if workspace { "Workspace settings saved." } else { "Project settings saved." });
                             ui.refresh();
                             if let Some(panel) = panel.upgrade() {
                                 panel.close();
@@ -1081,7 +1205,7 @@ impl Ui {
 fn section(parent: &gtk::Box, title: &str) -> gtk::Box {
     let section = gtk::Box::new(gtk::Orientation::Vertical, 8);
     section.add_css_class("registry-section");
-    section.append(&label(&title.to_uppercase(), "section-label"));
+    section.append(&label(title, "section-label"));
     parent.append(&section);
     section
 }

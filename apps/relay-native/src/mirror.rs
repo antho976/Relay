@@ -48,6 +48,8 @@ const MIRROR_MAX_LINE: usize = 32 * 1024 * 1024;
 /// `decode.rs`), and a picture taller than this is more pixels than any dock or window shows.
 const MAX_CAPTURE: i32 = 1280;
 const DOCK_WIDTH: i32 = 440;
+/// What the sidebar and a page need beside a dock.
+const DOCK_ROOM: i32 = 900;
 /// What the window spends around the phone: the rail and stage padding across, padding down.
 const CHROME_W: i32 = 116;
 const CHROME_H: i32 = 60;
@@ -102,6 +104,11 @@ pub(crate) fn prefer_dock() {
 pub fn open_avd(ui: &Rc<Ui>, name: String, cold: bool) {
     let existing = VIEWS.with(|views| views.borrow().iter().find(|view| view.avd.borrow().as_deref() == Some(name.as_str())).cloned());
     if let Some(view) = existing {
+        // A mirror left open on an AVD that was stopped, or died: Start and Cold boot it
+        // again, rather than raise a dead view.
+        if view.phase.get() != Phase::Live && !view.booting.get() {
+            view.boot(cold);
+        }
         view.present();
         return;
     }
@@ -710,6 +717,13 @@ impl MirrorView {
         if self.fullscreen.get() {
             self.toggle_fullscreen();
         }
+        // The dock takes its width from the page beside it; a window without that room opens the
+        // mirror in its own window instead of squeezing the page under its least width.
+        if ui.window.width() > 0 && ui.window.width() - DOCK_WIDTH < DOCK_ROOM {
+            self.detach();
+            PREFER_DOCK.with(|prefer| prefer.set(true));
+            return;
+        }
         self.release();
         let dock = Dock::new(&ui, DOCK_WIDTH);
         dock.body.append(&self.root);
@@ -839,7 +853,10 @@ impl MirrorView {
         let weak = Rc::downgrade(self);
         let task = glib::spawn_future_local(async move {
             let alive = || weak.upgrade().filter(|view| view.current(generation));
-            if let Err(error) = ui.call("avd.boot", json!({"name":name,"cold":cold})).await {
+            let booted = ui.call("avd.boot", json!({"name":name,"cold":cold})).await;
+            // Already up (a retry after the mirror alone failed): go straight to its serial.
+            let running = matches!(&booted, Err(crate::client::Error::Bus(e)) if e.code == "avd.already_running");
+            if let (Err(error), false) = (booted, running) {
                 if let Some(view) = alive() {
                     view.booting.set(false);
                     view.ended(&format!("{} didn't boot", view.name()), &error.to_string(), None, Some("Copy details"));
@@ -871,9 +888,10 @@ impl MirrorView {
         *self.task.borrow_mut() = Some(task);
     }
 
-    /// Retry: a view that never reached its AVD boots it again; anything else restarts the mirror.
+    /// Retry: an AVD's view boots it again (one still running is found by its name, as its
+    /// serial may be gone or new); a phone's restarts the mirror.
     fn retry(self: &Rc<Self>) {
-        if self.device.borrow().is_empty() && self.avd.borrow().is_some() {
+        if self.avd.borrow().is_some() {
             self.boot(false);
         } else {
             self.start();

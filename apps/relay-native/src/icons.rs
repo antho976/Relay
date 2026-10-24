@@ -92,6 +92,8 @@ pub fn image_with_stroke(name: &str, size: i32, stroke: f64) -> gtk::Image {
         "plus" => r##"<path d="M8 3v10M3 8h10" />"##,
         "file" => r##"<path d="M4 2h5l3 3v9H4z" /><path d="M9 2v3h3" />"##,
         "folder" => r##"<path d="M2 4h4l1.5 1.5H14V13H2z" />"##,
+        // The checkout's files: a page in front of another (the Files view key, the row menu).
+        "files" => r##"<path d="M6 2h4.5L13 4.5V11.5H6z" /><path d="M10.5 2v2.5H13" /><path d="M3.5 5v9h6.5" />"##,
         "folder-open" => {
             r##"<path d="M2 4h4l1.5 1.5H13V7" /><path d="M2 13l1.5-5.5H15L13.5 13z" />"##
         }
@@ -134,6 +136,17 @@ pub fn image_with_stroke(name: &str, size: i32, stroke: f64) -> gtk::Image {
         "file-git" => {
             r##"<path d="M8 1.75L14.25 8 8 14.25 1.75 8z" /><circle cx="6.5" cy="6.5" r="1" /><circle cx="9.5" cy="9.5" r="1" /><path d="M7.2 7.2l1.6 1.6M6.5 7.5v3" />"##
         }
+        // The explorer's remaining families, drawn rather than one generic code mark.
+        "file-go" => r##"<path d="M4 2h5l3 3v9H4z" /><path d="M9 2v3h3" /><path d="M5.75 9h3M5.75 11h4.5" />"##,
+        "file-c" => r##"<path d="M4 2h5l3 3v9H4z" /><path d="M9 2v3h3" /><path d="M9.5 8.75a1.9 1.9 0 1 0 0 2.5" />"##,
+        "file-java" => {
+            r##"<path d="M3.5 7h7v3.25a3 3 0 0 1-3 3h-1a3 3 0 0 1-3-3z" /><path d="M10.5 8h.75a1.4 1.4 0 0 1 0 2.8h-.9" /><path d="M6 2.5c-.6 1 .6 1.5 0 2.75M8.25 2.5c-.6 1 .6 1.5 0 2.75" />"##
+        }
+        "file-archive" => r##"<path d="M4 2h5l3 3v9H4z" /><path d="M7 2.5v.75M7 4.25V5M7 6v.75M7 7.75v.75" /><path d="M6.25 9.5h1.5v2.25h-1.5z" />"##,
+        "file-data" => {
+            r##"<ellipse cx="8" cy="4" rx="4.5" ry="1.75" /><path d="M3.5 4v8c0 1 2 1.75 4.5 1.75s4.5-.75 4.5-1.75V4" /><path d="M3.5 8c0 1 2 1.75 4.5 1.75s4.5-.75 4.5-1.75" />"##
+        }
+        "file-shader" => r##"<path d="M8 2.5l5.5 10h-11z" /><path d="M8 2.5v10M5.25 7.5h5.5" />"##,
         "file-text" => {
             r##"<path d="M4 2h5l3 3v9H4z" /><path d="M9 2v3h3M6 8.25h4M6 10.75h4" />"##
         }
@@ -220,6 +233,11 @@ pub fn image_with_stroke(name: &str, size: i32, stroke: f64) -> gtk::Image {
         }
         "save" => r##"<path d="M3 3h8l2 2v8H3z" /><path d="M5 3v4h5V3M5 13V9h6v4" />"##,
         "design" => r##"<path d="M5.5 2v12M10.5 2v12M2 5.5h12M2 10.5h12"/>"##,
+        // The bundled plugins' marks (tools_market::plugin_mark): what each works on, drawn.
+        "cube" => r##"<path d="M8 1.75l5.5 3v6.5L8 14.25l-5.5-3v-6.5z" /><path d="M2.5 4.75L8 7.75l5.5-3M8 7.75v6.5" />"##,
+        "gauge" => r##"<path d="M2.25 11.5a5.75 5.75 0 1 1 11.5 0" /><path d="M8 11.5l2.75-3.25" /><path d="M4.25 11.5h.01M11.75 11.5h.01" />"##,
+        "picture" => r##"<rect x="2" y="3" width="12" height="10" rx="1.5" /><circle cx="5.75" cy="6.5" r="1.1" /><path d="M2.5 12.25l3.75-3.75 2.5 2.5 1.75-1.75 3 3" />"##,
+        "film" => r##"<rect x="2" y="3.5" width="12" height="9" rx="1.5" /><path d="M6.75 6.25v3.5L9.75 8z" />"##,
         "edit" => r##"<path d="M3 13l1-3.5L11 2.5l2.5 2.5L6.5 12z" /><path d="M9.5 4l2.5 2.5" />"##,
         "merge" => {
             r##"<circle cx="4.5" cy="3.5" r="1.5" /><circle cx="4.5" cy="12.5" r="1.5" /><circle cx="11.5" cy="12.5" r="1.5" /><path d="M4.5 5v6M4.5 5a5 5 0 0 0 5 5h.5" />"##

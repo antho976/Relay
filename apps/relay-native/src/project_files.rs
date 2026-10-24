@@ -73,9 +73,15 @@ impl Editor {
         );
     }
     pub fn prepare_project(self: &Rc<Self>, ui: &Rc<Ui>) {
+        // A tree load for another project reads the checkouts and the Git status itself;
+        // reading them here as well ran the whole Code refresh twice on every switch.
+        let before = self.scope_project.get();
         self.load_tree(ui);
-        self.refresh_scopes(ui);
-        self.refresh_git(ui);
+        let by_tree = before != ui.project.get() && self.scope_project.get() == ui.project.get();
+        if !by_tree {
+            self.refresh_scopes(ui);
+            self.refresh_git(ui);
+        }
         self.update_scope_label(ui);
     }
     pub(super) fn update_scope_label(self: &Rc<Self>, ui: &Rc<Ui>) {
@@ -112,7 +118,7 @@ impl Editor {
                 .to_owned()
         };
         self.scope_label
-            .set_text(&format!("{workspace_name} / {project_name} · {branch}"));
+            .set_text(&format!("{} / {project_name} · {branch}", crate::app::display_name(workspace_name)));
     }
     pub(super) fn select_checkout(self: &Rc<Self>, ui: &Rc<Ui>, path: &str) {
         if self.worktree.borrow().as_str() == path {
@@ -147,7 +153,7 @@ impl Editor {
         body.append(&search);
         let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let mut searchable: Vec<(gtk::Widget, String)> = Vec::new();
-        list.append(&label("PROJECTS", "section-label"));
+        list.append(&label("Projects", "section-label"));
         for project in ui.projects.borrow().iter() {
             let spaces = ui.workspaces.borrow();
             let space = spaces.iter().find(|w| w["id"] == project["workspace_id"]);
@@ -208,7 +214,7 @@ impl Editor {
             list.append(&key);
         }
         let branch_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        branch_list.append(&label("LOCAL BRANCHES", "section-label"));
+        branch_list.append(&label("Local branches", "section-label"));
         list.append(&branch_list);
         let ed = self.clone();
         let weak = Rc::downgrade(ui);
@@ -417,6 +423,10 @@ fn button_row(title: &str, icon: &str) -> gtk::Button {
 }
 /// The explorer glyph for a path and the CSS class that tints it.
 pub(super) fn file_glyph(path: &str) -> (&'static str, &'static str) {
+    // Git lists an untracked folder as one path ending in a slash: a folder, not a file.
+    if path.ends_with('/') {
+        return ("folder", "ft-folder");
+    }
     let file = std::path::Path::new(path);
     let name = file
         .file_name()
@@ -465,14 +475,14 @@ pub(super) fn file_glyph(path: &str) -> (&'static str, &'static str) {
         "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "nu" => ("file-shell", "ft-shell"),
         "lock" => ("file-lock", "ft-lock"),
         "txt" | "rst" | "log" | "csv" | "tsv" => ("file-text", "ft-text"),
-        "zip" | "gz" | "tar" | "xz" | "7z" | "zst" | "bz2" | "tgz" | "rar" => ("modules", "ft-archive"),
-        "go" => ("code", "ft-go"),
-        "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hh" | "m" | "mm" => ("code", "ft-c"),
-        "java" | "kt" | "kts" | "scala" | "groovy" | "gradle" => ("code", "ft-java"),
+        "zip" | "gz" | "tar" | "xz" | "7z" | "zst" | "bz2" | "tgz" | "rar" => ("file-archive", "ft-archive"),
+        "go" => ("file-go", "ft-go"),
+        "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hh" | "m" | "mm" => ("file-c", "ft-c"),
+        "java" | "kt" | "kts" | "scala" | "groovy" | "gradle" => ("file-java", "ft-java"),
         "cs" | "fs" | "swift" | "rb" | "php" | "lua" | "zig" | "dart" | "ex" | "exs" | "hs"
         | "ml" | "nim" | "r" | "jl" | "pl" => ("code", "ft-code"),
-        "sql" | "graphql" | "gql" | "proto" | "prisma" => ("file-config", "ft-data"),
-        "glsl" | "wgsl" | "hlsl" | "frag" | "vert" | "shader" => ("code", "ft-shader"),
+        "sql" | "graphql" | "gql" | "proto" | "prisma" | "db" | "sqlite" => ("file-data", "ft-data"),
+        "glsl" | "wgsl" | "hlsl" | "frag" | "vert" | "shader" => ("file-shader", "ft-shader"),
         _ if super::image_preview::is_image(path) => ("file-image", "ft-image"),
         _ => ("file", "ft-plain"),
     }

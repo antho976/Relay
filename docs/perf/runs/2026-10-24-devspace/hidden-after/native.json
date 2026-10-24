@@ -1,0 +1,69 @@
+{
+  "date": "2026-10-24",
+  "size": "1440,900",
+  "seconds": 8,
+  "perf": false,
+  "gtk": "4.24.1",
+  "pages": {
+    "agents-hidden": {
+      "page": "agents",
+      "startup": {
+        "cpu_ms_first_2s": 860.0,
+        "rss_mb_at_2s": 227.3,
+        "threads": 16
+      },
+      "steady": {
+        "seconds": 310.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 0.1,
+        "rss_mb": 101.1,
+        "threads": 15
+      },
+      "exit_code": 0,
+      "total_wall_s": 328.63,
+      "gdk_frame_log_lines": 17,
+      "screenshot": true,
+      "calls": {},
+      "calls_counted_s": 325,
+      "calls_per_min": 0.0,
+      "state": "Some(ToplevelState(TOP_RESIZABLE | RIGHT_RESIZABLE | BOTTOM_RESIZABLE | LEFT_RESIZABLE | SUSPENDED))"
+    },
+    "agents-shown": {
+      "page": "agents",
+      "startup": {
+        "cpu_ms_first_2s": 360.0,
+        "rss_mb_at_2s": 184.1,
+        "threads": 14
+      },
+      "steady": {
+        "seconds": 310.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 10.0,
+        "wakeups_per_s": 0.3,
+        "rss_mb": 150.8,
+        "threads": 12
+      },
+      "exit_code": 0,
+      "total_wall_s": 328.43,
+      "gdk_frame_log_lines": 31,
+      "screenshot": true,
+      "calls": {
+        "git.fetch": 1,
+        "worktree.drift": 1,
+        "worktree.list": 1
+      },
+      "calls_counted_s": 325,
+      "calls_per_min": 0.55,
+      "state": null
+    }
+  },
+  "notes": [],
+  "engine_rss_mb_six_sessions": 33.5,
+  "display": {
+    "GDK_BACKEND": "wayland",
+    "WAYLAND_DISPLAY": "relay-sly-844339",
+    "DISPLAY": "",
+    "XDG_SESSION_TYPE": "wayland"
+  }
+}

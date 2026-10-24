@@ -60,7 +60,7 @@ fn classify(name: &str) -> Option<Meter> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Window {
     name: String,
     pct: f64,
@@ -259,6 +259,7 @@ impl UsageState {
 
     fn set_busy(&self, busy: bool) {
         self.busy.set(busy);
+        self.card.refresh.set_sensitive(!busy);
         if let Some(key) = self.popup.borrow().as_ref().and_then(|p| p.refresh.upgrade()) {
             key.set_sensitive(!busy);
         }
@@ -291,15 +292,8 @@ impl Ui {
             let Some(ui) = weak.upgrade() else {
                 return glib::ControlFlow::Break;
             };
-            if ui.usage_turn_ended() {
-                ui.refresh_usage(false);
-            }
-            let stale = ui.stale_count();
-            if stale != ui.usage.stale_windows.get() {
-                ui.render_usage();
-            } else {
-                ui.render_usage_popup();
-                ui.render_usage_card();
+            if !ui.later_if_hidden("usage") {
+                ui.usage_tick();
             }
             glib::ControlFlow::Continue
         });
@@ -384,6 +378,20 @@ impl Ui {
                 }
             }
         });
+    }
+
+    /// The usage clock's tick: re-read after a turn ended, and rewrite the labels.
+    pub(crate) fn usage_tick(self: &Rc<Self>) {
+        if self.usage_turn_ended() {
+            self.refresh_usage(false);
+        }
+        let stale = self.stale_count();
+        if stale != self.usage.stale_windows.get() {
+            self.render_usage();
+        } else {
+            self.render_usage_popup();
+            self.render_usage_card();
+        }
     }
 
     /// One pending timeout at most, counted from the last refresh.
@@ -513,7 +521,7 @@ impl Ui {
             let reported = label(
                 &match (&item, reported) {
                     (None, _) => "nothing reported".into(),
-                    (Some(_), Some(at)) => format!("reported {}", ago(at)),
+                    (Some(_), Some(at)) => format!("updated {}", ago(at)),
                     (Some(_), None) => String::new(),
                 },
                 "usage-reported",
@@ -570,7 +578,8 @@ impl Ui {
         let Some(panel) = crate::panel::Panel::toggle(self, "Usage limits", 360) else {
             return;
         };
-        panel.beside(&self.page_overlay, &self.usage.card.root, 480);
+        // No floor: the panel is as tall as what it holds, up to the room above the card.
+        panel.beside(&self.page_overlay, &self.usage.card.root, 0);
         panel.add_css_class("usage-panel");
         let refresh = icon_button("refresh", "Re-read usage limits");
         refresh.set_widget_name("usage-panel-refresh");
@@ -593,6 +602,14 @@ impl Ui {
         providers.add_css_class("usage-providers");
         body.append(&providers);
         let (options, controls) = self.usage_options();
+        if let Some(toggle) = options.first_child().and_downcast::<gtk::Button>() {
+            let panel = Rc::downgrade(&panel);
+            toggle.connect_clicked(move |_| {
+                if let Some(panel) = panel.upgrade() {
+                    panel.fit();
+                }
+            });
+        }
         body.append(&options);
         let footer = label(
             "Refreshing re-reads what each CLI last saved on this machine. It never contacts a provider or spends tokens.",
@@ -657,14 +674,32 @@ impl Ui {
         let prefs = self.usage.prefs.borrow().clone();
         let mut controls = Options::default();
         // Settings' shape: a quiet heading over a rounded card of rows, the control on the right.
+        // Folded under its heading: the panel is for reading the limits; what the card shows and
+        // how often it re-reads are set once.
         let options = gtk::Box::new(gtk::Orientation::Vertical, 6);
         options.add_css_class("usage-options");
-        let heading = label("Show in the sidebar", "usage-options-title");
-        heading.set_xalign(0.0);
+        let heading = gtk::Button::new();
+        heading.add_css_class("usage-options-toggle");
+        heading.set_widget_name("usage-options-toggle");
+        let heading_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let (closed, open) = (crate::icons::image("chevron-right", 12), crate::icons::image("chevron-down", 12));
+        open.set_visible(false);
+        heading_row.append(&closed);
+        heading_row.append(&open);
+        heading_row.append(&label("Display and refresh", "usage-options-title"));
+        heading.set_child(Some(&heading_row));
         options.append(&heading);
         let rows = gtk::Box::new(gtk::Orientation::Vertical, 0);
         rows.add_css_class("usage-options-card");
+        rows.set_visible(false);
         options.append(&rows);
+        let folded = rows.clone();
+        heading.connect_clicked(move |_| {
+            let shown = !folded.is_visible();
+            folded.set_visible(shown);
+            open.set_visible(shown);
+            closed.set_visible(!shown);
+        });
         for (provider, name) in PROVIDERS {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
             row.add_css_class("usage-option-row");
@@ -678,9 +713,9 @@ impl Ui {
             switch.set_active(enabled(&prefs, provider, "enabled"));
             switch.update_property(&[gtk::accessible::Property::Label(&format!("Show {name}"))]);
             controls.switches.push((switch.downgrade(), provider));
-            let chips = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            chips.add_css_class("linked");
-            chips.add_css_class("usage-chips");
+            // Independent toggles, apart, each lit while its meter shows: not a segmented choice.
+            let chips = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            chips.add_css_class("usage-toggles");
             chips.set_sensitive(switch.is_active());
             for &meter in meters(provider) {
                 let chip = gtk::ToggleButton::with_label(meter.title());

@@ -3,7 +3,7 @@
 
 /* The panel's own ground shows through, so its rounded corners are not squared off by the
    scroller and viewport, which paint @wall everywhere else. */
-.resources-panel.floating-panel { margin-bottom: 6px; border: 1px solid alpha(@ink, 0.09); border-radius: 16px; background: @backbox_chrome; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45); }
+.resources-panel.floating-panel { margin-bottom: 6px; border: 1px solid alpha(@ink, 0.09); border-radius: 16px; background: @console_solid; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45); }
 .resources-panel scrolledwindow, .resources-panel viewport { background: transparent; }
 .resources-panel .panel-heading { min-height: 40px; padding: 0 8px 0 16px; border-bottom: 0; }
 .resources-panel .panel-heading .section-title { color: @ink; font-size: 13px; font-weight: 600; letter-spacing: -0.005em; }

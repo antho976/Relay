@@ -60,6 +60,26 @@ fn head_string(head: &[u8], prefix: &[u8]) -> Option<String> {
     String::from_utf8(rest[..end].to_vec()).ok()
 }
 
+/// Requests sent, by op, counted only for a measuring run (`RELAY_NATIVE_COUNT_CALLS=1`): the
+/// deterministic half of "what does the client do while nobody looks" (perf lead 11).
+static CALLS: std::sync::Mutex<Option<std::collections::BTreeMap<String, u64>>> = std::sync::Mutex::new(None);
+
+fn count_call(op: &str) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("RELAY_NATIVE_COUNT_CALLS").is_some()) {
+        *CALLS.lock().unwrap().get_or_insert_default().entry(op.to_string()).or_default() += 1;
+    }
+}
+
+/// The counted requests since the last `reset_calls`.
+pub fn calls() -> std::collections::BTreeMap<String, u64> {
+    CALLS.lock().unwrap().clone().unwrap_or_default()
+}
+
+pub fn reset_calls() {
+    CALLS.lock().unwrap().take();
+}
+
 pub fn is_lifecycle_request(op: &str) -> bool {
     // Stock photos reach the network: a search or thumbnail (unlocked) would make the board's
     // next edit wait behind it, and an add (staged) would stop the connection reading for the
@@ -77,14 +97,18 @@ pub fn is_lifecycle_request(op: &str) -> bool {
                 | "session.discard_restorable"
                 | "task.dispatch"
                 // A clone may take many minutes; on the main connection every other request
-                // would wait behind it.
+                // would wait behind it. A linked repository's add clones too (staged: the
+                // connection stops reading meanwhile), and its remove reads git status.
                 | "project.clone"
+                | "session.repo.add"
+                | "session.repo.remove"
         )
 }
 
 fn request_timeout(op: &str) -> Duration {
     match op {
-        "project.clone" => Duration::from_secs(1800),
+        "project.clone" | "session.repo.add" => Duration::from_secs(1800),
+        "session.repo.remove" => Duration::from_secs(120),
         // A new checkout may hydrate large LFS assets after the bounded fetch.
         "session.create" | "worktree.create" | "task.dispatch" => Duration::from_secs(180),
         // A backtest reads up to two years of candles from the exchange, 350 at a time.
@@ -405,6 +429,7 @@ impl Client {
         payload: Value,
         id: Uuid,
     ) -> Result<Value, Error> {
+        count_call(op);
         let mut request = Request::new(Actor::User, op, payload);
         request.id = id;
         let (send, reply) = oneshot::channel();
@@ -491,6 +516,12 @@ mod tests {
             assert_eq!(request_timeout(op), Duration::from_secs(60), "{op}");
         }
         assert!(!is_lifecycle_request("design.get") && !is_lifecycle_request("design.pictures"));
+        // Linking a repository clones it: never on the main connection, never cut off at 30 s.
+        for op in ["session.repo.add", "session.repo.remove"] {
+            assert!(is_lifecycle_request(op), "{op}");
+            assert!(request_timeout(op) >= Duration::from_secs(120), "{op}");
+        }
+        assert!(!is_lifecycle_request("session.repo.list"));
     }
 
     async fn lifecycle_bypasses_a_stalled_status_request(op: &'static str) {

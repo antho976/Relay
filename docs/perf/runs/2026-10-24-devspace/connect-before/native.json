@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-24",
+  "size": "1440,900",
+  "seconds": 8,
+  "perf": false,
+  "gtk": "4.24.1",
+  "pages": {
+    "connect": {
+      "page": "agents",
+      "requests": 200,
+      "shared": {
+        "n": 200.0,
+        "p50": 31.0,
+        "p95": 61.0,
+        "max": 185.0
+      },
+      "own": {
+        "n": 200.0,
+        "p50": 75.0,
+        "p95": 130.0,
+        "max": 226.0
+      }
+    }
+  },
+  "notes": [],
+  "engine_rss_mb_six_sessions": 32.3,
+  "display": {
+    "GDK_BACKEND": "wayland",
+    "WAYLAND_DISPLAY": "relay-sly-939910",
+    "DISPLAY": "",
+    "XDG_SESSION_TYPE": "wayland"
+  }
+}

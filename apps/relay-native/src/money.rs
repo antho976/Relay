@@ -72,6 +72,8 @@ struct State {
     toggles: RefCell<Option<(gtk::ToggleButton, gtk::ToggleButton)>>,
     dev_only: RefCell<Vec<gtk::Widget>>,
     money_only: RefCell<Vec<gtk::Widget>>,
+    /// The title bar's + Entry: Tally's, so it shows on the threads and Tally's pages only.
+    add_key: RefCell<Option<gtk::Button>>,
     pages: RefCell<BTreeMap<&'static str, Rc<Page>>>,
     toasts: RefCell<BTreeMap<&'static str, Rc<Toast>>>,
     start: RefCell<Option<gtk::Widget>>,
@@ -177,7 +179,7 @@ pub fn add_key() -> gtk::Button {
     key.set_valign(gtk::Align::Center);
     key.set_tooltip_text(Some("Add an entry · Ctrl E"));
     key.set_visible(false);
-    STATE.with(|s| s.money_only.borrow_mut().push(key.clone().upcast()));
+    STATE.with(|s| *s.add_key.borrow_mut() = Some(key.clone()));
     key
 }
 
@@ -520,6 +522,11 @@ pub fn follow(ui: &Rc<Ui>, page: &str, restoring: bool) {
     let money = is_page(page);
     if active() != money {
         apply(ui, money);
+    }
+    // Avex and Arbiter have no entries to add: no Tally key over them.
+    let entries = money && !page.starts_with("avex-") && !page.starts_with("arbiter-");
+    if let Some(key) = STATE.with(|s| s.add_key.borrow().clone()) {
+        key.set_visible(entries);
     }
     let start_open = STATE.with(|s| s.start.borrow().is_some());
     let saved = STATE.with(|s| s.saved.get());

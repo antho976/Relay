@@ -324,6 +324,12 @@ pub struct Pane {
     size: Cell<(u16, u16)>,
     resize_pending: Cell<bool>,
     active: Cell<bool>,
+    /// Refused attachments in a row, and until when the next one waits: every reconcile used
+    /// to open a new socket for an attach the engine had just refused.
+    refusals: Cell<u32>,
+    retry_at: Cell<Option<std::time::Instant>>,
+    /// Asked to attach while waiting out a refusal: it attaches when the wait ends.
+    wanted: Cell<bool>,
     /// Output fed per frame (`FRAME_BYTES`) and what steers it.
     budget: Cell<usize>,
     pace: RefCell<Option<FramePace>>,
@@ -481,6 +487,9 @@ impl Pane {
             size: Cell::new((0, 0)),
             resize_pending: Cell::new(false),
             active: Cell::new(false),
+            refusals: Cell::new(0),
+            retry_at: Cell::new(None),
+            wanted: Cell::new(false),
             budget: Cell::new(FRAME_BYTES),
             pace: RefCell::default(),
         });
@@ -741,6 +750,10 @@ impl Pane {
     }
 
     pub fn set_active(self: &Rc<Self>, active: bool) {
+        self.wanted.set(active);
+        if active && self.retry_at.get().is_some_and(|at| at > std::time::Instant::now()) {
+            return;
+        }
         if self.active.replace(active) == active {
             return;
         }
@@ -773,8 +786,23 @@ impl Pane {
                     // The engine refused the attachment (no live PTY, say). Mark the pane
                     // detached so the next reconcile attaches it again once there is one.
                     Err(e @ Error::Bus(_)) => {
-                        p.status.set_text(&e.to_string());
+                        // Again after 1, 2, 4… up to 30 s, or at once when a reconcile asks
+                        // after that; an attach that works starts the count over.
+                        let refusals = p.refusals.get() + 1;
+                        p.refusals.set(refusals);
+                        let wait = Duration::from_secs(1 << refusals.min(5).saturating_sub(1)).min(Duration::from_secs(30));
+                        p.retry_at.set(Some(std::time::Instant::now() + wait));
+                        p.status.set_text(&format!("{} Trying again in {} s.", crate::editor::readable(&e), wait.as_secs()));
                         p.active.set(false);
+                        let weak = Rc::downgrade(&p);
+                        glib::timeout_add_local_once(wait, move || {
+                            if let Some(p) = weak.upgrade() {
+                                p.retry_at.set(None);
+                                if p.wanted.get() {
+                                    p.set_active(true);
+                                }
+                            }
+                        });
                         break;
                     }
                     // A timeout or a dropped connection passes; keep trying while shown. Their
@@ -807,6 +835,7 @@ impl Pane {
             )
             .await?;
         *self.client.borrow_mut() = Some(client);
+        self.refusals.set(0);
         self.size.set((0, 0));
         self.schedule_resize();
         self.status.set_text("");

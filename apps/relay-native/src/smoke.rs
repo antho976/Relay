@@ -66,7 +66,9 @@ fn record_geometry(ui: &Ui, screenshot: &str) {
                 "type": widget.type_().name(), "name": widget.widget_name().to_string(),
                 "classes": widget.css_classes().iter().map(|s| s.as_str()).collect::<Vec<_>>(),
                 "text": widget.downcast_ref::<gtk::Label>().map(|l| l.text().to_string()),
-                "x": bounds.x(), "y": bounds.y(), "width": bounds.width(), "height": bounds.height()
+                "x": bounds.x(), "y": bounds.y(), "width": bounds.width(), "height": bounds.height(),
+                // What holds a window wider than asked: the widest minimum under it.
+                "min_width": widget.measure(gtk::Orientation::Horizontal, -1).0
             }));
         }
         let mut child = widget.first_child();
@@ -698,7 +700,7 @@ async fn verify_exception_requests(ui: &Rc<Ui>, session: &str) -> Result<(), Str
     util::press(&send, "Send denial")?;
     settled(denied, |r| r["state"] == "rejected", "denied").await?;
 
-    // The session grant is listed under ACTIVE EXCEPTIONS with its own Revoke key.
+    // The session grant is listed under Active exceptions with its own Revoke key.
     ui.refresh_page();
     let grant = || {
         util::find(&page, &|w| {
@@ -778,6 +780,7 @@ pub fn install(ui: &Rc<Ui>) {
                 (_, "lifecycle") => crate::smoke_project_files::profile_lifecycle(&ui).await,
                 (_, "registry") => crate::smoke_registry::run(&ui).await,
                 (_, "tools") => crate::roadmap_smoke::run(&ui).await,
+                (_, "devspace") => crate::smoke_devspace::run(&ui).await,
                 _ => Err(format!("Unknown roadmap smoke part: {part}")),
             };
             if let Err(error) = result {
@@ -804,6 +807,78 @@ pub fn install(ui: &Rc<Ui>) {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(4);
+    // A measuring run (scripts/perf/native-baseline.py) minimizes the window after this many
+    // seconds and counts what the client asks of the engine from then on.
+    // A measuring run times a page's opening (perf lead 8): from navigate to the frame that
+    // shows its rows, once cold and then reopened from the wall, printed as PAGE_MS lines.
+    if let Ok(page) = std::env::var("RELAY_NATIVE_TIME_PAGE") {
+        let ui = ui.clone();
+        glib::spawn_future_local(async move {
+            glib::timeout_future(Duration::from_secs(3)).await;
+            let row = if page == "board" { "task-card" } else { "notification-row" };
+            for round in 0..6 {
+                ui.navigate("agents");
+                glib::timeout_future(Duration::from_millis(600)).await;
+                let started = Instant::now();
+                ui.navigate(&page);
+                // Each frame until the rows are drawn and laid out.
+                let (send, recv) = async_channel::bounded::<f64>(1);
+                let window = ui.window.clone();
+                let name = row.to_string();
+                window.add_tick_callback(move |window, _| {
+                    let drawn = util::find(window.upcast_ref(), &|w| w.widget_name() == name.as_str() && w.is_mapped() && w.width() > 0).is_some();
+                    if drawn {
+                        let _ = send.try_send(started.elapsed().as_secs_f64() * 1000.);
+                        return glib::ControlFlow::Break;
+                    }
+                    glib::ControlFlow::Continue
+                });
+                let took = glib::future_with_timeout(Duration::from_secs(20), recv.recv()).await;
+                match took {
+                    Ok(Ok(ms)) => println!("PAGE_MS={page} round={round} ms={ms:.1}"),
+                    _ => println!("PAGE_MS={page} round={round} timeout"),
+                }
+            }
+        });
+    }
+    // A measuring run times a request on the shared connection against one on a connection of
+    // its own, as every lifecycle op and stock-photo request makes (perf lead 13).
+    if let Some(n) = std::env::var("RELAY_NATIVE_TIME_CONNECT").ok().and_then(|s| s.parse::<usize>().ok()) {
+        let ui = ui.clone();
+        glib::spawn_future_local(async move {
+            glib::timeout_future(Duration::from_secs(3)).await;
+            let mut shared = Vec::new();
+            let mut own = Vec::new();
+            for _ in 0..n {
+                let started = Instant::now();
+                let _ = ui.call("bus.ping", json!({})).await;
+                shared.push(started.elapsed().as_secs_f64() * 1e6);
+                let started = Instant::now();
+                let _ = crate::client::Client::lifecycle_request(&ui.rt, ui.path.clone(), "bus.ping", json!({})).await;
+                own.push(started.elapsed().as_secs_f64() * 1e6);
+            }
+            for (name, mut times) in [("shared", shared), ("own", own)] {
+                times.sort_by(f64::total_cmp);
+                let at = |q: f64| times[((times.len() - 1) as f64 * q).round() as usize];
+                println!("CONNECT_US={name} n={} p50={:.0} p95={:.0} max={:.0}", times.len(), at(0.5), at(0.95), at(1.0));
+            }
+        });
+    }
+    // RELAY_NATIVE_COUNT_FROM only starts the count there, for the same window left on screen.
+    if let Some(after) = std::env::var("RELAY_NATIVE_COUNT_FROM").ok().and_then(|s| s.parse::<u64>().ok()) {
+        glib::timeout_add_local_once(Duration::from_secs(after), crate::client::reset_calls);
+    }
+    if let Some(after) = std::env::var("RELAY_NATIVE_MINIMIZE").ok().and_then(|s| s.parse::<u64>().ok()) {
+        let window = ui.window.clone();
+        glib::timeout_add_local_once(Duration::from_secs(after), move || {
+            crate::client::reset_calls();
+            window.minimize();
+            glib::timeout_add_local_once(Duration::from_secs(1), move || {
+                let state = window.surface().and_downcast::<gtk::gdk::Toplevel>().map(|t| t.state());
+                println!("MINIMIZED_STATE={state:?}");
+            });
+        });
+    }
     let navigate = ui.clone();
     glib::timeout_add_local_once(Duration::from_secs(2), move || {
         if fixture {
@@ -1018,6 +1093,13 @@ pub fn install(ui: &Rc<Ui>) {
                 });
                 return;
             }
+            // A narrow bar keeps Window presets under its More key.
+            if page == "layouts" {
+                if let Some(key) = named(&navigate.window, "window-presets").filter(|w| !w.is_mapped()) {
+                    key.downcast::<gtk::Button>().unwrap().emit_clicked();
+                    return;
+                }
+            }
             if matches!(page.as_str(), "palette" | "layouts" | "usage") {
                 let control = match page.as_str() {
                     "palette" => "command-palette",
@@ -1058,6 +1140,15 @@ pub fn install(ui: &Rc<Ui>) {
                     }
                     Ok(())
                 });
+                return;
+            }
+            // The open project's settings sheet, as its row menu opens it.
+            if page == "project-settings" {
+                navigate.navigate("agents");
+                let project = navigate.projects.borrow().iter().find(|p| p["id"].as_i64() == Some(navigate.project.get())).cloned();
+                if let Some(project) = project {
+                    navigate.registry_editor(project, false);
+                }
                 return;
             }
             // The agents bar's Agent skills and Plugins sheets, over the agents page.
@@ -1167,6 +1258,13 @@ pub fn install(ui: &Rc<Ui>) {
         }
     });
     glib::timeout_add_local_once(Duration::from_secs(duration), move || {
+        if std::env::var_os("RELAY_NATIVE_COUNT_CALLS").is_some() {
+            println!("CALLS={}", serde_json::to_string(&crate::client::calls()).unwrap_or_default());
+        }
+        // A minimized window draws no frame to capture: it shows again first.
+        if std::env::var_os("RELAY_NATIVE_MINIMIZE").is_some() {
+            ui.window.present();
+        }
         glib::spawn_future_local(async move {
             // The window closes after this; a check still running would be dropped unseen.
             if let Err(error) = wait_within(
