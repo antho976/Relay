@@ -262,6 +262,13 @@ EXPECTED
     got=$(systemctl show -p ExecStartEx --value relay-key-proxy.service)
     [[ $got == "{ path=$libexec/relay-key-proxy ; argv[]=$libexec/relay-key-proxy ; flags= ;"* && $got != *"{"*"{"* ]] \
         || die "relay-key-proxy.service starts something other than $libexec/relay-key-proxy, plainly; nothing was started"
+    # IPAddressAllow= lets the service reach loopback and Anthropic only, so its DNS must be a
+    # loopback stub (systemd-resolved's 127.0.0.53): with a LAN resolver every request is a 502.
+    local resolver
+    while read -r resolver; do
+        [[ $resolver == 127.* || $resolver == ::1 ]] \
+            || die "/etc/resolv.conf names the resolver $resolver, which the service may not reach (it allows loopback and Anthropic only); point it at a local stub such as systemd-resolved (127.0.0.53) first. Nothing was started"
+    done < <(awk '$1 == "nameserver" { print $2 }' /etc/resolv.conf)
     systemctl enable --now relay-key-proxy.socket >/dev/null
     systemctl enable relay-key-proxy.service >/dev/null
     systemctl restart relay-key-proxy.service
