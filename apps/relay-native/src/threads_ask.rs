@@ -259,9 +259,13 @@ fn fill(slot: &gtk::Box, p: &Value) {
             } else {
                 card.append(&keys);
             }
+            // The row of keys and the card's problem line are held weakly: each key is inside the
+            // row, and a strong hold on it from the key's own handler kept every card drawn (and
+            // cards are drawn again on every money.changed) alive for good.
             for (key, approve) in [(primary, true), (not_now, false)] {
-                let (keys, problem, seen) = (keys.clone(), problem.clone(), seen.clone());
+                let (keys, problem, seen) = (keys.downgrade(), problem.downgrade(), seen.clone());
                 key.connect_clicked(move |_| {
+                    let (Some(keys), Some(problem)) = (keys.upgrade(), problem.upgrade()) else { return };
                     let payload = if approve { json!({"id": id, "approve": true, "seen": seen}) } else { json!({"id": id, "approve": false}) };
                     answer(&keys, &problem, "thread.proposal.resolve", payload);
                 });
@@ -277,8 +281,12 @@ fn fill(slot: &gtk::Box, p: &Value) {
                 let undo = button("Undo", "quiet");
                 undo.add_css_class("threads-undo");
                 line.append(&undo);
-                let (line_, problem_) = (line.clone(), problem.clone());
-                undo.connect_clicked(move |_| answer(&line_, &problem_, "thread.proposal.undo", json!({"id": id})));
+                let (line_, problem_) = (line.downgrade(), problem.downgrade());
+                undo.connect_clicked(move |_| {
+                    if let (Some(line), Some(problem)) = (line_.upgrade(), problem_.upgrade()) {
+                        answer(&line, &problem, "thread.proposal.undo", json!({"id": id}));
+                    }
+                });
             }
             card.append(&line);
         }

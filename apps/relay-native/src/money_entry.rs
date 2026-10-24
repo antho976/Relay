@@ -373,12 +373,16 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, lists: &Value, tx: Option<Value>) {
     let submit = {
         let ui = ui.clone();
         let sheet = Rc::downgrade(panel);
-        let (amount, problem, kind, category, category_items, category_choice, from, to, day, note) =
-            (amount.clone(), problem.clone(), kind.clone(), category.clone(), category_items.clone(), category_choice.clone(), from.clone(), to.clone(), day.clone(), note.clone());
+        // The keys and fields whose own handlers hold `submit` are held weakly here, or each
+        // would keep the other alive and every sheet opened would stay in memory (fffb19e).
+        let (amount_ref, note_ref, save_ref, another_ref) = (amount.downgrade(), note.downgrade(), save.downgrade(), another.downgrade());
+        let (problem, kind, category, category_items, category_choice, from, to, day) =
+            (problem.clone(), kind.clone(), category.clone(), category_items.clone(), category_choice.clone(), from.clone(), to.clone(), day.clone());
         let accounts = accounts.clone();
         let before = tx.clone();
-        let (save, another, added, added_text, added_undo, added_id) = (save.clone(), another.clone(), added.clone(), added_text.clone(), added_undo.clone(), added_id.clone());
+        let (added, added_text, added_undo, added_id) = (added.clone(), added_text.clone(), added_undo.clone(), added_id.clone());
         move |keep_open: bool| {
+            let (Some(amount), Some(note), Some(save), Some(another)) = (amount_ref.upgrade(), note_ref.upgrade(), save_ref.upgrade(), another_ref.upgrade()) else { return };
             let keep_open = keep_open && before.is_none();
             let refuse = |text: &str, culprit: &gtk::Widget| {
                 problem.set_text(text);

@@ -2513,16 +2513,18 @@ fn ledger_settings(ui: &Rc<Ui>, column: &gtk::Box, summary: &Value) {
     save.set_halign(gtk::Align::End);
     save.add_css_class("tally-save");
     list.append(&save);
-    // Enter in either field saves, as the key does; not again while a save is on its way.
-    let key = save.clone();
+    // Enter in either field saves, as the key does; not again while a save is on its way. The
+    // key is held weakly: its own handler holds both fields, and a strong hold back would keep
+    // all three alive after every refresh of the Data page.
+    let key = save.downgrade();
     currency.connect_activate(move |_| {
-        if key.is_sensitive() {
+        if let Some(key) = key.upgrade().filter(|key| key.is_sensitive()) {
             key.emit_clicked();
         }
     });
-    let key = save.clone();
+    let key = save.downgrade();
     start.connect_activate(move |_| {
-        if key.is_sensitive() {
+        if let Some(key) = key.upgrade().filter(|key| key.is_sensitive()) {
             key.emit_clicked();
         }
     });
