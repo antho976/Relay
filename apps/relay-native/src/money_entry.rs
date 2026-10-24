@@ -41,7 +41,7 @@ fn last_account(kind: &str) -> Option<i64> {
 
 fn field(body: &gtk::Box, caption: &str, widget: &impl IsA<gtk::Widget>) -> gtk::Box {
     let block = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    block.append(&label(&caption.to_uppercase(), "money-label"));
+    block.append(&label(caption, "money-label"));
     block.append(widget);
     body.append(&block);
     block

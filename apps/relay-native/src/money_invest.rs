@@ -1255,7 +1255,7 @@ fn sheet_body(ui: &Rc<Ui>, panel: &Rc<Panel>, path: &Path, expects: &str, v: &Va
         });
         body.append(&add);
     } else if statement {
-        body.append(&label("INTO ACCOUNT", "money-label"));
+        body.append(&label("Into account", "money-label"));
         // Nothing is chosen for the person: a drop-down shows its first row, and an RRSP's
         // statement taken into the TFSA would count against the TFSA's room.
         let mut ids = vec![None];
@@ -1288,7 +1288,7 @@ fn sheet_body(ui: &Rc<Ui>, panel: &Rc<Panel>, path: &Path, expects: &str, v: &Va
         body.append(&picker);
         into = Some((picker, ids));
     } else {
-        body.append(&label("ACCOUNTS IN THE FILE", "money-label"));
+        body.append(&label("Accounts in the file", "money-label"));
         if found.is_empty() {
             body.append(&label("This file names no account.", "money-muted"));
         }
@@ -1354,7 +1354,7 @@ fn sheet_body(ui: &Rc<Ui>, panel: &Rc<Panel>, path: &Path, expects: &str, v: &Va
                 None => reasons.push((reason, vec![at])),
             }
         }
-        body.append(&label("SKIPPED", "money-label"));
+        body.append(&label("Skipped", "money-label"));
         for (reason, at) in reasons.iter().take(5) {
             let shown: Vec<String> = at.iter().take(6).map(|l| l.to_string()).collect();
             let which = match at.len() {
