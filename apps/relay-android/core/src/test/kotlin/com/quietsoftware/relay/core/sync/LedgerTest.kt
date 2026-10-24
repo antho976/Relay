@@ -172,6 +172,42 @@ class LedgerTest {
     }
 
     @Test
+    fun `a message queued to a thread made offline follows the thread to its real id`() = runBlocking {
+        val create = ledger.enqueue("thread.create", obj("title" to "Groceries"), "New thread")
+        val sent = ledger.enqueue("thread.send", obj("id" to Refs.ref(create.id), "text" to "And on pace?"), "Message")
+        assertEquals(Optimistic.tempId(create.id), replica.get(Kind.Message, Optimistic.tempId(sent.id))!!.parent)
+
+        val answer = obj("id" to 31, "title" to "Groceries", "updated_at" to "2026-10-24T10:00:00Z")
+        outbox.update(create.copy(state = OutboxEntry.State.Done, result = answer))
+        ledger.applied(outbox.get(create.id)!!, answer)
+        val moved = replica.all(Kind.Message, Scope(parent = "31"))
+        assertEquals(listOf(Optimistic.tempId(sent.id)), moved.map { it.id })
+        assertEquals("31", moved.single().json["thread_id"].toString())
+    }
+
+    @Test
+    fun `a rename's answer stays shown, not the title from before it`() = runBlocking {
+        ledger.upsert(listOf(Row.of(Kind.Thread, obj("id" to 31, "title" to "Groceries", "updated_at" to "2026-10-24T10:00:00Z"))!!))
+        val e = ledger.enqueue("thread.rename", obj("id" to 31, "title" to "Groceries this month"), "Rename")
+        val answer = obj("id" to 31, "title" to "Groceries this month", "updated_at" to "2026-10-24T10:01:00Z")
+        outbox.update(e.copy(state = OutboxEntry.State.Done, result = answer))
+        ledger.applied(outbox.get(e.id)!!, answer)
+        assertEquals("Groceries this month", replica.get(Kind.Thread, "31")!!.json.s("title"))
+    }
+
+    @Test
+    fun `a module's answer is laid over its listed summary`() = runBlocking {
+        ledger.upsert(listOf(Row.of(Kind.Module, obj("id" to 3, "project_id" to 1, "name" to "Phone", "priority" to "medium", "counts" to obj("done" to 4), "progress_pct" to 40.0))!!))
+        val e = ledger.enqueue("module.update", obj("module_id" to 3, "name" to "Phone app"), "Rename")
+        val answer = obj("id" to 3, "project_id" to 1, "name" to "Phone app", "priority" to "medium")
+        outbox.update(e.copy(state = OutboxEntry.State.Done, result = answer))
+        ledger.applied(outbox.get(e.id)!!, answer)
+        val row = replica.get(Kind.Module, "3")!!.json
+        assertEquals("Phone app", row.s("name"))
+        assertEquals("the summary's counts stay", "40.0", row["progress_pct"].toString())
+    }
+
+    @Test
     fun `a message to a thread shows at once, in the thread it was sent to`() = runBlocking {
         val sent = ledger.enqueue("thread.send", obj("id" to 7, "text" to "Am I on pace?"), "Message")
         val row = replica.get(Kind.Message, Optimistic.tempId(sent.id))!!

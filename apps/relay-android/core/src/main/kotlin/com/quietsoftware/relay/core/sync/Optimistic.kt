@@ -275,9 +275,10 @@ object Optimistic {
         val kind = when {
             op.startsWith("task.") && op != "task.label.list" && obj.containsKey("title") -> Kind.Task
             op.startsWith("notes.") && obj.containsKey("body") -> Kind.Note
-            op.startsWith("module.") && obj.containsKey("name") && obj.containsKey("priority") -> null // ModuleSummary differs; refetch instead
+            op.startsWith("module.") && obj.containsKey("name") && obj.containsKey("priority") -> null // A Module, not the listed ModuleSummary: the ledger lays it over the listed row
             op == "mailbox.send" -> return listOfNotNull((obj["message"] as? JsonObject)?.let { Row.of(Kind.Mail, it) })
-            op == "thread.create" && obj.containsKey("title") -> Kind.Thread
+            // thread.list's own rows (ThreadView), as are rename's and set's answers.
+            (op == "thread.create" || op == "thread.rename" || op == "thread.set") && obj.containsKey("title") -> Kind.Thread
             op == "thread.send" && obj.containsKey("role") -> Kind.Message
             op.startsWith("session.") && obj.containsKey("name") && obj.containsKey("state") -> Kind.Session
             op == "project.update" && obj.containsKey("path") -> Kind.Project

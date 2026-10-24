@@ -6,6 +6,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
 
 /**
@@ -119,10 +120,19 @@ class Ledger(
     /** The PC applied [entry]: its answer becomes the base, and a create's temp row gives way to the real one. */
     suspend fun applied(entry: OutboxEntry, result: JsonElement) = lock.withLock {
         val open = outbox.open()
-        Optimistic.created(entry.op, entry.id, result)?.let { (temp, _) ->
+        Optimistic.created(entry.op, entry.id, result)?.let { (temp, real) ->
             Optimistic.target(entry.op, entry.payload, entry.id)?.let { (kind, _) -> rows.remove(kind, listOf(temp)) }
+            // Messages queued to a thread made offline follow it to its real id, or the thread
+            // the screen now shows would leave them out.
+            if (entry.op == "thread.create") {
+                val moved = rows.all(Kind.Message, Scope(parent = temp)).map { m ->
+                    val json = JsonObject(LinkedHashMap(m.json).also { it["thread_id"] = real.toLongOrNull()?.let(::JsonPrimitive) ?: JsonPrimitive(real) })
+                    m.copy(parent = real, json = json)
+                }
+                if (moved.isNotEmpty()) rows.upsert(moved)
+            }
         }
-        val fresh = Optimistic.resultRows(entry.op, result)
+        val fresh = Optimistic.resultRows(entry.op, result).ifEmpty { moduleRow(entry.op, result) }
         if (fresh.isNotEmpty()) {
             rows.upsert(fresh.map { overlay(it, open) })
             wrote(fresh.map { it.kind to it.id })
@@ -205,6 +215,20 @@ class Ledger(
             return
         }
         rows.upsert(listOf(overlay(current.copy(json = base), open)))
+    }
+
+    /**
+     * A module op answers with the Module, not the ModuleSummary the list keeps (no task counts,
+     * no progress): its fields laid over the row the PC last listed, so the edit shows as the PC
+     * made it instead of reverting until the next list.
+     */
+    private suspend fun moduleRow(op: String, result: JsonElement): List<Row> {
+        if (!op.startsWith("module.") || op == "module.delete") return emptyList()
+        val obj = result as? JsonObject ?: return emptyList()
+        if (!obj.containsKey("name") || !obj.containsKey("priority")) return emptyList()
+        val id = Kind.Module.idOf(obj) ?: return emptyList()
+        val listed = rows.get(Kind.Module, id)?.base
+        return listOfNotNull(Row.of(Kind.Module, if (listed == null) obj else JsonObject(listed + obj)))
     }
 
     /** [server] with every open entry that targets it applied in order. */
