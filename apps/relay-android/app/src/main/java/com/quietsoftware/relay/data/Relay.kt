@@ -256,6 +256,9 @@ class Relay(
         result.onSuccess { profile ->
             val previous = pc.current()
             if (previous != null && previous.hostId != profile.hostId) {
+                // The old PC's session goes first: a read or an event of its own landing after the
+                // clear would leave its rows behind for good.
+                hub.link.stop()
                 hub.forgetData()
                 forgetNotified(context)
             }

@@ -55,6 +55,13 @@ class Ledger(
         rows.replace(kind, scope, kept + stays)
     }
 
+    /** Forget the PC's data and what was queued for it, under the lock, so no write interleaves. */
+    suspend fun clear() = lock.withLock {
+        rows.clear()
+        outbox.open().forEach { outbox.delete(it.id) }
+        written.clear()
+    }
+
     // ---- Reads that race events ----
 
     private var clock = 0L

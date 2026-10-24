@@ -356,8 +356,7 @@ class Hub(
 
     /** Forget the PC's data: another PC was paired, or this one forgotten. */
     suspend fun forgetData() = flushing.withLock {
-        store.clear()
-        outbox.open().forEach { outbox.delete(it.id) }
+        ledger.clear()
         _outboxChanged.value++
     }
 

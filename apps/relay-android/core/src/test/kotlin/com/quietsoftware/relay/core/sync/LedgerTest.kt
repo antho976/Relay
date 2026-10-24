@@ -236,6 +236,21 @@ class LedgerTest {
     }
 
     @Test
+    fun `forgetting the PC clears its rows and what was queued for it, and no list read marks survive`() = runBlocking {
+        ledger.upsert(listOf(Row.of(Kind.Task, task(7, "old PC's"))!!))
+        ledger.enqueue("task.update", obj("task_id" to 7, "title" to "queued"), "Rename")
+        val since = ledger.beginRead()
+        ledger.upsert(listOf(Row.of(Kind.Task, task(8, "event"))!!))
+        ledger.clear()
+        assertTrue(replica.all(Kind.Task).isEmpty())
+        assertTrue(outbox.open().isEmpty())
+        // The new PC's list is the whole truth: no row is held back as newer than it.
+        ledger.replace(Kind.Task, Scope(projectId = 1), listOf(Row.of(Kind.Task, task(8, "new PC's"))!!), since)
+        ledger.endRead()
+        assertEquals("new PC's", shown("8").s("title"))
+    }
+
+    @Test
     fun `a message to a thread shows at once, in the thread it was sent to`() = runBlocking {
         val sent = ledger.enqueue("thread.send", obj("id" to 7, "text" to "Am I on pace?"), "Message")
         val row = replica.get(Kind.Message, Optimistic.tempId(sent.id))!!
