@@ -325,7 +325,7 @@ impl Ui {
         let chevron = crate::icons::image(if folded { "chevron-right" } else { "chevron-down" }, 12);
         chevron.add_css_class("workspace-chevron");
         line.append(&chevron);
-        let caption = label(name, "workspace-name");
+        let caption = label(&crate::app::display_name(name), "workspace-name");
         caption.set_hexpand(true);
         caption.set_width_chars(1);
         caption.set_ellipsize(gtk::pango::EllipsizeMode::End);

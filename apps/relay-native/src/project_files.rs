@@ -112,7 +112,7 @@ impl Editor {
                 .to_owned()
         };
         self.scope_label
-            .set_text(&format!("{workspace_name} / {project_name} · {branch}"));
+            .set_text(&format!("{} / {project_name} · {branch}", crate::app::display_name(workspace_name)));
     }
     pub(super) fn select_checkout(self: &Rc<Self>, ui: &Rc<Ui>, path: &str) {
         if self.worktree.borrow().as_str() == path {

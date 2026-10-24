@@ -22,6 +22,20 @@ mod gaming_key;
 pub fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or("")
 }
+/// A workspace's name as a person reads it: a folder's lower-case slug
+/// ("northwind-traders-client-work") in words ("Northwind traders client work"). A name with a
+/// space or a capital in it was chosen, and stays as it is.
+pub fn display_name(name: &str) -> String {
+    let slug = !name.is_empty()
+        && !name.contains(char::is_whitespace)
+        && !name.chars().any(char::is_uppercase);
+    if !slug {
+        return name.to_string();
+    }
+    let words = name.split(['-', '_']).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ");
+    let mut chars = words.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
 pub fn rows(v: &Value, key: &str) -> Vec<Value> {
     v[key].as_array().cloned().unwrap_or_default()
 }
@@ -2709,7 +2723,17 @@ impl Ui {
 
 #[cfg(test)]
 mod tests {
-    use super::rotation_setting;
+    use super::{display_name, rotation_setting};
+
+    #[test]
+    fn a_folder_slug_reads_as_words_and_a_chosen_name_stays() {
+        assert_eq!(display_name("northwind-traders-client-work"), "Northwind traders client work");
+        assert_eq!(display_name("game_jam-2026"), "Game jam 2026");
+        assert_eq!(display_name("RelayV4"), "RelayV4");
+        assert_eq!(display_name("Open source"), "Open source");
+        assert_eq!(display_name("personal"), "Personal");
+        assert_eq!(display_name("my-App"), "my-App");
+    }
 
     #[test]
     fn only_rotation_keys_refresh_rotation() {
