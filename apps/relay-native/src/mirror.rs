@@ -48,6 +48,8 @@ const MIRROR_MAX_LINE: usize = 32 * 1024 * 1024;
 /// `decode.rs`), and a picture taller than this is more pixels than any dock or window shows.
 const MAX_CAPTURE: i32 = 1280;
 const DOCK_WIDTH: i32 = 440;
+/// What the sidebar and a page need beside a dock.
+const DOCK_ROOM: i32 = 900;
 /// What the window spends around the phone: the rail and stage padding across, padding down.
 const CHROME_W: i32 = 116;
 const CHROME_H: i32 = 60;
@@ -714,6 +716,13 @@ impl MirrorView {
         }
         if self.fullscreen.get() {
             self.toggle_fullscreen();
+        }
+        // The dock takes its width from the page beside it; a window without that room opens the
+        // mirror in its own window instead of squeezing the page under its least width.
+        if ui.window.width() > 0 && ui.window.width() - DOCK_WIDTH < DOCK_ROOM {
+            self.detach();
+            PREFER_DOCK.with(|prefer| prefer.set(true));
+            return;
         }
         self.release();
         let dock = Dock::new(&ui, DOCK_WIDTH);

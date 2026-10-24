@@ -343,6 +343,9 @@ pub struct Ui {
     /// contents. The bars themselves stay, wearing the start screen's ground.
     pub start_chrome: Vec<gtk::Widget>,
     pub page_overlay: gtk::Overlay,
+    /// The row the sidebar and page share, where a dock (the device mirror) takes its place
+    /// beside the page (`panel::Dock`).
+    pub dock_host: gtk::Box,
     pub panels: Rc<RefCell<Vec<Rc<crate::panel::Panel>>>>,
     registry_dirty: Cell<bool>,
     pub(crate) workspaces: RefCell<Vec<Value>>,
@@ -1406,6 +1409,7 @@ impl Ui {
                 .chain(bar.root.observe_children().into_iter().filter_map(|c| c.ok()?.downcast::<gtk::Widget>().ok()))
                 .collect(),
             page_overlay,
+            dock_host: body.clone(),
             panels: Rc::default(),
             registry_dirty: Cell::new(true),
             workspaces: RefCell::default(),
