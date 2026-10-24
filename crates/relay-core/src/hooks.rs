@@ -598,9 +598,14 @@ pub fn install_claude(worktree: &Path, instance: Instance, relay: &Path) -> Resu
         "hooks": [{"type": "command", "command": command, "timeout": 30}]
     }));
 
+    // A tool that failed reports as one that finished (a non-zero `adb install` included, or its
+    // device lease outlived it), and a new prompt ends a turn that Esc interrupted, which sends
+    // neither PostToolUse nor Stop.
     for (event, kind) in [
         ("SessionStart", "session_start"),
         ("PostToolUse", "tool_use"),
+        ("PostToolUseFailure", "tool_use"),
+        ("UserPromptSubmit", "prompt"),
         ("Stop", "stop"),
         ("Notification", "notification"),
     ] {

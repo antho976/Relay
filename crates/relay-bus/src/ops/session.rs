@@ -176,7 +176,7 @@ op!(Update, "session.update", UpdateIn => Session,
     OpMeta::mutation(Scope::Session, 6, "Patch a session; branch/model/effort conflict after first spawn").actors(Actors::UserOnly).undo(Undo::Inverse).emits(&["session.changed"]));
 payload!(#[schemars(rename = "SessionReportIn")] ReportIn { pub session: String, pub kind: String, pub data: Option<Value> });
 op!(Report, "session.report", ReportIn => Empty,
-    OpMeta::mutation(Scope::Session, 5, "Provider hooks calling home: session_start | tool_use | stop | notification | idle | blocked").audit(Audit::AgentOnly).actors(Actors::AgentOnly).emits(&["session.changed", "notify.new"]));
+    OpMeta::mutation(Scope::Session, 5, "Provider hooks calling home: session_start | tool_use | prompt | stop | notification | idle | blocked").audit(Audit::AgentOnly).actors(Actors::AgentOnly).emits(&["session.changed", "notify.new"]));
 payload!(#[schemars(rename = "SessionAttachIn")] AttachIn { pub session: String, pub from_seq: Option<u64>, pub epoch: Option<u64> });
 op!(Attach, "session.attach", AttachIn => Empty, OpMeta::query(Scope::Session, 3, "Attach the pty stream, replaying from (epoch, seq)").stream("pty"));
 op!(Detach, "session.detach", NameIn => Empty, OpMeta::query(Scope::Session, 3, "Detach the pty stream"));
