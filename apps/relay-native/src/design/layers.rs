@@ -37,7 +37,7 @@ fn rename_set(text: &str, shown: &str) -> Option<Value> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct Row {
     id: String,
     depth: u32,
@@ -63,6 +63,9 @@ pub struct Layers {
     page_sig: RefCell<PageSig>,
     model: gtk::StringList,
     rows: RefCell<Vec<Row>>,
+    /// What each row was last drawn showing (its layer's name, kind, eye, lock and whether it
+    /// is selected): a refresh with the same rows rebinds only those whose look changed.
+    looks: RefCell<Vec<u64>>,
     open: RefCell<HashSet<String>>,
     /// Said in place of the list when the page has nothing on it.
     empty: gtk::Label,
@@ -111,6 +114,7 @@ impl Layers {
             page_sig: RefCell::default(),
             model,
             rows: RefCell::default(),
+            looks: RefCell::default(),
             open: RefCell::default(),
             empty,
         });
@@ -451,9 +455,30 @@ impl Layers {
             }
         }
         drop(open);
+        let selection = b.selection.borrow();
+        let looks: Vec<u64> = rows.iter().map(|r| {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            if let Some(n) = scene.node(&r.id) {
+                (display_name(n), kind_glyph(n.kind), n.is_hidden(), n.is_locked()).hash(&mut h);
+            }
+            selection.contains(&r.id).hash(&mut h);
+            h.finish()
+        }).collect();
+        drop(selection);
         drop(scene);
-        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         self.empty.set_visible(rows.is_empty());
+        let same_rows = *self.rows.borrow() == rows;
+        let before = self.looks.replace(looks.clone());
+        if same_rows && before.len() == looks.len() {
+            // The same rows: only those that look otherwise are bound again, one at a time; on
+            // a page of thousands of layers a whole splice is a new object and a rebind a row.
+            for (i, row) in rows.iter().enumerate().filter(|(i, _)| before[*i] != looks[*i]) {
+                self.model.splice(i as u32, 1, &[row.id.as_str()]);
+            }
+            return;
+        }
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         *self.rows.borrow_mut() = rows.clone();
         self.model.splice(0, self.model.n_items(), &ids);
     }
