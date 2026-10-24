@@ -15,6 +15,7 @@ use relay_gym::model::History;
 use relay_gym::views::{self, Clock};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -46,11 +47,23 @@ fn file(path: &str) -> Result<(String, String), BusError> {
     if !p.is_absolute() {
         return Err(BusError::invalid("gym.path", "Give the file's full path"));
     }
-    let size = std::fs::metadata(p).map_err(|e| BusError::invalid("gym.path", format!("{}: {e}", p.display())))?.len();
-    if size > export::MAX_BYTES {
-        return Err(BusError::invalid("gym.import", "That file is too big to be an Avex export"));
+    let unreadable = |e: std::io::Error| BusError::invalid("gym.path", format!("{}: {e}", p.display()));
+    let too_big = || BusError::invalid("gym.import", "That file is too big to be an Avex export");
+    // Only a regular file, and never more than the cap read: `/dev/zero` has a length of 0 and
+    // no end, and a FIFO would hold the request forever (as money.import's `read_bounded`).
+    let meta = std::fs::metadata(p).map_err(unreadable)?;
+    if !meta.is_file() {
+        return Err(BusError::invalid("gym.path", format!("{}: not a file", p.display())));
     }
-    let text = std::fs::read_to_string(p).map_err(|e| BusError::invalid("gym.path", format!("{}: {e}", p.display())))?;
+    if meta.len() > export::MAX_BYTES {
+        return Err(too_big());
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(p).and_then(|f| f.take(export::MAX_BYTES + 1).read_to_end(&mut bytes)).map_err(unreadable)?;
+    if bytes.len() as u64 > export::MAX_BYTES {
+        return Err(too_big());
+    }
+    let text = String::from_utf8(bytes).map_err(|_| BusError::invalid("gym.import", "That file is not text, so not an Avex export"))?;
     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     Ok((text, name))
 }

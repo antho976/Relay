@@ -134,3 +134,29 @@ fn an_agent_reads_but_never_imports_or_forgets() {
         assert!(call_as(&engine, agent.clone(), op, payload).error.is_some(), "{op} must refuse an agent");
     }
 }
+
+/// `/dev/zero` has a length of 0 and no end, and a FIFO never answers: an import of either is
+/// refused at once instead of reading until the engine is out of memory or holding the request
+/// for good, as money.import does (`a_backup_is_only_ever_a_regular_file`).
+#[test]
+fn an_export_is_only_ever_a_regular_file() {
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("pipe.json");
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let answering = engine.clone();
+    let (pipe, folder) = (fifo.clone(), dir.path().to_path_buf());
+    std::thread::spawn(move || {
+        let codes: Vec<String> = [json!({"path": pipe}), json!({"path": "/dev/zero"}), json!({"path": folder})]
+            .into_iter()
+            .map(|payload| code(call_as(&answering, Actor::User, "gym.import", payload)))
+            .collect();
+        let _ = tx.send(codes);
+    });
+    let codes = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("a pipe or a device held the import open");
+    assert_eq!(codes, ["gym.path"; 3]);
+    let not_text = dir.path().join("avex.json");
+    std::fs::write(&not_text, b"{\"x\": \"caf\xe9\"}").unwrap();
+    assert_eq!(code(call_as(&engine, Actor::User, "gym.import", json!({"path": not_text}))), "gym.import");
+}
