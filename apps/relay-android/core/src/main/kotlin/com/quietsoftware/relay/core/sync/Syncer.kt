@@ -193,6 +193,11 @@ class Syncer(
     /** When the replica last caught up with the PC in full. */
     val syncedAt: StateFlow<Long> = _syncedAt
 
+    private val _synced = MutableStateFlow<BusSession?>(null)
+
+    /** The session the replica last caught up over in full: the current one once its first read is done. */
+    val synced: StateFlow<BusSession?> = _synced
+
     /** A new session: subscribe, then read everything. Events that arrive meanwhile are applied too. */
     suspend fun attach(s: BusSession) {
         session = s
@@ -213,6 +218,7 @@ class Syncer(
     suspend fun resync(s: BusSession) {
         run(s, Fetch.All)
         _syncedAt.value = now()
+        _synced.value = s
         _stale.tryEmit(setOf("*"))
     }
 

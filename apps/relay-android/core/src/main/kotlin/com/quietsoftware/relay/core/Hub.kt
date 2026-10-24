@@ -5,6 +5,8 @@ import com.quietsoftware.relay.core.link.Dialer
 import com.quietsoftware.relay.core.link.Link
 import com.quietsoftware.relay.core.link.LinkState
 import com.quietsoftware.relay.core.link.PcProfile
+import com.quietsoftware.relay.core.sync.Fetch
+import com.quietsoftware.relay.core.sync.Kind
 import com.quietsoftware.relay.core.sync.Ledger
 import com.quietsoftware.relay.core.sync.Optimistic
 import com.quietsoftware.relay.core.sync.OutboxEntry
@@ -21,6 +23,7 @@ import com.quietsoftware.relay.core.wire.Wire
 import com.quietsoftware.relay.core.wire.l
 import com.quietsoftware.relay.core.wire.s
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -38,6 +41,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -104,6 +108,8 @@ class Hub(
         outbox,
         onApplied = { e, r ->
             ledger.applied(e, r)
+            // Applied, but the PC no longer has the answer: read what it changed instead.
+            if (r is JsonNull) Optimistic.target(e.op, e.payload, e.id)?.let { (kind, id) -> refetch(kind, id, e.payload) }
             _outboxChanged.value++
         },
         onParked = {
@@ -124,8 +130,14 @@ class Hub(
                 s.ended.await()
                 holds.cancel()
             }
-            syncer.attach(s)
+            // A first read that fails (the subscribe, the project list) leaves the session with no
+            // events and a stale replica: what was queued is still sent, then the link dials again.
+            val attached = runCatching { syncer.attach(s) }
             flush()
+            attached.exceptionOrNull()?.let { e ->
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                s.close()
+            }
         }
         cloud.onSession = { s -> cloudSession(s) }
         scope.launch {
@@ -173,6 +185,38 @@ class Hub(
     }
 
     @Volatile private var again = false
+    private var flushRetry: Job? = null
+    @Volatile private var flushBackoff = FLUSH_RETRY_MIN_MS
+
+    private fun flushLater(s: BusSession) {
+        if (flushRetry?.isActive == true) return
+        val wait = flushBackoff
+        flushBackoff = (wait * 2).coerceAtMost(FLUSH_RETRY_MAX_MS)
+        flushRetry = scope.launch {
+            delay(wait)
+            if (link.session.value === s && s.isOpen) flush()
+        }
+    }
+
+    /** Read [kind]'s row [id] (or its list) again from the PC. */
+    private suspend fun refetch(kind: Kind, id: String, payload: JsonObject) {
+        val num = id.toLongOrNull()
+        val project = (payload["project_id"] as? JsonPrimitive)?.content?.toLongOrNull()
+        val fetch = when (kind) {
+            Kind.Task -> num?.let { Fetch.Task(it) } ?: Fetch.Tasks(project)
+            Kind.Note -> num?.let { Fetch.Note(it) } ?: project?.let { Fetch.Notes(it) }
+            Kind.Thread -> num?.let { Fetch.Thread(it) } ?: Fetch.Threads
+            Kind.Module -> Fetch.Modules(project)
+            Kind.Session -> Fetch.Sessions
+            Kind.Project -> Fetch.Projects
+            Kind.Workspace -> Fetch.Workspaces
+            Kind.Notification -> Fetch.Notifications
+            Kind.Mail -> project?.let { Fetch.Mail(it) }
+            Kind.Message -> (payload["id"] as? JsonPrimitive)?.content?.toLongOrNull()?.let { Fetch.Thread(it) }
+            else -> null
+        } ?: Fetch.All
+        syncer.schedule(setOf(fetch))
+    }
 
     /** Send what the outbox holds, if the PC is in reach. Safe to call any time, from anywhere. */
     suspend fun flush() {
@@ -182,7 +226,13 @@ class Hub(
             while (again) {
                 again = false
                 val s = link.session.value?.takeIf { it.isOpen } ?: break
-                if (runner.flush(s) is OutboxRunner.Outcome.LinkLost) break
+                if (runner.flush(s) is OutboxRunner.Outcome.LinkLost) {
+                    // A timeout with the session still up: nothing else would send it again until
+                    // the next edit or reconnect, so try again in a while.
+                    if (s.isOpen) flushLater(s)
+                    break
+                }
+                flushBackoff = FLUSH_RETRY_MIN_MS
             }
         } finally {
             flushing.unlock()
@@ -325,6 +375,10 @@ class Hub(
     companion object {
         /** How long the PC link may be down before the server's copy is dialled. */
         const val CLOUD_GRACE_MS = 3_000L
+
+        /** After a timed-out send with the link still up, the outbox is tried again this soon, then less often. */
+        const val FLUSH_RETRY_MIN_MS = 5_000L
+        const val FLUSH_RETRY_MAX_MS = 300_000L
 
         const val CLOUD_CATCH_UP_WAIT_MS = 30_000L
 

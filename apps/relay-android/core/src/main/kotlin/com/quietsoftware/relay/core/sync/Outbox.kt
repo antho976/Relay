@@ -195,6 +195,16 @@ class OutboxRunner(
             val error = response.error ?: BusError("internal", "bus.no_error", "The PC refused without saying why")
             if (error.transient) return Outcome.LinkLost(sent, error)
             if (dropped) continue
+            if (error.code == "bus.replay_unavailable" && (error.details?.get("applied") as? JsonPrimitive)?.content == "true") {
+                // It ran the first time; only its answer, too large to keep, is gone. Sending it
+                // again under a new id would run it twice: done, with no answer (JsonNull), and
+                // the row is read again.
+                val done = attempt.copy(state = OutboxEntry.State.Done, result = JsonNull, error = null)
+                store.update(done)
+                onApplied(done, JsonNull)
+                sent++
+                continue
+            }
             val state = when {
                 error.kind == "held" -> OutboxEntry.State.Held
                 error.kind == "conflict" && error.code.endsWith("edit_conflict") -> OutboxEntry.State.Conflict

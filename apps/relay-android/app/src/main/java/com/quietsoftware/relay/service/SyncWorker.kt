@@ -14,6 +14,7 @@ import com.quietsoftware.relay.data.Relay
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.TimeUnit
@@ -40,9 +41,10 @@ class SyncWorker @AssistedInject constructor(
             relay.hub.catchUpFromCloud()
             return Result.success()
         }
-        // The full read runs as the session opens; give it and the outbox time to finish.
+        // The full read runs as the session opens; give it and the outbox time to finish. This
+        // session's read, not one an earlier connection of this process made.
         withTimeoutOrNull(60_000) {
-            relay.hub.syncer.syncedAt.first { it > 0 }
+            combine(relay.hub.session, relay.hub.syncer.synced) { now, synced -> now != null && now === synced }.first { it }
             relay.hub.flush()
         }
         delay(2_000)

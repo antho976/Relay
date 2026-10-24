@@ -146,6 +146,7 @@ class FakeDoor(
                     put("error", buildJsonObject {
                         put("kind", e.kind); put("code", e.code); put("message", e.message ?: "")
                         e.confirm?.let { put("confirm", it) }
+                        e.details?.let { put("details", it) }
                     })
                 }
             }
@@ -155,7 +156,7 @@ class FakeDoor(
         }
     }
 
-    class Refuse(val kind: String, val code: String, message: String = code, val confirm: JsonObject? = null) : Exception(message)
+    class Refuse(val kind: String, val code: String, message: String = code, val confirm: JsonObject? = null, val details: JsonObject? = null) : Exception(message)
 }
 
 fun obj(vararg pairs: Pair<String, Any?>): JsonObject = buildJsonObject {
