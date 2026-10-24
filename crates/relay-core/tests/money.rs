@@ -86,6 +86,12 @@ fn an_agent_may_add_entries_but_never_wipe_the_ledger() {
         assert!(r.error.is_some(), "{op} must refuse an agent");
     }
     assert!(call_as(&engine, agent, "money.import", json!({"path": "/tmp/x.json"})).error.is_some());
+    // Writing the ledger over a file is the person's as much as reading one in: a role
+    // allowlist that lets `money.*` through must still not let an agent overwrite ~/.bashrc.
+    for op in ["money.import", "money.export", "money.reset", "money.sync"] {
+        let entry = relay_bus::registry::Registry::global().get(op).unwrap();
+        assert!(matches!(entry.meta.actors, relay_bus::registry::Actors::UserOnly), "{op} is the person's alone");
+    }
 }
 
 #[test]
