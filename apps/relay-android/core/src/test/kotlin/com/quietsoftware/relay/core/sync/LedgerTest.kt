@@ -230,6 +230,12 @@ class LedgerTest {
     }
 
     @Test
+    fun `rows the phone makes are stamped as the PC stamps its own`() {
+        assertEquals("2025-10-09T08:53:20.000000000Z", Optimistic.stamp(1_760_000_000_000))
+        assertEquals("2025-10-09T08:53:20.123000000Z", Optimistic.stamp(1_760_000_000_123))
+    }
+
+    @Test
     fun `a message to a thread shows at once, in the thread it was sent to`() = runBlocking {
         val sent = ledger.enqueue("thread.send", obj("id" to 7, "text" to "Am I on pace?"), "Message")
         val row = replica.get(Kind.Message, Optimistic.tempId(sent.id))!!

@@ -40,6 +40,14 @@ object Optimistic {
         "project.update", "workspace.update",
     )
 
+    /**
+     * [epochMs] as the PC stamps its rows (time.rs `stamp`): UTC with nine fractional digits, so
+     * a row the phone made sorts beside the PC's by its text, not by how many digits it has.
+     */
+    fun stamp(epochMs: Long): String = STAMP.format(Instant.ofEpochMilli(epochMs))
+
+    private val STAMP = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSSSSSSS'Z'").withZone(java.time.ZoneOffset.UTC)
+
     /** The kind of row an op changes many of at once (Mark all read), with no one [target]. */
     fun broad(op: String): Kind? = if (op == "notify.ack_all") Kind.Notification else null
 
@@ -82,7 +90,7 @@ object Optimistic {
      * create, which builds its row from the payload.
      */
     fun apply(op: String, payload: JsonObject, row: JsonObject?, entryId: String, now: Long): JsonObject? {
-        val ts = Instant.ofEpochMilli(now).toString()
+        val ts = stamp(now)
         return when (op) {
             "task.create" -> buildJsonObject {
                 put("id", tempId(entryId))

@@ -186,7 +186,7 @@ class Relay(
     fun thread(id: String): Flow<Thread?> = row(Kind.Thread, id).map { r -> r?.takeUnless { it.json.isHidden() }?.decode<Thread>() }.flowOn(Dispatchers.Default)
 
     fun messages(threadId: String): Flow<List<ThreadMessage>> =
-        db.entities().observeParent(Kind.Message.tag, threadId).map { list -> list.mapNotNull { it.toRow() }.decodeAll<ThreadMessage>().sortedWith(compareBy({ m -> m.createdAt }, { m -> m.id.toLongOrNull() ?: Long.MAX_VALUE })) }.flowOn(Dispatchers.Default)
+        db.entities().observeParent(Kind.Message.tag, threadId).map { list -> list.mapNotNull { it.toRow() }.decodeAll<ThreadMessage>().sortedWith(MESSAGE_ORDER) }.flowOn(Dispatchers.Default)
 
     fun mail(projectId: Long): Flow<List<Mail>> = rows(Kind.Mail, projectId).map { it.decodeAll<Mail>().sortedBy { m -> m.sentAt } }.flowOn(Dispatchers.Default)
 
@@ -323,6 +323,12 @@ class Relay(
     private fun deviceName(): String = listOf(Build.MANUFACTURER.replaceFirstChar { it.uppercase() }, Build.MODEL).distinct().joinToString(" ").take(64)
 
     companion object {
+        /**
+         * A thread's messages in time order, the ones the PC has not answered yet last: their
+         * stamps are the phone's clock, which may be behind the PC's.
+         */
+        val MESSAGE_ORDER: Comparator<ThreadMessage> = compareBy({ m -> Optimistic.isTemp(m.id) }, { m -> m.createdAt }, { m -> m.id.toLongOrNull() ?: Long.MAX_VALUE })
+
         /** Needs you first, then working, then the rest (the old app's order, and the PC's). */
         private val STATE_ORDER = listOf("blocked", "running", "spawning", "idle", "created", "restorable", "parked", "exited", "closed")
         val SESSION_ORDER: Comparator<Session> = compareBy({ STATE_ORDER.indexOf(it.state).let { i -> if (i < 0) 99 else i } }, { it.name })
