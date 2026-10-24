@@ -211,7 +211,9 @@ pub struct TxQuery {
 #[schemars(rename = "MoneyTxPage")]
 pub struct TxPage {
     pub period: PeriodView,
+    /// The newest matching entries, at most the query's `limit`.
     pub transactions: Vec<Tx>,
+    /// What every matching entry in the period took in and spent, listed or not.
     #[schemars(extend("x-unit" = "minor"))]
     pub income: i64,
     #[schemars(extend("x-unit" = "minor"))]

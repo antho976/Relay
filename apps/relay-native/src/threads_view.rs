@@ -4643,15 +4643,16 @@ fn entry_row(ui: &Rc<Ui>, tx: &Value, dated: bool) -> gtk::Button {
     key
 }
 
-/// The Entries view: the period's newest [`ENTRIES_SHOWN`] entries by day, in, out and net over
-/// them, and the key to the Entries page for the rest.
+/// The Entries view: the period's in, out and net (over all of it: `money.tx.list` totals every
+/// entry, listed or not), its newest [`ENTRIES_SHOWN`] entries by day, and the key to the
+/// Entries page for the rest.
 fn panel_entries(ui: &Rc<Ui>, body: &gtk::Box, page: &Value) {
     let rows: Vec<&Value> = page["transactions"].as_array().into_iter().flatten().collect();
     let fmt = super::formatter();
     let (income, spent) = (page["income"].as_i64().unwrap_or(0), page["spent"].as_i64().unwrap_or(0));
     let head = gtk::Box::new(gtk::Orientation::Vertical, 4);
     head.add_css_class("threads-summary");
-    // A full read is only the newest of the period, and its figures count only those.
+    // A full read lists only the newest of the period; its figures count all of it.
     let mut when = super::pages::period_name(&page["period"]);
     if rows.len() >= ENTRIES_SHOWN as usize {
         when.push_str(&format!(" · latest {ENTRIES_SHOWN}"));

@@ -549,8 +549,22 @@ impl Ledger {
             Self::tx_row,
         )?;
         let transactions: Vec<Tx> = rows.collect::<std::result::Result<_, _>>()?;
-        let income = transactions.iter().filter(|t| t.r#type == TxType::Income).map(|t| t.amount).sum();
-        let spent = transactions.iter().filter(|t| t.r#type == TxType::Expense).map(|t| t.amount).sum();
+        // Over every matching entry, not the `limit` listed: a panel that lists the newest 60
+        // still says what the period took in and spent.
+        let (income, spent) = self.conn.prepare_cached(
+            "SELECT COALESCE(SUM(CASE WHEN t.type = 'INCOME' THEN t.amount END), 0),
+                    COALESCE(SUM(CASE WHEN t.type = 'EXPENSE' THEN t.amount END), 0)
+             FROM transactions t
+             LEFT JOIN accounts a ON a.id = t.account_id
+             LEFT JOIN categories c ON c.id = t.category_id
+             WHERE t.deleted = 0 AND t.date >= ?1 AND t.date < ?2
+               AND (?3 = '' OR t.note GLOB ?3 OR COALESCE(c.name, '') GLOB ?3 OR COALESCE(a.name, '') GLOB ?3)
+               AND (?4 IS NULL OR t.account_id = ?4 OR t.to_account_id = ?4)
+               AND (?5 IS NULL OR t.category_id = ?5)",
+        )?.query_row(
+            params![period.start.to_string(), period.end_exclusive.to_string(), pattern, q.account_id, q.category_id],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+        )?;
         Ok(TxPage { period: PeriodView::of(&period, today), transactions, income, spent })
     }
 
@@ -1508,6 +1522,20 @@ mod tests {
         assert_eq!(cleared.category_id, None);
         let both = l.tx_update(t.id, &TxPatch { category_id: Some(dining), clear_category: Some(true), ..Default::default() }).unwrap();
         assert_eq!(both.category_id, Some(dining));
+    }
+
+    /// A page cut short by its limit still says what the whole period took in and spent.
+    #[test]
+    fn a_short_page_still_totals_the_period() {
+        let (mut l, acct) = with_account();
+        let dining = category(&l, "Dining");
+        for day in 1..=5 {
+            spend(&mut l, acct, dining, 10_00, &format!("2026-10-0{day}"));
+        }
+        let page = l.tx_list(&TxQuery { limit: Some(2), ..Default::default() }, date(2026, 10, 6)).unwrap();
+        assert_eq!((page.transactions.len(), page.spent), (2, 50_00));
+        let found = l.tx_list(&TxQuery { query: Some("dining".into()), limit: Some(1), ..Default::default() }, date(2026, 10, 6)).unwrap();
+        assert_eq!(found.spent, 50_00, "the filters count, the limit does not");
     }
 
     #[test]
