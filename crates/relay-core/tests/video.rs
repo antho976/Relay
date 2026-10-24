@@ -622,6 +622,29 @@ fn voice_lines_sounds_and_music_come_from_elevenlabs_with_how_they_were_made() {
     assert_eq!(code(call(&e, "video.sfx", json!({"video_id": id, "prompt": "boing"}))), "video.elevenlabs.no_key");
 }
 
+/// A transcription sends the sound alone, small: ten seconds of stereo WAV go as a mono MP3.
+#[test]
+fn a_transcription_sends_only_the_sound() {
+    if which::which("ffmpeg").is_err() {
+        eprintln!("no ffmpeg: skipped");
+        return;
+    }
+    let (e, _root) = project();
+    let (id, dir) = create(&e);
+    let calls = with_elevenlabs(&e);
+    ok(&e, "video.elevenlabs.key_set", json!({"key": "sk_test_123"}));
+    fs::create_dir_all(dir.join("public/assets")).unwrap();
+    let wav = dir.join("public/assets/talk.wav");
+    let made = std::process::Command::new("ffmpeg").args(["-v", "error", "-f", "lavfi", "-i", "sine=frequency=300:duration=10", "-ac", "2", "-ar", "48000"])
+        .arg(&wav).status().unwrap();
+    assert!(made.success());
+    ok(&e, "video.transcribe", json!({"video_id": id, "asset": "assets/talk.wav"}));
+    let sent = calls.lock().unwrap().iter().find(|c| c.path == "/v1/speech-to-text").cloned().unwrap();
+    let relay_core::video::eleven::Body::Form { file, .. } = &sent.body else { panic!("{sent:?}") };
+    assert_eq!(file.0, "talk.mp3");
+    assert!((file.1.len() as u64) < fs::metadata(&wav).unwrap().len() / 10, "{} bytes sent", file.1.len());
+}
+
 #[test]
 fn an_android_capture_holds_the_device_records_the_steps_and_adds_an_even_clip() {
     if which::which("ffmpeg").is_err() {

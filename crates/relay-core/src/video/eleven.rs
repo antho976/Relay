@@ -35,6 +35,8 @@ const MOST_JSON: u64 = 40 << 20;
 pub const TTS_MODEL: &str = "eleven_multilingual_v2";
 pub const MUSIC_MODEL: &str = "music_v1";
 const STT_MODELS: [&str; 2] = ["scribe_v2", "scribe_v1"];
+/// Most a transcription sends: its sound alone, mono at 16 kHz, is about 22 MB an hour.
+const MOST_UPLOAD: u64 = 200 << 20;
 
 /// What is sent.
 #[derive(Debug, Clone, PartialEq)]
@@ -42,7 +44,7 @@ pub enum Body {
     None,
     Json(Value),
     /// Form fields and one file, as multipart/form-data.
-    Form { fields: Vec<(String, String)>, file: (String, Vec<u8>) },
+    Form { fields: Vec<(String, String)>, file: (String, Arc<Vec<u8>>) },
 }
 
 /// One request to ElevenLabs.
@@ -537,8 +539,7 @@ pub fn compose(engine: &Engine, prompt: &str, seconds: f64, instrumental: bool, 
 
 /// Speech to text with each word's timing: the text, its language, and the words.
 pub fn hear(engine: &Engine, file: &Path, language: Option<&str>) -> Result<(String, String, Vec<VoiceWord>), BusError> {
-    let bytes = std::fs::read(file).map_err(|e| BusError::invalid("video.asset", format!("{}: {e}", file.display())))?;
-    let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "audio".into());
+    let (name, bytes) = for_hearing(engine, file)?;
     let mut last = None;
     for model in STT_MODELS {
         let mut fields = vec![("model_id".to_string(), model.to_string()), ("timestamps_granularity".to_string(), "word".to_string())];
@@ -561,6 +562,31 @@ pub fn hear(engine: &Engine, file: &Path, language: Option<&str>) -> Result<(Str
         }
     }
     Err(last.unwrap_or_else(|| BusError::unavailable("video.elevenlabs", "no speech-to-text model answered")))
+}
+
+/// What a transcription of `file` sends: its sound alone, mono MP3 at 16 kHz (a render or a clip
+/// of gigabytes is a few MB of it), written to a scratch file and read once; the file itself
+/// when ffmpeg cannot read it so (none set up, or not media it knows) and it is small enough.
+fn for_hearing(engine: &Engine, file: &Path) -> Result<(String, Arc<Vec<u8>>), BusError> {
+    let stem = file.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "audio".into());
+    let dir = engine.store.videos_dir().join(".relay/sound");
+    let scratch = dir.join(format!(".hear-{}.mp3", uuid::Uuid::new_v4()));
+    let made = std::fs::create_dir_all(&dir).is_ok() && super::media::ffmpeg(engine, &[std::ffi::OsStr::new("-i"), file.as_os_str(),
+        "-vn".as_ref(), "-sn".as_ref(), "-dn".as_ref(), "-ac".as_ref(), "1".as_ref(), "-ar".as_ref(), "16000".as_ref(),
+        "-c:a".as_ref(), "libmp3lame".as_ref(), "-b:a".as_ref(), "48k".as_ref(), scratch.as_os_str()], "taking the sound out").is_ok();
+    let (path, name) = if made { (scratch.as_path(), format!("{stem}.mp3")) } else {
+        (file, file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "audio".into()))
+    };
+    let read = (|| {
+        let size = std::fs::metadata(path).map_err(|e| BusError::invalid("video.asset", format!("{}: {e}", file.display())))?.len();
+        if size > MOST_UPLOAD {
+            return Err(BusError::invalid("video.asset", format!("{} holds {} MB of sound to send; at most {} MB", file.display(), size >> 20, MOST_UPLOAD >> 20))
+                .with_hint("transcribe a shorter clip, or a render of part of it"));
+        }
+        std::fs::read(path).map_err(|e| BusError::invalid("video.asset", format!("{}: {e}", file.display())))
+    })();
+    let _ = std::fs::remove_file(&scratch);
+    Ok((name, Arc::new(read?)))
 }
 
 #[cfg(test)]
