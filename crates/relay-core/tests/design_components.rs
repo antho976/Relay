@@ -229,6 +229,33 @@ fn an_agents_lenient_list_is_drawn_synced_and_sized() {
     assert_eq!(content(&e, id), before);
 }
 
+/// An instance resized keeps its pinned children where the follow rule put them: a later change
+/// to the main brings its fields, not the place its child has in the main's size; and one the
+/// main gains is placed for the instance's size too.
+#[test]
+fn a_resized_instance_keeps_its_pinned_children_through_the_mains_changes() {
+    let (e, _root) = project();
+    let id = ok(&e, "design.create", json!({"project_id": 1, "title": "Pins"}))["design"]["id"].as_i64().unwrap();
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "card", "parent": "page-1", "kind": "frame", "w": 200, "h": 100, "fill": "#FFFFFF"}},
+        {"op": "add", "node": {"id": "badge", "parent": "card", "kind": "rect", "x": 170, "y": 0, "w": 20, "h": 20, "pin_x": "right", "fill": "#FF0000"}},
+        {"op": "add", "node": {"id": "bar", "parent": "card", "kind": "rect", "x": 10, "y": 90, "w": 180, "h": 4, "pin_x": "left_right", "pin_y": "bottom"}},
+        {"op": "copy", "id": "card", "as": "card-2", "dx": 300, "instance": true},
+    ]));
+    apply(&e, id, json!([{"op": "update", "id": "card-2", "set": {"w": 300, "h": 120}}]));
+    let place = |n: &str| { let v = node(&e, id, n); (v["x"].as_f64().unwrap(), v["y"].as_f64().unwrap(), v["w"].as_f64().unwrap()) };
+    assert_eq!(place("card-2:badge"), (270.0, 0.0, 20.0));
+    assert_eq!(place("card-2:bar"), (10.0, 110.0, 280.0));
+    apply(&e, id, json!([{"op": "update", "id": "card", "set": {"fill": "#EEEEEE"}}]));
+    assert_eq!(node(&e, id, "card-2")["fill"], "#EEEEEE");
+    assert_eq!(place("card-2:badge"), (270.0, 0.0, 20.0), "the main's change keeps it where it follows");
+    assert_eq!(place("card-2:bar"), (10.0, 110.0, 280.0));
+    // A move of the main's child moves the instance's by as much, in its own size.
+    apply(&e, id, json!([{"op": "update", "id": "badge", "set": {"x": 160}}]));
+    assert_eq!(place("card-2:badge").0, 260.0);
+    assert_eq!(place("badge").0, 160.0);
+}
+
 #[test]
 fn a_design_is_marked_once_it_holds_a_main() {
     let (e, _root) = project();
