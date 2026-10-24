@@ -1490,22 +1490,23 @@ fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Opti
         cmd.process_group(0);
     }
     let mut child = cmd.spawn().map_err(|e| format!("Could not start Claude: {e}"))?;
-    let (Some(mut stdin), Some(stdout), Some(mut stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take()) else {
+    let (Some(stdin), Some(stdout), Some(mut stderr)) = (child.stdin.take(), child.stdout.take(), child.stderr.take()) else {
         let _ = child.kill();
         return Err("Could not talk to Claude".into());
     };
-    if let Err(e) = stdin.write_all(first_line.as_bytes()).and_then(|()| stdin.flush()) {
-        kill(child.id());
-        let _ = child.wait();
-        return Err(format!("Could not talk to Claude: {e}"));
-    }
+    // Registered before its first line is written: the socket door knows a thread's agent by
+    // its pid in `live.agents`, and a first line with pictures can be megabytes, which Claude
+    // may not read before its MCP server asks the door for its tools. Unregistered then, that
+    // server was refused as Relay's own child and the agent ran with no tools.
+    let pid = child.id();
+    let stdin = Arc::new(Mutex::new(stdin));
 
     let serial = {
         let mut live = lock(&engine.threads.live);
         // Stopped while Claude started: it has nothing to answer.
         if !live.current(id, token) {
             drop(live);
-            kill(child.id());
+            kill(pid);
             let _ = child.wait();
             return Ok(false);
         }
@@ -1521,7 +1522,7 @@ fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Opti
                 }
             }
         }
-        let agent = Agent { stdin: Arc::new(Mutex::new(stdin)), pid: child.id(), serial, turn: token, last_used: Instant::now(), local: local.is_some(), assistant };
+        let agent = Agent { stdin: stdin.clone(), pid, serial, turn: token, last_used: Instant::now(), local: local.is_some(), assistant };
         // One agent per thread: one it replaces is closed, not left answering beside it.
         if let Some(replaced) = live.agents.insert(id, agent) {
             kill(replaced.pid);
@@ -1563,6 +1564,22 @@ fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Opti
             }
         })
         .map_err(|e| format!("Could not watch Claude: {e}"))?;
+    // Written with its output already read, so a Claude that talks before it reads cannot
+    // stall on a full pipe while this waits on it.
+    let written = {
+        let mut stdin = lock(&stdin);
+        stdin.write_all(first_line.as_bytes()).and_then(|()| stdin.flush())
+    };
+    if let Err(e) = written {
+        // Taken out first: its reader then ends it quietly, and the caller says why.
+        let mut live = lock(&engine.threads.live);
+        if live.agents.get(&id).is_some_and(|a| a.serial == serial) {
+            live.agents.remove(&id);
+        }
+        drop(live);
+        kill(pid);
+        return Err(format!("Could not talk to Claude: {e}"));
+    }
     start_reaper(engine);
     Ok(true)
 }

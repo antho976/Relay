@@ -802,3 +802,46 @@ http.server.HTTPServer(("127.0.0.1", port), Health).serve_forever()
     ok(&engine, "thread.stop", json!({"id": id}));
     ok(&engine, "thread.pick", json!({}));
 }
+
+/// A first message with a picture is a line of megabytes, which Claude may not read before its
+/// MCP server asks the socket door for tools. The agent is known to the door by then: here a
+/// stand-in that calls the door before it reads a byte proposes for its own thread.
+#[test]
+fn an_agent_that_calls_the_door_before_reading_its_first_line_is_known() {
+    if !std::process::Command::new("python3").args(["-c", ""]).status().is_ok_and(|s| s.success()) {
+        eprintln!("skipping: no python3 to stand in for Relay's MCP server");
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let engine = engine_at(root.path());
+    let dir = root.path().join("fake");
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("claude");
+    let body = r#"#!/bin/sh
+python3 "DIR/client.py" "DIR"
+while IFS= read -r line; do
+  echo '{"type":"system","subtype":"init","session_id":"fake-session-1","mcp_servers":[{"name":"relay","status":"connected"}],"tools":["mcp__relay__money_summary"]}'
+  echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Seen"}]},"parent_tool_use_id":null}'
+  echo '{"type":"result","subtype":"success","is_error":false,"result":"Seen"}'
+done
+"#.replace("DIR", &dir.display().to_string());
+    std::fs::write(&script, body).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    ok(&engine, "settings.set", json!({"path": "providers.claude.path", "value": script}));
+    let added = ledger(&engine);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let server = runtime.block_on(relay_core::socket::SocketServer::start_in(engine.clone(), root.path().join("run"))).unwrap();
+    std::fs::write(dir.join("calls.json"), json!([["thread.propose", {"action": {"money.tx.delete": [{"id": added[0]["id"]}]}, "why": "Logged twice"}]]).to_string()).unwrap();
+    std::fs::write(dir.join("sock"), server.path.display().to_string()).unwrap();
+    std::fs::write(dir.join("client.py"), CLIENT).unwrap();
+
+    // About 3 MB of picture: far past what a pipe holds, so the write waits on the reader.
+    let image = upload(&engine, &png(800, 600, 3 * 1024 * 1024));
+    let created = ok(&engine, "thread.create", json!({"text": "What is this receipt?", "images": [image["id"]]}));
+    settled(&engine, &created["id"], 2);
+    let answers: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("answers.json")).unwrap()).unwrap();
+    assert_eq!(answers[0]["ok"], true, "{answers}");
+    assert_eq!(answers[0]["result"]["thread_id"], created["id"], "the door named the agent's own thread");
+    drop(server);
+}
