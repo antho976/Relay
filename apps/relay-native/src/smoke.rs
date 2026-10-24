@@ -66,7 +66,9 @@ fn record_geometry(ui: &Ui, screenshot: &str) {
                 "type": widget.type_().name(), "name": widget.widget_name().to_string(),
                 "classes": widget.css_classes().iter().map(|s| s.as_str()).collect::<Vec<_>>(),
                 "text": widget.downcast_ref::<gtk::Label>().map(|l| l.text().to_string()),
-                "x": bounds.x(), "y": bounds.y(), "width": bounds.width(), "height": bounds.height()
+                "x": bounds.x(), "y": bounds.y(), "width": bounds.width(), "height": bounds.height(),
+                // What holds a window wider than asked: the widest minimum under it.
+                "min_width": widget.measure(gtk::Orientation::Horizontal, -1).0
             }));
         }
         let mut child = widget.first_child();
@@ -1017,6 +1019,13 @@ pub fn install(ui: &Rc<Ui>) {
                     Ok(())
                 });
                 return;
+            }
+            // A narrow bar keeps Window presets under its More key.
+            if page == "layouts" {
+                if let Some(key) = named(&navigate.window, "window-presets").filter(|w| !w.is_mapped()) {
+                    key.downcast::<gtk::Button>().unwrap().emit_clicked();
+                    return;
+                }
             }
             if matches!(page.as_str(), "palette" | "layouts" | "usage") {
                 let control = match page.as_str() {

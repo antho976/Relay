@@ -4,6 +4,7 @@ mod client;
 mod design;
 mod editor;
 mod fit_label;
+mod fold;
 mod fonts;
 mod icons;
 mod mirror;

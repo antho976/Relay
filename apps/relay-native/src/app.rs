@@ -494,6 +494,9 @@ struct TopBar {
     actions: gtk::Box,
     palette_key: gtk::Button,
     palette_keycap: gtk::Label,
+    /// The search key's words, the utility keys (or their More key) and New agent's caption,
+    /// folded in that order as the bar narrows (`fold_top_bar`).
+    folds: [crate::fold::Fold; 3],
     layouts_key: gtk::Button,
     skills_key: gtk::Button,
     plugins_key: gtk::Button,
@@ -562,11 +565,23 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     palette_row.append(&palette_text);
     let palette_keycap = label("Ctrl K", "keycap");
     palette_row.append(&palette_keycap);
-    palette_key.set_child(Some(&palette_row));
+    // Narrower still, the words go and the key is its glass and its chord.
+    let palette_compact = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    palette_compact.append(&crate::icons::image("search", 14));
+    let compact_keycap = label("Ctrl K", "keycap");
+    palette_keycap.bind_property("label", &compact_keycap, "label").sync_create().build();
+    palette_compact.append(&compact_keycap);
+    let palette_fold = crate::fold::Fold::new(&palette_row, &palette_compact);
+    // It asks for its shortest words and grows into what the bar has left, so the keys after it
+    // get their full width first.
+    palette_fold.set_grows(true);
+    palette_fold.set_hexpand(true);
+    palette_key.set_child(Some(&palette_fold));
     palette_key.set_valign(gtk::Align::Center);
     let layouts_key = icon_button("view-grid-symbolic", "Window presets");
     layouts_key.set_widget_name("window-presets");
     let skills_key = icon_button("skills", "Skills for this project");
+    skills_key.set_widget_name("project-skills-key");
     let plugins_key = icon_button("plugins", "Plugins for this project");
     plugins_key.set_widget_name("project-plugins");
     // The assistant: a drawer over the page, about Relay itself (`assistant.rs`).
@@ -585,16 +600,28 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     for (key, icon) in [(&skills_key, "skills"), (&plugins_key, "plugins"), (&layouts_key, "layout"), (&assistant_key, "assistant")] {
         key.set_child(Some(&crate::icons::image(icon, 18)));
     }
-    for key in [
-        &palette_key,
-        &skills_key,
-        &plugins_key,
-        &layouts_key,
-        &assistant_key,
-        &notifications_key,
-    ] {
-        top_actions.append(key);
+    top_actions.append(&palette_key);
+    // Skills, Plugins, Window presets and the Assistant; on a narrow bar, one More key that lists
+    // whichever of them the page shows.
+    let tools = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    for key in [&skills_key, &plugins_key, &layouts_key, &assistant_key] {
+        tools.append(key);
     }
+    let more_key = icon_button("more", "More");
+    more_key.set_widget_name("topbar-more");
+    more_key.set_child(Some(&crate::icons::image("more", 18)));
+    more_key.connect_clicked({
+        let tools = tools.downgrade();
+        move |more| {
+            if let Some(tools) = tools.upgrade() {
+                more_menu(more, &tools);
+            }
+        }
+    });
+    let tools_fold = crate::fold::Fold::new(&tools, &more_key);
+    tools_fold.add_css_class("topbar-tools");
+    top_actions.append(&tools_fold);
+    top_actions.append(&notifications_key);
     let reconnect = icon_button("view-refresh-symbolic", "Reconnect to engine");
     top_actions.append(&reconnect);
     reconnect.set_visible(false);
@@ -604,7 +631,9 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     launch_label.append(&crate::icons::image_with_stroke("plus", 14, 2.0));
     let launch_caption = label("New agent", "");
     launch_label.append(&launch_caption);
-    launch_key.set_child(Some(&launch_label));
+    // On the narrowest bar the plus alone, its caption in the tooltip.
+    let launch_fold = crate::fold::Fold::new(&launch_label, &crate::icons::image_with_stroke("plus", 14, 2.0));
+    launch_key.set_child(Some(&launch_fold));
     launch_key.set_valign(gtk::Align::Center);
     launch_key.add_css_class("launch-key");
     top_actions.append(&launch_key);
@@ -640,8 +669,50 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
         window_controls.append(&key);
     }
     top.append(&window_controls);
+    // The bar folds as it narrows. A probe over it reports its width after each layout; the
+    // sidebar's width and the keys a page shows move what fits without resizing it.
+    let folds = [palette_fold.clone(), tools_fold.clone(), launch_fold.clone()];
+    let refold = Rc::new({
+        let (top, tools) = (top.downgrade(), tools.downgrade());
+        let pending = Rc::new(Cell::new(false));
+        move || {
+            if pending.replace(true) {
+                return;
+            }
+            let (top, tools, folds, pending) = (top.clone(), tools.clone(), folds.clone(), pending.clone());
+            // Never inside size-allocate: the next frame takes the new requests.
+            glib::idle_add_local_once(move || {
+                pending.set(false);
+                if let (Some(top), Some(tools)) = (top.upgrade(), tools.upgrade()) {
+                    fold_top_bar(&top, &tools, &folds);
+                }
+            });
+        }
+    });
+    let probe = gtk::DrawingArea::new();
+    probe.set_can_target(false);
+    probe.set_focusable(false);
+    probe.connect_resize({
+        let refold = refold.clone();
+        move |_, _, _| refold()
+    });
+    for key in [&skills_key, &plugins_key, &layouts_key, &assistant_key, &reconnect, &launch_key, &money_add] {
+        let refold = refold.clone();
+        key.connect_visible_notify(move |_| refold());
+    }
+    for watched in [top_left.upcast_ref::<gtk::Widget>(), launch_caption.upcast_ref()] {
+        let refold = refold.clone();
+        watched.connect_notify_local(None, move |_, spec| {
+            if matches!(spec.name(), "width-request" | "label") {
+                refold();
+            }
+        });
+    }
+    let bar = gtk::Overlay::new();
+    bar.set_child(Some(&top));
+    bar.add_overlay(&probe);
     let handle = gtk::WindowHandle::new();
-    handle.set_child(Some(&top));
+    handle.set_child(Some(&bar));
     // The bar lives inside the wallpaper backdrop so panel opacity shows the wallpaper
     // behind it, like the status bar. A hidden titlebar keeps client-side decorations
     // and their resize edges; the WindowHandle still drags and maximizes the window.
@@ -658,6 +729,7 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
         actions: top_actions,
         palette_key,
         palette_keycap,
+        folds: [palette_fold, tools_fold, launch_fold],
         layouts_key,
         skills_key,
         plugins_key,
@@ -669,6 +741,77 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
         launch_caption,
         money_add,
     }
+}
+
+/// Fold the title bar to the width it has: first the utility keys into More, then the search
+/// key's words, then New agent's caption. Each step is taken only when the bar, asking for every
+/// key's full width, would not fit; the folds ask for their compact width alone, so the window
+/// can always be made as narrow as the folded bar.
+fn fold_top_bar(top: &gtk::Box, tools: &gtk::Box, folds: &[crate::fold::Fold; 3]) {
+    let any_tool = std::iter::successors(tools.first_child(), |w| w.next_sibling()).any(|w| w.is_visible());
+    let [search, tools_fold, launch] = folds;
+    // Nothing to list under More: no key at all, rather than an empty menu.
+    tools_fold.set_visible(any_tool);
+    let width = top.width();
+    if width <= 0 || !top.is_mapped() {
+        return;
+    }
+    let (_, natural, _, _) = top.measure(gtk::Orientation::Horizontal, -1);
+    let shown = |f: &crate::fold::Fold| if f.is_visible() { f.measure(gtk::Orientation::Horizontal, -1).1 } else { 0 };
+    let fixed = natural - folds.iter().map(shown).sum::<i32>();
+    let need = |f: &crate::fold::Fold, full: bool| if f.is_visible() { f.width_of(full) } else { 0 };
+    let stages = [(true, true, true), (true, false, true), (false, false, true), (false, false, false)];
+    let (words, keys, caption) = stages
+        .into_iter()
+        .find(|&(words, keys, caption)| {
+            fixed + need(search, words) + need(tools_fold, keys) + need(launch, caption) <= width
+        })
+        .unwrap_or((false, false, false));
+    search.set_prefer_full(words);
+    tools_fold.set_prefer_full(keys || !any_tool);
+    launch.set_prefer_full(caption);
+}
+
+/// The More key's menu: the utility keys the bar has folded away, those the page shows.
+fn more_menu(more: &gtk::Button, tools: &gtk::Box) {
+    let popover = gtk::Popover::new();
+    popover.add_css_class("registry-menu");
+    popover.set_has_arrow(false);
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    body.set_size_request(220, -1);
+    for key in std::iter::successors(tools.first_child(), |w| w.next_sibling()) {
+        let Ok(key) = key.downcast::<gtk::Button>() else { continue };
+        if !key.is_visible() {
+            continue;
+        }
+        let icon = match key.widget_name().as_str() {
+            "project-skills-key" => "skills",
+            "project-plugins" => "plugins",
+            "window-presets" => "layout",
+            _ => "assistant",
+        };
+        let row = button("", "registry-action");
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 9);
+        line.append(&crate::icons::image(icon, 15));
+        line.append(&label(&key.tooltip_text().unwrap_or_default(), ""));
+        row.set_child(Some(&line));
+        let pop = popover.downgrade();
+        row.connect_clicked(move |_| {
+            if let Some(pop) = pop.upgrade() {
+                pop.popdown();
+            }
+            key.emit_clicked();
+        });
+        body.append(&row);
+    }
+    popover.set_child(Some(&body));
+    popover.set_parent(more);
+    popover.connect_closed(|popover| {
+        let popover = popover.clone();
+        // After the row's click has run.
+        glib::idle_add_local_once(move || popover.unparent());
+    });
+    popover.popup();
 }
 
 /// The notice under the title bar: the label, which stays the notice's source of truth
@@ -1257,7 +1400,9 @@ impl Ui {
         ui.wire_keys(&top, &bar, &wall.empty_launch, &side.add_project, &sheet.scrim);
         ui.wire_window();
         ui.remember_sidebar_width();
-        let mut dev_only: Vec<gtk::Widget> = vec![side.nav.clone().upcast(), top.layouts_key.clone().upcast(), top.assistant_key.clone().upcast(), top.launch_key.clone().upcast()];
+        // The title bar keeps one set of keys on every page of a space (Window presets takes you
+        // to the wall it arranges); the Threads space has none of them.
+        let mut dev_only: Vec<gtk::Widget> = vec![side.nav.clone().upcast(), top.skills_key.clone().upcast(), top.plugins_key.clone().upcast(), top.layouts_key.clone().upcast(), top.assistant_key.clone().upcast(), top.launch_key.clone().upcast()];
         dev_only.extend(side.workspaces.iter().cloned());
         crate::money::install(&ui, &side.money_nav, &top.money_add, dev_only);
         crate::design::install(&ui);
@@ -1320,7 +1465,7 @@ impl Ui {
         let ui = self;
         let (back_key, top_actions) = (top.sidebar_key.clone(), top.actions.clone());
         let (crumb, switcher, settings_tools) = (top.crumb.clone(), top.switcher.clone(), top.settings_tools.clone());
-        let (skills_key, plugins_key, bottom) = (top.skills_key.clone(), top.plugins_key.clone(), bottom.clone());
+        let bottom = bottom.clone();
         // The page Settings was opened from, which its back key returns to.
         let settings_return = Rc::new(RefCell::new(String::from("agents")));
         let return_state = settings_return.clone();
@@ -1353,8 +1498,6 @@ impl Ui {
             }));
             top_actions.set_visible(!settings);
             bottom.set_visible(!settings);
-            skills_key.set_visible(page == "agents");
-            plugins_key.set_visible(page == "agents");
             *mut_previous.borrow_mut() = page.into();
         });
         let weak = Rc::downgrade(ui);
@@ -1392,6 +1535,9 @@ impl Ui {
         let weak = Rc::downgrade(ui);
         top.layouts_key.connect_clicked(move |_| {
             if let Some(ui) = weak.upgrade() {
+                if ui.page.borrow().as_str() != "agents" {
+                    ui.navigate("agents");
+                }
                 ui.layout_menu();
             }
         });

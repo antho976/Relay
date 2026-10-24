@@ -322,8 +322,9 @@ window.notes-window { padding: 0; margin: 0; border: 0; box-shadow: none; backgr
 .layout-preset:hover, .layout-preset.selected { border-color: @strong; background: @wash; }
 .task-metadata flowboxchild { padding: 0; }
 
-/* The title bar's palette key, drawn as the search field it stands for. */
-button.command-search { min-width: 120px; min-height: 34px; padding: 0 6px 0 12px; margin-right: 10px; border: 1px solid @strong; border-radius: 10px; background: @raised; color: @faint; font-weight: 400; }
+/* The title bar's palette key, drawn as the search field it stands for. Its width is the fold's
+   (app.rs fold_top_bar): the words, "Search", or the glass and chord alone. */
+button.command-search { min-width: 0; min-height: 34px; padding: 0 6px 0 12px; margin-right: 10px; border: 1px solid @strong; border-radius: 10px; background: @raised; color: @faint; font-weight: 400; }
 button.command-search:hover { border-color: @line_emphasis; background: @raised; color: @secondary; }
 button.command-search image { color: @faint; }
 .command-search-text { font-size: 13px; }
@@ -360,8 +361,9 @@ button.settings-key:hover image { color: @ink; }
 .view-tabs button.quiet.open { background: alpha(@ink, 0.07); color: @secondary; }
 .view-tabs button.quiet.open:hover { color: @ink; }
 /* The terminal panes keep the look they had before this rework: their own text faces, and
-   their scrollbar. */
-.terminal-plate .umd label { font-family: 'Fira Sans', sans-serif; }
+   their scrollbar. Only the strip's own labels and keys: a popover opened from a strip key (Agent
+   settings) is chrome, in Geist, though it is the key's descendant. */
+.terminal-plate > .umd > label, .terminal-plate > .umd > box > label, .terminal-plate > .umd > box > button > label { font-family: 'Fira Sans', sans-serif; }
 .terminal-plate .umd .terminal-identity, .terminal-plate .umd .session-state { font-family: 'Fira Sans Condensed'; }
 .terminal-plate .umd .session-branch { font-family: 'Fira Mono', monospace; }
 .terminal-scrollbar slider { background: #2c2c30; border-radius: 0; }
