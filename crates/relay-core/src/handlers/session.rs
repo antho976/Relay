@@ -1697,7 +1697,12 @@ pub fn register(e: &mut Engine) {
             let cfg = crate::guardrail::config(conn, Some(s.project_id))?;
             Ok(Some((PathBuf::from(&s.worktree), project.base_branch, cfg)))
         })?;
-        Ok(measure.and_then(|(worktree, base, cfg)| crate::guardrail::measure_branch(&cfg, &worktree, &base)))
+        // Against the freshest base tip (its remote one when the local branch is behind), as
+        // the session was cut from: never other people's merged work counted as this task's.
+        Ok(measure.and_then(|(worktree, base, cfg)| {
+            let base = crate::handlers::git::freshest_base_sha(&worktree, &base).unwrap_or(base);
+            crate::guardrail::measure_branch(&cfg, &worktree, &base)
+        }))
     }, |ctx: &mut Ctx, p, work: Option<crate::guardrail::BranchWork>| {
         let row = sessions::by_name(ctx.tx(), &p.session)?;
         assert_own(ctx, &row, false)?;
