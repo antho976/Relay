@@ -124,11 +124,14 @@ category_id, category, icon, color, note }`.
 | `money.tx.add` | `{ type, amount, date, account_id, to_account_id?, category_id?, note? }` | `Tx` |
 | `money.tx.update` | `{ id, type?, amount?, date?, account_id?, to_account_id?, category_id?, note?, clear_category? }` (absent keeps; `clear_category: true` takes the category off) | `Tx` and its `previous` |
 | `money.tx.delete` | `{ id }` | `{}` |
+| `money.tx.restore` | `{ id }`: the Undo of a delete | `Tx` |
 | `money.budget.set` | `{ category_id?, amount }` (no category: the overall budget; 0 removes) | `{}` |
 | `money.import` | `{ path }`: a Tally backup (`.json`) replaces the ledger, as a restore does on the phone | `{ kind, transactions, accounts }` |
 | `money.export` | `{ path }` | `{ path, transactions }` |
 | `money.sample` | `{}`: Tally's sample household, only into an empty ledger | `{ transactions }` |
 | `money.reset` | `{}`: erase everything | `{}` |
+| `money.settings.set` | `{ currency?, month_start_day? }` (1 to 28) | `{ currency, month_start_day, week_starts_monday }` |
+| `money.series` | `{ measure?, by?, periods?, period_offset?, category?, cumulative?, today? }`: a chart's numbers over budget periods | `{ currency, fraction_digits, measure, by, labels, label_colors, series }` |
 | `money.account.add` | `{ name, type, opening_balance?, registration?, institution? }` (a registration on an `INVESTMENT` account only) | `AccountView` |
 | `money.account.update` | `{ id, name?, registration?, institution?, archived? }` | `AccountView` |
 | `money.value.set` | `{ account_id, date, value }`: what an investment account was worth that day; a second value the same day replaces the first | `AccountView` |
@@ -171,8 +174,9 @@ Change = { table, uid, updated_at, deleted, row }
   back still sends what it edits next.
 - **First sync: `replace: true`.** The PC's ledger becomes the phone's: everything on the PC is
   erased and the phone's rows are applied, and the PC answers with no changes, just the cursor.
-  The phone sends its tombstones of derived uids (`bill:`, `imp:`, `px:`…) with them, so a line
-  deleted before pairing is not posted or imported again on the PC.
+  The phone sends no tombstones with `replace` (since d6359ae): the PC keeps its own derived
+  tombstones through the replace instead (below), and a line deleted on the phone that the PC
+  never heard of before the first sync cannot be kept so.
   The phone is where the ledger lives; the PC is a second view of it. After that, both sides
   merge. Tally says so on its pairing page before the first sync runs.
   Before a replace, a restore (`money.import`) or an erase (`money.reset`) clears a ledger that
