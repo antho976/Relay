@@ -233,6 +233,28 @@ class InvestTest {
         assertEquals(date(2028, 2, 29), Invest.rrspDeadline(2027))
     }
 
+    @Test fun `R10 an archived account still used the room`() {
+        val archived = { id: Long -> InvestAccountRow(id, "a$id", "Old TFSA", Registration.TFSA) }
+        val i = input(date(2026, 10, 9)).copy(
+            roomFacts = listOf(RoomFactRow(Registration.TFSA, 2026, 700_000)),
+            archivedAccounts = listOf(archived(2), archived(3)),
+            activities = listOf(act("d", ActivityType.DEPOSIT, date(2026, 3, 1), 0, 650_000, 0).copy(accountId = 2)),
+            transfers = listOf(TransferRow(3, date(2026, 5, 1), 100_000)),
+        )
+        val p = Invest.portfolio(i)
+        val tfsa = p.room.single { it.registration == Registration.TFSA }
+        assertEquals(Triple(750_000L, 0L as Long?, 50_000L), Triple(tfsa.contributed, tfsa.left, tfsa.over))
+        // Only the open account is listed and valued.
+        assertEquals(listOf(1L), p.accounts.map { it.id })
+        // An archived account alone still gives its registration a row.
+        val only = PortfolioInput(
+            "CAD", date(2026, 10, 9),
+            archivedAccounts = listOf(archived(2)),
+            transfers = listOf(TransferRow(2, date(2026, 5, 1), 100_000)),
+        )
+        assertEquals(100_000L, Invest.portfolio(only).room.single { it.registration == Registration.TFSA }.contributed)
+    }
+
     @Test fun `R9 an rrsp has a two thousand dollar buffer`() {
         fun rrsp(contributed: Long): RoomLine {
             val i = PortfolioInput(

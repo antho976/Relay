@@ -97,6 +97,8 @@ data class PortfolioInput(
     val fxRates: List<FxRateRow> = emptyList(),
     val roomFacts: List<RoomFactRow> = emptyList(),
     val transfers: List<TransferRow> = emptyList(),
+    /** The archived investment accounts: nothing the reading values, but what went into one this year still used the room. */
+    val archivedAccounts: List<InvestAccountRow> = emptyList(),
 )
 
 // ── The reading ──────────────────────────────────────────────────────────────
@@ -817,7 +819,8 @@ object Invest {
     private fun room(input: PortfolioInput): List<RoomLine> {
         return ROOM_REGISTRATIONS.mapNotNull { registration ->
             val year = roomYear(registration, input.today)
-            val accounts = input.accounts.filter { it.registration == registration }
+            // Archived accounts too: a TFSA closed in June took its deposits' room with it.
+            val accounts = (input.accounts + input.archivedAccounts).filter { it.registration == registration }
             val fact = input.roomFacts.firstOrNull { it.registration == registration && it.year == year }?.amount
             if (accounts.isEmpty() && fact == null) return@mapNotNull null
             val window = roomWindow(registration, year)
