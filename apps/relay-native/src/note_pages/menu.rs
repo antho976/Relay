@@ -129,6 +129,22 @@ pub fn headings_menu() -> gio::Menu {
     ])
 }
 
+/// The toolbar's Format key: the marks a word processor keeps under one menu, with their keys.
+pub fn toolbar_format_menu() -> gio::Menu {
+    let menu = gio::Menu::new();
+    menu.append_section(None, &section(&[
+        item("Bold", "bold", Some("<Control>b")),
+        item("Italic", "italic", Some("<Control>i")),
+        item("Inline code", "code", None),
+    ]));
+    menu.append_section(None, &headings_menu());
+    menu.append_section(None, &section(&[
+        item("Quote", "quote", None),
+        item("Code block", "code-block", None),
+    ]));
+    menu
+}
+
 pub fn sort_menu() -> gio::Menu {
     let sort = section(&[
         targeted("Date modified", "sort", "modified".to_variant()),
@@ -244,7 +260,7 @@ fn model() -> gio::Menu {
             item("Previous tab", "prev-tab", Some("<Control><Shift>Tab")),
         ]),
     ]);
-    view.append_section(None, &sort_menu());
+    // Sort lives in one place, the library's own key beside its search.
     bar.append_submenu(Some("_View"), &view);
     bar
 }
@@ -288,12 +304,7 @@ pub fn install(ui: &Rc<Ui>, window: &gtk::Window) -> gtk::PopoverMenuBar {
     add("save", |ui| with_doc(ui, |ui, d| doc::save(ui, d, None)));
     add("save-as", |ui| with_doc(ui, doc::save_as));
     add("reload", |ui| with_doc(ui, |ui, d| doc::reload(ui, d, true)));
-    add("rename", |ui| {
-        with_doc(ui, |_, d| {
-            d.title.grab_focus();
-            d.title.select_region(0, -1);
-        })
-    });
+    add("rename", |ui| with_doc(ui, |_, d| d.rename()));
     add("duplicate", |ui| with_doc(ui, |ui, d| super::new_note(ui, super::text::copy_title(&d.title.text()), d.body())));
     add("delete", |ui| with_doc(ui, |ui, d| super::confirm_delete(ui, d.id, d.name())));
     add("close-tab", |ui| with_doc(ui, doc::request_close));

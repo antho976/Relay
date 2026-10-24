@@ -127,6 +127,17 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
     pin.set_tooltip_text(Some("Pin this note to the top of the library"));
     pin.set_active(note["pinned"].as_bool().unwrap_or(false));
     head.append(&pin);
+    // The note's name is in its tab and the title bar; the row that edits it shows only while
+    // renaming (F2, File › Rename…, a new note) and steps aside when the title loses focus.
+    head.set_visible(false);
+    let leave = gtk::EventControllerFocus::new();
+    let row = head.downgrade();
+    leave.connect_leave(move |_| {
+        if let Some(row) = row.upgrade() {
+            row.set_visible(false);
+        }
+    });
+    title.add_controller(leave);
     form.append(&head);
     let tasks = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     tasks.add_css_class("notes-tasks");
@@ -481,6 +492,15 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
 }
 
 impl Doc {
+    /// Show the title row and put the keyboard in it, its text selected, for a rename.
+    pub fn rename(&self) {
+        if let Some(row) = self.title.parent() {
+            row.set_visible(true);
+        }
+        self.title.grab_focus();
+        self.title.select_region(0, -1);
+    }
+
     pub fn body(&self) -> String {
         buffer_text(self.buffer.upcast_ref())
     }

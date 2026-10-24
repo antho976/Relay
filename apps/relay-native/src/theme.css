@@ -332,6 +332,10 @@ button.task-choice:hover { background: @slab; }
    opacity shows the wallpaper, never the desktop. Its containers stay clear; css/notes.css
    paints each surface once, so translucent layers never stack. */
 window.notes-window { padding: 0; margin: 0; border: 0; box-shadow: none; background: @wall_solid; }
+/* Its own window over Relay's: a hairline edge and a soft shadow, so it never reads as part of
+   the page under it. Maximized or full screen, neither. */
+window.notes-window.csd { box-shadow: 0 0 0 1px @line_emphasis, 0 18px 46px alpha(black, 0.55), 0 3px 10px alpha(black, 0.3); }
+window.notes-window.csd.maximized, window.notes-window.csd.fullscreen, window.notes-window.csd.tiled { box-shadow: 0 0 0 1px @line_emphasis; }
 .notes-window .notes-page, .notes-window .notes-page stack, .notes-window .notes-page scrolledwindow, .notes-window .notes-page viewport { background: transparent; }
 .notes-window-loading { padding: 24px; color: @secondary; }
 .notes-window .notes-page { padding: 0; }

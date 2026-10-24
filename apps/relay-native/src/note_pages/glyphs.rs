@@ -53,6 +53,8 @@ fn crisp(name: &str) -> Option<&'static str> {
         "code-block" => r##"<path d="M1.5 2.5h13v11h-13z" /><path d="M6.5 6L4.5 8l2 2M9.5 6l2 2-2 2" />"##,
         "plus" => r##"<path d="M8 2.5v11M2.5 8h11" />"##,
         "sort" => r##"<path d="M4.5 2.5v11M2 11l2.5 2.5L7 11" /><path d="M9 4.5h5M9 8.5h4M9 12.5h2.5" />"##,
+        // Format: a letter A over a baseline, the key for bold, italic, headings and code.
+        "format" => r##"<path d="M3.5 11.5L7.25 2.5h1.5l3.75 9" /><path d="M5.25 8h5.5" /><path d="M2.5 14.5h11" />"##,
         _ => return None,
     })
 }

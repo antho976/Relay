@@ -97,7 +97,7 @@ const fn t(id: &'static str, icon: &'static str, caption: &'static str, tip: &'s
     Tool { id, icon, caption, tip, group }
 }
 
-pub(super) const TOOLS: [Tool; 21] = [
+pub(super) const TOOLS: [Tool; 16] = [
     t("new", "note-new", "New", "New note (Ctrl+N)", 0),
     t("save", "save", "Save", "Save (Ctrl+S)", 0),
     t("undo", "undo", "Undo", "Undo (Ctrl+Z)", 1),
@@ -107,22 +107,15 @@ pub(super) const TOOLS: [Tool; 21] = [
     t("paste", "paste", "Paste", "Paste (Ctrl+V)", 2),
     t("find", "search", "Find", "Find (Ctrl+F)", 3),
     t("replace", "replace", "Replace", "Replace (Ctrl+H)", 3),
-    t("bold", "#B", "Bold", "Bold (Ctrl+B)", 4),
-    t("italic", "#I", "Italic", "Italic (Ctrl+I)", 4),
-    t("heading", "#H", "Heading", "Heading", 4),
+    // Bold, italic, headings, quote and code are one Format menu, as in a word processor.
+    t("format", "format", "Format", "Format: bold, italic, headings, quote, code", 4),
     t("bullets", "list", "Bullets", "Bulleted list", 4),
     t("numbers", "list-numbered", "Numbers", "Numbered list", 4),
     t("checklist", "checklist", "Checklist", "Checklist (Ctrl+Enter ticks an item)", 4),
-    t("quote", "quote", "Quote", "Quote", 4),
-    t("code", "code-inline", "Code", "Inline code", 4),
-    t("code-block", "code-block", "Code block", "Code block", 4),
     t("link", "link", "Link", "Link (Ctrl+K)", 4),
     t("image", "image", "Image", "Insert an image (or paste or drop one)", 5),
     t("to-task", "task", "To task", "Create a task from this note, or from the selected text", 5),
 ];
-
-/// The toolbar group of formatting keys (bold to link), which never show names.
-const FORMAT_GROUP: u8 = 4;
 
 /// A toolbar key and the name shown under its icon when labels are on.
 struct ToolKey {
@@ -705,6 +698,9 @@ fn tool_key(tool: &Tool) -> ToolKey {
     // The name sits under the icon when labels are on.
     let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
     content.set_halign(gtk::Align::Center);
+    // Centred in the key both ways: filling it, the icon sat at the top of the 28px key while
+    // the library key's bare icon sat in its middle, 5px lower.
+    content.set_valign(gtk::Align::Center);
     match tool.icon.strip_prefix('#') {
         Some(mark) => {
             let mark = label(mark, "notes-tool-mark");
@@ -716,11 +712,11 @@ fn tool_key(tool: &Tool) -> ToolKey {
     let caption = label(tool.caption, "notes-tool-caption");
     caption.set_visible(false);
     content.append(&caption);
-    let key: gtk::Widget = if tool.id == "heading" {
+    let key: gtk::Widget = if tool.id == "format" {
         let menu = gtk::MenuButton::new();
         menu.set_always_show_arrow(false);
         menu.add_css_class("notes-tool-menu");
-        menu.set_menu_model(Some(&menu::headings_menu()));
+        menu.set_menu_model(Some(&menu::toolbar_format_menu()));
         menu.set_child(Some(&content));
         menu.upcast()
     } else {
@@ -750,9 +746,8 @@ fn apply_toolbar(shell: &Shell, prefs: &Prefs) {
         let visible = prefs.toolbar_hidden & (1 << i) == 0;
         groups[usize::from(tool.group)] |= visible;
         key.key.set_visible(visible);
-        // Formatting keys keep to their icons, as in a word processor: named, the bar would
-        // outgrow the window.
-        let named = prefs.toolbar_labels && tool.group != FORMAT_GROUP;
+        // Names on every key or on none: with the marks under Format the bar holds them all.
+        let named = prefs.toolbar_labels;
         key.caption.set_visible(named);
         if named {
             key.key.add_css_class("labelled");
@@ -1975,8 +1970,7 @@ fn open_then(ui: &Rc<Ui>, id: i64, rename: bool, then: impl FnOnce(&Rc<Ui>, i64)
         edit(ui, note);
         if let Some(doc) = doc_by_id(id) {
             if rename {
-                doc.title.grab_focus();
-                doc.title.select_region(0, -1);
+                doc.rename();
             } else {
                 doc.view.grab_focus();
             }
