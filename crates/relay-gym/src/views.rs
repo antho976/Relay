@@ -288,6 +288,9 @@ pub struct SeriesQuery {
     pub periods: Option<u32>,
     /// A lift by name, as Avex shows it; a unique part of the name is enough.
     pub lift: Option<String>,
+    /// Count the periods back from this day (`YYYY-MM-DD`), as gym.summary's `today`: a copy
+    /// read as of its export, whose charts would otherwise end in empty weeks.
+    pub today: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

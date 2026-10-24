@@ -115,7 +115,7 @@ pub fn register(e: &mut Engine) {
         let limit = p.limit.unwrap_or(50).clamp(1, 1000) as usize;
         read(ctx.engine(), |h, c, _| CardioOut { entries: views::cardio(h, c, limit) })
     });
-    e.register_unlocked::<SeriesOp>(|ctx, p| read(ctx.engine(), |h, c, _| views::series(h, c, &p))?.map_err(invalid));
+    e.register_unlocked::<SeriesOp>(|ctx, p| read_on(ctx.engine(), clock_on(p.today.as_deref())?, |h, c, _| views::series(h, c, &p))?.map_err(invalid));
     e.register_staged::<Import, _>(
         |ctx, p| {
             let (text, name) = file(&p.path)?;

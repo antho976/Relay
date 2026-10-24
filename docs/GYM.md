@@ -97,7 +97,8 @@ Reads are `register_unlocked`. The import is staged: the file is read, parsed an
 
 `gym.series` takes `measure` (`volume`, `sessions`, `sets`, `minutes`, `e1rm`, `top_weight`,
 `cardio_minutes`, `distance`), `by` (`week`, `month`, `session`), `periods` (weeks or months, 12 by
-default) and `lift` (needed for `e1rm` and `top_weight`). It answers `labels`, `days`, `unit` and one
+default), `lift` (needed for `e1rm` and `top_weight`) and `today` (count back from that day, as
+`gym.summary` reads a copy as of its export). It answers `labels`, `days`, `unit` and one
 series whose values are null where a lift's best has nothing to read.
 
 ## The thread agent

@@ -65,6 +65,11 @@ fn an_export_comes_in_and_reads_back() {
     let e1rm = ok(&engine, "gym.series", json!({"measure": "e1rm", "by": "session", "lift": "Back Squat", "periods": 52}));
     assert_eq!(e1rm["lift"], "Back Squat");
     assert_eq!(code(call_as(&engine, Actor::User, "gym.series", json!({"measure": "e1rm"}))), "gym.invalid");
+    // As of another day, as gym.summary reads a stale copy: the weeks end at that day's week.
+    let then = ok(&engine, "gym.series", json!({"measure": "sessions", "periods": 2, "today": "2026-01-07"}));
+    assert_eq!(then["labels"].as_array().unwrap().len(), 2);
+    assert_ne!(then["labels"], ok(&engine, "gym.series", json!({"measure": "sessions", "periods": 2}))["labels"]);
+    assert_eq!(code(call_as(&engine, Actor::User, "gym.series", json!({"today": "soon"}))), "gym.invalid");
     assert!(!ok(&engine, "gym.cardio", json!({}))["entries"].as_array().unwrap().is_empty());
 
     // Importing again replaces, never doubles.
