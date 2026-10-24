@@ -1932,10 +1932,12 @@ fn transactions(ui: &Rc<Ui>, page: &Page, list: &Value, offset: i64, query: &str
 
 /// What each expense category spent in the three budget periods before this one, oldest first,
 /// and how many of those periods the ledger has entries in (a ledger two months old averages
-/// two).
+/// two); and what each spent in this one, which `money.summary` only reads for a category with
+/// a budget.
 pub(super) struct Past {
     by: std::collections::HashMap<i64, Vec<i64>>,
     months: usize,
+    now: std::collections::HashMap<i64, i64>,
 }
 
 impl Past {
@@ -1996,17 +1998,36 @@ async fn past(ui: &Rc<Ui>, s: &Value, lists: &Value) -> Rc<Past> {
     // This period and the three before it, oldest first.
     let reads = join_all(categories.iter().map(|(_, name)| ui.call("money.series", json!({"measure":"spending","by":"period","periods":4,"category":name}))).collect()).await;
     let mut by = std::collections::HashMap::new();
+    let mut now = std::collections::HashMap::new();
     for ((id, _), read) in categories.iter().zip(reads) {
         let Ok(read) = read else { continue };
         let values: Vec<i64> = read["series"][0]["values"].as_array().map(|v| v.iter().map(|x| x.as_i64().unwrap_or(0)).collect()).unwrap_or_default();
         if values.len() == 4 {
             by.insert(*id, values[..3].to_vec());
+            now.insert(*id, values[3]);
         }
     }
     let first = (0..3).find(|i| by.values().any(|values: &Vec<i64>| values[*i] > 0));
-    let past = Rc::new(Past { months: first.map_or(0, |i| 3 - i), by });
+    let past = Rc::new(Past { months: first.map_or(0, |i| 3 - i), by, now });
     PAST.with(|p| *p.borrow_mut() = Some((start, past.clone())));
     past
+}
+
+/// A category's budget, what it spent this period and the words for it, on Plan. `money.summary`
+/// reads spending only for a category with a budget row (`reading`); any other's comes from
+/// this period's `money.series` (`spent_now`), so Groceries with no budget and $300 spent reads
+/// "$300 spent, no budget", never "Nothing spent" folded away.
+fn plan_reading(reading: Option<&Value>, spent_now: i64, fmt: &relay_money::money::MoneyFormatter) -> (i64, i64, String) {
+    let amount = reading.map_or(0, |b| n(b, "budget"));
+    let used = reading.map_or(spent_now, |b| n(b, "spent"));
+    let detail = if amount > 0 {
+        copy::of_budget(used, amount, fmt)
+    } else if used > 0 {
+        format!("{} spent, no budget", fmt.format_whole(used))
+    } else {
+        String::from("Nothing spent")
+    };
+    (amount, used, detail)
 }
 
 /// Plan's head: the title with Suggest budgets, which asks in a thread, and its context line.
@@ -2098,13 +2119,7 @@ fn plan(ui: &Rc<Ui>, page: &Page, s: &Value, lists: &Value, past: &Past) {
     for category in &categories {
         let id = n(category, "id");
         let reading = spent.get(&id);
-        let amount = reading.map_or(0, |b| n(b, "budget"));
-        let used = reading.map_or(0, |b| n(b, "spent"));
-        let detail = match reading {
-            Some(b) if amount > 0 => copy::of_budget(n(b, "spent"), amount, &fmt),
-            _ if used > 0 => format!("{} spent, no budget", fmt.format_whole(used)),
-            _ => String::from("Nothing spent"),
-        };
+        let (amount, used, detail) = plan_reading(reading, past.now.get(&id).copied().unwrap_or(0), &fmt);
         let status = reading.map_or("", |b| text(b, "status"));
         let meter = (amount > 0).then(|| (used as f64 / amount as f64, tone(status, category["color"].as_i64())));
         let lead = badge_sized(text(category, "icon"), n(category, "color"), 28);
@@ -2619,4 +2634,27 @@ fn export(ui: &Rc<Ui>) {
             Err(e) => ui.show_error(&unavailable(&e)),
         }
     });
+}
+
+#[cfg(test)]
+#[allow(clippy::inconsistent_digit_grouping)]
+mod tests {
+    use super::plan_reading;
+    use relay_money::money::{Locale, MoneyFormatter};
+    use serde_json::json;
+
+    /// A category with no budget row reads this period's spending from its series, so it is
+    /// never "Nothing spent" while it spent; a budgeted one reads `money.summary`'s figure.
+    #[test]
+    fn an_unbudgeted_category_shows_what_it_spent() {
+        let fmt = MoneyFormatter::new("CAD", Locale::new("en-CA"));
+        let (amount, used, detail) = plan_reading(None, 300_00, &fmt);
+        assert_eq!((amount, used), (0, 300_00));
+        assert_eq!(detail, format!("{} spent, no budget", fmt.format_whole(300_00)));
+        assert_eq!(plan_reading(None, 0, &fmt).2, "Nothing spent");
+        let budgeted = json!({"category_id": 1, "budget": 400_00, "spent": 250_00, "status": "ON_TRACK"});
+        let (amount, used, detail) = plan_reading(Some(&budgeted), 999_00, &fmt);
+        assert_eq!((amount, used), (400_00, 250_00), "the summary's figure wins over the series");
+        assert_eq!(detail, format!("{} of {}", fmt.format_whole(250_00), fmt.format_whole(400_00)));
+    }
 }
