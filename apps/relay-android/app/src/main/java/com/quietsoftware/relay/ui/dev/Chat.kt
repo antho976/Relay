@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -277,7 +278,7 @@ fun ChatScreen(name: String, nav: Nav) {
                 if (ready) IconKey("focus", { peek = !peek }, size = 18.dp, tint = c.ink2, selected = peek, label = if (peek) "Hide the agent's screen" else "Show the agent's screen")
                 IconKey("terminal", { nav.console(name) }, size = 18.dp, tint = c.ink2)
             }
-            Banner(status, session, s.online, life)
+            ChatBanner(status, session, s.online, life)
             // The agent's plan, pinned: what it is on, and how far along, while there is any left.
             val plan = remember(messages) { latestPlan(messages) }
             if (plan != null && (working || plan.any { it.state != 'x' })) PlanStrip(name, plan)
@@ -424,15 +425,17 @@ private fun AgentBar(session: Session?, name: String, onBack: () -> Unit, onDeta
 
 /** "Claude Code · Working · relay/other-branch": an agent in words, under its name. */
 internal fun agentLine(session: Session): String {
-    val state = when (session.state) {
-        "running" -> "Working"
-        "spawning" -> "Starting"
-        "idle" -> "Ready"
-        "blocked" -> "Needs you"
-        else -> session.stateLabel.lowercase().replaceFirstChar(Char::uppercase)
-    }
     val branch = session.branch.takeIf { it.isNotBlank() && it != "relay/${session.name}" }
-    return listOfNotNull(providerName(session.provider), state, branch).joinToString(" · ")
+    return listOfNotNull(providerName(session.provider), stateWord(session), branch).joinToString(" · ")
+}
+
+/** An agent's state as a word in a sentence: "Working", "Needs you", "Parked". */
+private fun stateWord(session: Session): String = when (session.state) {
+    "running" -> "Working"
+    "spawning" -> "Starting"
+    "idle" -> "Ready"
+    "blocked" -> "Needs you"
+    else -> session.stateLabel.lowercase().replaceFirstChar(Char::uppercase)
 }
 
 // ---- The conversation as pieces ----
@@ -737,8 +740,59 @@ private fun PieceView(p: ChatPiece, cell: Modifier, online: Boolean) {
 }
 
 /**
- * The agent's plan under the header: one line with how far along it is and the step under way,
- * opening to every step, done ones ticked and quiet.
+ * Where the conversation stands when it is not live, in the conversation's look: a quiet pill
+ * under the header, with the key that brings a stopped agent back. The terminal keeps its band.
+ */
+@Composable
+private fun ChatBanner(status: TerminalFeed.Status, session: Session?, online: Boolean, life: Lifecycle) {
+    val c = Relay.colors
+    val line: String
+    val dot: Color?
+    when (status) {
+        TerminalFeed.Status.Live -> return
+        TerminalFeed.Status.Connecting -> {
+            line = "Reaching the PC"
+            dot = c.waiting
+        }
+        TerminalFeed.Status.Saved -> {
+            line = "Saved on this phone · the PC is away"
+            dot = c.inkDim
+        }
+        TerminalFeed.Status.Stopped -> {
+            line = session?.let { "${stateWord(it)} · ${slateHint(it, online)}" } ?: "Closed · this agent is gone from the PC"
+            dot = null
+        }
+    }
+    val revive = session?.takeIf { status == TerminalFeed.Status.Stopped && !it.pending }?.let { reviveAct(it.state) }
+    Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 2.dp), horizontalArrangement = Arrangement.Center) {
+        Row(
+            Modifier.heightIn(min = 34.dp).clip(STRIP).background(c.wash).padding(start = 14.dp, end = if (revive != null) 4.dp else 14.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (dot != null) Dot(dot, 6.dp) else session?.let { LampDot(it.lamp, 6.dp) }
+            T(line, Modifier.weight(1f, fill = false), Relay.type.caption, c.ink2, maxLines = 2)
+            if (revive != null && session != null) {
+                Key(
+                    if (revive == Act.Start) "Start session" else revive.label,
+                    { life.run(revive, session) },
+                    Modifier.alpha(if (online) 1f else .5f),
+                    kind = KeyKind.Primary,
+                    glyph = revive.glyph,
+                    enabled = life.busy == null,
+                    compact = true,
+                )
+            }
+        }
+    }
+}
+
+/** The strips under the header: rounded, as the bar is. */
+private val STRIP = RoundedCornerShape(18.dp)
+
+/**
+ * The agent's plan under the header, as a card in the conversation's look: a ring of how far
+ * along it is, the step under way and the count, opening to every step, done ones ticked and quiet.
  */
 @Composable
 private fun PlanStrip(name: String, plan: List<PlanStep>) {
@@ -746,45 +800,61 @@ private fun PlanStrip(name: String, plan: List<PlanStep>) {
     var open by rememberSaveable(name) { mutableStateOf(false) }
     val done = plan.count { it.state == 'x' }
     val now = plan.firstOrNull { it.state == '~' } ?: plan.firstOrNull { it.state != 'x' }
-    Column(Modifier.fillMaxWidth().background(c.slab)) {
+    Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 2.dp).clip(STRIP).background(c.wash)) {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 40.dp).clickable(onClickLabel = if (open) "Fold the plan" else "Show the whole plan") { open = !open }
-                .padding(horizontal = 14.dp),
+            Modifier.fillMaxWidth().heightIn(min = TOUCH).clickable(onClickLabel = if (open) "Fold the plan" else "Show the whole plan") { open = !open }
+                .padding(start = 14.dp, end = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Glyph("check", 13.dp, if (done == plan.size) c.live else c.ink3)
-            T("Plan", style = Relay.type.caption, color = c.ink2, weight = FontWeight.Medium)
-            T("$done of ${plan.size}", style = Relay.type.mono.copy(fontSize = 11.sp), color = c.ink3)
-            T(now?.text.orEmpty(), Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
-            Glyph(if (open) "chevron-up" else "chevron-down", 12.dp, c.inkDim)
+            PlanRing(done, plan.size)
+            T(if (done == plan.size) "Plan done" else now?.text.orEmpty(), Modifier.weight(1f), Relay.type.ui, c.ink, maxLines = 1)
+            T("$done of ${plan.size}", style = Relay.type.caption, color = c.ink3, maxLines = 1)
+            Glyph(if (open) "chevron-up" else "chevron-down", 12.dp, c.ink3)
         }
         AnimatedVisibility(open) {
             Column(
-                Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState()).padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState()).padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 for (step in plan) {
-                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                        Box(Modifier.padding(top = 3.dp).size(13.dp), contentAlignment = Alignment.Center) {
+                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(Modifier.padding(top = 2.dp).size(16.dp), contentAlignment = Alignment.Center) {
                             when (step.state) {
-                                'x' -> Glyph("check", 12.dp, c.live)
-                                '~' -> Dot(c.waiting, 7.dp)
-                                else -> Box(Modifier.size(9.dp).border(1.dp, c.inkDim, CircleShape))
+                                'x' -> Glyph("check", 13.dp, c.live)
+                                '~' -> Spinner(11.dp, c.ink2)
+                                else -> Box(Modifier.size(11.dp).border(1.dp, c.inkDim, CircleShape))
                             }
                         }
                         T(
                             step.text,
                             Modifier.weight(1f),
-                            Relay.type.caption.copy(textDecoration = if (step.state == 'x') TextDecoration.LineThrough else null),
+                            Relay.type.ui.copy(textDecoration = if (step.state == 'x') TextDecoration.LineThrough else null),
                             if (step.state == 'x') c.ink3 else c.ink2,
                         )
                     }
                 }
             }
         }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(c.edge))
     }
+}
+
+/** How far along a plan is, as a ring: green once every step is done. */
+@Composable
+private fun PlanRing(done: Int, total: Int) {
+    val c = Relay.colors
+    val track = c.track
+    val fill = if (done == total) c.live else c.ink2
+    val part = if (total == 0) 0f else done.toFloat() / total
+    Box(
+        Modifier.size(18.dp).drawBehind {
+            val w = 2.dp.toPx()
+            val box = Size(size.width - w, size.height - w)
+            val at = androidx.compose.ui.geometry.Offset(w / 2, w / 2)
+            drawArc(track, 0f, 360f, false, at, box, style = Stroke(w))
+            if (part > 0f) drawArc(fill, -90f, 360f * part, false, at, box, style = Stroke(w, cap = StrokeCap.Round))
+        },
+    )
 }
 
 /**
