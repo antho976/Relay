@@ -18,5 +18,7 @@ relay-money.workspace = true
 relay-arbiter.workspace = true
 # The gym.* contract's shapes; without SQLite.
 relay-gym.workspace = true
+# The aide.* contract's shapes; without SQLite.
+relay-aide.workspace = true
 
 [dev-dependencies]

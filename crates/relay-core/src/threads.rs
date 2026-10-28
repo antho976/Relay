@@ -89,6 +89,9 @@ pub const AGENT_OPS: &[&str] = &[
 pub const MONEY: &str = "money";
 /// The Dev space's assistant's kind: Relay itself.
 pub const ASSISTANT: &str = "assistant";
+/// Aide's kind (docs/AIDE.md): a job's channel, where its runs talk and the person may answer.
+/// Its prompt and ops are Aide's (`crate::aide::runs`).
+pub const AIDE: &str = "aide";
 
 /// The ops the assistant may call as the person: reads of Relay, and what a lone session may do
 /// itself (mail, a note's appended line, a task's comment). What a session may not do it asks for
@@ -216,6 +219,12 @@ pub fn peer_may_call(op: &str) -> bool {
     op == "bus.ops" || AGENT_OPS.contains(&op)
 }
 
+/// [`peer_may_call`] for Aide's agent (`peer::Peer::Aide`): Aide's ops; each run's MCP server
+/// lists only those its sources allow.
+pub fn aide_may_call(op: &str) -> bool {
+    relay_aide::policy::all_ops().contains(&op)
+}
+
 /// [`peer_may_call`] for the assistant's agent (`peer::Peer::Assistant`).
 pub fn assistant_may_call(op: &str) -> bool {
     op == "bus.ops" || ASSISTANT_OPS.contains(&op)
@@ -224,7 +233,14 @@ pub fn assistant_may_call(op: &str) -> bool {
 /// Each running agent's pid and what it is, for the socket door to know them (`peer::identify`).
 pub fn agent_pids(engine: &Engine) -> HashMap<u32, crate::peer::Peer> {
     lock(&engine.threads.live).agents.iter().map(|(id, agent)| {
-        (agent.pid, if agent.assistant { crate::peer::Peer::Assistant(*id) } else { crate::peer::Peer::Thread(*id) })
+        let peer = if agent.aide {
+            crate::peer::Peer::Aide(*id)
+        } else if agent.assistant {
+            crate::peer::Peer::Assistant(*id)
+        } else {
+            crate::peer::Peer::Thread(*id)
+        };
+        (agent.pid, peer)
     }).collect()
 }
 
@@ -874,6 +890,8 @@ struct Agent {
     local: bool,
     /// The Dev space's assistant's, which the socket door admits for [`ASSISTANT_OPS`].
     assistant: bool,
+    /// Aide's, which the socket door admits for Aide's ops (`relay_aide::policy::all_ops`).
+    aide: bool,
 }
 
 /// A thread's turn: the person's message until Claude's `result`.
@@ -968,7 +986,8 @@ pub fn checked_kind(kind: Option<&str>) -> Result<&'static str, BusError> {
         None => Ok(MONEY),
         Some(k) if k == MONEY => Ok(MONEY),
         Some(k) if k == ASSISTANT => Ok(ASSISTANT),
-        Some(k) => Err(BusError::invalid("thread.invalid", format!("A thread's kind is {MONEY} or {ASSISTANT}, not {k:?}"))),
+        Some(k) if k == AIDE => Ok(AIDE),
+        Some(k) => Err(BusError::invalid("thread.invalid", format!("A thread's kind is {MONEY}, {ASSISTANT} or {AIDE}, not {k:?}"))),
     }
 }
 
@@ -1088,6 +1107,27 @@ pub fn post(engine: &Engine, id: Id, text: &str, pictures: &[ImageView], now: &s
     added.map(|m| (m, token)).inspect_err(|_| {
         end_turn(engine, id, token);
     })
+}
+
+/// [`post`] for a turn the engine starts in an Aide thread (`crate::aide::runs`): its message is
+/// stored as `wake`, Relay's words to the agent, not the person's.
+pub fn post_wake(engine: &Engine, id: Id, text: &str, now: &str) -> Result<(MessageView, u64), BusError> {
+    let thread = get(engine, id)?;
+    if thread.kind != AIDE {
+        return Err(BusError::invalid("thread.invalid", format!("Thread {id} is not Aide's")));
+    }
+    let token = {
+        let mut live = lock(&engine.threads.live);
+        if live.working.contains_key(&id) {
+            return Err(BusError::conflict("thread.busy", "The agent is still answering in this thread"));
+        }
+        let token = live.mint();
+        live.working.insert(id, Turn { token, delivered: false });
+        token
+    };
+    with_db(engine, |db| db.add(id, "wake", &json!({"text": text}), now)).inspect_err(|_| {
+        end_turn(engine, id, token);
+    }).map(|m| (m, token))
 }
 
 /// End the turn `token`, if it is still the thread's.
@@ -1250,6 +1290,8 @@ fn hand_on(engine: &Arc<Engine>, id: Id, token: u64, text: &str, pictures: &[(St
     };
     let stored = with_db(engine, |db| db.get(id)).ok().flatten();
     let assistant = stored.as_ref().is_some_and(|t| t.kind == ASSISTANT);
+    // Aide's wake already carries the data its job may read, and nothing it may not.
+    let aide = stored.as_ref().is_some_and(|t| t.kind == AIDE);
     let local = stored.and_then(|t| t.model).and_then(|m| crate::local_models::find(&m));
     let Some(model) = local else {
         start(engine, id, token, &line, None, &answers);
@@ -1259,6 +1301,7 @@ fn hand_on(engine: &Arc<Engine>, id: Id, token: u64, text: &str, pictures: &[(St
     let started = std::thread::Builder::new().name(format!("thread-{id}-local")).spawn(move || {
         // A small model starts with what the data says, so an easy question needs no tool call.
         let line = match LocalStyle::from_env().prefetch {
+            true if aide => line,
             true if assistant => user_line(&relay_now(&waiting, &content)),
             true => user_line(&prefetched(&waiting, &content)),
             false => line,
@@ -1439,6 +1482,16 @@ pub fn assistant_args(mcp: &str, model: Option<&str>, effort: Option<&str>, agen
     }).collect()
 }
 
+/// Aide's command line: [`agent_args`] with Aide's prompt (`crate::aide::runs::PROMPT`, a small
+/// model's `LOCAL_PROMPT`) in place of [`PROMPT`] and [`LOCAL_PROMPT`].
+pub fn aide_args(mcp: &str, model: Option<&str>, effort: Option<&str>, agent_ref: Option<&str>, lean: bool) -> Vec<String> {
+    agent_args(mcp, model, effort, agent_ref, lean).into_iter().map(|a| match a.as_str() {
+        PROMPT => crate::aide::runs::PROMPT.to_string(),
+        LOCAL_PROMPT => crate::aide::runs::LOCAL_PROMPT.to_string(),
+        _ => a,
+    }).collect()
+}
+
 /// Start the agent for the turn `token`; `false` when the turn ended while it started, and the
 /// agent was closed again.
 fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Option<(&'static crate::local_models::Model, u16)>) -> Result<bool, String> {
@@ -1452,11 +1505,16 @@ fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Opti
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
 
     let mut cmd = Command::new(&claude);
+    // A model on the person's own server (Aide's settings) is reached as Claude is, at its address.
+    let server = if thread.kind == AIDE { crate::aide::models::endpoint(engine, thread.model.as_deref()) } else { None };
     // A local model has no efforts: Claude Code would ask it for thinking the server turns off.
-    let effort = if local.is_some() { None } else { thread.effort.as_deref() };
+    let effort = if local.is_some() || server.is_some() { None } else { thread.effort.as_deref() };
     let style = if local.is_some() { LocalStyle::from_env() } else { LocalStyle::CLASSIC };
     let assistant = thread.kind == ASSISTANT;
-    let args = if assistant {
+    let aide = thread.kind == AIDE;
+    let args = if aide {
+        aide_args(&mcp_config(engine), thread.model.as_deref(), effort, thread.agent_ref.as_deref(), style.lean)
+    } else if assistant {
         assistant_args(&mcp_config(engine), thread.model.as_deref(), effort, thread.agent_ref.as_deref(), style.lean)
     } else {
         agent_args(&mcp_config(engine), thread.model.as_deref(), effort, thread.agent_ref.as_deref(), style.lean)
@@ -1470,11 +1528,12 @@ fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Opti
     for var in ["RELAY_SESSION", "RELAY_TOKEN", "RELAY_PROJECT_ID", "RELAY_WORKTREE", "RELAY_BRIEF"] {
         cmd.env_remove(var);
     }
-    let ops = match (assistant, style.lean) {
-        (true, true) => assistant_local_ops(),
-        (true, false) => ASSISTANT_OPS.to_vec(),
-        (false, true) => local_ops(),
-        (false, false) => AGENT_OPS.to_vec(),
+    let ops = match (aide, assistant, style.lean) {
+        (true, _, _) => crate::aide::runs::ops_for_thread(engine, id),
+        (false, true, true) => assistant_local_ops(),
+        (false, true, false) => ASSISTANT_OPS.to_vec(),
+        (false, false, true) => local_ops(),
+        (false, false, false) => AGENT_OPS.to_vec(),
     };
     cmd.env("RELAY_MCP_OPS", ops.join(","));
     // The MCP server inherits it: how it answers a small model (`relay_cli::mcp`), and whose
@@ -1484,6 +1543,9 @@ fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Opti
     if let Some((model, port)) = local {
         cmd.env_remove("ANTHROPIC_API_KEY");
         cmd.envs(crate::local_models::agent_env(port, model));
+    } else if let Some(server) = &server {
+        cmd.env_remove("ANTHROPIC_API_KEY");
+        cmd.envs(crate::aide::models::server_env(server));
     }
     #[cfg(unix)]
     {
@@ -1529,7 +1591,7 @@ fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Opti
                 }
             }
         }
-        let agent = Agent { stdin: stdin.clone(), pid, serial, turn: token, last_used: Instant::now(), local: local.is_some(), assistant };
+        let agent = Agent { stdin: stdin.clone(), pid, serial, turn: token, last_used: Instant::now(), local: local.is_some(), assistant, aide };
         // One agent per thread: one it replaces is closed, not left answering beside it.
         if let Some(replaced) = live.agents.insert(id, agent) {
             kill(replaced.pid);

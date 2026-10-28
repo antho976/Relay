@@ -137,6 +137,8 @@ pub enum NotifyCategory {
     Provider,
     Disk,
     System,
+    /// Aide, the person's own agent (docs/AIDE.md), speaking first.
+    Aide,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

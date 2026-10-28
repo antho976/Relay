@@ -16,6 +16,8 @@
 mod agent_features;
 #[path = "agent_surface.rs"]
 mod agent_surface;
+#[path = "aide.rs"]
+mod aide;
 #[path = "arbiter.rs"]
 mod arbiter;
 #[path = "audit_low_g.rs"]

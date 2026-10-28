@@ -15,6 +15,7 @@ relay-client.workspace = true
 relay-money = { workspace = true, features = ["ledger"] }
 relay-arbiter = { workspace = true, features = ["engine"] }
 relay-gym = { workspace = true, features = ["store"] }
+relay-aide = { workspace = true, features = ["store"] }
 rust_decimal = { version = "1.43", default-features = false, features = ["std"] }
 serde.workspace = true
 serde_json.workspace = true

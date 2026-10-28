@@ -34,6 +34,8 @@ pub enum Peer {
     Thread(relay_bus::types::Id),
     /// Inside the process tree of this assistant thread's agent (the Dev space's assistant).
     Assistant(relay_bus::types::Id),
+    /// Inside the process tree of this Aide thread's agent (docs/AIDE.md).
+    Aide(relay_bus::types::Id),
     /// Below the engine but in no live session: a session's orphan, a build, a hook.
     EngineChild,
     /// Not identifiable: a peer in another pid namespace, an unreadable `/proc`, a process gone.
@@ -53,6 +55,7 @@ impl Peer {
         match self {
             Peer::Thread(_) => crate::threads::peer_may_call(op),
             Peer::Assistant(_) => crate::threads::assistant_may_call(op),
+            Peer::Aide(_) => crate::threads::aide_may_call(op),
             _ => self.may_act_as_user(),
         }
     }
@@ -71,6 +74,10 @@ impl Peer {
             Peer::Assistant(id) => (
                 format!("from the assistant (thread {id}), which acts for you only through its own tools and asks you for the rest"),
                 serde_json::json!({"peer": "assistant", "thread": id}),
+            ),
+            Peer::Aide(id) => (
+                format!("from Aide (thread {id}), which acts for you only through its own tools"),
+                serde_json::json!({"peer": "aide", "thread": id}),
             ),
             Peer::EngineChild => (
                 "from a process the engine started outside every session (an orphan of a session, a build or a hook)".to_string(),
