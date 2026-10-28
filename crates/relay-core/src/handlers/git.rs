@@ -1600,13 +1600,18 @@ pub fn fetch_remote(root: &Path) -> Result<(), BusError> {
     Ok(())
 }
 
-fn fetch_remote_now(root: &Path) -> Result<(), BusError> {
+/// `git fetch --all --prune` in `root`, as [`crate::proc::quiet_network_git`] runs a network git: no
+/// prompt of any kind, and a stalled transfer abandoned.
+fn fetch_command(root: &Path) -> std::process::Command {
     let mut command = std::process::Command::new("git");
+    command.current_dir(root).stdin(std::process::Stdio::null());
+    crate::proc::quiet_network_git(&mut command);
+    command.args(["fetch", "--all", "--prune"]);
     command
-        .current_dir(root)
-        .args(["fetch", "--all", "--prune"])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(std::process::Stdio::null());
+}
+
+fn fetch_remote_now(root: &Path) -> Result<(), BusError> {
+    let mut command = fetch_command(root);
     let output = crate::proc::output_with_timeout(&mut command, std::time::Duration::from_secs(20))
         .map_err(|error| BusError::unavailable("git.fetch_failed", error.to_string()))?
         .ok_or_else(|| {
@@ -2142,10 +2147,18 @@ fn switch_target(root: &Path, requested: &str) -> Result<SwitchTarget, BusError>
 
 /// `git push`, bounded, and never prompting for credentials on whatever terminal the engine was
 /// started from: a push that needs them fails instead of waiting for a person who is not there
-/// (RA-372). As generous as any other git mutation, since an LFS upload can be large.
-fn run_push(root: &Path, args: &[&str]) -> Result<(), BusError> {
+/// (RA-372), nor a GUI askpass or Git Credential Manager's window ([`crate::proc::quiet_network_git`]).
+/// As generous as any other git mutation, since an LFS upload can be large.
+fn push_command(root: &Path, args: &[&str]) -> std::process::Command {
     let mut command = std::process::Command::new("git");
-    command.arg("-C").arg(root).args(args).env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null());
+    command.arg("-C").arg(root).stdin(std::process::Stdio::null());
+    crate::proc::quiet_network_git(&mut command);
+    command.args(args);
+    command
+}
+
+fn run_push(root: &Path, args: &[&str]) -> Result<(), BusError> {
+    let mut command = push_command(root, args);
     let output = crate::proc::output_with_timeout(&mut command, std::time::Duration::from_secs(600))
         .map_err(|error| BusError::conflict("git.push_failed", error.to_string()))?
         .ok_or_else(|| BusError::unavailable("git.push_failed", "git push did not finish within 10 minutes; check the remote before pushing again"))?;
@@ -2395,6 +2408,24 @@ fn branches_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fetch (every session.create runs one) and a push never wait for a person: no terminal
+    /// prompt, no askpass window, no Credential Manager dialog, and a stalled transfer gives up.
+    #[test]
+    fn fetch_and_push_never_prompt_and_give_up_on_a_stalled_transfer() {
+        for command in [fetch_command(Path::new("/repo")), push_command(Path::new("/repo"), &["push", "origin", "main"])] {
+            let envs: Vec<(String, String)> = command.get_envs()
+                .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()).unwrap_or_default()))
+                .collect();
+            for (key, value) in [("GIT_TERMINAL_PROMPT", "0"), ("GIT_ASKPASS", ""), ("GCM_INTERACTIVE", "never")] {
+                assert!(envs.contains(&(key.into(), value.into())), "{key} in {envs:?}");
+            }
+            let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            let at = |arg: &str| args.iter().position(|a| a == arg);
+            let subcommand = at("fetch").or(at("push")).expect("a subcommand");
+            assert!(at("http.lowSpeedLimit=1000").is_some_and(|i| i < subcommand), "git's own option, before the subcommand: {args:?}");
+        }
+    }
 
     #[test]
     fn github_pull_requests_cover_all_pages_and_lifecycle_states() {
