@@ -1236,6 +1236,24 @@ pub fn stop(engine: &Engine, id: Id) -> bool {
     true
 }
 
+/// Stop the thread's agent unless a turn is under way, in one look at the live state; whether
+/// the thread was idle. A turn the person starts a moment later is left be.
+pub fn stop_idle(engine: &Engine, id: Id) -> bool {
+    let mut live = lock(&engine.threads.live);
+    if live.working.contains_key(&id) {
+        return false;
+    }
+    let Some(agent) = live.agents.remove(&id) else { return true };
+    drop(live);
+    kill(agent.pid);
+    true
+}
+
+/// Whether the turn `token` is still under way in thread `id`.
+pub fn turn_is_on(engine: &Engine, id: Id, token: u64) -> bool {
+    lock(&engine.threads.live).current(id, token)
+}
+
 /// Stop every agent talking to the local model server, which is stopping: their turns end
 /// with it, without an error of their own.
 pub fn stop_local(engine: &Engine) {
@@ -1263,7 +1281,12 @@ pub fn local_busy(engine: &Engine) -> bool {
 /// for the caller to remove outside the store's lock ([`images::remove`]).
 pub fn delete(engine: &Engine, id: Id) -> Result<Vec<PathBuf>, BusError> {
     stop(engine, id);
+    let aide = get(engine, id).is_ok_and(|t| t.kind == AIDE);
     let gone = with_db(engine, |db| db.delete(id))?.ok_or_else(|| not_found(id))?;
+    // Its id may be a new thread's: what Aide kept of its conversation goes with it.
+    if aide {
+        crate::aide::runs::forget_conversation(engine, id);
+    }
     Ok(gone.iter().map(|image| images::path(engine, image)).collect())
 }
 
@@ -1622,7 +1645,9 @@ fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Opti
     let assistant = thread.kind == ASSISTANT;
     let aide = thread.kind == AIDE;
     let args = if aide {
-        let resume = thread.agent_ref.as_deref().filter(|_| crate::aide::runs::may_resume(engine, id, thread.model.as_deref()));
+        // Asked on every start, a first turn included, so the thread's host is always kept.
+        let may = crate::aide::runs::may_resume(engine, id, thread.model.as_deref());
+        let resume = thread.agent_ref.as_deref().filter(|_| may);
         aide_args(&mcp_config(engine), thread.model.as_deref(), effort, resume, style.lean)
     } else if assistant {
         assistant_args(&mcp_config(engine), thread.model.as_deref(), effort, thread.agent_ref.as_deref(), style.lean)
@@ -1929,6 +1954,19 @@ mod tests {
         fail(&engine, id, second, "The model did not load");
         assert_eq!(token(&engine), None);
         assert_eq!(page(&engine, id, None, None).unwrap().messages.len(), 3);
+    }
+
+    #[test]
+    fn stopping_an_idle_agent_leaves_a_turn_under_way_be() {
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        let now = crate::time::now();
+        let id = create(&engine, AIDE, "Brief", None, None, &now).unwrap().id;
+        assert!(stop_idle(&engine, id), "nothing running: idle");
+        let (_, token) = post(&engine, id, "What happened today?", &[], &now).unwrap();
+        assert!(!stop_idle(&engine, id));
+        assert!(turn_is_on(&engine, id, token), "the person's turn goes on");
+        assert!(stop(&engine, id));
+        assert!(!turn_is_on(&engine, id, token));
     }
 
     #[test]

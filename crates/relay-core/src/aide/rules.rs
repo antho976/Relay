@@ -128,7 +128,7 @@ fn fire(engine: &Arc<Engine>, job: &Job, index: usize, found: Vec<Finding>) {
         return;
     }
     let summary = fresh.iter().map(|f| f.summary.as_str()).collect::<Vec<_>>().join("; ");
-    let _ = runs::queue(engine, job.id, Reason::Rule, &summary);
+    let _ = runs::queue(engine, job.id, Reason::Rule, &summary, false);
 }
 
 /// Takes what each of the job's rules finds now as seen: called when a job is saved or turned on,
@@ -255,7 +255,7 @@ pub fn check_stuck(engine: &Arc<Engine>, jobs: &[Job], now: Timestamp) -> Option
                 }
                 let key = format!("stuck:{name}:{since}");
                 if with_db(engine, |db| db.see(job.id, &key, &crate::time::now())).unwrap_or(false) {
-                    let _ = runs::queue(engine, job.id, Reason::Rule, &format!("session {name} has waited on you since {since}"));
+                    let _ = runs::queue(engine, job.id, Reason::Rule, &format!("session {name} has waited on you since {since}"), false);
                 }
             }
         }

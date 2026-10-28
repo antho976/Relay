@@ -208,7 +208,7 @@ pub fn register(e: &mut Engine) {
         let trigger = p.note.map(|n| n.trim().chars().take(1000).collect::<String>()).filter(|n| !n.is_empty()).unwrap_or_else(|| "pressed Run".into());
         // Queued now, so the answer carries the run; started after the handler returns.
         let at = ctx.now.clone();
-        let id = with_db(ctx.engine(), |db| db.add_run(p.job_id, Reason::Manual, &trigger, RunState::Queued, None, &at))?;
+        let id = with_db(ctx.engine(), |db| db.add_run(p.job_id, Reason::Manual, &trigger, false, RunState::Queued, None, &at))?;
         ctx.emit("aide.changed", json!({"what": "run", "id": id}));
         ctx.after_commit(runs::advance_soon);
         with_db(ctx.engine(), |db| db.run(id))?.ok_or_else(|| not_found("run", id))
@@ -280,7 +280,8 @@ pub fn register(e: &mut Engine) {
         let note = text("note", &p.note, 600)?;
         let due = jiff::Timestamp::now().checked_add(jiff::SignedDuration::from_mins(i64::from(p.minutes))).map_err(|e| invalid(e.to_string()))?;
         let due_at = crate::time::stamp(due);
-        with_db(ctx.engine(), |db| db.add_follow_up(j.id, &due_at, &note))?;
+        let private = runs::writes_private(ctx.engine(), Some(thread));
+        with_db(ctx.engine(), |db| db.add_follow_up(j.id, &due_at, &note, private))?;
         ctx.emit("aide.changed", json!({"what": "follow_up"}));
         ctx.after_commit(|engine| aide::poke(&engine));
         Ok(FollowupOut { due_at })

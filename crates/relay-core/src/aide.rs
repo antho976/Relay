@@ -43,6 +43,9 @@ pub struct Shelf {
     pub(crate) starting: Mutex<()>,
     /// Sessions seen blocked, and since when (RFC 3339): the stuck rule's clock.
     pub(crate) blocked: Mutex<HashMap<String, String>>,
+    /// Each Aide thread's running run's turn: the run, its turn's token and its wake message
+    /// (`runs::turn_ended`).
+    pub(crate) turns: Mutex<HashMap<i64, runs::RunTurn>>,
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {

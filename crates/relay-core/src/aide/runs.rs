@@ -94,7 +94,8 @@ pub fn reconcile(engine: &Engine) {
 
 /// Queue a run of `job_id`, and start it if the seat is free. Over the job's day of runs, or with
 /// Aide paused (a run the person asked for still goes), the run is kept as skipped.
-pub fn queue(engine: &Arc<Engine>, job_id: i64, reason: Reason, trigger: &str) -> Result<Run, BusError> {
+/// `private_trigger` when `trigger` was written from private data.
+pub fn queue(engine: &Arc<Engine>, job_id: i64, reason: Reason, trigger: &str, private_trigger: bool) -> Result<Run, BusError> {
     let job = with_db(engine, |db| db.job(job_id))?.ok_or_else(|| BusError::not_found("aide.not_found", format!("No job {job_id}")))?;
     let settings = super::settings(engine)?;
     let at = now();
@@ -111,7 +112,7 @@ pub fn queue(engine: &Arc<Engine>, job_id: i64, reason: Reason, trigger: &str) -
     };
     let state = if skip.is_some() { RunState::Skipped } else { RunState::Queued };
     let id = with_db(engine, |db| {
-        let id = db.add_run(job_id, reason, trigger, state, skip.as_deref(), &at)?;
+        let id = db.add_run(job_id, reason, trigger, private_trigger, state, skip.as_deref(), &at)?;
         if skip.is_some() {
             db.end_run(id, RunState::Skipped, None, &at)?;
         }
@@ -190,13 +191,13 @@ fn launch(engine: &Arc<Engine>, run: &Run) -> bool {
             return false;
         }
     };
-    if threads::get(engine, thread).is_ok_and(|t| t.working) {
-        return false;
-    }
     // Each run starts a fresh conversation: its cost does not grow with every run before it, and
     // what a model of the person's own read is never resumed on Claude's. What carries over is
-    // what Aide keeps: facts, errands, follow-ups and what was held for the brief.
-    threads::stop(engine, thread);
+    // what Aide keeps: facts, errands, follow-ups and what was held for the brief. The agent is
+    // stopped only while no turn is under way, so a person's that just started goes on.
+    if !threads::stop_idle(engine, thread) {
+        return false;
+    }
     let _ = threads::with_db(engine, |db| db.set_agent_ref(thread, ""));
     let wake = wake_text(engine, &job, run, &choice);
     let deadline = Timestamp::now().checked_add(SignedDuration::from_mins(i64::from(job.spec.minutes_per_run()))).unwrap_or(Timestamp::MAX);
@@ -205,6 +206,7 @@ fn launch(engine: &Arc<Engine>, run: &Run) -> bool {
     }
     match threads::post_wake(engine, thread, &wake.text, &at) {
         Ok((message, token)) => {
+            super::lock(&engine.aide.turns).insert(thread, RunTurn { run: run.id, token, wake: message.id });
             // What it was handed is used, and what was held for the brief is said, only now
             // that the wake is posted: a run that did not start keeps them for the next.
             let _ = with_db(engine, |db| {
@@ -334,6 +336,12 @@ pub fn may_resume(engine: &Engine, thread: i64, model: Option<&str>) -> bool {
     resume && recorded
 }
 
+/// Forgets what was kept of Aide thread `thread`'s conversation: the thread is gone, and its id
+/// may be a new one's.
+pub fn forget_conversation(engine: &Engine, thread: i64) {
+    let _ = with_db(engine, |db| db.forget_meta(&conversation_key(thread)));
+}
+
 /// A run's wake: the message, what each source read gave, the facts it was handed, and the
 /// messages held for the brief it says.
 struct Wake {
@@ -357,6 +365,8 @@ fn wake_text(engine: &Engine, job: &Job, run: &Run, choice: &Choice) -> Wake {
             Reason::Schedule => format!("its schedule ({})", job.spec.schedule.as_ref().map(schedule::describe).unwrap_or_default()),
             Reason::CatchUp => "its schedule, which came round while the PC was off".into(),
             Reason::Rule => format!("a rule: {}", run.trigger),
+            Reason::FollowUp if !private && with_db(engine, |db| db.run_trigger_is_private(run.id)).unwrap_or(true) =>
+                "a follow-up you set while working on private data (its note is not shown here)".into(),
             Reason::FollowUp => format!("a follow-up you set: {}", run.trigger),
             Reason::Manual => "the person pressed Run".into(),
         },
@@ -385,15 +395,28 @@ fn wake_text(engine: &Engine, job: &Job, run: &Run, choice: &Choice) -> Wake {
     let mut briefed = Vec::new();
     if matches!(run.reason, Reason::Schedule | Reason::CatchUp) {
         let held = with_db(engine, |db| db.held(true)).unwrap_or_default();
-        let shown = if private { held.clone() } else { with_db(engine, |db| db.held(false)).unwrap_or_default() };
+        // What may be shown is read from the same rows: one held meanwhile waits for the next.
+        let shared: std::collections::HashSet<i64> = if private { held.iter().map(|m| m.id).collect() } else {
+            with_db(engine, |db| db.held(false)).unwrap_or_default().into_iter().map(|m| m.id).collect()
+        };
+        let shown: Vec<&Message> = held.iter().filter(|m| shared.contains(&m.id)).collect();
         if !shown.is_empty() {
             let lines: Vec<String> = shown.iter().map(|m| format!("- {} ({}): {}", m.title, m.created_at, m.body)).collect();
             parts.push(format!("Held for this brief (say them, then they are done):\n{}", lines.join("\n")));
         }
-        let unshown = held.len() - shown.len();
-        if unshown > 0 {
-            parts.push(format!("{unshown} more held for this brief came from the person's own models working on \
-private data: do not guess at them, and say only that they are in their bots' chats."));
+        // The rest came from the person's own models working on private data: the brief says
+        // where to read them, each bot's chat, and never what they say.
+        let mut chats: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        for m in held.iter().filter(|m| !shared.contains(&m.id)) {
+            let bot = m.job_id.and_then(|id| with_db(engine, |db| db.job(id)).ok().flatten()).map_or_else(|| "Chief of Staff".to_string(), |j| j.spec.name);
+            *chats.entry(bot).or_default() += 1;
+        }
+        if !chats.is_empty() {
+            let lines: Vec<String> = chats.iter().map(|(bot, n)| {
+                format!("- {n} private message{} in {bot}'s chat", if *n == 1 { "" } else { "s" })
+            }).collect();
+            parts.push(format!("Also held, from the person's own models working on private data. Tell the person where to \
+read them, in these words, and do not guess at what they say:\n{}", lines.join("\n")));
         }
         briefed = held.iter().map(|m| m.id).collect();
     }
@@ -514,13 +537,39 @@ pub fn turn_ended(engine: &Arc<Engine>, thread: i64) {
     advance(engine);
 }
 
-/// Ends `thread`'s running run if its turn is over; the run and why when it failed.
+/// A running run's turn in its thread.
+pub struct RunTurn {
+    run: i64,
+    token: u64,
+    /// The wake message that started it.
+    wake: i64,
+}
+
+/// Ends `thread`'s running run if its own turn is over, whatever turn the thread is on now (the
+/// person may have written since); the run and why when it failed.
 fn end_with_turn(engine: &Engine, thread: i64) -> Option<(Run, String)> {
-    let run = with_db(engine, |db| db.open_run_of_thread(thread)).ok().flatten().filter(|r| r.state == RunState::Running)?;
-    if threads::get(engine, thread).is_ok_and(|t| t.working) {
+    let Some(run) = with_db(engine, |db| db.open_run_of_thread(thread)).ok().flatten().filter(|r| r.state == RunState::Running) else {
+        super::lock(&engine.aide.turns).remove(&thread);
+        return None;
+    };
+    let turn = super::lock(&engine.aide.turns).get(&thread).filter(|t| t.run == run.id).map(|t| (t.token, t.wake));
+    let on = match turn {
+        Some((token, _)) => threads::turn_is_on(engine, thread, token),
+        None => threads::get(engine, thread).is_ok_and(|t| t.working),
+    };
+    if on {
         return None;
     }
-    let failed = threads::page(engine, thread, None, None).ok().and_then(|p| p.messages.last().cloned()).filter(|m| m.role == "error");
+    super::lock(&engine.aide.turns).remove(&thread);
+    // How the run's own turn ended: its last message before the person next wrote.
+    let last = match turn {
+        Some((_, wake)) => threads::page(engine, thread, Some(wake), None).ok().and_then(|p| {
+            let own: Vec<_> = p.messages.into_iter().take_while(|m| m.role != "user").collect();
+            own.last().cloned()
+        }),
+        None => threads::page(engine, thread, None, None).ok().and_then(|p| p.messages.last().cloned()),
+    };
+    let failed = last.filter(|m| m.role == "error");
     let at = now();
     let (state, note) = match failed {
         Some(m) => (RunState::Failed, m.body["text"].as_str().unwrap_or("The agent stopped").to_string()),
@@ -583,9 +632,9 @@ pub fn tick(engine: &Arc<Engine>) -> Option<Timestamp> {
                 let following = schedule::next_after(&s, now_t);
                 let _ = with_db(engine, |db| db.set_job_due(job.id, following.map(stamp).as_deref()));
                 if late <= 120 {
-                    let _ = queue(engine, job.id, Reason::Schedule, &schedule::describe(&s));
+                    let _ = queue(engine, job.id, Reason::Schedule, &schedule::describe(&s), false);
                 } else if late <= schedule::GRACE_SECONDS {
-                    let _ = queue(engine, job.id, Reason::CatchUp, &format!("{} (due {})", schedule::describe(&s), stamp(due)));
+                    let _ = queue(engine, job.id, Reason::CatchUp, &format!("{} (due {})", schedule::describe(&s), stamp(due)), false);
                 }
                 // Further behind than the grace window: the PC was off through it, and a stale
                 // brief helps nobody. The next one comes round as usual.
@@ -609,7 +658,7 @@ pub fn tick(engine: &Arc<Engine>) -> Option<Timestamp> {
         match parse(&f.due_at) {
             Some(due) if due <= now_t => {
                 let _ = with_db(engine, |db| db.drop_follow_up(f.id));
-                let _ = queue(engine, f.job_id, Reason::FollowUp, &f.note);
+                let _ = queue(engine, f.job_id, Reason::FollowUp, &f.note, f.private);
             }
             Some(due) => soonest(due),
             None => {

@@ -1,6 +1,6 @@
 //! `aide.db` beside the store: Aide's own SQLite file, as Tally's ledger and Avex's history are.
-//! Small rows, written a few at a time; the engine keeps it behind one mutex and never holds the
-//! store's lock with it.
+//! Small rows, written a few at a time; the engine keeps it behind one mutex of its own, which a
+//! handler may take while it holds the store's lock (never the other way round).
 //!
 //! A row is **private** when a model of the person's own wrote it while some source was for
 //! their own models only: it may hold what that model read. The lists take `with_private`, and
@@ -105,12 +105,23 @@ ALTER TABLE fact ADD COLUMN private INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE errand ADD COLUMN private INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE message ADD COLUMN private INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE page ADD COLUMN private INTEGER NOT NULL DEFAULT 0;
--- Kept before rows were marked: what a job that ever ran on the person's own model wrote is
--- taken as private.
-UPDATE fact SET private = 1 WHERE job_id IN (SELECT job_id FROM run WHERE host IN ('pc', 'server'));
-UPDATE errand SET private = 1 WHERE job_id IN (SELECT job_id FROM run WHERE host IN ('pc', 'server'));
-UPDATE message SET private = 1 WHERE job_id IN (SELECT job_id FROM run WHERE host IN ('pc', 'server'));
-UPDATE page SET private = 1 WHERE job_id IN (SELECT job_id FROM run WHERE host IN ('pc', 'server'));
+ALTER TABLE follow_up ADD COLUMN private INTEGER NOT NULL DEFAULT 0;
+-- A run woken by words written from private data (a follow-up's note).
+ALTER TABLE run ADD COLUMN private_trigger INTEGER NOT NULL DEFAULT 0;
+-- Kept before rows were marked, an agent's words cannot be told from the person's, nor which
+-- model wrote them. So with any source for the person's own models only, all of it is taken as
+-- private; and whatever a job that ran on their own model wrote, in any case.
+CREATE TEMP TABLE was_private AS SELECT EXISTS (
+    SELECT 1 FROM meta m, json_each(CASE WHEN json_valid(m.value) THEN m.value ELSE '{}' END, '$.tiers') t
+    WHERE m.key = 'settings' AND t.value = 'local_only'
+) AS any_local, (SELECT json_group_array(DISTINCT job_id) FROM run WHERE host IN ('pc', 'server')) AS own_jobs;
+UPDATE fact SET private = 1 WHERE (SELECT any_local FROM was_private) OR job_id IN (SELECT value FROM json_each((SELECT own_jobs FROM was_private)));
+UPDATE errand SET private = 1 WHERE (SELECT any_local FROM was_private) OR job_id IN (SELECT value FROM json_each((SELECT own_jobs FROM was_private)));
+UPDATE message SET private = 1 WHERE (SELECT any_local FROM was_private) OR job_id IN (SELECT value FROM json_each((SELECT own_jobs FROM was_private)));
+UPDATE page SET private = 1 WHERE (SELECT any_local FROM was_private) OR job_id IN (SELECT value FROM json_each((SELECT own_jobs FROM was_private)));
+UPDATE follow_up SET private = 1 WHERE (SELECT any_local FROM was_private) OR job_id IN (SELECT value FROM json_each((SELECT own_jobs FROM was_private)));
+UPDATE job SET private = 1 WHERE state = 'proposed' AND ((SELECT any_local FROM was_private) OR id IN (SELECT value FROM json_each((SELECT own_jobs FROM was_private))));
+DROP TABLE was_private;
 "#];
 
 pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
@@ -266,6 +277,11 @@ impl Aide {
         self.conn.prepare_cached("SELECT value FROM meta WHERE key = ?1")?.query_row([key], |r| r.get(0)).optional()
     }
 
+    pub fn forget_meta(&self, key: &str) -> Result<()> {
+        self.conn.prepare_cached("DELETE FROM meta WHERE key = ?1")?.execute([key])?;
+        Ok(())
+    }
+
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
         self.conn.prepare_cached("INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value")?.execute([key, value])?;
         Ok(())
@@ -339,17 +355,22 @@ impl Aide {
 
     // Runs.
 
+    /// A run; `private_trigger` when what woke it was written from private data.
     #[allow(clippy::too_many_arguments)]
-    pub fn add_run(&self, job_id: i64, reason: Reason, trigger: &str, state: RunState, note: Option<&str>, now: &str) -> Result<i64> {
+    pub fn add_run(&self, job_id: i64, reason: Reason, trigger: &str, private_trigger: bool, state: RunState, note: Option<&str>, now: &str) -> Result<i64> {
         self.conn
-            .prepare_cached("INSERT INTO run (job_id, reason, trigger, state, note, sources, started_at) VALUES (?1, ?2, ?3, ?4, ?5, '[]', ?6)")?
-            .execute(params![job_id, reason.as_str(), trigger, state.as_str(), note, now])?;
+            .prepare_cached("INSERT INTO run (job_id, reason, trigger, state, note, sources, started_at, private_trigger) VALUES (?1, ?2, ?3, ?4, ?5, '[]', ?6, ?7)")?
+            .execute(params![job_id, reason.as_str(), trigger, state.as_str(), note, now, private_trigger])?;
         let id = self.conn.last_insert_rowid();
         self.conn.prepare_cached("UPDATE job SET last_run_at = ?2 WHERE id = ?1")?.execute(params![job_id, now])?;
         self.conn
             .prepare_cached("DELETE FROM run WHERE job_id = ?1 AND id <= (SELECT id FROM run WHERE job_id = ?1 ORDER BY id DESC LIMIT 1 OFFSET ?2)")?
             .execute(params![job_id, KEEP_RUNS])?;
         Ok(id)
+    }
+
+    pub fn run_trigger_is_private(&self, id: i64) -> Result<bool> {
+        Ok(self.conn.prepare_cached("SELECT private_trigger FROM run WHERE id = ?1")?.query_row([id], |r| r.get(0)).optional()?.unwrap_or(true))
     }
 
     pub fn run(&self, id: i64) -> Result<Option<Run>> {
@@ -443,14 +464,14 @@ impl Aide {
 
     // Follow-ups.
 
-    pub fn add_follow_up(&self, job_id: i64, due_at: &str, note: &str) -> Result<i64> {
-        self.conn.prepare_cached("INSERT INTO follow_up (job_id, due_at, note) VALUES (?1, ?2, ?3)")?.execute(params![job_id, due_at, note])?;
+    pub fn add_follow_up(&self, job_id: i64, due_at: &str, note: &str, private: bool) -> Result<i64> {
+        self.conn.prepare_cached("INSERT INTO follow_up (job_id, due_at, note, private) VALUES (?1, ?2, ?3, ?4)")?.execute(params![job_id, due_at, note, private])?;
         Ok(self.conn.last_insert_rowid())
     }
 
     pub fn follow_ups(&self) -> Result<Vec<FollowUp>> {
-        let mut st = self.conn.prepare_cached("SELECT id, job_id, due_at, note FROM follow_up ORDER BY due_at")?;
-        let rows = st.query_map([], |r| Ok(FollowUp { id: r.get(0)?, job_id: r.get(1)?, due_at: r.get(2)?, note: r.get(3)? }))?;
+        let mut st = self.conn.prepare_cached("SELECT id, job_id, due_at, note, private FROM follow_up ORDER BY due_at")?;
+        let rows = st.query_map([], |r| Ok(FollowUp { id: r.get(0)?, job_id: r.get(1)?, due_at: r.get(2)?, note: r.get(3)?, private: r.get(4)? }))?;
         rows.collect()
     }
 
@@ -652,7 +673,7 @@ mod tests {
         assert_eq!((j.spec.name.as_str(), j.state, j.thread_id), ("Brief", JobState::Active, Some(9)));
         assert_eq!(a.job_of_thread(9).unwrap().unwrap().id, id);
 
-        let run = a.add_run(id, Reason::Manual, "pressed Run", RunState::Queued, None, NOW).unwrap();
+        let run = a.add_run(id, Reason::Manual, "pressed Run", false, RunState::Queued, None, NOW).unwrap();
         let read = SourceRead { source: Source::Dev, ok: true, detail: "3 sessions".into() };
         assert!(a.start_run(run, Some("sonnet"), "claude", 9, std::slice::from_ref(&read), NOW).unwrap());
         assert!(!a.start_run(run, Some("sonnet"), "claude", 9, &[], NOW).unwrap(), "a run is claimed once");
@@ -671,7 +692,7 @@ mod tests {
         let a = Aide::open_in_memory().unwrap();
         let id = a.add_job(&spec("Busy"), JobState::Active, None, false, NOW).unwrap();
         for _ in 0..(KEEP_RUNS + 5) {
-            a.add_run(id, Reason::Rule, "x", RunState::Nothing, None, NOW).unwrap();
+            a.add_run(id, Reason::Rule, "x", false, RunState::Nothing, None, NOW).unwrap();
         }
         assert_eq!(a.runs(Some(id), 10_000).unwrap().len() as i64, KEEP_RUNS);
     }
@@ -782,6 +803,38 @@ mod tests {
         let a = Aide::init(conn).unwrap();
         let shared: Vec<String> = a.pages(false).unwrap().into_iter().map(|p| p.title).collect();
         assert_eq!(shared, vec!["Claude".to_string()]);
+    }
+
+    #[test]
+    fn with_a_source_for_your_own_models_everything_from_before_is_private() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        let settings = json(&Settings { tiers: Tiers { money: Tier::LocalOnly, ..Tiers::default() }, ..Settings::default() });
+        let spec = json(&spec("Drafted"));
+        conn.execute_batch(&format!(
+            "INSERT INTO meta (key, value) VALUES ('settings', '{settings}');
+             INSERT INTO job (id, spec, state, created_at, updated_at) VALUES (1, '{spec}', 'proposed', '{NOW}', '{NOW}'), (2, '{spec}', 'active', '{NOW}', '{NOW}');
+             INSERT INTO page (title, question, body, job_id, updated_at) VALUES ('Chief wrote', 'q', 'SECRET412', NULL, '{NOW}');
+             INSERT INTO fact (text, source, job_id, confirmed, pinned, learned_at) VALUES ('SECRET412', 'person', NULL, 1, 0, '{NOW}');
+             INSERT INTO errand (title, detail, job_id, state, proposed_done, created_at, updated_at) VALUES ('SECRET412', '', 2, 'open', 0, '{NOW}', '{NOW}');
+             INSERT INTO message (job_id, level, title, body, created_at, notified, held) VALUES (NULL, 'brief', 'SECRET412', '', '{NOW}', 0, 1);
+             INSERT INTO follow_up (job_id, due_at, note) VALUES (2, '{NOW}', 'SECRET412');"
+        )).unwrap();
+        let a = Aide::init(conn).unwrap();
+        assert!(a.pages(false).unwrap().is_empty() && a.facts(false).unwrap().is_empty());
+        assert!(a.errands(false, false).unwrap().is_empty() && a.held(false).unwrap().is_empty());
+        assert!(a.follow_ups().unwrap()[0].private);
+        assert_eq!(a.jobs_listed(false).unwrap().iter().map(|j| j.id).collect::<Vec<_>>(), vec![2], "the proposal is private; the job turned on is not");
+
+        // Without one, nothing was private.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        conn.execute_batch(&format!("INSERT INTO meta (key, value) VALUES ('settings', 'not json');
+            INSERT INTO page (title, question, body, job_id, updated_at) VALUES ('Chief wrote', 'q', 'b', NULL, '{NOW}');")).unwrap();
+        let a = Aide::init(conn).unwrap();
+        assert_eq!(a.pages(false).unwrap().len(), 1, "and a settings row it cannot read does not stop it opening");
     }
 
     #[test]

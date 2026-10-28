@@ -287,14 +287,18 @@ waits on Aide, and a channel the person is typing in keeps its run queued.
   host each Aide thread's conversation was last had on (`conversation:<thread>` in its meta). One
   that any of your own models took part in is resumed on your own models only; moved to Claude's,
   any Aide chat (a bot's, or the Chief of Staff's, which never has runs) starts afresh. So does one
-  whose host was not kept.
+  whose host was not kept. The host is kept from a thread's first turn, and forgotten when the
+  thread is deleted (a new thread may get its id).
 - **What your own models write from private data stays theirs.** While any source is local only,
   what an agent on your own model writes (a message, a page, an errand or a change to one, a fact,
-  a proposal) is marked private in `aide.db`. A run on Claude's is handed none of it: its brief says
-  only how many private messages were held, and its `aide.fact.list`, `.errand.list`, `.page.list`
-  and `.job.list` leave them out (a proposal stops being private once you turn it on). A fact
+  a proposal, a follow-up's note) is marked private in `aide.db`. A run on Claude's is handed
+  none of it. Its brief says only how many private messages wait in which bot's chat ("2 private
+  messages in Spending's chat"), and its `aide.fact.list`, `.errand.list`, `.page.list` and
+  `.job.list` leave them out (a proposal stops being private once you turn it on). A follow-up
+  run on Claude's is told it was set from private data, not what it says. A fact
   learned from a local-only source is not handed to Claude's either, nor one from a source turned
-  off to any model. You see everything.
+  off to any model. You see everything. What was kept before rows were marked cannot be told
+  apart, so with any source local only, all of it is taken as private.
 - **Approvals.** Aide has no outward action to approve: it cannot pay, trade, delete, send to
   anyone but you, or change settings (`policy::REFUSED`); those ops are not in any run's list. What
   needs you is a job it proposes (does nothing until turned on), a fact it learned (not given to
