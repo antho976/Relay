@@ -3078,6 +3078,7 @@ dependencies = [
  "gix",
  "jiff",
  "libc",
+ "memchr",
  "notify",
  "png",
  "portable-pty",
