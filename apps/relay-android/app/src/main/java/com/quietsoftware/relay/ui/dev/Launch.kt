@@ -243,8 +243,6 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    ProjectRow(project, project?.let { crumb(it, s.workspaces) }) { pickingProject = true }
-
                     if (group) {
                         Label("Review group")
                         Segmented(listOf(1 to "1 builder", 2 to "2 builders"), builders, { builders = it }, Modifier.fillMaxWidth(), fill = true)
@@ -261,7 +259,7 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                     Field(
                         profile.prompt,
                         { patch(profile.copy(prompt = it)) },
-                        Modifier.fillMaxWidth().padding(top = 14.dp).focusRequester(promptFocus),
+                        Modifier.fillMaxWidth().padding(top = 8.dp).focusRequester(promptFocus),
                         placeholder = if (group) "Instructions for ${label(index).lowercase()} (optional)" else "What should it work on?",
                         singleLine = false,
                         minLines = 4,
@@ -270,7 +268,10 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     )
 
-                    Label("Provider")
+                    Label("Project")
+                    ProjectRow(project, project?.let { crumb(it, s.workspaces) }) { pickingProject = true }
+
+                    Label("Who works on it")
                     if (!providerAnswer.fresh && providerAnswer.result != null) StaleNote(providerAnswer.at)
                     val chosen = providerOf(profile)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -291,7 +292,7 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                     Label("Model")
                     Models(chosen, profile.model, owner = index) { patch(profile.copy(model = it)) }
 
-                    Label("Effort")
+                    Label("How hard it thinks")
                     Efforts(effortsFor(chosen), profile.effortFor(chosen)) { patch(profile.copy(effort = it)) }
 
                     if (leads) {
@@ -334,10 +335,10 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                     error != null -> error!!
                     note != null -> note!!
                     !s.online -> "The PC is away · starts when it is back"
-                    else -> null
+                    else -> "Starts on ${s.pc?.name?.ifBlank { null } ?: "your PC"} now · you'll hear when it needs you"
                 },
                 held || error != null,
-                if (group) "Launch review group" else "Launch agent",
+                if (group) "Start review group" else "Start agent",
                 enabled = project != null && !busy && !held,
                 onStart = ::launch,
             )
@@ -603,19 +604,15 @@ private fun More(
     }
 }
 
-/** The fixed foot: what is happening or wrong, and the one primary key. */
+/** The fixed foot (design 14): the one primary key across the page, and what is happening or wrong under it. */
 @Composable
 private fun Footer(line: String?, bad: Boolean, start: String, enabled: Boolean, onStart: () -> Unit) {
     val c = Relay.colors
     Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
         Hairline(color = c.edge)
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            T(line.orEmpty(), Modifier.weight(1f), Relay.type.caption, if (bad) c.heldText else c.ink3, maxLines = 3)
-            Key(start, onStart, kind = KeyKind.Primary, glyph = "play", enabled = enabled)
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Key(start, onStart, Modifier.fillMaxWidth(), kind = KeyKind.Primary, glyph = "play", enabled = enabled)
+            if (line != null) T(line, Modifier.fillMaxWidth(), Relay.type.caption.copy(textAlign = androidx.compose.ui.text.style.TextAlign.Center), if (bad) c.heldText else c.ink3, maxLines = 3)
         }
     }
 }

@@ -50,6 +50,7 @@ import com.quietsoftware.relay.ui.kit.Empty
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.IconKey
 import com.quietsoftware.relay.ui.kit.Key
+import com.quietsoftware.relay.ui.kit.LampDot
 import com.quietsoftware.relay.ui.kit.KeyKind
 import com.quietsoftware.relay.ui.kit.ListRow
 import com.quietsoftware.relay.ui.kit.Pill
@@ -107,28 +108,13 @@ private fun Wall(nav: Nav) {
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
                 val columns = if (maxWidth >= 720.dp) 2 else 1
                 val grid = rememberLazyGridState()
-                // The live plates in view get a stream, the first few of them; the rest show their
-                // saved text. With the PC away there is no stream: a slate says so, where a
-                // miniature of nothing saved was an empty black plate.
-                val online = s.online
-                val streaming by remember(grid, plates, online) {
-                    derivedStateOf {
-                        val byName = plates.associateBy { it.name }
-                        grid.layoutInfo.visibleItemsInfo.asSequence()
-                            .mapNotNull { (it.key as? String)?.removePrefix(PLATE_KEY)?.let(byName::get) }
-                            .filter { online && it.attachable && !it.pending }
-                            .map { it.name }
-                            .take(MAX_MINIATURES)
-                            .toSet()
-                    }
-                }
                 LazyVerticalGrid(
                     GridCells.Fixed(columns),
                     Modifier.fillMaxSize(),
                     state = grid,
-                    contentPadding = PaddingValues(bottom = 88.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 88.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     item(key = "attention", span = { GridItemSpan(maxLineSpan) }, contentType = "attention") {
                         Attention(s, plates, tasks, nav)
@@ -142,7 +128,7 @@ private fun Wall(nav: Nav) {
                         }
                     }
                     items(plates, key = { PLATE_KEY + it.name }, contentType = { "plate" }) { p ->
-                        Plate(p, nav, s.online, streaming = p.name in streaming, life)
+                        Plate(p, nav, s.online, life)
                     }
                     if (stopped.isNotEmpty()) {
                         item(key = "stopped", span = { GridItemSpan(maxLineSpan) }, contentType = "stopped") {
@@ -198,7 +184,7 @@ private fun WorkspaceStrip(s: ShellState, project: Project?, onCrumb: () -> Unit
         val crumb: @Composable (Modifier) -> Unit = { m -> Crumb(s, project, onCrumb, m) }
         val views: @Composable (Modifier, Boolean) -> Unit = { m, fill ->
             Segmented(
-                listOf("agents" to "Agents", "files" to "Files", "git" to "Git", "design" to "Design"),
+                listOf("agents" to "Agents", "files" to "Files", "git" to "Changes", "design" to "Designs"),
                 "agents",
                 { v ->
                     val id = project?.num ?: return@Segmented
@@ -273,7 +259,7 @@ private fun Attention(s: ShellState, plates: List<Session>, tasks: List<Task>, n
                 Modifier.heightIn(min = 36.dp),
                 color = c.heldText,
                 dot = c.held,
-                onClick = { if (one != null) nav.terminal(one.name) else nav.inbox() },
+                onClick = { if (one != null) nav.chat(one.name) else nav.inbox() },
             )
         }
         if (review > 0) {
@@ -282,62 +268,54 @@ private fun Attention(s: ShellState, plates: List<Session>, tasks: List<Task>, n
     }
 }
 
-// ---- A plate ----
+// ---- An agent ----
 
 /**
- * One agent as the PC draws it: the identity strip, then its screen in miniature when it is live
- * and streaming, or a slate saying where it stands over the last text the phone saved. Tap opens
- * its conversation, a long press the session's details.
+ * One agent as a card (design 14, "Agents"): its lamp, what it is doing in words, who it is and
+ * where it stands, and the one key its state offers. No terminal: a tap opens its conversation,
+ * a long press the session's details.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Plate(session: Session, nav: Nav, online: Boolean, streaming: Boolean, life: Lifecycle) {
+private fun Plate(session: Session, nav: Nav, online: Boolean, life: Lifecycle) {
     val c = Relay.colors
     val pending = session.pending
     Column(
         Modifier
             .fillMaxWidth()
-            .background(c.screen)
+            .clip(Radii.card)
+            .background(c.slab)
+            .border(1.dp, if (session.state == "blocked") c.waiting.copy(alpha = .45f) else c.edge, Radii.card)
             .combinedClickable(
                 onClickLabel = "Open conversation",
                 onLongClickLabel = "Session details",
                 onLongClick = { if (!pending) nav.session(session.name) },
-                onClick = { if (pending) nav.shell.toast(slateHint(session, online)) else nav.terminal(session.name) },
-            ),
+                onClick = { if (pending) nav.shell.toast(slateHint(session, online)) else nav.chat(session.name) },
+            )
+            .padding(start = 14.dp, end = 10.dp, top = 12.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        PlateStrip(session) {
-            val act = if (pending) null else leadAct(session.state)
-            if (act != null) StripKey(act, { life.run(act, session) }, dim = !online || life.busy != null)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            LampDot(session.lamp, 8.dp)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                T(session.intent?.ifBlank { null } ?: session.name, style = Relay.type.uiMedium, color = c.ink, maxLines = 2, weight = FontWeight.SemiBold)
+                T(
+                    "${session.name} · ${session.stateLabel.lowercase()}",
+                    style = Relay.type.caption,
+                    color = if (session.state == "blocked") c.waiting else c.ink3,
+                    maxLines = 1,
+                )
+            }
+            Glyph("chevron-right", 14.dp, c.ink3)
         }
-        if (streaming) {
-            Miniature(nav.relay, session.name, PLATE_H)
-        } else {
-            Slate(session, nav, online, life)
-        }
-    }
-}
-
-/** A plate that is not streaming (terminal.rs slate): the state, a hint, the last saved text, the key that revives it. */
-@Composable
-private fun Slate(session: Session, nav: Nav, online: Boolean, life: Lifecycle) {
-    val c = Relay.colors
-    val lines = rememberSavedLines(nav.relay, session.name, 6)
-    Column(
-        Modifier.fillMaxWidth().heightIn(min = PLATE_H).padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        T(session.stateLabel, style = Relay.type.plateState.copy(fontSize = 13.sp, letterSpacing = 0.1.em), color = c.ink2)
-        // Until the saved lines are read, the hint does not claim there are none.
-        T(slateHint(session, online, saved = lines == null || lines.isNotEmpty()), style = Relay.type.caption, color = c.ink3, maxLines = 2)
-        if (!lines.isNullOrEmpty()) Excerpt(lines, Modifier.weight(1f, fill = false).padding(top = 2.dp))
-        val revive = if (session.pending) null else reviveAct(session.state)
-        if (revive != null) {
+        val act = if (pending) null else leadAct(session.state) ?: reviveAct(session.state)
+        if (act != null) {
             Key(
-                if (revive == Act.Start) "Start session" else revive.label,
-                { life.run(revive, session) },
+                if (act == Act.Start) "Start session" else act.label,
+                { life.run(act, session) },
                 Modifier.alpha(if (online) 1f else .5f),
                 kind = KeyKind.Plain,
-                glyph = revive.glyph,
+                glyph = act.glyph,
                 enabled = life.busy == null,
                 compact = true,
             )
@@ -376,7 +354,7 @@ private fun StoppedFold(list: List<Stopped>, online: Boolean, life: Lifecycle, n
                     {
                         // One agent resumes as its row's key does, without a question; several are asked about.
                         val one = list.singleOrNull()
-                        if (one != null) life.resume(one) { nav.terminal(one.name) } else life.resumeAll(list.map { it.name })
+                        if (one != null) life.resume(one) { nav.chat(one.name) } else life.resumeAll(list.map { it.name })
                     },
                     Modifier.alpha(if (online) 1f else .5f),
                     kind = KeyKind.Quiet,
@@ -410,8 +388,8 @@ private fun StoppedRow(st: Stopped, online: Boolean, life: Lifecycle, nav: Nav) 
                 weight = if (st.dirty) FontWeight.Medium else null,
             )
         }
-        IconKey("resume", { life.resume(st) { nav.terminal(st.name) } }, dim, size = 16.dp, tint = c.ink2, enabled = free, label = "Resume ${st.name}")
-        IconKey("refresh", { life.startFresh(st) { nav.terminal(st.name) } }, dim, size = 16.dp, enabled = free, label = "Start ${st.name} fresh")
+        IconKey("resume", { life.resume(st) { nav.chat(st.name) } }, dim, size = 16.dp, tint = c.ink2, enabled = free, label = "Resume ${st.name}")
+        IconKey("refresh", { life.startFresh(st) { nav.chat(st.name) } }, dim, size = 16.dp, enabled = free, label = "Start ${st.name} fresh")
         IconKey("trash", { life.discard(st) }, dim, size = 16.dp, tint = c.heldText, enabled = free, label = "Discard ${st.name}")
     }
 }

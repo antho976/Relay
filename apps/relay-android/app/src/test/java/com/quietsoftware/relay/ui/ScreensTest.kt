@@ -10,6 +10,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -184,12 +185,12 @@ class ScreensTest {
         }
     }
 
-    private fun shoot(name: String, content: @Composable (Nav) -> Unit) {
+    private fun shoot(name: String, palette: Palette = Palette.Matte, content: @Composable (Nav) -> Unit) {
         compose.mainClock.autoAdvance = false
         compose.setContent {
             val controller = rememberNavController()
             val nav = remember { Nav(controller, shell) }
-            RelayTheme(Palette.Matte) {
+            RelayTheme(palette) {
                 CompositionLocalProvider(LocalNav provides nav) { content(nav) }
             }
         }
@@ -232,6 +233,18 @@ class ScreensTest {
     }
 
     @Test fun start() = shoot("start", "start")
+    @Test fun home() = shoot("home", "home")
+    /** Home in another background and accent, as Settings › Appearance picks them. */
+    @Test fun homeMidnight() = shoot("home-midnight", Palette.of("midnight", "iris")) { nav ->
+        Box(Modifier.fillMaxSize()) { AppNav(nav, "home") }
+    }
+    /** The drawer, open over Home. */
+    @Test fun drawer() {
+        shoot("drawer-before", "home")
+        compose.onNodeWithContentDescription("Menu", substring = true).performClick()
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.onRoot().captureRoboImage("src/test/screenshots/drawer.png", OPTIONS)
+    }
     @Test fun agents() = shoot("agents", "agents")
     @Test fun board() = shoot("board", "board?project=1")
     @Test fun task() = shoot("task", "task/101")

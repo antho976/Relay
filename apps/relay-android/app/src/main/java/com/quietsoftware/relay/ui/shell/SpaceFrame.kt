@@ -6,6 +6,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.background
+import com.quietsoftware.relay.ui.kit.T
+import com.quietsoftware.relay.ui.kit.Dot
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
@@ -20,16 +30,22 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.currentBackStackEntryAsState
 import com.quietsoftware.relay.ui.Nav
-import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.launch
 
 /**
- * The frame of a space's pages, as on the PC: the top bar, the sidebar (a drawer here), the page,
- * and the status bar. Detail pages (a terminal, a task) use [PageBar] instead and fill the screen.
+ * The frame of the main pages (design 14): the top bar, the drawer, and the page. With the PC out
+ * of reach a quiet line under the bar says so; everything else about the link is in the drawer.
+ * [center] replaces the title with a chip of the page's own, as Home's project picker.
  */
 @Composable
-fun SpaceFrame(nav: Nav, content: @Composable () -> Unit) {
+fun SpaceFrame(
+    nav: Nav,
+    title: String? = null,
+    center: (@Composable () -> Unit)? = null,
+    actions: @Composable RowScope.() -> Unit = {},
+    content: @Composable () -> Unit,
+) {
     val s by nav.shell.state.collectAsStateWithLifecycle()
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -43,7 +59,12 @@ fun SpaceFrame(nav: Nav, content: @Composable () -> Unit) {
     val c = Relay.colors
     val close: () -> Unit = { scope.launch { drawer.close() } }
     val sidebarNav = object : SidebarNav by nav {
+        override fun home() { close(); nav.home() }
+        override fun agents() { close(); nav.agents() }
+        override fun chat(name: String) { close(); nav.chat(name) }
+        override fun search() { close(); nav.search() }
         override fun board() { close(); nav.board() }
+        override fun changes() { close(); nav.changes() }
         override fun notes() { close(); nav.notes() }
         override fun inbox() { close(); nav.inbox() }
         override fun outbox() { close(); nav.outbox() }
@@ -62,36 +83,57 @@ fun SpaceFrame(nav: Nav, content: @Composable () -> Unit) {
     }
     ModalNavigationDrawer(
         drawerState = drawer,
-        scrimColor = Color.Black.copy(alpha = .45f),
+        scrimColor = Color.Black.copy(alpha = .55f),
         drawerContent = {
-            ModalDrawerSheet(drawerContainerColor = c.wall, drawerShape = Radii.board, windowInsets = androidx.compose.foundation.layout.WindowInsets(0.dp)) {
+            ModalDrawerSheet(
+                drawerContainerColor = c.pane,
+                drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
+                windowInsets = androidx.compose.foundation.layout.WindowInsets(0.dp),
+            ) {
                 Sidebar(s, route, sidebarNav, space)
             }
         },
     ) {
         Column(Modifier.fillMaxSize().background(c.wall)) {
             TopBar(
-                space = space,
-                onSpace = { nav.space(it) },
-                onSidebar = { scope.launch { drawer.open() } },
-                bell = s.holds.size + s.unread,
-                // Held red while anything waits on the person, a blocked agent too, as the PC's bell.
-                bellRed = s.needsYou > 0,
-                onBell = { nav.inbox() },
-                onSearch = { nav.search() },
+                title = title ?: titleOf(route),
+                onMenu = { scope.launch { drawer.open() } },
+                onNew = { nav.home() },
+                bell = s.needsYou,
+                center = center,
+                actions = actions,
             )
-            Box(Modifier.fillMaxWidth().weight(1f)) { content() }
-            StatusBar(s, onLink = { nav.pc() }, onOutbox = { nav.outbox() })
+            if (s.loaded && !s.online && s.pc != null) {
+                Row(
+                    Modifier.fillMaxWidth().clickable { nav.pc() }.padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Dot(linkColor(s.link), 6.dp)
+                    T(linkLine(s) + " · showing what this phone saved", style = Relay.type.caption, color = c.ink3, maxLines = 1)
+                }
+            }
+            Box(Modifier.fillMaxWidth().weight(1f).navigationBarsPadding()) { content() }
         }
     }
-    // Back closes an open sidebar first. Set after the page's own handlers, it is asked before them.
+    // Back closes an open drawer first. Set after the page's own handlers, it is asked before them.
     BackHandler(enabled = drawer.isOpen) { close() }
+}
+
+/**
+ * The title the top bar shows for a page that does not name its own. The board, the inbox, notes,
+ * the outbox, skills, plugins and the three spaces set their title over a line of their own.
+ */
+internal fun titleOf(route: String?): String? = when (route) {
+    "agents" -> "Agents"
+    else -> null
 }
 
 /** The space a page belongs to; null for a page both share (the inbox, search, settings). */
 internal fun spaceOf(route: String?): String? = when {
     route == null -> null
     route == "threads" || route.startsWith("thread/") || route == "tally" || route == "arbiter" || route == "avex" -> "threads"
+    route == "home" -> null
     route == "agents" || route == "board" || route == "notes" || route == "skills" || route == "plugins" -> "dev"
     else -> null
 }

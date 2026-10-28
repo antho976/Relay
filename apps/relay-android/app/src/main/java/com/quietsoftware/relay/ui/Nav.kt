@@ -48,23 +48,28 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
         pairs.filter { it.second != null }.joinToString("&", "?") { (k, v) -> "$k=${Uri.encode(v.toString())}" }.let { if (it == "?") "" else it }
 
     fun back() {
-        if (!controller.popBackStack()) go(if (shell.state.value.prefs.space == "threads") "threads" else "agents", top = true)
+        if (!controller.popBackStack()) go("home", top = true)
     }
 
-    fun start() = go("start", top = true)
+    fun start() = go("home", top = true)
 
-    /** The space's home: the agent wall for Dev, a new thread for Threads. */
+    /** Home: the greeting and the one message box that starts an agent or a thread (design 14). */
+    override fun home() = go("home", top = true)
+
+    /** Home, with its message box aimed at [space]'s last choice. */
     fun space(space: String) {
         shell.pickSpace(space)
-        go(if (space == "threads") "threads" else "agents", top = true)
+        go("home", top = true)
     }
 
-    fun agents() = go("agents", top = true)
+    override fun agents() = go("agents")
+    /** The current project's changes, as a review. */
+    override fun changes() { shell.state.value.project?.num?.let { git(it) } ?: board() }
     /** An agent's own page: its conversation ([chat]), with its terminal one tap under it. */
     fun terminal(name: String) = chat(name)
 
     /** The agent as a conversation; back to it when the screen under this one already is. */
-    fun chat(name: String) = swap("chat", name)
+    override fun chat(name: String) = swap("chat", name)
 
     /** The agent's raw terminal, for what a conversation cannot show. */
     fun console(name: String) = swap("terminal", name)
@@ -104,7 +109,7 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     /** One skill or plugin, read only, from its list. */
     fun skill(id: Long) = go("skill/$id")
     fun plugin(id: String) = go("plugin/${Uri.encode(id)}")
-    fun search() = go("search")
+    override fun search() = go("search")
     override fun projectSettings(id: Long) = go("project-settings/$id")
     fun devices(projectId: Long) = go("devices/$projectId")
     fun integration(projectId: Long) = go("integration/$projectId")
@@ -122,7 +127,7 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     override fun plugins() = go("plugins")
     override fun project(id: Long) {
         shell.pickProject(id)
-        go("agents", top = true)
+        go("agents")
     }
     override fun pc() = go("pc")
     override fun settings() = go("settings")
