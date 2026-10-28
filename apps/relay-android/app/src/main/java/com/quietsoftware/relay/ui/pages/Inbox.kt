@@ -18,6 +18,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.size
+import com.quietsoftware.relay.ui.dev.AgentBadge
+import com.quietsoftware.relay.ui.dev.agentTitle
 import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.Eyebrow
 import androidx.compose.ui.unit.sp
@@ -110,10 +112,14 @@ fun InboxScreen(nav: Nav) {
                     items(stuck, key = { "stuck:${it.name}" }) { a ->
                         Slab(Modifier.fillMaxWidth().padding(bottom = 8.dp), padding = PaddingValues(14.dp), onClick = { nav.chat(a.name) }) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Glyph("help", 17.dp, Relay.colors.waiting)
+                                AgentBadge(a, 34.dp)
                                 Column(Modifier.weight(1f)) {
-                                    T("${a.name} needs you", style = Relay.type.uiMedium, color = Relay.colors.ink, weight = FontWeight.SemiBold, maxLines = 1)
-                                    a.intent?.ifBlank { null }?.let { T(it, style = Relay.type.caption, color = Relay.colors.ink3, maxLines = 1) }
+                                    val title = agentTitle(a)
+                                    T(title, style = Relay.type.uiMedium, color = Relay.colors.ink, weight = FontWeight.SemiBold, maxLines = 1)
+                                    T(
+                                        listOfNotNull(a.name.takeIf { it != title }, names[a.projectId].takeIf { projects.size > 1 }, "needs you").joinToString(" · "),
+                                        style = Relay.type.caption, color = Relay.colors.waiting, maxLines = 1,
+                                    )
                                 }
                                 Key("Answer", { nav.chat(a.name) }, kind = KeyKind.Primary, compact = true)
                             }

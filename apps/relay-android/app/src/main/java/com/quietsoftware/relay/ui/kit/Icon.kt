@@ -100,6 +100,8 @@ private val EXTRA: Map<String, Glyph> = mapOf(
     // Aide: a spark, the agent that speaks first.
     "aide" to Glyph(1f, listOf(GlyphShape("M8 1.5v4M8 10.5v4M1.5 8h4M10.5 8h4M4.2 4.2l1.6 1.6M10.2 10.2l1.6 1.6M11.8 4.2l-1.6 1.6M5.8 10.2l-1.6 1.6", false, true, 0f))),
     // A pencil over a square: a new chat.
+    // The desktop's Design key (lucide pen-tool, on its 24-unit grid).
+    "pen-tool" to Glyph(16f / 24f, listOf(GlyphShape("M15.707 21.293a1 1 0 0 1-1.414 0l-1.586-1.586a1 1 0 0 1 0-1.414l5.586-5.586a1 1 0 0 1 1.414 0l1.586 1.586a1 1 0 0 1 0 1.414zM18 13l-1.375-6.874a1 1 0 0 0-.746-.776L3.235 2.028a1 1 0 0 0-1.207 1.207L5.35 15.879a1 1 0 0 0 .776.746L13 18M2.3 2.3l7.286 7.286M9 11a2 2 0 1 0 4 0a2 2 0 1 0-4 0", false, true, 0f))),
     "compose" to Glyph(1f, listOf(GlyphShape("M7 2.75H4A1.75 1.75 0 0 0 2.25 4.5v7.5A1.75 1.75 0 0 0 4 13.75h7.5A1.75 1.75 0 0 0 13.25 12V9M11.6 2.4a1.2 1.2 0 0 1 1.7 1.7L8.2 9.2 6 9.75l.55-2.2z", false, true, 0f))),
     // Two people: the agents.
     "agents" to Glyph(1f, listOf(GlyphShape("M6 7.25a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5zM1.75 13.5c.4-2.3 2.1-3.75 4.25-3.75s3.85 1.45 4.25 3.75M10.5 3a2.25 2.25 0 0 1 0 4.1M12 9.75c1.2.5 2 1.7 2.25 3.75", false, true, 0f))),
