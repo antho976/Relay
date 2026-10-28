@@ -163,6 +163,37 @@ fn discarding_an_integration_stops_its_build_and_frees_the_project() {
     assert!(!marker.exists());
 }
 
+/// A stopped build is asked to stop before it is killed (RA-160): a git it runs drops its locks
+/// on SIGTERM, and leaves them behind to block the checkout on SIGKILL.
+#[test]
+fn a_discarded_build_hears_sigterm_before_it_is_killed() {
+    if Command::new("fish").arg("-c").arg("true").output().is_err() {
+        eprintln!("fish is not installed; skipping");
+        return;
+    }
+    let f = fixture();
+    let e = &f.engine;
+    branch(&f.repo, "a", "a.txt", "a\n");
+    branch(&f.repo, "b", "b.txt", "b\n");
+    let termed = f.root.join("build-termed");
+    let build = format!("function stop --on-signal TERM; touch '{}'; exit 0; end; sleep 30", termed.display());
+    ok(e, "project.update", json!({"project_id": 1, "build_cmd": build}));
+    let id = ok(e, "integration.request", json!({"project_id": 1, "branches": ["a", "b"]}))["id"].as_i64().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while ok(e, "integration.get", json!({"integration_id": id}))["state"] != "building" {
+        assert!(Instant::now() < deadline, "the build never started");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    // Long enough for fish to have read the script and set its handler.
+    std::thread::sleep(Duration::from_millis(500));
+    ok(e, "integration.discard", json!({"integration_id": id}));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !termed.exists() {
+        assert!(Instant::now() < deadline, "the build was killed without a SIGTERM");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 fn stored(e: &Engine, like: &str) -> i64 {
     e.store.lock().query_row("SELECT COUNT(*) FROM settings WHERE path LIKE ?1", [like], |r| r.get(0)).unwrap()
 }

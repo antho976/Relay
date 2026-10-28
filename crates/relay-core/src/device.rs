@@ -524,12 +524,7 @@ fn terminate(child: &mut Child, group: bool) {
         let _ = child.kill();
         return;
     }
-    let pgid = child.id() as i32;
-    unsafe { libc::kill(-pgid, libc::SIGTERM); }
-    let _ = std::thread::Builder::new().name("run-stop".into()).spawn(move || {
-        std::thread::sleep(RUN_STOP_GRACE);
-        unsafe { libc::kill(-pgid, libc::SIGKILL); }
-    });
+    crate::proc::terminate_group_soon(child.id(), RUN_STOP_GRACE);
 }
 
 #[cfg(test)]

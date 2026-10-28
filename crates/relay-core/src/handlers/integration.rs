@@ -304,17 +304,12 @@ fn engine_key(engine: &Engine) -> usize {
     engine as *const Engine as usize
 }
 
-fn kill_group(pid: u32) {
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(-(pid as i32), libc::SIGKILL);
-    }
-}
-
+/// A stop for the runner: its build's group is sent SIGTERM now, so a git in it drops its locks
+/// (RA-160), and SIGKILL once the grace is over. The step's own loop reaps it.
 fn signal(runner: &Runner, why: Stop) {
     runner.stop.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert(why);
     if let Some(pid) = *runner.child.lock().unwrap_or_else(|p| p.into_inner()) {
-        kill_group(pid);
+        crate::proc::terminate_group_soon(pid, crate::proc::TERM_GRACE);
     }
 }
 
@@ -577,7 +572,8 @@ enum Step {
 }
 
 /// Run `command` through the login shell in `cwd`, in its own process group, until it exits,
-/// [`Runner`]'s stop arrives or `timeout` elapses; either of the last two kills the group.
+/// [`Runner`]'s stop arrives or `timeout` elapses; either of the last two ends the group, SIGTERM
+/// first ([`crate::proc::terminate_group`]).
 /// Only the last [`OUTPUT_KEEP`] bytes of its interleaved output are kept.
 fn step(runner: &Runner, cwd: &Path, command: &str, timeout: Duration) -> Step {
     let mut cmd = Command::new("fish");
@@ -624,9 +620,11 @@ fn step(runner: &Runner, cwd: &Path, command: &str, timeout: Duration) -> Step {
             }
             Ok(None) if runner.stopped().is_none() && Instant::now() < deadline => {}
             waited => {
-                kill_group(child.id());
-                let _ = child.wait();
+                // Let go of the slot first: a stop arriving during the grace has nothing to add.
                 *slot = None;
+                drop(slot);
+                crate::proc::terminate_group(child.id(), crate::proc::TERM_GRACE, || !matches!(child.try_wait(), Ok(None)));
+                let _ = child.wait();
                 break Err(waited.err());
             }
         }

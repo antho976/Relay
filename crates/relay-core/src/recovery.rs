@@ -10,26 +10,20 @@ use relay_bus::ops::app::RecoveryReport;
 use relay_bus::types::Id;
 use rusqlite::{params, OptionalExtension};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// How long an audit row survives when settings say nothing. Well past any undo grace, and past
 /// any window in which `audit.list` is still how someone reconstructs what happened.
 const DEFAULT_AUDIT_RETENTION_DAYS: i64 = 180;
 
+/// End an agent a crashed engine left behind, with its group: SIGTERM, two seconds, then SIGKILL.
+/// The pid is signalled itself too, in case it left the group it led.
 fn kill_wait(pid: u32) {
-    unsafe {
-        libc::kill(-(pid as i32), libc::SIGTERM);
-        libc::kill(pid as i32, libc::SIGTERM);
-    }
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while pty::pid_alive(pid) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let Ok(alone @ 2..) = i32::try_from(pid) else { return };
+    unsafe { libc::kill(alone, libc::SIGTERM); }
+    crate::proc::terminate_group(pid, Duration::from_secs(2), || !pty::pid_alive(pid));
     if pty::pid_alive(pid) {
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL);
-            libc::kill(pid as i32, libc::SIGKILL);
-        }
+        unsafe { libc::kill(alone, libc::SIGKILL); }
     }
 }
 
