@@ -25,9 +25,12 @@ import sys
 
 # 2026-10-18, rust 1.99, dev profile with line tables only: 62 executables, largest 184 MB, all
 # 9.5 GB. With full debug info the largest was ~450 MB. 2026-10-20, `relay-core`'s tests as one
-# executable: 24 executables, largest (that one) 223 MB, all 3.0 GB.
-MAX_MB = 250
-TOTAL_GB = 3.5
+# executable: 24 executables, largest (that one) 223 MB, all 3.0 GB. 2026-10-28, Aide (#159: the
+# relay-aide crate, its handlers and tests/aide.rs in `all`) took `all` from 246 MB to 252 MB and
+# added relay-aide's own test executable: 25 executables, 3.5 GB. Code, not a dependency or debug
+# info, so the budgets moved.
+MAX_MB = 265
+TOTAL_GB = 3.8
 
 
 def executables(extra):
