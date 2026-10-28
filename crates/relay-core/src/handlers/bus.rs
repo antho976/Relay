@@ -13,7 +13,10 @@ use relay_bus::Op;
 use rusqlite::OptionalExtension;
 
 pub fn register(e: &mut Engine) {
-    e.register::<Ping>(|ctx, _| {
+    // Unlocked: each reads the store once, briefly, if at all. bus.schema and the registry walks
+    // grow with the op count (bus.schema whole is ~4.7 ms); in the transaction they held the
+    // store lock that every keystroke waits on.
+    e.register_unlocked::<Ping>(|ctx, _| {
         Ok(Pong {
             pong: true,
             instance: ctx.instance().as_str().to_string(),
@@ -21,30 +24,34 @@ pub fn register(e: &mut Engine) {
             uptime_s: ctx.engine().uptime_s(),
         })
     });
-    e.register::<Schema>(|_, p| {
+    e.register_unlocked::<Schema>(|_, p| {
         let schema = match p.op {
             None => relay_bus::schema::render(),
             Some(op) => relay_bus::schema::render_op(&op).ok_or_else(|| BusError::unknown_op(&op))?,
         };
         Ok(SchemaOut { schema })
     });
-    e.register::<Ops>(|ctx, p| {
+    e.register_unlocked::<Ops>(|ctx, p| {
         // Every row carries the all-layers verdict. Reporting only the registry layer made
         // this tool overstate a builder's write surface tenfold, which is worse than having
         // no discovery at all: the refusal moved from planning time to execution time (D104).
         let actor = p.actor.unwrap_or_else(|| ctx.actor.clone());
-        let session: Option<Session> = match (actor == ctx.actor).then(|| ctx.actor_session_id()).flatten() {
-            Some(id) => sessions::by_id(ctx.tx(), id)?.map(|row| row.session),
-            None => match actor.session_name() {
-                Some(name) => sessions::by_name(ctx.tx(), name).ok().map(|row| row.session),
+        let bound = (actor == ctx.actor).then(|| ctx.actor_session_id()).flatten();
+        let (session, cfg, plugins_on) = ctx.read(|conn| {
+            let session: Option<Session> = match bound {
+                Some(id) => sessions::by_id(conn, id)?.map(|row| row.session),
+                None => match actor.session_name() {
+                    Some(name) => sessions::by_name(conn, name).ok().map(|row| row.session),
+                    None => None,
+                },
+            };
+            let cfg = match &session {
+                Some(session) => Some(crate::guardrail::config(conn, Some(session.project_id))?),
                 None => None,
-            },
-        };
-        let cfg = match &session {
-            Some(session) => Some(crate::guardrail::config(ctx.tx(), Some(session.project_id))?),
-            None => None,
-        };
-        let plugins_on = enabled_plugins(ctx.tx(), session.as_ref())?;
+            };
+            let plugins_on = enabled_plugins(conn, session.as_ref())?;
+            Ok((session, cfg, plugins_on))
+        })?;
         let ops = Registry::global()
             .entries()
             .iter()
@@ -57,26 +64,31 @@ pub fn register(e: &mut Engine) {
             .collect();
         Ok(OpsOut { ops })
     });
-    e.register::<Whoami>(|ctx, _| {
+    e.register_unlocked::<Whoami>(|ctx, _| {
         // The same three-layer answer `bus.ops` gives, reduced to the question an actor asks
         // on arrival. Unlike `session.bootstrap` this works for the user too (D119).
-        let session = match ctx.actor_session_id() {
-            Some(id) => sessions::by_id(ctx.tx(), id)?.map(|row| row.session),
-            None => None,
-        };
-        let cfg = match &session {
-            Some(session) => Some(crate::guardrail::config(ctx.tx(), Some(session.project_id))?),
-            None => None,
-        };
-        let plugins_on = enabled_plugins(ctx.tx(), session.as_ref())?;
-        let project = match &session {
-            Some(session) => ctx.tx().query_row(
-                "SELECT name FROM projects WHERE id=?1",
-                [session.project_id],
-                |row| row.get::<_, String>(0),
-            ).optional().bus()?,
-            None => None,
-        };
+        let bound = ctx.actor_session_id();
+        let (session, cfg, plugins_on, project) = ctx.read(|conn| {
+            let session = match bound {
+                Some(id) => sessions::by_id(conn, id)?.map(|row| row.session),
+                None => None,
+            };
+            let cfg = match &session {
+                Some(session) => Some(crate::guardrail::config(conn, Some(session.project_id))?),
+                None => None,
+            };
+            let plugins_on = enabled_plugins(conn, session.as_ref())?;
+            let project = match &session {
+                Some(session) => conn
+                    .prepare_cached("SELECT name FROM projects WHERE id=?1")
+                    .bus()?
+                    .query_row([session.project_id], |row| row.get::<_, String>(0))
+                    .optional()
+                    .bus()?,
+                None => None,
+            };
+            Ok((session, cfg, plugins_on, project))
+        })?;
         let can_call = Registry::global()
             .entries()
             .iter()

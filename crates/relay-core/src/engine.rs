@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 use std::time::Instant;
 use tokio::sync::{broadcast, Notify};
 use uuid::Uuid;
@@ -806,15 +806,15 @@ impl Engine {
     // ------------------------------------------------------------------ PTY registry
 
     pub fn pty(&self, session_id: Id) -> Option<Arc<Pty>> {
-        self.ptys.lock().unwrap().get(&session_id).cloned()
+        self.ptys.lock().unwrap_or_else(PoisonError::into_inner).get(&session_id).cloned()
     }
     /// The live PTY for a session name, if it has one. `None` also means "not in the map" —
     /// callers that need to tell an unknown session from an unspawned one must ask the store.
     pub fn pty_named(&self, name: &str) -> Option<(Id, Arc<Pty>)> {
-        let id = *self.pty_ids.lock().unwrap().get(name)?;
+        let id = *self.pty_ids.lock().unwrap_or_else(PoisonError::into_inner).get(name)?;
         self.ptys
             .lock()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .get(&id)
             .cloned()
             .map(|pty| (id, pty))
@@ -822,21 +822,21 @@ impl Engine {
     pub fn set_pty(&self, session_id: Id, name: &str, pty: Arc<Pty>) -> Option<Arc<Pty>> {
         self.pty_ids
             .lock()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .insert(name.to_string(), session_id);
-        self.ptys.lock().unwrap().insert(session_id, pty)
+        self.ptys.lock().unwrap_or_else(PoisonError::into_inner).insert(session_id, pty)
     }
     pub fn take_pty(&self, session_id: Id) -> Option<Arc<Pty>> {
         self.pty_ids
             .lock()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .retain(|_, id| *id != session_id);
-        self.ptys.lock().unwrap().remove(&session_id)
+        self.ptys.lock().unwrap_or_else(PoisonError::into_inner).remove(&session_id)
     }
     pub fn live_pty_count(&self) -> usize {
         self.ptys
             .lock()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .values()
             .filter(|p| !p.exited())
             .count()
@@ -845,8 +845,8 @@ impl Engine {
     /// may not act as the user on the socket (RA-096). An exited child's pid may already be
     /// someone else's, so it is left out.
     pub fn session_pids(&self) -> HashMap<u32, String> {
-        let names: Vec<(String, Id)> = self.pty_ids.lock().unwrap().iter().map(|(name, id)| (name.clone(), *id)).collect();
-        let ptys = self.ptys.lock().unwrap();
+        let names: Vec<(String, Id)> = self.pty_ids.lock().unwrap_or_else(PoisonError::into_inner).iter().map(|(name, id)| (name.clone(), *id)).collect();
+        let ptys = self.ptys.lock().unwrap_or_else(PoisonError::into_inner);
         names
             .into_iter()
             .filter_map(|(name, id)| ptys.get(&id).filter(|pty| !pty.exited()).map(|pty| (pty.pid(), name)))
@@ -858,18 +858,18 @@ impl Engine {
         crate::handlers::integration::shutdown(self);
         crate::local_models::stop(self);
         crate::video::shutdown(self);
-        for (_, mirror) in self.mirrors.lock().unwrap().drain() {
+        for (_, mirror) in self.mirrors.lock().unwrap_or_else(PoisonError::into_inner).drain() {
             mirror.stop();
         }
         // The device watch: `adb track-devices` stops with it, and its worker lets go.
         {
-            let mut watch = self.device_watch.lock().unwrap();
+            let mut watch = self.device_watch.lock().unwrap_or_else(PoisonError::into_inner);
             watch.clients = 0;
             if let Some(runtime) = watch.runtime.take() {
                 runtime.stop();
             }
         }
-        let runs: Vec<_> = self.device_runs.lock().unwrap().drain().collect();
+        let runs: Vec<_> = self.device_runs.lock().unwrap_or_else(PoisonError::into_inner).drain().collect();
         for (_, run) in &runs {
             run.stop();
         }
@@ -881,8 +881,8 @@ impl Engine {
                 [now],
             );
         }
-        self.pty_ids.lock().unwrap().clear();
-        let ptys: Vec<(Id, Arc<Pty>)> = std::mem::take(&mut *self.ptys.lock().unwrap()).into_iter().collect();
+        self.pty_ids.lock().unwrap_or_else(PoisonError::into_inner).clear();
+        let ptys: Vec<(Id, Arc<Pty>)> = std::mem::take(&mut *self.ptys.lock().unwrap_or_else(PoisonError::into_inner)).into_iter().collect();
         if ptys.is_empty() {
             return;
         }
@@ -1343,7 +1343,7 @@ impl Engine {
     /// Hold `id` for one audited request (BUS.md §5.3), first waiting out any request that
     /// already holds it. Released when the guard drops, after the audit row is written.
     fn reserve_id(&self, id: Uuid) -> ReservedId<'_> {
-        let held = self.in_flight.lock().unwrap();
+        let held = self.in_flight.lock().unwrap_or_else(PoisonError::into_inner);
         let mut held = self.in_flight_done.wait_while(held, |held| held.contains(&id)).unwrap();
         held.insert(id);
         ReservedId { engine: self, id }
@@ -1471,14 +1471,14 @@ impl Engine {
                 return inline
                     && req.payload["mirror_id"]
                         .as_i64()
-                        .is_some_and(|id| self.mirrors.lock().unwrap().contains_key(&id));
+                        .is_some_and(|id| self.mirrors.lock().unwrap_or_else(PoisonError::into_inner).contains_key(&id));
             }
             _ => return false,
         }
         req.payload
             .get("session")
             .and_then(Value::as_str)
-            .is_some_and(|name| self.pty_ids.lock().unwrap().contains_key(name))
+            .is_some_and(|name| self.pty_ids.lock().unwrap_or_else(PoisonError::into_inner).contains_key(name))
     }
 
     /// `session.input` / `session.resize` against a live PTY, with no store lock and no
@@ -1630,7 +1630,7 @@ struct ReservedId<'a> {
 
 impl Drop for ReservedId<'_> {
     fn drop(&mut self) {
-        self.engine.in_flight.lock().unwrap().remove(&self.id);
+        self.engine.in_flight.lock().unwrap_or_else(PoisonError::into_inner).remove(&self.id);
         self.engine.in_flight_done.notify_all();
     }
 }
@@ -1756,6 +1756,25 @@ mod inline_path_tests {
 
     fn engine() -> Arc<Engine> {
         Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap())
+    }
+
+    /// A handler that panics while holding one of the PTY maps poisons it. Every keystroke reads
+    /// them, so each later one panicked too and dropped its connection: the maps hold no
+    /// half-made state across a panic, and are taken back as they are.
+    #[test]
+    fn a_poisoned_pty_map_still_answers() {
+        let e = engine();
+        let held = e.clone();
+        let _ = std::thread::spawn(move || {
+            let _ids = held.pty_ids.lock();
+            let _ptys = held.ptys.lock();
+            panic!("a handler panics with the PTY maps held");
+        })
+        .join();
+        assert!(e.pty_ids.is_poisoned() && e.ptys.is_poisoned());
+        assert!(e.pty_named("spry-kestrel").is_none());
+        assert!(e.take_pty(7).is_none());
+        assert_eq!(e.live_pty_count(), 0);
     }
 
     fn input(session: &str, data: &str) -> Request {

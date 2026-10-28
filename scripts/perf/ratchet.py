@@ -12,6 +12,7 @@ tolerance, and says which. `--lower` writes the figure of every row that came in
 ceiling by more than the tolerance, so the next change is held to the win. Raising a ceiling is
 an edit of `ratchet.json` by hand, with the reason in the commit: the work got bigger on purpose.
 A new toolchain or dependency moves every count; refresh them all in one commit (`--reset`).
+`--reset` records the compiler it ran with, and a check on another one says so before its rows.
 
 Three runs of the same build agree within 0.7% on every guarded row (the hash maps' random seeds
 are the spread), so the tolerance is 1.5%. Needs the CPU's counters: `perf_event_paranoid` at 2
@@ -61,6 +62,10 @@ def figures(paths):
     return {name: (statistics.median(v), (max(v) - min(v)) / statistics.median(v)) for name, v in seen.items()}
 
 
+def rustc():
+    return subprocess.run(["rustc", "--version"], cwd=ROOT, capture_output=True, text=True).stdout.strip() or None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--runs", nargs="+", help="runs already taken (perf run ... --counters --out FILE)")
@@ -73,6 +78,12 @@ def main():
     got = figures(args.runs or take_runs(args.n))
     book = json.loads(CEILINGS.read_text())
     tolerance, ceilings = book["tolerance"], book["rows"]
+    compiler = rustc()
+    if args.reset:
+        book["rustc"] = compiler
+    elif book.get("rustc") != compiler:
+        print(f"the ceilings were taken with {book.get('rustc')}, this is {compiler}: every count moves with the "
+              "compiler, so rows over their ceiling may be the toolchain (--reset in a commit of its own)", file=sys.stderr)
     over, lowered = [], []
     for name in sorted(set(got) | set(ceilings)):
         if name not in got:
@@ -97,6 +108,7 @@ def main():
         print(f"  {name:44s} {figure / 1e6:11.2f} M  ceiling {ceiling / 1e6:11.2f} M  {change:+7.2%}{mark}{noisy}")
     if lowered or args.reset or any(name not in book["rows"] for name in got):
         book["rows"] = dict(sorted(ceilings.items()))
+        book = {"about": book["about"], "rustc": book.get("rustc"), "tolerance": book["tolerance"], "rows": book["rows"]}
         CEILINGS.write_text(json.dumps(book, indent=2) + "\n")
         print(f"wrote {CEILINGS.relative_to(ROOT)}")
     if over:

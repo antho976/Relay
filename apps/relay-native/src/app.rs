@@ -2545,9 +2545,18 @@ impl Ui {
             let signature = json!({"state":s["state"], "role":s["role"], "provider":s["provider"], "branch":s["branch"], "worktree":s["worktree"], "intent":s["intent"], "pair_with":s["pair_with"]});
             // Render signatures describe widgets, not just sessions. A recreated pane has
             // an empty header and visible slate even when the session itself is unchanged.
-            if new_pane || self.rendered_sessions.borrow().get(name) != Some(&signature) {
+            let previous = self.rendered_sessions.borrow().get(name).cloned();
+            if new_pane || previous.as_ref() != Some(&signature) {
                 pane.update_session(s);
-                self.session_actions(&pane, s);
+                // An intent is header text. Rebuilding the actions for each one an agent sends
+                // was most of an intent event's cost once the sidebar stopped rebuilding.
+                let intent_only = !new_pane && previous.is_some_and(|mut was| {
+                    was["intent"] = signature["intent"].clone();
+                    was == signature
+                });
+                if !intent_only {
+                    self.session_actions(&pane, s);
+                }
                 self.rendered_sessions
                     .borrow_mut()
                     .insert(name.into(), signature);

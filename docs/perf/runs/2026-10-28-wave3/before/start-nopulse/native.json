@@ -1,0 +1,125 @@
+{
+  "date": "2026-10-28",
+  "size": "1440,900",
+  "seconds": 29,
+  "perf": false,
+  "gtk": "4.24.1",
+  "pages": {
+    "agents-hidden": {
+      "page": "agents",
+      "startup": {
+        "cpu_ms_first_2s": 1470.0,
+        "rss_mb_at_2s": 288.5,
+        "threads": 16
+      },
+      "steady": {
+        "seconds": 1.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 241.9,
+        "rss_mb": 288.6,
+        "threads": 16
+      },
+      "exit_code": 0,
+      "total_wall_s": 19.67,
+      "gdk_frame_log_lines": 21,
+      "screenshot": true,
+      "calls": {},
+      "calls_counted_s": 16,
+      "calls_per_min": 0.0,
+      "state": "Some(ToplevelState(TOP_RESIZABLE | RIGHT_RESIZABLE | BOTTOM_RESIZABLE | LEFT_RESIZABLE | SUSPENDED))"
+    },
+    "agents-shown": {
+      "page": "agents",
+      "startup": {
+        "cpu_ms_first_2s": 360.0,
+        "rss_mb_at_2s": 229.2,
+        "threads": 15
+      },
+      "steady": {
+        "seconds": 1.0,
+        "cpu_percent": 1.0,
+        "cpu_ms": 10.0,
+        "wakeups_per_s": 241.9,
+        "rss_mb": 229.2,
+        "threads": 15
+      },
+      "exit_code": 0,
+      "total_wall_s": 19.42,
+      "gdk_frame_log_lines": 11,
+      "screenshot": true,
+      "calls": {},
+      "calls_counted_s": 16,
+      "calls_per_min": 0.0,
+      "state": null
+    },
+    "start": {
+      "page": "start",
+      "startup": {
+        "cpu_ms_first_2s": 360.0,
+        "rss_mb_at_2s": 229.1,
+        "threads": 15
+      },
+      "steady": {
+        "seconds": 29.0,
+        "cpu_percent": 0.31,
+        "cpu_ms": 90.0,
+        "wakeups_per_s": 301.9,
+        "rss_mb": 257.1,
+        "threads": 14
+      },
+      "exit_code": 0,
+      "total_wall_s": 47.42,
+      "gdk_frame_log_lines": 2713,
+      "screenshot": true
+    },
+    "agents-streaming": {
+      "page": "agents",
+      "startup": {
+        "cpu_ms_first_2s": 440.0,
+        "rss_mb_at_2s": 227.9,
+        "threads": 15
+      },
+      "steady": {
+        "seconds": 29.0,
+        "cpu_percent": 2.14,
+        "cpu_ms": 620.0,
+        "wakeups_per_s": 405.2,
+        "rss_mb": 231.8,
+        "threads": 14
+      },
+      "exit_code": 0,
+      "total_wall_s": 36.47,
+      "gdk_frame_log_lines": 961,
+      "screenshot": true
+    },
+    "agents-burst": {
+      "page": "agents",
+      "startup": {
+        "cpu_ms_first_2s": 400.0,
+        "rss_mb_at_2s": 229.4,
+        "threads": 15
+      },
+      "steady": {
+        "seconds": 29.0,
+        "cpu_percent": 0.03,
+        "cpu_ms": 10.0,
+        "wakeups_per_s": 241.9,
+        "rss_mb": 231.2,
+        "threads": 14
+      },
+      "exit_code": 0,
+      "total_wall_s": 47.47,
+      "gdk_frame_log_lines": 31,
+      "screenshot": true
+    }
+  },
+  "notes": [],
+  "engine_rss_mb_six_sessions": 35.4,
+  "display": {
+    "GDK_BACKEND": "wayland",
+    "WAYLAND_DISPLAY": "relay-headless-4126720",
+    "DISPLAY": "",
+    "XDG_SESSION_TYPE": "wayland"
+  }
+}

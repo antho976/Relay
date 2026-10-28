@@ -1515,6 +1515,9 @@ fn cases() -> Vec<Case> {
     during(&mut c, "session_list.during_file_search", "file.search", json!({"project_id": 1, "query": "nothing-matches-this", "limit": 10}), "session.list", sessions);
     during(&mut c, "session_list.during_git_status", "git.status", json!({"project_id": 1}), "session.list", sessions);
     during(&mut c, "scrollback_tail.during_overlap_scan", "overlap.scan", json!({"project_id": 1}), "session.scrollback", tail);
+    // The whole schema is ~4.5 ms of rendering; unlocked, a session list issued beside it does
+    // not wait for it.
+    during(&mut c, "session_list.during_bus_schema", "bus.schema", json!({}), "session.list", sessions);
     // Opening or closing one agent must not stall the panes of every other one. Half a
     // millisecond in: closing a session that keeps its checkout takes about 1.5 ms.
     let during_session = |c: &mut Vec<Case>, name: &str, other: &'static str, setup: fn(&Fixture) -> Value| {
