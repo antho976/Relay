@@ -8,7 +8,7 @@
 //! (the dev instance beside the stable one) wrote.
 
 use anyhow::{Context, Result};
-use relay_bus::types::Id;
+use relay_bus::types::{Id, Provider};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -232,21 +232,16 @@ fn enabled_anywhere(conn: &Connection) -> Result<Vec<Row>> {
 pub fn user_bases(instance: crate::Instance) -> Vec<PathBuf> {
     // A test engine must never write into the developer's own home; `RELAY_SKILLS_HOME` gives
     // tests and scratch runs a harmless place to prove the same path end to end.
-    let (home, codex) = match std::env::var_os("RELAY_SKILLS_HOME") {
-        Some(path) => {
-            let home = PathBuf::from(path);
-            let codex = home.join(".codex");
-            (home, codex)
-        }
-        None if instance == crate::Instance::Test => return Vec::new(),
-        None => {
-            let Some(dirs) = directories::BaseDirs::new() else { return Vec::new() };
-            let home = dirs.home_dir().to_path_buf();
-            let codex = std::env::var_os("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".codex"));
-            (home, codex)
-        }
-    };
-    vec![home.join(".claude").join("skills"), codex.join("skills")]
+    if let Some(path) = std::env::var_os("RELAY_SKILLS_HOME") {
+        let home = PathBuf::from(path);
+        return vec![home.join(".claude").join("skills"), home.join(".codex").join("skills")];
+    }
+    if instance == crate::Instance::Test {
+        return Vec::new();
+    }
+    // Each provider's own folder, as it reads it: with `CLAUDE_CONFIG_DIR` set, Claude Code's
+    // user skills are there, not in `~/.claude`.
+    [Provider::Claude, Provider::Codex].into_iter().filter_map(crate::providers::config_dir).map(|dir| dir.join("skills")).collect()
 }
 
 /// What one set of skill folders should hold, read under the store lock so the copying can

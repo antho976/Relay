@@ -10,7 +10,7 @@ use relay_bus::ops::device::{Claim, Leases, LeasesOut, Release, ReleaseOut};
 use relay_bus::types::{Id, SessionState};
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 pub const ACQUIRED: &str = "device.lease.acquired";
@@ -98,7 +98,7 @@ pub(crate) fn prune(engine: &Engine, conn: &Connection) -> Vec<Lease> {
     if engine.device_leases.is_empty() {
         return Vec::new();
     }
-    let live_runs: Vec<Id> = engine.device_runs.lock().unwrap().keys().copied().collect();
+    let live_runs: Vec<Id> = engine.device_runs.lock().unwrap_or_else(PoisonError::into_inner).keys().copied().collect();
     engine.device_leases.prune(|lease| match (lease.kind, &lease.holder) {
         (Kind::Run(id), _) => !live_runs.contains(&id),
         (_, Holder::Session { id, .. }) => !session_running(conn, *id),

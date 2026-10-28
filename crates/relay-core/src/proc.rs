@@ -28,7 +28,7 @@ const MAX_OUTPUT: usize = 64 * 1024 * 1024;
 /// hold them open, and the call does not wait for it.
 const DRAIN_GRACE: Duration = Duration::from_millis(250);
 /// How long a child past its deadline has to exit on SIGTERM before it is SIGKILLed.
-const TERM_GRACE: Duration = Duration::from_secs(1);
+pub(crate) const TERM_GRACE: Duration = Duration::from_secs(1);
 
 /// Run `cmd` to completion, or kill it once `timeout` elapses.
 ///
@@ -99,18 +99,7 @@ fn run(cmd: &mut Command, input: Option<Vec<u8>>, timeout: Duration) -> io::Resu
                 interval = (interval * 2).min(POLL_MAX);
             }
             None => {
-                // SIGTERM first: git removes its `index.lock` and ref locks on SIGTERM, while a
-                // SIGKILLed git leaves them behind to block every later git command in that
-                // checkout (RA-160). Whatever still runs after the grace is killed outright.
-                #[cfg(unix)]
-                {
-                    unsafe { libc::kill(-(pid as i32), libc::SIGTERM); }
-                    let grace = Instant::now() + TERM_GRACE;
-                    while Instant::now() < grace && matches!(child.try_wait(), Ok(None)) {
-                        std::thread::sleep(POLL_MAX);
-                    }
-                    unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
-                }
+                terminate_group(pid, TERM_GRACE, || !matches!(child.try_wait(), Ok(None)));
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
@@ -119,8 +108,7 @@ fn run(cmd: &mut Command, input: Option<Vec<u8>>, timeout: Duration) -> io::Resu
     };
 
     // A short-lived probe must not leave descendants holding its pipes open.
-    #[cfg(unix)]
-    unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+    signal_group(pid, Signal::Kill);
     let until = deadline.max(Instant::now()) + DRAIN_GRACE;
     let stdout = stdout.map(|drain| drain.collect(until)).unwrap_or_default();
     let stderr = stderr.map(|drain| drain.collect(until)).unwrap_or_default();
@@ -129,6 +117,66 @@ fn run(cmd: &mut Command, input: Option<Vec<u8>>, timeout: Duration) -> io::Resu
         stdout,
         stderr,
     }))
+}
+
+/// End process group `pgid`: SIGTERM first, then SIGKILL to whatever is left once `exited` says
+/// its leader is gone or `grace` has passed. Git removes its `index.lock` and ref locks on
+/// SIGTERM, while a SIGKILLed git leaves them behind to block every later git command in that
+/// checkout (RA-160); a build's children (gradle, a test harness) clean up the same way. The
+/// SIGKILL goes to the group even after the leader exits: a descendant still in it holds pipes.
+pub fn terminate_group(pgid: u32, grace: Duration, mut exited: impl FnMut() -> bool) {
+    signal_group(pgid, Signal::Term);
+    let until = Instant::now() + grace;
+    // A SIGTERMed git is usually gone in a few milliseconds: look soon, then back off.
+    let mut interval = POLL_MIN;
+    while Instant::now() < until && !exited() {
+        std::thread::sleep(interval);
+        interval = (interval * 2).min(POLL_MAX);
+    }
+    signal_group(pgid, Signal::Kill);
+}
+
+/// SIGTERM to process group `pgid`, and nothing more: for a caller whose child's own wait loop
+/// finishes the job with [`terminate_group`]. A SIGKILL sent later from here could land on the
+/// group after that loop has reaped it.
+pub fn ask_group_to_stop(pgid: u32) {
+    signal_group(pgid, Signal::Term);
+}
+
+/// [`terminate_group`] for a caller that must not wait, one holding the store's lock or the
+/// child's slot: the grace runs out on a thread of its own.
+pub fn terminate_group_soon(pgid: u32, grace: Duration) {
+    signal_group(pgid, Signal::Term);
+    let started = std::thread::Builder::new().name("group-stop".into()).spawn(move || {
+        std::thread::sleep(grace);
+        signal_group(pgid, Signal::Kill);
+    });
+    if started.is_err() {
+        signal_group(pgid, Signal::Kill);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Signal {
+    Term,
+    Kill,
+}
+
+fn signal_group(pgid: u32, signal: Signal) {
+    #[cfg(unix)]
+    {
+        let signal = match signal {
+            Signal::Term => libc::SIGTERM,
+            Signal::Kill => libc::SIGKILL,
+        };
+        // Never 0 or 1: kill(0, …) is this process's own group, kill(-1, …) every process this
+        // user may signal.
+        if let Ok(pgid @ 2..) = i32::try_from(pgid) {
+            unsafe { libc::kill(-pgid, signal); }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (pgid, signal);
 }
 
 /// Make a network `git` command fail instead of waiting for a person: no terminal prompt, no

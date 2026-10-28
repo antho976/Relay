@@ -1150,27 +1150,10 @@ fn tree_numstat(root: &Path, repo: &gix::Repository, parent: Option<&str>, tree:
         &["diff-tree", "-r", "-z", "-M", "--numstat", "--no-ext-diff", "--no-textconv", from, tree],
     )
     .map_err(git_mutation("git.commit_failed"))?;
-    Ok(numstat_lines(&raw))
-}
-
-/// `diff-tree -z --numstat` records — `a\tr\tpath\0`, or `a\tr\t\0source\0dest\0` for a
-/// rename — as the gate's lines.
-fn numstat_lines(raw: &str) -> String {
-    let mut out = String::new();
-    let mut fields = raw.split('\0');
-    while let Some(record) = fields.next() {
-        let mut parts = record.splitn(3, '\t');
-        let (Some(added), Some(removed), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
-            continue;
-        };
-        if path.is_empty() {
-            let (Some(source), Some(dest)) = (fields.next(), fields.next()) else { break };
-            out.push_str(&format!("0\t0\t{source}\n{added}\t{removed}\t{dest}\n"));
-        } else {
-            out.push_str(&format!("{added}\t{removed}\t{path}\n"));
-        }
-    }
-    out
+    // Handed to the gate as git wrote it: `-z` keeps every path verbatim, and a rename is one
+    // file naming both sides. Rewritten as plain lines, a rename counted twice and a path with
+    // ` => ` or a newline in it was read back as other paths.
+    Ok(raw)
 }
 
 /// The message as `git commit -m` leaves it under commit.cleanup, which with no editor open is
@@ -1600,13 +1583,18 @@ pub fn fetch_remote(root: &Path) -> Result<(), BusError> {
     Ok(())
 }
 
-fn fetch_remote_now(root: &Path) -> Result<(), BusError> {
+/// `git fetch --all --prune` in `root`, as [`crate::proc::quiet_network_git`] runs a network git: no
+/// prompt of any kind, and a stalled transfer abandoned.
+fn fetch_command(root: &Path) -> std::process::Command {
     let mut command = std::process::Command::new("git");
+    command.current_dir(root).stdin(std::process::Stdio::null());
+    crate::proc::quiet_network_git(&mut command);
+    command.args(["fetch", "--all", "--prune"]);
     command
-        .current_dir(root)
-        .args(["fetch", "--all", "--prune"])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(std::process::Stdio::null());
+}
+
+fn fetch_remote_now(root: &Path) -> Result<(), BusError> {
+    let mut command = fetch_command(root);
     let output = crate::proc::output_with_timeout(&mut command, std::time::Duration::from_secs(20))
         .map_err(|error| BusError::unavailable("git.fetch_failed", error.to_string()))?
         .ok_or_else(|| {
@@ -2142,10 +2130,18 @@ fn switch_target(root: &Path, requested: &str) -> Result<SwitchTarget, BusError>
 
 /// `git push`, bounded, and never prompting for credentials on whatever terminal the engine was
 /// started from: a push that needs them fails instead of waiting for a person who is not there
-/// (RA-372). As generous as any other git mutation, since an LFS upload can be large.
-fn run_push(root: &Path, args: &[&str]) -> Result<(), BusError> {
+/// (RA-372), nor a GUI askpass or Git Credential Manager's window ([`crate::proc::quiet_network_git`]).
+/// As generous as any other git mutation, since an LFS upload can be large.
+fn push_command(root: &Path, args: &[&str]) -> std::process::Command {
     let mut command = std::process::Command::new("git");
-    command.arg("-C").arg(root).args(args).env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null());
+    command.arg("-C").arg(root).stdin(std::process::Stdio::null());
+    crate::proc::quiet_network_git(&mut command);
+    command.args(args);
+    command
+}
+
+fn run_push(root: &Path, args: &[&str]) -> Result<(), BusError> {
+    let mut command = push_command(root, args);
     let output = crate::proc::output_with_timeout(&mut command, std::time::Duration::from_secs(600))
         .map_err(|error| BusError::conflict("git.push_failed", error.to_string()))?
         .ok_or_else(|| BusError::unavailable("git.push_failed", "git push did not finish within 10 minutes; check the remote before pushing again"))?;
@@ -2396,6 +2392,24 @@ fn branches_with(
 mod tests {
     use super::*;
 
+    /// A fetch (every session.create runs one) and a push never wait for a person: no terminal
+    /// prompt, no askpass window, no Credential Manager dialog, and a stalled transfer gives up.
+    #[test]
+    fn fetch_and_push_never_prompt_and_give_up_on_a_stalled_transfer() {
+        for command in [fetch_command(Path::new("/repo")), push_command(Path::new("/repo"), &["push", "origin", "main"])] {
+            let envs: Vec<(String, String)> = command.get_envs()
+                .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()).unwrap_or_default()))
+                .collect();
+            for (key, value) in [("GIT_TERMINAL_PROMPT", "0"), ("GIT_ASKPASS", ""), ("GCM_INTERACTIVE", "never")] {
+                assert!(envs.contains(&(key.into(), value.into())), "{key} in {envs:?}");
+            }
+            let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            let at = |arg: &str| args.iter().position(|a| a == arg);
+            let subcommand = at("fetch").or(at("push")).expect("a subcommand");
+            assert!(at("http.lowSpeedLimit=1000").is_some_and(|i| i < subcommand), "git's own option, before the subcommand: {args:?}");
+        }
+    }
+
     #[test]
     fn github_pull_requests_cover_all_pages_and_lifecycle_states() {
         let row = |number, state: &str, merged_at: serde_json::Value, repository: &str| {
@@ -2543,17 +2557,6 @@ mod tests {
         assert!(kept.len() < 1000 && kept.iter().map(|f| f.path.len()).sum::<usize>() <= STATUS_MAX_BYTES);
         let few = vec![file("one".into(), "M", "")];
         assert_eq!(cap_status(few.clone()), few);
-    }
-
-    #[test]
-    fn numstat_records_become_gate_lines_with_a_rename_source_of_its_own() {
-        let raw = "1\t2\tsrc/a.rs\0-\t-\tlogo.png\0\
-                   0\t1\t\0secret/key.txt\0public/key.txt\0";
-        assert_eq!(
-            numstat_lines(raw),
-            "1\t2\tsrc/a.rs\n-\t-\tlogo.png\n0\t0\tsecret/key.txt\n0\t1\tpublic/key.txt\n"
-        );
-        assert_eq!(numstat_lines(""), "");
     }
 
     fn git(root: &Path, args: &[&str]) -> String {

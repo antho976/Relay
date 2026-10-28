@@ -304,17 +304,13 @@ fn engine_key(engine: &Engine) -> usize {
     engine as *const Engine as usize
 }
 
-fn kill_group(pid: u32) {
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(-(pid as i32), libc::SIGKILL);
-    }
-}
-
+/// A stop for the runner: its build's group is sent SIGTERM now, so a git in it drops its locks
+/// (RA-160). The step's own loop sees the stop and finishes the job, SIGKILL included, while its
+/// slot still holds the pid: a SIGKILL sent from here could land after that loop reaped the group.
 fn signal(runner: &Runner, why: Stop) {
     runner.stop.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert(why);
     if let Some(pid) = *runner.child.lock().unwrap_or_else(|p| p.into_inner()) {
-        kill_group(pid);
+        crate::proc::ask_group_to_stop(pid);
     }
 }
 
@@ -577,7 +573,8 @@ enum Step {
 }
 
 /// Run `command` through the login shell in `cwd`, in its own process group, until it exits,
-/// [`Runner`]'s stop arrives or `timeout` elapses; either of the last two kills the group.
+/// [`Runner`]'s stop arrives or `timeout` elapses; either of the last two ends the group, SIGTERM
+/// first ([`crate::proc::terminate_group`]).
 /// Only the last [`OUTPUT_KEEP`] bytes of its interleaved output are kept.
 fn step(runner: &Runner, cwd: &Path, command: &str, timeout: Duration) -> Step {
     let mut cmd = Command::new("fish");
@@ -624,9 +621,11 @@ fn step(runner: &Runner, cwd: &Path, command: &str, timeout: Duration) -> Step {
             }
             Ok(None) if runner.stopped().is_none() && Instant::now() < deadline => {}
             waited => {
-                kill_group(child.id());
-                let _ = child.wait();
+                // Let go of the slot first: a stop arriving during the grace has nothing to add.
                 *slot = None;
+                drop(slot);
+                crate::proc::terminate_group(child.id(), crate::proc::TERM_GRACE, || !matches!(child.try_wait(), Ok(None)));
+                let _ = child.wait();
                 break Err(waited.err());
             }
         }
@@ -637,9 +636,11 @@ fn step(runner: &Runner, cwd: &Path, command: &str, timeout: Duration) -> Step {
     let _ = done.recv_timeout(DRAIN_GRACE);
     let text = String::from_utf8_lossy(&tail.lock().unwrap_or_else(|p| p.into_inner())).into_owned();
     match outcome {
+        // A build that exited on its own after a stop heard the SIGTERM: it is stopped, not
+        // passed or failed.
+        _ if runner.stopped().is_some() => Step::Stopped,
         Ok(status) if status.success() => Step::Passed(text),
         Ok(status) => Step::Failed(format!("{text}\nBuild command {status}.\n")),
-        Err(_) if runner.stopped().is_some() => Step::Stopped,
         Err(Some(error)) => Step::Failed(format!("{text}\nwaiting on the build: {error}\n")),
         Err(None) => Step::Failed(format!(
             "{text}\nThe build did not finish within {} minutes and was stopped.\n",

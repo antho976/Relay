@@ -191,6 +191,26 @@ fn a_staged_rename_out_of_a_protected_path_is_gated_on_its_source() {
     assert_eq!(git(root, &["log", "-1", "--format=%s"]), "Add key", "nothing was committed");
 }
 
+/// The commit gate reads git's own `-z` records: a rename is one file against the cap, and a
+/// name with ` => ` in it is that name, not the two sides of a rename.
+#[test]
+fn a_commit_counts_a_rename_once_and_reads_odd_names_as_they_are() {
+    let e = engine();
+    let (_ws, repo) = project(&e);
+    let root = Path::new(&repo);
+    ok(&e, "guardrail.config.set", json!({"project_id":1,"patch":{"caps":{"files":1,"lines":2000},"protected_paths":["b.md"]}}));
+    git(root, &["mv", "README.md", "GUIDE.md"]);
+    let moved = call(&e, "git.commit", json!({"project_id":1,"message":"Rename the readme"}));
+    assert!(moved.ok, "one file moved: {:?}", moved.error);
+
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    std::fs::write(root.join("docs/a => b.md"), "odd\n").unwrap();
+    git(root, &["add", "docs"]);
+    let odd = call(&e, "git.commit", json!({"project_id":1,"message":"Add an oddly named file"}));
+    assert!(odd.ok, "docs/a => b.md is not b.md: {:?}", odd.error);
+    assert_eq!(git(root, &["log", "-1", "--format=%s"]), "Add an oddly named file");
+}
+
 /// RA-159: a commit that adds a file in a new directory lists the file, not the directory.
 #[test]
 fn show_and_base_diff_list_files_not_directories() {

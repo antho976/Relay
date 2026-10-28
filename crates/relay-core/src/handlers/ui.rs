@@ -11,9 +11,10 @@ use relay_bus::types::{PaneInfo, PaneTarget, WindowInfo};
 use relay_bus::Empty;
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
+use std::sync::PoisonError;
 
 fn state(engine: &Engine) -> StateOut {
-    let ui = engine.ui.lock().unwrap();
+    let ui = engine.ui.lock().unwrap_or_else(PoisonError::into_inner);
     StateOut {
         project_id: ui.project_id,
         page: ui.page,
@@ -74,7 +75,7 @@ pub fn register(engine: &mut Engine) {
         }
         let before = state(ctx.engine());
         {
-            let mut ui = ctx.engine().ui.lock().unwrap();
+            let mut ui = ctx.engine().ui.lock().unwrap_or_else(PoisonError::into_inner);
             ui.page = payload.page;
             if payload.project_id.is_some() {
                 ui.project_id = payload.project_id;
@@ -93,7 +94,7 @@ pub fn register(engine: &mut Engine) {
     });
     engine.register::<PaneOpen>(|ctx: &mut Ctx, payload| {
         let pane = {
-            let mut ui = ctx.engine().ui.lock().unwrap();
+            let mut ui = ctx.engine().ui.lock().unwrap_or_else(PoisonError::into_inner);
             let pane = format!("pane-{}", ui.next_pane);
             ui.next_pane += 1;
             for item in &mut ui.panes {
@@ -126,7 +127,7 @@ pub fn register(engine: &mut Engine) {
         Ok(PaneOpenOut { pane })
     });
     engine.register::<PaneClose>(|ctx: &mut Ctx, payload| {
-        let mut ui = ctx.engine().ui.lock().unwrap();
+        let mut ui = ctx.engine().ui.lock().unwrap_or_else(PoisonError::into_inner);
         let before = ui.panes.len();
         ui.panes.retain(|pane| pane.pane != payload.pane);
         if before == ui.panes.len() {
@@ -153,7 +154,7 @@ pub fn register(engine: &mut Engine) {
         Ok(Empty {})
     });
     engine.register::<PaneFocus>(|ctx: &mut Ctx, payload| {
-        let mut ui = ctx.engine().ui.lock().unwrap();
+        let mut ui = ctx.engine().ui.lock().unwrap_or_else(PoisonError::into_inner);
         if !ui.panes.iter().any(|pane| pane.pane == payload.pane) {
             return Err(relay_bus::BusError::not_found(
                 "ui.pane_not_found",
@@ -181,7 +182,7 @@ pub fn register(engine: &mut Engine) {
                 "edge must be top, bottom, left, right, or center",
             ));
         }
-        let mut ui = ctx.engine().ui.lock().unwrap();
+        let mut ui = ctx.engine().ui.lock().unwrap_or_else(PoisonError::into_inner);
         let from = ui
             .panes
             .iter()
@@ -310,7 +311,7 @@ pub fn register(engine: &mut Engine) {
         Ok(Empty {})
     });
     engine.register::<WindowPopout>(|ctx: &mut Ctx, payload| {
-        let mut ui = ctx.engine().ui.lock().unwrap();
+        let mut ui = ctx.engine().ui.lock().unwrap_or_else(PoisonError::into_inner);
         let position = ui
             .panes
             .iter()
@@ -347,7 +348,7 @@ pub fn register(engine: &mut Engine) {
                 "the main window cannot be closed through ui.window.close",
             ));
         }
-        let mut ui = ctx.engine().ui.lock().unwrap();
+        let mut ui = ctx.engine().ui.lock().unwrap_or_else(PoisonError::into_inner);
         let index = ui
             .windows
             .iter()
@@ -376,7 +377,7 @@ pub fn register(engine: &mut Engine) {
     });
     engine.register::<WindowList>(|ctx, _| {
         Ok(WindowListOut {
-            windows: ctx.engine().ui.lock().unwrap().windows.clone(),
+            windows: ctx.engine().ui.lock().unwrap_or_else(PoisonError::into_inner).windows.clone(),
         })
     });
     engine.register::<Toast>(|ctx: &mut Ctx, payload| {

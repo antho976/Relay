@@ -45,23 +45,15 @@ pub fn locate(provider: Provider, reference: &str, worktree: &Path) -> Option<Pa
     }
 }
 
-fn env_dir(variable: &str) -> Option<PathBuf> {
-    std::env::var_os(variable).filter(|value| !value.is_empty()).map(PathBuf::from)
-}
-
-fn home_dir(dir: &str) -> Option<PathBuf> { env_dir("HOME").map(|home| home.join(dir)) }
-
-/// Claude Code names a project's folder after its directory with every character that is not
-/// a letter or digit made `-`.
-fn claude_slug(worktree: &Path) -> String {
-    worktree.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
-}
-
 fn locate_claude(reference: &str, worktree: &Path) -> Option<PathBuf> {
     let file = format!("{reference}.jsonl");
-    let roots: Vec<PathBuf> = [env_dir("CLAUDE_CONFIG_DIR"), home_dir(".claude")].into_iter().flatten().map(|root| root.join("projects")).collect();
+    // Its config folder, and `~/.claude` too: an agent started without the variable wrote there.
+    let mut roots: Vec<PathBuf> = [crate::providers::config_dir(Provider::Claude), crate::providers::home_dir().map(|home| home.join(".claude"))]
+        .into_iter().flatten().map(|root| root.join("projects")).collect();
+    roots.dedup();
+    let key = crate::providers::claude_project_key(worktree);
     for root in &roots {
-        let path = root.join(claude_slug(worktree)).join(&file);
+        let path = root.join(&key).join(&file);
         if path.is_file() { return Some(path); }
     }
     // A conversation begun in another directory and resumed here keeps its first folder.
@@ -77,7 +69,7 @@ fn locate_codex(reference: &str) -> Option<PathBuf> {
     if let Some(path) = found.lock().ok()?.get(reference).filter(|path| path.is_file()) {
         return Some(path.clone());
     }
-    let root = env_dir("CODEX_HOME").or_else(|| home_dir(".codex"))?.join("sessions");
+    let root = crate::providers::config_dir(Provider::Codex)?.join("sessions");
     let suffix = format!("-{reference}.jsonl");
     let path = find_rollout(&root, &suffix, 0)?;
     found.lock().ok()?.insert(reference.to_string(), path.clone());
@@ -652,7 +644,7 @@ mod tests {
 
     #[test]
     fn claude_slug_makes_every_other_character_a_dash() {
-        assert_eq!(claude_slug(Path::new("/home/a/dev3/RelayV4/.relay/worktrees/proud-llama")), "-home-a-dev3-RelayV4--relay-worktrees-proud-llama");
+        assert_eq!(crate::providers::claude_project_key(Path::new("/home/a/dev3/RelayV4/.relay/worktrees/proud-llama")), "-home-a-dev3-RelayV4--relay-worktrees-proud-llama");
     }
 
     #[test]
