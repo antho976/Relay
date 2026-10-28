@@ -361,8 +361,7 @@ payload!(
 #[schemars(rename = "ThreadAskStep")] AskStep {
     /// One of the ops an assistant may ask for: `session.create`, `session.spawn`,
     /// `session.resume`, `session.park`, `session.wake`, `session.close`, `session.input`,
-    /// `session.update`, `task.create`, `task.update`, `task.move`, `task.dispatch`,
-    /// `task.delete`, `notes.create`, `notes.update`, `workspace.create`, `project.add`.
+    /// `session.update`, `task.dispatch`, `task.delete`, `workspace.create`, `project.add`.
     pub op: String,
     /// That op's own payload. A `session` left out of a step after `session.create` is the
     /// session it made.
@@ -389,9 +388,12 @@ result!(#[schemars(rename = "ThreadAsk")] AskView {
     pub results: Vec<Value>,
     pub created_at: String,
     pub resolved_at: Option<String>,
+    /// It ran without asking, as the person lets that kind of step
+    /// (`threads.assistant.without_asking`); its reply is what came of it.
+    pub auto: bool,
 });
 op!(Ask, "thread.ask", AskIn => AskView,
-    OpMeta::mutation(Scope::Global, 5, "The assistant asks the person for what a lone session may not do: launching, parking, waking, closing or typing into sessions, changing tasks, notes, workspaces and projects. It waits on a card; nothing runs until they approve")
+    OpMeta::mutation(Scope::Global, 5, "The assistant asks the person for what it may not do itself: launching, waking, parking, closing or typing into sessions, dispatching or deleting tasks, adding workspaces and projects. Kinds the person lets through run at once and the reply says what came of them (status approved or failed); the rest wait on a card (pending) until they approve")
         .emits(&["thread.ask"]));
 
 payload!(#[schemars(rename = "ThreadAskListIn")] AskListIn {

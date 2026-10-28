@@ -1,6 +1,6 @@
 use gtk4::gdk::{self, prelude::*, Key, ModifierType};
 
-pub const DEFAULTS: [(&str, &str, &str); 8] = [
+pub const DEFAULTS: [(&str, &str, &str); 9] = [
     ("palette", "Command palette", "Ctrl+K"),
     ("agents", "Agents", "Ctrl+1"),
     ("code", "Files and Git", "Ctrl+2"),
@@ -9,6 +9,8 @@ pub const DEFAULTS: [(&str, &str, &str); 8] = [
     ("settings", "Settings", "Ctrl+,"),
     ("sidebar", "Toggle sidebar", "Ctrl+Shift+B"),
     ("space", "Switch between Dev and Threads", "Ctrl+`"),
+    // With Shift, so a focused terminal does not keep it (`terminal_owns`).
+    ("assistant", "Assistant", "Ctrl+Shift+A"),
 ];
 
 fn parse(chord: &str) -> Option<(ModifierType, char)> {

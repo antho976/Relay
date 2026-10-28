@@ -5532,7 +5532,7 @@
       }
     },
     "thread.ask": {
-      "summary": "The assistant asks the person for what a lone session may not do: launching, parking, waking, closing or typing into sessions, changing tasks, notes, workspaces and projects. It waits on a card; nothing runs until they approve",
+      "summary": "The assistant asks the person for what it may not do itself: launching, waking, parking, closing or typing into sessions, dispatching or deleting tasks, adding workspaces and projects. Kinds the person lets through run at once and the reply says what came of them (status approved or failed); the rest wait on a card (pending) until they approve",
       "kind": "mutation",
       "audit": "always",
       "undo": "none",
@@ -22181,7 +22181,7 @@
       "properties": {
         "op": {
           "type": "string",
-          "description": "One of the ops an assistant may ask for: `session.create`, `session.spawn`,\n`session.resume`, `session.park`, `session.wake`, `session.close`, `session.input`,\n`session.update`, `task.create`, `task.update`, `task.move`, `task.dispatch`,\n`task.delete`, `notes.create`, `notes.update`, `workspace.create`, `project.add`."
+          "description": "One of the ops an assistant may ask for: `session.create`, `session.spawn`,\n`session.resume`, `session.park`, `session.wake`, `session.close`, `session.input`,\n`session.update`, `task.dispatch`, `task.delete`, `workspace.create`, `project.add`."
         },
         "payload": {
           "description": "That op's own payload. A `session` left out of a step after `session.create` is the\nsession it made."
@@ -22241,6 +22241,10 @@
             "string",
             "null"
           ]
+        },
+        "auto": {
+          "type": "boolean",
+          "description": "It ran without asking, as the person lets that kind of step\n(`threads.assistant.without_asking`); its reply is what came of it."
         }
       },
       "required": [
@@ -22251,7 +22255,8 @@
         "summary",
         "status",
         "results",
-        "created_at"
+        "created_at",
+        "auto"
       ]
     },
     "ThreadAskListIn": {
