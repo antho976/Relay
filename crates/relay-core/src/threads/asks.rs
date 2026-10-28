@@ -269,6 +269,22 @@ fn refused_flag(value: &Value) -> Option<&'static str> {
     }
 }
 
+/// Whether `value` asks for a shell anywhere in it: a `session.create`, or the `create` a
+/// `task.dispatch` carries. A shell is the person's own login shell, never the assistant's to open.
+fn asks_for_shell(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => fields.get("provider") == Some(&json!("shell")) || fields.values().any(asks_for_shell),
+        Value::Array(items) => items.iter().any(asks_for_shell),
+        _ => false,
+    }
+}
+
+/// Whether `name` is a shell session: what an ask may not type into, start or change.
+fn names_a_shell(engine: &Engine, name: &str) -> bool {
+    let conn = engine.store.lock();
+    crate::sessions::by_name(&conn, name).is_ok_and(|row| crate::handlers::session::is_shell(&row.session))
+}
+
 /// Steps as asked, with what they leave out filled the way that keeps work: `session.close`
 /// removes the checkout unless told not to, and removing one is never the assistant's to ask.
 fn kept(mut steps: Vec<AskStep>) -> Vec<AskStep> {
@@ -298,6 +314,10 @@ pub fn checked(steps: &[AskStep]) -> Result<(), BusError> {
         if let Some(flag) = refused_flag(&step.payload) {
             return Err(BusError::refused("thread.ask_flag", format!("Step {n}: an ask may not set {flag}"))
                 .with_hint("deleting work, and widening what a session may do or what it bills, stay the person's"));
+        }
+        if asks_for_shell(&step.payload) {
+            return Err(BusError::refused("thread.ask_shell", format!("Step {n}: a shell is the person's own; an ask may not open one"))
+                .with_hint("the person opens a shell themselves, from the desktop or their phone"));
         }
     }
     Ok(())
@@ -431,6 +451,14 @@ fn run(engine: &Engine, steps: &[AskStep]) -> (&'static str, String, Vec<Value>)
     let mut done = Vec::new();
     for (at, step) in steps.iter().enumerate() {
         let payload = filled(step, &made);
+        // Checked again as it runs, whatever its kind and whether or not it asked: the session a
+        // step names may have been opened as a shell since, and a shell takes nothing from an ask.
+        let shell = payload.get("session").and_then(Value::as_str).filter(|name| names_a_shell(engine, name));
+        if shell.is_some() || asks_for_shell(&payload) {
+            let ran = if done.is_empty() { String::new() } else { format!(" Done before it: {}.", done.join(", ")) };
+            let what = shell.map_or("a shell".to_string(), |name| format!("{name}, a shell,"));
+            return ("failed", format!("Step {} ({}) failed: {what} is the person's own; an assistant neither opens, types into nor changes one.{ran}", at + 1, step.op), results);
+        }
         let answer = engine.dispatch(Request::new(Actor::User, step.op.clone(), payload), crate::engine::Door::InProcess).into_result();
         match answer {
             Ok(result) => {

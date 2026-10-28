@@ -155,6 +155,8 @@ pub struct Unlocked<'a> {
     pub op: &'static str,
     session_id: Option<Id>,
     project_id: Option<Id>,
+    /// As [`Ctx::thread`].
+    thread: Option<Id>,
     events: Vec<Event>,
     deferred: Vec<Box<dyn FnOnce(Arc<Engine>) + Send + 'static>>,
 }
@@ -171,6 +173,10 @@ pub(crate) struct Prepared {
 impl Unlocked<'_> {
     pub fn engine(&self) -> &Engine {
         self.engine
+    }
+    /// The thread whose agent sent this request, as [`Ctx::thread`].
+    pub fn thread(&self) -> Option<Id> {
+        self.thread
     }
     /// Run `op`'s prepare phase now, unlocked, as `actor` and `session_id` — so a replay
     /// (`guardrail.confirm` of a held `git.commit`) does its slow work before the transaction
@@ -196,6 +202,7 @@ impl Unlocked<'_> {
             op: entry.name,
             session_id,
             project_id: None,
+            thread: self.thread,
             events: Vec::new(),
             deferred: Vec::new(),
         };
@@ -455,6 +462,7 @@ impl<'a> Ctx<'a> {
                     op: entry.name,
                     session_id: self.session_id,
                     project_id: self.project_id,
+                    thread: self.thread,
                     events: Vec::new(),
                     deferred: Vec::new(),
                 };
@@ -1159,7 +1167,7 @@ impl Engine {
         // Slow reads run with nothing locked (D149). Queries are never audited, so there is no
         // row to append and no transaction to keep open across an `adb`, `gh` or `gix` call.
         if let Some(h) = self.unlocked.get(entry.name).cloned() {
-            return self.dispatch_unlocked(req, entry, session_id, h);
+            return self.dispatch_unlocked(req, entry, session_id, thread, h);
         }
         // Implementation availability is deliberately checked after authorization: an
         // unfinished surface must not become a side door around role/scope policy.
@@ -1183,6 +1191,7 @@ impl Engine {
                     op: entry.name,
                     session_id,
                     project_id: None,
+                    thread,
                     events: Vec::new(),
                     deferred: Vec::new(),
                 };
@@ -1414,6 +1423,7 @@ impl Engine {
         req: &Request,
         entry: &OpEntry,
         session_id: Option<Id>,
+        thread: Option<Id>,
         h: UnlockedFn,
     ) -> Result<Response, BusError> {
         let mut ctx = Unlocked {
@@ -1425,6 +1435,7 @@ impl Engine {
             op: entry.name,
             session_id,
             project_id: None,
+            thread,
             events: Vec::new(),
             deferred: Vec::new(),
         };

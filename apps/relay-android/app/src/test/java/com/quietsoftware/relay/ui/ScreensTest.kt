@@ -35,6 +35,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
+import com.quietsoftware.relay.core.wire.s
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -269,6 +272,17 @@ class ScreensTest {
     }
     @Test fun session() = shoot("session", "session/brisk-otter")
     @Test fun launch() = shoot("launch", "launch?project=1")
+    /** A shell instead of an agent: the project alone, and no agent's settings. */
+    @Test fun launchShell() {
+        shoot("launch-shell", "launch?project=1&provider=shell")
+        for (shown in listOf("New shell", "Open shell", "Shell")) assertTrue(shown, compose.onAllNodesWithText(shown).fetchSemanticsNodes().isNotEmpty())
+        for (hidden in listOf("Model", "How hard it thinks", "What should it work on?")) {
+            assertTrue(hidden, compose.onAllNodesWithText(hidden, ignoreCase = true).fetchSemanticsNodes().isEmpty())
+        }
+        val create = com.quietsoftware.relay.ui.dev.shellCreate(1)
+        assertEquals("shell", create.s("provider"))
+        assertEquals(setOf("project_id", "provider"), create.keys)
+    }
     @Test fun tally() = shoot("tally", "tally")
     @Test fun pc() = shoot("pc", "pc")
     @Test fun projectSettings() = shoot("project-settings", "project-settings/1")

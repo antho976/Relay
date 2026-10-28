@@ -1484,6 +1484,15 @@ pub fn register(e: &mut Engine) {
             if task.column == Column::Done {
                 return Err(BusError::conflict("task.column_transition", "done tasks cannot be dispatched"));
             }
+            // A shell runs no agent: a task given to one would be typed into the person's shell.
+            let shell = match (&p.create, &p.session) {
+                (Some(create), _) => create.provider == relay_bus::types::Provider::Shell,
+                (None, Some(name)) => crate::handlers::session::is_shell(&sessions::by_name(conn, name)?.session),
+                (None, None) => false,
+            };
+            if shell {
+                return Err(BusError::invalid("task.dispatch_shell", "a shell runs no agent, so it takes no task"));
+            }
             if let Some(create) = &p.create {
                 if create.project_id != task.project_id {
                     return Err(BusError::invalid("task.dispatch_project", "created session must use the task project"));

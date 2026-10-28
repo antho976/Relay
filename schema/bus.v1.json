@@ -8770,7 +8770,8 @@
       "type": "string",
       "enum": [
         "claude",
-        "codex"
+        "codex",
+        "shell"
       ]
     },
     "GamingStatus": {

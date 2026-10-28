@@ -50,10 +50,15 @@ pub fn provider_str(p: Provider) -> &'static str {
     match p {
         Provider::Claude => "claude",
         Provider::Codex => "codex",
+        Provider::Shell => "shell",
     }
 }
 pub fn parse_provider(s: &str) -> Provider {
-    if s == "codex" { Provider::Codex } else { Provider::Claude }
+    match s {
+        "codex" => Provider::Codex,
+        "shell" => Provider::Shell,
+        _ => Provider::Claude,
+    }
 }
 pub fn role_str(r: Role) -> &'static str {
     match r {

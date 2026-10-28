@@ -21,7 +21,7 @@ pub fn defaults() -> &'static Value {
         json!({
             "appearance": { "mode": "dark", "panel_alpha": 1.0, "wallpaper": null },
             "notifications": { "sound": "chime", "volume": 0.7, "categories": {} },
-            "providers": { "claude": { "path": null }, "codex": { "path": null } },
+            "providers": { "claude": { "path": null }, "codex": { "path": null }, "shell": { "path": null } },
             // What the status bar's limit meters show, and how often the window re-reads them
             // (minutes; 0 = only on engine events and the refresh key).
             "usage": {

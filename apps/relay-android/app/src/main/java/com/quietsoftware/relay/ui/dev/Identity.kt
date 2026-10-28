@@ -50,15 +50,18 @@ internal fun agentInitials(name: String): String {
     }.uppercase()
 }
 
-/** What the agent is doing, in words: its intent, else its task's title, else its name. */
+/** What the agent is doing, in words: its intent, else its task's title, else its name. A shell is a shell. */
 internal fun agentTitle(session: Session, task: Task? = null): String =
-    session.intent?.trim()?.ifBlank { null } ?: task?.title?.trim()?.ifBlank { null } ?: session.name
+    session.intent?.trim()?.ifBlank { null } ?: task?.title?.trim()?.ifBlank { null } ?: if (session.shell) "Shell" else session.name
+
+/** What a session is, in a few words: "Shell" for the person's own shell, else its provider and role. */
+internal fun kindWords(session: Session): String = if (session.shell) "Shell" else "${session.provider} · ${session.role}"
 
 /** An agent's state as a word in a sentence: "Working", "Needs you", "Parked". */
 internal fun stateWord(session: Session): String = when (session.state) {
-    "running" -> "Working"
+    "running" -> if (session.shell) "Open" else "Working"
     "spawning" -> "Starting"
-    "idle" -> "Ready"
+    "idle" -> if (session.shell) "Open" else "Ready"
     "blocked" -> "Needs you"
     else -> session.stateLabel.lowercase().replaceFirstChar(Char::uppercase)
 }

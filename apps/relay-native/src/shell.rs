@@ -1213,7 +1213,7 @@ impl Ui {
         }
         for s in self.sessions.borrow().iter() {
             let name = text(s, "name").to_string();
-            let what = format!("{} · {}", text(s, "provider"), text(s, "role"));
+            let what = crate::terminal::kind_words(s);
             palette.add("Agents", "terminal", &format!("Focus {name}"), Some((what, "palette-hint")), false, Box::new(move |ui| {
                 *ui.focused.borrow_mut() = Some(name.clone());
                 ui.set_mode("focus");

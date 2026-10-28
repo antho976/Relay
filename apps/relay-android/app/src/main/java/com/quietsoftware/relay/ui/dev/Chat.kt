@@ -383,7 +383,7 @@ fun ChatScreen(name: String, nav: Nav) {
 
     LifecycleSheets(life)
     if (menu) {
-        DevSheet({ menu = false }, name, session?.let { "${it.provider} · ${it.role}" }) { close ->
+        DevSheet({ menu = false }, name, session?.let(::kindWords)) { close ->
             session?.let { ss ->
                 SheetRow("Changes", "commit", { close { nav.git(ss.projectId, ss.worktree.ifBlank { null }, name) } })
                 if (ss.state != "closed" && !ss.pending) SheetRow("Mail the agent", "mail", { close { mailing = true } })

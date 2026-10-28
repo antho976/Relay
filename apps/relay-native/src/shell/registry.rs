@@ -78,6 +78,10 @@ fn agents_in(sessions: &[Value], projects: &[i64]) -> Agents {
     let mut agents = Agents { open: 0, held: false, running: false };
     for s in mine {
         agents.open += 1;
+        // A shell runs no agent: it is never at work, nor waiting on the person.
+        if crate::terminal::is_shell(s) {
+            continue;
+        }
         match text(s, "state") {
             "blocked" => agents.held = true,
             "running" | "spawning" => agents.running = true,
@@ -121,8 +125,14 @@ struct AgentRow {
 impl AgentRow {
     fn show(&self, session: &Value) {
         let state = text(session, "state");
-        light(&self.lamp, state == "blocked", matches!(state, "running" | "spawning"));
-        let intent = text(session, "intent");
+        // A shell runs no agent: its lamp stays dark, and it says what it is where an agent
+        // says what it is doing.
+        let shell = crate::terminal::is_shell(session);
+        light(&self.lamp, !shell && state == "blocked", !shell && matches!(state, "running" | "spawning"));
+        let intent = match text(session, "intent") {
+            "" if shell => "Shell",
+            intent => intent,
+        };
         if self.doing.text() != intent {
             self.doing.set_text(intent);
         }

@@ -97,7 +97,7 @@ fun Sidebar(s: ShellState, route: String?, nav: SidebarNav, @Suppress("UNUSED_PA
             T("New chat", style = Relay.type.nav, color = c.accentText, weight = FontWeight.SemiBold)
         }
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
-            val live = s.sessions.count { it.attachable }
+            val live = s.sessions.count { it.attachable && !it.shell }
             item { NavRow("Agents", "agents", route == "agents", count = live.takeIf { it > 0 }?.toString(), onClick = nav::agents) }
             item { NavRow("Board", "board", route?.startsWith("board") == true, onClick = nav::board) }
             item {
@@ -116,7 +116,7 @@ fun Sidebar(s: ShellState, route: String?, nav: SidebarNav, @Suppress("UNUSED_PA
                     SpaceTile("Avex", "avex", Color(0xFFE5B567), route == "avex", nav::avex, Modifier.weight(1f))
                 }
             }
-            val open = s.sessions.filter { it.attachable }.sortedByDescending { it.blocked }
+            val open = s.sessions.filter { it.attachable && !it.shell }.sortedByDescending { it.blocked }
             if (open.isNotEmpty()) {
                 // Every agent with a live terminal, each line saying whether it works, waits or needs you.
                 item { Eyebrow("Open agents", Modifier.padding(start = 4.dp, top = 16.dp, bottom = 4.dp)) }

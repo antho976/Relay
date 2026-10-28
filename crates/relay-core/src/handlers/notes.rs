@@ -317,7 +317,7 @@ fn send(
         let mut stmt = tx
             .prepare_cached(
                 "SELECT id, name FROM sessions
-             WHERE project_id = ?1 AND state != 'closed' AND name != ?2 ORDER BY id",
+             WHERE project_id = ?1 AND state != 'closed' AND name != ?2 AND provider != 'shell' ORDER BY id",
             )
             .bus()?;
         recipients = stmt

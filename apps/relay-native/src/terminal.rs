@@ -269,6 +269,22 @@ impl ModeTracker {
     }
 }
 
+/// What a session is, in a few words: `Shell` for the person's own shell, which runs no agent,
+/// else its provider and role.
+pub fn kind_words(session: &serde_json::Value) -> String {
+    use crate::app::text;
+    if is_shell(session) {
+        "Shell".into()
+    } else {
+        format!("{} · {}", text(session, "provider"), text(session, "role"))
+    }
+}
+
+/// Whether `session` is a shell (`provider: "shell"`): the person's own login shell, no agent.
+pub fn is_shell(session: &serde_json::Value) -> bool {
+    session["provider"] == "shell"
+}
+
 /// What a session's state reads as wherever it is shown (the strip, the slate, the agent menu),
 /// in the phone's words (`Session.stateLabel`), and the lamp class beside it: lit for a live or
 /// held agent, never for an idle one.
@@ -670,9 +686,8 @@ impl Pane {
         let intent = text(session, "intent").trim();
         self.metadata.set_text(
             &format!(
-                "{} · {}{}",
-                text(session, "provider"),
-                text(session, "role"),
+                "{}{}",
+                kind_words(session),
                 if !intent.is_empty() {
                     format!(" · {intent}")
                 } else if pair.is_empty() {

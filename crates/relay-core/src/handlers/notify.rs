@@ -228,7 +228,7 @@ pub fn register(engine: &mut Engine) {
              COALESCE(SUM(CASE WHEN t.col='active' THEN 1 ELSE 0 END),0),
              COALESCE(SUM(CASE WHEN t.col='in_review' THEN 1 ELSE 0 END),0),
              COALESCE(SUM(CASE WHEN t.col='done' AND datetime(t.updated_at)>=datetime('now','-7 days') THEN 1 ELSE 0 END),0),
-             (SELECT COUNT(*) FROM sessions s WHERE s.project_id=p.id AND s.state IN ('spawning','running','idle','blocked')),
+             (SELECT COUNT(*) FROM sessions s WHERE s.project_id=p.id AND s.state IN ('spawning','running','idle','blocked') AND s.provider!='shell'),
              (SELECT COUNT(*) FROM sessions s WHERE s.project_id=p.id AND s.state='blocked')
              FROM projects p LEFT JOIN tasks t ON t.project_id=p.id AND t.deleted_at IS NULL
              WHERE ?1 IS NULL OR p.id=?1

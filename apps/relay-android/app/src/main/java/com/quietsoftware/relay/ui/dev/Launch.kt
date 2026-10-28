@@ -86,10 +86,11 @@ import kotlinx.serialization.json.put
  * own worktree, or a review group (one or two builders and a reviewer on one branch). Each agent
  * gets its provider, model, effort, first message and permissions; the first may take a staged
  * task. `session.create` and `session.spawn` both wait in the outbox, so with the PC away the
- * agents start when it is back.
+ * agents start when it is back. Or, in place of an agent, a shell: the person's own login shell on
+ * the PC, in the project's folder, opened on its terminal ([provider] `shell` picks it).
  */
 @Composable
-fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
+fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav, provider: String? = null) {
     val c = Relay.colors
     val s by nav.shell.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
@@ -98,6 +99,8 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
     val project = s.projects.firstOrNull { it.num == pid }
 
     var group by rememberSaveable { mutableStateOf(false) }
+    // A shell instead of an agent: nothing of an agent's applies, so the form is the project alone.
+    var shell by rememberSaveable { mutableStateOf(provider == "shell") }
     var builders by rememberSaveable { mutableIntStateOf(1) }
     var member by rememberSaveable { mutableIntStateOf(0) }
     var role by rememberSaveable { mutableStateOf("builder") }
@@ -120,7 +123,7 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
     val scroll = rememberScrollState()
     val promptFocus = remember { FocusRequester() }
     // A new agent with nothing written yet: the keyboard is up for its first message.
-    LaunchedEffect(Unit) { if (prompt.isNullOrEmpty() && taskId == null) runCatching { promptFocus.requestFocus() } }
+    LaunchedEffect(Unit) { if (prompt.isNullOrEmpty() && taskId == null && !shell) runCatching { promptFocus.requestFocus() } }
 
     val providerAnswer by remember { nav.relay.live("provider.list") }.collectAsStateWithLifecycle(RelayData.Live())
     val providers = remember(providerAnswer.result) { providersOf(providerAnswer.result) }
@@ -142,9 +145,52 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
     }
     fun label(i: Int) = if (group) (if (i == 2) "Reviewer" else "Builder ${i + 1}") else "the agent"
 
+    /** The person's login shell on the PC, opened on its terminal once the PC has made it. */
+    fun openShell(id: Long) {
+        error = null
+        busy = true
+        note = null
+        scope.launch {
+            val made = try {
+                withContext(NonCancellable) {
+                    val made = nav.relay.change("session.create", shellCreate(id), "New shell")
+                    nav.relay.change("session.spawn", buildJsonObject { put("session", refOf(made)) }, "Open shell")
+                    made
+                }
+            } catch (e: BusException) {
+                busy = false
+                error = refusal(e.error)
+                return@launch
+            }
+            if (!nav.shell.state.value.online) {
+                nav.shell.toast("New shell saved · opens when the PC is back")
+                nav.back()
+                return@launch
+            }
+            note = "Opening the shell…"
+            when (val done = settled(nav, made)) {
+                is Settled.Made -> {
+                    nav.back()
+                    nav.console(done.name)
+                }
+                is Settled.Refused -> {
+                    busy = false
+                    note = null
+                    refusedWhy = done.why
+                    refused = done.entry
+                }
+                Settled.Waiting -> {
+                    nav.shell.toast("New shell · opening when the PC has made it")
+                    nav.back()
+                }
+            }
+        }
+    }
+
     fun launch() {
         val id = pid ?: return
         if (busy || held) return
+        if (shell) return openShell(id)
         // Allocation order (launch.rs): builder 1, the reviewer, builder 2, each pairing with the one before.
         val order = if (group) (if (builders == 2) listOf(0, 2, 1) else listOf(0, 2)) else listOf(0)
         for (i in order) {
@@ -231,12 +277,12 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
     }
 
     // What was written for an agent is not dropped by Back without asking; a refused one the outbox keeps.
-    val written = !busy && !held && profiles.any { it.prompt.isNotBlank() }
+    val written = !busy && !held && !shell && profiles.any { it.prompt.isNotBlank() }
     BackHandler(enabled = written) { leaving = true }
 
     Page {
         Column(Modifier.fillMaxSize()) {
-            PageBar("New agent", { if (written) leaving = true else nav.back() }, subtitle = project?.let { crumb(it, s.workspaces) })
+            PageBar(if (shell) "New shell" else "New agent", { if (written) leaving = true else nav.back() }, subtitle = project?.let { crumb(it, s.workspaces) })
             if (s.projects.isEmpty()) {
                 Empty("folder", "No projects yet", "Add a project on the PC first.")
                 return@Column
@@ -259,7 +305,7 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                     }
 
                     // What it should do comes first, as a new conversation starts: the rest has defaults.
-                    Field(
+                    if (!shell) Field(
                         profile.prompt,
                         { patch(profile.copy(prompt = it)) },
                         Modifier.fillMaxWidth().padding(top = 8.dp).focusRequester(promptFocus),
@@ -275,22 +321,40 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                     ProjectRow(project, project?.let { crumb(it, s.workspaces) }) { pickingProject = true }
 
                     Label("Who works on it")
-                    if (!providerAnswer.fresh && providerAnswer.result != null) StaleNote(providerAnswer.at)
+                    if (!providerAnswer.fresh && providerAnswer.result != null && !shell) StaleNote(providerAnswer.at)
                     val chosen = providerOf(profile)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         for (name in listOf("claude", "codex")) {
                             val info = providers?.firstOrNull { it.provider == name }
                             val usable = providers == null || info?.installed == true
                             Pill(
                                 providerName(name),
                                 Modifier.heightIn(min = 36.dp).alpha(if (usable) 1f else .45f),
-                                selected = chosen == name,
+                                selected = !shell && chosen == name,
                                 glyph = name,
-                                onClick = if (usable) ({ patch(profile.copy(provider = name)) }) else ({ nav.shell.toast("${providerName(name)} is not installed on the PC") }),
+                                onClick = if (usable) ({ shell = false; patch(profile.copy(provider = name)) }) else ({ nav.shell.toast("${providerName(name)} is not installed on the PC") }),
                             )
                         }
+                        // A review group is agents only.
+                        if (!group) Pill("Shell", Modifier.heightIn(min = 36.dp), selected = shell, glyph = "terminal", onClick = { shell = true; error = null })
                     }
-                    T(account(providers, chosen), Modifier.padding(start = 4.dp, top = 6.dp), Relay.type.caption, c.ink3, maxLines = 2)
+                    T(
+                        if (shell) "Your own login shell on the PC, no agent. Sudo asks for your password in it; what you type is not kept."
+                        else account(providers, chosen),
+                        Modifier.padding(start = 4.dp, top = 6.dp),
+                        Relay.type.caption,
+                        c.ink3,
+                        maxLines = 3,
+                    )
+                    if (shell) {
+                        T(
+                            "It opens in the project's folder, on its terminal. Close it from its menu when you are done.",
+                            Modifier.padding(start = 4.dp, top = 16.dp, bottom = 20.dp),
+                            Relay.type.caption,
+                            c.ink3,
+                        )
+                        return@Column
+                    }
 
                     Label("Model")
                     Models(chosen, profile.model, owner = index) { patch(profile.copy(model = it)) }
@@ -337,11 +401,16 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                     held -> "Not created: $refusedWhy. The outbox holds it until you try it again or drop it there."
                     error != null -> error!!
                     note != null -> note!!
-                    !s.online -> "The PC is away · starts when it is back"
+                    !s.online -> if (shell) "The PC is away · opens when it is back" else "The PC is away · starts when it is back"
+                    shell -> "Opens on ${s.pc?.name?.ifBlank { null } ?: "your PC"} now"
                     else -> "Starts on ${s.pc?.name?.ifBlank { null } ?: "your PC"} now · you'll hear when it needs you"
                 },
                 held || error != null,
-                if (group) "Start review group" else "Start agent",
+                when {
+                    shell -> "Open shell"
+                    group -> "Start review group"
+                    else -> "Start agent"
+                },
                 enabled = project != null && !busy && !held,
                 onStart = ::launch,
             )
@@ -399,10 +468,17 @@ private fun providersOf(result: JsonElement?): List<ProviderInfo>? {
     }
 }
 
+/** A shell's `session.create`: the project alone. Anything an agent takes the PC refuses for a shell. */
+internal fun shellCreate(projectId: Long): JsonObject = buildJsonObject {
+    put("project_id", projectId)
+    put("provider", "shell")
+}
+
 /** A provider as a sentence names it: "Claude Code", "Codex", or its id. */
 internal fun providerName(p: String) = when (p) {
     "claude" -> "Claude Code"
     "codex" -> "Codex"
+    "shell" -> "Shell"
     else -> p
 }
 

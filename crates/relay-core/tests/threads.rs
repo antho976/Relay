@@ -854,6 +854,52 @@ fn what_runs_without_asking_is_deduplicated_capped_and_kept_to_its_own_checkout(
     ok(&engine, "thread.stop", json!({"id": id}));
 }
 
+/// A shell is the person's own login shell: the assistant may not ask to open one, nor to type
+/// into, start or change one, whatever the person lets it do without asking; and it reads nothing
+/// from one.
+#[test]
+fn the_assistant_never_opens_types_into_or_reads_a_shell() {
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    with_fake(&engine, dir.path());
+    let repo = dir.path().join("ws").join("Shooter");
+    std::fs::create_dir_all(&repo).unwrap();
+    common::init_repo(&repo);
+    let workspace = ok(&engine, "workspace.create", json!({"path": dir.path().join("ws")}));
+    let project = ok(&engine, "project.add", json!({"workspace_id": workspace["id"], "path": repo}))["id"].clone();
+    ok(&engine, "settings.set", json!({"path": "providers.shell.path", "value": "/bin/sh"}));
+    ok(&engine, "settings.set", json!({"path": "threads.assistant.without_asking.type", "value": true}));
+    ok(&engine, "settings.set", json!({"path": "threads.assistant.without_asking.stop", "value": true}));
+    let id = ok(&engine, "thread.create", json!({"kind": "assistant", "text": "Help"}))["id"].clone();
+    settled(&engine, &id, 4);
+    let ask = |steps: Value| from_agent(&engine, &id, "thread.ask", json!({"steps": steps, "why": "You asked"}));
+
+    // Opening one is refused when asked, directly or inside a dispatch.
+    assert_eq!(code(ask(json!([{"op": "session.create", "payload": {"project_id": project, "provider": "shell"}}]))), "thread.ask_shell");
+    let dispatch = json!([{"op": "task.dispatch", "payload": {"task_id": 1, "create": {"project_id": project, "provider": "shell"}}}]);
+    assert_eq!(code(ask(dispatch)), "thread.ask_shell");
+
+    // One the person opened takes nothing from an ask, though typing and stopping run without asking.
+    let shell = ok(&engine, "session.create", json!({"project_id": project, "provider": "shell"}))["name"].as_str().unwrap().to_string();
+    ok(&engine, "session.spawn", json!({"session": shell}));
+    for (op, payload) in [
+        ("session.input", json!({"session": shell, "data": "touch typed-by-assistant\r"})),
+        ("session.park", json!({"session": shell})),
+    ] {
+        let ran = ask(json!([{"op": op, "payload": payload}])).into_result().unwrap();
+        assert_eq!((ran["status"].as_str(), ran["auto"].as_bool()), (Some("failed"), Some(true)), "{ran}");
+        assert!(ran["outcome"].as_str().unwrap().contains(&format!("{shell}, a shell, is the person's own")), "{ran}");
+    }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!repo.join("typed-by-assistant").exists());
+    assert_eq!(ok(&engine, "session.get", json!({"session": shell}))["state"], "running");
+
+    // Nor does it read the terminal.
+    assert_eq!(code(from_agent(&engine, &id, "session.scrollback", json!({"session": shell}))), "session.shell");
+    ok(&engine, "session.close", json!({"session": shell}));
+    ok(&engine, "thread.stop", json!({"id": id}));
+}
+
 /// A turn that ends with nothing written for the person says so in the thread, and one that
 /// answers does not.
 #[test]

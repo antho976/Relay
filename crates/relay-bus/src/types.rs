@@ -85,6 +85,10 @@ pub enum TaskRelation {
 pub enum Provider {
     Claude,
     Codex,
+    // The person's own login shell in a real PTY, in the project's directory: no agent, no
+    // brief, no worktree. Only the person opens one, from the desktop or a paired phone. A plain
+    // comment, not a doc one: schemars would split the schema's enum around a described variant.
+    Shell,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

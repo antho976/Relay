@@ -132,6 +132,8 @@ mod session_lifecycle;
 mod session_lows;
 #[path = "sessions.rs"]
 mod sessions;
+#[path = "shell_session.rs"]
+mod shell_session;
 #[path = "task_comments.rs"]
 mod task_comments;
 #[path = "threads.rs"]

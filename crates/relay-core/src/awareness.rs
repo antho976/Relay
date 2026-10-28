@@ -96,7 +96,7 @@ pub fn peers(
             .prepare_cached(
                 "SELECT s.*, t.title AS task_title
          FROM sessions s LEFT JOIN tasks t ON t.id=s.task_id AND t.deleted_at IS NULL
-         WHERE s.project_id=?1 AND s.state!='closed' ORDER BY s.name, s.id",
+         WHERE s.project_id=?1 AND s.state!='closed' AND s.provider!='shell' ORDER BY s.name, s.id",
             )
             .bus()?;
         let rows = stmt

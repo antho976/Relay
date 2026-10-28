@@ -87,8 +87,8 @@ private fun Destinations(nav: Nav, startRoute: String) {
         composable("chat/{name}") { ChatScreen(it.str("name").orEmpty(), nav) }
         composable("terminal/{name}") { TerminalScreen(it.str("name").orEmpty(), nav) }
         composable("session/{name}") { SessionScreen(it.str("name").orEmpty(), nav) }
-        composable("launch?project={project}&task={task}&prompt={prompt}", listOf(opt("project"), opt("task"), opt("prompt"))) {
-            LaunchScreen(it.long("project"), it.long("task"), it.str("prompt"), nav)
+        composable("launch?project={project}&task={task}&prompt={prompt}&provider={provider}", listOf(opt("project"), opt("task"), opt("prompt"), opt("provider"))) {
+            LaunchScreen(it.long("project"), it.long("task"), it.str("prompt"), nav, it.str("provider"))
         }
         composable("board?project={project}", listOf(opt("project"))) { BoardScreen(it.long("project"), nav) }
         composable("task/{id}") { TaskScreen(it.str("id").orEmpty(), nav) }

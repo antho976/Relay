@@ -54,4 +54,23 @@ class ModelsTest {
         assertNull(titleOf("\n \n", 60))
         assertNull(titleOf(null, 60))
     }
+
+    @Test
+    fun `an open shell is open, not working, and lights nothing`() {
+        fun session(provider: String, state: String) =
+            row(Kind.Session, """{"id":4,"name":"calm-otter","project_id":1,"provider":"$provider","state":"$state"}""").decode<Session>()!!
+        for (state in listOf("running", "idle")) {
+            val shell = session("shell", state)
+            assertEquals(true, shell.shell)
+            assertEquals(false, shell.working)
+            assertEquals(Lamp.Off, shell.lamp)
+            assertEquals("OPEN", shell.stateLabel)
+        }
+        assertEquals(Lamp.Waiting, session("shell", "restorable").lamp)
+        val agent = session("claude", "running")
+        assertEquals(false, agent.shell)
+        assertEquals(true, agent.working)
+        assertEquals(Lamp.Live, agent.lamp)
+        assertEquals("LIVE", agent.stateLabel)
+    }
 }

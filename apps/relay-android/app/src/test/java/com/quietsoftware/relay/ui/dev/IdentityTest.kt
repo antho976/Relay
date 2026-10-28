@@ -28,4 +28,13 @@ class IdentityTest {
         assertEquals("RelayV4 · reviewer · #12", agentWhere(otter.copy(role = "reviewer"), "brisk-otter", project, Task(id = "12")))
         assertEquals("brisk-otter", agentWhere(otter, "Porting", null, null))
     }
+
+    @Test fun a_shell_says_it_is_a_shell_and_open() {
+        val shell = otter.copy(provider = "shell", state = "running")
+        assertEquals("Shell", agentTitle(shell))
+        assertEquals("Shell", kindWords(shell))
+        assertEquals("Open", stateWord(shell))
+        assertEquals("claude · builder", kindWords(otter))
+        assertEquals("Shell", providerName("shell"))
+    }
 }

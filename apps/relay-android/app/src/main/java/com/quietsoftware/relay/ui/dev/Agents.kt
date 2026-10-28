@@ -83,7 +83,7 @@ private enum class Show(val label: String, val keeps: (Session) -> Boolean) {
     All("All", { true }),
     Needs("Needs you", { it.blocked }),
     Working("Working", { it.working }),
-    Ready("Ready", { it.state == "idle" }),
+    Ready("Ready", { it.state == "idle" && !it.shell }),
     Other("Parked", { !it.attachable }),
 }
 
