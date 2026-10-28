@@ -36,6 +36,8 @@ mod arbiter;
 mod avex;
 #[path = "aide_pages.rs"]
 mod aide;
+#[path = "space_kit.rs"]
+mod kit;
 
 /// Tally's pages, in tab order: (stack name, caption, glyph).
 pub const PAGES: [(&str, &str, &str); 5] = [

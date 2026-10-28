@@ -73,12 +73,7 @@ fn price_text(price: i64, currency: &str) -> String {
 
 /// Basis points to one decimal: "+14.5%" and "−3.2%" when `signed`, else "12.3%".
 fn percent(bps: i64, signed: bool) -> String {
-    let body = format!("{:.1}%", bps.unsigned_abs() as f64 / 100.0);
-    match bps.signum() {
-        1 if signed => format!("+{body}"),
-        -1 => format!("\u{2212}{body}"),
-        _ => body,
-    }
+    relay_client::figures::percent_bps(bps, signed)
 }
 
 /// A legend's share in whole percent: "52%", or "<1%" for a sliver. The Tally panel's too.
@@ -87,7 +82,8 @@ pub(super) fn share(bps: i64) -> String {
 }
 
 /// A gain reads in the state colours, and always with its sign, so colour is never the only cue.
-fn gain_class(gain: i64) -> Option<&'static str> {
+/// The thread panel's too.
+pub(super) fn gain_class(gain: i64) -> Option<&'static str> {
     match gain.signum() {
         1 => Some("money-in"),
         -1 => Some("money-over"),
@@ -924,10 +920,50 @@ fn income_bars(months: &[Value]) -> gtk::Box {
     block
 }
 
-/// An activity: what happened (to which security), in which account and when, and its amount
-/// in its own currency, signed by the way the cash went. Its trash key, shown on hover, deletes
-/// it ([`delete_activity`]): a line imported into the wrong account comes out here.
-fn activity_row(ui: &Rc<Ui>, a: &Value) -> gtk::Box {
+/// Which way an activity's cash went: in (with a plus), out (with a minus), or neither (an
+/// exchange, a split, a reinvested dividend, a security moved between accounts).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Flow {
+    In,
+    Out,
+    Neither,
+}
+
+/// An activity's look wherever it shows (this page, the thread's card, the approval card): its
+/// glyph, which way its cash went, and its figure's class. A security transferred in or out moves
+/// no cash, so it has no sign.
+pub(super) fn activity_look(kind: &str, has_symbol: bool) -> (&'static str, Flow, &'static str) {
+    let glyph = match kind {
+        "DEPOSIT" | "TRANSFER_IN" => "income",
+        "WITHDRAWAL" | "TRANSFER_OUT" => "spend",
+        "DIVIDEND" | "INTEREST" | "CREDIT" | "RETURN_OF_CAPITAL" | "NOTIONAL_DISTRIBUTION" => "coins",
+        "FEE" | "TAX" => "card",
+        "FX" => "repeat",
+        _ => "chart",
+    };
+    let (flow, class) = match kind {
+        "DIVIDEND" | "INTEREST" | "CREDIT" => (Flow::In, "money-in"),
+        "DEPOSIT" | "SELL" | "RETURN_OF_CAPITAL" => (Flow::In, ""),
+        "TRANSFER_IN" if !has_symbol => (Flow::In, ""),
+        "WITHDRAWAL" | "FEE" | "TAX" | "BUY" => (Flow::Out, ""),
+        "TRANSFER_OUT" if !has_symbol => (Flow::Out, ""),
+        "SPLIT" => (Flow::Neither, ""),
+        _ => (Flow::Neither, "money-quiet"),
+    };
+    (glyph, flow, class)
+}
+
+/// An activity's `amount` (minor units) signed by its [`Flow`].
+pub(super) fn activity_figure(fmt: &MoneyFormatter, amount: i64, flow: Flow) -> String {
+    match flow {
+        Flow::In => fmt.format_signed(amount),
+        Flow::Out => format!("\u{2212}{}", fmt.format(amount)),
+        Flow::Neither => fmt.format(amount),
+    }
+}
+
+/// What an activity was, to which security: "Bought 10 XEQT", "Dividend from VFV".
+pub(super) fn activity_title(a: &Value) -> String {
     let kind = text(a, "type");
     let symbol = a["symbol"].as_str().unwrap_or("");
     let held = units(n(a, "quantity"));
@@ -951,42 +987,38 @@ fn activity_row(ui: &Rc<Ui>, a: &Value) -> gtk::Box {
         "TAX" => String::from("Tax withheld"),
         other => word(other),
     };
-    let glyph = match kind {
-        "DEPOSIT" | "TRANSFER_IN" => "income",
-        "WITHDRAWAL" | "TRANSFER_OUT" => "spend",
-        "DIVIDEND" | "INTEREST" | "CREDIT" | "RETURN_OF_CAPITAL" | "NOTIONAL_DISTRIBUTION" => "coins",
-        "FEE" | "TAX" => "card",
-        "FX" => "repeat",
-        _ => "chart",
-    };
+    title.trim().to_string()
+}
+
+/// An activity: what happened (to which security), in which account and when, and its amount
+/// in its own currency, signed by the way the cash went. Its trash key, shown on hover, deletes
+/// it ([`delete_activity`]): a line imported into the wrong account comes out here.
+fn activity_row(ui: &Rc<Ui>, a: &Value) -> gtk::Box {
+    let kind = text(a, "type");
+    let title = activity_title(a);
+    let (glyph, flow, class) = activity_look(kind, !a["symbol"].as_str().unwrap_or("").is_empty());
     let mut detail = vec![text(a, "account").to_string(), human_date(text(a, "date"))];
     if !text(a, "note").trim().is_empty() {
         detail.push(text(a, "note").trim().to_string());
     }
     let fmt = MoneyFormatter::new(text(a, "currency"), Locale::from_env());
     let amount = n(a, "amount");
-    let minus = format!("\u{2212}{}", fmt.format(amount));
-    let (figure, class) = match kind {
-        "DIVIDEND" | "INTEREST" | "CREDIT" => (fmt.format_signed(amount), "money-in"),
-        "DEPOSIT" | "SELL" | "RETURN_OF_CAPITAL" => (fmt.format_signed(amount), ""),
-        "TRANSFER_IN" if symbol.is_empty() => (fmt.format_signed(amount), ""),
-        "WITHDRAWAL" | "FEE" | "TAX" | "BUY" => (minus, ""),
-        "TRANSFER_OUT" if symbol.is_empty() => (minus, ""),
+    let figure = match kind {
         "FX" => {
             let to = MoneyFormatter::new(a["to_currency"].as_str().unwrap_or(""), Locale::from_env());
-            (format!("{} \u{2192} {}", fmt.format(amount), to.format(n(a, "to_amount"))), "money-quiet")
+            format!("{} \u{2192} {}", fmt.format(amount), to.format(n(a, "to_amount")))
         }
-        "SPLIT" => (String::new(), ""),
-        _ => (fmt.format(amount), "money-quiet"),
+        "SPLIT" => String::new(),
+        _ => activity_figure(&fmt, amount, flow),
     };
-    let row = icon_row(&tile(glyph), title.trim(), &detail.join(" · "), &figure, class);
+    let row = icon_row(&tile(glyph), &title, &detail.join(" · "), &figure, class);
     row.add_css_class("invest-activity");
     let trash = crate::app::icon_button("trash", "Delete activity");
     trash.add_css_class("money-row-delete");
     trash.set_valign(gtk::Align::Center);
     let weak = Rc::downgrade(ui);
     // Said as an entry's delete is: "Deleted Bought 10 XEQT · Thu 8 Oct".
-    let (id, what) = (a["id"].clone(), format!("Deleted “{}” · {}", title.trim(), human_date(text(a, "date"))));
+    let (id, what) = (a["id"].clone(), format!("Deleted “{title}” · {}", human_date(text(a, "date"))));
     trash.connect_clicked(move |_| {
         if let Some(ui) = weak.upgrade() {
             delete_activity(&ui, id.clone(), what.clone());
@@ -1024,10 +1056,7 @@ fn delete_activity(ui: &Rc<Ui>, id: Value, what: String) {
 
 /// A refusal in the engine's own sentence, never its kind and code ("Invalid money.invalid: …").
 fn refusal(error: &Error) -> String {
-    match error {
-        Error::Bus(e) if !matches!(e.code.as_str(), "bus.unknown_op" | "bus.not_implemented") => e.message.clone(),
-        e => unavailable(e),
-    }
+    unavailable(error)
 }
 
 /// The page's Import key (and Data's): the import flow, then a toast of what came in. It takes

@@ -334,11 +334,15 @@ pub fn register(e: &mut Engine) {
         }
         Ok(out)
     });
-    e.register::<Reset>(|ctx, _: Empty| {
-        ledger(ctx.engine(), |l| l.reset())?;
-        ctx.emit("money.changed", json!({}));
-        Ok(Empty {})
-    });
+    // The ledger is copied aside (`VACUUM INTO`) and cleared before the transaction opens: it has
+    // its own mutex, and the copy of a large ledger under the store's held every other request.
+    e.register_staged::<Reset, _>(
+        |ctx, _| ledger(ctx.engine(), |l| l.reset()),
+        |ctx: &mut Ctx, _, ()| {
+            ctx.emit("money.changed", json!({}));
+            Ok(Empty {})
+        },
+    );
     register_invest(e);
 }
 
@@ -458,6 +462,15 @@ fn register_invest(e: &mut Engine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What copies or rewrites the whole ledger runs before the store's lock is taken.
+    #[test]
+    fn whole_ledger_work_runs_outside_the_store_lock() {
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        for op in ["money.reset", "money.import", "money.export", "money.sync"] {
+            assert!(engine.is_staged(op), "{op}");
+        }
+    }
 
     #[test]
     fn a_valet_answer_reads_as_days_and_rates() {

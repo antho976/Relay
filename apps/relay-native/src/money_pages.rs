@@ -234,13 +234,7 @@ pub(super) fn chooser(choices: &[Choice], current: Option<i64>, pick: Rc<dyn Fn(
 /// What a failed read or change says on the page: the engine's own sentence, never its code
 /// ("Invalid money.invalid: …"). An engine without the ledger yet says so plainly.
 pub fn unavailable(error: &Error) -> String {
-    match error {
-        Error::Bus(e) if matches!(e.code.as_str(), "bus.unknown_op" | "bus.not_implemented") => {
-            format!("This engine has no money ledger yet ({}). Update Relay's engine to use Money.", e.message)
-        }
-        Error::Bus(e) => e.message.clone(),
-        e => e.to_string(),
-    }
+    super::kit::said(error, "This engine has no money ledger yet. Update Relay's engine to use Money.")
 }
 
 pub(super) fn n(v: &Value, key: &str) -> i64 {
@@ -320,6 +314,7 @@ pub fn tone(status: &str, hue: Option<i64>) -> Tone {
     }
 }
 
+/// `#2ec469` as cairo's red, green and blue; an unreadable colour is the page's ink.
 pub(super) fn rgb(hex: &str) -> (f64, f64, f64) {
     let v = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(0xEDE9E2);
     (f64::from((v >> 16) & 0xFF) / 255.0, f64::from((v >> 8) & 0xFF) / 255.0, f64::from(v & 0xFF) / 255.0)
@@ -459,9 +454,15 @@ pub(crate) fn dot(hue: i64) -> gtk::DrawingArea {
     area
 }
 
-/// "+$1,284" or "−$96": a strip's signed figure, in whole units like the rest of it.
+/// "+$1,284" or "−$96": a strip's signed figure, in whole units like the rest of it. One that
+/// rounds to nothing is "$0", never "+$0" or "−$0".
 pub(super) fn signed_whole(fmt: &relay_money::money::MoneyFormatter, minor: i64) -> String {
-    if minor > 0 { format!("+{}", fmt.format_whole(minor)) } else { fmt.format_whole(minor) }
+    relay_client::figures::signed(fmt.format_whole(minor), minor as f64, || fmt.format_whole(0))
+}
+
+/// "$475 left", or "$50 over" once it is spent past: never "−$50 left".
+pub(super) fn left_or_over(fmt: &relay_money::money::MoneyFormatter, left: i64) -> String {
+    if left < 0 { format!("{} over", fmt.format_whole(-left)) } else { format!("{} left", fmt.format_whole(left)) }
 }
 
 /// The figure's class for a pace status: red over budget, amber ahead of pace.
@@ -789,7 +790,7 @@ fn budget_line(b: &Value, pace_fraction: f64) -> gtk::Box {
     figures.set_xalign(1.0);
     row.append(&figures);
     let left = budget - spent;
-    let rest = label(&if left < 0 { format!("{} over", fmt.format_whole(-left)) } else { format!("{} left", fmt.format_whole(left)) }, "tally-left");
+    let rest = label(&left_or_over(&fmt, left), "tally-left");
     rest.set_width_chars(11);
     rest.set_xalign(1.0);
     if let Some(class) = tone_class(status) {
@@ -876,11 +877,23 @@ fn entry_name(tx: &Value) -> String {
     if !note.is_empty() {
         return note.to_string();
     }
+    entry_category(tx)
+}
+
+/// An entry's category as every row names it (Entries, the thread panel, a proposal's card): its
+/// own, else "Transfer" or its kind ("Expense", "Income").
+pub(super) fn entry_category(tx: &Value) -> String {
     match text(tx, "category") {
         "" if text(tx, "type") == "TRANSFER" => String::from("Transfer"),
         "" => word(text(tx, "type")),
         name => name.to_string(),
     }
+}
+
+/// An entry's badge, `size` square: a transfer's arrows, else its category's glyph and hue.
+pub(super) fn entry_badge(tx: &Value, size: i32) -> gtk::Box {
+    let transfer = text(tx, "type") == "TRANSFER";
+    badge_sized(if transfer { "repeat" } else { text(tx, "icon") }, if transfer { 10 } else { n(tx, "color") }, size)
 }
 
 /// "Thu 8 Oct", another year adding it: a day as words that still mean it later, unlike "Today".
@@ -1044,7 +1057,7 @@ fn tx_row(ui: &Rc<Ui>, tx: &Value, actions: bool, dated: bool) -> gtk::Box {
     let kind = text(tx, "type");
     let transfer = kind == "TRANSFER";
     let what = entry_name(tx);
-    let badge = badge_sized(if transfer { "repeat" } else { text(tx, "icon") }, if transfer { 10 } else { n(tx, "color") }, 28);
+    let badge = entry_badge(tx, 28);
     // In Entries the badge leads the row outside its key: for an expense or income it is a key of
     // its own, which changes the category.
     let badge_key: Option<gtk::Widget> = if actions && !transfer {
@@ -1074,11 +1087,7 @@ fn tx_row(ui: &Rc<Ui>, tx: &Value, actions: bool, dated: bool) -> gtk::Box {
     let words = gtk::Box::new(gtk::Orientation::Vertical, 1);
     words.set_hexpand(true);
     words.set_valign(gtk::Align::Center);
-    let category = match text(tx, "category") {
-        "" if transfer => String::from("Transfer"),
-        "" => word(kind),
-        name => name.to_string(),
-    };
+    let category = entry_category(tx);
     let mut detail = if text(tx, "note").trim().is_empty() { Vec::new() } else { vec![category] };
     if transfer {
         detail.push(format!("{} → {}", text(tx, "account"), text(tx, "to_account")));
@@ -1492,16 +1501,7 @@ pub(super) fn failed(ui: &Rc<Ui>, page: &Page, name: &str, error: &Error) {
     if !name.is_empty() {
         title(&page.head, name, "");
     }
-    message(&page.body, &unavailable(error));
-    let retry = button("Try again", "money-secondary");
-    retry.set_halign(gtk::Align::Start);
-    let weak = Rc::downgrade(ui);
-    retry.connect_clicked(move |_| {
-        if let Some(ui) = weak.upgrade() {
-            ui.refresh_page();
-        }
-    });
-    page.body.append(&retry);
+    super::kit::failed(ui, &page.body, &unavailable(error));
 }
 
 /// Overview: what is left to spend, large, with how it got there under it and income beside it,
@@ -2674,9 +2674,32 @@ fn export(ui: &Rc<Ui>) {
 #[cfg(test)]
 #[allow(clippy::inconsistent_digit_grouping)]
 mod tests {
-    use super::plan_reading;
+    use super::{entry_category, left_or_over, plan_reading, signed_whole};
     use relay_money::money::{Locale, MoneyFormatter};
     use serde_json::json;
+
+    /// An entry with no category reads the same on every row: "Transfer" or its kind, never
+    /// "Entry" on one and "Expense" on another.
+    #[test]
+    fn an_entry_without_a_category_is_named_by_its_kind() {
+        assert_eq!(entry_category(&json!({"type": "EXPENSE", "category": "Groceries"})), "Groceries");
+        assert_eq!(entry_category(&json!({"type": "EXPENSE"})), "Expense");
+        assert_eq!(entry_category(&json!({"type": "INCOME", "category": null})), "Income");
+        assert_eq!(entry_category(&json!({"type": "TRANSFER"})), "Transfer");
+    }
+
+    /// A strip's signed figure is signed by what it shows: 1–49 cents is "$0", never "+$0".
+    #[test]
+    fn a_signed_whole_figure_that_rounds_to_nothing_has_no_sign() {
+        let fmt = MoneyFormatter::new("CAD", Locale::new("en-CA"));
+        assert_eq!(signed_whole(&fmt, 49), "$0");
+        assert_eq!(signed_whole(&fmt, -49), "$0");
+        assert_eq!(signed_whole(&fmt, 0), "$0");
+        assert_eq!(signed_whole(&fmt, 1_284_00), "+$1,284");
+        assert_eq!(signed_whole(&fmt, -96_00), "\u{2212}$96");
+        assert_eq!(left_or_over(&fmt, -50_00), "$50 over");
+        assert_eq!(left_or_over(&fmt, 475_00), "$475 left");
+    }
 
     /// A category with no budget row reads this period's spending from its series, so it is
     /// never "Nothing spent" while it spent; a budgeted one reads `money.summary`'s figure.

@@ -90,9 +90,7 @@ pub(super) fn said(e: &Error) -> String {
     match e {
         Error::Bus(b) if b.code == "thread.images_unsupported" => LOCAL_CANNOT.to_string(),
         Error::Bus(b) if b.code == "thread.image_unknown" => EXPIRED.to_string(),
-        Error::Bus(b) if b.code == "bus.unknown_op" => String::from("This engine does not handle pictures yet: update Relay's engine"),
-        Error::Bus(b) => b.message.clone(),
-        e => e.to_string(),
+        e => super::kit::said(e, "This engine does not handle pictures yet: update Relay's engine"),
     }
 }
 

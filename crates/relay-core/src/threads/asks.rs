@@ -6,7 +6,9 @@
 //! The person may let some kinds of step run without asking ([`Allowed`], the setting
 //! `threads.assistant.without_asking`): an ask made only of those is claimed at once, runs after
 //! its request's transaction, and its reply is what came of it (`auto`), so the agent hears it
-//! there and not again with the next message.
+//! there and not again with the next message. The same steps asked again within minutes are that
+//! ask, not a second run; past [`MAX_AUTO_PER_HOUR`], and for an agent started outside a new
+//! checkout of its own ([`reaches`]), it waits on a card all the same.
 //! It lives in `threads.db`, tied to the assistant thread whose agent sent it (`Ctx::thread`, set
 //! by the socket door from the process that connected). It is checked when it is made: each op on
 //! the list, no flag that throws work away or widens what a session may do ([`REFUSED_FLAGS`]),
@@ -24,7 +26,7 @@
 //! ([`heard`]), once per answer.
 use super::{cut, with_db, ThreadStore};
 use crate::engine::Engine;
-use relay_bus::ops::thread::{AskStep, AskView};
+use relay_bus::ops::thread::{shown, AskStep, AskView};
 use relay_bus::types::Id;
 use relay_bus::{Actor, BusError, Request};
 use rusqlite::{params, OptionalExtension};
@@ -80,9 +82,25 @@ impl Allowed {
         super::ASSISTANT_OPS.contains(&op) || KINDS.iter().any(|(kind, ops)| self.0.contains(kind) && ops.contains(&op))
     }
 
-    /// Whether every step runs without asking.
+    /// Whether every step runs without asking: each of a kind let through, and none reaching
+    /// past a fresh checkout of its own ([`reaches`]).
     pub fn lets_all(&self, steps: &[AskStep]) -> bool {
-        steps.iter().all(|step| self.lets(&step.op))
+        steps.iter().all(|step| self.lets(&step.op) && !reaches(&step.payload))
+    }
+}
+
+/// Whether a payload, at any depth (a `task.dispatch` carries a whole `session.create`), starts an
+/// agent anywhere but a new checkout of its own: a `worktree` other than `"new"` (the person's
+/// primary checkout, or a peer's) or a `pair_with`. Allowed, but only on a card that shows it.
+fn reaches(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => {
+            fields.get("worktree").is_some_and(|w| !w.is_null() && w.as_str() != Some("new"))
+                || fields.get("pair_with").is_some_and(|p| !p.is_null())
+                || fields.values().any(reaches)
+        }
+        Value::Array(items) => items.iter().any(reaches),
+        _ => false,
     }
 }
 
@@ -95,6 +113,11 @@ const REFUSED_FLAGS: &[&str] = &["discard_changes", "remove_worktree", "remove_w
 pub const MAX_STEPS: usize = 5;
 /// The most asks one thread may have waiting at once.
 pub const MAX_PENDING: i64 = 20;
+/// The most asks one thread runs without asking in an hour; past it, each waits on a card.
+pub const MAX_AUTO_PER_HOUR: i64 = 10;
+/// How long an ask that ran without asking stands for the same steps asked again: a model that
+/// repeats a tool call gets the first one's answer, not a second agent.
+const AUTO_SAME_MINUTES: i64 = 10;
 /// The longest a reason may be, in characters.
 const MAX_WHY: usize = 1_000;
 
@@ -175,6 +198,22 @@ impl ThreadStore {
             .query_row(params![thread, steps], |r| r.get(0))
             .optional()?;
         let count = self.conn.prepare_cached("SELECT COUNT(*) FROM ask WHERE thread_id = ?1 AND status = 'pending'")?.query_row([thread], |r| r.get(0))?;
+        Ok((same, count))
+    }
+
+    /// An ask of the same thread that ran the same steps without asking since `since`, and is
+    /// running or done, and how many ran without asking since `hour`.
+    fn asks_ran(&self, thread: Id, steps: &str, since: &str, hour: &str) -> rusqlite::Result<(Option<Id>, i64)> {
+        let same = self.conn
+            .prepare_cached(
+                "SELECT id FROM ask WHERE thread_id = ?1 AND auto AND status IN ('running', 'approved') AND steps = ?2
+                 AND created_at >= ?3 ORDER BY id DESC LIMIT 1",
+            )?
+            .query_row(params![thread, steps, since], |r| r.get(0))
+            .optional()?;
+        let count = self.conn
+            .prepare_cached("SELECT COUNT(*) FROM ask WHERE thread_id = ?1 AND auto AND created_at >= ?2")?
+            .query_row(params![thread, hour], |r| r.get(0))?;
         Ok((same, count))
     }
 
@@ -264,10 +303,11 @@ pub fn checked(steps: &[AskStep]) -> Result<(), BusError> {
     Ok(())
 }
 
-/// A step in words, for the summary and the agent: the op and what it names.
+/// A step in words, for the summary and the agent: the op and what it names, its control
+/// characters shown (`thread::shown`) once the Enter that ends a line is trimmed.
 fn step_words(step: &AskStep) -> String {
     let p = &step.payload;
-    let text = |key: &str| p.get(key).and_then(Value::as_str).map(|s| cut(s, 60));
+    let text = |key: &str| p.get(key).and_then(Value::as_str).map(|s| cut(&shown(s.trim_end_matches(['\r', '\n'])), 60));
     let id = |key: &str| p.get(key).and_then(Value::as_i64);
     let session = text("session").unwrap_or_else(|| "the new session".into());
     match step.op.as_str() {
@@ -282,7 +322,7 @@ fn step_words(step: &AskStep) -> String {
         "session.park" => format!("park {session}"),
         "session.wake" => format!("wake {session}"),
         "session.close" => format!("close {session}"),
-        "session.input" => format!("type \u{201c}{}\u{201d} into {session}", text("data").unwrap_or_default().trim_end()),
+        "session.input" => format!("type \u{201c}{}\u{201d} into {session}", text("data").unwrap_or_default()),
         "session.update" => format!("change {session}"),
         "task.create" => format!("create the task \u{201c}{}\u{201d}", text("title").unwrap_or_default()),
         "task.update" => format!("edit task #{}", id("task_id").unwrap_or_default()),
@@ -307,9 +347,20 @@ pub fn summary(steps: &[AskStep]) -> String {
     out
 }
 
-/// Store an ask from thread `thread`'s agent; the same steps already waiting are that ask. When
-/// `allowed` lets every step through it is stored `running`, for [`carry_out`] to run at once.
-pub fn ask(engine: &Engine, thread: Id, steps: Vec<AskStep>, why: &str, allowed: &Allowed, now: &str) -> Result<AskView, BusError> {
+/// `now` less `minutes`, in the stored format; `now` itself when it does not parse.
+fn before(now: &str, minutes: i64) -> String {
+    now.parse::<jiff::Timestamp>()
+        .ok()
+        .and_then(|t| t.checked_sub(jiff::SignedDuration::from_mins(minutes)).ok())
+        .map_or_else(|| now.to_string(), crate::time::stamp)
+}
+
+/// Store an ask from thread `thread`'s agent, and whether it is new and runs now. The same steps
+/// already waiting are that ask. When `allowed` lets every step through it is stored `running`,
+/// for [`carry_out`] to run at once, unless the same steps ran without asking in the last
+/// [`AUTO_SAME_MINUTES`] (that ask is the answer, and nothing runs again) or
+/// [`MAX_AUTO_PER_HOUR`] already did this hour (it waits on a card).
+pub fn ask(engine: &Engine, thread: Id, steps: Vec<AskStep>, why: &str, allowed: &Allowed, now: &str) -> Result<(AskView, bool), BusError> {
     if super::get(engine, thread)?.kind != super::ASSISTANT {
         return Err(BusError::refused("thread.not_assistant", "Only the assistant asks this way; a Threads conversation proposes (thread.propose)"));
     }
@@ -322,21 +373,27 @@ pub fn ask(engine: &Engine, thread: Id, steps: Vec<AskStep>, why: &str, allowed:
     let stored = serde_json::to_string(&steps).map_err(|e| BusError::internal(e.to_string()))?;
     let summary = summary(&steps);
     let auto = allowed.lets_all(&steps);
-    let id = with_db(engine, |db| {
+    let (id, runs) = with_db(engine, |db| {
         if auto {
-            return db.ask(thread, &stored, why, &summary, true, now).map(Ok);
+            let (same, ran) = db.asks_ran(thread, &stored, &before(now, AUTO_SAME_MINUTES), &before(now, 60))?;
+            if let Some(same) = same {
+                return Ok(Ok((same, false)));
+            }
+            if ran < MAX_AUTO_PER_HOUR {
+                return db.ask(thread, &stored, why, &summary, true, now).map(|id| Ok((id, true)));
+            }
         }
         let (same, waiting) = db.asks_waiting(thread, &stored)?;
         if let Some(same) = same {
-            return Ok(Ok(same));
+            return Ok(Ok((same, false)));
         }
         if waiting >= MAX_PENDING {
             return Ok(Err(BusError::conflict("thread.ask_full", format!("{MAX_PENDING} asks already wait in this thread"))
                 .with_hint("wait for the person to answer them")));
         }
-        db.ask(thread, &stored, why, &summary, false, now).map(Ok)
+        db.ask(thread, &stored, why, &summary, false, now).map(|id| Ok((id, false)))
     })??;
-    get(engine, id)
+    Ok((get(engine, id)?, runs))
 }
 
 /// Answer ask `id`: claim it, so a second answer is refused. Declining is then done; an approval
@@ -524,6 +581,32 @@ mod tests {
         }
     }
 
+    /// A launch into the person's checkout, a peer's, or beside a peer waits on a card even with
+    /// launching let through, at any depth; a new checkout, said or left out, does not.
+    #[test]
+    fn a_launch_outside_a_new_checkout_of_its_own_waits_on_a_card() {
+        let allowed = Allowed::from_setting(&json!({"launch": true}));
+        let create = |extra: Value| {
+            let mut payload = json!({"project_id": 1, "provider": "claude"});
+            payload.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            payload
+        };
+        for fine in [json!({}), json!({"worktree": "new"}), json!({"worktree": null, "pair_with": null})] {
+            assert!(allowed.lets_all(&[step("session.create", create(fine.clone()))]), "{fine}");
+        }
+        for reaching in [json!({"worktree": "primary"}), json!({"worktree": "/home/me/repo/.relay/worktrees/calm-otter"}), json!({"pair_with": "calm-otter"})] {
+            assert!(!allowed.lets_all(&[step("session.create", create(reaching.clone()))]), "{reaching}");
+            let dispatch = step("task.dispatch", json!({"task_id": 12, "create": create(reaching.clone())}));
+            assert!(!allowed.lets_all(&[dispatch]), "nested {reaching}");
+        }
+    }
+
+    #[test]
+    fn before_counts_back_in_the_stored_format() {
+        assert_eq!(before("2026-10-28T12:05:00.000000000Z", 10), "2026-10-28T11:55:00.000000000Z");
+        assert_eq!(before("not a time", 10), "not a time");
+    }
+
     #[test]
     fn a_summary_reads_its_steps_in_order() {
         let steps = [
@@ -532,5 +615,8 @@ mod tests {
         ];
         assert_eq!(summary(&steps), "Create a claude builder in project 1, then start the new session");
         assert_eq!(summary(&[step("session.input", json!({"session": "calm-otter", "data": "yes\r"}))]), "Type \u{201c}yes\u{201d} into calm-otter");
+        // What else is typed shows, so the person sees an Escape or a Ctrl-C before approving it.
+        let hidden = step("session.input", json!({"session": "calm-otter", "data": "\u{1b}[2Jy\u{3}\r"}));
+        assert_eq!(summary(&[hidden]), "Type \u{201c}\u{241b}[2Jy\u{2403}\u{201d} into calm-otter");
     }
 }

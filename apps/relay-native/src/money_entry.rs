@@ -390,6 +390,10 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, lists: &Value, tx: Option<Value>) {
         let (added, added_text, added_undo, added_id) = (added.clone(), added_text.clone(), added_undo.clone(), added_id.clone());
         move |keep_open: bool| {
             let (Some(amount), Some(note), Some(save), Some(another)) = (amount_ref.upgrade(), note_ref.upgrade(), save_ref.upgrade(), another_ref.upgrade()) else { return };
+            // A save is on its way (Save is off until it answers): a second Enter is not a second entry.
+            if !save.is_sensitive() {
+                return;
+            }
             let keep_open = keep_open && before.is_none();
             let refuse = |text: &str, culprit: &gtk::Widget| {
                 problem.set_text(text);
@@ -658,6 +662,10 @@ pub fn account_of(ui: &Rc<Ui>, kind: Option<&str>) {
         let (name, kind, balance, owed, problem, save) = (name.clone(), kind.clone(), balance.clone(), owed.clone(), problem.clone(), save.clone());
         let (registration, institution) = (registration.clone(), institution.clone());
         move || {
+            // A save is on its way: a second Enter is not a second account.
+            if !save.is_sensitive() {
+                return;
+            }
             let title = name.text().trim().to_string();
             if title.is_empty() {
                 problem.set_text("Give the account a name.");
@@ -774,6 +782,10 @@ pub fn value(ui: &Rc<Ui>, account: &Value) {
         let (amount, problem, save, day) = (amount.clone(), problem.clone(), save.clone(), day.clone());
         let id = account["id"].clone();
         move || {
+            // A save is on its way: a second Enter is not a second value.
+            if !save.is_sensitive() {
+                return;
+            }
             let Some(worth) = formatter().parse(&amount.text()) else {
                 problem.set_text("Type what it is worth, like 25072.31.");
                 problem.set_visible(true);
