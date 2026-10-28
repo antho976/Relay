@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-28",
+  "size": "1440,900",
+  "seconds": 8,
+  "perf": false,
+  "gtk": "4.24.1",
+  "pages": {
+    "burst-idle": {
+      "page": "board",
+      "events": 0,
+      "op": "session.update",
+      "instructions_u": 69320.0,
+      "task_clock_ms": 0.1
+    },
+    "burst-200": {
+      "page": "board",
+      "events": 200,
+      "op": "session.update",
+      "instructions_u": 101853939.0,
+      "task_clock_ms": 14.95,
+      "instructions_per_event": 508923
+    },
+    "burst-intent-200": {
+      "page": "board",
+      "events": 200,
+      "op": "session.intent",
+      "instructions_u": 1394099429.0,
+      "task_clock_ms": 187.28,
+      "instructions_per_event": 6970151
+    }
+  },
+  "notes": [],
+  "engine_rss_mb_six_sessions": 35.1,
+  "display": {
+    "GDK_BACKEND": "wayland",
+    "WAYLAND_DISPLAY": "relay-headless-3532763",
+    "DISPLAY": "",
+    "XDG_SESSION_TYPE": "wayland"
+  }
+}

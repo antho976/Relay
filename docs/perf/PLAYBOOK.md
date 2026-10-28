@@ -186,7 +186,7 @@ several may turn out to be cheap enough not to matter. File paths are current as
 
 ### Native client
 
-7. **Cleared 2026-10-14** — a signature guards the rebuild (BASELINE §2). Original lead: **the sidebar rebuilds on every `session.changed`**: `render_projects` serializes all projects
+7. **Cleared 2026-10-14; regressed by a6701d2 (agents in the sidebar) and cleared again 2026-10-28** — agent rows and lamps update in place, 40.6 M → 2.9 M instructions per `session.intent` (`FIXES-2026-10-28.md`; `--burst-only` row `burst-intent-200` guards it). A signature guards the rebuild (BASELINE §2). Original lead: **the sidebar rebuilds on every `session.changed`**: `render_projects` serializes all projects
    and workspaces to JSON to hash them, then `clear()`s and rebuilds the whole box when anything
    changed (`shell/registry.rs`); status counts rebuild on every reconcile (`status.rs`). With many
    sessions emitting state changes, count widgets created per event and frame time during a burst.
@@ -229,6 +229,10 @@ several may turn out to be cheap enough not to matter. File paths are current as
     profiling style recalculation. Original lead: **CSS**: one ~2 600-line static provider; broad selectors (`*`, `window > box, stack,
     scrolledwindow`, `> *:not(button)`); transitions on every button. Measure style-recalc cost in
     sysprof during a sidebar rebuild before touching anything.
+22. **Measured 2026-10-28, open** (`FIXES-2026-10-28.md`): the start screen's pulse. Left open,
+    the screen idles at 0.07 % CPU between pulses, but each pulse (2.6 s of every 4.8 s) redraws the
+    whole field in Cairo on the CPU, 29 % CPU over a 29 s window. Pulse less often or stop after a
+    minute idle (taste), or draw the field as GSK nodes with the dot layer cached (M).
 
 ### Android
 

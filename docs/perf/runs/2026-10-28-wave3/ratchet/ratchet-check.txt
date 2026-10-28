@@ -1,0 +1,50 @@
+run 1 of 3 -> /home/anthony/dev3/RelayV4/.relay/worktrees/quiet-otter/target/perf-ratchet/run-1.jsonl
+run 2 of 3 -> /home/anthony/dev3/RelayV4/.relay/worktrees/quiet-otter/target/perf-ratchet/run-2.jsonl
+run 3 of 3 -> /home/anthony/dev3/RelayV4/.relay/worktrees/quiet-otter/target/perf-ratchet/run-3.jsonl
+the ceilings were taken with None, this is rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1): every count moves with the compiler, so rows over their ceiling may be the toolchain (--reset in a commit of its own)
+24 row(s) over their ceiling by more than 1.5%: op.design.apply.add.2000, op.design.apply.add.5000, op.design.apply.batch_1000.2000, op.design.apply.batch_1000.500, op.design.apply.batch_1000.5000, op.design.apply.delete_all_4998, op.design.apply.move.2000, op.design.apply.move.500, op.design.apply.move.5000, op.design.apply.resize.2000, op.design.apply.resize.500, op.design.apply.resize.5000, op.design.apply.resize_pinned.2000, op.design.apply.resize_pinned.500, op.design.apply.resize_pinned.5000, op.design.apply.undo_1000_adds.500, op.design.apply.undo_1000_adds.5000, op.design.apply.undo_delete_all_4998, op.design.apply.ungroup_1999_of_4998, op.design.apply.update.2000, op.design.apply.update.500, op.design.apply.update.5000, path.design.commit.1721, path.design.commit.4903
+  op.design.apply.add.2000                            0.45 M  ceiling        0.44 M   +1.66%  OVER
+  op.design.apply.add.500                             0.44 M  ceiling        0.44 M   +1.42%
+  op.design.apply.add.5000                            0.45 M  ceiling        0.44 M   +2.02%  OVER
+  op.design.apply.batch_1000.2000                   169.52 M  ceiling      166.14 M   +2.04%  OVER
+  op.design.apply.batch_1000.500                    162.78 M  ceiling      159.30 M   +2.18%  OVER
+  op.design.apply.batch_1000.5000                   174.71 M  ceiling      170.65 M   +2.38%  OVER
+  op.design.apply.delete_all_4998                   618.95 M  ceiling      609.23 M   +1.60%  OVER
+  op.design.apply.delete_subtree.2000                13.60 M  ceiling       13.52 M   +0.56%
+  op.design.apply.delete_subtree.500                  7.29 M  ceiling        7.21 M   +1.16%
+  op.design.apply.delete_subtree.5000                26.14 M  ceiling       26.08 M   +0.24%
+  op.design.apply.group_1999_of_4998                460.07 M  ceiling      454.14 M   +1.31%
+  op.design.apply.move.2000                           0.52 M  ceiling        0.51 M   +1.85%  OVER
+  op.design.apply.move.500                            0.52 M  ceiling        0.51 M   +2.16%  OVER
+  op.design.apply.move.5000                           0.52 M  ceiling        0.51 M   +1.73%  OVER
+  op.design.apply.resize.2000                         0.79 M  ceiling        0.76 M   +4.63%  OVER
+  op.design.apply.resize.500                          0.78 M  ceiling        0.74 M   +4.75%  OVER
+  op.design.apply.resize.5000                         0.80 M  ceiling        0.76 M   +4.88%  OVER
+  op.design.apply.resize_pinned.2000                  9.95 M  ceiling        9.76 M   +2.01%  OVER
+  op.design.apply.resize_pinned.500                   9.95 M  ceiling        9.79 M   +1.66%  OVER
+  op.design.apply.resize_pinned.5000                  9.99 M  ceiling        9.80 M   +1.91%  OVER
+  op.design.apply.undo_1000_adds.2000               143.45 M  ceiling      141.41 M   +1.44%
+  op.design.apply.undo_1000_adds.500                130.24 M  ceiling      128.09 M   +1.68%  OVER
+  op.design.apply.undo_1000_adds.5000               160.12 M  ceiling      157.69 M   +1.55%  OVER
+  op.design.apply.undo_delete_all_4998              757.62 M  ceiling      743.92 M   +1.84%  OVER
+  op.design.apply.ungroup_1999_of_4998              639.87 M  ceiling      621.53 M   +2.95%  OVER
+  op.design.apply.update.2000                         0.43 M  ceiling        0.43 M   +1.66%  OVER  (runs spread 1.0%)
+  op.design.apply.update.500                          0.43 M  ceiling        0.43 M   +1.61%  OVER
+  op.design.apply.update.5000                         0.44 M  ceiling        0.43 M   +1.85%  OVER  (runs spread 1.0%)
+  op.design.apply.update_text.1721                    0.44 M  ceiling        0.44 M   +0.35%
+  op.design.apply.update_text.1721c                   0.56 M  ceiling        0.55 M   +0.82%
+  op.design.apply.update_text.4903                    0.44 M  ceiling        0.44 M   +0.45%
+  op.design.apply.update_text.4903c                   0.56 M  ceiling        0.56 M   +0.16%
+  op.design.apply.update_text_beside_chart.1721        0.44 M  ceiling        0.44 M   +0.66%  (runs spread 1.6%)
+  op.design.apply.update_text_beside_chart.1721c        2.83 M  ceiling        2.80 M   +1.15%
+  op.design.apply.update_text_beside_chart.4903        0.44 M  ceiling        0.44 M   +0.25%
+  op.design.apply.update_text_beside_chart.4903c        2.82 M  ceiling        2.79 M   +1.08%
+  op.design.get.2000                                 43.01 M  ceiling       42.39 M   +1.47%
+  op.design.get.500                                  10.98 M  ceiling       10.82 M   +1.46%
+  op.design.get.5000                                106.91 M  ceiling      105.36 M   +1.48%
+  path.design.commit.1721                             6.94 M  ceiling        6.78 M   +2.31%  OVER
+  path.design.commit.4903                            19.56 M  ceiling       19.12 M   +2.30%  OVER
+  path.design.reread_delta.1721                      17.35 M  ceiling       17.13 M   +1.30%
+  path.design.reread_delta.4903                      49.21 M  ceiling       48.60 M   +1.26%
+  path.design.reread_whole.1721                     129.79 M  ceiling      128.58 M   +0.94%
+  path.design.reread_whole.4903                     370.19 M  ceiling      367.06 M   +0.85%
