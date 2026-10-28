@@ -13,6 +13,7 @@
 pub mod model;
 pub mod policy;
 pub mod schedule;
+pub mod templates;
 
 #[cfg(feature = "store")]
 pub mod store;

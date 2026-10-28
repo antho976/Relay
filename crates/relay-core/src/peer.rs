@@ -426,6 +426,27 @@ mod tests {
     }
 
     #[test]
+    fn aide_acts_for_the_person_only_through_its_own_tools() {
+        // relay mcp 960 → claude 950 (Aide thread 4's agent) → engine 500
+        let links = [(960, 950), (950, ENGINE), (ENGINE, 1), (1, 0)];
+        let threads = HashMap::from([(950, Peer::Aide(4))]);
+        let peer = classify_with(960, ENGINE, &sessions(), &threads, tree(&links));
+        assert_eq!(peer, Peer::Aide(4));
+        assert!(!peer.may_act_as_user());
+        // Its MCP server lists its tools with bus.ops; a real run had none without it.
+        for op in ["bus.ops", "aide.notify", "aide.run.finish", "session.list", "money.summary", "gym.summary"] {
+            assert!(peer.may_act_as_user_for(op), "{op}");
+        }
+        for op in [
+            "aide.settings.set", "aide.job.set", "aide.job.delete", "aide.fact.forget", "money.tx.add", "money.tx.delete",
+            "arbiter.order.place", "thread.send", "session.input", "settings.set", "mailbox.send", "guardrail.confirm",
+        ] {
+            assert!(!peer.may_act_as_user_for(op), "{op}");
+        }
+        assert!(peer.refusal("user").message.contains("Aide (thread 4)"));
+    }
+
+    #[test]
     fn the_assistant_acts_for_the_person_only_through_its_own_tools() {
         // relay mcp 960 → claude 950 (assistant thread 9's agent) → engine 500
         let links = [(960, 950), (950, ENGINE), (ENGINE, 1), (1, 0)];

@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 407,
+  "op_count": 408,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -7377,6 +7377,24 @@
       },
       "result": {
         "$ref": "#/$defs/AideJobsOut"
+      }
+    },
+    "aide.job.templates": {
+      "summary": "The jobs Aide starts with, to turn on as they are or change first: the morning brief, an agent waiting on you, budget and Arbiter watches, the weekly review",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/AideTemplatesOut"
       }
     },
     "aide.job.get": {
@@ -35789,62 +35807,38 @@
       ],
       "description": "Whether a job runs."
     },
-    "AideIdIn": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "type": "integer",
-          "format": "int64"
-        }
-      },
-      "required": [
-        "id"
-      ]
-    },
-    "AideJobOut": {
+    "AideTemplatesOut": {
       "type": "object",
       "properties": {
-        "job": {
-          "$ref": "#/$defs/AideJobView"
-        },
-        "runs": {
+        "templates": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/Run2"
-          },
-          "description": "Its last runs, newest first."
+            "$ref": "#/$defs/Template"
+          }
         }
       },
       "required": [
-        "job",
-        "runs"
+        "templates"
       ]
     },
-    "AideJobSaveIn": {
+    "Template": {
       "type": "object",
-      "additionalProperties": false,
       "properties": {
         "id": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int64",
-          "description": "The job to change; a new one when absent."
+          "type": "string",
+          "description": "Stable: `brief`, `stuck`, `budget`, `arbiter`, `weekly`."
+        },
+        "why": {
+          "type": "string",
+          "description": "What it is for, in a sentence."
         },
         "spec": {
           "$ref": "#/$defs/JobSpec"
-        },
-        "active": {
-          "type": [
-            "boolean",
-            "null"
-          ],
-          "description": "Turned on at once (a new job); otherwise it waits paused."
         }
       },
       "required": [
+        "id",
+        "why",
         "spec"
       ]
     },
@@ -35936,6 +35930,65 @@
         "instructions"
       ],
       "description": "A job as the person (or Aide, as a proposal) writes it."
+    },
+    "AideIdIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "AideJobOut": {
+      "type": "object",
+      "properties": {
+        "job": {
+          "$ref": "#/$defs/AideJobView"
+        },
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Run2"
+          },
+          "description": "Its last runs, newest first."
+        }
+      },
+      "required": [
+        "job",
+        "runs"
+      ]
+    },
+    "AideJobSaveIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "The job to change; a new one when absent."
+        },
+        "spec": {
+          "$ref": "#/$defs/JobSpec"
+        },
+        "active": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Turned on at once (a new job); otherwise it waits paused."
+        }
+      },
+      "required": [
+        "spec"
+      ]
     },
     "AideJobProposeIn": {
       "type": "object",

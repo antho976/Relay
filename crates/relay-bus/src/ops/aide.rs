@@ -12,6 +12,7 @@
 //! Events: `aide.changed` (a job, run, fact, errand, message, page or the settings changed).
 use crate::registry::{Actors, OpMeta, Scope};
 use crate::{op, Empty};
+use relay_aide::templates::Template;
 use relay_aide::model::{Errand, ErrandState, Fact, Job, JobSpec, JobState, Level, Message, Page, Run, RunState, Settings};
 
 const CHANGED: &[&str] = &["aide.changed"];
@@ -71,6 +72,9 @@ result!(#[schemars(rename = "AideJobView")] JobView {
 });
 result!(#[schemars(rename = "AideJobsOut")] JobsOut { pub jobs: Vec<JobView> });
 op!(JobList, "aide.job.list", Empty => JobsOut, person(OpMeta::query(Scope::Global, 12, "Every job: what it does, what wakes it, its model, its state and its next wake")));
+
+result!(#[schemars(rename = "AideTemplatesOut")] TemplatesOut { pub templates: Vec<Template> });
+op!(JobTemplates, "aide.job.templates", Empty => TemplatesOut, person(OpMeta::query(Scope::Global, 12, "The jobs Aide starts with, to turn on as they are or change first: the morning brief, an agent waiting on you, budget and Arbiter watches, the weekly review")));
 
 payload!(#[schemars(rename = "AideIdIn")] IdIn { pub id: i64 });
 result!(#[schemars(rename = "AideJobOut")] JobOut {
@@ -236,7 +240,7 @@ result!(#[schemars(rename = "AideMessagesOut")] MessagesOut { pub messages: Vec<
 op!(MessageList, "aide.message.list", MessageListIn => MessagesOut, person(OpMeta::query(Scope::Global, 12, "What Aide said, newest first")));
 
 entries!(
-    Summary, SettingsGet, SettingsSet, Models, JobList, JobGet, JobSave, JobPropose, JobSet, JobDelete, RunNow, RunStop, RunList, RunGet,
+    Summary, SettingsGet, SettingsSet, Models, JobList, JobTemplates, JobGet, JobSave, JobPropose, JobSet, JobDelete, RunNow, RunStop, RunList, RunGet,
     RunFinish, Notify, Followup, FactList, FactAdd, FactUpdate, FactForget, ErrandList, ErrandAdd, ErrandUpdate, PageList, PageGet,
     PageWrite, PageDelete, MessageList,
 );

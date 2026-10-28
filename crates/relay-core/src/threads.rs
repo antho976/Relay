@@ -219,10 +219,10 @@ pub fn peer_may_call(op: &str) -> bool {
     op == "bus.ops" || AGENT_OPS.contains(&op)
 }
 
-/// [`peer_may_call`] for Aide's agent (`peer::Peer::Aide`): Aide's ops; each run's MCP server
-/// lists only those its sources allow.
+/// [`peer_may_call`] for Aide's agent (`peer::Peer::Aide`): `bus.ops`, which its MCP server lists
+/// its tools from, and Aide's ops; each run's server lists only those its sources allow.
 pub fn aide_may_call(op: &str) -> bool {
-    relay_aide::policy::all_ops().contains(&op)
+    op == "bus.ops" || relay_aide::policy::all_ops().contains(&op)
 }
 
 /// [`peer_may_call`] for the assistant's agent (`peer::Peer::Assistant`).

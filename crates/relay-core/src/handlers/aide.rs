@@ -112,6 +112,7 @@ pub fn register(e: &mut Engine) {
     });
 
     e.register_unlocked::<JobList>(|ctx, _: Empty| Ok(JobsOut { jobs: with_db(ctx.engine(), |db| db.jobs())?.into_iter().map(view).collect() }));
+    e.register_unlocked::<JobTemplates>(|_, _: Empty| Ok(TemplatesOut { templates: relay_aide::templates::all() }));
     e.register_unlocked::<JobGet>(|ctx, p| {
         let engine = ctx.engine();
         let j = job(engine, p.id)?;
