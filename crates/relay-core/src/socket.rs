@@ -1717,24 +1717,36 @@ mod conn_tests {
         assert_eq!(wait(&mut other, Actor::User).await["timed_out"], true);
     }
 
-    /// A locked handler that panics (here on a mutex an earlier panic poisoned) is answered with
-    /// an internal error under its id, and the connection goes on answering.
+    /// Poisons one of the engine's mutexes, as a panic while it was held would.
+    fn poison<T: Send>(lock: &std::sync::Mutex<T>) {
+        std::thread::scope(|scope| {
+            let _ = scope.spawn(|| {
+                let _held = lock.lock().unwrap();
+                panic!("poisoned for the test");
+            }).join();
+        });
+        assert!(lock.is_poisoned());
+    }
+
+    /// A locked handler that panics is answered with an internal error under its id, and the
+    /// connection goes on answering. A hot-path lock a panic poisoned still answers: its data
+    /// stays whole, so the next request is not refused for it until a restart.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_panicking_locked_handler_is_answered_and_the_connection_lives() {
         let (engine, _fixture, server) = server().await;
-        let poisoner = engine.clone();
-        let _ = std::thread::spawn(move || {
-            let _held = poisoner.ui.lock().unwrap();
-            panic!("poison the UI state");
-        })
-        .join();
         let mut conn = Client::connect(&server.path).await.unwrap();
-        let req = Request::new(Actor::User, "ui.state", json!({}));
+        // `resource_watch_clients` is still read with `unwrap()`: poisoned, the watch panics.
+        poison(&engine.resource_watch_clients);
+        let req = Request::new(Actor::User, "app.resources.watch", json!({"on": true}));
         let resp = conn.call(&req, |_| {}).await.unwrap();
         assert_eq!(resp.id, Some(req.id));
         assert_eq!(resp.error.map(|e| e.kind), Some(relay_bus::ErrorKind::Internal));
         let ping = conn.call(&Request::new(Actor::User, "bus.ping", json!({})), |_| {}).await.unwrap();
         assert!(ping.ok, "{:?}", ping.error);
+
+        poison(&engine.ui);
+        let state = conn.call(&Request::new(Actor::User, "ui.state", json!({})), |_| {}).await.unwrap();
+        assert!(state.ok, "{:?}", state.error);
     }
 
     /// Another project's event between the refusal and the wait neither wakes the agent nor

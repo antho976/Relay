@@ -127,10 +127,20 @@ fn run(cmd: &mut Command, input: Option<Vec<u8>>, timeout: Duration) -> io::Resu
 pub fn terminate_group(pgid: u32, grace: Duration, mut exited: impl FnMut() -> bool) {
     signal_group(pgid, Signal::Term);
     let until = Instant::now() + grace;
+    // A SIGTERMed git is usually gone in a few milliseconds: look soon, then back off.
+    let mut interval = POLL_MIN;
     while Instant::now() < until && !exited() {
-        std::thread::sleep(POLL_MAX);
+        std::thread::sleep(interval);
+        interval = (interval * 2).min(POLL_MAX);
     }
     signal_group(pgid, Signal::Kill);
+}
+
+/// SIGTERM to process group `pgid`, and nothing more: for a caller whose child's own wait loop
+/// finishes the job with [`terminate_group`]. A SIGKILL sent later from here could land on the
+/// group after that loop has reaped it.
+pub fn ask_group_to_stop(pgid: u32) {
+    signal_group(pgid, Signal::Term);
 }
 
 /// [`terminate_group`] for a caller that must not wait, one holding the store's lock or the

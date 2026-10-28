@@ -305,11 +305,12 @@ fn engine_key(engine: &Engine) -> usize {
 }
 
 /// A stop for the runner: its build's group is sent SIGTERM now, so a git in it drops its locks
-/// (RA-160), and SIGKILL once the grace is over. The step's own loop reaps it.
+/// (RA-160). The step's own loop sees the stop and finishes the job, SIGKILL included, while its
+/// slot still holds the pid: a SIGKILL sent from here could land after that loop reaped the group.
 fn signal(runner: &Runner, why: Stop) {
     runner.stop.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert(why);
     if let Some(pid) = *runner.child.lock().unwrap_or_else(|p| p.into_inner()) {
-        crate::proc::terminate_group_soon(pid, crate::proc::TERM_GRACE);
+        crate::proc::ask_group_to_stop(pid);
     }
 }
 
@@ -635,9 +636,11 @@ fn step(runner: &Runner, cwd: &Path, command: &str, timeout: Duration) -> Step {
     let _ = done.recv_timeout(DRAIN_GRACE);
     let text = String::from_utf8_lossy(&tail.lock().unwrap_or_else(|p| p.into_inner())).into_owned();
     match outcome {
+        // A build that exited on its own after a stop heard the SIGTERM: it is stopped, not
+        // passed or failed.
+        _ if runner.stopped().is_some() => Step::Stopped,
         Ok(status) if status.success() => Step::Passed(text),
         Ok(status) => Step::Failed(format!("{text}\nBuild command {status}.\n")),
-        Err(_) if runner.stopped().is_some() => Step::Stopped,
         Err(Some(error)) => Step::Failed(format!("{text}\nwaiting on the build: {error}\n")),
         Err(None) => Step::Failed(format!(
             "{text}\nThe build did not finish within {} minutes and was stopped.\n",

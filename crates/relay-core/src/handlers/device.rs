@@ -22,7 +22,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 pub fn register(e: &mut Engine) {
@@ -297,7 +297,7 @@ pub fn register(e: &mut Engine) {
 
     e.register::<RunStop>(|ctx: &mut Ctx, p| {
         let run = get_run(ctx.tx(), p.run_id)?;
-        let runtime = ctx.engine().device_runs.lock().unwrap().remove(&p.run_id);
+        let runtime = ctx.engine().device_runs.lock().unwrap_or_else(PoisonError::into_inner).remove(&p.run_id);
         if let Some(runtime) = &runtime {
             runtime.stop();
         }
@@ -1705,7 +1705,7 @@ fn live_runs_in(conn: &rusqlite::Connection, root: &Path) -> Result<Vec<Id>, Bus
 
 /// Refuse to start in `root` while a run is fetching and fast-forwarding it.
 fn refuse_while_syncing(engine: &Engine, root: &Path) -> Result<(), BusError> {
-    let syncing = engine.device_runs.lock().unwrap().values().find(|run| run.syncing(root)).map(|run| run.id);
+    let syncing = engine.device_runs.lock().unwrap_or_else(PoisonError::into_inner).values().find(|run| run.syncing(root)).map(|run| run.id);
     match syncing {
         Some(id) => Err(BusError::conflict(
             "device.checkout_syncing",
@@ -1729,7 +1729,7 @@ impl PendingRun {
     fn register(engine: &Engine, runtime: Arc<RunRuntime>) -> Result<Self, BusError> {
         let engine = engine.arc().ok_or_else(|| BusError::internal("the engine is shutting down"))?;
         let id = runtime.id;
-        engine.device_runs.lock().unwrap().insert(id, runtime);
+        engine.device_runs.lock().unwrap_or_else(PoisonError::into_inner).insert(id, runtime);
         Ok(Self { engine: Some(engine), id })
     }
     fn keep(mut self) {
@@ -1740,7 +1740,7 @@ impl PendingRun {
 impl Drop for PendingRun {
     fn drop(&mut self) {
         let Some(engine) = self.engine.take() else { return };
-        engine.device_runs.lock().unwrap().remove(&self.id);
+        engine.device_runs.lock().unwrap_or_else(PoisonError::into_inner).remove(&self.id);
         // Silently: the acquisition's event was never sent either.
         engine.device_leases.release_run(self.id);
     }
@@ -3300,7 +3300,7 @@ fn fail_run(engine: &Engine, runtime: &RunRuntime, parent: uuid::Uuid, code: &st
 /// The worker is done with the run: no live stream, no lease. Idempotent, since
 /// `device.run.stop` has usually done both already.
 fn end_run(engine: &Engine, runtime: &RunRuntime) {
-    engine.device_runs.lock().unwrap().remove(&runtime.id);
+    engine.device_runs.lock().unwrap_or_else(PoisonError::into_inner).remove(&runtime.id);
     super::device_lease::release_run(engine, runtime.id);
 }
 
