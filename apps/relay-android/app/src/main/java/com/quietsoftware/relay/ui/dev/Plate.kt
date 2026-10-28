@@ -119,7 +119,7 @@ internal fun slateHint(s: Session, online: Boolean, saved: Boolean = true): Stri
 @Composable
 internal fun PlateStrip(s: Session, modifier: Modifier = Modifier, trailing: @Composable RowScope.() -> Unit = {}) {
     val c = Relay.colors
-    val held = s.state == "blocked"
+    val held = s.blocked
     BoxWithConstraints(modifier.fillMaxWidth().background(c.console)) {
         // A phone's width cuts the one line short at "CLAUDE · BUILDER · …": what the agent says it
         // does gets a line of its own, in its own words, beside the branch.
@@ -131,14 +131,14 @@ internal fun PlateStrip(s: Session, modifier: Modifier = Modifier, trailing: @Co
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
             ) {
                 LampDot(s.lamp, 6.dp)
-                T(s.shownName(), Modifier.widthIn(max = 150.dp), Relay.type.plateName, if (held) c.heldText else c.ink, maxLines = 1)
+                T(s.shownName(), Modifier.widthIn(max = 150.dp), Relay.type.plateName, if (held) c.waiting else c.ink, maxLines = 1)
                 if (narrow) {
                     T("${s.provider} · ${s.role}".uppercase(), Modifier.weight(1f), Relay.type.plateMeta, c.ink3, maxLines = 1)
                 } else {
                     T(plateMeta(s), Modifier.weight(1f), Relay.type.plateMeta, c.ink3, maxLines = 1)
                     if (s.branch.isNotBlank()) Branch(s, Modifier.widthIn(max = 120.dp))
                 }
-                T(s.stateLabel, style = Relay.type.plateState, color = if (held) c.heldText else c.ink3, maxLines = 1)
+                T(s.stateLabel, style = Relay.type.plateState, color = if (held) c.waiting else c.ink3, maxLines = 1)
                 trailing()
             }
             val intent = s.intent?.trim().orEmpty()

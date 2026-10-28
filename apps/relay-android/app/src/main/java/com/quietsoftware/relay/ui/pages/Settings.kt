@@ -1,8 +1,10 @@
 package com.quietsoftware.relay.ui.pages
 
+import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.background
+import com.quietsoftware.relay.ui.kit.refusal
 import com.quietsoftware.relay.ui.threads.replyStyle
 import com.quietsoftware.relay.ui.theme.Accent
 import com.quietsoftware.relay.ui.kit.Eyebrow
@@ -135,14 +137,7 @@ fun SettingsScreen(nav: Nav) {
 
                 SectionLabel("Connection")
                 Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
-                    SwitchRow(
-                        "Stay connected",
-                        "Keeps the link open in the background so agents that need you can say so. Shows an ongoing notification.",
-                        p.stayConnected,
-                    ) { on ->
-                        nav.shell.update { prefs -> prefs.copy(stayConnected = on) }
-                        if (on) LinkService.start(context) else LinkService.stop(context)
-                    }
+                    SwitchRow("Stay connected", STAY_CONNECTED, p.stayConnected) { on -> nav.stayConnected(context, on) }
                     Hairline()
                     SwitchRow("Notifications", "Tell me when an agent is held, blocked or done while the app is not on screen.", p.notify) { on ->
                         nav.shell.update { prefs -> prefs.copy(notify = on) }
@@ -206,7 +201,7 @@ fun SettingsScreen(nav: Nav) {
                                             )
                                             overrides[category.key] = value
                                         } catch (e: BusException) {
-                                            nav.shell.toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
+                                            nav.shell.toast(refusal(e))
                                         }
                                     }
                                 }
@@ -336,4 +331,13 @@ internal fun Appearance(base: String, accent: String, onBase: (String) -> Unit, 
             }
         }
     }
+}
+
+/** What "Stay connected" means, where Settings and the PC's page offer it. */
+internal const val STAY_CONNECTED = "Keeps the link open in the background so agents that need you can say so. Shows an ongoing notification."
+
+/** "Stay connected" switched: kept in the settings, and the link's service started or stopped with it. */
+internal fun Nav.stayConnected(context: Context, on: Boolean) {
+    shell.update { it.copy(stayConnected = on) }
+    if (on) LinkService.start(context) else LinkService.stop(context)
 }

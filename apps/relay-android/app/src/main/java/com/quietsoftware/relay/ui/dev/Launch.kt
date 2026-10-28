@@ -48,6 +48,7 @@ import com.quietsoftware.relay.core.wire.b
 import com.quietsoftware.relay.core.wire.s
 import com.quietsoftware.relay.data.Relay as RelayData
 import com.quietsoftware.relay.ui.Nav
+import com.quietsoftware.relay.ui.home.LaunchedFromHome
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Empty
 import com.quietsoftware.relay.ui.kit.Eyebrow
@@ -62,6 +63,7 @@ import com.quietsoftware.relay.ui.kit.Segmented
 import com.quietsoftware.relay.ui.kit.Slab
 import com.quietsoftware.relay.ui.kit.StaleNote
 import com.quietsoftware.relay.ui.kit.T
+import com.quietsoftware.relay.ui.kit.refusal
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
 import com.quietsoftware.relay.ui.theme.Palette
@@ -196,6 +198,7 @@ fun LaunchScreen(projectId: Long?, taskId: Long?, prompt: String?, nav: Nav) {
                 error = refusal(e.error)
                 return@launch
             }
+            prompt?.let(LaunchedFromHome::made)
             val online = nav.shell.state.value.online
             if (group || !online) {
                 nav.shell.toast(

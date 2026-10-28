@@ -175,10 +175,11 @@ fun StartScreen(nav: Nav) {
     }
 
     val dash = dashboard.result as? JsonObject
-    // Until the dashboard is read, from this phone's copy: a blocked agent needs you, it is not running.
-    val running = dash?.arr("sessions_live")?.size ?: s.sessions.count { it.state in setOf("running", "idle", "spawning") }
+    // Who works is this phone's copy, as Home and the drawer count it; what waits on the person and
+    // what is in review come from the dashboard once it is read.
+    val working = s.working
     val waiting = dash?.let(::waitingOnYou) ?: s.needsYou
-    val devLine = dash?.let(::devReading) ?: if (running == 0 && waiting == 0) null else agentsLine(running, waiting, 0)
+    val devLine = dash?.let { devReading(it, working) } ?: if (working == 0 && waiting == 0) null else agentsLine(working, waiting, 0)
     val summary = money.result as? JsonObject
     val moneyLine = summary?.let(::moneyReading)
     val first = s.prefs.name.trim().substringBefore(' ')
@@ -202,8 +203,8 @@ fun StartScreen(nav: Nav) {
                     glyph = "terminal",
                     title = "Dev",
                     description = "Agents, tasks and code across your projects",
-                    line = devLine ?: if (s.online) "No agents running" else offlineLine(s.lastSeen),
-                    live = s.online && running > 0,
+                    line = devLine ?: if (s.online) "No agents working" else offlineLine(s.lastSeen),
+                    live = s.online && working > 0,
                     attention = s.online && waiting > 0,
                     onClick = { nav.space("dev") },
                 )
@@ -400,15 +401,15 @@ private fun greetingFor(hour: Int) = when (hour) {
 
 private fun offlineLine(lastSeen: Long) = if (lastSeen > 0) "PC away · last seen ${com.quietsoftware.relay.ui.kit.ago(lastSeen)}" else "PC away"
 
-/** "3 agents running · 2 need you · 1 in review" (money.rs `dev_reading`). */
-fun devReading(d: JsonObject): String = agentsLine(d.arr("sessions_live").size, waitingOnYou(d), d.arr("in_review").size)
+/** "3 agents working · 2 need you · 1 in review", after money.rs `dev_reading`, with this phone's count of who works. */
+fun devReading(d: JsonObject, working: Int): String = agentsLine(working, waitingOnYou(d), d.arr("in_review").size)
 
 /** Held actions waiting for a decision, and agents stopped on a question (money.rs `waiting_on_you`). */
 fun waitingOnYou(d: JsonObject): Int =
     d.arr("holds_open").size + d.arr("projects").sumOf { ((it as? JsonObject)?.l("blocked_sessions") ?: 0L).toInt() }
 
-private fun agentsLine(live: Int, waiting: Int, review: Int): String = buildList {
-    add(if (live == 0) "No agents running" else "${plural(live, "agent")} running")
+private fun agentsLine(working: Int, waiting: Int, review: Int): String = buildList {
+    add(if (working == 0) "No agents working" else "${plural(working, "agent")} working")
     if (waiting > 0) add(if (waiting == 1) "1 needs you" else "$waiting need you")
     if (review > 0) add("$review in review")
 }.joinToString(" · ")

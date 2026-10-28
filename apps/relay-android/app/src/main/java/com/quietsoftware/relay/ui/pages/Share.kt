@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.core.Hub
+import com.quietsoftware.relay.core.model.titleOf
 import com.quietsoftware.relay.core.sync.Optimistic
 import com.quietsoftware.relay.core.sync.OutboxRunner
 import com.quietsoftware.relay.ui.Nav
@@ -53,7 +54,7 @@ fun ShareScreen(text: String, nav: Nav) {
     // The current project until one is picked: a share can open the app before its state has loaded.
     var picked by remember { mutableStateOf<Long?>(null) }
     val projectId = picked ?: s.project?.num
-    val title = body.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(120) ?: "Shared"
+    val title = titleOf(body, 120) ?: "Shared"
     val rest = body.substringAfter('\n', "").trim()
 
     /** The id the phone shows for what a change made: the PC's, or the temp one while it waits. */

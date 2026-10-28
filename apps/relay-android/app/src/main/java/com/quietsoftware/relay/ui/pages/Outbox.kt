@@ -114,7 +114,7 @@ private fun OutboxRow(e: OutboxEntry, nav: Nav, scope: CoroutineScope, away: Boo
         Gap(10.dp)
         when (e.state) {
             OutboxEntry.State.Held -> {
-                Status(c.held, "Held by a guardrail on the PC", c.ink2)
+                Status(c.waiting, "Held by a guardrail on the PC", c.ink2)
                 Gap(10.dp)
                 Key("Open inbox", { nav.inbox() }, compact = true)
             }

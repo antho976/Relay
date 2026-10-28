@@ -68,6 +68,7 @@ import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.Markdown
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.TOUCH
+import com.quietsoftware.relay.ui.kit.fenceOf
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -127,14 +128,17 @@ internal fun rememberToday(): LocalDate {
  * written; the settled part is read once per paragraph.
  */
 internal fun splitStream(text: String): Pair<String, String> {
-    var fence = false
+    // The fence a block is open in: only the same fence closes it, as Markdown reads it.
+    var fence: String? = null
     var cut = -1
     var start = 0
     while (start < text.length) {
         val end = text.indexOf('\n', start).let { if (it < 0) text.length else it }
         val line = text.substring(start, end)
-        if (line.trimStart().startsWith("```")) fence = !fence
-        else if (!fence && start > 0 && line.isBlank()) cut = start
+        val opens = fenceOf(line.trimStart())
+        if (fence == null && opens != null) fence = opens
+        else if (fence != null && line.trimStart().startsWith(fence)) fence = null
+        else if (fence == null && start > 0 && line.isBlank()) cut = start
         start = end + 1
     }
     if (cut <= 0) return "" to text

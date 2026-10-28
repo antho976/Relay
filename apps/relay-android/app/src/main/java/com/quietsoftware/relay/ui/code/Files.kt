@@ -72,6 +72,8 @@ import com.quietsoftware.relay.ui.kit.ListRow
 import com.quietsoftware.relay.ui.kit.Pill
 import com.quietsoftware.relay.ui.kit.StaleNote
 import com.quietsoftware.relay.ui.kit.T
+import com.quietsoftware.relay.ui.kit.byteSize
+import com.quietsoftware.relay.ui.kit.refusal
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
 import com.quietsoftware.relay.ui.theme.Palette
@@ -684,7 +686,7 @@ fun FileScreen(projectId: Long, path: String, worktree: String?, line: Int?, nav
             PageBar(
                 title = name,
                 onBack = { if (editing) requestClose() else nav.back() },
-                subtitle = listOfNotNull(folder.ifEmpty { "/" }, data?.size?.let { sizeText(it) }).joinToString(" · "),
+                subtitle = listOfNotNull(folder.ifEmpty { "/" }, data?.size?.let { byteSize(it) }).joinToString(" · "),
                 actions = {
                     if (editing) {
                         Key("Save", { save(false) }, kind = KeyKind.Primary, compact = true, enabled = dirty && online && !saving)
@@ -727,14 +729,14 @@ fun FileScreen(projectId: Long, path: String, worktree: String?, line: Int?, nav
                 data.truncated -> Empty(
                     "file",
                     "Too large for the phone",
-                    "This file is ${sizeText(data.size)}. The phone reads up to ${sizeText(READ_LIMIT.toLong())}; open it on the PC.",
+                    "This file is ${byteSize(data.size)}. The phone reads up to ${byteSize(READ_LIMIT.toLong())}; open it on the PC.",
                 )
                 body == null -> {
                     val image = data.bytesB64
                     if (image != null && data.mime.startsWith("image/")) {
                         ImageFile(image, Modifier.weight(1f).fillMaxWidth())
                     } else {
-                        Empty("file", "Not shown on the phone", "Binary file, ${sizeText(data.size)}. Open it on the PC.")
+                        Empty("file", "Not shown on the phone", "Binary file, ${byteSize(data.size)}. Open it on the PC.")
                     }
                 }
                 editing -> EditArea(draft, onChange = { draft = it })

@@ -151,8 +151,17 @@ class OutboxRunner(
     /** Threads whose agent is answering: messages to them wait for [threadFree]. */
     private val busyThreads: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
+    /**
+     * Threads a message is on its way to, and whether the thread's turn ended meanwhile: that end
+     * can be read before the PC's `thread.busy` for the message, and nothing else would come for it.
+     */
+    private val sendingTo = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
     /** The thread's turn ended: true when a message was waiting on it, and the outbox should be sent. */
-    fun threadFree(id: String): Boolean = busyThreads.remove(id)
+    fun threadFree(id: String): Boolean {
+        sendingTo.computeIfPresent(id) { _, _ -> true }
+        return busyThreads.remove(id)
+    }
 
     /** A new session: whatever was answering then may be done. */
     fun forgetBusy() = busyThreads.clear()
@@ -166,6 +175,8 @@ class OutboxRunner(
         var sent = 0
         var parked = 0
         var waiting = 0
+        // A thread that answered busy as its turn ended: what was renewed for it goes in another pass.
+        var again = false
         val blockedTargets = mutableSetOf<Pair<Kind, String>>()
         val blockedEntries = mutableSetOf<String>()
         for (entry in store.open()) {
@@ -196,11 +207,14 @@ class OutboxRunner(
             }
             val attempt = entry.copy(attempts = entry.attempts + 1)
             store.update(attempt)
+            if (thread != null) sendingTo[thread] = false
             val response = try {
                 session.call(entry.op, payload, id = entry.id, timeoutMs = timeoutFor(entry.op))
             } catch (e: BusException) {
+                if (thread != null) sendingTo.remove(thread)
                 return Outcome.LinkLost(sent, e.error)
             }
+            val endedMeanwhile = thread != null && sendingTo.remove(thread) == true
             // Dropped by the person while it was on its way: an answer still brings the rows up to
             // date, but the entry is not written back.
             val dropped = store.get(entry.id) == null
@@ -215,8 +229,9 @@ class OutboxRunner(
             if (error.transient) return Outcome.LinkLost(sent, error)
             if (dropped) continue
             if (error.code == "thread.busy" && thread != null) {
-                // The refusal is recorded under this id, so the message goes again under a new one.
-                busyThreads += thread
+                // The refusal is recorded under this id, so the message goes again under a new one:
+                // after the turn's end, or now when that end came while this was on its way.
+                if (endedMeanwhile) again = true else busyThreads += thread
                 onBusy(attempt)
                 waiting++
                 continue
@@ -244,6 +259,10 @@ class OutboxRunner(
             target?.let { blockedTargets += it }
         }
         store.prune(now() - DONE_KEEP_MS)
+        if (again) return when (val more = flush(session)) {
+            is Outcome.Flushed -> more.copy(sent = sent + more.sent)
+            is Outcome.LinkLost -> more.copy(sent = sent + more.sent)
+        }
         return Outcome.Flushed(sent, parked, waiting)
     }
 

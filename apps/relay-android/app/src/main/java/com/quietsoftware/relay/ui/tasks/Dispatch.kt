@@ -45,6 +45,7 @@ import com.quietsoftware.relay.ui.kit.StaleNote
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.Toggle
 import com.quietsoftware.relay.ui.kit.plural
+import com.quietsoftware.relay.ui.kit.refusal
 import com.quietsoftware.relay.ui.kit.switchRow
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.isActive
@@ -131,7 +132,7 @@ internal fun DispatchSheet(task: Task, nav: Nav, onDismiss: () -> Unit) {
                     if (scope.isActive) close { if (start && name != null) nav.terminal(name) }
                 } catch (e: BusException) {
                     busy = false
-                    nav.shell.toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
+                    nav.shell.toast(refusal(e))
                 }
             }
         }

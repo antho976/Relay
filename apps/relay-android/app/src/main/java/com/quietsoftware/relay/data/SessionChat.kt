@@ -73,7 +73,7 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
             // Shown at once, while the PC is asked: the link decides whether it is still "saved".
             // A conversation read before this start goes on from its own cursor instead.
             if (_messages.value.isEmpty()) relay.hub.cached(OP, first)?.let { show(it.result, replace = true); at = it.at }
-            combine(relay.state, relay.hub.session, relay.session(name)) { link, bus, s -> Triple(link is LinkState.Online && bus != null, s?.attachable == true, s?.state == "running" || s?.state == "spawning") }
+            combine(relay.state, relay.hub.session, relay.session(name)) { link, bus, s -> Triple(link is LinkState.Online && bus != null, s?.attachable == true, s?.working == true) }
                 .distinctUntilChanged()
                 .collectLatest { (online, attachable, busy) ->
                     working = busy

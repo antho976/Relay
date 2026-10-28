@@ -28,7 +28,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 
 /**
@@ -121,9 +120,17 @@ class BootReceiver : BroadcastReceiver() {
     @Inject lateinit var relay: Relay
     @Inject lateinit var settings: Settings
 
+    // Off the main thread: whether it is paired unseals the token, a keystore call. goAsync keeps
+    // the receiver alive for that read, well inside its ten seconds.
     override fun onReceive(context: Context, intent: Intent) {
-        val stay = runBlocking { settings.prefs.first().stayConnected && relay.isPaired() }
-        if (stay) LinkService.start(context)
-        SyncWorker.schedule(context)
+        val pending = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                if (settings.prefs.first().stayConnected && relay.isPaired()) LinkService.start(context)
+                SyncWorker.schedule(context)
+            } finally {
+                pending.finish()
+            }
+        }
     }
 }

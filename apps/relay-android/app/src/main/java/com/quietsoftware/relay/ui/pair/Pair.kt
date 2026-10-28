@@ -57,6 +57,8 @@ import com.quietsoftware.relay.ui.kit.ago
 import com.quietsoftware.relay.ui.kit.column
 import com.quietsoftware.relay.ui.kit.plural
 import com.quietsoftware.relay.ui.kit.switchRow
+import com.quietsoftware.relay.ui.pages.STAY_CONNECTED
+import com.quietsoftware.relay.ui.pages.stayConnected
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
 import com.quietsoftware.relay.ui.shell.linkColor
@@ -287,15 +289,12 @@ fun PcScreen(nav: Nav) {
 
                     Slab(Modifier.fillMaxWidth()) {
                         Row(
-                            Modifier.switchRow(s.prefs.stayConnected) { on ->
-                                nav.shell.update { it.copy(stayConnected = on) }
-                                if (on) LinkService.start(context) else LinkService.stop(context)
-                            },
+                            Modifier.switchRow(s.prefs.stayConnected) { on -> nav.stayConnected(context, on) },
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(Modifier.weight(1f)) {
                                 T("Stay connected", style = Relay.type.uiMedium, color = c.ink)
-                                T("Keeps the link open in the background so agents that need you can say so. Shows an ongoing notification.", style = Relay.type.caption, color = c.ink3)
+                                T(STAY_CONNECTED, style = Relay.type.caption, color = c.ink3)
                             }
                             Toggle(s.prefs.stayConnected, null)
                         }

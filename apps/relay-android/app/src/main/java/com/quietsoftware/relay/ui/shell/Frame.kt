@@ -60,6 +60,7 @@ import com.quietsoftware.relay.ui.kit.RelayMark
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.ago
 import com.quietsoftware.relay.ui.kit.lampAlpha
+import com.quietsoftware.relay.ui.kit.refusal
 import com.quietsoftware.relay.ui.theme.Relay
 import com.quietsoftware.relay.core.wire.BusException
 import kotlinx.coroutines.flow.first
@@ -157,9 +158,9 @@ fun StatusBar(s: ShellState, onLink: () -> Unit, onOutbox: () -> Unit) {
                         T(if (s.parked > 0) "${s.parked} to decide" else "${s.outbox.size} waiting", style = Relay.type.mono, color = if (s.parked > 0) c.heldText else c.ink3)
                     }
                 }
-                val live = s.sessions.count { it.state in setOf("running", "idle", "spawning") }
+                val live = s.sessions.count { it.attachable && !it.blocked }
                 if (s.needsYou > 0) {
-                    Dot(c.held.copy(alpha = lampAlpha()), 6.dp)
+                    Dot(c.waiting.copy(alpha = lampAlpha()), 6.dp)
                     T(if (s.needsYou == 1) "1 needs you" else "${s.needsYou} need you", style = Relay.type.mono, color = c.ink3)
                 }
                 Dot(if (live > 0) c.live.copy(alpha = lampAlpha()) else c.ink3, 6.dp)
@@ -213,17 +214,11 @@ fun BoxScope.ToastHost(model: ShellModel, nav: Nav) {
             if (toast === it) toast = null
         }
     }
-    // Where this box ends, so a toast can be lifted from there to just above a screen's bar.
-    var bottom by remember { mutableFloatStateOf(0f) }
-    Box(Modifier.matchParentSize().onGloballyPositioned { bottom = it.positionInRoot().y + it.size.height })
-    val density = LocalDensity.current
-    val lift = model.toastFloors.values.minOrNull()?.let { floor -> with(density) { (bottom - floor).coerceAtLeast(0f).toDp() } }
+    val floor = aboveBars(model)
     val c = Relay.colors
     AnimatedVisibility(
         visible = toast != null,
-        modifier = Modifier.align(Alignment.BottomCenter)
-            .then(if (lift != null) Modifier.padding(bottom = lift + 8.dp) else Modifier.navigationBarsPadding().padding(bottom = 44.dp))
-            .padding(start = 16.dp, end = 16.dp),
+        modifier = Modifier.align(Alignment.BottomCenter).then(floor).padding(start = 16.dp, end = 16.dp),
         enter = fadeIn() + slideInVertically { it / 2 },
         exit = fadeOut() + slideOutVertically { it / 2 },
     ) {
@@ -244,7 +239,7 @@ fun BoxScope.ToastHost(model: ShellModel, nav: Nav) {
                         try {
                             act(nav)
                         } catch (e: BusException) {
-                            model.toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
+                            model.toast(refusal(e))
                         }
                     }
                     toast = null
@@ -252,6 +247,21 @@ fun BoxScope.ToastHost(model: ShellModel, nav: Nav) {
             }
         }
     }
+}
+
+/**
+ * Where something floating at the foot of this box sits: just above the screen's own bottom bar
+ * when one is marked ([LiftToasts]), otherwise above the navigation bar. Toasts and the hold tray
+ * use it, so neither covers a message box.
+ */
+@Composable
+internal fun BoxScope.aboveBars(model: ShellModel): Modifier {
+    // Where this box ends, so what floats can be lifted from there to just above a screen's bar.
+    var bottom by remember { mutableFloatStateOf(0f) }
+    Box(Modifier.matchParentSize().onGloballyPositioned { bottom = it.positionInRoot().y + it.size.height })
+    val density = LocalDensity.current
+    val lift = model.toastFloors.values.minOrNull()?.let { floor -> with(density) { (bottom - floor).coerceAtLeast(0f).toDp() } }
+    return if (lift != null) Modifier.padding(bottom = lift + 8.dp) else Modifier.navigationBarsPadding().padding(bottom = 44.dp)
 }
 
 /**

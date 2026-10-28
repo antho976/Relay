@@ -74,9 +74,6 @@ interface SidebarNav {
     fun aide()
 }
 
-/** Agent states the drawer lists under "Working now". */
-private val WORKING = setOf("running", "spawning", "blocked", "idle")
-
 /**
  * The drawer, as Claude's app has one (design 14, "Drawer"): New chat, the places, the three
  * money and training spaces as tiles, the agents at work and the recent threads, then the person
@@ -100,7 +97,7 @@ fun Sidebar(s: ShellState, route: String?, nav: SidebarNav, @Suppress("UNUSED_PA
             T("New chat", style = Relay.type.nav, color = c.accentText, weight = FontWeight.SemiBold)
         }
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
-            val live = s.sessions.count { it.state in WORKING }
+            val live = s.sessions.count { it.attachable }
             item { NavRow("Agents", "agents", route == "agents", count = live.takeIf { it > 0 }?.toString(), onClick = nav::agents) }
             item { NavRow("Board", "board", route?.startsWith("board") == true, onClick = nav::board) }
             item {
@@ -119,12 +116,13 @@ fun Sidebar(s: ShellState, route: String?, nav: SidebarNav, @Suppress("UNUSED_PA
                     SpaceTile("Avex", "avex", Color(0xFFE5B567), route == "avex", nav::avex, Modifier.weight(1f))
                 }
             }
-            val working = s.sessions.filter { it.state in WORKING }.sortedByDescending { it.state == "blocked" }
-            if (working.isNotEmpty()) {
-                item { Eyebrow("Working now", Modifier.padding(start = 4.dp, top = 16.dp, bottom = 4.dp)) }
-                val mixed = working.map { it.projectId }.distinct().size > 1
-                items(working, key = { "s${it.name}" }) { a ->
-                    val blocked = a.state == "blocked"
+            val open = s.sessions.filter { it.attachable }.sortedByDescending { it.blocked }
+            if (open.isNotEmpty()) {
+                // Every agent with a live terminal, each line saying whether it works, waits or needs you.
+                item { Eyebrow("Open agents", Modifier.padding(start = 4.dp, top = 16.dp, bottom = 4.dp)) }
+                val mixed = open.map { it.projectId }.distinct().size > 1
+                items(open, key = { "s${it.name}" }) { a ->
+                    val blocked = a.blocked
                     val title = agentTitle(a)
                     AgentRow(
                         a,
@@ -222,8 +220,8 @@ private fun ProjectRow(p: Project, s: ShellState, nav: SidebarNav) {
     val c = Relay.colors
     val mine = s.sessions.filter { it.projectId == p.num }
     val lamp = when {
-        mine.any { it.state == "blocked" } -> Lamp.Held
-        mine.any { it.state == "running" || it.state == "spawning" } -> Lamp.Live
+        mine.any { it.blocked } -> Lamp.Held
+        mine.any { it.working } -> Lamp.Live
         else -> Lamp.Off
     }
     val live = s.liveIn(p.num)

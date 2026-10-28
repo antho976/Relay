@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,6 +57,8 @@ import com.quietsoftware.relay.ui.kit.plural
 import com.quietsoftware.relay.ui.shell.ShellState
 import com.quietsoftware.relay.ui.shell.SpaceFrame
 import com.quietsoftware.relay.ui.theme.Relay
+import com.quietsoftware.relay.ui.threads.SOURCE_GLYPH
+import com.quietsoftware.relay.ui.threads.THREAD_SOURCES
 import com.quietsoftware.relay.ui.threads.ThreadSource
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -69,8 +72,23 @@ private sealed interface Target {
     data class Space(val key: String, override val label: String) : Target
 }
 
-private val SPACES = listOf("tally" to "Tally", "arbiter" to "Arbiter", "avex" to "Avex")
-private val SPACE_GLYPH = mapOf("tally" to "wallet", "arbiter" to "arbiter", "avex" to "avex")
+/**
+ * The words Home's box handed to Launch for a new agent. Home keeps them until Launch says the
+ * agent was made from them, so backing out of Launch finds them still in the box.
+ *
+ * Used from the main thread only.
+ */
+internal object LaunchedFromHome {
+    private var made: String? = null
+
+    /** Launch made an agent from the words it was opened with. */
+    fun made(prompt: String) {
+        made = prompt.trim()
+    }
+
+    /** Whether [draft] is what an agent was made from since Home last looked; it is forgotten either way. */
+    fun take(draft: String): Boolean = (made != null && made == draft.trim()).also { made = null }
+}
 
 /**
  * Home, as Claude's app opens (design 14, "Home · new chat"): a greeting, what needs the person
@@ -103,8 +121,8 @@ fun HomeScreen(nav: Nav) {
             }
             if (s.projects.isEmpty()) T("No projects yet.", Modifier.padding(6.dp), Relay.type.caption, Relay.colors.ink3)
             Eyebrow("A chat about", Modifier.padding(start = 6.dp, top = 12.dp, bottom = 4.dp))
-            for ((key, label) in SPACES) {
-                SheetRow(label, SPACE_GLYPH.getValue(key), {
+            for ((key, label) in THREAD_SOURCES) {
+                SheetRow(label, SOURCE_GLYPH.getValue(key), {
                     pick = "s:$key"
                     ThreadSource.key = key
                     nav.shell.pickSpace("threads")
@@ -116,12 +134,12 @@ fun HomeScreen(nav: Nav) {
 }
 
 private fun targetOf(pick: String, s: ShellState): Target {
-    val space = { key: String -> Target.Space(key, SPACES.first { it.first == key }.second) }
+    val space = { key: String -> Target.Space(key, THREAD_SOURCES.first { it.first == key }.second) }
     when {
         pick.startsWith("p:") -> pick.removePrefix("p:").toLongOrNull()?.let { n -> s.projects.firstOrNull { it.num == n } }?.let { return Target.Project(it.num ?: 0, it.name) }
-        pick.startsWith("s:") -> pick.removePrefix("s:").takeIf { k -> SPACES.any { it.first == k } }?.let { return space(it) }
+        pick.startsWith("s:") -> pick.removePrefix("s:").takeIf { k -> THREAD_SOURCES.any { it.first == k } }?.let { return space(it) }
     }
-    if (s.prefs.space == "threads") return space(ThreadSource.key.takeIf { k -> SPACES.any { it.first == k } } ?: "tally")
+    if (s.prefs.space == "threads") return space(ThreadSource.key.takeIf { k -> THREAD_SOURCES.any { it.first == k } } ?: "tally")
     return s.project?.let { Target.Project(it.num ?: 0, it.name) } ?: space("tally")
 }
 
@@ -137,7 +155,7 @@ private fun TargetChip(target: Target, online: Boolean, onClick: () -> Unit) {
     ) {
         when (target) {
             is Target.Project -> Dot(if (online) c.live else c.ink3, 7.dp)
-            is Target.Space -> Glyph(SPACE_GLYPH.getValue(target.key), 15.dp, c.ink2)
+            is Target.Space -> Glyph(SOURCE_GLYPH.getValue(target.key), 15.dp, c.ink2)
         }
         T(target.label, style = Relay.type.uiMedium, color = c.ink, weight = FontWeight.SemiBold, maxLines = 1)
         Glyph("chevron-down", 14.dp, c.ink3)
@@ -148,18 +166,23 @@ private fun TargetChip(target: Target, online: Boolean, onClick: () -> Unit) {
 private fun Home(nav: Nav, s: ShellState, target: Target) {
     val c = Relay.colors
     var draft by rememberSaveable { mutableStateOf("") }
-    val working = s.sessions.count { it.state == "running" || it.state == "spawning" }
-    val blocked = s.sessions.filter { it.state == "blocked" }
+    // Back from Launch: the words go once an agent was made from them, and stay when it was not.
+    LaunchedEffect(Unit) { if (LaunchedFromHome.take(draft)) draft = "" }
+    val working = s.working
+    val blocked = s.sessions.filter { it.blocked }
     val needs = s.holds.size + blocked.size
 
     fun send(text: String) {
         val t = text.trim()
         if (t.isEmpty()) return
         when (target) {
+            // Kept in the box until Launch makes the agent ([LaunchedFromHome]).
             is Target.Project -> nav.launch(target.num, prompt = t)
-            is Target.Space -> startThread(nav, s, target.key, t)
+            is Target.Space -> {
+                startThread(nav, s, target.key, t)
+                if (t == draft.trim()) draft = ""
+            }
         }
-        if (t == draft.trim()) draft = ""
     }
 
     Column(Modifier.fillMaxSize()) {

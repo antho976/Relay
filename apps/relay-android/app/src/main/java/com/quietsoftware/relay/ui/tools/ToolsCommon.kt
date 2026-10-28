@@ -14,15 +14,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.quietsoftware.relay.core.wire.BusException
-import com.quietsoftware.relay.core.wire.arr
-import com.quietsoftware.relay.core.wire.asStr
 import com.quietsoftware.relay.ui.Nav
+import com.quietsoftware.relay.ui.dev.providerName
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Key
 import com.quietsoftware.relay.ui.kit.KeyKind
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.TOUCH
 import com.quietsoftware.relay.ui.kit.Toggle
+import com.quietsoftware.relay.ui.kit.byteSize
+import com.quietsoftware.relay.ui.kit.refusal
 import com.quietsoftware.relay.ui.kit.switchRow
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.CoroutineScope
@@ -56,7 +57,7 @@ internal fun CoroutineScope.pcCall(
             done?.let { nav.shell.toast(it) }
             after(answer)
         } catch (e: BusException) {
-            nav.shell.toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
+            nav.shell.toast(refusal(e))
         } finally {
             busy(false)
         }
@@ -84,12 +85,7 @@ internal fun withProject(projectId: Long, changes: JsonObject): JsonObject = bui
 }
 
 /** A byte count as the backups list shows it. */
-internal fun formatBytes(bytes: Long): String = when {
-    bytes < 1024 -> "$bytes B"
-    bytes < 1024L * 1024 -> "%.1f KB".format(bytes / 1024.0)
-    bytes < 1024L * 1024 * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024)
-    else -> "%.2f GB".format(bytes / 1024.0 / 1024 / 1024)
-}
+internal fun formatBytes(bytes: Long): String = byteSize(bytes)
 
 private val STAMP = DateTimeFormatter.ofPattern("d MMM yyyy, HH:mm")
 
@@ -97,19 +93,13 @@ private val STAMP = DateTimeFormatter.ofPattern("d MMM yyyy, HH:mm")
 internal fun stamp(epochMs: Long): String =
     if (epochMs <= 0) "" else STAMP.format(Instant.ofEpochMilli(epochMs).atZone(ZoneId.systemDefault()))
 
-internal fun providerTitle(id: String): String = when (id) {
-    "claude" -> "Claude Code"
-    "codex" -> "Codex"
-    else -> id
-}
+internal fun providerTitle(id: String): String = providerName(id)
 
 /** A JSON number as a Double, if it is one. */
 internal fun JsonElement.number(): Double? = (this as? JsonPrimitive)?.doubleOrNull
 
 /** One entry per line, blanks dropped: how the PC's lists of patterns are edited. */
 internal fun splitLines(text: String): List<String> = text.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
-
-internal fun JsonObject.strings(key: String): List<String> = arr(key).mapNotNull { it.asStr() }
 
 /** A line under the page bar while the PC cannot be reached: the copy is shown, the acts are off. */
 @Composable

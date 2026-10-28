@@ -19,8 +19,8 @@ import com.quietsoftware.relay.R
 /**
  * The app's colours: a background family (the ground, cards, sheets and code wells) and an accent
  * (the one primary key per surface, the send key, switches and selections), both chosen in
- * Settings › Appearance. Words and state colours (live green, waiting amber, held red) are the
- * same in every theme, so a lamp reads the same whatever the person picked.
+ * Settings › Appearance. Words and state colours (live green, needs-you amber, refused red) are
+ * the same in every theme, so a lamp reads the same whatever the person picked.
  */
 @Immutable
 data class Palette(

@@ -81,10 +81,10 @@ private val STOPPED = setOf("restorable", "exited")
 /** The state chips, in order, and which agents each keeps. */
 private enum class Show(val label: String, val keeps: (Session) -> Boolean) {
     All("All", { true }),
-    Needs("Needs you", { it.state == "blocked" }),
-    Working("Working", { it.state == "running" || it.state == "spawning" }),
+    Needs("Needs you", { it.blocked }),
+    Working("Working", { it.working }),
     Ready("Ready", { it.state == "idle" }),
-    Other("Parked", { it.state !in setOf("blocked", "running", "spawning", "idle") }),
+    Other("Parked", { !it.attachable }),
 }
 
 @Composable
@@ -275,7 +275,7 @@ private fun stoppedOf(sessions: List<Session>, offers: List<Restorable>, pid: Lo
 private fun Attention(s: ShellState, nav: Nav) {
     val c = Relay.colors
     if (s.holds.isEmpty()) return
-    Pill(if (s.holds.size == 1) "1 command held for you" else "${s.holds.size} commands held for you", Modifier.heightIn(min = 36.dp), color = c.heldText, dot = c.held, onClick = nav::inbox)
+    Pill(if (s.holds.size == 1) "1 command held for you" else "${s.holds.size} commands held for you", Modifier.heightIn(min = 36.dp), color = c.waiting, dot = c.waiting, onClick = nav::inbox)
 }
 
 // ---- An agent ----
@@ -290,7 +290,7 @@ private fun Attention(s: ShellState, nav: Nav) {
 private fun Plate(session: Session, task: Task?, project: Project?, nav: Nav, online: Boolean, life: Lifecycle) {
     val c = Relay.colors
     val pending = session.pending
-    val held = session.state == "blocked"
+    val held = session.blocked
     val title = agentTitle(session, task)
     Row(
         Modifier

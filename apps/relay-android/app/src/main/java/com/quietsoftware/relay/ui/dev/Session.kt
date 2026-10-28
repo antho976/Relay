@@ -68,6 +68,7 @@ import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.Toggle
 import com.quietsoftware.relay.ui.kit.ago
 import com.quietsoftware.relay.ui.kit.epoch
+import com.quietsoftware.relay.ui.kit.refusal
 import com.quietsoftware.relay.ui.kit.switchRow
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
@@ -131,11 +132,11 @@ fun SessionScreen(name: String, nav: Nav) {
 @Composable
 private fun StateCard(session: Session, project: String?) {
     val c = Relay.colors
-    val held = session.state == "blocked"
+    val held = session.blocked
     Slab(Modifier.fillMaxWidth(), padding = PaddingValues(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             LampDot(session.lamp, 7.dp)
-            T(session.stateLabel, style = Relay.type.plateState.copy(letterSpacing = 0.1.em), color = if (held) c.heldText else c.ink)
+            T(session.stateLabel, style = Relay.type.plateState.copy(letterSpacing = 0.1.em), color = if (held) c.waiting else c.ink)
         }
         val line = listOfNotNull(
             project,

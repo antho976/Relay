@@ -17,6 +17,7 @@ import com.quietsoftware.relay.data.Prefs
 import com.quietsoftware.relay.data.Relay
 import com.quietsoftware.relay.data.Settings
 import com.quietsoftware.relay.ui.Nav
+import com.quietsoftware.relay.ui.kit.refusal
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -46,9 +47,11 @@ data class ShellState(
 ) {
     val online: Boolean get() = link is LinkState.Online
     val project: Project? get() = projects.firstOrNull { it.num == prefs.lastProject } ?: projects.firstOrNull()
-    val needsYou: Int get() = holds.size + sessions.count { it.state == "blocked" }
+    val needsYou: Int get() = holds.size + sessions.count { it.blocked }
+    /** Agents at work on a turn: Home, Start and the drawer count the same ones. */
+    val working: Int get() = sessions.count { it.working }
     val parked: Int get() = outbox.count { it.parked }
-    fun liveIn(projectId: Long?) = sessions.count { it.projectId == projectId && it.state in setOf("running", "idle", "blocked", "spawning") }
+    fun liveIn(projectId: Long?) = sessions.count { it.projectId == projectId && it.attachable }
 }
 
 @HiltViewModel
@@ -111,7 +114,7 @@ class ShellModel @Inject constructor(val relay: Relay, private val settings: Set
             if (c is Hub.Change.Queued && !state.value.online && op !in QUIET) toast("$label · saved on this phone, sent when the PC is back")
             after(c)
         } catch (e: BusException) {
-            toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
+            toast(refusal(e))
         }
     }
 
@@ -122,7 +125,7 @@ class ShellModel @Inject constructor(val relay: Relay, private val settings: Set
             done?.let { toast(it) }
             after(r)
         } catch (e: BusException) {
-            toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
+            toast(refusal(e))
         }
     }
 

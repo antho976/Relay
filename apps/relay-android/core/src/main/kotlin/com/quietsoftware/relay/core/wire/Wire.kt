@@ -279,6 +279,8 @@ fun JsonObject.s(key: String): String? = (this[key] as? JsonPrimitive)?.contentO
 fun JsonObject.l(key: String): Long? = (this[key] as? JsonPrimitive)?.longOrNull
 fun JsonObject.b(key: String): Boolean? = (this[key] as? JsonPrimitive)?.booleanOrNull
 fun JsonObject.arr(key: String): List<JsonElement> = runCatching { this[key]?.jsonArray?.toList() }.getOrNull().orEmpty()
+/** The strings of a list field; a `null` or an object in it is skipped, not read as text. */
+fun JsonObject.strings(key: String): List<String> = arr(key).mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
 fun JsonObject.o(key: String): JsonObject? = this[key] as? JsonObject
 fun JsonElement.asObj(): JsonObject = jsonObject
 fun JsonElement.asStr(): String? = runCatching { jsonPrimitive.contentOrNull }.getOrNull()

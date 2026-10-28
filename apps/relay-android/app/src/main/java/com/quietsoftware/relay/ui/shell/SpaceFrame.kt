@@ -23,6 +23,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -57,31 +58,8 @@ fun SpaceFrame(
     val space = spaceOf(route) ?: s.prefs.space
     LaunchedEffect(space, s.loaded) { if (s.loaded && space != s.prefs.space) nav.shell.pickSpace(space) }
     val c = Relay.colors
-    val close: () -> Unit = { scope.launch { drawer.close() } }
-    val sidebarNav = object : SidebarNav by nav {
-        override fun home() { close(); nav.home() }
-        override fun agents() { close(); nav.agents() }
-        override fun chat(name: String) { close(); nav.chat(name) }
-        override fun search() { close(); nav.search() }
-        override fun board() { close(); nav.board() }
-        override fun changes() { close(); nav.changes() }
-        override fun notes() { close(); nav.notes() }
-        override fun inbox() { close(); nav.inbox() }
-        override fun outbox() { close(); nav.outbox() }
-        override fun skills() { close(); nav.skills() }
-        override fun plugins() { close(); nav.plugins() }
-        override fun project(id: Long) { close(); nav.project(id) }
-        override fun projectSettings(id: Long) { close(); nav.projectSettings(id) }
-        override fun addProject() { close(); nav.addProject() }
-        override fun pc() { close(); nav.pc() }
-        override fun settings() { close(); nav.settings() }
-        override fun newThread() { close(); nav.newThread() }
-        override fun thread(id: String) { close(); nav.thread(id) }
-        override fun tally() { close(); nav.tally() }
-        override fun arbiter() { close(); nav.arbiter() }
-        override fun avex() { close(); nav.avex() }
-        override fun aide() { close(); nav.aide() }
-    }
+    // Made once: a new one on each recomposition would recompose the whole drawer with it.
+    val sidebarNav = remember(nav, drawer, scope) { drawerNav(nav) { scope.launch { drawer.close() } } }
     ModalNavigationDrawer(
         drawerState = drawer,
         scrimColor = Color.Black.copy(alpha = .55f),
@@ -118,7 +96,7 @@ fun SpaceFrame(
         }
     }
     // Back closes an open drawer first. Set after the page's own handlers, it is asked before them.
-    BackHandler(enabled = drawer.isOpen) { close() }
+    BackHandler(enabled = drawer.isOpen) { scope.launch { drawer.close() } }
 }
 
 /**
@@ -138,4 +116,30 @@ internal fun spaceOf(route: String?): String? = when {
     route == "home" -> null
     route == "agents" || route == "board" || route == "notes" || route == "skills" || route == "plugins" -> "dev"
     else -> null
+}
+
+/** The drawer's links: each closes the drawer, then goes. */
+private fun drawerNav(nav: Nav, close: () -> Unit): SidebarNav = object : SidebarNav by nav {
+    override fun home() { close(); nav.home() }
+    override fun agents() { close(); nav.agents() }
+    override fun chat(name: String) { close(); nav.chat(name) }
+    override fun search() { close(); nav.search() }
+    override fun board() { close(); nav.board() }
+    override fun changes() { close(); nav.changes() }
+    override fun notes() { close(); nav.notes() }
+    override fun inbox() { close(); nav.inbox() }
+    override fun outbox() { close(); nav.outbox() }
+    override fun skills() { close(); nav.skills() }
+    override fun plugins() { close(); nav.plugins() }
+    override fun project(id: Long) { close(); nav.project(id) }
+    override fun projectSettings(id: Long) { close(); nav.projectSettings(id) }
+    override fun addProject() { close(); nav.addProject() }
+    override fun pc() { close(); nav.pc() }
+    override fun settings() { close(); nav.settings() }
+    override fun newThread() { close(); nav.newThread() }
+    override fun thread(id: String) { close(); nav.thread(id) }
+    override fun tally() { close(); nav.tally() }
+    override fun arbiter() { close(); nav.arbiter() }
+    override fun avex() { close(); nav.avex() }
+    override fun aide() { close(); nav.aide() }
 }

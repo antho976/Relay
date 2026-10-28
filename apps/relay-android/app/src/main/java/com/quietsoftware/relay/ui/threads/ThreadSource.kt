@@ -19,6 +19,9 @@ import java.time.temporal.ChronoUnit
 /** The sources, as the desktop's switch names them. */
 internal val THREAD_SOURCES = listOf("tally" to "Tally", "arbiter" to "Arbiter", "avex" to "Avex")
 
+/** Each source's glyph, as the drawer's tiles and Home's target chip draw it. */
+internal val SOURCE_GLYPH = mapOf("tally" to "wallet", "arbiter" to "arbiter", "avex" to "avex")
+
 /** The source showing, chosen on a new thread; kept while the app runs. */
 internal object ThreadSource {
     var key by mutableStateOf("tally")

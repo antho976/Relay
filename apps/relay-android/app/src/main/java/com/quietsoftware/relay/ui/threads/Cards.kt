@@ -26,15 +26,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.quietsoftware.relay.core.wire.BusException
 import com.quietsoftware.relay.core.wire.Wire
+import com.quietsoftware.relay.core.wire.b
 import com.quietsoftware.relay.core.wire.l
 import com.quietsoftware.relay.core.wire.o
 import com.quietsoftware.relay.core.wire.s
+import com.quietsoftware.relay.core.wire.strings
 import com.quietsoftware.relay.ui.LocalNav
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.kit.Key
 import com.quietsoftware.relay.ui.kit.KeyKind
 import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.T
+import com.quietsoftware.relay.ui.kit.refusal
 import com.quietsoftware.relay.ui.theme.Palette
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.delay
@@ -47,10 +50,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.time.Duration
 import java.time.Instant
-
-/** What a refused act says in a toast: plainly when the PC is away. */
-internal fun refusal(e: BusException): String =
-    if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code }
 
 /** An act that needs the PC now, its refusal handed to [failed] (a toast unless it says otherwise). */
 internal suspend fun Nav.attempt(op: String, payload: JsonObject, failed: (BusException) -> Boolean = { false }): JsonElement? =
@@ -420,8 +419,6 @@ private fun proposalFootnote(p: JsonObject) = when (p.s("kind")) {
     else -> "Approving runs the new version exactly as shown."
 }
 
-private fun JsonObject.b(key: String): Boolean? = (this[key] as? JsonPrimitive)?.content?.toBooleanStrictOrNull()
-
 @Composable
 private fun ProposalPill(status: String) {
     val c = Relay.colors
@@ -469,7 +466,7 @@ internal fun ProposalCard(p: JsonObject, now: JsonObject? = null) {
         }
         T(proposalDetail(shown), style = Relay.type.caption, color = c.ink3)
         shown.s("why")?.takeIf { it.isNotBlank() }?.let { T(it, style = Relay.type.caption.copy(fontSize = 13.sp, lineHeight = 19.sp), color = c.ink2) }
-        val changes = shown.arrStrings("changes")
+        val changes = shown.strings("changes")
         if (changes.isNotEmpty()) Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             for (change in changes) Row {
                 T("•", Modifier.padding(end = 8.dp), Relay.type.caption, c.ink3)
@@ -521,9 +518,6 @@ internal fun ProposalCard(p: JsonObject, now: JsonObject? = null) {
         }
     }
 }
-
-private fun JsonObject.arrStrings(key: String): List<String> =
-    (this[key] as? kotlinx.serialization.json.JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content } ?: emptyList()
 
 /** Seconds from [now] to an RFC 3339 time; below zero once it has passed. */
 private fun secondsUntil(ts: String?, now: Instant): Long? =

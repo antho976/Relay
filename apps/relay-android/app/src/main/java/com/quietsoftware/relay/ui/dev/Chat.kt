@@ -133,6 +133,7 @@ import com.quietsoftware.relay.ui.threads.Spinner
 import com.quietsoftware.relay.ui.threads.dayOf
 import com.quietsoftware.relay.ui.threads.humanDay
 import com.quietsoftware.relay.ui.threads.said
+import com.quietsoftware.relay.ui.threads.str
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
@@ -210,8 +211,8 @@ fun ChatScreen(name: String, nav: Nav) {
     val pickPictures = rememberPicturePicker(attached) { picture -> chat.upload(picture) }
 
     val ready = session?.attachable == true && s.online
-    val working = session?.state == "running" || session?.state == "spawning"
-    val held = session?.state == "blocked"
+    val working = session?.working == true
+    val held = session?.blocked == true
     // Held at a prompt, the turn is still open: its last call waits on the answer, it was not cut off.
     val today = rememberToday()
     val pieces = remember(messages, sending, working, held, today) { chatPieces(messages, sending, working || held, today) }
@@ -417,7 +418,7 @@ fun ChatScreen(name: String, nav: Nav) {
 @Composable
 private fun AgentBar(session: Session?, name: String, task: Task?, project: Project?, onBack: () -> Unit, onDetails: () -> Unit, onMenu: () -> Unit, extra: @Composable () -> Unit = {}) {
     val c = Relay.colors
-    val held = session?.state == "blocked"
+    val held = session?.blocked == true
     Row(
         Modifier.fillMaxWidth().background(c.wall).statusBarsPadding().heightIn(min = 56.dp).padding(start = 4.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -434,7 +435,7 @@ private fun AgentBar(session: Session?, name: String, task: Task?, project: Proj
                 T(title, style = Relay.type.title, color = c.ink, maxLines = 1)
                 if (session != null) {
                     val line = listOfNotNull(name.takeIf { it != title }, project?.name, stateWord(session), providerName(session.provider)).joinToString(" · ")
-                    T(line, style = Relay.type.caption, color = if (held) c.heldText else c.ink3, maxLines = 1)
+                    T(line, style = Relay.type.caption, color = if (held) c.waiting else c.ink3, maxLines = 1)
                 }
             }
         }
@@ -484,8 +485,6 @@ internal sealed interface ChatPiece {
     /** The end of a finished turn: a quiet Copy key for the agent's words in it. */
     data class Copy(override val key: String, val text: String) : ChatPiece
 }
-
-private fun JsonObject.str(key: String) = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty()
 
 /** [working]: the agent's turn is still open (running, or held at a prompt), so its last unanswered calls are waiting, not cut off. */
 internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessage>, working: Boolean, today: LocalDate): List<ChatPiece> {
@@ -779,23 +778,7 @@ private fun PieceView(p: ChatPiece, cell: Modifier, online: Boolean) {
 @Composable
 private fun ChatBanner(status: TerminalFeed.Status, session: Session?, online: Boolean, life: Lifecycle) {
     val c = Relay.colors
-    val line: String
-    val dot: Color?
-    when (status) {
-        TerminalFeed.Status.Live -> return
-        TerminalFeed.Status.Connecting -> {
-            line = "Reaching the PC"
-            dot = c.waiting
-        }
-        TerminalFeed.Status.Saved -> {
-            line = "Saved on this phone · the PC is away"
-            dot = c.inkDim
-        }
-        TerminalFeed.Status.Stopped -> {
-            line = session?.let { "${stateWord(it)} · ${slateHint(it, online)}" } ?: "Closed · this agent is gone from the PC"
-            dot = null
-        }
-    }
+    val (line, dot) = bannerLine(status, session, online, ::stateWord) ?: return
     val revive = session?.takeIf { status == TerminalFeed.Status.Stopped && !it.pending }?.let { reviveAct(it.state) }
     Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 2.dp), horizontalArrangement = Arrangement.Center) {
         Row(
