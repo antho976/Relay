@@ -479,6 +479,7 @@ pub fn run(rt: Handle) -> glib::ExitCode {
             include_str!("css/threads.css"),
             include_str!("css/arbiter.css"),
             include_str!("css/avex.css"),
+            include_str!("css/aide.css"),
             include_str!("css/start.css"),
             include_str!("css/settings.css"),
             include_str!("css/launch.css"),
@@ -2030,7 +2031,7 @@ impl Ui {
                         return;
                     }
                     *ui.client.borrow_mut() = Some(client);
-                    if let Err(e)=ui.call("bus.subscribe",json!({"events":["project.changed","project.deleted","workspace.changed","workspace.deleted","session.changed","task.changed","task.deleted","mailbox.new","mailbox.changed","guardrail.held","guardrail.resolved","guardrail.grant_used","overlap.changed","notes.changed","notes.deleted","file.changed","git.changed","worktree.changed","module.changed","module.deleted","skill.changed","skill.deleted","plugin.changed","settings.changed","provider.update.changed","notify.new","notify.changed","device.changed","device.lease.acquired","device.lease.released","run.changed","run.crash","device.signing.changed","avd.changed","layout.changed","ui.changed","ui.toast","usage.changed","integration.changed","integration.result","money.changed","arbiter.changed","gym.changed","thread.changed","thread.message","thread.delta","thread.local","thread.proposal","thread.ask","gaming.changed","design.changed","design.deleted","video.changed","video.render.changed","video.render.finished","video.kit.changed","video.kit.progress"]})).await {
+                    if let Err(e)=ui.call("bus.subscribe",json!({"events":["project.changed","project.deleted","workspace.changed","workspace.deleted","session.changed","task.changed","task.deleted","mailbox.new","mailbox.changed","guardrail.held","guardrail.resolved","guardrail.grant_used","overlap.changed","notes.changed","notes.deleted","file.changed","git.changed","worktree.changed","module.changed","module.deleted","skill.changed","skill.deleted","plugin.changed","settings.changed","provider.update.changed","notify.new","notify.changed","device.changed","device.lease.acquired","device.lease.released","run.changed","run.crash","device.signing.changed","avd.changed","layout.changed","ui.changed","ui.toast","usage.changed","integration.changed","integration.result","money.changed","arbiter.changed","gym.changed","aide.changed","thread.changed","thread.message","thread.delta","thread.local","thread.proposal","thread.ask","gaming.changed","design.changed","design.deleted","video.changed","video.render.changed","video.render.finished","video.kit.changed","video.kit.progress"]})).await {
                         if generation == ui.generation.get() {
                             ui.show_error(&e.to_string());
                         }
@@ -2133,6 +2134,10 @@ impl Ui {
                                 }
                                 if e.ev == "gym.changed" {
                                     crate::money::gym_changed(&ui);
+                                    continue;
+                                }
+                                if e.ev == "aide.changed" {
+                                    crate::money::aide_changed(&ui);
                                     continue;
                                 }
                                 if e.ev.starts_with("thread.") {

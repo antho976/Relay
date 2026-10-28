@@ -131,6 +131,12 @@ pub enum Gate {
 /// `device.adb_path`), quit the engine, or call ops no screen of the app uses. An op the app
 /// starts sending is added here. Sorted: `gate` binary-searches it.
 pub const PHONE_OPS: &[&str] = &[
+    // Aide on the phone (docs/AIDE.md): what it said and what waits on you, its jobs to run or
+    // pause, and its facts to confirm or forget. Its settings stay on the PC, so a lost phone
+    // cannot point it at another server or open private data to Claude.
+    "aide.errand.list", "aide.errand.update", "aide.fact.forget", "aide.fact.list", "aide.fact.update",
+    "aide.job.get", "aide.job.list", "aide.job.set", "aide.message.list", "aide.run.list", "aide.run.now",
+    "aide.run.stop", "aide.summary",
     "app.backup.list", "app.backup.now", "app.resources.watch",
     // Arbiter on the phone: its reads, a proposal's answer, and the halt and restart keys.
     "arbiter.decision.list", "arbiter.halt", "arbiter.order.list", "arbiter.proposal.list",

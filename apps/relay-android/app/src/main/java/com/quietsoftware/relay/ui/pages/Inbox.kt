@@ -87,6 +87,7 @@ fun InboxScreen(nav: Nav) {
             (op == "session.get" || op == "session.brief" || op == "guardrail.confirm") && session != null -> nav.chat(session)
             op == "guardrail.confirm" -> nav.guardrails(n.projectId)
             n.category == "agent_done" || n.category == "agent_blocked" -> nav.board(n.projectId)
+            n.category == "aide" -> nav.aide()
         }
     }
 
@@ -180,6 +181,7 @@ private fun NotificationRow(n: Notification, project: String?, onClick: () -> Un
     val dot: Color? = if (n.read) null else when (n.category) {
         "agent_blocked", "guardrail" -> c.held
         "agent_done" -> c.live
+        "aide" -> c.waiting
         else -> c.ink3
     }
     // What kind, then where, as the PC's: a long project name is cut, not the kind.
@@ -231,6 +233,7 @@ private fun NotificationRow(n: Notification, project: String?, onClick: () -> Un
 private fun categoryLabel(category: String) = when (category) {
     "agent_done" -> "Agent finished"
     "agent_blocked" -> "Agent needs you"
+    "aide" -> "Aide"
     "guardrail" -> "Guardrail"
     "integration" -> "Integrations"
     "provider" -> "Providers"

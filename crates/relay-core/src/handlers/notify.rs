@@ -16,6 +16,7 @@ fn category(value: &str) -> NotifyCategory {
         "integration" => NotifyCategory::Integration,
         "provider" => NotifyCategory::Provider,
         "disk" => NotifyCategory::Disk,
+        "aide" => NotifyCategory::Aide,
         _ => NotifyCategory::System,
     }
 }
@@ -28,6 +29,7 @@ fn category_str(value: NotifyCategory) -> &'static str {
         NotifyCategory::Integration => "integration",
         NotifyCategory::Provider => "provider",
         NotifyCategory::Disk => "disk",
+        NotifyCategory::Aide => "aide",
         NotifyCategory::System => "system",
     }
 }

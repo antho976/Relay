@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 380,
+  "op_count": 410,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -7325,6 +7325,581 @@
       },
       "result": {
         "$ref": "#/$defs/VideoKitStatus"
+      }
+    },
+    "aide.summary": {
+      "summary": "Aide at a glance: jobs, the next wake, what runs now, what waits on you, what is held for the brief",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/AideSummary"
+      }
+    },
+    "aide.settings.get": {
+      "summary": "Aide's settings: paused, the default model and fallback, quiet hours, the interrupt cap, each source's privacy tier, your own servers' models",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/Settings"
+      }
+    },
+    "aide.settings.set": {
+      "summary": "Replace Aide's settings",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Settings"
+      },
+      "result": {
+        "$ref": "#/$defs/Settings"
+      }
+    },
+    "aide.models": {
+      "summary": "The models a job may name: Claude's, those Relay runs on this PC, and your own servers' (each server is asked, briefly, whether it answers)",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/AideModelsOut"
+      }
+    },
+    "aide.job.list": {
+      "summary": "Every job: what it does, what wakes it, its model, its state and its next wake",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/AideJobsOut"
+      }
+    },
+    "aide.job.templates": {
+      "summary": "The jobs Aide starts with, to turn on as they are or change first: the morning brief, an agent waiting on you, budget and Arbiter watches, the weekly review",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/AideTemplatesOut"
+      }
+    },
+    "aide.job.get": {
+      "summary": "One job and its last runs",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/AideJobOut"
+      }
+    },
+    "aide.job.save": {
+      "summary": "Make a job, or change one. From Aide's own agent it is a proposal instead (aide.job.propose)",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideJobSaveIn"
+      },
+      "result": {
+        "$ref": "#/$defs/AideJobView"
+      }
+    },
+    "aide.job.propose": {
+      "summary": "Draft a new job for the person to turn on: it does nothing until they do",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideJobProposeIn"
+      },
+      "result": {
+        "$ref": "#/$defs/AideJobView"
+      }
+    },
+    "aide.job.set": {
+      "summary": "Turn a job on or pause it; turning a proposal on approves it",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideJobSetIn"
+      },
+      "result": {
+        "$ref": "#/$defs/AideJobView"
+      }
+    },
+    "aide.job.delete": {
+      "summary": "Remove a job and its runs; its channel thread stays",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "aide.run.now": {
+      "summary": "Run a job now, whatever its schedule (a paused job too)",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideRunNowIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Run2"
+      }
+    },
+    "aide.run.stop": {
+      "summary": "Stop a queued or running run",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Run2"
+      }
+    },
+    "aide.run.list": {
+      "summary": "Runs, newest first: why each woke, its model, what it read, how it ended",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideRunListIn"
+      },
+      "result": {
+        "$ref": "#/$defs/AideRunsOut"
+      }
+    },
+    "aide.run.get": {
+      "summary": "One run",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Run2"
+      }
+    },
+    "aide.run.finish": {
+      "summary": "Aide's agent: say how this run ended, as its last step",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideRunFinishIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Run2"
+      }
+    },
+    "aide.notify": {
+      "summary": "Aide's agent: tell the person something. An interrupt in quiet hours or past the day's cap waits for the brief",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed",
+        "notify.new"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideNotifyIn"
+      },
+      "result": {
+        "$ref": "#/$defs/AideNotifyOut"
+      }
+    },
+    "aide.followup": {
+      "summary": "Aide's agent: wake this job once more later (at most five waiting per job)",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideFollowupIn"
+      },
+      "result": {
+        "$ref": "#/$defs/AideFollowupOut"
+      }
+    },
+    "aide.fact.list": {
+      "summary": "What Aide has learned, pinned first, each with where it came from",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/AideFactsOut"
+      }
+    },
+    "aide.fact.add": {
+      "summary": "Keep a fact. One Aide's agent adds waits for the person to confirm it before runs are given it",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideFactAddIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Fact"
+      }
+    },
+    "aide.fact.update": {
+      "summary": "Edit, confirm or pin a fact",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideFactUpdateIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Fact"
+      }
+    },
+    "aide.fact.forget": {
+      "summary": "Forget one fact, or every fact from one source",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideFactForgetIn"
+      },
+      "result": {
+        "$ref": "#/$defs/AideFactForgetOut"
+      }
+    },
+    "aide.errand.list": {
+      "summary": "What Aide is doing and what waits on the person, waiting first",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideErrandListIn"
+      },
+      "result": {
+        "$ref": "#/$defs/AideErrandsOut"
+      }
+    },
+    "aide.errand.add": {
+      "summary": "Put an errand on the list",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideErrandAddIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Errand"
+      }
+    },
+    "aide.errand.update": {
+      "summary": "Change an errand; only the person closes one",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideErrandUpdateIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Errand"
+      }
+    },
+    "aide.page.list": {
+      "summary": "Aide's living pages, most recently written first",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/AidePagesOut"
+      }
+    },
+    "aide.page.get": {
+      "summary": "One living page",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Page2"
+      }
+    },
+    "aide.page.write": {
+      "summary": "Write a living page, or write it again",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AidePageWriteIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Page2"
+      }
+    },
+    "aide.page.delete": {
+      "summary": "Remove a living page",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "aide.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "aide.message.list": {
+      "summary": "What Aide said, newest first",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideMessageListIn"
+      },
+      "result": {
+        "$ref": "#/$defs/AideMessagesOut"
       }
     }
   },
@@ -18012,15 +18587,24 @@
       }
     },
     "NotifyCategory": {
-      "type": "string",
-      "enum": [
-        "agent_done",
-        "agent_blocked",
-        "guardrail",
-        "integration",
-        "provider",
-        "disk",
-        "system"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "agent_done",
+            "agent_blocked",
+            "guardrail",
+            "integration",
+            "provider",
+            "disk",
+            "system"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "aide",
+          "description": "Aide, the person's own agent (docs/AIDE.md), speaking first."
+        }
       ]
     },
     "NotifyListOut": {
@@ -34596,6 +35180,1718 @@
           "description": "Set it up again even when it is ready (a damaged install)."
         }
       }
+    },
+    "AideSummary": {
+      "type": "object",
+      "properties": {
+        "paused": {
+          "type": "boolean"
+        },
+        "jobs": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "active": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "proposed": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Jobs Aide drafted, waiting for the person to turn them on."
+        },
+        "next_job": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The next job its schedule wakes, and when."
+        },
+        "next_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "running": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Run2"
+          },
+          "description": "Runs queued or running now."
+        },
+        "waiting": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Errands waiting on the person."
+        },
+        "held": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Messages held for the next brief."
+        },
+        "interrupts_today": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Interrupts shown today, and the day's cap."
+        },
+        "interrupt_cap": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "unconfirmed": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Facts Aide learned that wait to be confirmed."
+        }
+      },
+      "required": [
+        "paused",
+        "jobs",
+        "active",
+        "proposed",
+        "running",
+        "waiting",
+        "held",
+        "interrupts_today",
+        "interrupt_cap",
+        "unconfirmed"
+      ]
+    },
+    "Run2": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "job_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "job_name": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/Reason"
+        },
+        "trigger": {
+          "type": "string",
+          "description": "What woke it: the rule's finding, the follow-up's note, the schedule."
+        },
+        "state": {
+          "$ref": "#/$defs/RunState"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The model it ran on, once chosen."
+        },
+        "host": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "claude, pc (this PC) or server (the person's own server)."
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "How it ended, in its own words or Relay's."
+        },
+        "thread_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SourceRead"
+          }
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "deadline_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "job_id",
+        "job_name",
+        "reason",
+        "trigger",
+        "state",
+        "sources",
+        "started_at"
+      ],
+      "description": "One wake of one job."
+    },
+    "Reason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "schedule",
+            "rule",
+            "follow_up"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "manual",
+          "description": "The person pressed Run."
+        },
+        {
+          "type": "string",
+          "const": "catch_up",
+          "description": "A schedule that came round while the PC was off, inside the grace window."
+        }
+      ],
+      "description": "Why a run started."
+    },
+    "RunState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "running",
+            "done",
+            "failed"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "queued",
+          "description": "Waiting for a seat (a person's conversation has it) or for its model to load."
+        },
+        {
+          "type": "string",
+          "const": "nothing",
+          "description": "It looked and found nothing worth saying."
+        },
+        {
+          "type": "string",
+          "const": "waiting",
+          "description": "It needs the person: an approval, an answer."
+        },
+        {
+          "type": "string",
+          "const": "late",
+          "description": "Past its minutes: stopped."
+        },
+        {
+          "type": "string",
+          "const": "skipped",
+          "description": "It did not start: paused, over its day's runs, or no model allowed to read its sources."
+        }
+      ],
+      "description": "How a run is going, or how it ended."
+    },
+    "SourceRead": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "string",
+          "description": "What it held, in a few words, or why it could not be read."
+        }
+      },
+      "required": [
+        "source",
+        "ok",
+        "detail"
+      ],
+      "description": "Whether a source was read for a run, and what was wrong when it was not."
+    },
+    "Source": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "dev",
+          "description": "Relay's dev side: sessions, tasks, Git, notifications."
+        },
+        {
+          "type": "string",
+          "const": "money",
+          "description": "Tally's ledger and investments."
+        },
+        {
+          "type": "string",
+          "const": "arbiter",
+          "description": "Arbiter's strategies, orders and decisions."
+        },
+        {
+          "type": "string",
+          "const": "gym",
+          "description": "Avex's training history."
+        }
+      ],
+      "description": "Where Aide reads from. Each has a privacy tier ([`Tier`])."
+    },
+    "Settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "paused": {
+          "type": "boolean",
+          "description": "Nothing runs and nothing is said while true.",
+          "default": false
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The model a job runs on when it names none."
+        },
+        "fallback": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Tried when that one cannot run."
+        },
+        "quiet_start": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Quiet hours, start and end (0 to 23, the PC's time): interrupts are held for the brief. The\nsame hour twice means none.",
+          "default": 22
+        },
+        "quiet_end": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "default": 7
+        },
+        "interrupt_cap": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "At most this many interrupts a day; past it they wait for the brief.",
+          "default": 6
+        },
+        "tiers": {
+          "$ref": "#/$defs/Tiers",
+          "default": {
+            "dev": "any",
+            "money": "any",
+            "arbiter": "any",
+            "gym": "any"
+          }
+        },
+        "endpoints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Endpoint"
+          },
+          "description": "The person's own servers' models.",
+          "default": []
+        }
+      },
+      "description": "Aide's settings."
+    },
+    "Tiers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dev": {
+          "$ref": "#/$defs/Tier",
+          "default": "any"
+        },
+        "money": {
+          "$ref": "#/$defs/Tier",
+          "default": "any"
+        },
+        "arbiter": {
+          "$ref": "#/$defs/Tier",
+          "default": "any"
+        },
+        "gym": {
+          "$ref": "#/$defs/Tier",
+          "default": "any"
+        }
+      },
+      "description": "The tier of each source."
+    },
+    "Tier": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "any",
+          "description": "Any model: Claude through the person's account, or one of theirs."
+        },
+        {
+          "type": "string",
+          "const": "local_only",
+          "description": "Only a model the person runs themselves: on this PC or on their own server. A job that\nreads it on Claude does not run."
+        },
+        {
+          "type": "string",
+          "const": "off",
+          "description": "No model reads it."
+        }
+      ],
+      "description": "Which models may read a source."
+    },
+    "Endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The id a job names: letters, digits, `-` and `_`."
+        },
+        "name": {
+          "type": "string",
+          "description": "As shown."
+        },
+        "url": {
+          "type": "string",
+          "description": "`http://host:port` (or `https://`), without a path."
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The model name the server is asked for; `id` when absent."
+        },
+        "context": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Its context window in tokens; 32768 when absent."
+        },
+        "vision": {
+          "type": "boolean",
+          "description": "It reads pictures.",
+          "default": false
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "url"
+      ],
+      "description": "A model on the person's own server: an address that answers Anthropic's Messages API (a\nllama.cpp server, vLLM or LiteLLM in front of one), so Aide's agent talks to it as it talks to\nClaude."
+    },
+    "AideModelsOut": {
+      "type": "object",
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AideModel"
+          }
+        }
+      },
+      "required": [
+        "models"
+      ]
+    },
+    "AideModel": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "What a job names."
+        },
+        "name": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string",
+          "description": "`claude` (the person's Claude account), `pc` (a model Relay runs on this PC) or `server`\n(one on the person's own server)."
+        },
+        "available": {
+          "type": "boolean",
+          "description": "It can run now: Claude signed in, the model's file present, the server answering."
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why not, when it cannot."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "host",
+        "available"
+      ]
+    },
+    "AideJobsOut": {
+      "type": "object",
+      "properties": {
+        "jobs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AideJobView"
+          }
+        }
+      },
+      "required": [
+        "jobs"
+      ]
+    },
+    "AideJobView": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "name": {
+          "type": "string",
+          "description": "Its name, as the brief and the notifications show it."
+        },
+        "instructions": {
+          "type": "string",
+          "description": "What Aide does when it wakes, in plain words."
+        },
+        "schedule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Schedule"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When it wakes by the clock."
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Rule"
+          },
+          "description": "What wakes it in the data."
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Source"
+          },
+          "description": "What it may read. A rule's source is added.",
+          "default": []
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The model it runs on: a Claude model id (`claude-…`, or `opus`, `sonnet`, `haiku`), a\nmodel on this PC, or one on the person's own server (`aide.models`). Aide's default when\nabsent."
+        },
+        "fallback": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Tried when `model` cannot run: not loaded, unreachable, or not allowed to read a source."
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "low, medium, high, xhigh or max, for a Claude model."
+        },
+        "level": {
+          "$ref": "#/$defs/Level",
+          "description": "How loudly it speaks by default.",
+          "default": "brief"
+        },
+        "runs_per_day": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "At most this many runs a day; 24 when absent."
+        },
+        "minutes_per_run": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "A run is stopped and called late after this; 10 when absent."
+        },
+        "state": {
+          "$ref": "#/$defs/JobState"
+        },
+        "thread_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "Its channel: the Aide thread its runs talk in."
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "last_run_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_due_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "When its schedule next wakes it, while it is active."
+        },
+        "when": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What wakes it, one line each: its schedule and its rules."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "instructions",
+        "state",
+        "created_at",
+        "updated_at",
+        "when"
+      ],
+      "description": "A job as kept."
+    },
+    "Schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "every": {
+          "$ref": "#/$defs/Every"
+        },
+        "hour": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "0 to 23."
+        },
+        "minute": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "0 to 59; 0 when absent.",
+          "default": 0
+        },
+        "weekday": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "For `week`: 1 (Monday) to 7 (Sunday); Monday when absent."
+        },
+        "day": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "For `month`: 1 to 28; the 1st when absent."
+        }
+      },
+      "required": [
+        "every",
+        "hour"
+      ],
+      "description": "When a job wakes by the clock, in the PC's own time zone."
+    },
+    "Every": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "day",
+            "week",
+            "month"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "weekdays",
+          "description": "Monday to Friday."
+        }
+      ],
+      "description": "How often a schedule comes round."
+    },
+    "Rule": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "over": {
+              "type": "number",
+              "format": "double"
+            },
+            "kind": {
+              "type": "string",
+              "const": "spend"
+            }
+          },
+          "required": [
+            "kind",
+            "over"
+          ],
+          "description": "A Tally transaction whose amount is at least `over`, in the ledger's currency."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "percent": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "budget"
+            }
+          },
+          "required": [
+            "kind",
+            "percent"
+          ],
+          "description": "A budget category past `percent` of its month."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "minutes": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "stuck"
+            }
+          },
+          "required": [
+            "kind",
+            "minutes"
+          ],
+          "description": "An agent session waiting on the person for `minutes`."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "category": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "notice"
+            }
+          },
+          "required": [
+            "kind",
+            "category"
+          ],
+          "description": "A Relay notification in `category` (agent_done, agent_blocked, guardrail, integration,\nprovider, disk, system)."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "arbiter"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "description": "An Arbiter strategy halted, or its exchange unreachable."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "workout"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "description": "New training history from Avex."
+        }
+      ],
+      "description": "A data rule: a condition on the person's data, checked by Relay without a model when the data\nchanges. A true rule wakes its job, once per thing it found."
+    },
+    "Level": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "interrupt",
+          "description": "A notification now, on the phone too. Held through quiet hours and past the day's cap."
+        },
+        {
+          "type": "string",
+          "const": "brief",
+          "description": "Kept for the next brief."
+        },
+        {
+          "type": "string",
+          "const": "quiet",
+          "description": "Only on Aide's page."
+        }
+      ],
+      "description": "How loudly a message is said."
+    },
+    "JobState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "active",
+            "paused"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "proposed",
+          "description": "Drafted by Aide: waits for the person to turn it on."
+        }
+      ],
+      "description": "Whether a job runs."
+    },
+    "AideTemplatesOut": {
+      "type": "object",
+      "properties": {
+        "templates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Template"
+          }
+        }
+      },
+      "required": [
+        "templates"
+      ]
+    },
+    "Template": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable: `brief`, `stuck`, `budget`, `arbiter`, `weekly`."
+        },
+        "why": {
+          "type": "string",
+          "description": "What it is for, in a sentence."
+        },
+        "spec": {
+          "$ref": "#/$defs/JobSpec"
+        }
+      },
+      "required": [
+        "id",
+        "why",
+        "spec"
+      ]
+    },
+    "JobSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Its name, as the brief and the notifications show it."
+        },
+        "instructions": {
+          "type": "string",
+          "description": "What Aide does when it wakes, in plain words."
+        },
+        "schedule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Schedule"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When it wakes by the clock."
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Rule"
+          },
+          "description": "What wakes it in the data."
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Source"
+          },
+          "description": "What it may read. A rule's source is added.",
+          "default": []
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The model it runs on: a Claude model id (`claude-…`, or `opus`, `sonnet`, `haiku`), a\nmodel on this PC, or one on the person's own server (`aide.models`). Aide's default when\nabsent."
+        },
+        "fallback": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Tried when `model` cannot run: not loaded, unreachable, or not allowed to read a source."
+        },
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "low, medium, high, xhigh or max, for a Claude model."
+        },
+        "level": {
+          "$ref": "#/$defs/Level",
+          "description": "How loudly it speaks by default.",
+          "default": "brief"
+        },
+        "runs_per_day": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "At most this many runs a day; 24 when absent."
+        },
+        "minutes_per_run": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "A run is stopped and called late after this; 10 when absent."
+        }
+      },
+      "required": [
+        "name",
+        "instructions"
+      ],
+      "description": "A job as the person (or Aide, as a proposal) writes it."
+    },
+    "AideIdIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "AideJobOut": {
+      "type": "object",
+      "properties": {
+        "job": {
+          "$ref": "#/$defs/AideJobView"
+        },
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Run2"
+          },
+          "description": "Its last runs, newest first."
+        }
+      },
+      "required": [
+        "job",
+        "runs"
+      ]
+    },
+    "AideJobSaveIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "The job to change; a new one when absent."
+        },
+        "spec": {
+          "$ref": "#/$defs/JobSpec"
+        },
+        "active": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Turned on at once (a new job); otherwise it waits paused."
+        }
+      },
+      "required": [
+        "spec"
+      ]
+    },
+    "AideJobProposeIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "spec": {
+          "$ref": "#/$defs/JobSpec"
+        },
+        "why": {
+          "type": "string",
+          "description": "Why it would help, for the person's card."
+        }
+      },
+      "required": [
+        "spec",
+        "why"
+      ]
+    },
+    "AideJobSetIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "state": {
+          "$ref": "#/$defs/JobState",
+          "description": "`active` (turning on a proposal approves it) or `paused`."
+        }
+      },
+      "required": [
+        "id",
+        "state"
+      ]
+    },
+    "AideRunNowIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Said to the run along with the job's instructions."
+        }
+      },
+      "required": [
+        "job_id"
+      ]
+    },
+    "AideRunListIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "50 by default, 500 at most."
+        }
+      }
+    },
+    "AideRunsOut": {
+      "type": "object",
+      "properties": {
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Run2"
+          }
+        }
+      },
+      "required": [
+        "runs"
+      ]
+    },
+    "AideRunFinishIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/RunState",
+          "description": "`done` (it did the job), `nothing` (it looked and there was nothing worth saying), `waiting`\n(it needs the person) or `failed`."
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "One line on how it went."
+        }
+      },
+      "required": [
+        "outcome"
+      ]
+    },
+    "AideNotifyIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "One line."
+        },
+        "body": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The detail, in a few sentences of Markdown."
+        },
+        "level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Level"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`interrupt` (a notification now), `brief` (kept for the next brief) or `quiet` (on Aide's\npage only); the job's own level when absent."
+        }
+      },
+      "required": [
+        "title"
+      ]
+    },
+    "AideNotifyOut": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/Message2"
+        },
+        "notified": {
+          "type": "boolean",
+          "description": "It was shown as a notification now."
+        },
+        "held": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "It waits for the brief, and why: quiet hours, the day's cap, or its level."
+        }
+      },
+      "required": [
+        "message",
+        "notified"
+      ]
+    },
+    "Message2": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "job_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "run_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "level": {
+          "$ref": "#/$defs/Level"
+        },
+        "title": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "notified": {
+          "type": "boolean",
+          "description": "Shown as a notification (an interrupt that was not held)."
+        },
+        "held": {
+          "type": "boolean",
+          "description": "Held for the next brief: a brief message, or an interrupt in quiet hours or past the cap."
+        },
+        "briefed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The brief that carried it."
+        }
+      },
+      "required": [
+        "id",
+        "level",
+        "title",
+        "body",
+        "created_at",
+        "notified",
+        "held"
+      ],
+      "description": "Something Aide said or has to say."
+    },
+    "AideFollowupIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minutes": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Wake again this many minutes from now (1 to 10080)."
+        },
+        "note": {
+          "type": "string",
+          "description": "What to look at then, said to that run."
+        }
+      },
+      "required": [
+        "minutes",
+        "note"
+      ]
+    },
+    "AideFollowupOut": {
+      "type": "object",
+      "properties": {
+        "due_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "due_at"
+      ]
+    },
+    "AideFactsOut": {
+      "type": "object",
+      "properties": {
+        "facts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fact"
+          }
+        }
+      },
+      "required": [
+        "facts"
+      ]
+    },
+    "Fact": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "text": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "description": "Where it came from: `person`, a source's name (`money`, `gym`, …), or `thread:<id>`."
+        },
+        "job_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "The person has confirmed it; Aide's own guesses are not handed to a run until then."
+        },
+        "pinned": {
+          "type": "boolean",
+          "description": "Always handed to a run."
+        },
+        "learned_at": {
+          "type": "string"
+        },
+        "used_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "source",
+        "confirmed",
+        "pinned",
+        "learned_at"
+      ],
+      "description": "Something Aide has learned and keeps."
+    },
+    "AideFactAddIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "One sentence."
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Where it came from: a source (`dev`, `money`, `arbiter`, `gym`) or `person`. From Aide's\nagent, its thread when absent."
+        }
+      },
+      "required": [
+        "text"
+      ]
+    },
+    "AideFactUpdateIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confirmed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "pinned": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "AideFactForgetIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "One fact."
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Every fact learned from this source."
+        }
+      }
+    },
+    "AideFactForgetOut": {
+      "type": "object",
+      "properties": {
+        "forgotten": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "forgotten"
+      ]
+    },
+    "AideErrandListIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "closed": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Closed ones too."
+        }
+      }
+    },
+    "AideErrandsOut": {
+      "type": "object",
+      "properties": {
+        "errands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Errand"
+          }
+        }
+      },
+      "required": [
+        "errands"
+      ]
+    },
+    "Errand": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "title": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "job_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "state": {
+          "$ref": "#/$defs/ErrandState"
+        },
+        "due_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "When Aide said it would be done; past it, Aide says it is late."
+        },
+        "proposed_done": {
+          "type": "boolean",
+          "description": "Aide thinks it is done and asks the person to close it."
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "closed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "detail",
+        "state",
+        "proposed_done",
+        "created_at",
+        "updated_at"
+      ],
+      "description": "Something Aide is doing, or waits on the person for. Only the person closes one."
+    },
+    "ErrandState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "done",
+            "dropped"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "open",
+          "description": "Aide is on it."
+        },
+        {
+          "type": "string",
+          "const": "waiting",
+          "description": "It waits on the person."
+        }
+      ],
+      "description": "Where an errand stands."
+    },
+    "AideErrandAddIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "due_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "When it will be done (RFC 3339); past it, Aide says it is late."
+        },
+        "waiting": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "It waits on the person."
+        }
+      },
+      "required": [
+        "title"
+      ]
+    },
+    "AideErrandUpdateIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrandState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "From Aide's agent, `done` or `dropped` asks the person to close it."
+        },
+        "due_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "AidePagesOut": {
+      "type": "object",
+      "properties": {
+        "pages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Page2"
+          }
+        }
+      },
+      "required": [
+        "pages"
+      ]
+    },
+    "Page2": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "title": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string",
+          "description": "What the page answers; the job's run rewrites `body` from current data."
+        },
+        "body": {
+          "type": "string",
+          "description": "Markdown."
+        },
+        "job_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "question",
+        "body",
+        "updated_at"
+      ],
+      "description": "A page Aide keeps current: it stores its question, and each run of its job writes it again."
+    },
+    "AidePageWriteIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Its title: writing the same title again replaces the page."
+        },
+        "question": {
+          "type": "string",
+          "description": "What it answers, kept so the next run writes it again from current data."
+        },
+        "body": {
+          "type": "string",
+          "description": "Markdown; name the row each number came from."
+        }
+      },
+      "required": [
+        "title",
+        "question",
+        "body"
+      ]
+    },
+    "AideMessageListIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "50 by default, 500 at most."
+        }
+      }
+    },
+    "AideMessagesOut": {
+      "type": "object",
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Message2"
+          }
+        }
+      },
+      "required": [
+        "messages"
+      ]
     }
   }
 }

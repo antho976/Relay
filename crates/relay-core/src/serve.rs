@@ -26,6 +26,7 @@ impl Served {
     pub fn stop(self) {
         let Served { engine, socket } = self;
         engine.request_quit();
+        crate::aide::shutdown(&engine);
         drop(socket);
         let mirrors: Vec<_> = engine.mirrors.lock().unwrap().values().cloned().collect();
         engine.shutdown();
@@ -87,6 +88,8 @@ pub async fn start(instance: Instance, store_path: Option<PathBuf>) -> Result<Se
     crate::gaming::spawn_worker(&engine);
     // Arbiter's strategies wake on their bars (arbiter::spawn_runner).
     crate::arbiter::spawn_runner(&engine);
+    // Aide's jobs wake on their schedules and on the person's data (aide::spawn).
+    crate::aide::spawn(&engine);
     let socket = lock.bind(engine.clone()).await?;
     Ok(Served { engine, socket })
 }

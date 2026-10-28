@@ -34,6 +34,8 @@ pub enum Peer {
     Thread(relay_bus::types::Id),
     /// Inside the process tree of this assistant thread's agent (the Dev space's assistant).
     Assistant(relay_bus::types::Id),
+    /// Inside the process tree of this Aide thread's agent (docs/AIDE.md).
+    Aide(relay_bus::types::Id),
     /// Below the engine but in no live session: a session's orphan, a build, a hook.
     EngineChild,
     /// Not identifiable: a peer in another pid namespace, an unreadable `/proc`, a process gone.
@@ -53,6 +55,7 @@ impl Peer {
         match self {
             Peer::Thread(_) => crate::threads::peer_may_call(op),
             Peer::Assistant(_) => crate::threads::assistant_may_call(op),
+            Peer::Aide(_) => crate::threads::aide_may_call(op),
             _ => self.may_act_as_user(),
         }
     }
@@ -71,6 +74,10 @@ impl Peer {
             Peer::Assistant(id) => (
                 format!("from the assistant (thread {id}), which acts for you only through its own tools and asks you for the rest"),
                 serde_json::json!({"peer": "assistant", "thread": id}),
+            ),
+            Peer::Aide(id) => (
+                format!("from Aide (thread {id}), which acts for you only through its own tools"),
+                serde_json::json!({"peer": "aide", "thread": id}),
             ),
             Peer::EngineChild => (
                 "from a process the engine started outside every session (an orphan of a session, a build or a hook)".to_string(),
@@ -416,6 +423,27 @@ mod tests {
         assert!(!Peer::Session("calm-otter".into()).may_act_as_user_for("money.summary"));
         assert!(Peer::Outside.may_act_as_user_for("money.reset"));
         assert!(Peer::Thread(7).refusal("user").message.contains("thread 7"));
+    }
+
+    #[test]
+    fn aide_acts_for_the_person_only_through_its_own_tools() {
+        // relay mcp 960 → claude 950 (Aide thread 4's agent) → engine 500
+        let links = [(960, 950), (950, ENGINE), (ENGINE, 1), (1, 0)];
+        let threads = HashMap::from([(950, Peer::Aide(4))]);
+        let peer = classify_with(960, ENGINE, &sessions(), &threads, tree(&links));
+        assert_eq!(peer, Peer::Aide(4));
+        assert!(!peer.may_act_as_user());
+        // Its MCP server lists its tools with bus.ops; a real run had none without it.
+        for op in ["bus.ops", "aide.notify", "aide.run.finish", "session.list", "money.summary", "gym.summary"] {
+            assert!(peer.may_act_as_user_for(op), "{op}");
+        }
+        for op in [
+            "aide.settings.set", "aide.job.set", "aide.job.delete", "aide.fact.forget", "money.tx.add", "money.tx.delete",
+            "arbiter.order.place", "thread.send", "session.input", "settings.set", "mailbox.send", "guardrail.confirm",
+        ] {
+            assert!(!peer.may_act_as_user_for(op), "{op}");
+        }
+        assert!(peer.refusal("user").message.contains("Aide (thread 4)"));
     }
 
     #[test]

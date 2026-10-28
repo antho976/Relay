@@ -80,6 +80,7 @@ fun SpaceFrame(
         override fun tally() { close(); nav.tally() }
         override fun arbiter() { close(); nav.arbiter() }
         override fun avex() { close(); nav.avex() }
+        override fun aide() { close(); nav.aide() }
     }
     ModalNavigationDrawer(
         drawerState = drawer,
@@ -132,7 +133,7 @@ internal fun titleOf(route: String?): String? = when (route) {
 /** The space a page belongs to; null for a page both share (the inbox, search, settings). */
 internal fun spaceOf(route: String?): String? = when {
     route == null -> null
-    route == "threads" || route.startsWith("thread/") || route == "tally" || route == "arbiter" || route == "avex" -> "threads"
+    route == "threads" || route.startsWith("thread/") || route == "tally" || route == "arbiter" || route == "avex" || route == "aide" -> "threads"
     route == "home" -> null
     route == "agents" || route == "board" || route == "notes" || route == "skills" || route == "plugins" -> "dev"
     else -> null

@@ -66,6 +66,7 @@ interface SidebarNav {
     fun tally()
     fun arbiter()
     fun avex()
+    fun aide()
 }
 
 /** Agent states the drawer lists under "Working now". */
@@ -102,6 +103,7 @@ fun Sidebar(s: ShellState, route: String?, nav: SidebarNav, @Suppress("UNUSED_PA
             }
             item { NavRow("Changes", "branch", route?.startsWith("git/") == true, onClick = nav::changes) }
             item { NavRow("Notes", "notes", route?.startsWith("notes") == true, onClick = nav::notes) }
+            item { NavRow("Aide", "aide", route == "aide", onClick = nav::aide) }
             if (s.outbox.isNotEmpty()) item { NavRow("Waiting to send", "outbox", route == "outbox", count = s.outbox.size.toString(), onClick = nav::outbox) }
             item {
                 Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

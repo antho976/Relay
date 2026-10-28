@@ -33,6 +33,8 @@ pub(crate) mod pictures;
 mod arbiter;
 #[path = "avex_pages.rs"]
 mod avex;
+#[path = "aide_pages.rs"]
+mod aide;
 
 /// Tally's pages, in tab order: (stack name, caption, glyph).
 pub const PAGES: [(&str, &str, &str); 5] = [
@@ -91,7 +93,7 @@ thread_local! {
 }
 
 pub fn is_page(page: &str) -> bool {
-    page == threads::PAGE || page.starts_with("money-") || page.starts_with("arbiter-") || page.starts_with("avex-")
+    page == threads::PAGE || page.starts_with("money-") || page.starts_with("arbiter-") || page.starts_with("avex-") || page.starts_with("aide-")
 }
 
 /// Whether the Money space is the one showing.
@@ -194,13 +196,15 @@ pub fn sidebar_keys() -> gtk::Box {
     nav
 }
 
-/// Money's pages, added to the window's content stack: the threads, Tally's, Arbiter's and Avex's.
+/// Money's pages, added to the window's content stack: the threads, Tally's, Arbiter's, Avex's
+/// and Aide's.
 pub fn add_pages(content: &gtk::Stack) {
     content.add_named(&threads::page(), Some(threads::PAGE));
     let tally = PAGES.iter().map(|(name, _, _)| (*name, tally_tabs(name)));
     let arbiter = arbiter::ALL.iter().map(|name| (*name, arbiter::tabs(name)));
     let avex = avex::ALL.iter().map(|name| (*name, avex::tabs(name)));
-    for (name, tabs) in tally.chain(arbiter).chain(avex) {
+    let aide = aide::ALL.iter().map(|name| (*name, aide::tabs(name)));
+    for (name, tabs) in tally.chain(arbiter).chain(avex).chain(aide) {
         let head = gtk::Box::new(gtk::Orientation::Vertical, 4);
         head.add_css_class("money-head");
         let body = gtk::Box::new(gtk::Orientation::Vertical, 16);
@@ -422,7 +426,21 @@ pub fn install(ui: &Rc<Ui>, nav: &gtk::Box, add: &gtk::Button, dev_only: Vec<gtk
         }
     });
     nav.append(&avex_key);
-    let keys = [(tally_key.downgrade(), "money-"), (arbiter_key.downgrade(), "arbiter-"), (avex_key.downgrade(), "avex-")];
+    // Aide, the person's own agent: its jobs, what it learned and what waits on them.
+    let aide_key = button("", "nav");
+    aide_key.set_widget_name("nav-aide-home");
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 9);
+    row.append(&aide::icon("aide", 16));
+    row.append(&label("Aide", "nav-label"));
+    aide_key.set_child(Some(&row));
+    let weak = Rc::downgrade(ui);
+    aide_key.connect_clicked(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            ui.navigate("aide-home");
+        }
+    });
+    nav.append(&aide_key);
+    let keys = [(tally_key.downgrade(), "money-"), (arbiter_key.downgrade(), "arbiter-"), (avex_key.downgrade(), "avex-"), (aide_key.downgrade(), "aide-")];
     ui.content.connect_visible_child_name_notify(move |stack| {
         let showing = stack.visible_child_name();
         for (key, prefix) in &keys {
@@ -483,6 +501,7 @@ pub fn install(ui: &Rc<Ui>, nav: &gtk::Box, add: &gtk::Button, dev_only: Vec<gtk
     pages::install(ui);
     arbiter::install();
     avex::install();
+    aide::install();
 }
 
 /// Shows `money`'s keys and look. Navigation calls it through [`follow`].
@@ -523,8 +542,8 @@ pub fn follow(ui: &Rc<Ui>, page: &str, restoring: bool) {
     if active() != money {
         apply(ui, money);
     }
-    // Avex and Arbiter have no entries to add: no Tally key over them.
-    let entries = money && !page.starts_with("avex-") && !page.starts_with("arbiter-");
+    // Avex, Arbiter and Aide have no entries to add: no Tally key over them.
+    let entries = money && !["avex-", "arbiter-", "aide-"].iter().any(|p| page.starts_with(p));
     if let Some(key) = STATE.with(|s| s.add_key.borrow().clone()) {
         key.set_visible(entries);
     }
@@ -596,6 +615,8 @@ pub async fn refresh(ui: &Rc<Ui>, page: &str) {
             arbiter::refresh(ui, page).await;
         } else if page.starts_with("avex-") {
             avex::refresh(ui, page).await;
+        } else if page.starts_with("aide-") {
+            aide::refresh(ui, page).await;
         } else {
             pages::refresh(ui, page).await;
         }
@@ -651,6 +672,12 @@ pub fn gym_changed(ui: &Rc<Ui>) {
     }
 }
 
+/// `aide.changed`: a job, a run, a fact, an errand, a message, a page or the settings moved. The
+/// Aide page showing reads again, once for several in a moment.
+pub fn aide_changed(ui: &Rc<Ui>) {
+    aide::changed(ui);
+}
+
 /// A Tally glyph, for the Threads page's own marks.
 pub(crate) fn pages_glyph(key: &str, size: i32) -> gtk::Image {
     pages::glyph_image(key, size)
@@ -683,6 +710,10 @@ pub fn palette_entries() -> Vec<(&'static str, String)> {
     for (name, caption) in avex::PAGES {
         entries.push((name, format!("Avex {}", caption.to_lowercase())));
     }
+    for (name, caption) in aide::PAGES {
+        entries.push((name, format!("Aide {}", caption.to_lowercase())));
+    }
+    entries.push(("aide-new-job", String::from("Aide: new job")));
     entries.push(("avex-import", String::from("Avex: import training history")));
     // The kill switch, from anywhere (docs/ARBITER.md).
     entries.push(("arbiter-halt", String::from("Arbiter: halt all")));
@@ -697,6 +728,7 @@ pub fn run_palette(ui: &Rc<Ui>, key: &str) {
         "add" => add_entry(ui),
         "arbiter-halt" => arbiter::halt_all(ui),
         "avex-import" => avex::import(ui),
+        "aide-new-job" => aide::editor(ui, None, &Value::Null),
         page => ui.navigate(page),
     }
 }

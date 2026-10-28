@@ -84,6 +84,7 @@ private val PC_GROUPS = listOf(
         PcCategory("agent_blocked", "Agent needs you", "Blocked on a question or waiting for approval."),
         PcCategory("agent_done", "Agent finished", "Once per terminal, and again after you type into it."),
         PcCategory("guardrail", "Guardrail needs you", "An action held for approval, or an exception request. Refusals are filed quietly."),
+        PcCategory("aide", "Aide", "Your own agent, when it has something you should hear now. The rest waits for its brief."),
     ),
     listOf(
         PcCategory("provider", "Providers", "Claude or Codex limits, outages and sign-in issues."),

@@ -586,6 +586,8 @@ pub struct Engine {
     pub(crate) arbiter: crate::arbiter::Desk,
     /// Avex's training history (`gym.db`, opened on first use) and its loaded copy.
     pub(crate) gym: crate::gym::Shelf,
+    /// Aide's file (`aide.db`, opened on first use) and what its scheduler and watcher share.
+    pub(crate) aide: crate::aide::Shelf,
     /// Videos written as code: the Node worker, the kit's setup and the render queue (`video`).
     /// Its own locks; never the store's.
     pub video: crate::video::Hub,
@@ -636,6 +638,7 @@ impl Engine {
                 local: Default::default(),
                 arbiter: Default::default(),
                 gym: Default::default(),
+                aide: Default::default(),
                 video: Default::default(),
             };
             crate::handlers::register_all(&mut engine);

@@ -67,6 +67,7 @@ fun SearchScreen(nav: Nav) {
         Triple("Tally", "home") { nav.tally() },
         Triple("Arbiter", "arbiter") { nav.arbiter() },
         Triple("Avex", "avex") { nav.avex() },
+        Triple("Aide", "aide") { nav.aide() },
         Triple("Skills", "skills") { nav.skills() },
         Triple("Plugins", "dashboard") { nav.plugins() },
         Triple("Your PC", "device") { nav.pc() },

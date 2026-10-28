@@ -1,14 +1,15 @@
 [workspace]
 resolver = "2"
-members = ["crates/relay-bus", "crates/relay-core", "crates/relay-cli", "crates/relay-remote", "crates/relay-board", "crates/relay-client", "crates/relay-money", "crates/relay-arbiter", "crates/relay-gym", "apps/relay-native"]
+members = ["crates/relay-bus", "crates/relay-core", "crates/relay-cli", "crates/relay-remote", "crates/relay-board", "crates/relay-client", "crates/relay-money", "crates/relay-arbiter", "crates/relay-gym", "crates/relay-aide", "apps/relay-native"]
 # Its own workspace, with its own Cargo.lock, so root builds it from that folder alone
 # (scripts/key-proxy/install.sh). Check it with `--manifest-path crates/relay-key-proxy/Cargo.toml`.
 exclude = ["crates/relay-key-proxy"]
 # Engine checks stay headless; build the GTK client with `-p relay-native`. relay-board and
 # relay-client are the client's GTK-free logic (the board; the Git panel and the device mirror),
 # here so plain `cargo test` (and CI) runs their tests. relay-money is Tally's money rules;
-# relay-arbiter is Arbiter's trading rules; relay-gym reads Avex's training history.
-default-members = ["crates/relay-bus", "crates/relay-core", "crates/relay-cli", "crates/relay-remote", "crates/relay-board", "crates/relay-client", "crates/relay-money", "crates/relay-arbiter", "crates/relay-gym"]
+# relay-arbiter is Arbiter's trading rules; relay-gym reads Avex's training history; relay-aide
+# is Aide's jobs, schedules and privacy rules.
+default-members = ["crates/relay-bus", "crates/relay-core", "crates/relay-cli", "crates/relay-remote", "crates/relay-board", "crates/relay-client", "crates/relay-money", "crates/relay-arbiter", "crates/relay-gym", "crates/relay-aide"]
 
 [workspace.package]
 version = "4.0.0-dev"
@@ -29,6 +30,7 @@ relay-client = { path = "crates/relay-client" }
 relay-money = { path = "crates/relay-money", default-features = false }
 relay-arbiter = { path = "crates/relay-arbiter", default-features = false }
 relay-gym = { path = "crates/relay-gym", default-features = false }
+relay-aide = { path = "crates/relay-aide", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 schemars = { version = "1", features = ["uuid1", "preserve_order"] }

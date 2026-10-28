@@ -2524,6 +2524,14 @@ fn draw_message(v: &View, m: &Value) {
             }
         }
         "tool" => draw_tool_answer(v, body),
+        // An Aide channel: Relay's words that started a run, quiet beside the conversation.
+        "wake" => {
+            STATE.with(|s| {
+                *s.turn.borrow_mut() = None;
+                *s.group.borrow_mut() = None;
+            });
+            v.column.append(&super::aide::wake_note(body["text"].as_str().unwrap_or("")));
+        }
         "error" => {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             row.add_css_class("threads-error-row");

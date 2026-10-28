@@ -114,7 +114,7 @@ internal fun rememberLive(op: String, payload: JsonObject = JsonObject(emptyMap(
 
 /** A source's page: a column of at most 720dp that scrolls, its title and context over the body. */
 @Composable
-private fun SourcePage(
+internal fun SourcePage(
     title: String,
     context: (@Composable () -> Unit)?,
     actions: @Composable RowScope.() -> Unit = {},

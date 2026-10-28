@@ -195,7 +195,8 @@ class Notifier(private val context: Context, private val relay: Relay, private v
         private const val HOLD_BASE = 10_000
         private const val NOTE_BASE = 20_000
         // Not "guardrail": the PC files one with every hold, which is announced as itself above.
-        private val LOUD = setOf("agent_done", "agent_blocked")
+        // "aide": Aide files a notification only for an interrupt it means you to hear now.
+        private val LOUD = setOf("agent_done", "agent_blocked", "aide")
         private val HOLDS = stringSetPreferencesKey("holds")
         private val LAST_NOTE = longPreferencesKey("last_note")
     }
