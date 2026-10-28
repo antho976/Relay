@@ -957,7 +957,7 @@ fn store_files(ui: &Rc<Ui>, doc: &Rc<Doc>, files: &[PathBuf]) {
 }
 
 fn is_image(extension: &str) -> bool {
-    matches!(extension, "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tif" | "tiff" | "svg")
+    crate::editor::image_preview::image_extension(extension)
 }
 
 /// Edit > Insert image… and the toolbar's Image key.

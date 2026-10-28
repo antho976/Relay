@@ -29,7 +29,17 @@ struct Setup {
     /// The repository whose name `destination` was last filled from, so re-filtering the list
     /// keeps a folder name the user typed.
     destination_for: RefCell<Option<String>>,
+    /// The rows of two fields side by side, stacked while the first run is narrow (`fit`).
+    pairs: RefCell<Vec<glib::WeakRef<gtk::Box>>>,
+    narrow: Cell<bool>,
+    /// The hint and the keys that finish the form: under its fields, or pinned in view under
+    /// the first run's page when the fields do not fit (`place_footer`).
+    footer: gtk::Box,
+    slot: RefCell<Option<gtk::Box>>,
 }
+
+/// Below this width the first run stacks its paired fields instead of cutting them off.
+const NARROW: i32 = 620;
 
 pub fn open(ui: &Rc<Ui>, workspace: Option<Value>) {
     let first = ui.projects.borrow().is_empty();
@@ -51,14 +61,10 @@ pub fn open(ui: &Rc<Ui>, workspace: Option<Value>) {
     let body = gtk::Box::new(gtk::Orientation::Vertical, 16);
     body.set_halign(gtk::Align::Center);
     body.set_hexpand(true);
-    body.set_size_request(
-        if first {
-            (ui.page_overlay.width() - 36).clamp(580, 844)
-        } else {
-            744
-        },
-        -1,
-    );
+    // The first run is a page: its column follows the window (`fit`), so a small window
+    // never cuts off its fields or Open Relay.
+    let width = if first { (ui.page_overlay.width() - 36).clamp(320, 844) } else { 744 };
+    body.set_size_request(width, -1);
     body.set_valign(gtk::Align::Center);
     body.add_css_class("setup-body");
     panel.body.append(&body);
@@ -94,7 +100,35 @@ pub fn open(ui: &Rc<Ui>, workspace: Option<Value>) {
         skip_import: button("Skip import", "quiet"),
         discovery_generation: Cell::new(0),
         destination_for: RefCell::new(None),
+        pairs: RefCell::default(),
+        narrow: Cell::new(first && width < NARROW),
+        footer: gtk::Box::new(gtk::Orientation::Horizontal, 10),
+        slot: RefCell::default(),
     });
+    if first {
+        // Sized by `fit` only: pinned outside the scroll, a width of its own would hold the page
+        // as wide as it was.
+        setup.footer.set_halign(gtk::Align::Center);
+        *setup.slot.borrow_mut() = Some(panel.footer_slot());
+        let weak = Rc::downgrade(&setup);
+        panel.body_adjustment().connect_changed(move |adjustment| {
+            let (weak, adjustment) = (weak.clone(), adjustment.clone());
+            // Never inside size-allocate: the next frame takes the move.
+            glib::idle_add_local_once(move || {
+                if let Some(setup) = weak.upgrade() {
+                    setup.place_footer(&adjustment);
+                }
+            });
+        });
+    }
+    if first {
+        let weak = Rc::downgrade(&setup);
+        panel.watch_width(move |width| {
+            if let Some(setup) = weak.upgrade() {
+                setup.fit(width);
+            }
+        });
+    }
     setup.connect.set_widget_name("setup-connect");
     setup.message.set_wrap(true);
     setup.message.set_visible(false);
@@ -116,6 +150,54 @@ pub fn open(ui: &Rc<Ui>, workspace: Option<Value>) {
 }
 
 impl Setup {
+    /// The first run's column at `width` of page: as wide as it fits, up to 844px.
+    fn fit(&self, width: i32) {
+        let column = (width - 36).clamp(320, 844);
+        self.body.set_size_request(column, -1);
+        self.footer.set_size_request(column, -1);
+        let narrow = column < NARROW;
+        if self.narrow.replace(narrow) != narrow {
+            self.pairs.borrow_mut().retain(|pair| pair.upgrade().is_some());
+            for pair in self.pairs.borrow().iter().filter_map(|pair| pair.upgrade()) {
+                pair.set_orientation(if narrow { gtk::Orientation::Vertical } else { gtk::Orientation::Horizontal });
+            }
+        }
+    }
+
+    /// The footer under the fields while they fit the page, pinned in view under it when they
+    /// do not, so Open Relay is never below the fold.
+    fn place_footer(&self, body: &gtk::Adjustment) {
+        let Some(slot) = self.slot.borrow().clone() else { return };
+        let Some(holder) = slot.parent().and_then(|viewport| viewport.parent()) else { return };
+        let pinned = self.footer.parent().as_ref() == Some(slot.upcast_ref());
+        let fits = if pinned {
+            // The page grows by the slot's height once it goes, and the fields by the footer's.
+            body.upper() + f64::from(self.footer.height() + self.body.spacing()) <= body.page_size() + f64::from(holder.height())
+        } else {
+            body.upper() <= body.page_size()
+        };
+        if fits != pinned {
+            return;
+        }
+        if let Some(parent) = self.footer.parent().and_downcast::<gtk::Box>() {
+            parent.remove(&self.footer);
+        }
+        if fits {
+            self.body.append(&self.footer);
+        } else {
+            slot.append(&self.footer);
+        }
+        holder.set_visible(!fits);
+    }
+
+    /// A row of two fields, side by side unless the column is narrow.
+    fn pair(&self) -> gtk::Box {
+        let orientation = if self.narrow.get() { gtk::Orientation::Vertical } else { gtk::Orientation::Horizontal };
+        let pair = gtk::Box::new(orientation, 10);
+        self.pairs.borrow_mut().push(pair.downgrade());
+        pair
+    }
+
     fn project_step(self: &Rc<Self>) {
         clear(&self.body);
         let new_workspace = self.workspace.borrow()["id"].is_null();
@@ -158,7 +240,7 @@ impl Setup {
                     }
                 }
             });
-            let fields = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+            let fields = self.pair();
             fields.set_valign(gtk::Align::End);
             let path = gtk::Box::new(gtk::Orientation::Vertical, 6);
             path.set_hexpand(true);
@@ -168,6 +250,7 @@ impl Setup {
             let scan = button("Scan", "quiet");
             scan.set_widget_name("setup-scan");
             scan.set_valign(gtk::Align::End);
+            scan.set_halign(gtk::Align::Start);
             fields.append(&scan);
             let name = gtk::Box::new(gtk::Orientation::Vertical, 6);
             name.set_size_request(230, -1);
@@ -203,7 +286,7 @@ impl Setup {
         let local = gtk::Box::new(gtk::Orientation::Vertical, 12);
         local.add_css_class("setup-repo-panel");
         self.local.set_widget_name("setup-local-path");
-        let repository = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let repository = self.pair();
         let choices = gtk::Box::new(gtk::Orientation::Vertical, 6);
         choices.set_hexpand(true);
         field("Repository", &found, &choices);
@@ -253,7 +336,8 @@ impl Setup {
                 &self.body,
             );
         }
-        let footer = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let footer = &self.footer;
+        clear(footer);
         let hint = label("Local choices must already contain .git. GitHub choices are cloned into this workspace.","dim");
         hint.set_wrap(true);
         hint.set_hexpand(true);
@@ -262,7 +346,7 @@ impl Setup {
         footer.append(&self.skip_import);
         footer.append(&self.add);
         self.add.set_valign(gtk::Align::Center);
-        self.body.append(&footer);
+        self.body.append(footer);
         let weak = Rc::downgrade(self);
         self.skip_import.connect_clicked(move |_| {
             if let Some(setup) = weak.upgrade() {

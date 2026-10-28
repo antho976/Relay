@@ -362,6 +362,7 @@ impl Ui {
                 ui.close_agents(dirty.into_iter().map(|(name, _)| name).collect(), payload);
             } else {
                 for (name, _) in &dirty {
+                    with(|a| a.closing.remove(name));
                     ui.unpark(name);
                 }
                 ui.refresh();
@@ -392,7 +393,11 @@ impl Ui {
             self.refresh();
             return None;
         }
-        with(|a| a.closing.remove(name));
+        // A dirty worktree stays closing until the person answers: a session event while the
+        // question is open must not put a second pane on the wall behind it.
+        if !matches!(&result, Err(Error::Bus(error)) if error.code == "worktree.dirty") {
+            with(|a| a.closing.remove(name));
+        }
         match result {
             Ok(_) => {
                 settle_parked(name);

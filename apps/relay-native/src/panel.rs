@@ -40,6 +40,34 @@ impl Panel {
         Self::build(ui, title, -1, &ui.page_overlay, true)
     }
 
+    /// A place under the scrolled body, always in view, for the actions of a form too long for
+    /// the window (shown while it holds something). Its width never holds the panel wider than
+    /// the window: it is cut, never scrolled, until the panel's `watch_width` narrows it.
+    pub fn footer_slot(&self) -> gtk::Box {
+        let pinned = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        pinned.add_css_class("panel-footer");
+        let holder = gtk::ScrolledWindow::builder()
+            .child(&pinned)
+            .hscrollbar_policy(gtk::PolicyType::External)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .visible(false)
+            .build();
+        self.frame.append(&holder);
+        pinned
+    }
+
+    /// The scrolled body's vertical adjustment: whether the body fits, and where it is.
+    pub fn body_adjustment(&self) -> gtk::Adjustment {
+        self.scroll.vadjustment()
+    }
+
+    /// Calls `on_width` with the panel's own width as it changes: the room it has, which its
+    /// body (scrolled, and as wide as its content) does not tell.
+    pub fn watch_width(&self, on_width: impl Fn(i32) + 'static) {
+        crate::app::watch_width(&self.frame, on_width);
+    }
+
     fn build(ui: &Ui, title: &str, width: i32, host: &gtk::Overlay, page: bool) -> Rc<Self> {
         let layer = gtk::Overlay::new();
         let scrim = button("", "panel-scrim");
@@ -175,26 +203,6 @@ impl Panel {
             let previous = heading.last_child().and_then(|close| close.prev_sibling());
             heading.insert_child_after(widget, previous.as_ref());
         }
-    }
-
-    pub fn top(&self, height: i32) {
-        self.modal.set(false);
-        self.layer.add_css_class("utility-layer");
-        self.frame.add_css_class("utility-panel");
-        self.frame.set_valign(gtk::Align::Start);
-        self.frame.set_margin_end(8);
-        self.scroll.set_vexpand(false);
-        self.scroll
-            .set_max_content_height(height.min((self.host.height() - 16).max(200)));
-        self.scroll.set_propagate_natural_height(true);
-    }
-
-    /// Lifts a `top` panel off the window's edge into a rounded floating sheet, like the usage
-    /// card's panel: inset from the top as well, with corners that clip what scrolls under them.
-    pub fn float(&self) {
-        self.frame.add_css_class("floating-panel");
-        self.frame.set_overflow(gtk::Overflow::Hidden);
-        self.frame.set_margin_top(8);
     }
 
     /// Grow to the content once it has arrived. A scrolled window asks its child for a height

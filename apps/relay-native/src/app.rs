@@ -163,6 +163,9 @@ mod session_context;
 thread_local! {
     /// Bumped by every `Ui::show_error`, so a newer message is never cleared by an older timer.
     static NOTICE_SERIAL: Cell<u64> = const { Cell::new(0) };
+    /// The top bar's brand block: the sidebar's width it keeps (`follow_sidebar`, -1 with the
+    /// sidebar hidden), and the most the bar can spare it (`fold_top_bar`).
+    static BRAND_WIDTH: Cell<(i32, i32)> = const { Cell::new((-1, i32::MAX)) };
 }
 
 /// How long an armed key waits for its second click before it reverts.
@@ -531,8 +534,6 @@ struct TopBar {
     palette_key: gtk::Button,
     palette_keycap: gtk::Label,
     layouts_key: gtk::Button,
-    skills_key: gtk::Button,
-    plugins_key: gtk::Button,
     assistant_key: gtk::Button,
     notifications_key: gtk::Button,
     notification_count: gtk::Label,
@@ -613,10 +614,6 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     palette_key.set_valign(gtk::Align::Center);
     let layouts_key = icon_button("view-grid-symbolic", "Window presets");
     layouts_key.set_widget_name("window-presets");
-    let skills_key = icon_button("skills", "Skills for this project");
-    skills_key.set_widget_name("project-skills-key");
-    let plugins_key = icon_button("plugins", "Plugins for this project");
-    plugins_key.set_widget_name("project-plugins");
     // The assistant: a drawer over the page, about Relay itself (`assistant.rs`).
     let assistant_key = icon_button("assistant", "Assistant");
     assistant_key.set_widget_name("assistant-key");
@@ -630,7 +627,7 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     notification_count.set_can_target(false);
     bell.add_overlay(&notification_count);
     notifications_key.set_child(Some(&bell));
-    for (key, icon) in [(&skills_key, "skills"), (&plugins_key, "puzzle"), (&layouts_key, "layout-tiles"), (&assistant_key, "message-sparkle")] {
+    for (key, icon) in [(&layouts_key, "layout-tiles"), (&assistant_key, "message-sparkle")] {
         key.set_child(Some(&crate::icons::image(icon, 16)));
     }
     top_actions.append(&palette_key);
@@ -729,9 +726,15 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
         let refold = refold.clone();
         move |_, _, _| refold()
     });
-    for key in [&skills_key, &plugins_key, &layouts_key, &assistant_key, &reconnect, &launch_key, &money_add] {
+    for key in [&layouts_key, &assistant_key, &reconnect, &launch_key, &money_add] {
         let refold = refold.clone();
         key.connect_visible_notify(move |_| refold());
+    }
+    // A window narrower than the bar's minimum leaves the bar its minimum, cut off, so the
+    // probe never hears of it: the window's own width refolds too.
+    for property in ["default-width", "maximized", "fullscreened"] {
+        let refold = refold.clone();
+        window.connect_notify_local(Some(property), move |_, _| refold());
     }
     for watched in [top_left.upcast_ref::<gtk::Widget>(), launch_caption.upcast_ref()] {
         let refold = refold.clone();
@@ -765,8 +768,6 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
         palette_key,
         palette_keycap,
         layouts_key,
-        skills_key,
-        plugins_key,
         assistant_key,
         notifications_key,
         notification_count,
@@ -781,12 +782,23 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
 /// key's words, then New agent's caption. Each step is taken only when the bar, asking for every
 /// key's full width, would not fit; the folds ask for their compact width alone, so the window
 /// can always be made as narrow as the folded bar.
+/// The brand block's width: the sidebar's, unless the bar cannot spare it.
+fn size_brand(brand: &gtk::Box) {
+    let (wanted, cap) = BRAND_WIDTH.with(Cell::get);
+    let width = if wanted < 0 { -1 } else { wanted.min(cap) };
+    if brand.width_request() != width {
+        brand.set_size_request(width, -1);
+    }
+}
+
 fn fold_top_bar(top: &gtk::Box, tools: &gtk::Box, project: &gtk::Box, folds: &[crate::fold::Fold; 3]) {
     let any_tool = std::iter::successors(tools.first_child(), |w| w.next_sibling()).any(|w| w.is_visible());
     let [search, tools_fold, launch] = folds;
     // Nothing to list under More: no key at all, rather than an empty menu.
     tools_fold.set_visible(any_tool);
-    let width = top.width();
+    // The window's width, not the bar's: a bar at its minimum is wider than a small window.
+    let window = top.root().map_or(0, |root| root.width());
+    let width = if window > 0 { top.width().min(window) } else { top.width() };
     if width <= 0 || !top.is_mapped() {
         return;
     }
@@ -802,6 +814,12 @@ fn fold_top_bar(top: &gtk::Box, tools: &gtk::Box, project: &gtk::Box, folds: &[c
     let captions_shown: i32 = captions.iter().filter(|l| l.is_visible()).map(caption_width).sum();
     let captions_full: i32 = captions.iter().map(caption_width).sum();
     let fixed = natural - (project_natural - project_min) - captions_shown - folds.iter().map(shown).sum::<i32>();
+    // The stages are chosen with the brand block at the sidebar's width, even while it gives
+    // way below, so that giving way never makes an earlier stage seem to fit.
+    let brand = top.first_child().and_downcast::<gtk::Box>();
+    let brand_natural = brand.as_ref().map_or(0, |b| b.measure(gtk::Orientation::Horizontal, -1).1);
+    let rest = fixed - brand_natural;
+    let fixed = rest + brand_natural.max(BRAND_WIDTH.with(Cell::get).0);
     let need = |f: &crate::fold::Fold, full: bool| if f.is_visible() { f.width_of(full) } else { 0 };
     // The search key keeps its compact glass and chord: the bar's middle belongs to the project.
     let stages = [(true, true, true), (false, true, true), (false, false, true), (false, false, false)];
@@ -811,6 +829,14 @@ fn fold_top_bar(top: &gtk::Box, tools: &gtk::Box, project: &gtk::Box, folds: &[c
             fixed + if named { captions_full } else { 0 } + need(search, false) + need(tools_fold, keys) + need(launch, caption) <= width
         })
         .unwrap_or((false, false, false));
+    // Folded as far as it goes and still too wide, the brand block gives up the sidebar's width
+    // it keeps, so the keys and window controls stay in the window.
+    if let Some(brand) = brand {
+        let folded = rest + need(search, false) + need(tools_fold, false) + need(launch, false);
+        let cap = if (named, keys, caption) == (false, false, false) { (width - folded).max(0) } else { i32::MAX };
+        BRAND_WIDTH.with(|slot| slot.set((slot.get().0, cap)));
+        size_brand(&brand);
+    }
     for label in &captions {
         if label.is_visible() != named {
             label.set_visible(named);
@@ -854,8 +880,6 @@ fn more_menu(more: &gtk::Button, tools: &gtk::Box) {
             continue;
         }
         let icon = match key.widget_name().as_str() {
-            "project-skills-key" => "skills",
-            "project-plugins" => "puzzle",
             "window-presets" => "layout-tiles",
             _ => "message-sparkle",
         };
@@ -964,9 +988,8 @@ fn follow_sidebar(brand: &gtk::Box, split: &gtk::Paned, sidebar: &gtk::Box) {
                 return;
             };
             let width = if sidebar.is_visible() { split.position() } else { -1 };
-            if brand.width_request() != width {
-                brand.set_size_request(width, -1);
-            }
+            BRAND_WIDTH.with(|slot| slot.set((width, slot.get().1)));
+            size_brand(&brand);
         }
     };
     fit();
@@ -1566,7 +1589,7 @@ impl Ui {
         ui.remember_sidebar_width();
         // The title bar keeps one set of keys on every page of a space (Window presets takes you
         // to the wall it arranges); the Threads space has none of them.
-        let mut dev_only: Vec<gtk::Widget> = vec![side.nav.clone().upcast(), top.skills_key.clone().upcast(), top.plugins_key.clone().upcast(), top.layouts_key.clone().upcast(), top.assistant_key.clone().upcast(), top.launch_key.clone().upcast()];
+        let mut dev_only: Vec<gtk::Widget> = vec![side.nav.clone().upcast(), top.layouts_key.clone().upcast(), top.assistant_key.clone().upcast(), top.launch_key.clone().upcast()];
         dev_only.push(side.workspaces.clone());
         dev_only.extend(bar.dev_only.iter().cloned());
         crate::money::install(&ui, &side.money_nav, &top.money_add, dev_only);
@@ -1613,18 +1636,6 @@ impl Ui {
         // Notifications open in place under the bell, never as a page of their own.
         notification_center::install(ui, &top.notifications_key);
         crate::assistant::install(ui, &top.assistant_key, &ui.overlay);
-        let weak = Rc::downgrade(ui);
-        top.skills_key.connect_clicked(move |_| {
-            if let Some(ui) = weak.upgrade() {
-                ui.project_skills();
-            }
-        });
-        let weak = Rc::downgrade(ui);
-        top.plugins_key.connect_clicked(move |_| {
-            if let Some(ui) = weak.upgrade() {
-                ui.project_plugins();
-            }
-        });
     }
 
     /// Settings takes the whole window: it hides the sidebar, the title bar's actions and the
@@ -2865,6 +2876,8 @@ impl Ui {
                     crate::tools::refresh(&ui, &page, project).await;
                 } else if project != 0 {
                     crate::pages::refresh(&ui, &page, project).await;
+                } else {
+                    crate::pages::no_project(&ui, &page);
                 }
             }
             ui.page_pending.set(false);

@@ -171,8 +171,8 @@ impl Draft {
     }
 }
 
-use super::board_view::{caption, hue, label_chip, priority_icon, since, state_badge, status_icon, titled, wrapped};
-use relay_board::{activity_sentence, actor_name, markdown_markup, URGENT_FIRST};
+use super::board_view::{hue, label_chip, priority_icon, since, state_badge, status_icon, titled, wrapped};
+use relay_board::{activity_sentence, actor_name, column_title, markdown_markup, URGENT_FIRST};
 
 // ── Pieces the issue-style pages share ────────────────────────────────────────────────────
 
@@ -389,7 +389,7 @@ fn titled_choices(list: &[&str], none: &str) -> Vec<(String, String)> {
     list.iter().map(|v| (v.to_string(), if v.is_empty() { none.to_string() } else { titled(v) })).collect()
 }
 fn column_choices(list: &[&str]) -> Vec<(String, String)> {
-    list.iter().map(|c| (c.to_string(), caption(c).to_string())).collect()
+    list.iter().map(|c| (c.to_string(), column_title(c).to_string())).collect()
 }
 fn module_choices(modules: &[Value], current: Option<i64>) -> Vec<(String, String)> {
     let mut names = vec![(String::new(), "None".to_string())];
@@ -1971,7 +1971,7 @@ impl Detail {
         pill.add_css_class("status-pill");
         pill.add_css_class(&format!("status-pill-{column}"));
         pill.append(&status_icon(column, 13));
-        pill.append(&label(caption(column), "status-pill-name"));
+        pill.append(&label(column_title(column), "status-pill-name"));
         meta.append(&pill);
         if let Some(badge) = state_badge(text(task, "state")) {
             meta.append(&badge);

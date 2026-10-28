@@ -8,12 +8,13 @@ pub(super) fn is_image(path: &str) -> bool {
     std::path::Path::new(path)
         .extension()
         .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            matches!(
-                ext.to_ascii_lowercase().as_str(),
-                "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tif" | "tiff" | "ico" | "svg"
-            )
-        })
+        .is_some_and(|ext| image_extension(&ext.to_ascii_lowercase()))
+}
+
+/// The picture formats Relay shows, by lowercase extension: Code previews them and Notes
+/// embeds them.
+pub(crate) fn image_extension(extension: &str) -> bool {
+    matches!(extension, "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tif" | "tiff" | "ico" | "svg")
 }
 
 pub(super) struct Preview {

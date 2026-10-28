@@ -1465,6 +1465,13 @@ fn close_saved(ui: &Rc<Ui>, doc: &Rc<Doc>) {
         );
         return;
     }
+    // A picture pasted while the save was in flight is not in the note yet: the tab closes
+    // once it is (`inline::writing`), saved with it.
+    if doc.inline.writing.get() > 0 {
+        doc.close_pending.set(true);
+        doc.flash("Closing once the picture is kept");
+        return;
+    }
     doc.draft.close();
 }
 

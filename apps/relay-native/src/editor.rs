@@ -564,7 +564,7 @@ impl Editor {
         inline_key.connect_toggled(move |key| {
             if let Some(e) = weak.upgrade() {
                 if e.diff_inline.replace(key.is_active()) != key.is_active() {
-                    e.rerender_diff();
+                    e.rerender_diff(false);
                 }
             }
         });
@@ -610,10 +610,10 @@ impl Editor {
                     "Ln {}, Col {}{}",
                     iter.line() + 1,
                     iter.line_offset() + 1,
-                    if e.diff.get() {
-                        " · HEAD / working tree · read only"
-                    } else {
-                        ""
+                    match (e.diff.get(), e.diff_target.borrow().0) {
+                        (true, true) => " · HEAD / index · read only",
+                        (true, false) => " · HEAD / working tree · read only",
+                        _ => "",
                     }
                 ));
             }
@@ -804,14 +804,27 @@ impl Editor {
         clear(&self.git);
         self.search.set_text("");
         self.clear_document();
+        // A tab is a path in this project's checkout; in another project it would open that
+        // project's file of the same name.
+        self.tabs.borrow_mut().clear();
+        clear(&self.tab_strip);
+        self.tab_scroll.set_visible(false);
     }
+    /// The open file closed and the explorer emptied, for a new scope to fill.
     fn clear_document(&self) {
+        self.close_document();
+        self.tree_revision.set(self.tree_revision.get() + 1);
+        clear(&self.tree);
+        self.tree_rows.borrow_mut().clear();
+        self.tree_signature.set(0);
+    }
+    /// The open file closed; the explorer stays as it is.
+    pub(super) fn close_document(&self) {
         self.image_mode.set(false);
         self.image.clear();
         self.diff.set(false);
         self.before_scroll.set_visible(false);
         self.revision.set(self.revision.get() + 1);
-        self.tree_revision.set(self.tree_revision.get() + 1);
         self.buffer.set_text("");
         self.buffer.set_modified(false);
         self.path.borrow_mut().clear();
@@ -819,9 +832,6 @@ impl Editor {
         self.view.set_editable(false);
         self.set_busy(false);
         self.clear_conflict();
-        clear(&self.tree);
-        self.tree_rows.borrow_mut().clear();
-        self.tree_signature.set(0);
         // As before any file was opened: emptying the text put the caret at "Ln 1, Col 1".
         self.caption.set_text("No file open");
         self.position.set_text("Select a file to edit");
@@ -957,6 +967,7 @@ impl Editor {
         self.buffer.set_text(disk);
         self.buffer.set_modified(false);
         *self.original.borrow_mut() = disk.into();
+        self.describe(disk);
         self.clear_conflict();
         let at = self
             .buffer
@@ -2321,6 +2332,19 @@ impl Editor {
             .filter_map(|item| remap(item).unwrap_or_else(|| Some(item.clone())))
             .collect();
         *self.expanded.borrow_mut() = expanded;
+        // Tabs follow their files; a removed file's tab goes.
+        let tabs: Vec<editor_tabs::Tab> = self
+            .tabs
+            .borrow()
+            .iter()
+            .filter_map(|tab| match remap(&tab.path) {
+                None => Some(tab.clone()),
+                Some(None) => None,
+                Some(Some(path)) => Some(editor_tabs::Tab { path, kept: tab.kept }),
+            })
+            .collect();
+        let retabbed = *self.tabs.borrow() != tabs;
+        *self.tabs.borrow_mut() = tabs;
         let document = self.path.borrow().clone();
         match remap(&document).filter(|_| !document.is_empty()) {
             Some(Some(moved)) => {
@@ -2332,6 +2356,9 @@ impl Editor {
             }
             Some(None) => self.clear_document(),
             None => {}
+        }
+        if retabbed {
+            self.draw_tabs(ui);
         }
         self.load_tree(ui);
         self.refresh_git(ui);

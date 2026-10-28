@@ -183,32 +183,6 @@
 .ext-page .ext-state-title { font-size: 16px; font-weight: 600; color: @ink; }
 .ext-page .ext-state button { min-height: 34px; padding: 0 16px; border-radius: 9px; }
 
-/* ── The agents bar's Agent skills and Plugins sheets (shell.rs switch_sheet) ──
-   The usage panel's floating sheet: rounded, lifted off the edge, one rounded card of rows. */
-.agent-skills-popover.floating-panel { border: 1px solid alpha(@ink, 0.09); border-radius: 16px; background: @console_solid; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45); }
-.agent-skills-popover .panel-heading { min-height: 46px; padding: 0 10px 0 18px; border-bottom: 0; }
-.agent-skills-popover .panel-heading .section-title { color: @ink; font-size: 14px; font-weight: 600; letter-spacing: -0.005em; }
-.agent-skills-popover .panel-heading button.icon-key { min-width: 28px; min-height: 28px; border-radius: 8px; color: @faint; }
-.agent-skills-popover .panel-heading button.icon-key:hover { background: alpha(@ink, 0.06); color: @ink; }
-.agent-skills-popover .panel-body { padding: 0 12px 10px; }
-.agent-sheet-head { padding: 0 6px 14px; }
-.agent-sheet-project { color: @ink; font-size: 13px; font-weight: 500; }
-.agent-skills-intro { padding: 0; color: mix(@faint, @secondary, 0.3); font-size: 12.5px; line-height: 1.3; }
-.agent-sheet-section { padding: 0 6px 8px; }
-.agent-sheet-section-title { color: @secondary; font-size: 13px; font-weight: 600; }
-.agent-sheet-count { color: @faint; font-size: 12px; font-feature-settings: "tnum"; }
-.agent-sheet-card { border: 1px solid alpha(@ink, 0.08); border-radius: 12px; background: alpha(@ink, 0.03); }
-.agent-sheet-empty { padding: 14px 16px; color: @faint; font-size: 13px; }
-.agent-sheet-feedback { padding: 10px 6px 0; color: @held_text; font-size: 12.5px; }
-.agent-skill-row { min-height: 34px; padding: 10px 12px 10px 16px; border-bottom: 0; }
-.agent-skill-row + .agent-skill-row { border-top: 1px solid alpha(@ink, 0.07); }
-.agent-skill-row .skill-title { color: @ink; font-size: 13px; font-weight: 500; }
-.agent-skill-row .skill-source { padding: 0; background: transparent; color: @faint; font-family: 'Geist', sans-serif; font-size: 12px; }
-.agent-skills-footer { min-height: 0; padding: 8px 0 0; border-top: 0; }
-.agent-skills-footer button.settings-link { min-height: 28px; }
-.agent-skills-footer button.settings-link image { color: @faint; }
-.agent-skills-footer button.settings-link:hover image { color: @ink; }
-
 /* ── Devices (tools_devices.rs) ───────────────────────────────────────────────
    Phones and virtual devices share one list: lamp, name over facts, actions. */
 /* Device control on glass (the Glass Rule): its sections are cards, its devices rows in them. */

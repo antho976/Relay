@@ -289,7 +289,7 @@ fn empty(ui: &Rc<Ui>, market: &Rc<Market>) -> gtk::Widget {
             market.reveal_banner();
         }
     });
-    let create = button("Write a local skill", "");
+    let create = button("New local skill", "");
     let weak = Rc::downgrade(ui);
     create.connect_clicked(move |_| {
         if let Some(ui) = weak.upgrade() {

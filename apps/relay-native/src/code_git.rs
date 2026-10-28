@@ -627,34 +627,44 @@ impl Editor {
             panes.set_resize_end_child(false);
             panes.set_shrink_end_child(false);
             let free = ui.window.height().max(ui.window.default_height()) - 42 - 24 - 36;
+            // Only a split the person dragged is kept: the panel's own moves (the fit below,
+            // folding History) set `own` around them, so a rebuild never freezes its own fit.
+            let own = Rc::new(Cell::new(false));
             let kept = e.git_split_position.get();
-            if kept > 0 {
-                panes.set_position(kept);
-            } else if folded("history") {
+            if folded("history") {
                 panes.set_position(free - 34);
+            } else if kept > 0 {
+                panes.set_position(kept);
             } else {
                 // Unless the person placed the split, the sections above take their own height
                 // and History the rest: a fixed split left 150px of nothing above History. It
                 // is placed once, when the panes first have their height.
                 panes.set_position((free - 280).max(120));
                 let placed = Rc::new(Cell::new(false));
-                let fit = upper.downgrade();
+                let (fit, own) = (upper.downgrade(), own.clone());
                 panes.connect_max_position_notify(move |panes| {
                     if placed.get() || panes.max_position() <= 0 {
                         return;
                     }
                     placed.set(true);
-                    let (panes, fit) = (panes.downgrade(), fit.clone());
+                    let (panes, fit, own) = (panes.downgrade(), fit.clone(), own.clone());
                     // After this allocation: the sections have their width, so their height.
                     glib::idle_add_local_once(move || {
                         let (Some(panes), Some(above)) = (panes.upgrade(), fit.upgrade()) else { return };
                         let (_, natural, _, _) = above.measure(gtk::Orientation::Vertical, panes.width().max(1));
+                        own.set(true);
                         panes.set_position(natural.clamp(120, (panes.max_position() - 160).max(120)));
+                        own.set(false);
                     });
                 });
             }
-            let (split_position, weak) = (Rc::downgrade(&e), Rc::downgrade(&ui));
+            let (split_position, weak, moving) = (Rc::downgrade(&e), Rc::downgrade(&ui), own.clone());
             panes.connect_position_notify(move |panes| {
+                // Folded, the split is the panel's (and moves with every resize): only an open
+                // History's split is the person's.
+                if moving.get() || folded("history") {
+                    return;
+                }
                 if let (Some(ed), Some(ui)) = (split_position.upgrade(), weak.upgrade()) {
                     ed.git_split_position.set(panes.position());
                     ed.keep_git_view(&ui);
@@ -1063,11 +1073,13 @@ impl Editor {
             history.append(&history_section.root);
             panes.set_end_child(Some(&history));
             let fold_panes = panes.downgrade();
-            let reopen = Rc::new(Cell::new(0));
+            // Unfolding goes back to the split as it was, the person's if they placed one.
+            let reopen = Rc::new(Cell::new(if folded("history") { e.git_split_position.get() } else { 0 }));
             history_section.toggle.connect_clicked(move |_| {
                 let Some(panes) = fold_panes.upgrade() else {
                     return;
                 };
+                own.set(true);
                 if folded("history") {
                     reopen.set(panes.position());
                     panes.set_position(panes.height() - 34);
@@ -1075,6 +1087,7 @@ impl Editor {
                     let saved = reopen.get();
                     panes.set_position(if saved > 0 { saved } else { (panes.height() - 280).max(120) });
                 }
+                own.set(false);
             });
 
             let merged = results.0.as_ref().ok().and_then(|value| {
@@ -2051,7 +2064,11 @@ impl Editor {
                     *e.path.borrow_mut() = path.clone();
                     e.project.set(project);
                     *e.diff_data.borrow_mut() = Some(v);
-                    e.rerender_diff();
+                    e.rerender_diff(false);
+                    // The status line describes the file diffed, not the one open before it.
+                    if let Some(v) = e.diff_data.borrow().as_ref() {
+                        e.describe(text(v, "new"));
+                    }
                     e.set_busy(false);
                 }
                 Err(err) => ui.show_error(&readable(&err)),
@@ -2060,7 +2077,7 @@ impl Editor {
         true
     }
     /// The open diff read again after a file or git change, and drawn only when it differs:
-    /// "HEAD ↔ working tree" and its counts follow an agent's edits.
+    /// its sides and counts follow an agent's edits, while the caret and scroll stay put.
     pub(super) fn refresh_diff(self: &Rc<Self>, ui: &Rc<Ui>) {
         let path = self.path.borrow().clone();
         let (staged, old_path) = self.diff_target.borrow().clone();
@@ -2074,19 +2091,27 @@ impl Editor {
                 return;
             }
             *e.diff_data.borrow_mut() = Some(v);
-            e.rerender_diff();
+            e.rerender_diff(true);
         });
     }
     /// Draw the open diff split or inline, with removed lines red and added lines green
-    /// over the file's own syntax colours.
-    pub(super) fn rerender_diff(&self) {
+    /// over the file's own syntax colours. The caret goes to the first change, unless `keep`:
+    /// a refresh under someone reading leaves each side's caret and scroll where they were.
+    pub(super) fn rerender_diff(&self, keep: bool) {
         let Some(v) = self.diff_data.borrow().clone() else {
             return;
         };
         if !self.diff.get() {
             return;
         }
+        let before_view = self.before_scroll.child().and_downcast::<sourceview5::View>();
+        let held = |buffer: &sourceview5::Buffer, view: Option<&sourceview5::View>| {
+            let at = buffer.iter_at_mark(&buffer.get_insert());
+            ((at.line(), at.line_offset()), view.and_then(|v| v.vadjustment()).map(|a| (a.value(), a)))
+        };
+        let kept = keep.then(|| (held(&self.buffer, Some(&self.view)), held(&self.before, before_view.as_ref())));
         let path = self.path.borrow().clone();
+        let against = if self.diff_target.borrow().0 { "HEAD ↔ index" } else { "HEAD ↔ working tree" };
         let old = text(&v, "old");
         let new = text(&v, "new");
         let unified: String = rows(&v, "hunks").iter().map(|hunk| text(hunk, "text")).collect();
@@ -2130,9 +2155,28 @@ impl Editor {
             for line in &added {
                 tag_line(&self.buffer, &new_tag, *line);
             }
-            self.caption.set_text(&format!("{path} · HEAD ↔ working tree"));
+            self.caption.set_text(&format!("{path} · {against}"));
         }
         self.buffer.set_modified(false);
+        let position = if unified.is_empty() {
+            String::from("No changes against HEAD · read only")
+        } else {
+            format!("+{} −{} · read only", added.len(), removed.len())
+        };
+        if let Some((now, then)) = kept {
+            for (buffer, ((line, offset), scroll)) in [(&self.buffer, now), (&self.before, then)] {
+                let at = buffer
+                    .iter_at_line_offset(line, offset)
+                    .or_else(|| buffer.iter_at_line(line))
+                    .unwrap_or_else(|| buffer.end_iter());
+                buffer.place_cursor(&at);
+                if let Some((value, adjustment)) = scroll {
+                    glib::idle_add_local_once(move || adjustment.set_value(value));
+                }
+            }
+            self.position.set_text(&position);
+            return;
+        }
         // A change past the last line (lines added at the end) is at the end.
         let line = |buffer: &sourceview5::Buffer| match first {
             Some(line) => buffer.iter_at_line(line as i32).unwrap_or_else(|| buffer.end_iter()),
@@ -2142,7 +2186,7 @@ impl Editor {
         // Scrolled once the views have their new size, as `reveal` does; HEAD's side with it.
         let mut views = vec![(self.view.clone(), self.buffer.get_insert())];
         if self.before_scroll.is_visible() {
-            if let Some(before) = self.before_scroll.child().and_downcast::<sourceview5::View>() {
+            if let Some(before) = before_view {
                 self.before.place_cursor(&line(&self.before));
                 views.push((before, self.before.get_insert()));
             }
@@ -2153,11 +2197,7 @@ impl Editor {
             }
         });
         // After the caret moved, whose position line this replaces.
-        self.position.set_text(&if unified.is_empty() {
-            String::from("No changes against HEAD · read only")
-        } else {
-            format!("+{} −{} · read only", added.len(), removed.len())
-        });
+        self.position.set_text(&position);
     }
     fn show_commit(self: &Rc<Self>, ui: &Rc<Ui>, sha: String) {
         let project = ui.project.get();

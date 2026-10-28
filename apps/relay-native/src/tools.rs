@@ -9,7 +9,6 @@ use std::rc::Rc;
 pub(crate) mod devices;
 #[path = "tools_market.rs"]
 mod market;
-pub(crate) use market::enable_switch;
 #[path = "tools_plugins.rs"]
 pub(crate) mod plugins;
 #[path = "tools_settings.rs"]

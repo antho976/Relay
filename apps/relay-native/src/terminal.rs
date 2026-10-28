@@ -790,7 +790,7 @@ impl Pane {
                         // after that; an attach that works starts the count over.
                         let refusals = p.refusals.get() + 1;
                         p.refusals.set(refusals);
-                        let wait = Duration::from_secs(1 << refusals.min(5).saturating_sub(1)).min(Duration::from_secs(30));
+                        let wait = Duration::from_secs(1 << refusals.min(6).saturating_sub(1)).min(Duration::from_secs(30));
                         p.retry_at.set(Some(std::time::Instant::now() + wait));
                         p.status.set_text(&format!("{} Trying again in {} s.", crate::editor::readable(&e), wait.as_secs()));
                         p.active.set(false);
