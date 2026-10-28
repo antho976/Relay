@@ -854,7 +854,7 @@ pub fn register(e: &mut Engine) {
             device: p.device.as_deref(), launch: p.launch.as_deref(), steps: &p.steps, tail, fps, demo: p.demo.unwrap_or(true),
             name: p.name.as_deref(), overwrite: p.overwrite.unwrap_or(false),
         };
-        let c = video::capture::capture(ctx.engine(), &adb, Path::new(&video.dir), holder, &plan)?;
+        let c = video::capture::capture(ctx, &adb, Path::new(&video.dir), holder, &plan)?;
         Ok(Staged(CaptureOut { asset: c.asset, seconds: c.seconds, fps, frames: c.frames, steps: c.marks, motion: c.motion, device: c.device }))
     }, |ctx: &mut Ctx, p, staged| {
         commit_to(ctx, p.video_id)?;
@@ -953,7 +953,9 @@ pub fn register(e: &mut Engine) {
             let actor = caller_name(ctx);
             stills::snapshot(ctx.engine(), &video, &Caller { actor: &actor, session_id: ctx.actor_session_id() })?;
         }
-        let versions::Restored { missing, left, .. } = versions::restore(&dir, &blobs, &entries, only.as_deref()).map_err(folder)?;
+        // One that fails partway puts the folder back as it was: in an undo's replay nothing
+        // above recorded it, and the transaction's rollback would lose a record made here.
+        let versions::Restored { missing, left, .. } = versions::restore_or_back(&dir, &blobs, &entries, &before.entries, only.as_deref()).map_err(folder)?;
         let after = versions::scan(&dir, &blobs).map_err(folder)?;
         Ok(StagedRestore { before, after, only, missing, left })
     }, |ctx: &mut Ctx, p, staged| {

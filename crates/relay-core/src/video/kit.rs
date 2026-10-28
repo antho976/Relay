@@ -290,6 +290,8 @@ pub fn install(engine: &Arc<Engine>) -> KitStatus {
     });
     let started = std::thread::Builder::new().name("video-kit".into()).spawn(move || {
         let Some(engine) = weak.upgrade() else { return };
+        // However the setup ends, a panic included, it is over when this goes.
+        let _settle = Settle(engine.clone());
         let root = engine.store.videos_dir();
         let stage = |name: &str, detail: &str| {
             if let Some((_, p)) = engine.video.kit.progress.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
@@ -302,20 +304,10 @@ pub fn install(engine: &Arc<Engine>) -> KitStatus {
         };
         // Nothing runs on the packages while they are replaced.
         super::worker::stop(&engine);
-        let result = set_up(&root, &stage);
-        let hub = &engine.video;
-        *hub.kit.progress.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        if let Err(e) = &result {
+        if let Err(e) = set_up(&root, &stage) {
             tracing::warn!(error = %e, "video kit setup failed");
-            *hub.kit.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.clone());
+            *engine.video.kit.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(e);
         }
-        // A worker started on the old kit would keep it: the next request starts one anew.
-        super::worker::stop(&engine);
-        hub.kit.installing.store(false, Ordering::SeqCst);
-        let status = status(&engine);
-        engine.emit_system("video.kit.changed", serde_json::to_value(&status).unwrap_or_default());
-        // Renders queued while it was set up waited for it.
-        super::jobs::enqueue(&engine);
     });
     if started.is_err() {
         hub.kit.installing.store(false, Ordering::SeqCst);
@@ -323,6 +315,27 @@ pub fn install(engine: &Arc<Engine>) -> KitStatus {
     let status = status(engine);
     engine.emit_system("video.kit.changed", serde_json::to_value(&status).unwrap_or_default());
     status
+}
+
+/// The end of a setup, run when its thread lets go of it, however it ends: the worker stopped
+/// (one started on the old kit would keep it), the kit no longer setting up, its state said, and
+/// the renders queued meanwhile started. A setup that panicked is a failed one.
+struct Settle(Arc<Engine>);
+
+impl Drop for Settle {
+    fn drop(&mut self) {
+        let engine = &self.0;
+        let hub = &engine.video;
+        if std::thread::panicking() {
+            *hub.kit.error.lock().unwrap_or_else(|e| e.into_inner()) = Some("the setup stopped on an error in Relay".into());
+        }
+        *hub.kit.progress.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        super::worker::stop(engine);
+        hub.kit.installing.store(false, Ordering::SeqCst);
+        let status = status(engine);
+        engine.emit_system("video.kit.changed", serde_json::to_value(&status).unwrap_or_default());
+        super::jobs::enqueue(engine);
+    }
 }
 
 fn tail(bytes: &[u8]) -> String {
@@ -367,6 +380,22 @@ fn set_up(root: &Path, stage: &dyn Fn(&str, &str)) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A setup whose thread panics still ends: the kit is no longer setting up (so the renders
+    /// waiting on it start), and it reads as failed.
+    #[test]
+    fn a_setup_that_panics_still_ends() {
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        engine.video.kit.installing.store(true, Ordering::SeqCst);
+        let held = engine.clone();
+        let ended = std::thread::spawn(move || {
+            let _settle = Settle(held);
+            panic!("set_up broke");
+        }).join();
+        assert!(ended.is_err());
+        assert!(!engine.video.kit.installing.load(Ordering::SeqCst));
+        assert_eq!(engine.video.kit.error.lock().unwrap().as_deref(), Some("the setup stopped on an error in Relay"));
+    }
 
     #[test]
     fn the_runtime_comes_with_the_plugin_and_lands_where_videos_resolve_it() {

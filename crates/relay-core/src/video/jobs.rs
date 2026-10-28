@@ -159,6 +159,9 @@ fn run(weak: Weak<Engine>) {
             // A render that panics fails alone: its row is failed and the queue goes on.
             let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render_one(&engine, id, project_id)));
             if ran.is_err() {
+                // The worker may still be drawing it, as past a timeout: told to stop.
+                let _ = worker::call(&engine, "cancel", json!({"job": job(id)}), Duration::from_secs(10));
+                worker::unwatch(&engine, &job(id));
                 lock(&engine.video.jobs.stopping).remove(&id);
                 let _ = advance(&engine, id, project_id, |tx, now| {
                     tx.prepare_cached("UPDATE video_renders SET state = 'failed', error = 'the render stopped on an error in Relay', finished_at = ?2

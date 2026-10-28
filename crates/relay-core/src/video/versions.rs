@@ -196,8 +196,12 @@ pub fn restore(dir: &Path, blobs: &Path, entries: &[Entry], only: Option<&[Strin
                 left.push(rel.clone());
                 continue;
             }
-            fs::remove_file(&path).map_err(|e| format!("{rel}: {e}"))?;
-            removed += 1;
+            match remove_in(dir, rel) {
+                Ok(()) => removed += 1,
+                // A folder on its way became a link since it was read: left, never followed.
+                Err(e) if e.raw_os_error() == Some(libc::ELOOP) => left.push(rel.clone()),
+                Err(e) => return Err(format!("{rel}: {e}")),
+            }
         }
     }
     let (mut written, mut missing) = (0, Vec::new());
@@ -220,17 +224,111 @@ pub fn restore(dir: &Path, blobs: &Path, entries: &[Entry], only: Option<&[Strin
             continue;
         }
         match fs::read(blob_path(blobs, &entry.hash)) {
-            Ok(bytes) => {
-                if let Some(parent) = target.parent() {
-                    fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", entry.path))?;
-                }
-                fs::write(&target, bytes).map_err(|e| format!("{}: {e}", entry.path))?;
-                written += 1;
-            }
+            Ok(bytes) => match write_in(dir, &entry.path, &bytes) {
+                Ok(()) => written += 1,
+                Err(e) if e.raw_os_error() == Some(libc::ELOOP) => left.push(entry.path.clone()),
+                Err(e) => return Err(format!("{}: {e}", entry.path)),
+            },
             Err(_) => missing.push(entry.path.clone()),
         }
     }
     Ok(Restored { written, removed, missing, left })
+}
+
+/// [`restore`], and when it fails partway (a full disk, a folder where the version has a file)
+/// the folder put back as `before` has it, the scan taken just before, whose files are all kept
+/// as blobs: a failed restore leaves the code as it found it, not half of each.
+pub fn restore_or_back(dir: &Path, blobs: &Path, entries: &[Entry], before: &[Entry], only: Option<&[String]>) -> Result<Restored, String> {
+    restore(dir, blobs, entries, only).map_err(|e| match restore(dir, blobs, before, only) {
+        Ok(_) => format!("{e}; the folder was put back as it was"),
+        Err(back) => format!("{e}; putting the folder back failed too: {back}"),
+    })
+}
+
+/// The folder holding `rel` in `dir`, opened a folder at a time from `dir` itself and never
+/// through a link (`O_NOFOLLOW`): one swapped in for any of them since it was read fails the
+/// open with `ELOOP` rather than leading out of the folder. With `make`, missing folders are
+/// made. The name left to act on in it.
+fn open_parent(dir: &Path, rel: &str, make: bool) -> std::io::Result<(std::os::fd::OwnedFd, std::ffi::CString)> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    let name = |part: &[u8]| std::ffi::CString::new(part).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput));
+    let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    let open = |at: libc::c_int, part: &std::ffi::CStr| -> std::io::Result<OwnedFd> {
+        // SAFETY: `part` is a NUL-terminated name, `at` an open folder or AT_FDCWD.
+        let fd = unsafe { libc::openat(at, part.as_ptr(), flags) };
+        if fd >= 0 {
+            return Ok(unsafe { OwnedFd::from_raw_fd(fd) });
+        }
+        let e = std::io::Error::last_os_error();
+        // With O_DIRECTORY a link is told as "not a folder": said as the link it is.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: as above; `st` is written by the call.
+        let link = e.raw_os_error() == Some(libc::ENOTDIR)
+            && unsafe { libc::fstatat(at, part.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } == 0
+            && st.st_mode & libc::S_IFMT == libc::S_IFLNK;
+        Err(if link { std::io::Error::from_raw_os_error(libc::ELOOP) } else { e })
+    };
+    let mut at = open(libc::AT_FDCWD, &name(dir.as_os_str().as_bytes())?)?;
+    let mut parts = rel.split('/').filter(|p| !p.is_empty()).peekable();
+    while let Some(part) = parts.next() {
+        let part = name(part.as_bytes())?;
+        if parts.peek().is_none() {
+            return Ok((at, part));
+        }
+        // SAFETY: as above.
+        if make && unsafe { libc::mkdirat(at.as_raw_fd(), part.as_ptr(), 0o777) } < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(e);
+            }
+        }
+        at = open(at.as_raw_fd(), &part)?;
+    }
+    Err(std::io::Error::from(std::io::ErrorKind::InvalidInput))
+}
+
+/// Write `bytes` as `rel` in `dir`: to a hidden file beside it, then renamed over it, so a link
+/// there is replaced rather than written through, and its folders opened as [`open_parent`]
+/// opens them.
+fn write_in(dir: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    let (parent, name) = open_parent(dir, rel, true)?;
+    let part = std::ffi::CString::new(format!(".{}.restoring-{}", name.to_string_lossy(), std::process::id()))
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    // SAFETY: `part` is NUL-terminated and `parent` an open folder.
+    let fd = unsafe { libc::openat(parent.as_raw_fd(), part.as_ptr(), flags, 0o666 as libc::c_uint) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut file = fs::File::from(unsafe { OwnedFd::from_raw_fd(fd) });
+    let written = file.write_all(bytes).and_then(|_| {
+        // SAFETY: both names NUL-terminated, both in `parent`.
+        if unsafe { libc::renameat(parent.as_raw_fd(), part.as_ptr(), parent.as_raw_fd(), name.as_ptr()) } < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    });
+    if written.is_err() {
+        // SAFETY: as above.
+        unsafe { libc::unlinkat(parent.as_raw_fd(), part.as_ptr(), 0) };
+    }
+    written
+}
+
+/// Remove `rel` in `dir` (a link itself, never what it points at), its folders opened as
+/// [`open_parent`] opens them.
+fn remove_in(dir: &Path, rel: &str) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let (parent, name) = open_parent(dir, rel, false)?;
+    // SAFETY: `name` is NUL-terminated and `parent` an open folder.
+    if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Whether `rel` in `dir`, or a folder on the way to it, is a link.
@@ -393,6 +491,47 @@ mod tests {
         left.sort();
         assert_eq!(left, ["public/clip.mp4", "public/music.mp3"]);
         assert!(dir.join("public/music.mp3").exists() && fs::symlink_metadata(dir.join("public/clip.mp4")).is_ok());
+    }
+
+    /// The writes a restore makes never pass through a link, even one swapped in after the
+    /// folder was read: a link as a folder on the way fails with ELOOP, and a link as the file
+    /// itself is replaced, not written through; a removal takes the link, not its target.
+    #[test]
+    fn writes_and_removals_open_each_folder_without_following_a_link() {
+        let root = tempfile::tempdir().unwrap();
+        let (dir, outside) = (root.path().join("v"), root.path().join("outside"));
+        tree(&dir, &[("public/keep.txt", "k")]);
+        tree(&outside, &[("a.ts", "theirs"), ("song.mp3", "mine")]);
+        std::os::unix::fs::symlink(&outside, dir.join("src")).unwrap();
+        assert_eq!(write_in(&dir, "src/a.ts", b"ours").unwrap_err().raw_os_error(), Some(libc::ELOOP));
+        assert_eq!(remove_in(&dir, "src/a.ts").unwrap_err().raw_os_error(), Some(libc::ELOOP));
+        std::os::unix::fs::symlink(outside.join("song.mp3"), dir.join("public/music.mp3")).unwrap();
+        write_in(&dir, "public/music.mp3", b"old").unwrap();
+        assert!(!fs::symlink_metadata(dir.join("public/music.mp3")).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(dir.join("public/music.mp3")).unwrap(), "old");
+        std::os::unix::fs::symlink(outside.join("song.mp3"), dir.join("public/clip.mp3")).unwrap();
+        remove_in(&dir, "public/clip.mp3").unwrap();
+        assert_eq!((fs::read_to_string(outside.join("a.ts")).unwrap(), fs::read_to_string(outside.join("song.mp3")).unwrap()), ("theirs".into(), "mine".into()));
+        write_in(&dir, "src2/deep/new.ts", b"n").unwrap();
+        assert_eq!(fs::read_to_string(dir.join("src2/deep/new.ts")).unwrap(), "n", "folders made as it goes");
+        assert!(fs::read_dir(dir.join("public")).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains("restoring")), "no part file left");
+    }
+
+    /// A restore that fails partway (here a folder where the version has a file) puts the folder
+    /// back as it was before it started.
+    #[test]
+    fn a_restore_that_fails_partway_puts_the_folder_back() {
+        let root = tempfile::tempdir().unwrap();
+        let (dir, blobs) = (root.path().join("v"), root.path().join("blobs"));
+        tree(&dir, &[("src/a.ts", "old a"), ("src/z", "old z")]);
+        let first = scan(&dir, &blobs).unwrap();
+        fs::write(dir.join("src/a.ts"), "new a").unwrap();
+        fs::remove_file(dir.join("src/z")).unwrap();
+        tree(&dir, &[("src/z/x.ts", "x"), ("src/z/y.ts", "y")]);
+        let before = scan(&dir, &blobs).unwrap();
+        let why = restore_or_back(&dir, &blobs, &first.entries, &before.entries, None).unwrap_err();
+        assert!(why.contains("src/z") && why.contains("put back as it was"), "{why}");
+        assert_eq!(scan(&dir, &blobs).unwrap().digest, before.digest, "as it was before the restore");
     }
 
     /// A file the version holds, now a link (or in a folder that is now a link), is not written
