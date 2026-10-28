@@ -147,7 +147,7 @@ object EventRouter {
         "session.*", "guardrail.*", "notify.*", "task.*", "project.*", "workspace.*", "mailbox.*",
         "notes.*", "module.*", "git.*", "file.*", "worktree.*", "overlap.*", "integration.*", "usage.*",
         "run.*", "device.*", "avd.*", "skill.*", "plugin.*", "provider.*", "settings.*", "github.*",
-        "thread.*", "money.*", "arbiter.*", "gym.*", "design.*",
+        "thread.*", "money.*", "arbiter.*", "gym.*", "design.*", "aide.*",
     )
 
     /** Whether the door sends [ev] to a phone that subscribed to [events]: as socket.rs `Filter::matches` reads them. */

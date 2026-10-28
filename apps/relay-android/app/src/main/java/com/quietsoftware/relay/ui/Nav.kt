@@ -131,6 +131,7 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     override fun tally() = go("tally")
     override fun arbiter() = go("arbiter")
     override fun avex() = go("avex")
+    override fun aide() = go("aide")
     /** One of Avex's lifts, by its name as Avex shows it. */
     fun avexLift(name: String) = go("avex-lift" + q("name" to name))
     /** One of Arbiter's strategies. */

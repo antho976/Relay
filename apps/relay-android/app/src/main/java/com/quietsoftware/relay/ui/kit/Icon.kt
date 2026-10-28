@@ -97,4 +97,6 @@ private val EXTRA: Map<String, Glyph> = mapOf(
     "menu" to Glyph(1f, listOf(GlyphShape("M2.5 4h11M2.5 8h11M2.5 12h11", false, true, 0f))),
     "arbiter" to Glyph(1f, listOf(GlyphShape("M2 12l3.5-4 3 2.5L14 4M10.5 4H14v3.5", false, true, 0f))),
     "avex" to Glyph(1f, listOf(GlyphShape("M1.5 6.5v3M4 4.5v7M4 8h8M12 4.5v7M14.5 6.5v3", false, true, 0f))),
+    // Aide: a spark, the agent that speaks first.
+    "aide" to Glyph(1f, listOf(GlyphShape("M8 1.5v4M8 10.5v4M1.5 8h4M10.5 8h4M4.2 4.2l1.6 1.6M10.2 10.2l1.6 1.6M11.8 4.2l-1.6 1.6M5.8 10.2l-1.6 1.6", false, true, 0f))),
 )

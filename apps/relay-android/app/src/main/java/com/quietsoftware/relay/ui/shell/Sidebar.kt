@@ -59,6 +59,7 @@ interface SidebarNav {
     fun tally()
     fun arbiter()
     fun avex()
+    fun aide()
 }
 
 /**
@@ -147,6 +148,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.threads(s: ShellState
     item { NavRow("Tally", "home", route == "tally", onClick = nav::tally) }
     item { NavRow("Arbiter", "arbiter", route == "arbiter", onClick = nav::arbiter) }
     item { NavRow("Avex", "avex", route == "avex", onClick = nav::avex) }
+    item { NavRow("Aide", "aide", route == "aide", onClick = nav::aide) }
     val zone = ZoneId.systemDefault()
     val today = LocalDate.now(zone)
     fun group(t: Thread): String {

@@ -44,6 +44,7 @@ import com.quietsoftware.relay.ui.tasks.BoardScreen
 import com.quietsoftware.relay.ui.tasks.ModulesScreen
 import com.quietsoftware.relay.ui.tasks.TaskEditScreen
 import com.quietsoftware.relay.ui.tasks.TaskScreen
+import com.quietsoftware.relay.ui.threads.AideScreen
 import com.quietsoftware.relay.ui.threads.ArbiterScreen
 import com.quietsoftware.relay.ui.threads.ArbiterStrategyScreen
 import com.quietsoftware.relay.ui.threads.AvexLiftScreen
@@ -120,6 +121,7 @@ private fun Destinations(nav: Nav, startRoute: String) {
         composable("tally") { TallyScreen(nav) }
         composable("arbiter") { ArbiterScreen(nav) }
         composable("avex") { AvexScreen(nav) }
+        composable("aide") { AideScreen(nav) }
         composable("avex-lift?name={name}", listOf(opt("name"))) { AvexLiftScreen(it.str("name").orEmpty(), nav) }
         composable("arbiter-strategy/{id}") { ArbiterStrategyScreen(it.long("id") ?: 0, nav) }
         composable("pair?link={link}", listOf(opt("link"))) { PairEntry(it.str("link"), nav) }
