@@ -133,6 +133,15 @@ pub fn advance(engine: &Arc<Engine>) {
     }
 }
 
+/// [`advance`] on a thread of its own: a handler's after-commit hands it off, so starting a run
+/// (reading its sources, starting its agent) never holds the request that queued it.
+pub fn advance_soon(engine: Arc<Engine>) {
+    let started = std::thread::Builder::new().name("aide-start".into()).spawn(move || advance(&engine));
+    if let Err(e) = started {
+        tracing::warn!(error = %e, "could not start Aide's queued runs");
+    }
+}
+
 /// Start `run`; whether it now holds a seat. A run that cannot start ends here, saying why; one
 /// whose channel is busy with the person stays queued.
 fn launch(engine: &Arc<Engine>, run: &Run) -> bool {
@@ -237,6 +246,18 @@ pub fn ops_for_thread(engine: &Engine, thread: i64) -> Vec<&'static str> {
         Tier::Off => false,
     }).collect();
     policy::ops(&allowed)
+}
+
+/// Whether an Aide thread's agent may resume its conversation on `model`: not on Claude's after a
+/// run on one of the person's own models, whose conversation holds what that model read. The
+/// person may move a channel to Claude; it then starts afresh.
+pub fn may_resume(engine: &Engine, thread: i64, model: Option<&str>) -> bool {
+    let Ok(settings) = super::settings(engine) else { return false };
+    if policy::host_of(model, &settings, &models::pc_models(engine)).is_own() {
+        return true;
+    }
+    let last = with_db(engine, |db| db.last_run_of_thread(thread)).ok().flatten();
+    !last.and_then(|r| r.host).is_some_and(|h| h != Host::Claude.as_str())
 }
 
 /// The message that wakes the agent, what each source read gave, and the facts it was handed.

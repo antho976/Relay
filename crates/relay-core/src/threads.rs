@@ -1513,7 +1513,8 @@ fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Opti
     let assistant = thread.kind == ASSISTANT;
     let aide = thread.kind == AIDE;
     let args = if aide {
-        aide_args(&mcp_config(engine), thread.model.as_deref(), effort, thread.agent_ref.as_deref(), style.lean)
+        let resume = thread.agent_ref.as_deref().filter(|_| crate::aide::runs::may_resume(engine, id, thread.model.as_deref()));
+        aide_args(&mcp_config(engine), thread.model.as_deref(), effort, resume, style.lean)
     } else if assistant {
         assistant_args(&mcp_config(engine), thread.model.as_deref(), effort, thread.agent_ref.as_deref(), style.lean)
     } else {

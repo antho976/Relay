@@ -314,3 +314,28 @@ fn a_schedule_missed_while_off_catches_up_inside_its_grace_only() {
     let rolled = ok(&engine, "aide.job.get", json!({"id": stale["id"]}))["job"]["next_due_at"].as_str().unwrap().to_string();
     assert!(rolled > relay_core::time::now(), "it waits for its next time: {rolled}");
 }
+
+#[test]
+fn a_channel_moved_to_claude_after_a_run_on_your_own_model_starts_afresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine();
+    relay_core::aide::spawn(&engine);
+    with_fake(&engine, dir.path());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut settings = ok(&engine, "aide.settings.get", json!({}));
+    settings["endpoints"] = json!([{"id": "farm", "name": "Farm", "url": format!("http://{}", listener.local_addr().unwrap())}]);
+    ok(&engine, "aide.settings.set", settings);
+    let j = job(&engine, json!({"name": "Mine", "instructions": "Look.", "sources": ["gym"], "model": "farm"}));
+    let done = ended(&engine, &ok(&engine, "aide.run.now", json!({"job_id": j["id"]}))["id"]);
+    assert_eq!(done["host"], "server");
+    let thread = done["thread_id"].clone();
+    // The person moves the channel to Claude and asks a follow-up there.
+    ok(&engine, "thread.set", json!({"id": thread, "model": "claude-sonnet-5-5"}));
+    ok(&engine, "thread.send", json!({"id": thread, "text": "And last week?"}));
+    wait_until("the reply", || ok(&engine, "thread.get", json!({"id": thread}))["thread"]["working"] == false
+        && ok(&engine, "thread.get", json!({"id": thread}))["messages"].as_array().unwrap().len() >= 4);
+    let args = std::fs::read_to_string(dir.path().join("args.log")).unwrap();
+    let last = args.lines().last().unwrap();
+    assert!(last.contains("--model claude-sonnet-5-5") && !last.contains("--resume"), "{last}");
+    drop(listener);
+}

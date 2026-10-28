@@ -101,7 +101,7 @@ pub fn register(e: &mut Engine) {
         ctx.emit("aide.changed", json!({"what": "settings"}));
         ctx.after_commit(|engine| {
             aide::poke(&engine);
-            runs::advance(&engine);
+            runs::advance_soon(engine);
         });
         Ok(s)
     });
@@ -185,7 +185,7 @@ pub fn register(e: &mut Engine) {
         ctx.emit("aide.changed", json!({"what": "job", "id": p.id}));
         ctx.after_commit(|engine| {
             aide::poke(&engine);
-            runs::advance(&engine);
+            runs::advance_soon(engine);
         });
         Ok(Empty {})
     });
@@ -200,7 +200,7 @@ pub fn register(e: &mut Engine) {
         let at = ctx.now.clone();
         let id = with_db(ctx.engine(), |db| db.add_run(p.job_id, Reason::Manual, &trigger, RunState::Queued, None, &at))?;
         ctx.emit("aide.changed", json!({"what": "run", "id": id}));
-        ctx.after_commit(|engine| runs::advance(&engine));
+        ctx.after_commit(runs::advance_soon);
         with_db(ctx.engine(), |db| db.run(id))?.ok_or_else(|| not_found("run", id))
     });
     e.register::<RunStop>(|ctx, p| {
@@ -214,7 +214,7 @@ pub fn register(e: &mut Engine) {
                     crate::threads::stop(&engine, t);
                     engine.emit_system("thread.changed", json!({"thread": crate::threads::get(&engine, t).ok()}));
                 }
-                runs::advance(&engine);
+                runs::advance_soon(engine);
             });
         }
         ctx.emit("aide.changed", json!({"what": "run", "id": p.id}));
@@ -229,7 +229,7 @@ pub fn register(e: &mut Engine) {
         let thread = ctx.thread().ok_or_else(|| BusError::refused("aide.agent", "aide.run.finish is Aide's agent's, for the run that woke it"))?;
         let r = runs::finish(ctx.engine(), thread, p.outcome, p.note.as_deref())?;
         ctx.emit("aide.changed", json!({"what": "run", "id": r.id}));
-        ctx.after_commit(|engine| runs::advance(&engine));
+        ctx.after_commit(runs::advance_soon);
         Ok(r)
     });
 

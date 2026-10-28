@@ -33,7 +33,9 @@ One binary, agent-native, Linux-first. Clean-slate rewrite; v3 data imported.
 - **notify** — inotify watchers per worktree; git panel and file tree refresh
   on events. NO polling timers anywhere in v4. A 60s "trust but verify"
   reconcile pass and the 20-minute merged-branch sweep (`git.branch.cleanup`,
-  BUS.md §10.12) are the only clock-driven work in the app.
+  BUS.md §10.12) are the only clock-driven work in the app, with Aide's
+  scheduler (docs/AIDE.md): one wait until its earliest job, follow-up or
+  deadline is due, not a tick.
 - **serde + schemars** — bus message types with generated JSON schema.
 
 ## Build & Release
