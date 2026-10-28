@@ -1,9 +1,12 @@
 /* The assistant (assistant.rs): a drawer over the page's right edge, opened from the title bar.
-   Opaque, so a pane's terminal never shows through the conversation. Its replies, tool lines,
-   composer and cards are Threads' own (threads.css); only the frame and the ask card are here. */
+   Opaque, so a pane's terminal never shows through the conversation. Its replies, tool lines and
+   composer are Threads' own (threads.css); the frame, its menus, the ask card and the live cards
+   of tasks, sessions and notes are here. */
 .topbar-actions > button.icon-key.assistant-open { color: @ink; background: alpha(@ink, 0.08); }
 .assistant-drawer { background: @pane; border-left: 1px solid @edge; box-shadow: -12px 0 32px alpha(black, 0.28); }
 .assistant-head { padding: 14px 12px 12px 18px; border-bottom: 1px solid @line_subtle; }
+menubutton.assistant-head-key > button { min-width: 30px; min-height: 30px; padding: 0; border-radius: 8px; background: none; box-shadow: none; color: @secondary; }
+menubutton.assistant-head-key > button:hover, menubutton.assistant-head-key > button:checked { background: alpha(@ink, 0.08); color: @ink; }
 .assistant-title { font-size: 14px; font-weight: 600; color: @ink; }
 .assistant-subtitle { font-size: 12px; color: @faint; }
 .assistant-scroll, .assistant-scroll viewport { background: transparent; }
@@ -26,3 +29,38 @@ button.assistant-suggestion:hover { border-color: @line_emphasis; background: @w
 .assistant-pill.assistant-pill-failed { color: @held_text; background: alpha(@held, 0.14); border-color: alpha(@held, 0.4); }
 .assistant-steps { padding: 8px 10px; border-radius: 9px; background: @wash; }
 .assistant-step { font-family: "Geist Mono", monospace; font-size: 11px; line-height: 16px; color: @secondary; }
+
+button.assistant-link { min-height: 0; padding: 0 2px; background: none; box-shadow: none; color: @ink; font-size: 12px; font-weight: 500; text-decoration: underline; }
+button.assistant-link:hover { color: @ink; background: none; }
+
+/* Earlier chats and what it does without asking: the head's menus. */
+.assistant-popover > contents { padding: 0; }
+.assistant-history-title { font-size: 13px; color: @ink; }
+.assistant-history-detail { font-size: 11px; color: @faint; }
+.threads-menu button.nav.assistant-history-row { min-height: 40px; padding: 4px 8px; }
+.threads-menu button.nav.assistant-history-current { background: alpha(@ink, 0.06); }
+button.icon-key.assistant-bin-armed { color: @held_text; background: alpha(@held, 0.14); }
+.assistant-settings { padding: 12px; }
+.assistant-settings checkbutton { padding: 4px 2px; }
+.assistant-allow-caption { font-size: 13px; color: @ink; }
+.assistant-allow-detail { font-size: 12px; line-height: 17px; color: @faint; }
+.assistant-allow-note { margin-top: 4px; padding-top: 8px; border-top: 1px solid @line_subtle; }
+
+/* A task, a session or a note in a reply, read live; the whole card opens it. */
+button.assistant-card { padding: 10px 12px; border: 1px solid @edge; border-radius: 12px; background: @slab; box-shadow: none; font-weight: 400; }
+button.assistant-card:hover { border-color: @line_emphasis; background: @wash; }
+button.assistant-card:disabled { opacity: 1; }
+button.assistant-card:disabled .threads-card-detail { color: @faint; }
+button.assistant-card image { color: @faint; }
+.assistant-card-id { font-family: "Geist Mono", monospace; font-size: 12px; color: @faint; }
+.assistant-card-text { font-size: 12px; line-height: 17px; color: @secondary; }
+.assistant-card-dot { min-width: 8px; min-height: 8px; border-radius: 999px; background: @ink_dim; }
+.assistant-card-dot.assistant-card-dot-live { background: @live; }
+.assistant-card-dot.assistant-card-dot-idle { background: @secondary; }
+.assistant-card-dot.assistant-card-dot-waiting { background: @waiting; }
+.assistant-card-dot.assistant-card-dot-held { background: @held; }
+
+/* Where an open block went: a quiet key that goes there again. */
+button.assistant-open-key { min-height: 26px; padding: 0 10px; border: 1px solid @edge; border-radius: 999px; background: @raised; box-shadow: none; color: @secondary; font-size: 12px; font-weight: 500; }
+button.assistant-open-key:hover { color: @ink; background: @wash; border-color: @line_emphasis; }
+button.assistant-open-key image { color: @faint; }

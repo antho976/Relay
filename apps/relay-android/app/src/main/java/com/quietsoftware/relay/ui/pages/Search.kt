@@ -53,7 +53,7 @@ fun SearchScreen(nav: Nav) {
     val project = s.project?.num
 
     val pages = listOf(
-        Triple("Agents", "terminal") { nav.agents() },
+        Triple("Agents", "agents") { nav.agents() },
         Triple("Board", "board") { nav.board(project) },
         Triple("Notes", "brief") { nav.notes(project) },
         Triple("Inbox", "inbox") { nav.inbox() },
@@ -72,7 +72,7 @@ fun SearchScreen(nav: Nav) {
         Triple("Plugins", "dashboard") { nav.plugins() },
         Triple("Your PC", "device") { nav.pc() },
         Triple("Settings", "gear") { nav.settings() },
-        Triple("Start screen", "home") { nav.start() },
+        Triple("Home", "home") { nav.home() },
     ).filter { q.isEmpty() || it.first.lowercase().contains(q) }
 
     fun Task.matches() = q.isNotEmpty() && (title.lowercase().contains(q) || ref == q || ref == "#$q" || body.lowercase().contains(q))

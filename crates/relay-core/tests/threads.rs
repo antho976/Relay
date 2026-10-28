@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 /// line on stdin the way the real one does: its id, a piece of text, a tool call and its answer,
 /// the reply, the result. A message saying `slow` waits a second first; one saying `die` exits
 /// mid-turn; one saying `propose` runs `client.py` beside it first, from inside its own tree, as
-/// Relay's MCP server would.
+/// Relay's MCP server would; one saying `silent` calls its tool and ends with only a thought.
 fn fake_claude(dir: &Path) -> (PathBuf, PathBuf) {
     let log = dir.join("args.log");
     let script = dir.join("claude");
@@ -30,6 +30,11 @@ while IFS= read -r line; do
   echo '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}},"parent_tool_use_id":null}'
   echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"mcp__relay__money_summary","input":{}}]},"parent_tool_use_id":null}'
   echo '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":[{"type":"text","text":"{\"spent\":0}"}]}]},"parent_tool_use_id":null}'
+  case "$line" in *silent*)
+    echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hm"}]},"parent_tool_use_id":null}'
+    echo '{"type":"result","subtype":"success","is_error":false,"result":""}'
+    continue;;
+  esac
   echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"Hi from the fake"}]},"parent_tool_use_id":null}'
   echo '{"type":"result","subtype":"success","is_error":false,"result":"Hi from the fake"}'
 done
@@ -738,6 +743,78 @@ fn the_assistant_asks_the_person_and_hears_what_came_of_it() {
     let line: Value = serde_json::from_str(lines.lines().last().unwrap()).unwrap();
     assert_eq!(line["message"]["content"], "And now?");
     ok(&engine, "thread.delete", json!({"id": id}));
+}
+
+/// What the person lets through runs at once and its reply is what came of it, heard there and
+/// not again; launching does by default, stopping a session waits unless they let it, and a step
+/// of no kind always waits on a card.
+#[test]
+fn the_assistant_does_at_once_what_the_person_lets_it() {
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    with_fake(&engine, dir.path());
+    let repo = dir.path().join("ws").join("Shooter");
+    std::fs::create_dir_all(&repo).unwrap();
+    common::init_repo(&repo);
+    let workspace = ok(&engine, "workspace.create", json!({"path": dir.path().join("ws")}));
+    let project = ok(&engine, "project.add", json!({"workspace_id": workspace["id"], "path": repo}))["id"].clone();
+    let id = ok(&engine, "thread.create", json!({"kind": "assistant", "text": "Set up a builder"}))["id"].clone();
+    settled(&engine, &id, 4);
+
+    // Launching is let through by default: the session is made before the reply.
+    let launch = json!({"steps": [{"op": "session.create", "payload": {"project_id": project, "provider": "claude"}}], "why": "You asked for a builder"});
+    let made = from_agent(&engine, &id, "thread.ask", launch).into_result().unwrap();
+    assert_eq!((made["status"].as_str(), made["auto"].as_bool()), (Some("approved"), Some(true)), "{made}");
+    let name = made["results"][0]["name"].as_str().unwrap().to_string();
+    assert!(ok(&engine, "session.list", json!({"project_id": project}))["sessions"].as_array().unwrap().iter().any(|s| s["name"] == name.as_str()));
+
+    // Stopping one waits on a card, until the person lets that kind through.
+    let park = json!({"steps": [{"op": "session.park", "payload": {"session": "nobody-here"}}], "why": "You asked"});
+    let waits = from_agent(&engine, &id, "thread.ask", park.clone()).into_result().unwrap();
+    assert_eq!((waits["status"].as_str(), waits["auto"].as_bool()), (Some("pending"), Some(false)), "{waits}");
+    ok(&engine, "thread.ask.resolve", json!({"id": waits["id"], "approve": false}));
+    ok(&engine, "settings.set", json!({"path": "threads.assistant.without_asking.stop", "value": true}));
+    let ran = from_agent(&engine, &id, "thread.ask", park).into_result().unwrap();
+    assert_eq!((ran["status"].as_str(), ran["auto"].as_bool()), (Some("failed"), Some(true)), "{ran}");
+    assert!(ran["outcome"].as_str().unwrap().starts_with("Step 1 (session.park) failed: "), "{ran}");
+
+    // Adding a workspace is no kind the person can let through.
+    ok(&engine, "settings.set", json!({"path": "threads.assistant.without_asking.type", "value": true}));
+    let games = dir.path().join("games");
+    std::fs::create_dir(&games).unwrap();
+    let workspace = from_agent(&engine, &id, "thread.ask", json!({"steps": [{"op": "workspace.create", "payload": {"path": games}}], "why": "Games"}));
+    assert_eq!(workspace.into_result().unwrap()["status"], "pending");
+
+    // Its next message tells it of the declined card alone: the rest it heard in their replies.
+    ok(&engine, "thread.send", json!({"id": id, "text": "Done?"}));
+    settled(&engine, &id, 8);
+    let lines = std::fs::read_to_string(dir.path().join("lines.log")).unwrap();
+    let line: Value = serde_json::from_str(lines.lines().last().unwrap()).unwrap();
+    let content = line["message"]["content"].as_str().unwrap();
+    assert!(content.contains(&format!("the person declined ask {} (Park nobody-here)", waits["id"])), "{content}");
+    for heard in [&made["id"], &ran["id"]] {
+        assert!(!content.contains(&format!("ask {heard} (")), "{content}");
+    }
+    ok(&engine, "thread.stop", json!({"id": id}));
+}
+
+/// A turn that ends with nothing written for the person says so in the thread, and one that
+/// answers does not.
+#[test]
+fn a_turn_that_writes_the_person_nothing_says_so() {
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    with_fake(&engine, dir.path());
+    let id = ok(&engine, "thread.create", json!({"kind": "assistant", "text": "Stay silent"}))["id"].clone();
+    let read = settled(&engine, &id, 4);
+    let roles: Vec<&str> = read["messages"].as_array().unwrap().iter().map(|m| m["role"].as_str().unwrap()).collect();
+    assert_eq!(roles, ["user", "assistant", "tool", "error"], "{read}");
+    assert_eq!(read["messages"][3]["body"]["text"], relay_core::threads::UNANSWERED);
+    ok(&engine, "thread.send", json!({"id": id, "text": "Hello"}));
+    let read = settled(&engine, &id, 8);
+    let roles: Vec<&str> = read["messages"].as_array().unwrap().iter().map(|m| m["role"].as_str().unwrap()).collect();
+    assert_eq!(roles[4..], ["user", "assistant", "tool", "assistant"], "{read}");
+    ok(&engine, "thread.stop", json!({"id": id}));
 }
 
 /// The assistant on a model on this PC: the model's server started for it (a stand-in that only

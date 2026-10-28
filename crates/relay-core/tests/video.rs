@@ -39,6 +39,12 @@ fn drain(rx: &mut tokio::sync::broadcast::Receiver<Event>) -> Vec<Event> {
     std::iter::from_fn(|| rx.try_recv().ok()).collect()
 }
 
+/// Undo the newest `op` as the person would, through its audit row.
+fn undo_last(e: &Engine, op: &str) {
+    let row = ok(e, "audit.list", json!({"op_prefix": op, "limit": 1}))["rows"][0]["id"].clone();
+    ok(e, "audit.undo", json!({"audit_id": row}));
+}
+
 fn agent(e: &Engine) -> (String, Actor) {
     let name = ok(e, "session.create", json!({"project_id": 1, "provider": "claude", "role": "builder"}))["name"].as_str().unwrap().to_string();
     let actor = Actor::agent(&name);
@@ -405,9 +411,21 @@ fn a_render_can_be_named_and_waited_for_in_the_same_call() {
     // Nothing but the file is left in out/: the partial it was drawn to is gone.
     let out: Vec<String> = fs::read_dir(dir.join("out")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     assert_eq!(out, ["avex-1.0-voiceover.mp4"]);
-    // The same name renders over the file.
+    // The same name renders over the file, and the render before says whose file it is now.
     let again = ok(&e, "video.render", json!({"video_id": id, "name": "avex-1.0-voiceover", "props": {"title": "Second"}, "wait": true}));
     assert!(fs::read_to_string(again["path"].as_str().unwrap()).unwrap().contains("Second"));
+    let first = ok(&e, "video.render.get", json!({"render_id": done["id"]}));
+    assert_eq!(first["replaced_by"], again["id"]);
+    assert_eq!(again["replaced_by"], Value::Null);
+    let third = ok(&e, "video.render", json!({"video_id": id, "name": "avex-1.0-voiceover", "wait": true}));
+    let renders = ok(&e, "video.get", json!({"video_id": id}))["renders"].clone();
+    let by: Vec<Value> = renders.as_array().unwrap().iter().map(|r| r["replaced_by"].clone()).collect();
+    assert_eq!(by, [Value::Null, third["id"].clone(), third["id"].clone()], "each older one names the render whose file it is now");
+    // A failed render of the name leaves the file, and the rows, as they were.
+    fs::write(dir.join("src/THROWS"), "").unwrap();
+    assert_eq!(ok(&e, "video.render", json!({"video_id": id, "name": "avex-1.0-voiceover", "wait": true}))["state"], "failed");
+    assert_eq!(ok(&e, "video.render.get", json!({"render_id": third["id"]}))["replaced_by"], Value::Null);
+    fs::remove_file(dir.join("src/THROWS")).unwrap();
     assert_eq!(code(call(&e, "video.render", json!({"video_id": id, "name": "///"}))), "video.name");
     assert_eq!(code(call(&e, "video.render", json!({"video_id": id, "format": "gif", "preset": "youtube"}))), "video.loudness");
 }
@@ -505,6 +523,74 @@ fn versions_say_what_they_changed() {
     let versions = ok(&e, "video.get", json!({"video_id": id}))["versions"].clone();
     assert_eq!(versions[0]["changed"], json!(["+src/Hook.tsx"]));
     assert_eq!(versions[1]["changed"], json!(["the starter"]));
+}
+
+/// A take worth keeping is named, by the person or an agent, and stays listed however many
+/// versions come after it; its name comes off with null, and an undo puts it back.
+#[test]
+fn a_version_can_be_named_and_is_listed_however_old() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let (id, dir) = create(&e);
+    ok(&e, "plugin.enable", json!({"plugin_id": "video", "project_id": 1, "enabled": true}));
+    let (_, actor) = agent(&e);
+    let named = ok_as(&e, actor, "video.version.label", json!({"video_id": id, "version": 1, "label": "  the first take  "}));
+    assert_eq!((named["n"].as_i64(), named["label"].as_str()), (Some(1), Some("the first take")));
+    for i in 0..22 {
+        fs::write(dir.join("src/Video.tsx"), format!("export const Video = () => null; // {i}\n")).unwrap();
+        ok(&e, "video.check", json!({"video_id": id}));
+    }
+    let versions = ok(&e, "video.get", json!({"video_id": id}))["versions"].clone();
+    let ns: Vec<i64> = versions.as_array().unwrap().iter().map(|v| v["n"].as_i64().unwrap()).collect();
+    assert_eq!(ns.len(), 21, "the newest 20, and the named one");
+    assert_eq!((ns[0], ns[19], ns[20]), (23, 4, 1));
+    assert_eq!((versions[20]["label"].as_str(), versions[20]["changed"].clone()), (Some("the first take"), json!(["the starter"])));
+    assert!(versions[0].get("label").is_none());
+    // Off with null; the undo puts it back.
+    ok(&e, "video.version.label", json!({"video_id": id, "version": 1, "label": null}));
+    assert_eq!(ok(&e, "video.get", json!({"video_id": id}))["versions"].as_array().unwrap().len(), 20);
+    undo_last(&e, "video.version.label");
+    assert_eq!(ok(&e, "video.get", json!({"video_id": id}))["versions"][20]["label"], "the first take");
+    assert_eq!(code(call(&e, "video.version.label", json!({"video_id": id, "version": 99, "label": "x"}))), "video.version");
+    assert_eq!(code(call(&e, "video.version.label", json!({"video_id": id, "version": 1, "label": "x".repeat(81)}))), "video.version");
+}
+
+/// Part of a take brought back: the files named go back as it had them, the rest stay; the answer
+/// says what changed, and the undo puts the whole folder back.
+#[test]
+fn some_files_of_a_version_can_be_put_back_and_the_changes_read_first() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let (id, dir) = create(&e);
+    fs::write(dir.join("src/Open.tsx"), "export const Open = 'first';\n").unwrap();
+    assert_eq!(ok(&e, "video.check", json!({"video_id": id}))["version"], 2);
+    fs::write(dir.join("src/Open.tsx"), "export const Open = 'second';\n").unwrap();
+    fs::write(dir.join("src/Video.tsx"), "export const Video = () => null;\n").unwrap();
+    fs::write(dir.join("src/End.tsx"), "export const End = 1;\n").unwrap();
+
+    // Since v2, read as it is now: recorded first.
+    let diff = ok(&e, "video.version.diff", json!({"video_id": id, "from": 2}));
+    assert_eq!(diff["to"], 3);
+    let files: Vec<(&str, &str)> = diff["files"].as_array().unwrap().iter().map(|f| (f["path"].as_str().unwrap(), f["change"].as_str().unwrap())).collect();
+    assert_eq!(files, [("src/End.tsx", "added"), ("src/Open.tsx", "changed"), ("src/Video.tsx", "changed")]);
+    assert!(diff["files"][1]["diff"].as_str().unwrap().contains("-export const Open = 'first';\n+export const Open = 'second';\n"), "{diff}");
+    let one = ok(&e, "video.version.diff", json!({"video_id": id, "from": 2, "to": 3, "paths": ["src/Open.tsx"]}));
+    assert_eq!(one["files"].as_array().unwrap().len(), 1);
+
+    let restored = ok(&e, "video.version.restore", json!({"video_id": id, "version": 2, "paths": ["src/Open.tsx", "./src/End.tsx"]}));
+    assert_eq!(restored["changed"], json!(["src/Open.tsx", "-src/End.tsx"]));
+    assert_eq!(restored["previous"], 3);
+    assert_eq!(fs::read_to_string(dir.join("src/Open.tsx")).unwrap(), "export const Open = 'first';\n");
+    assert!(!dir.join("src/End.tsx").exists());
+    assert_eq!(fs::read_to_string(dir.join("src/Video.tsx")).unwrap(), "export const Video = () => null;\n", "not named: as it was");
+    undo_last(&e, "video.version.restore");
+    assert_eq!(fs::read_to_string(dir.join("src/Open.tsx")).unwrap(), "export const Open = 'second';\n");
+    assert!(dir.join("src/End.tsx").exists());
+
+    for paths in [json!(["src/Nope.tsx"]), json!(["../escape"]), json!(["out/main-1.mp4"])] {
+        assert_eq!(code(call(&e, "video.version.restore", json!({"video_id": id, "version": 2, "paths": paths}))), "video.version", "{paths}");
+    }
+    assert_eq!(code(call(&e, "video.version.diff", json!({"video_id": id, "from": 40}))), "video.version");
 }
 
 #[test]

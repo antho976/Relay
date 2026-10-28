@@ -82,7 +82,8 @@ button.filter-chip:hover { border-color: @glass_line_hover; background: @glass_h
 
 /* ── Lanes ─────────────────────────────────────────────────────────────── */
 .board-grid { padding: 0 20px 16px; }
-.board-lane { border: 1px solid @glass_edge; border-radius: 14px; background: @glass_well; }
+/* Lanes are open columns on the page (DESIGN.md, Board): the cards are the only boxes. */
+.board-lane { border: 1px solid transparent; border-radius: 14px; background: transparent; }
 .board-lane.drop-lane, .list-section.drop-lane { border-color: @glass_line_hover; background: @glass_hover; }
 .lane-head { padding: 8px 8px 7px 12px; border-bottom: 1px solid @glass_edge; }
 .list-head { padding: 8px 10px 8px 14px; border-bottom: 1px solid @glass_edge; }

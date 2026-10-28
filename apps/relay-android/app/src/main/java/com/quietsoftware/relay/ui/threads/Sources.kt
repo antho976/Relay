@@ -63,6 +63,8 @@ import com.quietsoftware.relay.core.wire.o
 import com.quietsoftware.relay.core.wire.s
 import com.quietsoftware.relay.data.Relay as RelayData
 import com.quietsoftware.relay.ui.LocalNav
+import com.quietsoftware.relay.ui.home.AskBar
+import com.quietsoftware.relay.ui.kit.PillTabs
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Empty
@@ -112,21 +114,32 @@ internal fun rememberLive(op: String, payload: JsonObject = JsonObject(emptyMap(
 
 /** A source's page: a column of at most 720dp that scrolls, its title and context over the body. */
 @Composable
-internal fun SourcePage(title: String, context: (@Composable () -> Unit)?, actions: @Composable RowScope.() -> Unit = {}, body: @Composable ColumnScope.() -> Unit) {
+internal fun SourcePage(
+    title: String,
+    context: (@Composable () -> Unit)?,
+    actions: @Composable RowScope.() -> Unit = {},
+    ask: Pair<String, String>? = null,
+    body: @Composable ColumnScope.() -> Unit,
+) {
     val c = Relay.colors
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val side = gutter(maxWidth)
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
-            Column(Modifier.column().fillMaxWidth().padding(horizontal = side).padding(top = 16.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        T(title, style = Relay.type.heading, color = c.ink)
-                        context?.invoke()
+        Column(Modifier.fillMaxSize()) {
+            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.column().fillMaxWidth().padding(horizontal = side).padding(top = 8.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            T(title, style = Relay.type.heading.copy(fontSize = 24.sp, lineHeight = 30.sp), color = c.ink)
+                            context?.invoke()
+                        }
+                        actions()
                     }
-                    actions()
+                    body()
                 }
-                body()
             }
+            // The space's own question, asked from its page: it starts a thread about it.
+            val nav = LocalNav.current
+            ask?.let { (space, hint) -> AskBar(nav, space, hint, Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp)) }
         }
     }
 }
@@ -217,8 +230,8 @@ fun TallyScreen(nav: Nav) {
         val ledger by remember { nav.relay.cached("money.summary") }.collectAsStateWithLifecycle(null)
         // Entries keeps its period, search and filters while another tab shows.
         val entries = remember { EntriesFilter() }
-        SourcePage("Tally", { T("The PC's ledger, read on this phone", style = Relay.type.caption, color = c.ink3) }) {
-            Segmented(listOf("overview" to "Overview", "entries" to "Entries", "plan" to "Plan", "invest" to "Invest"), tab, { tab = it }, Modifier.fillMaxWidth(), fill = true)
+        SourcePage("Tally", { T("The PC's ledger, read on this phone", style = Relay.type.caption, color = c.ink3) }, ask = "tally" to "Ask about your money…") {
+            PillTabs(listOf("overview" to "Overview", "entries" to "Entries", "plan" to "Plan", "invest" to "Invest"), tab, { tab = it })
             val missing = "This engine does not read Tally yet. Update Relay's engine to see it here."
             when (tab) {
                 "entries" -> TallyEntries(entries, Money.of(ledger?.result as? JsonObject), missing)
@@ -933,8 +946,9 @@ fun ArbiterScreen(nav: Nav) {
             "Arbiter",
             context = s?.o("connection")?.let { { Connection(it) } },
             actions = { Key("Halt all", { halting = true }, kind = KeyKind.Danger, enabled = s != null && s.b("halted") != true) },
+            ask = "arbiter" to "Ask about your strategies…",
         ) {
-            Segmented(listOf("overview" to "Overview", "orders" to "Orders", "settings" to "Settings"), tab, { tab = it }, Modifier.fillMaxWidth(), fill = true)
+            PillTabs(listOf("overview" to "Overview", "orders" to "Orders", "settings" to "Settings"), tab, { tab = it })
             when (tab) {
                 "orders" -> {
                     val limit = remember { buildJsonObject { put("limit", 50) } }
@@ -1264,8 +1278,8 @@ fun AvexScreen(nav: Nav) {
                     ?: "Your training, read from Avex's export",
                 style = Relay.type.caption, color = c.ink3,
             )
-        }) {
-            Segmented(listOf("overview" to "Overview", "workouts" to "Workouts", "lifts" to "Lifts"), tab, { tab = it }, Modifier.fillMaxWidth(), fill = true)
+        }, ask = "avex" to "Ask about your training…") {
+            PillTabs(listOf("overview" to "Overview", "workouts" to "Workouts", "lifts" to "Lifts"), tab, { tab = it })
             when (tab) {
                 "workouts" -> AvexWorkouts(unit, missing)
                 // The four weeks each lift is read over end where the copy does (avex_pages.rs `refresh`).

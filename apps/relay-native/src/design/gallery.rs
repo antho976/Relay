@@ -519,7 +519,7 @@ impl Gallery {
         empty.add_css_class("design-empty");
         empty.set_halign(gtk::Align::Center);
         empty.set_valign(gtk::Align::Start);
-        let glyph = super::glyphs::image("frame", 28);
+        let glyph = crate::icons::image("pen-tool", 28);
         glyph.add_css_class("faint");
         empty.append(&glyph);
         let empty_title = label("No designs yet", "title");

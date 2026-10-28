@@ -435,7 +435,7 @@ fn line_area(points: Vec<(f64, f64)>, height: i32, hex: &'static str, zero: bool
         let x = |t: f64| (t - x0) / (x1 - x0).max(1e-9) * w;
         let y = |v: f64| pad + (hi - v) / (hi - lo) * (h - 2.0 * pad);
         if zero {
-            let (r, g, b) = rgb("#33302D");
+            let (r, g, b) = rgb("#333333");
             cr.set_source_rgb(r, g, b);
             cr.set_line_width(1.0);
             cr.move_to(0.0, y(0.0).round() + 0.5);
@@ -443,7 +443,7 @@ fn line_area(points: Vec<(f64, f64)>, height: i32, hex: &'static str, zero: bool
             let _ = cr.stroke();
         }
         if let Some(at) = split.filter(|at| *at > x0 && *at < x1) {
-            let (r, g, b) = rgb("#8C877F");
+            let (r, g, b) = rgb("#878787");
             cr.set_source_rgb(r, g, b);
             cr.set_line_width(1.0);
             cr.set_dash(&[3.0, 3.0], 0.0);

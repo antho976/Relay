@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 408,
+  "op_count": 410,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -5532,7 +5532,7 @@
       }
     },
     "thread.ask": {
-      "summary": "The assistant asks the person for what a lone session may not do: launching, parking, waking, closing or typing into sessions, changing tasks, notes, workspaces and projects. It waits on a card; nothing runs until they approve",
+      "summary": "The assistant asks the person for what it may not do itself: launching, waking, parking, closing or typing into sessions, dispatching or deleting tasks, adding workspaces and projects. Kinds the person lets through run at once and the reply says what came of them (status approved or failed); the rest wait on a card (pending) until they approve",
       "kind": "mutation",
       "audit": "always",
       "undo": "none",
@@ -7229,7 +7229,7 @@
       }
     },
     "video.version.restore": {
-      "summary": "Put a video's code back as an earlier version had it (the code before is recorded first)",
+      "summary": "Put a video's code back as an earlier version had it, or only some of its files (the code before is recorded first)",
       "kind": "mutation",
       "audit": "always",
       "undo": "inverse",
@@ -7246,6 +7246,46 @@
       },
       "result": {
         "$ref": "#/$defs/VideoVersionRestoreOut"
+      }
+    },
+    "video.version.label": {
+      "summary": "Name a version of a video's code (a take to keep and come back to), or take its name off; named versions are listed however old",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "inverse",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoVersionLabelIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoVersion"
+      }
+    },
+    "video.version.diff": {
+      "summary": "What changed in a video's code between two versions (or since one): each file as a unified diff, to bring part of a take back by hand",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "video.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/VideoVersionDiffIn"
+      },
+      "result": {
+        "$ref": "#/$defs/VideoVersionDiffOut"
       }
     },
     "video.kit.status": {
@@ -22725,7 +22765,7 @@
       "properties": {
         "op": {
           "type": "string",
-          "description": "One of the ops an assistant may ask for: `session.create`, `session.spawn`,\n`session.resume`, `session.park`, `session.wake`, `session.close`, `session.input`,\n`session.update`, `task.create`, `task.update`, `task.move`, `task.dispatch`,\n`task.delete`, `notes.create`, `notes.update`, `workspace.create`, `project.add`."
+          "description": "One of the ops an assistant may ask for: `session.create`, `session.spawn`,\n`session.resume`, `session.park`, `session.wake`, `session.close`, `session.input`,\n`session.update`, `task.dispatch`, `task.delete`, `workspace.create`, `project.add`."
         },
         "payload": {
           "description": "That op's own payload. A `session` left out of a step after `session.create` is the\nsession it made."
@@ -22785,6 +22825,10 @@
             "string",
             "null"
           ]
+        },
+        "auto": {
+          "type": "boolean",
+          "description": "It ran without asking, as the person lets that kind of step\n(`threads.assistant.without_asking`); its reply is what came of it."
         }
       },
       "required": [
@@ -22795,7 +22839,8 @@
         "summary",
         "status",
         "results",
-        "created_at"
+        "created_at",
+        "auto"
       ]
     },
     "ThreadAskListIn": {
@@ -31805,7 +31850,7 @@
           "items": {
             "$ref": "#/$defs/VideoVersion"
           },
-          "description": "The newest versions first, at most 20."
+          "description": "The newest versions first: the newest 20, then every older one with a name."
         },
         "renders": {
           "type": "array",
@@ -31890,6 +31935,13 @@
             "type": "string"
           },
           "description": "What changed from the version before: `src/Hook.tsx` (changed), `+src/Outro.tsx` (added),\n`-src/Old.tsx` (removed); at most 12."
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its name, when the person or an agent gave it one (`video.version.label`): a take to keep.\n`video.get` lists named versions however old."
         }
       },
       "required": [
@@ -31971,6 +32023,15 @@
             "null"
           ],
           "format": "int64"
+        },
+        "replaced_by": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "A later render of the same name wrote over this one's file: the render whose file it now\nis. `path` then holds that render, not this one.",
+          "default": null
         },
         "error": {
           "type": [
@@ -34930,6 +34991,18 @@
           "type": "integer",
           "format": "int64",
           "description": "A version `video.get` lists."
+        },
+        "paths": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Only these files, or the files under these folders (`src/Open.tsx`, `src/scenes`): each put\nback as the version had it, or taken out where it had none. The rest stay as they are: a\nscene brought back from a take without undoing what came after.",
+          "minItems": 1,
+          "maxItems": 100
         }
       },
       "required": [
@@ -34947,11 +35020,152 @@
           "type": "integer",
           "format": "int64",
           "description": "The version recorded of the code as it was before, which a restore of it undoes this."
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What the restore changed, as a version says it: `src/Hook.tsx` (written back),\n`+src/Old.tsx` (put back), `-src/New.tsx` (taken out)."
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Files the version names but kept no copy of (over 2 MiB): left as they are."
+        },
+        "left": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Files the version does not have, left in place: links and files over 2 MiB, which no\nversion could put back."
         }
       },
       "required": [
         "video",
-        "previous"
+        "previous",
+        "changed"
+      ]
+    },
+    "VideoVersionLabelIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "version": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A name for the take (\"narrated cut, warm grade\"); none (or `null`) takes its name off."
+        }
+      },
+      "required": [
+        "video_id",
+        "version"
+      ]
+    },
+    "VideoVersionDiffIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "video_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "from": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The version to compare from."
+        },
+        "to": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "The version to compare to; default the code as it is now (recorded as a version first,\nwhen it changed)."
+        },
+        "paths": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Only these files, or the files under these folders.",
+          "minItems": 1,
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "video_id",
+        "from"
+      ]
+    },
+    "VideoVersionDiffOut": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "to": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VideoFileDiff"
+          },
+          "description": "Every file that differs, by path."
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "files"
+      ]
+    },
+    "VideoFileDiff": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "change": {
+          "type": "string",
+          "description": "`changed`, `added` (only in `to`) or `removed` (only in `from`)."
+        },
+        "diff": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A unified diff of its lines (3 of context), when both sides are text Relay kept."
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why there is no `diff`: `binary`, `not_kept` (over 2 MiB) or `cut` (the answer was full)."
+        }
+      },
+      "required": [
+        "path",
+        "change"
       ]
     },
     "VideoKitInstallIn": {

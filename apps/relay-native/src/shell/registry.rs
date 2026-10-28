@@ -194,6 +194,10 @@ impl Ui {
                 let agents = agents_in(&sessions, &[id_of(project)]);
                 (agents.open, agents.held, agents.running).hash(&mut hash);
             }
+            // The active project's agents are listed under it: who, their state and intent.
+            for session in sessions.iter().filter(|s| s["project_id"].as_i64() == Some(active) && text(s, "state") != "closed") {
+                (text(session, "name"), text(session, "state"), text(session, "intent")).hash(&mut hash);
+            }
             hash.finish()
         };
         if sidebar(|s| s.rendered.replace(signature)) == Some(signature) {
@@ -243,6 +247,11 @@ impl Ui {
                         first_match = Some(id);
                     }
                     self.projects_box.append(&self.project_row(project, &agents, active));
+                    if id == active && !filtering {
+                        for session in sessions.iter().filter(|s| s["project_id"].as_i64() == Some(id) && text(s, "state") != "closed") {
+                            self.projects_box.append(&self.agent_row(session));
+                        }
+                    }
                 } else {
                     hidden += 1;
                 }
@@ -512,6 +521,51 @@ impl Ui {
         tools.append(&menu);
         row.add_overlay(&tools);
         row
+    }
+
+    /// One of the active project's agents, under its row (DESIGN.md, Navigation): its lamp, its
+    /// name and what it says it is doing; a click brings its terminal up.
+    fn agent_row(self: &Rc<Self>, session: &Value) -> gtk::Button {
+        let name = text(session, "name").to_string();
+        let intent = text(session, "intent").to_string();
+        let key = button("", "agent-row");
+        key.set_widget_name(&format!("sidebar-agent:{name}"));
+        key.set_focus_on_click(false);
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 9);
+        let lamp = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        lamp.add_css_class("lamp");
+        lamp.add_css_class("small-lamp");
+        lamp.set_valign(gtk::Align::Start);
+        match text(session, "state") {
+            "blocked" => lamp.add_css_class("held"),
+            "running" | "spawning" => lamp.add_css_class("live"),
+            _ => {}
+        }
+        line.append(&lamp);
+        let words = gtk::Box::new(gtk::Orientation::Vertical, 1);
+        words.set_hexpand(true);
+        let title = label(&name, "agent-row-name");
+        title.set_xalign(0.0);
+        title.set_width_chars(1);
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        words.append(&title);
+        if !intent.is_empty() {
+            let doing = label(&intent, "agent-row-doing");
+            doing.set_xalign(0.0);
+            doing.set_width_chars(1);
+            doing.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            words.append(&doing);
+        }
+        line.append(&words);
+        key.set_child(Some(&line));
+        key.set_tooltip_text(Some(&if intent.is_empty() { name.clone() } else { format!("{name}\n{intent}") }));
+        let weak = Rc::downgrade(self);
+        key.connect_clicked(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                ui.show_session(&name);
+            }
+        });
+        key
     }
 
     /// The ⋯ menu of a workspace or project row. Each entry is one line in `entries`; a

@@ -15,11 +15,12 @@ use relay_bus::ops::video::{
     AssetAdd, AssetAddOut, AssetInspect, Preview, PreviewOut, CaptureAndroid, CaptureOut, ElevenKeyRemove, ElevenKeySet, ElevenStatusOp, MadeOut, Music, Sfx, Transcribe, TranscribeOut, VoiceInfo, Voices,
     VoicesOut, VoiceOut, AssetList, AssetListOut, AudioBeats, BeatBar, BeatGrid, BeatSection, Check, Composition, Create, CreateOut, Delete, Format, Get, GetOut, KitInstall,
     KitState, KitStatusOp, List, ListOut, Quality, Render, RenderBatch, RenderCancel, RenderGet, RenderJob, RenderState, RenderWait,
-    RendersOut, Restore, Scan, Still, Timeline, Update, Version, VersionRestore, VersionRestoreOut, VideoRender, MAX_ASSETS, MAX_SECONDS, MAX_SIDE,
+    RendersOut, Restore, Scan, Still, Timeline, Update, Version, VersionDiff, VersionDiffOut, VersionLabel, VersionRestore, VersionRestoreOut, VideoRender,
+    MAX_ASSETS, MAX_SECONDS, MAX_SIDE, MAX_VERSION_LABEL,
 };
 use relay_bus::types::Id;
 use relay_bus::Empty;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -168,6 +169,25 @@ pub struct StagedRestore {
     before: versions::Scan,
     after: versions::Scan,
     missing: Vec<String>,
+    left: Vec<String>,
+}
+
+/// `paths` an agent or the person gave, made a version's own, each naming a file (or a folder of
+/// files) that one of `sides` has: a name that matches nothing is a mistake, not a no-op.
+fn only_paths(raw: &[String], sides: &[&[versions::Entry]], what: &str) -> Result<Vec<String>, BusError> {
+    if raw.is_empty() || raw.len() > 100 {
+        return Err(BusError::invalid("video.version", "name 1 to 100 files or folders"));
+    }
+    let only = versions::clean_paths(raw)
+        .ok_or_else(|| BusError::invalid("video.version", "paths are relative to the video's folder (src/Open.tsx), and stay in it"))?;
+    for path in &only {
+        let one = std::slice::from_ref(path);
+        if !sides.iter().any(|side| side.iter().any(|e| versions::within(&e.path, Some(one)))) {
+            return Err(BusError::invalid("video.version", format!("no file or folder {path} in {what}"))
+                .with_hint("video.version.diff lists the files that changed; a version holds src/, public/ but its assets, and the folder's own files"));
+        }
+    }
+    Ok(only)
 }
 
 /// A job's fields checked against the video, with nothing locked: its composition, props, frames,
@@ -342,20 +362,33 @@ pub fn register(e: &mut Engine) {
         let video = read_video(ctx, p.video_id, false)?;
         let (compositions, props, versions, renders) = ctx.read(|conn| {
             let props: String = conn.prepare_cached("SELECT props FROM videos WHERE id = ?1").bus()?.query_row([video.id], |r| r.get(0)).bus()?;
-            // The newest 20 and the one before them, each told by what it changed.
-            let rows = conn.prepare_cached("SELECT n, actor, files, created_at, manifest FROM video_versions WHERE video_id = ?1 ORDER BY n DESC LIMIT 21").bus()?
-                .query_map([video.id], |r| Ok((Version { n: r.get(0)?, actor: r.get(1)?, files: r.get(2)?, created_at: r.get(3)?, changed: Vec::new() }, r.get::<_, String>(4)?))).bus()?
+            // The newest 20 and the one before them, each told by what it changed; then every
+            // older one with a name, told against the one before it.
+            let row = |r: &rusqlite::Row| Ok((Version { n: r.get(0)?, actor: r.get(1)?, files: r.get(2)?, created_at: r.get(3)?, changed: Vec::new(), label: r.get(5)? }, r.get::<_, String>(4)?));
+            let rows = conn.prepare_cached("SELECT n, actor, files, created_at, manifest, label FROM video_versions WHERE video_id = ?1 ORDER BY n DESC LIMIT 21").bus()?
+                .query_map([video.id], row).bus()?
                 .collect::<rusqlite::Result<Vec<_>>>().bus()?;
             let manifests: Vec<Vec<versions::Entry>> = rows.iter().map(|(_, m)| serde_json::from_str(m).unwrap_or_default()).collect();
-            let versions = rows.iter().take(20).enumerate().map(|(i, (v, _))| {
-                let mut v = v.clone();
-                v.changed = match manifests.get(i + 1) {
-                    Some(before) => versions::changes(before, &manifests[i], 12),
-                    None if v.n == 1 => vec!["the starter".to_string()],
-                    None => Vec::new(),
-                };
-                v
+            let changed = |n: i64, before: Option<&Vec<versions::Entry>>, after: &[versions::Entry]| match before {
+                Some(before) => versions::changes(before, after, 12),
+                None if n == 1 => vec!["the starter".to_string()],
+                None => Vec::new(),
+            };
+            let mut versions = rows.iter().take(20).enumerate().map(|(i, (v, _))| {
+                Version { changed: changed(v.n, manifests.get(i + 1), &manifests[i]), ..v.clone() }
             }).collect::<Vec<_>>();
+            if let Some(oldest) = versions.last().map(|v| v.n).filter(|_| rows.len() > 20) {
+                let named = conn.prepare_cached("SELECT n, actor, files, created_at, manifest, label FROM video_versions
+                    WHERE video_id = ?1 AND n < ?2 AND label IS NOT NULL ORDER BY n DESC").bus()?
+                    .query_map(params![video.id, oldest], row).bus()?.collect::<rusqlite::Result<Vec<_>>>().bus()?;
+                for (v, manifest) in named {
+                    let before: Option<Vec<versions::Entry>> = conn.prepare_cached("SELECT manifest FROM video_versions WHERE video_id = ?1 AND n < ?2 ORDER BY n DESC LIMIT 1").bus()?
+                        .query_row(params![video.id, v.n], |r| r.get::<_, String>(0)).optional().bus()?
+                        .map(|m| serde_json::from_str(&m).unwrap_or_default());
+                    let after: Vec<versions::Entry> = serde_json::from_str(&manifest).unwrap_or_default();
+                    versions.push(Version { changed: changed(v.n, before.as_ref(), &after), ..v });
+                }
+            }
             let renders = conn.prepare_cached(&format!("SELECT {RENDER_COLUMNS} FROM video_renders WHERE video_id = ?1 ORDER BY id DESC LIMIT 20")).bus()?
                 .query_map([video.id], render_row).bus()?.collect::<rusqlite::Result<Vec<_>>>().bus()?;
             Ok((compositions(conn, video.id)?, serde_json::from_str(&props).unwrap_or(json!({})), versions, renders))
@@ -903,12 +936,13 @@ pub fn register(e: &mut Engine) {
         let (dir, blobs) = (PathBuf::from(&video.dir), video::blobs_dir(ctx.engine()));
         let folder = |e: String| BusError::unavailable("video.folder", format!("could not read the video's folder: {e}"));
         let before = versions::scan(&dir, &blobs).map_err(folder)?;
-        let versions::Restored { missing, left, .. } = versions::restore(&dir, &blobs, &entries).map_err(folder)?;
-        if !left.is_empty() {
-            tracing::info!(video = video.id, left = ?left, "video version restore: left files no version could put back");
-        }
+        let only = match p.paths.as_deref() {
+            Some(raw) => Some(only_paths(raw, &[&entries, &before.entries], &format!("v{} or the code now", p.version))?),
+            None => None,
+        };
+        let versions::Restored { missing, left, .. } = versions::restore(&dir, &blobs, &entries, only.as_deref()).map_err(folder)?;
         let after = versions::scan(&dir, &blobs).map_err(folder)?;
-        Ok(StagedRestore { before, after, missing })
+        Ok(StagedRestore { before, after, missing, left })
     }, |ctx: &mut Ctx, p, staged| {
         let video = live_video(ctx.tx(), p.video_id)?;
         assert_actor_project(ctx, video.project_id)?;
@@ -918,10 +952,55 @@ pub fn register(e: &mut Engine) {
         ctx.tx().execute("UPDATE videos SET updated_at = ?2, updated_by = ?3 WHERE id = ?1", params![video.id, ctx.now, by]).bus()?;
         ctx.set_undo("video.version.restore", json!({"video_id": video.id, "version": previous}), None);
         let video = emit(ctx, video.id)?;
-        if !staged.missing.is_empty() {
-            tracing::warn!(video = video.id, missing = ?staged.missing, "video version restore: files whose contents were not kept");
+        let changed = versions::changes(&staged.before.entries, &staged.after.entries, 100);
+        Ok(VersionRestoreOut { video, previous, changed, missing: staged.missing, left: staged.left })
+    });
+
+    e.register::<VersionLabel>(|ctx: &mut Ctx, p| {
+        let video = live_video(ctx.tx(), p.video_id)?;
+        assert_actor_project(ctx, video.project_id)?;
+        let label = match p.label.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(raw) if raw.chars().count() > MAX_VERSION_LABEL || !plain_label(raw) => {
+                return Err(BusError::invalid("video.version", format!("a version's name is 1 to {MAX_VERSION_LABEL} characters, without control characters")));
+            }
+            Some(raw) => Some(raw.to_string()),
+        };
+        let before: Option<String> = ctx.tx().prepare_cached("SELECT label FROM video_versions WHERE video_id = ?1 AND n = ?2").bus()?
+            .query_row(params![video.id, p.version], |r| r.get(0)).optional().bus()?
+            .ok_or_else(|| BusError::not_found("video.version", format!("video {} has no version {}", video.id, p.version))
+                .with_hint("video.get lists its versions"))?;
+        if before != label {
+            ctx.tx().prepare_cached("UPDATE video_versions SET label = ?3 WHERE video_id = ?1 AND n = ?2").bus()?
+                .execute(params![video.id, p.version, label]).bus()?;
+            ctx.set_undo("video.version.label", json!({"video_id": video.id, "version": p.version, "label": before}), None);
+            emit(ctx, video.id)?;
         }
-        Ok(VersionRestoreOut { video, previous })
+        ctx.set_project(video.project_id);
+        let (actor, files, created_at): (String, u32, String) = ctx.tx()
+            .prepare_cached("SELECT actor, files, created_at FROM video_versions WHERE video_id = ?1 AND n = ?2").bus()?
+            .query_row(params![video.id, p.version], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).bus()?;
+        Ok(Version { n: p.version, actor, files, created_at, changed: Vec::new(), label })
+    });
+
+    // Unlocked: the folder is read (and recorded, when it changed) with nothing held; the blobs are
+    // files of their own.
+    e.register_unlocked::<VersionDiff>(|ctx, p| {
+        let video = read_video(ctx, p.video_id, true)?;
+        let to = match p.to {
+            Some(n) => n,
+            None => {
+                let actor = caller_name(ctx);
+                stills::snapshot(ctx.engine(), &video, &Caller { actor: &actor, session_id: ctx.actor_session_id() })?
+            }
+        };
+        let (before, after) = ctx.read(|conn| Ok((versions::manifest(conn, video.id, p.from)?, versions::manifest(conn, video.id, to)?)))?;
+        let only = match p.paths.as_deref() {
+            Some(raw) => Some(only_paths(raw, &[&before, &after], &format!("v{} or v{to}", p.from))?),
+            None => None,
+        };
+        let files = versions::diff(&video::blobs_dir(ctx.engine()), &before, &after, only.as_deref());
+        Ok(VersionDiffOut { from: p.from, to, files })
     });
 
     e.register_unlocked::<KitStatusOp>(|ctx, _| Ok(kit::status(ctx.engine())));

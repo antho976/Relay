@@ -466,6 +466,9 @@ async fn handle(instance: Instance, actor: &Actor, token: Option<&str>, message:
             let style = Style::from_env();
             let instructions = if style.lean && style.assistant {
                 "Relay itself: workspaces, projects, sessions, the board, notes and mail. What a session may not do is asked for with thread.ask."
+            } else if style.assistant {
+                // Not a session's: the assistant has no bootstrap, peers or role, only these tools.
+                "Relay itself, as the person: workspaces, projects, sessions, the board, notes, mail, skills and plugins. Tool names are bus op names; typed refusals are returned as tool errors. `bus.schema {op}` returns one op's payload and result schema. What the assistant may not do itself it asks for with thread.ask."
             } else if style.lean {
                 "The person's own data: Tally, their budget (money.*), and Avex, their gym log (gym.*)."
             } else {
@@ -1033,7 +1036,7 @@ struct Style {
     readings: bool,
     /// Tools described in plain words with an example each.
     docs: bool,
-    /// The Dev space's assistant's server, which a lean introduction describes as Relay's.
+    /// The Dev space's assistant's server, which its introduction describes as Relay's.
     assistant: bool,
 }
 

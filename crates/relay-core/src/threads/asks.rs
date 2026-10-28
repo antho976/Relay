@@ -3,6 +3,10 @@
 //! each ask on a card.
 //!
 //! An ask is a few steps, each a user-only op from [`ASKABLE`] with its own payload, and a reason.
+//! The person may let some kinds of step run without asking ([`Allowed`], the setting
+//! `threads.assistant.without_asking`): an ask made only of those is claimed at once, runs after
+//! its request's transaction, and its reply is what came of it (`auto`), so the agent hears it
+//! there and not again with the next message.
 //! It lives in `threads.db`, tied to the assistant thread whose agent sent it (`Ctx::thread`, set
 //! by the socket door from the process that connected). It is checked when it is made: each op on
 //! the list, no flag that throws work away or widens what a session may do ([`REFUSED_FLAGS`]),
@@ -26,9 +30,10 @@ use relay_bus::{Actor, BusError, Request};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 
-/// The ops an ask may hold: lifecycle and board changes a session may not make itself. Never
-/// guardrails, settings, the app, removing a workspace or project, worktrees, Git, files, money,
-/// keys or pairing: those stay the person's to do themselves.
+/// The ops an ask may hold: what changes a session, dispatching or deleting a task, and adding a
+/// workspace or a project. Creating and editing tasks and notes the assistant does itself
+/// ([`super::ASSISTANT_OPS`]). Never guardrails, settings, the app, removing a workspace or
+/// project, worktrees, Git, files, money, keys or pairing: those stay the person's to do themselves.
 pub const ASKABLE: &[&str] = &[
     "session.create",
     "session.spawn",
@@ -38,16 +43,48 @@ pub const ASKABLE: &[&str] = &[
     "session.close",
     "session.input",
     "session.update",
-    "task.create",
-    "task.update",
-    "task.move",
     "task.dispatch",
     "task.delete",
-    "notes.create",
-    "notes.update",
     "workspace.create",
     "project.add",
 ];
+
+/// The kinds of step the person may let run without asking, each a key of
+/// `threads.assistant.without_asking`: launching, waking and setting up agents; typing into a
+/// session's terminal, which can answer the agent's own permission prompts; and stopping one.
+/// A step of no kind (deleting a task, adding a workspace or a project) always waits on a card;
+/// one the assistant may do itself ([`super::ASSISTANT_OPS`]) never needs to.
+pub const KINDS: &[(&str, &[&str])] = &[
+    ("launch", &["session.create", "session.spawn", "session.resume", "session.wake", "session.update", "task.dispatch"]),
+    ("type", &["session.input"]),
+    ("stop", &["session.park", "session.close"]),
+];
+
+/// Which [`KINDS`] the person lets run without asking, as read from the settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Allowed(Vec<&'static str>);
+
+impl Allowed {
+    /// From `threads.assistant.without_asking`, `{kind: bool}`: only a kind set to `true`.
+    pub fn from_setting(value: &Value) -> Allowed {
+        Allowed(KINDS.iter().map(|(kind, _)| *kind).filter(|kind| value.get(*kind) == Some(&Value::Bool(true))).collect())
+    }
+
+    /// The setting, read in the request's transaction.
+    pub fn read(tx: &rusqlite::Transaction) -> Allowed {
+        crate::handlers::settings::get(tx, Some("threads.assistant.without_asking")).map(|v| Allowed::from_setting(&v)).unwrap_or_default()
+    }
+
+    /// Whether `op` runs without asking: the assistant's own, or of a kind let through.
+    fn lets(&self, op: &str) -> bool {
+        super::ASSISTANT_OPS.contains(&op) || KINDS.iter().any(|(kind, ops)| self.0.contains(kind) && ops.contains(&op))
+    }
+
+    /// Whether every step runs without asking.
+    pub fn lets_all(&self, steps: &[AskStep]) -> bool {
+        steps.iter().all(|step| self.lets(&step.op))
+    }
+}
 
 /// Payload fields an ask may not set to `true`, at any depth (a `task.dispatch` carries a whole
 /// `session.create` in `create`): deleting uncommitted work or a worktree, and widening what a
@@ -78,7 +115,7 @@ CREATE TABLE ask (
 CREATE INDEX ask_thread ON ask(thread_id, id);
 ";
 
-const COLUMNS: &str = "id, thread_id, steps, why, summary, status, outcome, results, created_at, resolved_at";
+const COLUMNS: &str = "id, thread_id, steps, why, summary, status, outcome, results, created_at, resolved_at, auto";
 
 /// An ask's answer, for the agent: (id, status, summary, outcome).
 type Answer = (Id, String, String, Option<String>);
@@ -97,6 +134,7 @@ fn row(r: &rusqlite::Row) -> rusqlite::Result<AskView> {
         results: serde_json::from_str(&results).unwrap_or_default(),
         created_at: r.get(8)?,
         resolved_at: r.get(9)?,
+        auto: r.get(10)?,
     })
 }
 
@@ -109,10 +147,14 @@ impl ThreadStore {
         Ok(())
     }
 
-    fn ask(&self, thread: Id, steps: &str, why: &str, summary: &str, now: &str) -> rusqlite::Result<Id> {
+    /// Store an ask: `pending`, or `running` already when it runs without asking (`auto`).
+    fn ask(&self, thread: Id, steps: &str, why: &str, summary: &str, auto: bool, now: &str) -> rusqlite::Result<Id> {
         self.conn
-            .prepare_cached("INSERT INTO ask (thread_id, steps, why, summary, status, created_at) VALUES (?1, ?2, ?3, ?4, 'pending', ?5)")?
-            .execute(params![thread, steps, why, summary, now])?;
+            .prepare_cached(
+                "INSERT INTO ask (thread_id, steps, why, summary, status, auto, created_at)
+                 VALUES (?1, ?2, ?3, ?4, CASE WHEN ?5 THEN 'running' ELSE 'pending' END, ?5, ?6)",
+            )?
+            .execute(params![thread, steps, why, summary, auto, now])?;
         Ok(self.conn.last_insert_rowid())
     }
 
@@ -265,8 +307,9 @@ pub fn summary(steps: &[AskStep]) -> String {
     out
 }
 
-/// Store an ask from thread `thread`'s agent; the same steps already waiting are that ask.
-pub fn ask(engine: &Engine, thread: Id, steps: Vec<AskStep>, why: &str, now: &str) -> Result<AskView, BusError> {
+/// Store an ask from thread `thread`'s agent; the same steps already waiting are that ask. When
+/// `allowed` lets every step through it is stored `running`, for [`carry_out`] to run at once.
+pub fn ask(engine: &Engine, thread: Id, steps: Vec<AskStep>, why: &str, allowed: &Allowed, now: &str) -> Result<AskView, BusError> {
     if super::get(engine, thread)?.kind != super::ASSISTANT {
         return Err(BusError::refused("thread.not_assistant", "Only the assistant asks this way; a Threads conversation proposes (thread.propose)"));
     }
@@ -278,7 +321,11 @@ pub fn ask(engine: &Engine, thread: Id, steps: Vec<AskStep>, why: &str, now: &st
     checked(&steps)?;
     let stored = serde_json::to_string(&steps).map_err(|e| BusError::internal(e.to_string()))?;
     let summary = summary(&steps);
+    let auto = allowed.lets_all(&steps);
     let id = with_db(engine, |db| {
+        if auto {
+            return db.ask(thread, &stored, why, &summary, true, now).map(Ok);
+        }
         let (same, waiting) = db.asks_waiting(thread, &stored)?;
         if let Some(same) = same {
             return Ok(Ok(same));
@@ -287,7 +334,7 @@ pub fn ask(engine: &Engine, thread: Id, steps: Vec<AskStep>, why: &str, now: &st
             return Ok(Err(BusError::conflict("thread.ask_full", format!("{MAX_PENDING} asks already wait in this thread"))
                 .with_hint("wait for the person to answer them")));
         }
-        db.ask(thread, &stored, why, &summary, now).map(Ok)
+        db.ask(thread, &stored, why, &summary, false, now).map(Ok)
     })??;
     get(engine, id)
 }
@@ -304,7 +351,8 @@ pub fn answer(engine: &Engine, id: Id, approve: bool, now: &str) -> Result<AskVi
 }
 
 /// Run approved ask `id`'s steps as the person, each its own request, and keep what came of it.
-/// Called after the approval's transaction, with the store's lock released.
+/// Called after the approval's transaction, with the store's lock released. One that ran without
+/// asking is answered in its own reply, so the agent is not told it again.
 pub fn carry_out(engine: &Engine, id: Id) -> Result<AskView, BusError> {
     let asked = get(engine, id)?;
     if asked.status != "running" {
@@ -313,6 +361,9 @@ pub fn carry_out(engine: &Engine, id: Id) -> Result<AskView, BusError> {
     let (status, outcome, results) = run(engine, &asked.steps);
     let results = Value::Array(results).to_string();
     with_db(engine, |db| db.move_ask(id, "running", status, Some(&outcome), &results, &crate::time::now()))?;
+    if asked.auto {
+        told(engine, &[(id, status.to_string())]);
+    }
     get(engine, id)
 }
 
@@ -420,7 +471,7 @@ mod tests {
             let dispatch = step("task.dispatch", json!({"task_id": 12, "fanout": true, "create": {"project_id": 1, "provider": "claude", flag: true}}));
             assert_eq!(checked(&[dispatch]).unwrap_err().code, "thread.ask_flag", "{flag}");
         }
-        let listed = step("task.update", json!({"task_id": 1, "steps": [{"force": "yes"}]}));
+        let listed = step("task.dispatch", json!({"task_id": 1, "steps": [{"force": "yes"}]}));
         assert_eq!(checked(&[listed]).unwrap_err().code, "thread.ask_flag");
         assert!(checked(&[step("task.dispatch", json!({"task_id": 12, "create": {"project_id": 1, "provider": "claude", "bus_writes": false}}))]).is_ok());
     }
@@ -448,6 +499,29 @@ mod tests {
         assert_eq!(filled(&step("session.create", json!({"project_id": 1, "provider": "claude"})), &made), json!({"project_id": 1, "provider": "claude"}));
         assert_eq!(filled(&step("task.create", json!({"title": "T"})), &made), json!({"title": "T"}));
         assert_eq!(filled(&step("session.spawn", json!({})), &None), json!({}));
+    }
+
+    /// The person's settings let whole kinds through; anything of no kind, or of a kind left
+    /// off, waits on a card, and a setting that is not `true` lets nothing through.
+    #[test]
+    fn only_the_kinds_the_person_allows_run_without_asking() {
+        let launch = [step("session.create", json!({"project_id": 1, "provider": "claude"})), step("session.spawn", json!({"prompt": "Go"}))];
+        let typing = [step("session.input", json!({"session": "calm-otter", "data": "yes\r"}))];
+        let allowed = Allowed::from_setting(&json!({"launch": true, "type": false, "stop": "yes"}));
+        assert!(allowed.lets_all(&launch));
+        assert!(!allowed.lets_all(&typing), "typing can answer a session's permission prompt");
+        assert!(!allowed.lets_all(&[step("session.park", json!({"session": "calm-otter"}))]), "only true lets a kind through");
+        assert!(!allowed.lets_all(&[launch[0].clone(), step("task.delete", json!({"task_id": 3}))]), "one step of no kind holds the whole ask");
+        assert!(!Allowed::from_setting(&Value::Null).lets_all(&launch));
+        let every = Allowed::from_setting(&json!({"launch": true, "type": true, "stop": true}));
+        for op in ["task.delete", "workspace.create", "project.add"] {
+            assert!(!every.lets_all(&[step(op, json!({}))]), "{op} always asks");
+        }
+        for (_, ops) in KINDS {
+            for op in *ops {
+                assert!(ASKABLE.contains(op), "{op} is askable");
+            }
+        }
     }
 
     #[test]

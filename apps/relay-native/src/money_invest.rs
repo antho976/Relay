@@ -900,11 +900,11 @@ fn income_bars(months: &[Value]) -> gtk::Box {
         for (i, amount) in amounts.iter().enumerate() {
             let tall = if *amount > 0 { (*amount as f64 / top * (h - 2.0)).max(2.0) } else { 2.0 };
             let (r, g, b) = rgb(if *amount == 0 {
-                "#2A2826"
+                "#2A2A2A"
             } else if i == last {
-                "#EDE9E2"
+                "#EDEDED"
             } else {
-                "#8C877F"
+                "#878787"
             });
             cr.set_source_rgb(r, g, b);
             cr.rectangle(slot * i as f64 + (slot - bar) / 2.0, h - tall, bar, tall);

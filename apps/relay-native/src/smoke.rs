@@ -88,9 +88,10 @@ fn record_geometry(ui: &Ui, screenshot: &str) {
     );
     let mut widgets = Vec::new();
     collect(ui.window.upcast_ref(), &ui.window, &mut widgets);
-    // DESIGN.md's shell: each bar's height and its 1px rule.
+    // DESIGN.md's shell: each bar's height, the status bar's and strip's with their 1px rule
+    // (the title bar has none: the page's card sets it off).
     for (class, dimension, expected) in [
-        ("topbar", "height", 53.),
+        ("topbar", "height", 52.),
         ("statusbar", "height", 31.),
         ("umd", "height", 26.),
     ] {

@@ -5,6 +5,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -64,16 +66,16 @@ import com.quietsoftware.relay.ui.theme.Relay
 
 /** The PC's radii (DESIGN.md "Shapes"). */
 object Radii {
-    val key = RoundedCornerShape(10.dp)
+    val key = RoundedCornerShape(14.dp)
     val icon = RoundedCornerShape(7.dp)
     val keycap = RoundedCornerShape(6.dp)
     val tab = RoundedCornerShape(9.dp)
     val popover = RoundedCornerShape(12.dp)
-    val card = RoundedCornerShape(14.dp)
-    val sheet = RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp)
+    val card = RoundedCornerShape(16.dp)
+    val sheet = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     val pill = RoundedCornerShape(999.dp)
     /** Board cards, task pages, Git and Files rows. */
-    val board = RoundedCornerShape(2.dp)
+    val board = RoundedCornerShape(14.dp)
 }
 
 /** A touch target never shrinks below this, whatever the PC's row height was. */
@@ -116,8 +118,8 @@ fun Eyebrow(text: String, modifier: Modifier = Modifier, color: Color = Relay.co
 enum class KeyKind { Plain, Primary, Quiet, Danger }
 
 /**
- * A key (DESIGN.md "Buttons"): surface with a line-strong stroke; Primary is ink with ground text,
- * the one per surface; Quiet is transparent ink-2; Danger reads in held red.
+ * A key (DESIGN.md "Buttons"): surface with a line-strong stroke; Primary is the accent with dark
+ * text, the one per surface; Quiet is transparent ink-2; Danger reads in held red.
  */
 @Composable
 fun Key(
@@ -134,14 +136,14 @@ fun Key(
     val pressed by source.collectIsPressedAsState()
     val (bg, fg, border) = when (kind) {
         KeyKind.Plain -> Triple(if (pressed) c.wash else c.slab, c.ink, c.strong)
-        KeyKind.Primary -> Triple(if (pressed) Color.White else c.ink, c.wall, Color.Transparent)
+        KeyKind.Primary -> Triple(if (pressed) c.accentText else c.accent, c.onAccent, Color.Transparent)
         KeyKind.Quiet -> Triple(if (pressed) c.wash else Color.Transparent, c.ink2, Color.Transparent)
         KeyKind.Danger -> Triple(if (pressed) c.wash else c.slab, c.heldText, c.strong)
     }
     Row(
         modifier
             .alpha(if (enabled) 1f else .4f)
-            .heightIn(min = if (compact) 34.dp else 40.dp)
+            .heightIn(min = if (compact) 34.dp else 44.dp)
             .clip(Radii.key)
             .background(bg)
             .border(1.dp, border, Radii.key)
@@ -450,7 +452,34 @@ fun <T> Segmented(options: List<Pair<T, String>>, selected: T, onSelect: (T) -> 
 }
 
 /**
- * A switch (settings.css): 40×24, ink when on. A row that is all one switch puts [switchRow] on
+ * Tabs as a row of pills (design 14): the showing one filled with ink, the rest outlined; the row
+ * scrolls sideways when it is wider than the screen.
+ */
+@Composable
+fun <T> PillTabs(options: List<Pair<T, String>>, selected: T, onSelect: (T) -> Unit, modifier: Modifier = Modifier) {
+    val c = Relay.colors
+    Row(
+        modifier.horizontalScroll(rememberScrollState()).selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        for ((value, label) in options) {
+            val on = value == selected
+            Box(
+                Modifier.heightIn(min = 36.dp).clip(Radii.pill)
+                    .background(if (on) c.ink else Color.Transparent)
+                    .border(1.dp, if (on) c.ink else c.strong, Radii.pill)
+                    .selectable(selected = on, role = Role.Tab) { onSelect(value) }
+                    .padding(horizontal = 14.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                T(label, style = Relay.type.uiMedium, color = if (on) c.wall else c.ink, maxLines = 1, weight = if (on) FontWeight.SemiBold else FontWeight.Medium)
+            }
+        }
+    }
+}
+
+/**
+ * A switch (settings.css): 44×26, the accent when on. A row that is all one switch puts [switchRow] on
  * itself and passes no [onChange] here, so its words take the tap too and it is read as one switch.
  */
 @Composable
@@ -462,7 +491,7 @@ fun Toggle(checked: Boolean, onChange: ((Boolean) -> Unit)?, modifier: Modifier 
             .alpha(if (enabled) 1f else .4f)
             .size(width = 44.dp, height = 26.dp)
             .clip(Radii.pill)
-            .background(if (checked) c.ink else c.track)
+            .background(if (checked) c.accent else c.track)
             .then(if (onChange != null) Modifier.toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChange) else Modifier)
             .padding(3.dp),
     ) {
@@ -471,7 +500,7 @@ fun Toggle(checked: Boolean, onChange: ((Boolean) -> Unit)?, modifier: Modifier 
                 .padding(start = (18 * x).dp)
                 .size(20.dp)
                 .clip(CircleShape)
-                .background(if (checked) c.wall else c.ink3),
+                .background(if (checked) Color.White else c.ink3),
         )
     }
 }

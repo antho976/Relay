@@ -7,6 +7,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -16,19 +17,20 @@ import androidx.compose.ui.unit.sp
 import com.quietsoftware.relay.R
 
 /**
- * The desktop's tokens (DESIGN.md, apps/relay-native/src/fonts.rs and theme.css), so the phone
- * looks like the PC: warm near-black chrome in Geist, off-white primary keys, colour only where
- * it means state, and the screen-black terminal plates left exactly as they are.
+ * The app's colours: a background family (the ground, cards, sheets and code wells) and an accent
+ * (the one primary key per surface, the send key, switches and selections), both chosen in
+ * Settings › Appearance. Words and state colours (live green, waiting amber, held red) are the
+ * same in every theme, so a lamp reads the same whatever the person picked.
  */
 @Immutable
 data class Palette(
     val name: String,
-    /** App ground, bars, sidebar. */
+    /** App ground, bars, the drawer. */
     val wall: Color,
     val console: Color,
     /** Keys, cards, pills, popovers. */
     val slab: Color,
-    /** Hover and selected rows. */
+    /** Pressed and selected rows, the person's own bubble. */
     val wash: Color,
     /** Terminals and code only. */
     val screen: Color,
@@ -37,34 +39,53 @@ data class Palette(
     val edge: Color,
     val ink3: Color,
     val strong: Color,
+    /** The drawer and sheets: a step under the ground. */
+    val pane: Color = screen,
+    val raised: Color = slab,
+    val track: Color = wash,
+    val lineSubtle: Color = edge,
+    val lineEmphasis: Color = strong,
+    val lineFocus: Color = strong,
+    val accent: Color = Accent.Clay.color,
 ) {
-    val pane = Color(0xFF181715)
-    val raised = Color(0xFF1C1B19)
-    val track = Color(0xFF2A2826)
-    val lineSubtle = Color(0xFF211F1D)
-    val lineEmphasis = Color(0xFF33302D)
-    val lineFocus = Color(0xFF3A3733)
     val inkDim = Color(0xFF6E6A64)
     val live = Color(0xFF2EC469)
     val held = Color(0xFFE5382E)
     val waiting = Color(0xFFF0A828)
     /** Red for words: a refusal's reason, a held name. */
     val heldText = Color(0xFFF0786F)
-    val selection = ink.copy(alpha = .22f)
+    val selection = accent.copy(alpha = .30f)
+    /** Words on the accent: every accent is light enough to carry the ground's near-black. */
+    val onAccent = Color(0xFF1F1E1C)
+    /** The accent as a tint behind a selected row or a soft key. */
+    val accentSoft = accent.copy(alpha = .17f)
+    /** The accent dimmed for words on the ground (a link, a count). */
+    val accentText = lerp(accent, Color.White, .25f)
     /** The terminal's own colours (terminal.rs). */
     val termFg = Color(0xFFDCDCDA)
     val termCursor = Color(0xFFECECEA)
 
     companion object {
-        val Matte = Palette("matte", Color(0xFF171614), Color(0xFF171614), Color(0xFF1E1D1B), Color(0xFF23211F), Color(0xFF0A0A0B), Color(0xFFEDE9E2), Color(0xFFB5B0A8), Color(0xFF292725), Color(0xFF8C877F), Color(0xFF2C2A28))
-        val Dark = Palette("dark", Color(0xFF131211), Color(0xFF131211), Color(0xFF1A1917), Color(0xFF1F1D1B), Color(0xFF08090A), Color(0xFFEDE9E2), Color(0xFFB5B0A8), Color(0xFF242220), Color(0xFF8C877F), Color(0xFF262422))
-        val Oled = Palette("oled", Color(0xFF000000), Color(0xFF000000), Color(0xFF0F0E0D), Color(0xFF161513), Color(0xFF000000), Color(0xFFEDE9E2), Color(0xFFB5B0A8), Color(0xFF1C1B19), Color(0xFF8C877F), Color(0xFF211F1D))
+        /** The background families, in the order Settings shows them. */
+        val BASES = listOf(
+            Base("grey", "Grey", Color(0xFF262624), Color(0xFF30302E), Color(0xFF3A3936), Color(0xFF1D1C1B)),
+            Base("slate", "Slate", Color(0xFF1F2328), Color(0xFF2A2F36), Color(0xFF343A42), Color(0xFF181B1F)),
+            Base("midnight", "Midnight", Color(0xFF141B2D), Color(0xFF1E2740), Color(0xFF283350), Color(0xFF0F1524)),
+            Base("forest", "Forest", Color(0xFF18211D), Color(0xFF222D28), Color(0xFF2C3933), Color(0xFF121915)),
+            Base("plum", "Plum", Color(0xFF221A26), Color(0xFF2D2332), Color(0xFF382D3E), Color(0xFF1A141D)),
+            Base("black", "Black", Color(0xFF000000), Color(0xFF141414), Color(0xFF1E1E1E), Color(0xFF0A0A0A)),
+        )
 
-        fun of(name: String) = when (name) {
-            "dark" -> Dark
-            "oled" -> Oled
-            else -> Matte
+        /** The ground a name stands for; the PC's older names (matte, dark, oled) keep working. */
+        fun base(name: String): Base = when (name) {
+            "oled" -> BASES.last()
+            "matte", "dark" -> BASES.first()
+            else -> BASES.firstOrNull { it.key == name } ?: BASES.first()
         }
+
+        fun of(name: String, accent: String = Accent.Clay.key): Palette = base(name).palette(Accent.of(accent))
+
+        val Matte = of("grey")
 
         /** ANSI 0–15 as the PC's terminals draw them (terminal.rs). */
         val ANSI = intArrayOf(
@@ -101,6 +122,46 @@ data class Palette(
         val START_DIM = Color(0xFF63666B)
         val START_TEXT2 = Color(0xFF8B8F96)
         val SIGNAL = Color(0xFFC6F24E)
+    }
+}
+
+/** A background family: its ground, cards, raised cards and the well under them. */
+@Immutable
+data class Base(val key: String, val label: String, val ground: Color, val card: Color, val card2: Color, val deep: Color) {
+    fun palette(accent: Accent): Palette = Palette(
+        name = key,
+        wall = ground,
+        console = ground,
+        slab = card,
+        wash = card2,
+        screen = if (ground == Color.Black) Color.Black else lerp(deep, Color.Black, .25f),
+        ink = Color(0xFFF5F4EF),
+        ink2 = Color(0xFFB9B4AA),
+        edge = lerp(ground, Color.White, .08f),
+        ink3 = Color(0xFF9C978D),
+        strong = lerp(ground, Color.White, .13f),
+        pane = deep,
+        raised = card,
+        track = card2,
+        lineSubtle = lerp(ground, Color.White, .05f),
+        lineEmphasis = lerp(ground, Color.White, .12f),
+        lineFocus = lerp(ground, Color.White, .17f),
+        accent = accent.color,
+    )
+}
+
+/** The accents Settings offers. Each is light enough for [Palette.onAccent] to read on it. */
+enum class Accent(val key: String, val label: String, val color: Color) {
+    Clay("clay", "Clay", Color(0xFFD97757)),
+    Ocean("ocean", "Ocean", Color(0xFF5B9CF6)),
+    Sage("sage", "Sage", Color(0xFF7FB685)),
+    Iris("iris", "Iris", Color(0xFF9B8AFB)),
+    Rose("rose", "Rose", Color(0xFFE8789A)),
+    Amber("amber", "Amber", Color(0xFFE5B567)),
+    Mint("mint", "Mint", Color(0xFF4FC6B8));
+
+    companion object {
+        fun of(key: String) = entries.firstOrNull { it.key == key } ?: Clay
     }
 }
 
@@ -168,7 +229,7 @@ fun RelayTheme(palette: Palette = Palette.Matte, content: @Composable () -> Unit
     CompositionLocalProvider(
         LocalPalette provides palette,
         LocalType provides Type(),
-        LocalTextSelectionColors provides TextSelectionColors(handleColor = palette.ink, backgroundColor = palette.selection),
+        LocalTextSelectionColors provides TextSelectionColors(handleColor = palette.accent, backgroundColor = palette.selection),
         content = content,
     )
 }

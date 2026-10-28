@@ -15,6 +15,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.size
+import com.quietsoftware.relay.ui.kit.Radii
+import com.quietsoftware.relay.ui.kit.Eyebrow
+import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -78,7 +84,7 @@ fun InboxScreen(nav: Nav) {
         when {
             op == "task.get" && taskId != null -> nav.task(taskId.toString())
             // A hold is answered beside its agent, as the PC's notice opens its tile (notification_center.rs `route`).
-            (op == "session.get" || op == "session.brief" || op == "guardrail.confirm") && session != null -> nav.terminal(session)
+            (op == "session.get" || op == "session.brief" || op == "guardrail.confirm") && session != null -> nav.chat(session)
             op == "guardrail.confirm" -> nav.guardrails(n.projectId)
             n.category == "agent_done" || n.category == "agent_blocked" -> nav.board(n.projectId)
             n.category == "aide" -> nav.aide()
@@ -91,10 +97,30 @@ fun InboxScreen(nav: Nav) {
                 Modifier.column().fillMaxSize(),
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
             ) {
-                item { T("Inbox", style = Relay.type.heading, color = Relay.colors.ink) }
+                item {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        T("Inbox", Modifier.weight(1f), Relay.type.heading.copy(fontSize = 24.sp, lineHeight = 30.sp), Relay.colors.ink)
+                        if (unread > 0) Key("Mark all read", { nav.shell.change("notify.ack_all", buildJsonObject { }, "Mark all read") }, kind = KeyKind.Quiet, compact = true)
+                    }
+                }
 
+                val stuck = s.sessions.filter { it.state == "blocked" }
+                if (s.holds.isNotEmpty() || stuck.isNotEmpty()) {
+                    item { Eyebrow("Needs you · ${s.holds.size + stuck.size}", Modifier.padding(start = 4.dp, top = 16.dp, bottom = 8.dp), Relay.colors.waiting) }
+                    items(stuck, key = { "stuck:${it.name}" }) { a ->
+                        Slab(Modifier.fillMaxWidth().padding(bottom = 8.dp), padding = PaddingValues(14.dp), onClick = { nav.chat(a.name) }) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Glyph("help", 17.dp, Relay.colors.waiting)
+                                Column(Modifier.weight(1f)) {
+                                    T("${a.name} needs you", style = Relay.type.uiMedium, color = Relay.colors.ink, weight = FontWeight.SemiBold, maxLines = 1)
+                                    a.intent?.ifBlank { null }?.let { T(it, style = Relay.type.caption, color = Relay.colors.ink3, maxLines = 1) }
+                                }
+                                Key("Answer", { nav.chat(a.name) }, kind = KeyKind.Primary, compact = true)
+                            }
+                        }
+                    }
+                }
                 if (s.holds.isNotEmpty()) {
-                    item { SectionLabel("Waiting on you") }
                     items(s.holds, key = { "hold:${it.id}" }) { hold ->
                         HoldCard(
                             hold,
@@ -109,7 +135,7 @@ fun InboxScreen(nav: Nav) {
                 }
 
                 if (review.isNotEmpty()) {
-                    item { SectionLabel("In review") }
+                    item { Eyebrow("Finished · waiting for review", Modifier.padding(start = 4.dp, top = 16.dp, bottom = 8.dp)) }
                     itemsIndexed(review.entries.toList(), key = { _, e -> "review:${e.key}" }) { index, (project, waiting) ->
                         // With tasks in several projects, each row names whose board it opens.
                         val board = names[project]?.takeIf { review.size > 1 && it.isNotBlank() }?.let { "the $it board" } ?: "the board"
@@ -127,25 +153,14 @@ fun InboxScreen(nav: Nav) {
                                     )
                                     T("Open $board to look and approve.", style = Relay.type.caption, color = Relay.colors.ink3)
                                 }
-                                Glyph("chevron-right", 16.dp, Relay.colors.ink3)
+                                Key("Review", { nav.board(project) }, compact = true)
                             }
                         }
                     }
                 }
 
                 if (notifications.isNotEmpty()) {
-                    item {
-                        SectionLabel("Notifications") {
-                            if (unread > 0) {
-                                Key(
-                                    "Mark all read",
-                                    { nav.shell.change("notify.ack_all", buildJsonObject { }, "Mark all read") },
-                                    kind = KeyKind.Quiet,
-                                    compact = true,
-                                )
-                            }
-                        }
-                    }
+                    item { Eyebrow("Earlier", Modifier.padding(start = 4.dp, top = 16.dp, bottom = 4.dp)) }
                     itemsIndexed(notifications, key = { _, n -> "notify:${n.id}" }) { index, n ->
                         if (index > 0) Hairline()
                         NotificationRow(n, n.projectId?.let { names[it] }, onClick = { open(n) })
@@ -179,8 +194,19 @@ private fun NotificationRow(n: Notification, project: String?, onClick: () -> Un
             .padding(horizontal = 4.dp, vertical = 12.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        if (dot != null) Dot(dot, 6.dp, Modifier.padding(top = 6.dp)) else Spacer(Modifier.width(6.dp))
-        Spacer(Modifier.width(10.dp))
+        Box(Modifier.size(32.dp).clip(Radii.key).background(c.slab), contentAlignment = Alignment.Center) {
+            Glyph(
+                when (n.category) {
+                    "agent_done" -> "check"
+                    "agent_blocked" -> "help"
+                    "guardrail" -> "shield"
+                    else -> "bell"
+                },
+                15.dp,
+                dot ?: c.ink3,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
                 T(
@@ -194,7 +220,7 @@ private fun NotificationRow(n: Notification, project: String?, onClick: () -> Un
                 T(ago(epoch(n.createdAt)), style = Relay.type.caption, color = c.ink3, maxLines = 1)
             }
             if (n.body.isNotBlank()) T(n.body, style = Relay.type.ui, color = c.ink2, maxLines = 3)
-            T(meta, style = Relay.type.mono, color = c.ink3, maxLines = 1)
+            T(meta.lowercase().replaceFirstChar { it.uppercase() }, style = Relay.type.caption, color = c.ink3, maxLines = 1)
         }
     }
 }

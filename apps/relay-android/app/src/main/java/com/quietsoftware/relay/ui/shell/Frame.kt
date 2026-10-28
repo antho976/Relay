@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -66,31 +67,27 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * The top bar (theme.css `.topbar`, 52px): the sidebar key, the ring mark and wordmark, the
- * Dev | Threads switch, then the bell. A page with its own title shows a back key instead.
+ * The top bar, as Claude's app has one (design 14): the drawer key, then the page's title or, on
+ * Home, the chip in the middle; the page's own keys, and New chat.
  */
 @Composable
 fun TopBar(
-    space: String,
-    onSpace: (String) -> Unit,
-    onSidebar: () -> Unit,
-    bell: Int,
-    bellRed: Boolean,
-    onBell: () -> Unit,
-    onSearch: () -> Unit,
+    title: String?,
+    onMenu: () -> Unit,
+    onNew: () -> Unit,
+    bell: Int = 0,
+    center: (@Composable () -> Unit)? = null,
+    actions: @Composable RowScope.() -> Unit = {},
 ) {
     val c = Relay.colors
-    Row(
-        Modifier.fillMaxWidth().background(c.wall).statusBarsPadding().heightIn(min = 56.dp).padding(start = 4.dp, end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconKey("sidebar", onSidebar, size = 18.dp)
-        RelayMark(22.dp)
-        T("relay", Modifier.padding(start = 7.dp, end = 10.dp), Relay.type.brand, c.ink)
-        SpaceSwitch(space, onSpace)
-        Fill()
-        IconKey("search", onSearch, size = 18.dp)
-        IconKey("bell", onBell, size = 18.dp, badge = bell, badgeColor = if (bellRed) c.held else c.ink, label = if (bell > 0) "Inbox, $bell new" else "Inbox")
+    Box(Modifier.fillMaxWidth().background(c.wall).statusBarsPadding().heightIn(min = 56.dp).padding(horizontal = 4.dp)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconKey("menu", onMenu, size = 20.dp, tint = c.ink, badge = bell, badgeColor = c.accent, label = if (bell > 0) "Menu, $bell new" else "Menu")
+            if (title != null && center == null) T(title, Modifier.weight(1f).padding(start = 4.dp), Relay.type.heading, c.ink, maxLines = 1) else Fill()
+            actions()
+            IconKey("compose", onNew, size = 19.dp, tint = c.ink, label = "New chat")
+        }
+        center?.let { Box(Modifier.align(Alignment.Center)) { it() } }
     }
 }
 

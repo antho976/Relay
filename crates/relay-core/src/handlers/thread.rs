@@ -122,7 +122,8 @@ pub fn register(e: &mut Engine) {
 
 /// The assistant's asks (`threads::asks`). Asking stores a row; an approval is claimed in the
 /// request's transaction and its steps run after it, each its own request, before the reply, so
-/// none of them runs inside another's handler or under the store's lock.
+/// none of them runs inside another's handler or under the store's lock. An ask the person's
+/// settings let through is claimed as it is stored, and its reply is what came of it.
 fn register_asks(e: &mut Engine) {
     e.register::<Ask>(|ctx, p| {
         let Some(thread) = ctx.thread() else {
@@ -130,8 +131,21 @@ fn register_asks(e: &mut Engine) {
                 .with_hint("the person does these themselves; a session has no thread"));
         };
         let now = ctx.now.clone();
-        let ask = asks::ask(ctx.engine(), thread, p.steps, &p.why, &now)?;
+        let allowed = asks::Allowed::read(ctx.tx());
+        let ask = asks::ask(ctx.engine(), thread, p.steps, &p.why, &allowed, &now)?;
         ctx.emit("thread.ask", json!({"thread": thread, "ask": ask}));
+        if ask.status == "running" {
+            let id = ask.id;
+            ctx.finish_reply(move |engine, reply| match asks::carry_out(engine, id) {
+                Ok(done) => {
+                    engine.emit_system("thread.ask", json!({"thread": done.thread_id, "ask": done}));
+                    if let Ok(done) = serde_json::to_value(&done) {
+                        *reply = done;
+                    }
+                }
+                Err(e) => tracing::warn!(ask = id, "carrying out an ask failed: {}", e.message),
+            });
+        }
         Ok(ask)
     });
     e.register_unlocked::<AskList>(|ctx, p| Ok(AsksOut { asks: asks::list(ctx.engine(), p.thread_id, p.pending.unwrap_or(false))? }));

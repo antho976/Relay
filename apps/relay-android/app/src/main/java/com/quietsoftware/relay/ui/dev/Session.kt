@@ -168,8 +168,7 @@ private fun Actions(session: Session, nav: Nav, life: Lifecycle, online: Boolean
     Column(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (session.state != "closed") {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Key("Conversation", { nav.chat(session.name) }, Modifier.weight(1f), kind = KeyKind.Primary, glyph = "notes")
-                Key("Terminal", { nav.console(session.name) }, Modifier.weight(1f), glyph = "terminal")
+                Key("Open conversation", { nav.chat(session.name) }, Modifier.weight(1f), kind = KeyKind.Primary, glyph = "message")
             }
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

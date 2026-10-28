@@ -3,6 +3,16 @@ package com.quietsoftware.relay.ui.pages
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.background
+import com.quietsoftware.relay.ui.threads.replyStyle
+import com.quietsoftware.relay.ui.theme.Accent
+import com.quietsoftware.relay.ui.kit.Eyebrow
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -59,8 +69,6 @@ import com.quietsoftware.relay.ui.kit.Toggle
 import com.quietsoftware.relay.ui.kit.switchRow
 import com.quietsoftware.relay.ui.shell.Page
 import com.quietsoftware.relay.ui.shell.PageBar
-import com.quietsoftware.relay.ui.term.MAX_SP
-import com.quietsoftware.relay.ui.term.MIN_SP
 import com.quietsoftware.relay.ui.theme.Palette
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.launch
@@ -108,16 +116,8 @@ fun SettingsScreen(nav: Nav) {
             PageBar("Settings", nav::back)
             ScrollBody {
                 SectionLabel("Appearance")
-                listOf(
-                    Triple("matte", "Matte", "Soft console around darker panes"),
-                    Triple("dark", "Warm dark", "Easy on long nights"),
-                    Triple("oled", "OLED", "True black"),
-                ).forEach { (key, label, hint) ->
-                    PaletteCard(label, hint, selected = p.palette == key, palette = Palette.of(key)) {
-                        nav.shell.update { it.copy(palette = key) }
-                    }
-                    Gap(8.dp)
-                }
+                Appearance(p.palette, p.accent, onBase = { key -> nav.shell.update { it.copy(palette = key) } }, onAccent = { key -> nav.shell.update { it.copy(accent = key) } })
+                Gap(12.dp)
                 Slab(Modifier.fillMaxWidth(), padding = PaddingValues(14.dp)) {
                     T("Your first name", style = Relay.type.body, color = c.ink, weight = FontWeight.Medium)
                     T("Used in the greeting on the start screen.", style = Relay.type.caption, color = c.ink3)
@@ -161,47 +161,10 @@ fun SettingsScreen(nav: Nav) {
                     }
                 }
 
-                SectionLabel("Terminal")
+                SectionLabel("Conversations")
                 Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
-                    SwitchRow(
-                        "Fit the terminal to this phone",
-                        "Borrow the PC's terminal at the phone's width while one is open.",
-                        p.fitTerminal,
-                    ) { on -> nav.shell.update { prefs -> prefs.copy(fitTerminal = on) } }
-                    Hairline()
-                    SwitchRow("Keep the screen on in a terminal", "The screen stays awake while a terminal is open.", p.keepScreenOn) { on ->
+                    SwitchRow("Keep the screen on", "The screen stays awake while an agent's conversation is open.", p.keepScreenOn) { on ->
                         nav.shell.update { prefs -> prefs.copy(keepScreenOn = on) }
-                    }
-                    Hairline()
-                    SwitchRow("Type straight to the terminal", "Each key goes as it is pressed, for vim, a shell or a menu, with Ctrl and Alt on the key row. Off, a message box sends a line at a time.", p.terminalDirect) { on ->
-                        nav.shell.update { prefs -> prefs.copy(terminalDirect = on) }
-                    }
-                    Hairline()
-                    SwitchRow("Extra keys in a conversation", "Arrows, Tab, Space, Enter and Ctrl-C over an agent's message box.", p.chatKeys) { on ->
-                        nav.shell.update { prefs -> prefs.copy(chatKeys = on) }
-                    }
-                    Hairline()
-                    SettingRow("Text size", "In a terminal, from ${MIN_SP.toInt()} to ${MAX_SP.toInt()} points; a pinch changes it too.") {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconKey(
-                                "minus",
-                                { nav.shell.update { prefs -> prefs.copy(terminalFont = (prefs.terminalFont - 1f).coerceIn(MIN_SP, MAX_SP)) } },
-                                enabled = p.terminalFont > MIN_SP,
-                                label = "Smaller terminal text",
-                            )
-                            T(
-                                "${p.terminalFont.toInt()} sp",
-                                Modifier.width(52.dp),
-                                Relay.type.mono.copy(textAlign = TextAlign.Center),
-                                c.ink2,
-                            )
-                            IconKey(
-                                "plus",
-                                { nav.shell.update { prefs -> prefs.copy(terminalFont = (prefs.terminalFont + 1f).coerceIn(MIN_SP, MAX_SP)) } },
-                                enabled = p.terminalFont < MAX_SP,
-                                label = "Larger terminal text",
-                            )
-                        }
                     }
                 }
 
@@ -303,51 +266,74 @@ private fun SwitchRow(title: String, hint: String?, checked: Boolean, enabled: B
     SettingRow(title, hint, tap = Modifier.switchRow(checked, enabled, onChange)) { Toggle(checked, null, enabled = enabled) }
 
 /**
- * A palette as a card: the app in miniature in its colours (the ground, a card with two lines of
- * ink, a terminal pane), its name and what it is for. The three differ in their grounds and
- * panes more than anything, so the swatch shows both.
+ * The theme's two choices, Appearance in design 14: a preview of a short exchange in the picked
+ * colours, a row of accents, and the background families as tiles, two to a row.
  */
 @Composable
-private fun PaletteCard(label: String, hint: String, selected: Boolean, palette: Palette, onClick: () -> Unit) {
+internal fun Appearance(base: String, accent: String, onBase: (String) -> Unit, onAccent: (String) -> Unit) {
     val c = Relay.colors
-    Slab(
-        Modifier.fillMaxWidth(),
-        padding = PaddingValues(14.dp),
-        edge = if (selected) c.ink else c.edge,
-        onClick = onClick,
+    val picked = Palette.of(base, accent)
+    Column(
+        Modifier.fillMaxWidth().clip(Radii.card).background(picked.wall).border(1.dp, picked.edge, Radii.card).padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Row(
-                Modifier
-                    .size(width = 56.dp, height = 40.dp)
-                    .clip(Radii.key)
-                    .background(palette.wall)
-                    .border(1.dp, palette.strong, Radii.key)
-                    .padding(5.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+            T(
+                "Is the board test fixed?",
+                Modifier.clip(RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)).background(picked.wash).padding(horizontal = 12.dp, vertical = 8.dp),
+                Relay.type.ui, picked.ink,
+            )
+        }
+        T("Yes, it passes now. Want me to open a pull request?", style = replyStyle().copy(fontSize = 15.sp, lineHeight = 22.sp), color = picked.ink)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            T("Open it", Modifier.clip(Radii.key).background(picked.accent).padding(horizontal = 14.dp, vertical = 8.dp), Relay.type.uiMedium, picked.onAccent, weight = FontWeight.SemiBold)
+            T("Not yet", Modifier.clip(Radii.key).background(picked.slab).padding(horizontal = 14.dp, vertical = 8.dp), Relay.type.uiMedium, picked.ink, weight = FontWeight.SemiBold)
+        }
+    }
+    Gap(14.dp)
+    Eyebrow("Accent")
+    Gap(8.dp)
+    Row(
+        Modifier.fillMaxWidth().clip(Radii.card).background(c.slab).border(1.dp, c.edge, Radii.card).padding(horizontal = 8.dp, vertical = 12.dp).selectableGroup(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        for (a in Accent.entries) {
+            val on = a.key == Accent.of(accent).key
+            Column(
+                Modifier.width(44.dp).selectable(on, role = Role.RadioButton) { onAccent(a.key) }.padding(vertical = 2.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Column(
-                    Modifier.weight(1f).fillMaxHeight().clip(Radii.keycap).background(palette.slab).padding(4.dp),
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
-                ) {
-                    Box(Modifier.fillMaxWidth().height(3.dp).clip(Radii.pill).background(palette.ink))
-                    Box(Modifier.fillMaxWidth(.6f).height(3.dp).clip(Radii.pill).background(palette.ink3))
-                }
-                Column(
-                    Modifier.weight(1f).fillMaxHeight().clip(Radii.keycap).background(palette.screen).padding(4.dp),
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
-                ) {
-                    Box(Modifier.fillMaxWidth(.8f).height(2.dp).background(palette.ink2))
-                    Box(Modifier.fillMaxWidth(.5f).height(2.dp).background(palette.ink3))
-                    Box(Modifier.fillMaxWidth(.7f).height(2.dp).background(palette.ink3))
+                Box(
+                    Modifier.size(36.dp).clip(CircleShape).border(2.dp, if (on) c.ink else Color.Transparent, CircleShape).padding(4.dp).clip(CircleShape).background(a.color),
+                    contentAlignment = Alignment.Center,
+                ) { if (on) Glyph("check", 14.dp, picked.onAccent) }
+                T(a.label, style = Relay.type.caption.copy(fontSize = 11.sp), color = if (on) c.ink else c.ink3, weight = if (on) FontWeight.SemiBold else null)
+            }
+        }
+    }
+    Gap(14.dp)
+    Eyebrow("Background")
+    Gap(8.dp)
+    Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        for (pair in Palette.BASES.chunked(2)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                for (b in pair) {
+                    val on = b.key == Palette.base(base).key
+                    Column(
+                        Modifier.weight(1f).clip(Radii.card).background(b.ground)
+                            .border(if (on) 2.dp else 1.dp, if (on) picked.accent else c.edge, Radii.card)
+                            .selectable(on, role = Role.RadioButton) { onBase(b.key) }.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Box(Modifier.size(width = 56.dp, height = 22.dp).clip(Radii.icon).background(b.card))
+                            Box(Modifier.size(width = 36.dp, height = 22.dp).clip(Radii.icon).background(b.card2))
+                        }
+                        T(b.label, style = Relay.type.uiMedium, color = c.ink, weight = FontWeight.SemiBold)
+                    }
                 }
             }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                T(label, style = Relay.type.uiMedium, color = c.ink)
-                T(hint, style = Relay.type.caption, color = c.ink3)
-            }
-            if (selected) Glyph("check", 16.dp, c.ink)
         }
     }
 }

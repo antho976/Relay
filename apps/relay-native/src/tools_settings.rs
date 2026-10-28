@@ -563,7 +563,7 @@ fn body(page: &gtk::Box) -> (gtk::Box, gtk::Box, gtk::Stack) {
 /// The appearance modes, their cards' words, in the order the cards show.
 const MODES: [(&str, &str, &str); 3] = [
     ("matte", "Matte", "Soft console around darker panes"),
-    ("dark", "Warm dark", "Default, easy on long nights"),
+    ("dark", "Dark", "Default: near-black, easy on long nights"),
     ("oled", "OLED", "True black, the wall disappears"),
 ];
 
@@ -1600,7 +1600,7 @@ fn rounded(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
 /// A theme card's miniature: the mode's console around a sidebar and a pane.
 fn draw_theme(cr: &gtk::cairo::Context, mode: &str, w: f64, h: f64) {
     let colors = crate::fonts::palette(mode);
-    // Matte and Warm dark: their raised console around ground-toned panes. OLED: true black
+    // Matte and Dark: their raised console around ground-toned panes. OLED: true black
     // around barely lifted ones.
     let (frame, pane, line) = match mode {
         "oled" => (rgb(colors[0]), rgb(colors[2]), rgb(colors[9])),

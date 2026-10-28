@@ -3,7 +3,6 @@ package com.quietsoftware.relay.ui.dev
 import android.content.Intent
 import android.os.SystemClock
 import android.speech.RecognizerIntent
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -116,6 +115,7 @@ import com.quietsoftware.relay.ui.code.DEL_TEXT
 import com.quietsoftware.relay.ui.code.DEL_WASH
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Empty
+import com.quietsoftware.relay.ui.kit.Eyebrow
 import com.quietsoftware.relay.ui.kit.epoch
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.IconKey
@@ -191,7 +191,6 @@ fun ChatScreen(name: String, nav: Nav) {
     var menu by remember { mutableStateOf(false) }
     var mailing by remember { mutableStateOf(false) }
     var controls by remember { mutableStateOf(false) }
-    var peek by rememberSaveable(name) { mutableStateOf(false) }
     // What is being written to this agent outlives the screen: away and back, it is still here.
     val draft = remember(name) { ChatDrafts.of(name) }
     // A value, not a string: a picked command puts the cursor after itself.
@@ -230,8 +229,6 @@ fun ChatScreen(name: String, nav: Nav) {
     val since = remember(messages, sending) { epoch((sending.lastOrNull() ?: messages.lastOrNull { it.role == "user" })?.createdAt).takeIf { it > 0 } }
 
     KeepScreenOn(s.prefs.keepScreenOn)
-    // Back puts the agent's screen away before it leaves the conversation.
-    BackHandler(enabled = peek && ready) { peek = false }
 
     // When the last message went: the key turns to Stop under the finger that sent it.
     var sentAt by remember { mutableLongStateOf(0L) }
@@ -275,19 +272,15 @@ fun ChatScreen(name: String, nav: Nav) {
     Page {
         Column(Modifier.fillMaxSize()) {
             AgentBar(session, name, onBack = nav::back, onDetails = { nav.session(name) }, onMenu = { menu = true }) {
-                if (ready) IconKey("focus", { peek = !peek }, size = 18.dp, tint = c.ink2, selected = peek, label = if (peek) "Hide the agent's screen" else "Show the agent's screen")
-                IconKey("terminal", { nav.console(name) }, size = 18.dp, tint = c.ink2)
+                session?.let { ss -> IconKey("branch", { nav.git(ss.projectId, ss.worktree.ifBlank { null }, name) }, size = 18.dp, tint = c.ink2, label = "Review changes") }
             }
             ChatBanner(status, session, s.online, life)
             // The agent's plan, pinned: what it is on, and how far along, while there is any left.
             val plan = remember(messages) { latestPlan(messages) }
             if (plan != null && (working || plan.any { it.state != 'x' })) PlanStrip(name, plan)
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                // The agent's screen here before the terminal: it answers what the conversation cannot show yet.
-                val openTerminal = @Composable {
-                    if (ready && !peek) Key("Show its screen", { peek = true }, glyph = "focus", compact = true)
-                    else Key("Open the terminal", { nav.console(name) }, glyph = "terminal", compact = true)
-                }
+                // Nothing to read yet: the agent's details, never its terminal.
+                val openTerminal = @Composable { Key("Agent details", { nav.session(name) }, glyph = "sliders", compact = true) }
                 when {
                     pieces.isNotEmpty() || asking -> Conversation(
                         pieces, doing, since, asking, screen, chat, s.online, session?.provider == "codex",
@@ -299,12 +292,12 @@ fun ChatScreen(name: String, nav: Nav) {
                     )
                     error != null && status != TerminalFeed.Status.Saved -> Empty(
                         "terminal", "Can't read the conversation",
-                        said(error!!.error, "The PC's Relay is older than this app: update it to see agents as a conversation. The terminal works meanwhile."),
+                        said(error!!.error, "The PC's Relay is older than this app: update it to see agents as a conversation."),
                         action = openTerminal,
                     )
                     found == false -> Empty(
                         "terminal", "Nothing said yet",
-                        "The conversation shows here once ${session?.provider?.let(::providerName) ?: "the agent"} starts. Its screen shows everything meanwhile.",
+                        "The conversation shows here once ${session?.provider?.let(::providerName) ?: "the agent"} starts.",
                         action = openTerminal,
                     )
                     status == TerminalFeed.Status.Connecting && s.online -> Empty("terminal", "Reading the conversation", action = { Spinner(16.dp) })
@@ -312,8 +305,15 @@ fun ChatScreen(name: String, nav: Nav) {
                 }
             }
             com.quietsoftware.relay.ui.shell.LiftToasts()
-            if (peek && ready) ScreenPanel(nav, name, screen) { peek = false }
-            if (s.prefs.chatKeys) QuickKeys(chat, ready)
+            if (ready) ChatActions(
+                working = working && !asking,
+                onStop = {
+                    chat.key(Keys.ESC)
+                    nav.shell.toast("Asked ${session?.provider?.let(::providerName) ?: "the agent"} to stop")
+                },
+                onChanges = { session?.let { ss -> nav.git(ss.projectId, ss.worktree.ifBlank { null }, name) } },
+                onCommands = { controls = true },
+            )
             val asked = commandAsked(text)
             if (asked != null && ready) Commands(nav, session?.provider, session?.projectId, asked) { type("/$it ") }
             // Claude's bar: the words, the keys for pictures and for the agent's own keys, its mode, and the round key.
@@ -332,7 +332,7 @@ fun ChatScreen(name: String, nav: Nav) {
                         session == null -> "This agent is closed"
                         !s.online -> "Needs the PC to talk to the agent"
                         !ready -> "The agent is not running"
-                        else -> "Reply to ${session?.name ?: "the agent"}"
+                        else -> "Reply to ${session?.name ?: "the agent"}…"
                     },
                     key = barKey,
                     keyEnabled = ready,
@@ -353,24 +353,31 @@ fun ChatScreen(name: String, nav: Nav) {
         }
     }
 
-    // The agent's own keys, out of the bar: its commands, its next mode, Escape, and the row of extra keys.
-    if (controls) DevSheet({ controls = false }, session?.provider?.let(::providerName) ?: "The agent", "Keys the agent's screen asks for") { close ->
-        SheetRow("Commands", "code", {
+    // The agent's commands sheet (design 14): stop it, free its memory, start it fresh, how much it
+    // does alone, and its slash commands and skills in words. Every one is a button.
+    if (controls) DevSheet({ controls = false }, session?.intent?.ifBlank { null } ?: name, session?.let { agentLine(it) }) { close ->
+        val codex = session?.provider == "codex"
+        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ActionTile("pause", "Stop", ready, Modifier.weight(1f)) { close { chat.key(Keys.ESC) } }
+            ActionTile("save", "Free memory", ready && !working, Modifier.weight(1f)) { close { resend("/compact") } }
+            ActionTile("refresh", "Start fresh", ready && !working, Modifier.weight(1f)) { close { resend(if (codex) "/new" else "/clear") } }
+        }
+        Eyebrow("How much it does alone", Modifier.padding(start = 6.dp, top = 14.dp, bottom = 6.dp))
+        SheetRow(modeWords(mode), "shield", { close { chat.key(Keys.SHIFT_TAB) } }, detail = "Change", enabled = ready)
+        Eyebrow("Ask it to…", Modifier.padding(start = 6.dp, top = 14.dp, bottom = 6.dp))
+        SheetRow("Review its own changes", "focus", { close { resend("Review the changes you made so far and list anything that could break.") } }, enabled = ready)
+        SheetRow("Run a command or skill", "code", {
             close {
                 if (text.isBlank()) type("/")
                 focus.requestFocus()
             }
-        }, detail = "/", enabled = ready)
-        SheetRow("Next mode", "shield", { close { chat.key(Keys.SHIFT_TAB) } }, detail = mode ?: "Shift Tab", enabled = ready)
-        SheetRow("Escape", "close", { close { chat.key(Keys.ESC) } }, detail = "Esc", enabled = ready)
-        SheetRow(if (s.prefs.chatKeys) "Hide the extra keys" else "Show the extra keys", "grid", { close { nav.shell.update { it.copy(chatKeys = !it.chatKeys) } } }, selected = s.prefs.chatKeys)
+        }, detail = "Pick from the list", enabled = ready)
+        SheetRow("Send it a message", "mail", { close { mailing = true } }, enabled = session != null && session?.state != "closed")
     }
 
     LifecycleSheets(life)
     if (menu) {
         DevSheet({ menu = false }, name, session?.let { "${it.provider} · ${it.role}" }) { close ->
-            if (ready) SheetRow(if (peek) "Hide the agent's screen" else "Show the agent's screen", "focus", { close { peek = !peek } })
-            SheetRow("Open the terminal", "terminal", { close { nav.console(name) } })
             session?.let { ss ->
                 SheetRow("Changes", "commit", { close { nav.git(ss.projectId, ss.worktree.ifBlank { null }, name) } })
                 if (ss.state != "closed" && !ss.pending) SheetRow("Mail the agent", "mail", { close { mailing = true } })
@@ -1193,44 +1200,99 @@ private fun AskCard(chat: SessionChat, screen: State<String?>, online: Boolean, 
     val text = screen.value
     val (question, options) = remember(text) { askOf(text.orEmpty()) }
     Column(
-        modifier.clip(Radii.card).background(c.slab).border(1.dp, c.held.copy(alpha = .45f), Radii.card).padding(14.dp),
+        modifier.clip(Radii.card).background(c.slab).border(1.dp, c.accent.copy(alpha = .55f), Radii.card).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Dot(c.held, 6.dp)
-            T("Waiting for you", style = Relay.type.ui, color = c.heldText, weight = androidx.compose.ui.text.font.FontWeight.Medium)
+            Glyph("help", 15.dp, c.accentText)
+            Eyebrow("Waiting for your answer", color = c.accentText)
         }
         if (text == null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Spinner(11.dp)
-            T("Reading the agent's screen…", style = Relay.type.caption, color = c.ink3)
-        } else if (question.isNotEmpty()) T(question.joinToString("\n"), style = Relay.type.mono.copy(fontSize = 11.5.sp, lineHeight = 16.sp), color = c.ink2)
+            T("Reading the question…", style = Relay.type.caption, color = c.ink3)
+        } else if (question.isNotEmpty()) T(askWords(question), style = Relay.type.body, color = c.ink, weight = FontWeight.Medium)
         if (options.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                for ((n, label) in options) {
+                options.forEachIndexed { i, (n, label) ->
+                    val first = i == 0
                     Row(
-                        Modifier.fillMaxWidth().heightIn(min = TOUCH).alpha(if (online) 1f else .5f).clip(Radii.keycap).background(c.wash)
-                            .clickable(enabled = online, role = Role.Button, onClickLabel = label) { chat.key(n) }.padding(horizontal = 12.dp, vertical = 8.dp),
+                        Modifier.fillMaxWidth().heightIn(min = TOUCH).alpha(if (online) 1f else .5f).clip(Radii.key)
+                            .background(if (first) c.accentSoft else c.wash)
+                            .border(1.dp, if (first) c.accent else Color.Transparent, Radii.key)
+                            .clickable(enabled = online, role = Role.Button, onClickLabel = label) { chat.key(n) }.padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        T(n, style = Relay.type.mono, color = c.ink3)
-                        T(label, Modifier.weight(1f), Relay.type.ui, c.ink, maxLines = 3)
+                        T(label.trimStart('❯', '›', '>', ' '), Modifier.weight(1f), Relay.type.ui, c.ink, maxLines = 3, weight = FontWeight.Medium)
                     }
                 }
             }
-        }
-        // Full-size keys, set apart: these answer permission prompts.
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (options.isEmpty()) {
-                Key("Yes", { chat.key("y") }, enabled = online)
-                Key("No", { chat.key("n") }, enabled = online)
-            } else {
-                Key("↑", { chat.key(ARROW_UP) }, enabled = online)
-                Key("↓", { chat.key(ARROW_DOWN) }, enabled = online)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Key("Cancel", { chat.key(Keys.ESC) }, kind = KeyKind.Quiet, enabled = online, compact = true)
             }
-            Key("Enter", { chat.key(Keys.ENTER) }, enabled = online)
-            Key("Esc", { chat.key(Keys.ESC) }, kind = KeyKind.Quiet, enabled = online)
+        } else {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Key("Yes", { chat.key("y") }, Modifier.weight(1f), kind = KeyKind.Primary, enabled = online)
+                Key("No", { chat.key("n") }, Modifier.weight(1f), enabled = online)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                Key("Continue", { chat.key(Keys.ENTER) }, kind = KeyKind.Quiet, enabled = online, compact = true)
+                Key("Cancel", { chat.key(Keys.ESC) }, kind = KeyKind.Quiet, enabled = online, compact = true)
+            }
         }
+    }
+}
+
+/** The question's lines as one sentence: the screen wraps it, the card does not need to. */
+internal fun askWords(lines: List<String>): String = lines.joinToString(" ") { it.trim() }.replace(Regex("\\s+"), " ")
+
+/** The agent's mode in words: Claude Code's footer says it the way a terminal person reads it. */
+internal fun modeWords(mode: String?): String {
+    val m = mode?.lowercase().orEmpty()
+    return when {
+        m.isEmpty() -> "Asks before edits"
+        "plan" in m -> "Plans first"
+        "accept" in m || "auto" in m -> "Edits on its own"
+        "bypass" in m || "yolo" in m -> "Does everything on its own"
+        else -> mode!!
+    }
+}
+
+/** The row over the message box (design 14): Stop while it works, its changes, its commands. */
+@Composable
+private fun ChatActions(working: Boolean, onStop: () -> Unit, onChanges: () -> Unit, onCommands: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 14.dp, end = 14.dp, top = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (working) ActionChip("pause", "Stop", onStop)
+        ActionChip("branch", "Review changes", onChanges)
+        ActionChip("zap", "Commands", onCommands)
+    }
+}
+
+@Composable
+private fun ActionChip(glyph: String, label: String, onClick: () -> Unit) {
+    val c = Relay.colors
+    Row(
+        Modifier.heightIn(min = 36.dp).clip(Radii.pill).background(c.pane).border(1.dp, c.strong, Radii.pill).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Glyph(glyph, 14.dp, c.ink)
+        T(label, style = Relay.type.caption, color = c.ink, weight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun ActionTile(glyph: String, label: String, enabled: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val c = Relay.colors
+    Column(
+        modifier.alpha(if (enabled) 1f else .4f).clip(Radii.key).background(c.wash).clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(vertical = 14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Glyph(glyph, 19.dp, c.ink)
+        T(label, style = Relay.type.caption, color = c.ink, weight = FontWeight.Medium, maxLines = 1)
     }
 }
 

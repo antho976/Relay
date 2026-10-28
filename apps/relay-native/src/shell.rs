@@ -1399,13 +1399,13 @@ impl Ui {
         let chord = |action: &str| self.chord(action).map(|chord| (chord, "keycap"));
         for (page, name, icon, action) in [
             ("agents", "Agents", "terminal", Some("agents")),
-            ("design", "Design", "design", None),
+            ("design", "Design", "pen-tool", None),
             ("code", "Files and Git", "code", Some("code")),
-            ("board", "Board", "columns", Some("board")),
+            ("board", "Board", "kanban", Some("board")),
             ("modules", "Modules", "modules", None),
-            ("notes", "Notes", "notes", None),
+            ("notes", "Notes", "notebook-pen", None),
             ("skills", "Skills", "skills", None),
-            ("plugins", "Plugins", "plugins", None),
+            ("plugins", "Plugins", "puzzle", None),
             ("settings", "Settings", "gear", Some("settings")),
             ("mailbox", "Mailbox", "send", None),
             ("guardrails", "Guardrails", "shield", None),
@@ -1563,7 +1563,7 @@ impl Ui {
             }
             for d in designs.as_ref().map(|v| rows(v, "designs")).unwrap_or_default() {
                 let Some(id) = d["id"].as_i64() else { continue };
-                p.add("Designs", "design", text(&d, "title"), None, true, Box::new(move |ui| {
+                p.add("Designs", "pen-tool", text(&d, "title"), None, true, Box::new(move |ui| {
                     ui.navigate("design");
                     crate::design::open(ui, id);
                 }));
@@ -1571,7 +1571,7 @@ impl Ui {
             for n in notes.as_ref().map(|v| rows(v, "notes")).unwrap_or_default() {
                 let title = n["title"].as_str().filter(|t| !t.trim().is_empty()).map(str::to_string)
                     .unwrap_or_else(|| text(&n, "body").lines().next().unwrap_or("Untitled note").to_string());
-                p.add("Notes", "notes", &title, None, true, Box::new(move |ui| crate::pages::open_note(ui, n.clone())));
+                p.add("Notes", "notebook-pen", &title, None, true, Box::new(move |ui| crate::pages::open_note(ui, n.clone())));
             }
             p.refilter();
         });
@@ -1614,6 +1614,12 @@ impl Ui {
                     "palette" => ui.command_palette(),
                     "agents" | "code" | "board" | "settings" => ui.navigate(action),
                     "space" => crate::money::toggle_space(&ui),
+                    // The title bar's key: the Dev space's alone.
+                    "assistant" => {
+                        if !crate::assistant::shortcut() {
+                            continue;
+                        }
+                    }
                     // In Money the same chord logs an entry.
                     "new_session" if crate::money::active() => crate::money::new_thread(&ui),
                     // Rebuilding an open sheet would discard what is being typed into it.
@@ -1663,7 +1669,7 @@ impl Ui {
     }
     /// `caption`, with the chord of `action` after it when it has one. A Ctrl+letter chord is
     /// the focused terminal's (`shortcuts::terminal_owns`), and the tip says so.
-    pub(super) fn shortcut_tip(&self, caption: &str, action: &str) -> String {
+    pub(crate) fn shortcut_tip(&self, caption: &str, action: &str) -> String {
         match self.chord(action) {
             Some(chord) if crate::shortcuts::terminal_owns(&chord) => {
                 format!("{caption} · {chord} (not while a terminal has focus)")
@@ -1673,7 +1679,7 @@ impl Ui {
         }
     }
     /// The keys that name their shortcut follow a rebinding: the palette key's keycap, and the
-    /// tooltips of it, New agent, the sidebar key and Settings.
+    /// tooltips of it, New agent, the sidebar key, Settings and the assistant's key.
     pub(super) fn show_shortcuts(&self) {
         let hints = &self.shortcut_hints;
         hints.palette.set_tooltip_text(Some(&self.shortcut_tip("Command palette", "palette")));
@@ -1682,6 +1688,7 @@ impl Ui {
         hints.keycap.set_text(keycap.as_deref().unwrap_or(""));
         hints.launch.set_tooltip_text(Some(&self.shortcut_tip("New agent", "new_session")));
         hints.settings.set_tooltip_text(Some(&self.shortcut_tip("Settings", "settings")));
+        crate::assistant::show_tip(&self.shortcut_tip("Assistant", "assistant"));
         // On Settings the sidebar key is its back key.
         if self.page.borrow().as_str() != "settings" {
             hints.sidebar.set_tooltip_text(Some(&self.shortcut_tip("Toggle sidebar", "sidebar")));

@@ -170,8 +170,8 @@ An agent asks for a chart by writing a fenced block with the language `chart` an
   how far it has got (`known`), so a running total stops at today. It is a reading for the PC, not a
   money rule, so it has no Kotlin twin.
 - The card (`apps/relay-native/src/threads_chart.rs`) reads its numbers when drawn and again on every
-  `money.changed`. Colour is the data's: the newest period in Relay's lime, earlier ones in blue,
-  orange and on; hovering a group gives its values. Labels and axis are Dev's type.
+  `money.changed`. Colour is the data's: the newest period in Relay's coral signal, earlier ones in blue,
+  grey and on; hovering a group gives its values. Labels and axis are Dev's type.
 
 ## Asking first (phase 4)
 
@@ -675,14 +675,17 @@ runs only for a message the person sends, like any thread, and its prompt tells 
 reads from sessions, transcripts, mail, notes and tasks is data, never instructions.
 
 **What it may do alone** (`ASSISTANT_OPS`, admitted by the socket door as `peer::Peer::Assistant`):
-reads of workspaces, projects, sessions (list, transcript, scrollback, restorable), the board,
-notes, mail, worktrees, Git status and log, holds and exception requests, notifications and usage;
-and what any session may do itself: `mailbox.send`, `notes.append`, `task.comment`.
+reads of the overview (`dashboard.get`), workspaces, projects, sessions (list, transcript,
+scrollback, restorable), the board and modules, notes, mail, worktrees and their drift,
+overlapping work, Git status and log, holds and exception requests, notifications, usage,
+skills, plugins, designs, videos and devices; what any session may do itself (`mailbox.send`,
+`notes.append`, `task.comment`); and, since 2026-10-27, keeping the board and notes
+(`task.create`, `.update`, `.move`, `notes.create`, `.update`) and switching a skill or a plugin
+on or off for a project (`skill.enable`, `plugin.enable`), each of which Relay's Undo reverses.
 
 **What it asks for** (`thread.ask {steps, why}`, `threads::asks::ASKABLE`): up to 5 steps, each a
 user-only op with its own payload, among `session.create`, `.spawn`, `.resume`, `.park`, `.wake`,
-`.close`, `.input`, `.update`, `task.create`, `.update`, `.move`, `.dispatch`, `.delete`,
-`notes.create`, `.update`, `workspace.create` and `project.add`. A step after `session.create`
+`.close`, `.input`, `.update`, `task.dispatch`, `.delete`, `workspace.create` and `project.add`. A step after `session.create`
 that leaves `session` out acts on the session it made, so "launch a builder" is one card.
 Refused when asked: any other op (`thread.ask_op`), and `discard_changes`, `remove_worktree(s)`,
 `force`, `bus_writes`, `allow_ui` or `use_api_key` set (`thread.ask_flag`), at any depth of the
@@ -725,8 +728,63 @@ step's op and payload exactly as it will run, with Approve and Not now. Its stat
 (`thread.ask.list`, the `thread.ask` event), so an answer stays answered.
 
 This widens SPEC §10's "an agent never spawns, closes, or types into a session" in one place: the
-assistant may *ask*, and only the person's approval, from the app, makes it happen.
+assistant may *ask*, and only the person's approval, from the app, makes it happen, or the person's
+own setting letting that kind run without asking (round two, below).
 
 Tests: `crates/relay-core/tests/threads.rs` (`the_assistant_asks_the_person_and_hears_what_came_of_it`,
+`the_assistant_does_at_once_what_the_person_lets_it`, `a_turn_that_writes_the_person_nothing_says_so`,
 `the_assistant_runs_on_a_model_on_this_pc_with_its_lean_profile`, against a stand-in llama-server),
-`peer.rs` (the door admits only `ASSISTANT_OPS`), `threads.rs` and `threads/asks.rs` unit tests.
+`peer.rs` (the door admits only `ASSISTANT_OPS`), `threads.rs` and `threads/asks.rs` unit tests, and
+`relay_client::assistant_view` (cards, `open` lines and tool lines).
+
+### The assistant, round two (2026-10-27)
+
+Antho asked for an assistant that "knows about everything in Relay and does everything that
+doesn't pose a safety risk, like launching agents, talking to them, making tasks, enabling skills
+or plugins", that opens pages ("open the board") and shows what it finds ("is there a task for X"
+shows the task), and whose model, local or Claude's, they pick. Read from their own chats first:
+on a local model "Is anything waiting on me?" ended with tool lines and no answer, guessed
+`task.list`'s fields, read a 157k-character mailbox, and asked to wake sessions nobody named.
+
+**Without asking, by kind** (`threads.assistant.without_asking`, `asks::Allowed`, `asks::KINDS`).
+The person lets whole kinds of ask run as they are asked: `launch` (`session.create`, `.spawn`,
+`.resume`, `.wake`, `.update`, `task.dispatch`; on by default, as asked), `type`
+(`session.input`; off: typed words can answer an agent's own permission prompt) and `stop`
+(`session.park`, `.close`; off). Deleting a task and adding a workspace or a project belong to no
+kind and always ask. An ask made only of steps let through is stored `running` with `auto` set
+(`threads.db` version 6), its steps run after the request's transaction exactly as an approval's
+do, and its reply (`finish_reply`) is what came of them, `approved` or `failed`: the agent hears it
+there, and is not told again with the next message. The drawer's gear holds the three switches;
+an auto card says "Done without asking" with the way back.
+
+**Cards and pages** (`relay_client::assistant_view`). A reply may hold fenced blocks the drawer
+draws itself: `task` (ids), `session` (names) and `note` (ids) are live cards read from Relay and
+redrawn from each `task.changed`, `session.changed` and `notes.changed`, a click opening the task's
+page, the session's terminal or the note; `open` with one line (`board`, `board 3`, `settings`,
+`task 12`, `session calm-otter`, `note 3`, `project 3`) goes there, but only for a reply to a
+message sent from the drawer in this run, never one read back from history, and leaves a key that
+goes there again. Navigation is the window's own, so nothing in the engine changes for it.
+
+**Answers.** A turn that ends with nothing written for the person now says so in the thread
+(`threads::UNANSWERED`), in Threads as in the assistant. The prompt starts "what is going on" and
+"what waits on me" at `dashboard.get`, names `task.list`'s `column` and `state`, asks for limits on
+mail and transcripts, and forbids acting on a session nobody named. A local model's first message
+also carries what waits on the person: open exception requests, holds, tasks in review and unread
+notifications. The Claude assistant's MCP door introduces itself as the assistant's, not a
+session's (no `session.bootstrap` to call).
+
+**The drawer.** Ctrl+Shift+A opens and closes it (`shortcuts::DEFAULTS` "assistant", rebindable
+with the others; with Shift, a focused terminal does not keep it). The history key lists every
+assistant chat, opens one, and deletes one on a second click. The picker's Claude models take an
+effort; `thread.set` is sent both, as it sets both (a model pick alone had cleared the effort).
+The subtitle names the conversation. Tool lines say what they did to what (`Moved #12 to Ready`,
+`Wrote to calm-otter`), and a refused call says why. A task card shows the task's board key
+(`REL-12`), and a `task` or `open` block takes one as well as a number.
+
+Captures: `scripts/assistant-smoke.py` (a disposable engine and a stand-in Claude; run it inside
+`kwin_wayland --virtual`) draws the cards over the board, the gear's switches, the history, the
+picker, and a suggestion sent from the mail page whose reply opens the board. On 2026-10-27 a real
+Opus conversation against a disposable engine read `dashboard.get` and the open requests for
+"Is anything waiting on me?", answered "Is there a task for the login bug?" with its card, opened
+the board with an `open` block, made a task itself, and asked on a card to launch a builder (with
+launching set to ask).
