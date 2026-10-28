@@ -880,6 +880,16 @@ pub fn install(ui: &Rc<Ui>) {
             });
         });
     }
+    // RELAY_NATIVE_ASSISTANT opens the assistant drawer after that many seconds and leaves it open,
+    // for a reply streamed into it (native-baseline.py --stream-only).
+    if let Some(after) = std::env::var("RELAY_NATIVE_ASSISTANT").ok().and_then(|s| s.parse::<u64>().ok()) {
+        let window = ui.window.clone();
+        glib::timeout_add_local_once(Duration::from_secs(after), move || {
+            if let Err(e) = click(&window, "assistant-key") {
+                println!("ASSISTANT_OPEN_FAILED={e}");
+            }
+        });
+    }
     let navigate = ui.clone();
     glib::timeout_add_local_once(Duration::from_secs(2), move || {
         if fixture {
