@@ -194,6 +194,15 @@ const bundleVideo = (dir, bundleRoot) => {
     const outDir = path.join(bundleRoot, print);
     const entryPoint = path.join(dir, 'src', 'index.ts');
     if (!fs.existsSync(entryPoint)) throw new Refusal('video.entry', 'src/index.ts is missing: it registers the video (registerRoot(relayRoot(Root)))');
+    // These files were bundled here before. A render still reading that bundle is this worker's,
+    // and the bundle is whole: it is taken as it is. Anything else is a worker before this one's
+    // (one stops when idle), maybe cut short, and Remotion's copy of public/ refuses to write over
+    // its links (EEXIST), so it goes.
+    if (inUse.get(outDir)) {
+      Object.assign(v, { fingerprint: print, serveUrl: outDir, outDir });
+      return v;
+    }
+    fs.rmSync(outDir, { recursive: true, force: true });
     const started = performance.now();
     const publicDir = path.join(bundleRoot, `.public-${print}`);
     fs.rmSync(publicDir, { recursive: true, force: true });
