@@ -17,6 +17,9 @@ use std::rc::Rc;
 
 pub struct Editor {
     pub root: gtk::Box,
+    /// The project's strip: the scope key, Agents (a way back from a file), Design, Files and
+    /// Git. The window moves it into its title bar (app.rs), shown while this view is.
+    pub project_bar: gtk::Box,
     tree: gtk::Box,
     expanded: RefCell<std::collections::BTreeSet<String>>,
     scope: gtk::MenuButton,
@@ -202,26 +205,25 @@ impl Editor {
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
         project_tools.append(&spacer);
-        // The project's views, Agents | Design: one segmented control, the one showing lit. Files
-        // and Git open beside whichever shows, so they are keys of their own after it, lit while
-        // their panel is open (`panel_keys`).
+        // The project's views. The agents are the view at rest: Design, Files and Git are keys
+        // of their own, each lit while it shows (`panel_keys`), and Agents appears only as the
+        // way back from a file the person opened.
         let views = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        views.add_css_class("view-tabs");
         views.set_valign(gtk::Align::Center);
         project_tools.append(&views);
         let panel_keys = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         panel_keys.add_css_class("panel-keys");
         panel_keys.set_valign(gtk::Align::Center);
         project_tools.append(&panel_keys);
-        let agents_button = button("Agents", "quiet");
+        let agents_button = panel_key("arrow-left", "Agents");
         agents_button.set_widget_name("project-agents");
-        agents_button.set_tooltip_text(Some("The project's agents: their terminals, side by side"));
-        agents_button.add_css_class("selected");
+        agents_button.set_tooltip_text(Some("Back to the project's agents: their terminals, side by side"));
+        agents_button.set_visible(false);
         views.append(&agents_button);
-        let design_button = button("Design", "quiet");
+        let design_button = panel_key("pen-tool", "Design");
         design_button.set_widget_name("project-design");
         design_button.set_tooltip_text(Some("The project's designs: canvases you and its agents draw on"));
-        views.append(&design_button);
+        panel_keys.append(&design_button);
         root.append(&project_tools);
 
         let caption = label("No file open", "title");
@@ -448,6 +450,7 @@ impl Editor {
         discard.set_sensitive(false);
         let editor = Rc::new(Self {
             root,
+            project_bar: project_tools,
             tree,
             expanded: RefCell::default(),
             scope,
@@ -630,9 +633,14 @@ impl Editor {
             }
         });
         let weak = Rc::downgrade(&editor);
+        // A toggle like Files and Git: pressed again, it returns to the agents.
         design_button.connect_clicked(move |_| {
             if let Some(editor) = weak.upgrade() {
-                editor.show_design();
+                if editor.design_visible() {
+                    editor.show_agents();
+                } else {
+                    editor.show_design();
+                }
             }
         });
         let weak = Rc::downgrade(&editor);
@@ -665,8 +673,9 @@ impl Editor {
                 if let Some(editor) = weak.upgrade() {
                     let design = editor.design_visible();
                     let document = !editor.agents_visible() && !design;
-                    if editor.agents_visible() { agents_tab.add_css_class("selected") } else { agents_tab.remove_css_class("selected") }
-                    if design { design_tab.add_css_class("selected") } else { design_tab.remove_css_class("selected") }
+                    agents_tab.set_visible(document);
+                    if design { design_tab.add_css_class("open") } else { design_tab.remove_css_class("open") }
+                    design_tab.update_state(&[gtk::accessible::State::Pressed(if design { gtk::AccessibleTristate::True } else { gtk::AccessibleTristate::False })]);
                     editor.document_tools.set_visible(document && !editor.image_mode.get());
                     editor.tab_scroll.set_visible(document && !editor.tabs.borrow().is_empty());
                     editor.position.set_visible(document);

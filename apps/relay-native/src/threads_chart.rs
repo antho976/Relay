@@ -540,7 +540,7 @@ fn plot(body: &gtk::Box, data: &Data, kind: ChartKind) {
         // Grid: one line per tick, the zero line a step brighter.
         for k in -(down as i64)..=i64::from(up) {
             let y = y_of(base + k * step, h).round() + 0.5;
-            let (r, g, b) = rgb(if k == 0 { "#33302D" } else { "#242220" });
+            let (r, g, b) = rgb(if k == 0 { "#333333" } else { "#1C1C1C" });
             cr.set_source_rgb(r, g, b);
             cr.set_line_width(1.0);
             cr.move_to(left, y);
@@ -731,7 +731,7 @@ fn donut(body: &gtk::Box, data: &Data) {
 /// The price line: blue, so green and ink stay the buys' and the sells'.
 const PRICE_LINE: &str = "#6A9FD8";
 const BUY: &str = "#2ec469";
-const SELL: &str = "#EDE9E2";
+const SELL: &str = "#EDEDED";
 
 /// A price chart's question: `query` is an `arbiter.series` payload; `cutoff` (Unix seconds) is
 /// where the model's training data ends.
@@ -967,7 +967,7 @@ fn draw_price(body: &gtk::Box, legend: &gtk::Box, v: &Value, cutoff: Option<i64>
         let (w, h) = (f64::from(width), f64::from(height));
         for k in 0..=ticks {
             let y = y_of(bottom + k as f64 * step, h).round() + 0.5;
-            let (r, g, b) = rgb("#242220");
+            let (r, g, b) = rgb("#1C1C1C");
             cr.set_source_rgb(r, g, b);
             cr.set_line_width(1.0);
             cr.move_to(left, y);
@@ -980,7 +980,7 @@ fn draw_price(body: &gtk::Box, legend: &gtk::Box, v: &Value, cutoff: Option<i64>
             cr.set_source_rgba(0.93, 0.91, 0.89, 0.05);
             cr.rectangle(left, 0.0, x - left, h);
             let _ = cr.fill();
-            let (r, g, b) = rgb("#8C877F");
+            let (r, g, b) = rgb("#878787");
             cr.set_source_rgb(r, g, b);
             cr.set_line_width(1.0);
             cr.set_dash(&[4.0, 3.0], 0.0);
@@ -1002,7 +1002,7 @@ fn draw_price(body: &gtk::Box, legend: &gtk::Box, v: &Value, cutoff: Option<i64>
             let (x, y) = (x_of(*t, w), y_of(*price, h));
             if *buy {
                 // A dark ring keeps a dot readable where it sits on the line.
-                let (r, g, b) = rgb("#131211");
+                let (r, g, b) = rgb("#070707");
                 cr.set_source_rgb(r, g, b);
                 cr.arc(x, y, 5.5, 0.0, 2.0 * PI);
                 let _ = cr.fill();
@@ -1011,7 +1011,7 @@ fn draw_price(body: &gtk::Box, legend: &gtk::Box, v: &Value, cutoff: Option<i64>
                 cr.arc(x, y, 4.0, 0.0, 2.0 * PI);
                 let _ = cr.fill();
             } else {
-                let (r, g, b) = rgb("#131211");
+                let (r, g, b) = rgb("#070707");
                 cr.set_source_rgb(r, g, b);
                 cr.arc(x, y, 4.5, 0.0, 2.0 * PI);
                 let _ = cr.fill();

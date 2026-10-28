@@ -1,31 +1,31 @@
 /* The ten mode tokens: Dark's values (the default mode), which shell.rs redefines for the
    chosen mode (fonts::PALETTES). DESIGN.md names them: ground, ground, surface, selected, idle pane, ink,
    ink-2, ink-3, line-strong, line. */
-@define-color wall #131211;
-@define-color console #131211;
-@define-color slab #1a1917;
-@define-color wash #1f1d1b;
+@define-color wall #070707;
+@define-color console #070707;
+@define-color slab #141414;
+@define-color wash #1c1c1c;
 @define-color screen #08090a;
-@define-color ink #ede9e2;
-@define-color secondary #b5b0a8;
-@define-color faint #8c877f;
-@define-color strong #262422;
-@define-color edge #242220;
+@define-color ink #ededed;
+@define-color secondary #a3a3a3;
+@define-color faint #878787;
+@define-color strong #262626;
+@define-color edge #1c1c1c;
 /* The rest of the scale, the same in every mode. */
-@define-color pane #181715;
-@define-color raised #1c1b19;
-@define-color track #2a2826;
-@define-color line_subtle #211f1d;
-@define-color line_emphasis #33302d;
-@define-color line_focus #3a3733;
-@define-color ink_dim #6e6a64;
+@define-color pane #0f0f0f;
+@define-color raised #1c1c1c;
+@define-color track #2a2a2a;
+@define-color line_subtle #1a1a1a;
+@define-color line_emphasis #333333;
+@define-color line_focus #3a3a3a;
+@define-color ink_dim #6e6e6e;
 /* Opaque twins of the four surfaces panel opacity makes translucent (shell.rs redefines both). */
-@define-color wall_solid #131211;
-@define-color console_solid #131211;
-@define-color slab_solid #1a1917;
-@define-color wash_solid #1f1d1b;
+@define-color wall_solid #070707;
+@define-color console_solid #070707;
+@define-color slab_solid #141414;
+@define-color wash_solid #1c1c1c;
 /* A page's one layer, as see-through as a terminal plate on its @wall (shell.rs redefines it). */
-@define-color page_fill #131211;
+@define-color page_fill #0f0f0f;
 /* Glass: everything that sits on a page. A page paints @page_fill once; what lies on it is a
    veil of @ink over that one layer, never a colour token. @slab, @wash and @raised are nearly
    opaque under panel opacity (and @raised fully), so a card in them over @page_fill reads as a
@@ -50,6 +50,8 @@
 @define-color live #2ec469;
 @define-color held #e5382e;
 @define-color waiting #f0a828;
+/* The one accent: coral, for what asks for you (the notification count) and nothing else. */
+@define-color signal #d97757;
 /* Attention red for text: @held on @wall is about 3.6:1, too low for 12-13px words; this is 6.7:1. */
 @define-color held_text #f0786f;
 * { -gtk-icon-style: symbolic; }
@@ -281,9 +283,9 @@ button.window-close:hover { background: @held; color: @ink; }
 .agent-skill-row .skill-title { font-size: 12px; }
 .agent-skill-row .skill-source { padding: 0; font-family: 'Geist'; font-size: 10px; color: @faint; background: transparent; }
 /* Inside the bell's key, clear of the window's top edge. */
-.notification-count { margin: 3px 1px 0 0; min-width: 10px; min-height: 15px; padding: 0 4px; border-radius: 999px; background: @ink; color: @wall; font-family: 'Geist Mono'; font-size: 9.5px; font-weight: 500; }
+.notification-count { margin: 3px 1px 0 0; min-width: 10px; min-height: 15px; padding: 0 4px; border-radius: 999px; background: @signal; color: #0a0a0a; font-family: 'Geist Mono'; font-size: 9.5px; font-weight: 500; }
 /* The count reads the same whatever it holds; the bell's popover says which need you. */
-.notification-count.held { background: @ink; color: @wall; }
+.notification-count.held { background: @signal; color: #0a0a0a; }
 
 /* Strip desktop-theme colors from app-owned form controls. */
 scale { padding: 8px 0; }
@@ -406,3 +408,23 @@ button.panel-key.open image { color: @ink; }
 .terminal-plate .umd .session-branch { font-family: 'Fira Mono', monospace; }
 .terminal-scrollbar slider { background: #2c2c30; border-radius: 0; }
 .terminal-scrollbar slider:hover { background: #3f3f45; }
+
+/* The shell (DESIGN.md, Title bar): one bar over the page on the ground, no rule under it. The
+   project's strip (editor.rs, moved here by app.rs) holds the scope key and Design, Files and
+   Git; Dev | Threads heads the sidebar. */
+.topbar { min-height: 52px; border-bottom: 0; }
+.topbar-project { min-height: 52px; padding: 0 2px 0 4px; }
+.topbar-project > menubutton > button { min-height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; }
+.topbar-project > menubutton > button:hover { background: @glass_hover; }
+.topbar-project > menubutton label.mono { color: @ink; font-family: 'Geist', sans-serif; font-size: 13px; font-weight: 600; }
+.topbar-project .panel-keys { margin-left: 6px; }
+.topbar-project button.panel-key { min-height: 30px; padding: 0 11px; border-radius: 8px; border-color: @glass_line; }
+.topbar-actions button.command-search { min-height: 30px; margin-right: 4px; border-radius: 8px; border-color: @glass_line; background: transparent; }
+.sidebar-switcher { margin: 4px 12px 6px; }
+.sidebar-switcher button { min-height: 26px; }
+/* Every page but the project's view is a card on the ground (DESIGN.md, Pages), inset from the
+   window's edge; the agents' wall is not a card, and its panes are untouched. */
+.page-stack > :not(.code-surface) { margin: 0 8px 8px 0; border: 1px solid @edge; border-radius: 12px; }
+/* The sidebar meets the page's card with no rule: the card's edge is the border. */
+paned.sidebar-split > separator { background-color: transparent; }
+paned.sidebar-split > separator:hover { background-color: @line_focus; }

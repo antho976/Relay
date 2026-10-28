@@ -10,13 +10,13 @@ pub const SCREEN: usize = 4;
 /// schemes written below both come from this one table.
 const PALETTES: [(&str, [&str; 10]); 3] = [
     // DESIGN.md's palette is Dark, the default: ground, ground, surface, selected, the
-    // terminals' screen, ink, ink-2, line, ink-3, line-strong. Matte lifts its grounds a step;
-    // OLED sets them on true black. The inks are the same in all three. `screen` paints the
-    // terminals and the code editor and keeps each mode's earlier value: the terminals are not
-    // part of the warm rework.
-    ("matte", ["#171614", "#171614", "#1e1d1b", "#23211f", "#0a0a0b", "#ede9e2", "#b5b0a8", "#292725", "#8c877f", "#2c2a28"]),
-    ("dark", ["#131211", "#131211", "#1a1917", "#1f1d1b", "#08090a", "#ede9e2", "#b5b0a8", "#242220", "#8c877f", "#262422"]),
-    ("oled", ["#000000", "#000000", "#0f0e0d", "#161513", "#000000", "#ede9e2", "#b5b0a8", "#1c1b19", "#8c877f", "#211f1d"]),
+    // terminals' screen, ink, ink-2, line, ink-3, line-strong. A neutral near-black: Matte lifts
+    // its grounds a step; OLED sets them on true black. The inks are the same in all three.
+    // `screen` paints the terminals and the code editor and keeps each mode's earlier value: the
+    // terminals are not part of the rework.
+    ("matte", ["#0d0d0d", "#0d0d0d", "#171717", "#1e1e1e", "#0a0a0b", "#ededed", "#a3a3a3", "#202020", "#878787", "#2a2a2a"]),
+    ("dark", ["#070707", "#070707", "#141414", "#1c1c1c", "#08090a", "#ededed", "#a3a3a3", "#1c1c1c", "#878787", "#262626"]),
+    ("oled", ["#000000", "#000000", "#0f0f0f", "#161616", "#000000", "#ededed", "#a3a3a3", "#1a1a1a", "#878787", "#222222"]),
 ];
 
 /// The status tokens, the same in every appearance mode: theme.css defines them for the
