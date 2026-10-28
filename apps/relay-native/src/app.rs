@@ -2072,6 +2072,10 @@ impl Ui {
                                     continue;
                                 }
                                 // A note lists the tasks made from it, whatever project it shows.
+                                // The assistant's cards follow their rows, whatever project they are in.
+                                if matches!(e.ev.as_str(), "task.changed" | "task.deleted" | "session.changed" | "notes.changed" | "notes.deleted") {
+                                    crate::assistant::data_changed(&e.ev, &e.payload);
+                                }
                                 if matches!(e.ev.as_str(), "task.changed" | "task.deleted") {
                                     crate::pages::note_tasks_changed(&ui);
                                     // An open task page follows its task, whatever the board shows.
