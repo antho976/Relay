@@ -34,8 +34,8 @@ use std::cell::{Cell, RefCell};
 use std::f64::consts::{FRAC_PI_2, PI};
 use std::rc::Rc;
 
-/// Series colours, the newest first: Relay's lime, then blue, orange, violet, teal, gold.
-const PALETTE: [&str; 6] = ["#C6F24E", "#6A9FD8", "#E08A5F", "#C27BC0", "#4FA9A0", "#D9A441"];
+/// Series colours, the newest first: Relay's coral signal, then blue, grey, violet, teal, gold.
+const PALETTE: [&str; 6] = ["#D97757", "#6A9FD8", "#A3A3A3", "#C27BC0", "#4FA9A0", "#D9A441"];
 const PLOT_H: i32 = 184;
 const PAD_T: f64 = 10.0;
 const PAD_B: f64 = 8.0;

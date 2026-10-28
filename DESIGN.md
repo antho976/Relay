@@ -116,7 +116,7 @@ runtime behavior. Validation and remaining coverage belong in
 
 **The 2026-10 rework (Antho's mockup and token sheet).** Everything around the terminals is
 warm near-black chrome in Geist: rounded keys, fields and rows (10px), pills for small toggles,
-a search-field palette key with a Ctrl K keycap, the mark (three lanes staggered like a relay's start, the lime signal broken away ahead of the front one) and Sora wordmark, a segmented
+a search-field palette key with a Ctrl K keycap, the mark (three lanes staggered like a relay's start, the signal (lime then, coral since the 2026-10-28 redesign) broken away ahead of the front one) and Sora wordmark, a segmented
 view switch and a mono status bar. **The terminal panes are not part of it.** Their plates,
 identity strips, lamps, metadata, gutters, Fira faces and screen colour stay exactly as below;
 Antho asked for them to be left alone. The Dashboard page was removed at the same time.

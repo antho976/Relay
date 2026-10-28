@@ -170,8 +170,8 @@ An agent asks for a chart by writing a fenced block with the language `chart` an
   how far it has got (`known`), so a running total stops at today. It is a reading for the PC, not a
   money rule, so it has no Kotlin twin.
 - The card (`apps/relay-native/src/threads_chart.rs`) reads its numbers when drawn and again on every
-  `money.changed`. Colour is the data's: the newest period in Relay's lime, earlier ones in blue,
-  orange and on; hovering a group gives its values. Labels and axis are Dev's type.
+  `money.changed`. Colour is the data's: the newest period in Relay's coral signal, earlier ones in blue,
+  grey and on; hovering a group gives its values. Labels and axis are Dev's type.
 
 ## Asking first (phase 4)
 
