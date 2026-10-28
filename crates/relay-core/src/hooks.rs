@@ -16,6 +16,10 @@ use std::process::Command;
 
 const CLAUDE_HOOK_MARKER: &str = "hook claude-";
 const CLAUDE_PRE_TOOL: &str = "hook claude-pre-tool";
+/// Every Claude tool that writes or executes, which the guardrail hook is installed for: a tool
+/// missing here is never checked at all (RA-562 left NotebookEdit out). `relay hook
+/// claude-pre-tool` builds a gate for each one, and its tests hold the two lists together.
+pub const CLAUDE_GATED_TOOLS: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash";
 const CODEX_HOOK_MARKER: &str = "hook codex-";
 const CODEX_PRE_TOOL: &str = "hook codex-pre-tool";
 const CODEX_HOOKS_RELATIVE: &str = ".codex/hooks.json";
@@ -594,7 +598,7 @@ pub fn install_claude(worktree: &Path, instance: Instance, relay: &Path) -> Resu
         CLAUDE_PRE_TOOL,
     );
     pre.push(json!({
-        "matcher": "Edit|Write|MultiEdit|Bash",
+        "matcher": CLAUDE_GATED_TOOLS,
         "hooks": [{"type": "command", "command": command, "timeout": 30}]
     }));
 

@@ -437,6 +437,14 @@ pub fn authorize(
         .ok_or_else(|| BusError::actor(format!("unknown session id {session_id}")))?;
     let session = &row.session;
 
+    // An agent works in its own project and reads nothing outside it: source, diffs, history,
+    // worktrees and guardrails included, not just the board and mail (D106, RA-208). Drawn once
+    // here for every op, for reads as well as writes; the engine fills an omitted `project_id`
+    // with the session's own before this runs.
+    if payload.get("project_id").and_then(Value::as_i64).is_some_and(|asked| asked != session.project_id) {
+        return Err(BusError::not_own("project"));
+    }
+
     if let Some(name) = payload.get("session").and_then(Value::as_str) {
         let own = name == session.name;
         let pair_read = entry.meta.kind == OpKind::Query && session.pair_with.as_deref() == Some(name);

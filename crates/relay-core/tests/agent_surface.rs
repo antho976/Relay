@@ -281,6 +281,40 @@ fn session_visibility_stops_at_the_project_and_stops_consistently() {
     assert_eq!(ok(&f.engine, Actor::User, "session.list", json!({}))["sessions"].as_array().unwrap().len(), 3);
 }
 
+/// RA-208, the read half: the board and mail refused another project, but its source, diffs,
+/// history, worktrees and guardrails answered any agent that named it. One check in `authorize`
+/// now draws the line for every op.
+#[test]
+fn an_agent_reads_nothing_of_another_project() {
+    let f = Fixture::new();
+    let other = json!({"project_id": 2});
+    for op in [
+        "file.tree", "git.status", "git.log", "git.branches", "worktree.list", "worktree.disk",
+        "guardrail.config.get", "guardrail.config.layers", "project.get", "device.run.list", "skill.list", "plugin.list",
+    ] {
+        assert_eq!(refusal(&f.engine, f.me(), op, other.clone()).code, "actor.scope", "{op}");
+    }
+    for (op, payload) in [
+        ("file.read", json!({"project_id": 2, "path": "src/lib.rs"})),
+        ("file.search", json!({"project_id": 2, "query": "one"})),
+        ("git.diff", json!({"project_id": 2})),
+        ("git.show", json!({"project_id": 2, "sha": "HEAD"})),
+        ("file.write", json!({"project_id": 2, "path": "src/x.rs", "text": "x"})),
+    ] {
+        assert_eq!(refusal(&f.engine, f.me(), op, payload).code, "actor.scope", "{op}");
+    }
+    // Its own project, named or left for the engine to fill in, still answers.
+    for payload in [json!({"project_id": 1}), json!({})] {
+        ok(&f.engine, f.me(), "file.tree", payload.clone());
+        ok(&f.engine, f.me(), "git.log", payload.clone());
+        ok(&f.engine, f.me(), "guardrail.config.get", payload);
+    }
+    assert!(ok(&f.engine, f.me(), "file.read", json!({"path": "src/lib.rs"}))["text"].as_str().unwrap().contains("one"));
+    // A person at the PC reads every project.
+    ok(&f.engine, Actor::User, "file.tree", json!({"project_id": 2}));
+    ok(&f.engine, Actor::User, "git.log", json!({"project_id": 2}));
+}
+
 /// F12: an agent already *is* a project and a session; every call began with guess-and-retry
 /// because it had to say so anyway.
 #[test]

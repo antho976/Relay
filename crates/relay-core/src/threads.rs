@@ -1833,7 +1833,7 @@ fn handle(engine: &Engine, id: Id, serial: u64, event: &Value) {
                     _ => String::new(),
                 };
                 record(engine, id, "tool", json!({
-                    "tool_use_id": b["tool_use_id"], "is_error": b["is_error"].as_bool().unwrap_or(false), "text": cut(&text, MAX_TOOL_TEXT),
+                    "tool_use_id": b["tool_use_id"], "is_error": b["is_error"].as_bool().unwrap_or(false), "text": cut(&crate::redact::text(&text), MAX_TOOL_TEXT),
                 }));
             }
         }

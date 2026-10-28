@@ -42,3 +42,19 @@ jobs:
         continue-on-error: ${{ github.event_name != 'schedule' && github.event_name != 'workflow_dispatch' }}
         with:
           command: check advisories
+
+      # The key proxy is its own workspace with its own Cargo.lock (docs/KEY-PROXY.md), so the
+      # checks above never see it, and it is the one binary that holds the API key. Same
+      # deny.toml, read from the repository root.
+      - name: Key proxy bans and sources
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2 (v2.1.1)
+        with:
+          manifest-path: crates/relay-key-proxy/Cargo.toml
+          command: check bans sources
+
+      - name: Key proxy advisories
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2 (v2.1.1)
+        continue-on-error: ${{ github.event_name != 'schedule' && github.event_name != 'workflow_dispatch' }}
+        with:
+          manifest-path: crates/relay-key-proxy/Cargo.toml
+          command: check advisories

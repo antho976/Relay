@@ -29,7 +29,10 @@ while IFS= read -r line; do
   esac
   echo '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}},"parent_tool_use_id":null}'
   echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"mcp__relay__money_summary","input":{}}]},"parent_tool_use_id":null}'
-  echo '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":[{"type":"text","text":"{\"spent\":0}"}]}]},"parent_tool_use_id":null}'
+  case "$line" in
+    *leakkey*) echo '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"ANTHROPIC_API_KEY=sk-ant-api03-Zx9_secret-0042 set"}]},"parent_tool_use_id":null}';;
+    *) echo '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":[{"type":"text","text":"{\"spent\":0}"}]}]},"parent_tool_use_id":null}';;
+  esac
   case "$line" in *silent*)
     echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hm"}]},"parent_tool_use_id":null}'
     echo '{"type":"result","subtype":"success","is_error":false,"result":""}'
@@ -162,6 +165,20 @@ fn a_message_gets_an_answer_and_a_cold_thread_resumes_by_its_id() {
         assert!(runs[1].contains(said), "the prompt says {said:?}");
     }
     ok(&engine, "thread.delete", json!({"id": created["id"]}));
+}
+
+/// A key a thread agent's tool prints is stored blanked, as a transcript's is: the thread's rows
+/// are served to the phone and kept in the store.
+#[test]
+fn a_key_in_a_tools_output_is_never_stored() {
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    with_fake(&engine, dir.path());
+    let created = ok(&engine, "thread.create", json!({"text": "leakkey: what is set?"}));
+    let read = settled(&engine, &created["id"], 4);
+    let tool = read["messages"].as_array().unwrap().iter().find(|m| m["role"] == "tool").unwrap();
+    assert_eq!(tool["body"]["text"], "ANTHROPIC_API_KEY=sk-ant-********************* set");
+    assert!(!read.to_string().contains("secret-0042"));
 }
 
 #[test]

@@ -465,7 +465,7 @@ fn sessions_install_git_and_claude_hooks_without_clobbering_local_settings() {
         assert_eq!(settings["permissions"]["allow"][0], "Bash(cargo test)");
         let groups = settings["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(groups.len(), 2);
-        assert!(groups.iter().any(|group| group["matcher"] == "Edit|Write|MultiEdit|Bash"));
+        assert!(groups.iter().any(|group| group["matcher"] == "Edit|Write|MultiEdit|NotebookEdit|Bash"));
         for event in ["SessionStart", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop", "Notification"] {
             let groups = settings["hooks"][event].as_array().unwrap();
             assert_eq!(groups.len(), 1, "Relay installed {event} reporting");

@@ -1072,6 +1072,21 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&lib).unwrap(), "a b a\n");
     }
 
+    /// The hook fires only for the tools its matcher names: a gate built for a tool the matcher
+    /// leaves out never runs, which is how NotebookEdit wrote anywhere (RA-562).
+    #[test]
+    fn the_installed_hook_fires_for_every_tool_this_gates() {
+        let (_dir, root) = checkout();
+        let gated: Vec<&str> = relay_core::hooks::CLAUDE_GATED_TOOLS.split('|').collect();
+        for tool in ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"] {
+            assert!(gated.contains(&tool), "{tool} is gated here but the hook never fires for it");
+        }
+        for tool in gated {
+            let error = claude_payloads(&hook_input(&root, tool, json!({})), "calm-otter").map(|_| ()).unwrap_err();
+            assert!(!format!("{error:#}").contains("unsupported"), "the hook fires for {tool}, which has no gate here");
+        }
+    }
+
     #[test]
     fn edits_that_cannot_be_previewed_fail_closed() {
         let (_dir, root) = checkout();

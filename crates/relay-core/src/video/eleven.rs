@@ -607,7 +607,9 @@ pub fn hear(engine: &Engine, file: &Path, language: Option<&str>) -> Result<(Str
 
 /// What a transcription of `file` sends: its sound alone, mono MP3 at 16 kHz (a render or a clip
 /// of gigabytes is a few MB of it), written to a scratch file and read once; the file itself
-/// when ffmpeg cannot read it so (none set up, or not media it knows) and it is small enough.
+/// when ffmpeg cannot read it so (none set up, or not media it knows), it is small enough, and
+/// its name says sound or video. Anything else is refused, never uploaded: a key file or a
+/// document ffmpeg cannot read is not what speech-to-text is for.
 fn for_hearing(engine: &Engine, file: &Path) -> Result<(String, Arc<Vec<u8>>), BusError> {
     let stem = file.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "audio".into());
     let dir = engine.store.videos_dir().join(".relay/sound");
@@ -616,7 +618,13 @@ fn for_hearing(engine: &Engine, file: &Path) -> Result<(String, Arc<Vec<u8>>), B
         "-vn".as_ref(), "-sn".as_ref(), "-dn".as_ref(), "-ac".as_ref(), "1".as_ref(), "-ar".as_ref(), "16000".as_ref(),
         "-c:a".as_ref(), "libmp3lame".as_ref(), "-b:a".as_ref(), "48k".as_ref(), scratch.as_os_str()], "taking the sound out").is_ok();
     let (path, name) = if made { (scratch.as_path(), format!("{stem}.mp3")) } else {
-        (file, file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "audio".into()))
+        let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if !matches!(assets::kind(&name), "audio" | "video") {
+            let _ = std::fs::remove_file(&scratch);
+            return Err(BusError::invalid("video.asset", format!("{} is not sound or video that could be read; nothing was sent", file.display()))
+                .with_hint("transcribe an audio or video file, or a render"));
+        }
+        (file, name)
     };
     let read = (|| {
         let size = std::fs::metadata(path).map_err(|e| BusError::invalid("video.asset", format!("{}: {e}", file.display())))?.len();
@@ -633,6 +641,24 @@ fn for_hearing(engine: &Engine, file: &Path) -> Result<(String, Arc<Vec<u8>>), B
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file ffmpeg cannot read is sent as it is only when its name says sound or video: a key
+    /// file named as an asset never leaves the machine.
+    #[test]
+    fn only_sound_or_video_is_sent_when_ffmpeg_cannot_read_it() {
+        let engine = Engine::new(Instance::Test, crate::Store::open_memory().unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("id_ed25519");
+        std::fs::write(&key, "-----BEGIN OPENSSH PRIVATE KEY-----\nnot sound\n").unwrap();
+        let refused = for_hearing(&engine, &key).map(|_| ()).unwrap_err();
+        assert_eq!(refused.code, "video.asset");
+        assert!(refused.message.contains("nothing was sent"), "{}", refused.message);
+        // A recording ffmpeg cannot open (or no ffmpeg at all) still goes as it is.
+        let clip = dir.path().join("memo.m4a");
+        std::fs::write(&clip, b"not media ffmpeg knows").unwrap();
+        let (name, bytes) = for_hearing(&engine, &clip).unwrap();
+        assert_eq!((name.as_str(), bytes.as_slice()), ("memo.m4a", &b"not media ffmpeg knows"[..]));
+    }
 
     #[test]
     fn words_come_from_the_character_alignment() {
