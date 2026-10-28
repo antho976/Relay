@@ -132,7 +132,7 @@ fn register_asks(e: &mut Engine) {
         };
         let now = ctx.now.clone();
         let allowed = asks::Allowed::read(ctx.tx());
-        let (ask, runs) = asks::ask(ctx.engine(), thread, p.steps, &p.why, &allowed, &now)?;
+        let (ask, runs) = asks::ask(ctx.engine(), ctx.tx(), thread, p.steps, &p.why, &allowed, &now)?;
         ctx.emit("thread.ask", json!({"thread": thread, "ask": ask}));
         if runs {
             let id = ask.id;

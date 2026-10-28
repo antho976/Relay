@@ -147,6 +147,8 @@ class OutboxRunner(
     private val now: () -> Long = System::currentTimeMillis,
     /** A message refused while its thread's agent is still answering: queued again under a new id, sent once it is done. */
     private val onBusy: suspend (OutboxEntry) -> Unit = {},
+    /** An entry too old to send ([expired]): dropped, with what waits on it, and the person told. */
+    private val onExpired: suspend (OutboxEntry) -> Unit = {},
 ) {
     /** Threads whose agent is answering: messages to them wait for [threadFree]. */
     private val busyThreads: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
@@ -183,6 +185,12 @@ class OutboxRunner(
             val target = Optimistic.target(entry.op, entry.payload, entry.id)
             if (entry.parked) {
                 parked++
+                blockedEntries += entry.id
+                target?.let { blockedTargets += it }
+                continue
+            }
+            if (expired(entry)) {
+                onExpired(entry)
                 blockedEntries += entry.id
                 target?.let { blockedTargets += it }
                 continue
@@ -266,6 +274,14 @@ class OutboxRunner(
         return Outcome.Flushed(sent, parked, waiting)
     }
 
+    /**
+     * A shell opened from the phone is wanted now: one queued while the PC was away is not opened
+     * long after, when nobody is there to use it. Its own `session.create` alone is checked; the
+     * start waiting on it goes with it.
+     */
+    private fun expired(entry: OutboxEntry): Boolean =
+        entry.op == "session.create" && entry.payload.s("provider") == "shell" && now() - entry.createdAt > SHELL_OPEN_MS
+
     private suspend fun answerOf(entryId: String): JsonElement? {
         val e = store.get(entryId) ?: return null
         return if (e.state == OutboxEntry.State.Done) e.result else null
@@ -274,6 +290,9 @@ class OutboxRunner(
     companion object {
         /** Finished entries stay this long so a later one can still read their answer after a restart. */
         const val DONE_KEEP_MS = 7L * 24 * 60 * 60 * 1000
+
+        /** The longest a shell opened from the phone waits for the PC before it is dropped. */
+        const val SHELL_OPEN_MS = 2L * 60 * 1000
 
         /** How long an op may take before its answer counts as lost (the old app's `LONG_OPS`). */
         fun timeoutFor(op: String): Long = when (op) {

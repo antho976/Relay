@@ -91,6 +91,7 @@ class Relay(
 
     /** The PC's raw event stream while connected, for screens that react to one (a run's crash). */
     val parked: SharedFlow<OutboxEntry> get() = hub.parked
+    val expired: SharedFlow<OutboxEntry> get() = hub.expired
 
     init {
         // Disconnected before the process ended: the link starts out stopped, so a kick does not dial it.

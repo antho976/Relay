@@ -879,17 +879,33 @@ fn the_assistant_never_opens_types_into_or_reads_a_shell() {
     let dispatch = json!([{"op": "task.dispatch", "payload": {"task_id": 1, "create": {"project_id": project, "provider": "shell"}}}]);
     assert_eq!(code(ask(dispatch)), "thread.ask_shell");
 
-    // One the person opened takes nothing from an ask, though typing and stopping run without asking.
+    // One the person opened takes nothing from an ask, though typing and stopping run without
+    // asking: not typed into, stopped, or paired with, at any depth.
     let shell = ok(&engine, "session.create", json!({"project_id": project, "provider": "shell"}))["name"].as_str().unwrap().to_string();
     ok(&engine, "session.spawn", json!({"session": shell}));
-    for (op, payload) in [
-        ("session.input", json!({"session": shell, "data": "touch typed-by-assistant\r"})),
-        ("session.park", json!({"session": shell})),
+    for steps in [
+        json!([{"op": "session.input", "payload": {"session": shell, "data": "touch typed-by-assistant\r"}}]),
+        json!([{"op": "session.park", "payload": {"session": shell}}]),
+        json!([{"op": "session.create", "payload": {"project_id": project, "provider": "claude", "role": "builder", "pair_with": shell}}]),
+        json!([{"op": "task.dispatch", "payload": {"task_id": 1, "create": {"project_id": project, "provider": "claude", "pair_with": shell}}}]),
     ] {
-        let ran = ask(json!([{"op": op, "payload": payload}])).into_result().unwrap();
-        assert_eq!((ran["status"].as_str(), ran["auto"].as_bool()), (Some("failed"), Some(true)), "{ran}");
-        assert!(ran["outcome"].as_str().unwrap().contains(&format!("{shell}, a shell, is the person's own")), "{ran}");
+        assert_eq!(code(ask(steps.clone())), "thread.ask_shell", "{steps}");
     }
+    // The person cannot pair with one either: a shell runs no agent.
+    let paired = json!({"project_id": project, "provider": "claude", "role": "builder", "pair_with": shell});
+    assert_eq!(code(call(&engine, "session.create", paired)), "session.shell");
+
+    // Checked again as it runs: a waiting card whose session has since become a shell does nothing.
+    ok(&engine, "settings.set", json!({"path": "threads.assistant.without_asking.stop", "value": false}));
+    let waits = ask(json!([{"op": "session.park", "payload": {"session": "later-shell"}}])).into_result().unwrap();
+    assert_eq!(waits["status"], "pending");
+    engine.store.lock().execute("UPDATE sessions SET name='later-shell' WHERE name=?1", [&shell]).unwrap();
+    let shell = "later-shell".to_string();
+    ok(&engine, "thread.ask.resolve", json!({"id": waits["id"], "approve": true}));
+    let asks = ok(&engine, "thread.ask.list", json!({"thread_id": id}))["asks"].clone();
+    let ran = asks.as_array().unwrap().iter().find(|a| a["id"] == waits["id"]).unwrap();
+    assert_eq!(ran["status"], "failed", "{ran}");
+    assert!(ran["outcome"].as_str().unwrap().contains("later-shell, a shell, is the person's own"), "{ran}");
     std::thread::sleep(std::time::Duration::from_millis(300));
     assert!(!repo.join("typed-by-assistant").exists());
     assert_eq!(ok(&engine, "session.get", json!({"session": shell}))["state"], "running");

@@ -105,16 +105,46 @@ fn the_person_opens_a_shell_in_the_project_folder_with_no_agent_around_it() {
     assert_eq!(user(e, "session.transcript", json!({"session": shell}))["found"], false);
     assert_eq!(git(&f.app, &["config", "--get", "core.hooksPath"]), hooks_before);
 
-    // Parked and woken, it comes back as a fresh shell with what it showed before.
+    // Parked, nothing of what it showed is kept in the store; woken, it is a fresh, blank shell.
     user(e, "session.park", json!({"session": shell}));
+    assert_eq!(saved_screens(e, &shell), 0);
     user(e, "session.wake", json!({"session": shell}));
-    assert!(scrollback(e, &shell).contains("tok=[] ses=[]"));
+    assert!(!scrollback(e, &shell).contains("tok=[] ses=[]"));
 
     // Closing it leaves the project's own checkout and branch exactly as they were.
     user(e, "session.close", json!({"session": shell}));
     assert!(f.app.join("README").is_file());
     assert_eq!(git(&f.app, &["branch", "--show-current"]), "main");
     assert_eq!(git(&f.app, &["config", "--get", "core.hooksPath"]), hooks_before);
+}
+
+/// The rows the store keeps of `session`'s screen.
+fn saved_screens(e: &Engine, session: &str) -> i64 {
+    e.store.lock().query_row(
+        "SELECT COUNT(*) FROM session_scrollback b JOIN sessions s ON s.id=b.session_id WHERE s.name=?1", [session], |r| r.get(0),
+    ).unwrap()
+}
+
+#[test]
+fn an_engine_going_down_keeps_an_agents_screen_but_never_a_shells() {
+    let f = fixture();
+    let e = &f.engine;
+    let provider = f.app.parent().unwrap().join("fake-agent");
+    std::fs::write(&provider, "#!/bin/sh\necho agent-screen\nexec sleep 30\n").unwrap();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut std::fs::metadata(&provider).unwrap().permissions(), 0o755);
+    Command::new("chmod").arg("755").arg(&provider).status().unwrap();
+    user(e, "settings.set", json!({"path": "providers.claude.path", "value": provider}));
+    let agent = name(&user(e, "session.create", json!({"project_id": 1, "provider": "claude", "role": "builder"})));
+    user(e, "session.spawn", json!({"session": agent}));
+    wait_for(e, &agent, "agent-screen");
+    let shell = name(&user(e, "session.create", json!({"project_id": 1, "provider": "shell"})));
+    user(e, "session.spawn", json!({"session": shell}));
+    user(e, "session.input", json!({"session": shell, "data": "echo printed-secret\r"}));
+    wait_for(e, &shell, "printed-secret\r\n");
+
+    e.shutdown();
+    assert_eq!(user(e, "session.get", json!({"session": shell}))["state"], "restorable");
+    assert_eq!((saved_screens(e, &agent), saved_screens(e, &shell)), (1, 0));
 }
 
 #[test]

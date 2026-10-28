@@ -925,7 +925,9 @@ impl Engine {
         for (id, pty) in ptys {
             let (text, epoch, seq) = pty.scrollback(None);
             let _ = tx.execute(
-                "INSERT INTO session_scrollback(session_id,text,epoch,seq,updated_at) VALUES (?1,?2,?3,?4,?5)
+                // Never a shell's (`sessions::save_scrollback`): it comes back blank.
+                "INSERT INTO session_scrollback(session_id,text,epoch,seq,updated_at)
+                 SELECT ?1,?2,?3,?4,?5 WHERE NOT EXISTS(SELECT 1 FROM sessions WHERE id=?1 AND provider='shell')
                  ON CONFLICT(session_id) DO UPDATE SET text=excluded.text,epoch=excluded.epoch,seq=excluded.seq,updated_at=excluded.updated_at",
                 rusqlite::params![id, text.as_bytes(), epoch as i64, seq as i64, now],
             );

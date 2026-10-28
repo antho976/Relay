@@ -223,8 +223,11 @@ pub fn save_scrollback(
     seq: u64,
     now: &str,
 ) -> Result<(), BusError> {
+    // A shell's screen is never kept (`Provider::Shell`): what the person ran there (`cat .env`,
+    // a token printed) would otherwise sit in the store and its backups. It comes back blank.
     conn.prepare_cached(
-        "INSERT INTO session_scrollback(session_id,text,epoch,seq,updated_at) VALUES (?1,?2,?3,?4,?5)
+        "INSERT INTO session_scrollback(session_id,text,epoch,seq,updated_at)
+         SELECT ?1,?2,?3,?4,?5 WHERE NOT EXISTS(SELECT 1 FROM sessions WHERE id=?1 AND provider='shell')
          ON CONFLICT(session_id) DO UPDATE SET text=excluded.text,epoch=excluded.epoch,seq=excluded.seq,updated_at=excluded.updated_at",
     )
     .map_err(crate::engine::internal)?

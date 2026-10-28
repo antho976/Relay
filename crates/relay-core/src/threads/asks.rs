@@ -279,10 +279,26 @@ fn asks_for_shell(value: &Value) -> bool {
     }
 }
 
-/// Whether `name` is a shell session: what an ask may not type into, start or change.
-fn names_a_shell(engine: &Engine, name: &str) -> bool {
-    let conn = engine.store.lock();
-    crate::sessions::by_name(&conn, name).is_ok_and(|row| crate::handlers::session::is_shell(&row.session))
+/// The shell session `value` names anywhere in it, as the session a step acts on (`session`) or
+/// the partner a create pairs with (`pair_with`, also inside a `task.dispatch`'s `create`): what
+/// an ask may not type into, start, change or pair with. Read on `conn`: the store's, held by
+/// the caller (`thread.ask`'s transaction, or the lock taken for one step as it runs).
+fn names_a_shell(conn: &rusqlite::Connection, value: &Value) -> Option<String> {
+    let mut named = Vec::new();
+    fn walk<'a>(value: &'a Value, named: &mut Vec<&'a str>) {
+        match value {
+            Value::Object(fields) => {
+                named.extend(["session", "pair_with"].iter().filter_map(|key| fields.get(*key).and_then(Value::as_str)));
+                fields.values().for_each(|v| walk(v, named));
+            }
+            Value::Array(items) => items.iter().for_each(|v| walk(v, named)),
+            _ => {}
+        }
+    }
+    walk(value, &mut named);
+    named.into_iter()
+        .find(|name| crate::sessions::by_name(conn, name).is_ok_and(|row| crate::handlers::session::is_shell(&row.session)))
+        .map(str::to_string)
 }
 
 /// Steps as asked, with what they leave out filled the way that keeps work: `session.close`
@@ -379,8 +395,9 @@ fn before(now: &str, minutes: i64) -> String {
 /// already waiting are that ask. When `allowed` lets every step through it is stored `running`,
 /// for [`carry_out`] to run at once, unless the same steps ran without asking in the last
 /// [`AUTO_SAME_MINUTES`] (that ask is the answer, and nothing runs again) or
-/// [`MAX_AUTO_PER_HOUR`] already did this hour (it waits on a card).
-pub fn ask(engine: &Engine, thread: Id, steps: Vec<AskStep>, why: &str, allowed: &Allowed, now: &str) -> Result<(AskView, bool), BusError> {
+/// [`MAX_AUTO_PER_HOUR`] already did this hour (it waits on a card). `conn` is the store's, in the
+/// asking request's transaction.
+pub fn ask(engine: &Engine, conn: &rusqlite::Connection, thread: Id, steps: Vec<AskStep>, why: &str, allowed: &Allowed, now: &str) -> Result<(AskView, bool), BusError> {
     if super::get(engine, thread)?.kind != super::ASSISTANT {
         return Err(BusError::refused("thread.not_assistant", "Only the assistant asks this way; a Threads conversation proposes (thread.propose)"));
     }
@@ -390,6 +407,10 @@ pub fn ask(engine: &Engine, thread: Id, steps: Vec<AskStep>, why: &str, allowed:
     }
     let steps = kept(steps);
     checked(&steps)?;
+    if let Some((n, name)) = steps.iter().enumerate().find_map(|(at, step)| names_a_shell(conn, &step.payload).map(|name| (at + 1, name))) {
+        return Err(BusError::refused("thread.ask_shell", format!("Step {n}: {name} is a shell, the person's own; an ask may not act on it"))
+            .with_hint("the person uses a shell themselves, from the desktop or their phone"));
+    }
     let stored = serde_json::to_string(&steps).map_err(|e| BusError::internal(e.to_string()))?;
     let summary = summary(&steps);
     let auto = allowed.lets_all(&steps);
@@ -453,7 +474,7 @@ fn run(engine: &Engine, steps: &[AskStep]) -> (&'static str, String, Vec<Value>)
         let payload = filled(step, &made);
         // Checked again as it runs, whatever its kind and whether or not it asked: the session a
         // step names may have been opened as a shell since, and a shell takes nothing from an ask.
-        let shell = payload.get("session").and_then(Value::as_str).filter(|name| names_a_shell(engine, name));
+        let shell = names_a_shell(&engine.store.lock(), &payload);
         if shell.is_some() || asks_for_shell(&payload) {
             let ran = if done.is_empty() { String::new() } else { format!(" Done before it: {}.", done.join(", ")) };
             let what = shell.map_or("a shell".to_string(), |name| format!("{name}, a shell,"));

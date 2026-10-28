@@ -842,6 +842,8 @@ fn plan_launch(conn: &Connection, engine: &Engine, row: Row_, kind: LaunchKind, 
 /// What a relaunch shows before the new process prints anything.
 fn initial_scrollback(conn: &Connection, engine: &Engine, row: &Row_, kind: LaunchKind) -> Result<Vec<u8>, BusError> {
     Ok(match kind {
+        // A shell keeps nothing of what it showed, not even from its dead PTY: it comes back blank.
+        _ if is_shell(&row.session) => Vec::new(),
         LaunchKind::Fresh => Vec::new(),
         // An exited session's history is still in its dead PTY: nothing saves it at exit, so
         // the stored copy is stale or missing until the engine shuts down.
@@ -1333,6 +1335,9 @@ fn validate_create(conn: &Connection, p: &CreateIn) -> Result<relay_bus::types::
 /// prepare phase can refuse a bad pairing before it touches the partner's checkout.
 fn validate_pair(conn: &Connection, p: &CreateIn, project_id: Id, name: &str) -> Result<Row_, BusError> {
     let pair = sessions::by_name(conn, name)?;
+    if is_shell(&pair.session) {
+        return Err(BusError::invalid("session.shell", format!("{name} is a shell: it runs no agent to pair with")));
+    }
     if pair.session.project_id != project_id { return Err(BusError::invalid("session.pair_project", "PAIR sessions must belong to the same project")); }
     if pair.session.pair_with.is_some() {
         let role = p.role.unwrap_or(Role::Builder);

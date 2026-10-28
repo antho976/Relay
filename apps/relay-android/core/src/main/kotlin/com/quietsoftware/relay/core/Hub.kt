@@ -99,6 +99,11 @@ class Hub(
     /** An outbox entry the PC refused or held: the screens say so, the person decides. */
     val parked: SharedFlow<OutboxEntry> = _parked
 
+    private val _expired = MutableSharedFlow<OutboxEntry>(extraBufferCapacity = 16)
+
+    /** An outbox entry dropped as too old to send (a shell opened while the PC was away): the screens say so. */
+    val expired: SharedFlow<OutboxEntry> = _expired
+
     private val _outboxChanged = MutableStateFlow(0L)
 
     /** Bumps whenever the outbox moves, for the status bar's count. */
@@ -119,6 +124,11 @@ class Hub(
         now = now,
         onBusy = {
             ledger.renew(it.id)
+            _outboxChanged.value++
+        },
+        onExpired = {
+            ledger.discard(it.id)
+            _expired.tryEmit(it)
             _outboxChanged.value++
         },
     )
