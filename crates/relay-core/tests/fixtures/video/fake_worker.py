@@ -167,6 +167,8 @@ def timeline(a):
 
 def render(a):
     job = a["job"]
+    if flag(a["dir"], "THROWS"):
+        raise Refusal("video.runtime", "src/Video.tsx:12: boom")
     if flag(a["dir"], "BUNDLING"):
         time.sleep(1.0)
         # A stop that came while it bundled is lost, as the worker before 2026-10-24 lost it.

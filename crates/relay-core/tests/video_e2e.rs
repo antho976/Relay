@@ -173,6 +173,28 @@ fn video_e2e_first_check_after_writing() {
     relay_core::video::shutdown(&e);
 }
 
+/// A worker started again (one stops after ten idle minutes, and with Relay) bundles a video it
+/// bundled before into the folder that video's files name: what the last worker left there must
+/// not stop it. The first film's preview failed so, `EEXIST` on its first asset.
+#[test]
+#[ignore = "needs Node.js 20+ and the kit video_e2e sets up: run with --ignored"]
+fn video_e2e_a_worker_started_again_bundles_a_video_with_assets() {
+    let e = engine();
+    assert_eq!(ok(&e, "video.kit.status", json!({}))["state"], "ready", "run video_e2e_the_starter_checks_looks_and_renders_for_real first");
+    let made = ok(&e, "video.create", json!({"project_id": 1, "title": "Restarted", "seconds": 2}));
+    let id = made["video"]["id"].as_i64().unwrap();
+    let first = ok(&e, "video.still", json!({"video_id": id, "at": ["0.5s"]}));
+    let logo = root().join("restarted-logo.png");
+    fs::copy(first["png"].as_str().unwrap(), &logo).unwrap();
+    ok(&e, "video.asset.add", json!({"video_id": id, "path": logo}));
+    timed("still with the asset", || ok(&e, "video.still", json!({"video_id": id, "at": ["0.5s"]})));
+    relay_core::video::worker::stop(&e);
+    let again = timed("still from a new worker", || ok(&e, "video.still", json!({"video_id": id, "at": ["1s"]})));
+    assert!(again["errors"].as_array().is_none_or(|e| e.is_empty()), "{again}");
+    ok(&e, "video.delete", json!({"video_id": id}));
+    relay_core::video::shutdown(&e);
+}
+
 /// The kit's screens and charts drawn for real: a phone laid out at iPhone points with its status
 /// bar and home indicator, a donut, bars, a tap and a counter. Typechecks clean and draws without
 /// issues; the sheet is printed to look at.

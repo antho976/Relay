@@ -10,6 +10,7 @@
 //! over 2 MiB, which a version names without keeping.
 
 use relay_bus::error::BusError;
+use relay_bus::ops::video::FileDiff;
 use relay_bus::types::Id;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
@@ -164,17 +165,32 @@ pub fn manifest(conn: &Connection, video_id: Id, n: i64) -> Result<Vec<Entry>, B
     serde_json::from_str(&text).bus()
 }
 
+/// Paths as an agent or the person names them, made the way a version writes them: `/`-separated,
+/// relative, without `./` or a trailing `/`. `None` for one that leaves the folder or names nothing.
+pub fn clean_paths(raw: &[String]) -> Option<Vec<String>> {
+    raw.iter().map(|p| {
+        let parts: Vec<&str> = p.trim().split('/').filter(|c| !c.is_empty() && *c != ".").collect();
+        (!parts.is_empty() && !parts.contains(&"..") && !p.trim().starts_with('/')).then(|| parts.join("/"))
+    }).collect()
+}
+
+/// Whether `path` is one of `only`, or under one of them; anything when there is no `only`.
+pub fn within(path: &str, only: Option<&[String]>) -> bool {
+    only.is_none_or(|only| only.iter().any(|o| path == o || path.strip_prefix(o.as_str()).is_some_and(|rest| rest.starts_with('/'))))
+}
+
 /// Put the folder back as `entries` has it: each file written from its blob, and the files a
 /// version would hold that it does not name removed, but those no version could put back: one
 /// too large to keep (a version names it with no copy, so the undo could not bring it back) and
-/// a link, which stay as they are. A file too large to have been kept is left as it is. What it
-/// did: files written, files removed, those it could not put back, and those it left.
-pub fn restore(dir: &Path, blobs: &Path, entries: &[Entry]) -> Result<Restored, String> {
+/// a link, which stay as they are. A file too large to have been kept is left as it is. With
+/// `only`, just those files and folders; the rest stay as they are. What it did: files written,
+/// files removed, those it could not put back, and those it left.
+pub fn restore(dir: &Path, blobs: &Path, entries: &[Entry], only: Option<&[String]>) -> Result<Restored, String> {
     let now = scan_paths(dir)?;
     let wanted: std::collections::HashSet<&str> = entries.iter().map(|e| e.path.as_str()).collect();
     let (mut removed, mut left) = (0, Vec::new());
     for rel in &now {
-        if !wanted.contains(rel.as_str()) {
+        if !wanted.contains(rel.as_str()) && within(rel, only) {
             let path = dir.join(rel);
             if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink() || m.len() > MOST_KEPT) {
                 left.push(rel.clone());
@@ -185,8 +201,12 @@ pub fn restore(dir: &Path, blobs: &Path, entries: &[Entry]) -> Result<Restored, 
         }
     }
     let (mut written, mut missing) = (0, Vec::new());
-    for entry in entries {
+    for entry in entries.iter().filter(|e| within(&e.path, only)) {
         if entry.hash.is_empty() {
+            // Too large to keep: told only when it is not there as the version had it.
+            if fs::metadata(dir.join(&entry.path)).map(|m| m.len()).ok() != Some(entry.size) {
+                missing.push(entry.path.clone());
+            }
             continue;
         }
         let target = dir.join(&entry.path);
@@ -205,6 +225,57 @@ pub fn restore(dir: &Path, blobs: &Path, entries: &[Entry]) -> Result<Restored, 
         }
     }
     Ok(Restored { written, removed, missing, left })
+}
+
+/// Most lines of diff one answer holds: the files past them are listed without theirs.
+const MOST_DIFF_LINES: usize = 3000;
+/// How long one file's diff may take before `similar` settles for a coarser one (a generated
+/// file of thousands of lines).
+const DIFF_WITHIN: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// What differs from manifest `before` to `after`, in path order, each text file as a unified diff
+/// of its kept contents; with `only`, those files and folders alone.
+pub fn diff(blobs: &Path, before: &[Entry], after: &[Entry], only: Option<&[String]>) -> Vec<FileDiff> {
+    let side = |entries: &[Entry]| -> std::collections::BTreeMap<String, Entry> {
+        entries.iter().filter(|e| within(&e.path, only)).map(|e| (e.path.clone(), e.clone())).collect()
+    };
+    let (old, new) = (side(before), side(after));
+    let paths: std::collections::BTreeSet<&String> = old.keys().chain(new.keys()).collect();
+    let text = |e: Option<&Entry>| -> Result<String, &'static str> {
+        match e {
+            None => Ok(String::new()),
+            Some(e) if e.hash.is_empty() => Err("not_kept"),
+            Some(e) => String::from_utf8(fs::read(blob_path(blobs, &e.hash)).map_err(|_| "not_kept")?).map_err(|_| "binary"),
+        }
+    };
+    let mut budget = MOST_DIFF_LINES;
+    let mut out = Vec::new();
+    for path in paths {
+        let (a, b) = (old.get(path), new.get(path));
+        let change = match (a, b) {
+            (Some(a), Some(b)) if a.hash == b.hash && a.size == b.size => continue,
+            (Some(_), Some(_)) => "changed",
+            (None, _) => "added",
+            (_, None) => "removed",
+        };
+        let (diff, note) = match (text(a), text(b)) {
+            (Err(why), _) | (_, Err(why)) => (None, Some(why)),
+            (Ok(a), Ok(b)) => {
+                let unified = similar::TextDiff::configure().timeout(DIFF_WITHIN).diff_lines(&a, &b)
+                    .unified_diff().context_radius(3).header(&format!("a/{path}"), &format!("b/{path}")).to_string();
+                let lines = unified.lines().count();
+                if lines > budget {
+                    budget = 0;
+                    (None, Some("cut"))
+                } else {
+                    budget -= lines;
+                    (Some(unified), None)
+                }
+            }
+        };
+        out.push(FileDiff { path: path.clone(), change: change.into(), diff, note: note.map(str::to_string) });
+    }
+    out
 }
 
 /// What [`restore`] did.
@@ -278,7 +349,7 @@ mod tests {
         fs::write(dir.join("src/Video.tsx"), "second").unwrap();
         fs::remove_file(dir.join("src/Scene.tsx")).unwrap();
         tree(&dir, &[("src/New.tsx", "new")]);
-        let done = restore(&dir, &blobs, &first.entries).unwrap();
+        let done = restore(&dir, &blobs, &first.entries, None).unwrap();
         assert_eq!((done.written, done.removed, done.missing.len()), (2, 1, 0));
         assert_eq!(fs::read_to_string(dir.join("src/Video.tsx")).unwrap(), "first");
         assert_eq!(fs::read_to_string(dir.join("src/Scene.tsx")).unwrap(), "scene");
@@ -300,7 +371,7 @@ mod tests {
         fs::create_dir_all(dir.join("public")).unwrap();
         fs::write(dir.join("public/music.mp3"), vec![7u8; (MOST_KEPT + 1) as usize]).unwrap();
         std::os::unix::fs::symlink(root.path().join("elsewhere.mp4"), dir.join("public/clip.mp4")).unwrap();
-        let done = restore(&dir, &blobs, &first.entries).unwrap();
+        let done = restore(&dir, &blobs, &first.entries, None).unwrap();
         assert_eq!(done.removed, 1);
         assert!(!dir.join("src/b.ts").exists());
         let mut left = done.left.clone();
@@ -329,5 +400,57 @@ mod tests {
         let scan = scan(&dir, &blobs).unwrap();
         let big = scan.entries.iter().find(|e| e.path == "public/big.bin").unwrap();
         assert_eq!((big.hash.as_str(), big.size), ("", MOST_KEPT + 1));
+    }
+
+    /// A scene brought back from a take: only the files named, or under the folders named, go
+    /// back as the take had them; what came after stays.
+    #[test]
+    fn a_restore_of_some_files_leaves_the_rest() {
+        let root = tempfile::tempdir().unwrap();
+        let (dir, blobs) = (root.path().join("v"), root.path().join("blobs"));
+        tree(&dir, &[("src/Video.tsx", "take one"), ("src/scenes/Open.tsx", "open one"), ("src/scenes/End.tsx", "end one")]);
+        let take = scan(&dir, &blobs).unwrap();
+        tree(&dir, &[("src/Video.tsx", "take two"), ("src/scenes/Open.tsx", "open two"), ("src/scenes/Extra.tsx", "extra")]);
+        fs::remove_file(dir.join("src/scenes/End.tsx")).unwrap();
+        let only = clean_paths(&["./src/scenes/".to_string()]).unwrap();
+        assert_eq!(only, ["src/scenes"]);
+        let done = restore(&dir, &blobs, &take.entries, Some(&only)).unwrap();
+        assert_eq!((done.written, done.removed), (2, 1));
+        assert_eq!(fs::read_to_string(dir.join("src/scenes/Open.tsx")).unwrap(), "open one");
+        assert_eq!(fs::read_to_string(dir.join("src/scenes/End.tsx")).unwrap(), "end one");
+        assert!(!dir.join("src/scenes/Extra.tsx").exists());
+        assert_eq!(fs::read_to_string(dir.join("src/Video.tsx")).unwrap(), "take two", "outside what was named");
+        // One file alone; a name that is a prefix but not a folder is not under it.
+        fs::write(dir.join("src/Video.tsx"), "take three").unwrap();
+        restore(&dir, &blobs, &take.entries, Some(&["src/Video.tsx".to_string()])).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("src/Video.tsx")).unwrap(), "take one");
+        assert!(within("src/scenes/Open.tsx", Some(&["src/scenes".to_string()])));
+        assert!(!within("src/scenes-old/Open.tsx", Some(&["src/scenes".to_string()])));
+        for bad in ["../x", "/etc/passwd", "", "src/../../x", "  "] {
+            assert!(clean_paths(&[bad.to_string()]).is_none(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_diff_shows_each_text_file_that_changed() {
+        let root = tempfile::tempdir().unwrap();
+        let (dir, blobs) = (root.path().join("v"), root.path().join("blobs"));
+        tree(&dir, &[("src/Video.tsx", "a\nb\nc\n"), ("src/Old.tsx", "old\n"), ("src/Same.tsx", "same\n")]);
+        let first = scan(&dir, &blobs).unwrap();
+        tree(&dir, &[("src/Video.tsx", "a\nB\nc\n"), ("src/New.tsx", "new\n")]);
+        fs::remove_file(dir.join("src/Old.tsx")).unwrap();
+        fs::write(dir.join("public/logo.bin"), [0xff, 0xfe, 0x00]).unwrap_or_else(|_| {
+            fs::create_dir_all(dir.join("public")).unwrap();
+            fs::write(dir.join("public/logo.bin"), [0xff, 0xfe, 0x00]).unwrap();
+        });
+        let second = scan(&dir, &blobs).unwrap();
+        let files = diff(&blobs, &first.entries, &second.entries, None);
+        let said: Vec<(&str, &str)> = files.iter().map(|f| (f.path.as_str(), f.change.as_str())).collect();
+        assert_eq!(said, [("public/logo.bin", "added"), ("src/New.tsx", "added"), ("src/Old.tsx", "removed"), ("src/Video.tsx", "changed")]);
+        let video = &files[3];
+        assert!(video.diff.as_deref().unwrap().contains("-b\n+B\n"), "{video:?}");
+        assert!(video.diff.as_deref().unwrap().starts_with("--- a/src/Video.tsx\n+++ b/src/Video.tsx\n"), "{video:?}");
+        assert_eq!((files[0].diff.as_deref(), files[0].note.as_deref()), (None, Some("binary")));
+        assert_eq!(diff(&blobs, &first.entries, &second.entries, Some(&["src/Old.tsx".to_string()])).len(), 1);
     }
 }

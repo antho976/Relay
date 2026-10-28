@@ -74,7 +74,9 @@ loudness (`preset: "youtube"`). To let the person watch it with sound before a r
 | `video.elevenlabs.status {}` | Whether the person saved an ElevenLabs key, and its characters left. Never ask for the key: they save it in the Design view. |
 | `video.capture.android {video_id, steps, launch?, device?, fps?, tail?, demo?, name?}` | Record an Android device's screen while `steps` run (`{tap: [x, y]}`, `{swipe: [x1, y1, x2, y2], ms}`, `{text}`, `{key: "BACK"}`, `{wait: 1.5}`, `{launch: "pkg/.Activity"}`), holding the device's lease, with demo mode's clean status bar, at a constant `fps` (default 30). Answers the asset, where each step fell (`steps[].frame`) and `motion` (exact frames the screen changed). |
 | `video.update {video_id, title?, composition?, props?}` | Rename; pick the default composition; set props (`{"main": {...}}`, `null` to reset). |
-| `video.version.restore {video_id, version}` | Put the code back as a version had it (the current code is recorded first). |
+| `video.version.restore {video_id, version, paths?}` | Put the code back as a version had it (the current code is recorded first); with `paths` (`["src/Open.tsx", "src/scenes"]`) only those files and folders, the rest left as they are. Answers what it `changed`. |
+| `video.version.label {video_id, version, label}` | Name a version (`"narrated cut, before the HUD"`): a take the person can come back to, listed in `video.get` however old. `label: null` takes the name off. |
+| `video.version.diff {video_id, from, to?, paths?}` | What changed between two versions, or since `from` (the code now, recorded first): each file `changed`, `added` or `removed`, with a unified `diff` of its lines. Read it before bringing part of a take back. |
 | `video.delete {video_id}` / `video.restore {video_id}` | Only when the person asked. |
 | `video.kit.status {}` / `video.kit.install {force?}` | Whether this machine can render; set it up (the answer is the real state, with `progress` while installing). `kit_dir` is the kit's sources, to read when this skill is not enough; Remotion's types are in `node_modules/` under `root`. |
 
@@ -309,6 +311,27 @@ priming); a tool that ignores edit lists reads it about 43 ms late. Do not mux i
 - Each check, still and render records a version when the code changed (`video.get` lists them).
   `video.version.restore {version}` puts one back; the code before is recorded first, so a restore
   is undone by restoring the version it answers as `previous`.
+- **A render of a name used before replaces its file**: the older render then has `replaced_by`
+  (the render whose file it is now). Give each take its own name (`avex-changelog-voice-2`) when
+  the person may want both.
+
+## Several versions of one video
+
+- **Cuts are compositions.** A narrated cut and a music-only one, a vertical and a square one, a
+  15 s and a 60 s: one `<Composition>` each in `src/Root.tsx`, sharing the scenes, told apart by
+  a prop (`defaultProps={{ voice: true }}`) or by what they compose. The Design view shows them as
+  cuts the person switches between, each with its renders and props; pass `composition` to
+  `video.still`, `video.scan`, `video.timeline` and `video.render`. Keep an earlier film the person
+  still wants as compositions of its own (`v1-voice`) rather than deleting it.
+- **Takes are named versions.** Before a rewrite the person may want to undo, or when they say
+  they like what is there, `video.version.label {version, label}` on the version `video.check`
+  answers. They can name versions too, and compare any two renders at the same moment (A/B).
+- **Bringing part of a take back:** `video.version.diff {from: <the take>}` shows what changed
+  since; `video.version.restore {version, paths: ["src/Open.tsx"]}` puts just those files back.
+  A whole restore is for going back entirely.
+- An Ask from the board names the cut (`composition`) and the frame of it on screen, and says when
+  the person watched a render older than the code (`the person watched render 7, of v19`): look at
+  that version's diff before changing what they may not have seen yet.
 
 ## Craft
 

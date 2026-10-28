@@ -5,6 +5,11 @@
 //! Agents write a video; the person watches it, changes what its props allow, renders it and
 //! asks for the rest. Applying props renders a preview, so what plays follows what was set. A
 //! render that is older than the code says so, with the key to render it again.
+//!
+//! A video with several compositions has them as cuts (a narrated one, a music-only one, a
+//! vertical one): the board shows one at a time, its renders playing, its props, and Render and
+//! Ask about it, without changing the composition the agent draws by default. Two renders can be
+//! compared at the same moment (A/B), and a version kept by naming it.
 
 use super::ask::{self, Route};
 use crate::app::{label, rows, text, Ui};
@@ -63,6 +68,84 @@ fn caption(name: &str, schema: &Value) -> String {
     }
 }
 
+/// Two renders loaded side by side, the player showing one: the same moment of either at a key.
+struct Compare {
+    renders: [VideoRender; 2],
+    files: [gtk::MediaFile; 2],
+    /// Which the player shows: 0 for A, 1 for B.
+    showing: usize,
+}
+
+/// The moment an Ask is about: the render on screen, and the frame of its composition it shows.
+#[derive(Clone)]
+struct Moment {
+    render: VideoRender,
+    frame: u32,
+    fps: f64,
+}
+
+/// A render as the compare keys name it: its name, else its cut; and its version.
+fn render_tag(r: &VideoRender) -> String {
+    format!("{} · v{}", r.name.as_deref().unwrap_or(&r.composition), r.version)
+}
+
+/// Seconds into its composition where render `r`'s file starts: a render of part of it starts
+/// at its first frame.
+fn start_s(r: &VideoRender, fps: f64) -> f64 {
+    r.range.map_or(0.0, |[first, _]| first as f64 / fps.max(1.0))
+}
+
+/// The composition's frame at `seconds` into render `r`'s file.
+fn frame_at(r: &VideoRender, seconds: f64, fps: f64) -> u32 {
+    r.range.map_or(0, |[first, _]| first) + (seconds.max(0.0) * fps).round() as u32
+}
+
+/// Where in render `to`'s file (µs) the moment `seconds` into render `from`'s falls: the same
+/// moment of their compositions, whatever part of it each covers and at whatever rate.
+fn same_moment(from: &VideoRender, from_fps: f64, seconds: f64, to: &VideoRender, to_fps: f64) -> i64 {
+    ((start_s(from, from_fps) + seconds - start_s(to, to_fps)).max(0.0) * 1e6).round() as i64
+}
+
+/// A render's file to play, looping. Silent in a screenshot run: a virtual compositor keeps the
+/// window off the desktop, not its sound off the speakers.
+fn media_file(r: &VideoRender) -> gtk::MediaFile {
+    let file = gtk::MediaFile::for_filename(r.path.as_deref().unwrap_or_default());
+    file.set_loop(true);
+    if std::env::var_os("RELAY_NATIVE_SCREENSHOT").is_some() {
+        file.set_muted(true);
+    }
+    file
+}
+
+/// Seek `file` to `at` (µs) once it can be, then play it if asked and `player` still shows it: a
+/// file just loaded is not prepared yet, and a seek before then is lost.
+fn seek_when_ready(file: &gtk::MediaFile, at: i64, play: bool, player: &gtk::Video) {
+    let player = player.downgrade();
+    let go = move |f: &gtk::MediaFile| {
+        let end = f.duration();
+        if f.is_seekable() {
+            f.seek(if end > 0 { at.min(end - 1) } else { at });
+        }
+        let shown = player.upgrade().and_then(|p| p.media_stream()).is_some_and(|s| s == *f.upcast_ref::<gtk::MediaStream>());
+        if play && shown {
+            f.play();
+        }
+    };
+    if file.is_prepared() {
+        return go(file);
+    }
+    let held: Rc<RefCell<Option<glib::SignalHandlerId>>> = Rc::default();
+    let kept = held.clone();
+    *held.borrow_mut() = Some(file.connect_prepared_notify(move |f| {
+        if f.is_prepared() {
+            go(f);
+            if let Some(id) = kept.borrow_mut().take() {
+                f.disconnect(id);
+            }
+        }
+    }));
+}
+
 pub struct VideoBoard {
     pub root: gtk::Box,
     ui: Weak<Ui>,
@@ -86,9 +169,18 @@ pub struct VideoBoard {
     progress: gtk::Box,
     progress_bar: gtk::ProgressBar,
     progress_label: gtk::Label,
-    /// The render playing, and its file.
-    playing: RefCell<Option<(i64, String)>>,
-    composition: gtk::DropDown,
+    /// The render in the player.
+    playing: RefCell<Option<VideoRender>>,
+    /// The player shows its cut's newest render, and takes the next one as it lands; a render
+    /// the person picked from the list stays until they pick another.
+    following: Cell<bool>,
+    compare: RefCell<Option<Compare>>,
+    compare_bar: gtk::Box,
+    compare_keys: [gtk::ToggleButton; 2],
+    /// The cut the board shows: the composition its stage, props, Render and Ask are about.
+    cut: RefCell<String>,
+    comp_title: gtk::Label,
+    cuts: gtk::ListBox,
     compositions: RefCell<Vec<String>>,
     choosing: Cell<bool>,
     about: gtk::Label,
@@ -266,6 +358,21 @@ impl VideoBoard {
         });
         let player_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
         player_box.append(&player);
+        // Comparing two renders: A and B, the player showing one, either at the same moment.
+        let compare_bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        compare_bar.add_css_class("video-compare");
+        compare_bar.set_halign(gtk::Align::Center);
+        let compare_keys = [gtk::ToggleButton::new(), gtk::ToggleButton::new()];
+        compare_keys[1].set_group(Some(&compare_keys[0]));
+        for (key, side) in compare_keys.iter().zip(["A", "B"]) {
+            key.add_css_class("video-compare-key");
+            key.set_widget_name(&format!("video-compare-{}", side.to_lowercase()));
+            compare_bar.append(key);
+        }
+        let compare_close = crate::app::icon_button("close", "Stop comparing: keep the one on screen");
+        compare_bar.append(&compare_close);
+        compare_bar.set_visible(false);
+        player_box.append(&compare_bar);
         let controls = gtk::MediaControls::new(None::<&gtk::MediaStream>);
         controls.add_css_class("video-controls");
         player_box.append(&controls);
@@ -369,9 +476,12 @@ impl VideoBoard {
         side.set_margin_start(12);
         let side_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let (comp_section, comp_body) = section("Composition");
-        let composition = gtk::DropDown::from_strings(&[]);
-        composition.add_css_class("design-dropdown");
-        comp_body.append(&composition);
+        let comp_title = comp_section.first_child().and_downcast::<gtk::Label>().unwrap_or_else(|| label("", ""));
+        let cuts = gtk::ListBox::new();
+        cuts.add_css_class("video-cuts");
+        cuts.set_selection_mode(gtk::SelectionMode::Single);
+        cuts.set_visible(false);
+        comp_body.append(&cuts);
         let about = label("", "dim");
         about.set_xalign(0.0);
         about.set_wrap(true);
@@ -422,7 +532,13 @@ impl VideoBoard {
             progress_bar,
             progress_label,
             playing: RefCell::default(),
-            composition: composition.clone(),
+            following: Cell::new(true),
+            compare: RefCell::default(),
+            compare_bar,
+            compare_keys: compare_keys.clone(),
+            cut: RefCell::default(),
+            comp_title,
+            cuts: cuts.clone(),
             compositions: RefCell::default(),
             choosing: Cell::new(false),
             about,
@@ -475,10 +591,35 @@ impl VideoBoard {
         let weak = Rc::downgrade(&b);
         play_key.connect_clicked(move |_| {
             let Some(b) = weak.upgrade() else { return };
-            let newest = b.detail.borrow().as_ref().and_then(|d| d.renders.iter().find(|r| playable(r)).cloned());
-            if let Some(r) = newest {
-                b.play(r.id, r.path.unwrap_or_default());
+            if let Some(r) = b.newest_of_cut() {
+                b.play(&r, true);
             }
+        });
+        for (side, key) in compare_keys.iter().enumerate() {
+            let weak = Rc::downgrade(&b);
+            key.connect_toggled(move |key| {
+                if let Some(b) = weak.upgrade().filter(|b| key.is_active() && !b.choosing.get()) {
+                    b.show_side(side);
+                }
+            });
+        }
+        let weak = Rc::downgrade(&b);
+        compare_close.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.stop_comparing();
+            }
+        });
+        let weak = Rc::downgrade(&b);
+        cuts.connect_row_selected(move |_, row| {
+            let Some(b) = weak.upgrade().filter(|b| !b.choosing.get()) else { return };
+            let Some(cut) = row.and_then(|row| b.compositions.borrow().get(row.index().max(0) as usize).cloned()) else { return };
+            // After the selection settles: showing the cut rebuilds this list.
+            let weak = b.me.clone();
+            glib::idle_add_local_once(move || {
+                if let Some(b) = weak.upgrade() {
+                    b.choose_cut(cut);
+                }
+            });
         });
         let weak = Rc::downgrade(&b);
         cancel_key.connect_clicked(move |_| {
@@ -486,17 +627,6 @@ impl VideoBoard {
             let running = b.detail.borrow().as_ref().and_then(|d| current_render(&d.renders).map(|r| r.id));
             if let Some(render_id) = running {
                 b.call("video.render.cancel", json!({"render_id": render_id}), None);
-            }
-        });
-        let weak = Rc::downgrade(&b);
-        composition.connect_selected_notify(move |d| {
-            let Some(b) = weak.upgrade() else { return };
-            if b.choosing.get() {
-                return;
-            }
-            let chosen = b.compositions.borrow().get(d.selected() as usize).cloned();
-            if let Some(chosen) = chosen {
-                b.call("video.update", json!({"video_id": b.id, "composition": chosen}), None);
             }
         });
         let weak = Rc::downgrade(&b);
@@ -633,10 +763,35 @@ impl VideoBoard {
         self.detail.borrow().as_ref().map(|d| d.video.clone())
     }
 
+    /// The cut on show, as the last check found it.
     fn composition_of(&self) -> Option<Composition> {
         let d = self.detail.borrow();
-        let d = d.as_ref()?;
-        d.compositions.iter().find(|c| c.id == d.video.composition).cloned()
+        let cut = self.cut.borrow();
+        d.as_ref()?.compositions.iter().find(|c| c.id == *cut).cloned()
+    }
+
+    /// A composition's frame rate, as the last check found it; the video's when it was not.
+    fn fps_of(&self, composition: &str) -> f64 {
+        let d = self.detail.borrow();
+        let Some(d) = d.as_ref() else { return 30.0 };
+        d.compositions.iter().find(|c| c.id == composition).map_or(d.video.fps, |c| c.fps)
+    }
+
+    /// The newest render of the cut on show that plays here.
+    fn newest_of_cut(&self) -> Option<VideoRender> {
+        let cut = self.cut.borrow();
+        self.detail.borrow().as_ref()?.renders.iter().find(|r| playable(r) && r.composition == *cut).cloned()
+    }
+
+    /// Show cut `cut`: its renders on the stage, its props, and Render and Ask about it.
+    fn choose_cut(&self, cut: String) {
+        if *self.cut.borrow() == cut {
+            return;
+        }
+        *self.cut.borrow_mut() = cut;
+        self.stop_comparing();
+        self.following.set(true);
+        self.show();
     }
 
     /// Read the video again and show it.
@@ -651,9 +806,31 @@ impl VideoBoard {
                     let (project, session) = (detail.video.project_id, detail.video.session.clone());
                     *b.detail.borrow_mut() = Some(detail);
                     b.show();
-                    // The video smoke's capture of the player (scripts/video-smoke.py).
+                    // The video smoke's captures of the player and of two renders compared
+                    // (scripts/video-smoke.py).
                     if std::env::var_os("RELAY_SMOKE_VIDEO_PLAY").is_some() && b.play_key.is_visible() {
                         b.play_key.emit_clicked();
+                    }
+                    if std::env::var_os("RELAY_SMOKE_VIDEO_VERSIONS").is_some() {
+                        // Once laid out: the side panel scrolled to the versions.
+                        let versions = b.versions_box.downgrade();
+                        glib::timeout_add_local_once(Duration::from_millis(1500), move || {
+                            let Some(versions) = versions.upgrade() else { return };
+                            let side = versions.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>();
+                            let at = versions.parent().and_then(|section| section.compute_point(&versions.ancestor(gtk::Viewport::static_type())?, &gtk::graphene::Point::new(0.0, 0.0)));
+                            if let (Some(side), Some(at)) = (side, at) {
+                                side.vadjustment().set_value(at.y() as f64 - 12.0);
+                            }
+                        });
+                    }
+                    if std::env::var_os("RELAY_SMOKE_VIDEO_COMPARE").is_some() && b.compare.borrow().is_none() {
+                        let other = b.newest_of_cut().and_then(|a| {
+                            b.detail.borrow().as_ref()?.renders.iter().find(|r| playable(r) && r.id != a.id).cloned().map(|o| (a, o))
+                        });
+                        if let Some((a, other)) = other {
+                            b.play(&a, true);
+                            b.compare_with(&other);
+                        }
                     }
                     // The lamp starts at the terminal's state now; session.changed moves it after.
                     if let Some(session) = session {
@@ -732,27 +909,13 @@ impl VideoBoard {
         }
         self.status.set_text(&format!("v{} · {}", v.version, ago(&v.updated_at, Form::CompactAgo).map_or_else(|| v.updated_by.clone(), |when| format!("{} {when}", v.updated_by))));
 
-        // The compositions.
+        // The cut: the one the person picked while the video still has it, else its own.
         let ids: Vec<String> = detail.compositions.iter().map(|c| c.id.clone()).collect();
-        if *self.compositions.borrow() != ids {
-            self.choosing.set(true);
-            let names: Vec<&str> = ids.iter().map(String::as_str).collect();
-            self.composition.set_model(Some(&gtk::StringList::new(&names)));
-            *self.compositions.borrow_mut() = ids.clone();
-            self.choosing.set(false);
+        let kept = !self.cut.borrow().is_empty() && ids.contains(&self.cut.borrow());
+        if !kept {
+            *self.cut.borrow_mut() = v.composition.clone();
         }
-        if let Some(at) = ids.iter().position(|c| *c == v.composition) {
-            if self.composition.selected() as usize != at {
-                self.choosing.set(true);
-                self.composition.set_selected(at as u32);
-                self.choosing.set(false);
-            }
-        }
-        self.composition.set_visible(ids.len() > 1);
-        self.about.set_text(&match self.composition_of() {
-            Some(c) => format!("{} · {} × {} · {} fps · {}", c.id, c.width, c.height, c.fps, super::videos::clock(c.duration_frames, c.fps)),
-            None => "Not checked yet: an agent's video.check lists the compositions.".into(),
-        });
+        self.show_cuts(&detail, &ids);
 
         self.show_props(&detail);
         self.show_stage(&detail);
@@ -761,21 +924,76 @@ impl VideoBoard {
         self.show_versions(&detail);
     }
 
+    /// One composition: what it is. Several: a cut each, to pick, with its newest render.
+    fn show_cuts(&self, detail: &GetOut, ids: &[String]) {
+        let many = ids.len() > 1;
+        self.comp_title.set_text(if many { "Cuts" } else { "Composition" });
+        self.cuts.set_visible(many);
+        self.about.set_visible(!many);
+        *self.compositions.borrow_mut() = ids.to_vec();
+        if !many {
+            self.about.set_text(&match self.composition_of() {
+                Some(c) => format!("{} · {} × {} · {} fps · {}", c.id, c.width, c.height, c.fps, super::videos::clock(c.duration_frames, c.fps)),
+                None => "Not checked yet: an agent's video.check lists the compositions.".into(),
+            });
+            return;
+        }
+        self.choosing.set(true);
+        self.cuts.remove_all();
+        let cut = self.cut.borrow().clone();
+        for c in &detail.compositions {
+            let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            row.add_css_class("video-cut");
+            let head = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            let name = label(&c.id, "video-row-title");
+            name.set_xalign(0.0);
+            name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            name.set_max_width_chars(24);
+            head.append(&name);
+            if c.id == detail.video.composition {
+                let own = label("default", "faint");
+                own.set_tooltip_text(Some("What agents draw and render unless they name another"));
+                head.append(&own);
+            }
+            row.append(&head);
+            let size = format!("{} × {} · {} fps · {}", c.width, c.height, c.fps, super::videos::clock(c.duration_frames, c.fps));
+            let newest = detail.renders.iter().find(|r| r.composition == c.id && r.state == RenderState::Done && r.replaced_by.is_none());
+            let rendered = newest.map_or_else(|| "no render yet".to_string(), |r| {
+                format!("v{} {}", r.version, r.finished_at.as_deref().and_then(|t| ago(t, Form::CompactAgo)).unwrap_or_default())
+            });
+            let sub = label(&format!("{size} · {rendered}"), "dim");
+            sub.set_xalign(0.0);
+            sub.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            sub.set_max_width_chars(36);
+            row.append(&sub);
+            self.cuts.append(&row);
+            if c.id == cut {
+                if let Some(r) = self.cuts.last_child().and_downcast::<gtk::ListBoxRow>() {
+                    self.cuts.select_row(Some(&r));
+                }
+            }
+        }
+        self.choosing.set(false);
+    }
+
     fn show_stage(&self, detail: &GetOut) {
         let v = &detail.video;
-        let newest = detail.renders.iter().find(|r| playable(r));
+        let cut = self.cut.borrow().clone();
+        let many = detail.compositions.len() > 1;
+        let newest = detail.renders.iter().find(|r| playable(r) && r.composition == cut).cloned();
         if let Some(path) = &v.poster {
             self.poster.set_filename(Some(path));
         }
         let in_player = self.stage.visible_child_name().as_deref() == Some("player");
-        match newest {
+        // Comparing: the two renders stay as the person set them.
+        let comparing = self.compare.borrow().is_some();
+        match &newest {
             Some(r) => {
-                let path = r.path.clone().unwrap_or_default();
-                // Playing already: the newer render takes the old one's place, paused.
-                let same = self.playing.borrow().as_ref().is_some_and(|(id, p)| *id == r.id && *p == path);
-                if in_player && !same {
-                    self.player.set_media_stream(Some(&gtk::MediaFile::for_filename(&path)));
-                    *self.playing.borrow_mut() = Some((r.id, path));
+                // Watching the cut's newest: the next one takes its place, paused. A render the
+                // person picked stays.
+                let same = self.playing.borrow().as_ref().is_some_and(|p| p.id == r.id && p.path == r.path);
+                if in_player && !same && !comparing && self.following.get() {
+                    self.load(r);
                 }
                 if !in_player {
                     self.stage.set_visible_child_name("poster");
@@ -783,37 +1001,125 @@ impl VideoBoard {
                 self.play_key.set_visible(true);
                 self.preview_key.set_visible(false);
                 let size = r.bytes.map(megabytes).unwrap_or_default();
-                self.stage_note.set_text(&format!("{} {} of v{} · {size}", r.format.name().to_uppercase(),
-                    if r.quality == relay_bus::ops::video::Quality::Preview { "preview" } else { "render" }, r.version));
+                let of = if many { format!("{cut}, v{}", r.version) } else { format!("v{}", r.version) };
+                self.stage_note.set_text(&format!("{} {} of {of} · {size}", r.format.name().to_uppercase(),
+                    if r.quality == relay_bus::ops::video::Quality::Preview { "preview" } else { "render" }));
                 let older = r.version < v.version;
                 self.stale.set_visible(older);
                 self.stale_note.set_text(&format!("This render is of v{}; the code is at v{}.", r.version, v.version));
             }
             None => {
                 self.stale.set_visible(false);
-                self.stage.set_visible_child_name("poster");
+                if !comparing {
+                    self.stage.set_visible_child_name("poster");
+                }
                 self.play_key.set_visible(false);
                 self.preview_key.set_visible(true);
-                self.stage_note.set_text(if v.poster.is_some() {
-                    "No render to play yet. A preview renders it at half size, in seconds."
+                self.stage_note.set_text(&if many {
+                    format!("No render of {cut} yet. A preview renders it at half size, in seconds.")
+                } else if v.poster.is_some() {
+                    "No render to play yet. A preview renders it at half size, in seconds.".to_string()
                 } else {
-                    "Nothing drawn yet. Once an agent has written the video, render a preview to watch it."
+                    "Nothing drawn yet. Once an agent has written the video, render a preview to watch it.".to_string()
                 });
             }
         }
     }
 
-    /// Play render `id`'s file in the player.
-    fn play(&self, id: i64, path: String) {
-        let same = self.playing.borrow().as_ref().is_some_and(|(playing, p)| *playing == id && *p == path);
+    /// Put render `r`'s file in the player, paused where it starts.
+    fn load(&self, r: &VideoRender) -> gtk::MediaFile {
+        let file = media_file(r);
+        self.player.set_media_stream(Some(&file));
+        self.controls.set_media_stream(Some(&file));
+        *self.playing.borrow_mut() = Some(r.clone());
+        file
+    }
+
+    /// Play render `r`. `follow`: it is the cut's newest, and the next one takes its place.
+    fn play(&self, r: &VideoRender, follow: bool) {
+        self.stop_comparing();
+        self.following.set(follow);
+        let same = self.playing.borrow().as_ref().is_some_and(|p| p.id == r.id && p.path == r.path);
         if !same {
-            self.player.set_media_stream(Some(&gtk::MediaFile::for_filename(&path)));
-            self.controls.set_media_stream(self.player.media_stream().as_ref());
-            *self.playing.borrow_mut() = Some((id, path));
+            self.load(r);
         }
         self.stage.set_visible_child_name("player");
         if let Some(stream) = self.player.media_stream() {
             stream.play();
+        }
+        self.mark_playing();
+    }
+
+    /// Compare render `b` with the one on screen (or the cut's newest): the player switches
+    /// between them at the same moment.
+    fn compare_with(&self, b: &VideoRender) {
+        let shown = self.compare.borrow().as_ref().map(|c| c.renders[c.showing].clone());
+        let on_screen = self.stage.visible_child_name().as_deref() == Some("player");
+        let a = shown.or_else(|| self.playing.borrow().clone().filter(|_| on_screen))
+            .filter(|a| a.id != b.id)
+            .or_else(|| self.newest_of_cut().filter(|a| a.id != b.id));
+        let Some(a) = a else { return self.play(b, false) };
+        self.stop_comparing();
+        // A keeps the stream it is playing in, so its place and its pause are kept.
+        let playing_a = self.playing.borrow().as_ref().is_some_and(|p| p.id == a.id) && on_screen;
+        let file_a = match self.player.media_stream().and_downcast::<gtk::MediaFile>().filter(|_| playing_a) {
+            Some(file) => file,
+            None => self.load(&a),
+        };
+        let file_b = media_file(b);
+        self.choosing.set(true);
+        for (key, (side, r)) in self.compare_keys.iter().zip([("A", &a), ("B", b)]) {
+            key.set_label(&format!("{side}  {}", render_tag(r)));
+            key.set_tooltip_text(Some(&format!("Render {} · {}", r.id, r.composition)));
+        }
+        self.compare_keys[0].set_active(true);
+        self.choosing.set(false);
+        *self.compare.borrow_mut() = Some(Compare { renders: [a, b.clone()], files: [file_a, file_b], showing: 0 });
+        self.compare_bar.set_visible(true);
+        self.stage.set_visible_child_name("player");
+        self.following.set(false);
+        self.show_side(1);
+    }
+
+    /// Show side `side` (0 for A, 1 for B) of a comparison, at the moment the other was at, playing
+    /// if it was.
+    fn show_side(&self, side: usize) {
+        let switched = {
+            let mut compare = self.compare.borrow_mut();
+            let Some(c) = compare.as_mut() else { return };
+            if c.showing == side && self.player.media_stream().is_some_and(|s| s == *c.files[side].upcast_ref::<gtk::MediaStream>()) {
+                return;
+            }
+            let (from, to) = (c.showing, side);
+            let (seconds, was_playing) = (c.files[from].timestamp() as f64 / 1e6, c.files[from].is_playing());
+            c.files[from].pause();
+            let at = same_moment(&c.renders[from], self.fps_of(&c.renders[from].composition), seconds, &c.renders[to], self.fps_of(&c.renders[to].composition));
+            self.player.set_media_stream(Some(&c.files[to]));
+            self.controls.set_media_stream(Some(&c.files[to]));
+            seek_when_ready(&c.files[to], at, was_playing, &self.player);
+            c.showing = to;
+            c.renders[to].clone()
+        };
+        *self.playing.borrow_mut() = Some(switched);
+        self.choosing.set(true);
+        self.compare_keys[side].set_active(true);
+        self.choosing.set(false);
+        self.mark_playing();
+    }
+
+    /// End a comparison, keeping the render on screen where it is.
+    fn stop_comparing(&self) {
+        if self.compare.borrow_mut().take().is_some() {
+            self.compare_bar.set_visible(false);
+            self.mark_playing();
+        }
+    }
+
+    /// The renders list marks the one on screen.
+    fn mark_playing(&self) {
+        let detail = self.detail.borrow().clone();
+        if let Some(detail) = detail {
+            self.show_renders(&detail);
         }
     }
 
@@ -835,11 +1141,12 @@ impl VideoBoard {
     }
 
     fn show_props(&self, detail: &GetOut) {
-        let comp = detail.compositions.iter().find(|c| c.id == detail.video.composition);
+        let cut = self.cut.borrow().clone();
+        let comp = detail.compositions.iter().find(|c| c.id == cut);
         let sig = json!([
-            detail.video.composition,
+            cut,
             comp.map(|c| (&c.props_schema, &c.default_props)),
-            detail.props.get(&detail.video.composition),
+            detail.props.get(&cut),
         ])
         .to_string();
         if self.props_sig.borrow().as_deref() == Some(sig.as_str()) {
@@ -848,7 +1155,7 @@ impl VideoBoard {
         *self.props_sig.borrow_mut() = Some(sig);
         clear(&self.props_box);
         self.fields.borrow_mut().clear();
-        let Some(comp) = detail.compositions.iter().find(|c| c.id == detail.video.composition) else {
+        let Some(comp) = comp else {
             self.props_box.append(&label("The props show once the video has been checked.", "dim"));
             return;
         };
@@ -927,9 +1234,14 @@ impl VideoBoard {
             self.renders_box.append(&label("None yet.", "dim"));
             return;
         }
-        for r in detail.renders.iter().take(8) {
+        let many = detail.compositions.len() > 1;
+        let on_screen = self.playing.borrow().as_ref().map(|p| p.id).filter(|_| self.stage.visible_child_name().as_deref() == Some("player"));
+        for r in detail.renders.iter().take(10) {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             row.add_css_class("video-row");
+            if on_screen == Some(r.id) {
+                row.add_css_class("video-row-playing");
+            }
             let words = gtk::Box::new(gtk::Orientation::Vertical, 2);
             words.set_hexpand(true);
             let quality = match r.quality {
@@ -941,27 +1253,34 @@ impl VideoBoard {
             let head = label(&format!("{named}{}{} · v{}", r.format.name().to_uppercase(), quality, r.version), "video-row-title");
             head.set_xalign(0.0);
             head.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            // An ellipsized label still asks for its whole text: held, so a long render name
+            // never widens the panel into the player's room.
+            head.set_max_width_chars(28);
             words.append(&head);
             let when = r.finished_at.as_deref().or(Some(r.created_at.as_str())).and_then(|t| ago(t, Form::CompactAgo)).unwrap_or_default();
-            let detail_text = match r.state {
-                RenderState::Done => format!("{} · {}", r.bytes.map(megabytes).unwrap_or_default(), when),
-                RenderState::Failed => format!("failed: {}", r.error.as_deref().unwrap_or_default()),
-                RenderState::Cancelled => format!("stopped {when}"),
-                RenderState::Queued => "queued".into(),
-                RenderState::Rendering => format!("{}%", (r.progress * 100.0).round()),
+            let cut = if many { format!("{} · ", r.composition) } else { String::new() };
+            let detail_text = match (r.state, r.replaced_by) {
+                (RenderState::Done, Some(by)) => format!("{cut}replaced by render {by} of the same name"),
+                (RenderState::Done, None) => format!("{cut}{} · {}", r.bytes.map(megabytes).unwrap_or_default(), when),
+                (RenderState::Failed, _) => format!("failed: {}", r.error.as_deref().unwrap_or_default()),
+                (RenderState::Cancelled, _) => format!("{cut}stopped {when}"),
+                (RenderState::Queued, _) => format!("{cut}queued"),
+                (RenderState::Rendering, _) => format!("{cut}{}%", (r.progress * 100.0).round()),
             };
             let sub = label(&detail_text, "dim");
             sub.set_xalign(0.0);
             sub.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            sub.set_tooltip_text(r.error.as_deref().or(r.path.as_deref()));
+            sub.set_max_width_chars(30);
+            sub.set_tooltip_text(r.error.as_deref().or(r.path.as_deref().filter(|_| r.replaced_by.is_none())));
             words.append(&sub);
             // Its sound as measured: loudness and peak, red when it clips.
-            if let Some(audio) = r.audio.as_ref().filter(|_| r.state == RenderState::Done) {
+            if let Some(audio) = r.audio.as_ref().filter(|_| r.state == RenderState::Done && r.replaced_by.is_none()) {
                 let line = sound_line(audio);
                 let warn = audio.warnings.iter().any(|w| w.kind == "clipping" || w.kind == "hot");
                 let sound = label(&line, if warn { "video-warn" } else { "dim" });
                 sound.set_xalign(0.0);
                 sound.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                sound.set_max_width_chars(30);
                 let tip = audio.warnings.iter().map(|w| w.detail.as_str()).collect::<Vec<_>>().join("\n");
                 if !tip.is_empty() {
                     sound.set_tooltip_text(Some(&tip));
@@ -969,18 +1288,27 @@ impl VideoBoard {
                 words.append(&sound);
             }
             row.append(&words);
-            if let (true, Some(path)) = (playable(r), r.path.clone()) {
+            if playable(r) {
                 let play = crate::app::icon_button("play", "Play this render");
-                let (weak, id) = (self.me.clone(), r.id);
-                let file = path.clone();
+                let (weak, render) = (self.me.clone(), r.clone());
                 play.connect_clicked(move |_| {
                     if let Some(b) = weak.upgrade() {
-                        b.play(id, file.clone());
+                        b.play(&render, false);
                     }
                 });
                 row.append(&play);
+                let compare = crate::app::icon_button("columns", "Compare with the render on screen, or the cut's newest: switch between them at the same moment");
+                compare.set_widget_name(&format!("video-compare-render-{}", r.id));
+                let (weak, render) = (self.me.clone(), r.clone());
+                compare.connect_clicked(move |_| {
+                    if let Some(b) = weak.upgrade() {
+                        b.compare_with(&render);
+                    }
+                });
+                compare.set_sensitive(on_screen != Some(r.id));
+                row.append(&compare);
             }
-            if let Some(path) = r.path.clone().filter(|_| r.state == RenderState::Done) {
+            if let Some(path) = r.path.clone().filter(|_| r.state == RenderState::Done && r.replaced_by.is_none()) {
                 let show = crate::app::icon_button("folder-open", "Show the file in its folder");
                 let weak = self.me.clone();
                 show.connect_clicked(move |key| {
@@ -998,35 +1326,135 @@ impl VideoBoard {
         }
     }
 
+    /// The versions, newest first, then the older ones kept by name: each with what it changed,
+    /// its render to play when there is one, and a menu to name it or put it back.
     fn show_versions(&self, detail: &GetOut) {
         clear(&self.versions_box);
         if detail.versions.is_empty() {
             self.versions_box.append(&label("Recorded as the code is checked, looked at and rendered.", "dim"));
             return;
         }
-        for (i, version) in detail.versions.iter().take(10).enumerate() {
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let cut = self.cut.borrow().clone();
+        for (i, version) in detail.versions.iter().enumerate() {
+            // video.get answers the newest twenty, then the older ones kept by name.
+            if i == 20 {
+                let kept = label("Kept", "video-versions-kept");
+                kept.set_xalign(0.0);
+                self.versions_box.append(&kept);
+            }
+            let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
             row.add_css_class("video-row");
-            let words = label(&format!("v{} · {} · {}", version.n, version.actor, ago(&version.created_at, Form::CompactAgo).unwrap_or_default()), "");
-            words.set_xalign(0.0);
-            words.set_hexpand(true);
-            row.append(&words);
-            if i == 0 {
-                row.append(&label("now", "dim"));
-            } else {
-                let restore = gtk::Button::with_label("Restore");
-                restore.add_css_class("quiet");
-                restore.set_tooltip_text(Some("Put the code back as this version had it; the code as it is now is kept as a version first"));
-                let (weak, n) = (self.me.clone(), version.n);
-                restore.connect_clicked(move |_| {
+            let head = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            let n = label(&format!("v{}", version.n), "video-row-title");
+            head.append(&n);
+            let named = label(version.label.as_deref().unwrap_or_default(), "video-version-label");
+            if let Some(name) = &version.label {
+                head.append(&crate::icons::image("pin", 12));
+                named.set_tooltip_text(Some(name));
+            }
+            named.set_xalign(0.0);
+            named.set_hexpand(true);
+            named.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            named.set_max_width_chars(16);
+            head.append(&named);
+            let current = version.n == detail.video.version;
+            if current {
+                head.append(&label("now", "dim"));
+            }
+            // Its render, of the cut on show first.
+            let render = detail.renders.iter().filter(|r| playable(r) && r.version == version.n)
+                .min_by_key(|r| (r.composition != cut, -r.id)).cloned();
+            if let Some(r) = render {
+                let play = crate::app::icon_button("play", &format!("Play render {} ({}), of this version", r.id, r.composition));
+                let weak = self.me.clone();
+                play.connect_clicked(move |_| {
                     if let Some(b) = weak.upgrade() {
-                        b.call("video.version.restore", json!({"video_id": b.id, "version": n}), Some(format!("Restored v{n}; the code before is kept as a version.")));
+                        b.play(&r, false);
                     }
                 });
-                row.append(&restore);
+                head.append(&play);
             }
+            let menu = gtk::MenuButton::new();
+            menu.set_child(Some(&crate::icons::image("more", 16)));
+            menu.add_css_class("quiet");
+            menu.add_css_class("icon-key");
+            menu.set_tooltip_text(Some("Name this version, or put the code back as it had it"));
+            menu.set_widget_name(&format!("video-version-{}", version.n));
+            let pop = gtk::Popover::new();
+            pop.add_css_class("design-menu");
+            menu.set_popover(Some(&pop));
+            let (weak, version_n, label_now) = (self.me.clone(), version.n, version.label.clone());
+            pop.connect_show(move |pop| {
+                if let Some(b) = weak.upgrade() {
+                    pop.set_child(Some(&b.version_menu(pop, version_n, label_now.as_deref(), current)));
+                }
+            });
+            head.append(&menu);
+            row.append(&head);
+            // Who and when, then what it changed.
+            let mut line = format!("{} · {}", version.actor, ago(&version.created_at, Form::CompactAgo).unwrap_or_default());
+            if !version.changed.is_empty() {
+                let shown: Vec<&str> = version.changed.iter().take(3).map(String::as_str).collect();
+                let more = version.changed.len().saturating_sub(3);
+                line.push_str(&format!(" · {}", shown.join(", ")));
+                if more > 0 {
+                    line.push_str(&format!(" +{more}"));
+                }
+            }
+            let changed = label(&line, "video-version-changed");
+            changed.set_xalign(0.0);
+            changed.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            changed.set_max_width_chars(36);
+            if !version.changed.is_empty() {
+                changed.set_tooltip_text(Some(&version.changed.join("\n")));
+            }
+            row.append(&changed);
             self.versions_box.append(&row);
         }
+    }
+
+    /// A version's menu: a name for it (Enter keeps it, empty takes it off), and Restore.
+    fn version_menu(&self, pop: &gtk::Popover, n: i64, named: Option<&str>, current: bool) -> gtk::Box {
+        let menu = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        menu.set_size_request(260, -1);
+        let caption = label(if named.is_some() { "Its name" } else { "Name this version to keep it" }, "dim");
+        caption.set_xalign(0.0);
+        menu.append(&caption);
+        let name = gtk::Entry::new();
+        name.set_text(named.unwrap_or_default());
+        name.set_placeholder_text(Some("Narrated cut, warm grade"));
+        name.set_max_length(relay_bus::ops::video::MAX_VERSION_LABEL as i32);
+        let (weak, popw) = (self.me.clone(), pop.downgrade());
+        name.connect_activate(move |e| {
+            let text = e.text().trim().to_string();
+            if let Some(b) = weak.upgrade() {
+                let label = if text.is_empty() { Value::Null } else { json!(text) };
+                b.call("video.version.label", json!({"video_id": b.id, "version": n, "label": label}), None);
+            }
+            if let Some(p) = popw.upgrade() {
+                p.popdown();
+            }
+        });
+        menu.append(&name);
+        if !current {
+            let restore = gtk::Button::with_label(&format!("Restore v{n}"));
+            restore.add_css_class("quiet");
+            restore.set_tooltip_text(Some("Put the code back as this version had it; the code as it is now is kept as a version first"));
+            if let Some(child) = restore.child().and_downcast::<gtk::Label>() {
+                child.set_xalign(0.0);
+            }
+            let (weak, popw) = (self.me.clone(), pop.downgrade());
+            restore.connect_clicked(move |_| {
+                if let Some(p) = popw.upgrade() {
+                    p.popdown();
+                }
+                if let Some(b) = weak.upgrade() {
+                    b.call("video.version.restore", json!({"video_id": b.id, "version": n}), Some(format!("Restored v{n}; the code before is kept as a version.")));
+                }
+            });
+            menu.append(&restore);
+        }
+        menu
     }
 
     fn title_menu(&self, pop: &gtk::Popover) -> gtk::Box {
@@ -1114,13 +1542,18 @@ impl VideoBoard {
         menu
     }
 
+    /// Render the cut on show as `payload` asks.
     fn render(&self, mut payload: Value) {
         payload["video_id"] = json!(self.id);
-        // A new preview supersedes those still waiting: Apply pressed three times renders once
-        // more, not three times over.
+        let cut = self.cut.borrow().clone();
+        if !cut.is_empty() {
+            payload["composition"] = json!(cut);
+        }
+        // A new preview supersedes those of the cut still waiting: Apply pressed three times
+        // renders once more, not three times over.
         if payload["quality"] == "preview" {
             let waiting: Vec<i64> = self.detail.borrow().as_ref().map(|d| d.renders.iter()
-                .filter(|r| r.state == RenderState::Queued && r.quality == relay_bus::ops::video::Quality::Preview)
+                .filter(|r| r.state == RenderState::Queued && r.quality == relay_bus::ops::video::Quality::Preview && r.composition == cut)
                 .map(|r| r.id).collect()).unwrap_or_default();
             if let (Some(ui), false) = (self.ui.upgrade(), waiting.is_empty()) {
                 glib::spawn_future_local(async move {
@@ -1134,7 +1567,10 @@ impl VideoBoard {
     }
 
     fn apply_props(&self, reset: bool) {
-        let Some(comp) = self.video().map(|v| v.composition) else { return };
+        let comp = self.cut.borrow().clone();
+        if comp.is_empty() {
+            return;
+        }
         let value = if reset {
             Value::Null
         } else {
@@ -1192,12 +1628,13 @@ impl VideoBoard {
         });
     }
 
-    /// The moment on screen: the frame the player shows, at the composition's rate.
-    fn moment(&self) -> Option<(u32, f64)> {
-        let fps = self.composition_of().map(|c| c.fps).or_else(|| self.video().map(|v| v.fps))?;
+    /// The moment on screen: the render in the player and the frame it shows of its composition,
+    /// at that composition's rate (a render of part of it starts at its first frame).
+    fn moment(&self) -> Option<Moment> {
+        let render = self.playing.borrow().clone()?;
         let stream = self.player.media_stream().filter(|_| self.stage.visible_child_name().as_deref() == Some("player"))?;
-        let seconds = stream.timestamp() as f64 / 1e6;
-        Some(((seconds * fps).round() as u32, fps))
+        let fps = self.fps_of(&render.composition);
+        Some(Moment { frame: frame_at(&render, stream.timestamp() as f64 / 1e6, fps), fps, render })
     }
 
     /// Ask the video's terminal about the moment on screen.
@@ -1215,8 +1652,10 @@ impl VideoBoard {
         let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
         body.set_size_request(380, -1);
         let at = self.moment();
-        let heading = match at {
-            Some((frame, fps)) => format!("Ask {session} about {}", frame_label(frame, fps)),
+        let many = self.detail.borrow().as_ref().is_some_and(|d| d.compositions.len() > 1);
+        let heading = match &at {
+            Some(m) if many => format!("Ask {session} about {} of {}", frame_label(m.frame, m.fps), m.render.composition),
+            Some(m) => format!("Ask {session} about {}", frame_label(m.frame, m.fps)),
             None => format!("Ask {session} about this video"),
         };
         body.append(&label(&heading, "design-section-title"));
@@ -1242,7 +1681,7 @@ impl VideoBoard {
             if let Some(p) = popw.upgrade() {
                 p.popdown();
             }
-            b.send(session.clone(), request, at);
+            b.send(session.clone(), request, at.clone());
         });
         let draft = self.me.clone();
         let kept = view.buffer();
@@ -1256,25 +1695,31 @@ impl VideoBoard {
         view.grab_focus();
     }
 
-    /// The prompt an Ask sends: one line naming the video, the moment and the request, with the
-    /// call that shows the agent that frame.
-    fn prompt(v: &Video, request: &str, at: Option<(u32, f64)>) -> String {
+    /// The prompt an Ask sends: one line naming the video, the cut, the moment and the request,
+    /// with the call that shows the agent that frame, and the render the person watched when the
+    /// code has moved on since it.
+    fn prompt(v: &Video, cut: &str, request: &str, at: Option<&Moment>) -> String {
         let request = request.replace(['\n', '\r'], " ");
+        let composition = at.map_or(cut, |m| m.render.composition.as_str());
+        let head = format!("[Relay video] \"{}\" (video_id {}, composition {composition})", v.title, v.id);
+        let seen = at.filter(|m| m.render.version < v.version)
+            .map(|m| format!("; the person watched render {}, of v{} (the code is at v{})", m.render.id, m.render.version, v.version))
+            .unwrap_or_default();
         match at {
-            Some((frame, fps)) => format!(
-                "[Relay video] \"{}\" (video_id {}, composition {}) at {}: {request} — see that frame with video.still {{\"video_id\": {}, \"at\": [\"f{frame}\"]}}; its code is in {}",
-                v.title, v.id, v.composition, frame_label(frame, fps), v.id, v.dir,
+            Some(m) => format!(
+                "{head} at {}: {request} — see that frame with video.still {{\"video_id\": {}, \"composition\": \"{composition}\", \"at\": [\"f{}\"]}}{seen}; its code is in {}",
+                frame_label(m.frame, m.fps), v.id, m.frame, v.dir,
             ),
             None => format!(
-                "[Relay video] \"{}\" (video_id {}, composition {}): {request} — look with video.still {{\"video_id\": {}}}; its code is in {}",
-                v.title, v.id, v.composition, v.id, v.dir,
+                "{head}: {request} — look with video.still {{\"video_id\": {}, \"composition\": \"{composition}\"}}; its code is in {}",
+                v.id, v.dir,
             ),
         }
     }
 
-    fn send(&self, session: String, request: String, at: Option<(u32, f64)>) {
+    fn send(&self, session: String, request: String, at: Option<Moment>) {
         let (Some(ui), Some(v)) = (self.ui.upgrade(), self.video()) else { return };
-        let message = Self::prompt(&v, &request, at);
+        let message = Self::prompt(&v, &self.cut.borrow(), &request, at.as_ref());
         let weak = self.me.clone();
         glib::spawn_future_local(async move {
             // The terminal's state now decides the way, as a design's Ask (TM-1, TM-20).
@@ -1362,15 +1807,54 @@ mod tests {
         assert_eq!(caption("title", &json!({"description": "Headline"})), "Headline");
     }
 
+    fn render(id: i64, composition: &str, version: i64, range: Option<[u32; 2]>) -> VideoRender {
+        serde_json::from_value(json!({
+            "id": id, "video_id": 4, "project_id": 1, "composition": composition, "format": "mp4", "quality": "standard",
+            "state": "done", "progress": 1.0, "version": version, "range": range, "path": format!("/v/out/{id}.mp4"), "bytes": 1, "error": null,
+            "actor": "user", "created_at": "", "started_at": null, "finished_at": null
+        }))
+        .unwrap()
+    }
+
     #[test]
-    fn an_ask_names_the_video_the_moment_and_how_to_see_it() {
+    fn an_ask_names_the_video_the_cut_the_moment_and_how_to_see_it() {
         let v = Video {
             id: 4, project_id: 1, session: Some("snug-zebra".into()), title: "Promo".into(), dir: "/v/p1/4-promo".into(),
             composition: "main".into(), width: 1080, height: 1920, fps: 30.0, duration_frames: 240, version: 3, poster: None,
             last_render: None, created_by: "user".into(), updated_by: "user".into(), created_at: String::new(), updated_at: String::new(), deleted_at: None,
         };
-        let line = VideoBoard::prompt(&v, "make the title\nbigger", Some((45, 30.0)));
-        assert_eq!(line, "[Relay video] \"Promo\" (video_id 4, composition main) at 1.5s · f45: make the title bigger — see that frame with video.still {\"video_id\": 4, \"at\": [\"f45\"]}; its code is in /v/p1/4-promo");
+        let at = Moment { render: render(9, "main", 3, None), frame: 45, fps: 30.0 };
+        let line = VideoBoard::prompt(&v, "main", "make the title\nbigger", Some(&at));
+        assert_eq!(line, "[Relay video] \"Promo\" (video_id 4, composition main) at 1.5s · f45: make the title bigger — see that frame with video.still {\"video_id\": 4, \"composition\": \"main\", \"at\": [\"f45\"]}; its code is in /v/p1/4-promo");
         assert!(!line.contains('\n'));
+        // The render on screen names the cut, and says when the code has moved on since it.
+        let old = Moment { render: render(7, "voice", 2, None), frame: 90, fps: 60.0 };
+        let line = VideoBoard::prompt(&v, "main", "hold the end longer", Some(&old));
+        assert!(line.contains("(video_id 4, composition voice) at 1.5s · f90:"), "{line}");
+        assert!(line.contains("\"composition\": \"voice\", \"at\": [\"f90\"]}; the person watched render 7, of v2 (the code is at v3);"), "{line}");
+        let none = VideoBoard::prompt(&v, "wide", "a square cut too", None);
+        assert!(none.contains("composition wide): a square cut too — look with video.still {\"video_id\": 4, \"composition\": \"wide\"}"), "{none}");
+    }
+
+    /// A render of part of a composition starts at its first frame; compositions at other rates
+    /// meet at the same second.
+    #[test]
+    fn moments_are_read_in_the_composition_whatever_the_render_covers() {
+        let whole = render(1, "show", 28, None);
+        let part = render(2, "show", 28, Some([600, 899]));
+        assert_eq!(frame_at(&whole, 12.5, 60.0), 750);
+        assert_eq!(frame_at(&part, 2.5, 60.0), 750);
+        // 12.5 s into the whole is 2.5 s into the part from 10 s.
+        assert_eq!(same_moment(&whole, 60.0, 12.5, &part, 60.0), 2_500_000);
+        assert_eq!(same_moment(&part, 60.0, 2.5, &whole, 60.0), 12_500_000);
+        // Before the part starts: its start.
+        assert_eq!(same_moment(&whole, 60.0, 3.0, &part, 60.0), 0);
+        // A 30 fps cut against a 60 fps one: the same second.
+        let v1 = render(3, "v1-music", 9, Some([150, 299]));
+        assert_eq!(same_moment(&whole, 60.0, 7.0, &v1, 30.0), 2_000_000);
+        assert_eq!(render_tag(&whole), "show · v28");
+        let mut named = whole.clone();
+        named.name = Some("avex-1.0-changelog-music".into());
+        assert_eq!(render_tag(&named), "avex-1.0-changelog-music · v28");
     }
 }

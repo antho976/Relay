@@ -221,6 +221,10 @@ result!(#[schemars(rename = "VideoVersion")] Version {
     /// `-src/Old.tsx` (removed); at most 12.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changed: Vec<String>,
+    /// Its name, when the person or an agent gave it one (`video.version.label`): a take to keep.
+    /// `video.get` lists named versions however old.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 });
 
 /// Where a render is.
@@ -346,6 +350,10 @@ pub struct VideoRender {
     /// The file, once done.
     pub path: Option<String>,
     pub bytes: Option<i64>,
+    /// A later render of the same name wrote over this one's file: the render whose file it now
+    /// is. `path` then holds that render, not this one.
+    #[serde(default)]
+    pub replaced_by: Option<Id>,
     /// Why it failed.
     pub error: Option<String>,
     /// Its sound as measured once done (formats with sound): loudness, peaks, clipping, and the
@@ -505,7 +513,7 @@ result!(#[schemars(rename = "VideoGetOut")] GetOut {
     /// The props the person set, by composition id: stills and renders draw with them unless
     /// given others.
     pub props: Value,
-    /// The newest versions first, at most 20.
+    /// The newest versions first: the newest 20, then every older one with a name.
     pub versions: Vec<Version>,
     /// The newest renders first, at most 20.
     pub renders: Vec<VideoRender>,
@@ -1344,15 +1352,75 @@ payload!(#[schemars(rename = "VideoVersionRestoreIn")] VersionRestoreIn {
     pub video_id: Id,
     /// A version `video.get` lists.
     pub version: i64,
+    /// Only these files, or the files under these folders (`src/Open.tsx`, `src/scenes`): each put
+    /// back as the version had it, or taken out where it had none. The rest stay as they are: a
+    /// scene brought back from a take without undoing what came after.
+    #[schemars(length(min = 1, max = 100))]
+    pub paths: Option<Vec<String>>,
 });
 result!(#[schemars(rename = "VideoVersionRestoreOut")] VersionRestoreOut {
     pub video: Video,
     /// The version recorded of the code as it was before, which a restore of it undoes this.
     pub previous: i64,
+    /// What the restore changed, as a version says it: `src/Hook.tsx` (written back),
+    /// `+src/Old.tsx` (put back), `-src/New.tsx` (taken out).
+    pub changed: Vec<String>,
+    /// Files the version names but kept no copy of (over 2 MiB): left as they are.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
+    /// Files the version does not have, left in place: links and files over 2 MiB, which no
+    /// version could put back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub left: Vec<String>,
 });
 op!(VersionRestore, "video.version.restore", VersionRestoreIn => VersionRestoreOut,
-    OpMeta::mutation(Scope::Project, 12, "Put a video's code back as an earlier version had it (the code before is recorded first)")
+    OpMeta::mutation(Scope::Project, 12, "Put a video's code back as an earlier version had it, or only some of its files (the code before is recorded first)")
         .undo(Undo::Inverse).emits(&["video.changed"]).plugin(PLUGIN));
+
+/// Longest name a version takes.
+pub const MAX_VERSION_LABEL: usize = 80;
+
+payload!(#[schemars(rename = "VideoVersionLabelIn")] VersionLabelIn {
+    pub video_id: Id,
+    pub version: i64,
+    /// A name for the take ("narrated cut, warm grade"); none (or `null`) takes its name off.
+    pub label: Option<String>,
+});
+op!(VersionLabel, "video.version.label", VersionLabelIn => Version,
+    OpMeta::mutation(Scope::Project, 12, "Name a version of a video's code (a take to keep and come back to), or take its name off; named versions are listed however old")
+        .undo(Undo::Inverse).emits(&["video.changed"]).plugin(PLUGIN));
+
+payload!(#[schemars(rename = "VideoVersionDiffIn")] VersionDiffIn {
+    pub video_id: Id,
+    /// The version to compare from.
+    pub from: i64,
+    /// The version to compare to; default the code as it is now (recorded as a version first,
+    /// when it changed).
+    pub to: Option<i64>,
+    /// Only these files, or the files under these folders.
+    #[schemars(length(min = 1, max = 100))]
+    pub paths: Option<Vec<String>>,
+});
+result!(#[schemars(rename = "VideoFileDiff")] FileDiff {
+    pub path: String,
+    /// `changed`, `added` (only in `to`) or `removed` (only in `from`).
+    pub change: String,
+    /// A unified diff of its lines (3 of context), when both sides are text Relay kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+    /// Why there is no `diff`: `binary`, `not_kept` (over 2 MiB) or `cut` (the answer was full).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+});
+result!(#[schemars(rename = "VideoVersionDiffOut")] VersionDiffOut {
+    pub from: i64,
+    pub to: i64,
+    /// Every file that differs, by path.
+    pub files: Vec<FileDiff>,
+});
+op!(VersionDiff, "video.version.diff", VersionDiffIn => VersionDiffOut,
+    OpMeta::query(Scope::Project, 12, "What changed in a video's code between two versions (or since one): each file as a unified diff, to bring part of a take back by hand")
+        .emits(&["video.changed"]).plugin(PLUGIN));
 
 op!(KitStatusOp, "video.kit.status", Empty => KitStatus,
     OpMeta::query(Scope::Global, 12, "Whether this machine is set up to render videos (Node.js, Remotion and its browser)"));
@@ -1366,7 +1434,7 @@ op!(KitInstall, "video.kit.install", KitInstallIn => KitStatus,
 
 entries!(List, Get, Create, Update, Delete, Restore, Check, Still, Scan, Render, RenderBatch, RenderWait, RenderGet, RenderCancel,
     AssetAdd, AssetList, AssetInspect, AudioBeats, Timeline, Preview, CaptureAndroid, Voice, Voices, Sfx, Music, Transcribe, ElevenKeySet, ElevenKeyRemove, ElevenStatusOp,
-    VersionRestore, KitStatusOp, KitInstall);
+    VersionRestore, VersionLabel, VersionDiff, KitStatusOp, KitInstall);
 
 #[cfg(test)]
 mod tests {

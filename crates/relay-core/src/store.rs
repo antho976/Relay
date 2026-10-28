@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// The schema version this build knows. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: i64 = 35;
+pub const SCHEMA_VERSION: i64 = 36;
 
 /// Numbered migrations; index 0 brings a fresh DB to `user_version = 1`.
 pub const MIGRATIONS: &[&str] = &[
@@ -570,6 +570,16 @@ pub const MIGRATIONS: &[&str] = &[
     ALTER TABLE video_renders ADD COLUMN loudness REAL;
     ALTER TABLE video_renders ADD COLUMN peak REAL;
     ALTER TABLE video_renders ADD COLUMN audio TEXT;
+    "#,
+    // v36 - a video version's name (`video.version.label`): a take the person or an agent keeps,
+    // listed however old. And the render whose file a render's now is, when a later one of the
+    // same name wrote over it: filled in for those already rendered.
+    r#"
+    ALTER TABLE video_versions ADD COLUMN label TEXT;
+    ALTER TABLE video_renders ADD COLUMN replaced_by INTEGER;
+    UPDATE video_renders SET replaced_by = (SELECT MAX(r.id) FROM video_renders r
+        WHERE r.video_id = video_renders.video_id AND r.path = video_renders.path AND r.id > video_renders.id AND r.state = 'done')
+    WHERE state = 'done' AND path IS NOT NULL;
     "#,
 ];
 
