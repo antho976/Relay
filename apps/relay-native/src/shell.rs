@@ -1399,13 +1399,13 @@ impl Ui {
         let chord = |action: &str| self.chord(action).map(|chord| (chord, "keycap"));
         for (page, name, icon, action) in [
             ("agents", "Agents", "terminal", Some("agents")),
-            ("design", "Design", "design", None),
+            ("design", "Design", "pen-tool", None),
             ("code", "Files and Git", "code", Some("code")),
-            ("board", "Board", "columns", Some("board")),
+            ("board", "Board", "kanban", Some("board")),
             ("modules", "Modules", "modules", None),
-            ("notes", "Notes", "notes", None),
+            ("notes", "Notes", "notebook-pen", None),
             ("skills", "Skills", "skills", None),
-            ("plugins", "Plugins", "plugins", None),
+            ("plugins", "Plugins", "puzzle", None),
             ("settings", "Settings", "gear", Some("settings")),
             ("mailbox", "Mailbox", "send", None),
             ("guardrails", "Guardrails", "shield", None),
@@ -1563,7 +1563,7 @@ impl Ui {
             }
             for d in designs.as_ref().map(|v| rows(v, "designs")).unwrap_or_default() {
                 let Some(id) = d["id"].as_i64() else { continue };
-                p.add("Designs", "design", text(&d, "title"), None, true, Box::new(move |ui| {
+                p.add("Designs", "pen-tool", text(&d, "title"), None, true, Box::new(move |ui| {
                     ui.navigate("design");
                     crate::design::open(ui, id);
                 }));
@@ -1571,7 +1571,7 @@ impl Ui {
             for n in notes.as_ref().map(|v| rows(v, "notes")).unwrap_or_default() {
                 let title = n["title"].as_str().filter(|t| !t.trim().is_empty()).map(str::to_string)
                     .unwrap_or_else(|| text(&n, "body").lines().next().unwrap_or("Untitled note").to_string());
-                p.add("Notes", "notes", &title, None, true, Box::new(move |ui| crate::pages::open_note(ui, n.clone())));
+                p.add("Notes", "notebook-pen", &title, None, true, Box::new(move |ui| crate::pages::open_note(ui, n.clone())));
             }
             p.refilter();
         });

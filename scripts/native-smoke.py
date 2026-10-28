@@ -187,7 +187,7 @@ for line in sys.stdin:
                                      ("design", "1440,900", "design"),
                                      *((frame,"1440,900","start") for frame in START_FRAMES),
                                      # Threads' other sources, only when named in RELAY_SMOKE_PAGES.
-                                     *(((name,"1440,900",name) for name in ("avex-home","avex-workouts","avex-lifts","arbiter-home","arbiter-orders","arbiter-settings")) if PAGES_ONLY else ())):
+                                     *(((name,"1440,900",name) for name in ("avex-home","avex-workouts","avex-lifts","arbiter-home","arbiter-orders","arbiter-settings","threads","thread")) if PAGES_ONLY else ())):
             if PAGES_ONLY and viewport not in PAGES_ONLY:
                 continue
             output = OUT / f"{viewport}.png"

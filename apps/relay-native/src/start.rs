@@ -13,7 +13,7 @@
 //! landing it kicks back through the lanes and sends a wave across the field.
 //! The wordmark spells itself in, then the greeting, then the cards one after the other. After
 //! that the signal beats and sends a fainter wave every few seconds, until a card is picked; the
-//! screen then fades out. The field answers the pointer throughout: the dots under it light lime
+//! screen then fades out. The field answers the pointer throughout: the dots under it light coral
 //! and lean away from it, and a click on the field sends a ripple out from where it landed. With
 //! animations off (GTK's setting) it opens at its last frame and holds still, pointer or not.
 //! `RELAY_NATIVE_START_T=<0..1>` holds it at one point of the opening, for screenshots.
@@ -32,9 +32,9 @@ const PULSE_US: f64 = 2_600_000.0;
 /// The fade when a card is picked.
 const LEAVE_US: f64 = 260_000.0;
 
-const INK: (f64, f64, f64) = (0xED as f64 / 255.0, 0xEE as f64 / 255.0, 0xF0 as f64 / 255.0);
-const DIM: (f64, f64, f64) = (0x63 as f64 / 255.0, 0x66 as f64 / 255.0, 0x6B as f64 / 255.0);
-const SIGNAL: (f64, f64, f64) = (0xC6 as f64 / 255.0, 0xF2 as f64 / 255.0, 0x4E as f64 / 255.0);
+const INK: (f64, f64, f64) = (0xED as f64 / 255.0, 0xED as f64 / 255.0, 0xED as f64 / 255.0);
+const DIM: (f64, f64, f64) = (0x66 as f64 / 255.0, 0x66 as f64 / 255.0, 0x66 as f64 / 255.0);
+const SIGNAL: (f64, f64, f64) = (0xD9 as f64 / 255.0, 0x77 as f64 / 255.0, 0x57 as f64 / 255.0);
 
 /// Where each part's motion sits on the 0..1 timeline: (from, to).
 /// The lanes, back to front: each draws in from its start, overshoots a little and settles.
@@ -216,9 +216,9 @@ fn farthest((w, h): (f64, f64), p: (f64, f64)) -> f64 {
     [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].iter().map(|&(x, y)| (x - p.0).hypot(y - p.1)).fold(1.0, f64::max)
 }
 
-/// The field behind the lockup: a lime glow around the mark and a grid of dots that the
+/// The field behind the lockup: a coral glow around the mark and a grid of dots that the
 /// opening wave uncovers, dimming toward the edges. `signal` is where waves start, `glow` the
-/// mark's centre, both in the field's pixels. Near the pointer the dots light lime and lean
+/// mark's centre, both in the field's pixels. Near the pointer the dots light coral and lean
 /// away from it; a click's ripple runs out from where it landed.
 fn draw_field(cr: &gtk::cairo::Context, (w, h): (f64, f64), signal: (f64, f64), glow: (f64, f64), t: f64, pulses: &[Wave], pointer: Pointer) {
     let (red, green, blue) = SIGNAL;
@@ -280,7 +280,7 @@ fn draw_field(cr: &gtk::cairo::Context, (w, h): (f64, f64), signal: (f64, f64), 
                 heat = heat.max(wave.strength * (1.0 - wave.progress) * (-((dw - at) / 70.0).powi(2)).exp());
             }
             let heat = heat * (0.35 + 0.65 * fade);
-            // The pointer: lime under it, and each dot leaning away along the line from it.
+            // The pointer: coral under it, and each dot leaning away along the line from it.
             let (mut dx, mut dy) = (x, y);
             let mut near = 0.0;
             if pointer.strength > 0.01 {

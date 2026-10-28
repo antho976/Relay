@@ -280,11 +280,11 @@ pub fn confirm_inline_if(
     key.add_controller(keys);
 }
 
-fn track_navigation(stack: &gtk::Stack, key: &gtk::Button, name: &'static str) {
+fn track_navigation(stack: &gtk::Stack, key: &gtk::Button, pages: &'static [&'static str]) {
     let weak = key.downgrade();
     stack.connect_visible_child_name_notify(move |s| {
         if let Some(key) = weak.upgrade() {
-            if s.visible_child_name().as_deref() == Some(name) {
+            if s.visible_child_name().is_some_and(|page| pages.contains(&page.as_str())) {
                 key.add_css_class("selected");
             } else {
                 key.remove_css_class("selected");
@@ -521,6 +521,10 @@ struct TopBar {
     /// "/ Settings" after the wordmark, and the Dev/Money switch it stands in for there.
     crumb: gtk::Box,
     switcher: gtk::Box,
+    /// The bar's middle: the editor's project strip moves in here (`Ui::build`).
+    project_host: gtk::Box,
+    /// Folds the bar again for what it now holds (`fold_top_bar`).
+    refold: Rc<dyn Fn()>,
     settings_tools: gtk::Box,
     actions: gtk::Box,
     palette_key: gtk::Button,
@@ -568,7 +572,9 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     // edge: the block before it keeps the sidebar's width (`follow_sidebar`).
     let switcher = crate::money::switcher();
     top.append(&switcher);
+    // The project's strip (scope, Design, Files, Git) lands here once the editor exists.
     let top_space = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    top_space.add_css_class("topbar-project-host");
     top_space.set_hexpand(true);
     top.append(&top_space);
     let settings_tools = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -601,10 +607,7 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     palette_keycap.bind_property("visible", &compact_keycap, "visible").sync_create().build();
     palette_compact.append(&compact_keycap);
     let palette_fold = crate::fold::Fold::new(&palette_row, &palette_compact);
-    // It asks for its shortest words and grows into what the bar has left, so the keys after it
-    // get their full width first.
-    palette_fold.set_grows(true);
-    palette_fold.set_hexpand(true);
+    // Its glass and chord alone: the bar's middle is the project's strip, not the search key.
     palette_key.set_child(Some(&palette_fold));
     palette_key.set_valign(gtk::Align::Center);
     let layouts_key = icon_button("view-grid-symbolic", "Window presets");
@@ -626,14 +629,14 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     notification_count.set_can_target(false);
     bell.add_overlay(&notification_count);
     notifications_key.set_child(Some(&bell));
-    for (key, icon) in [(&skills_key, "skills"), (&plugins_key, "plugins"), (&layouts_key, "layout"), (&assistant_key, "assistant")] {
-        key.set_child(Some(&crate::icons::image(icon, 18)));
+    for (key, icon) in [(&skills_key, "skills"), (&plugins_key, "puzzle"), (&layouts_key, "layout-tiles"), (&assistant_key, "message-sparkle")] {
+        key.set_child(Some(&crate::icons::image(icon, 16)));
     }
     top_actions.append(&palette_key);
-    // Skills, Plugins, Window presets and the Assistant; on a narrow bar, one More key that lists
-    // whichever of them the page shows.
+    // Window presets and the Assistant; on a narrow bar, one More key that lists whichever of
+    // them the page shows. Skills and Plugins are the sidebar's pages, so they keep no key here.
     let tools = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-    for key in [&skills_key, &plugins_key, &layouts_key, &assistant_key] {
+    for key in [&layouts_key, &assistant_key] {
         tools.append(key);
     }
     let more_key = icon_button("more", "More");
@@ -702,18 +705,18 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     // sidebar's width and the keys a page shows move what fits without resizing it.
     let folds = [palette_fold.clone(), tools_fold.clone(), launch_fold.clone()];
     let refold = Rc::new({
-        let (top, tools) = (top.downgrade(), tools.downgrade());
+        let (top, tools, project) = (top.downgrade(), tools.downgrade(), top_space.downgrade());
         let pending = Rc::new(Cell::new(false));
         move || {
             if pending.replace(true) {
                 return;
             }
-            let (top, tools, folds, pending) = (top.clone(), tools.clone(), folds.clone(), pending.clone());
+            let (top, tools, project, folds, pending) = (top.clone(), tools.clone(), project.clone(), folds.clone(), pending.clone());
             // Never inside size-allocate: the next frame takes the new requests.
             glib::idle_add_local_once(move || {
                 pending.set(false);
-                if let (Some(top), Some(tools)) = (top.upgrade(), tools.upgrade()) {
-                    fold_top_bar(&top, &tools, &folds);
+                if let (Some(top), Some(tools), Some(project)) = (top.upgrade(), tools.upgrade(), project.upgrade()) {
+                    fold_top_bar(&top, &tools, &project, &folds);
                 }
             });
         }
@@ -750,6 +753,8 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     window.set_titlebar(Some(&titlebar));
     TopBar {
         handle,
+        project_host: top_space,
+        refold: refold.clone(),
         left: top_left,
         sidebar_key,
         crumb,
@@ -775,7 +780,7 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
 /// key's words, then New agent's caption. Each step is taken only when the bar, asking for every
 /// key's full width, would not fit; the folds ask for their compact width alone, so the window
 /// can always be made as narrow as the folded bar.
-fn fold_top_bar(top: &gtk::Box, tools: &gtk::Box, folds: &[crate::fold::Fold; 3]) {
+fn fold_top_bar(top: &gtk::Box, tools: &gtk::Box, project: &gtk::Box, folds: &[crate::fold::Fold; 3]) {
     let any_tool = std::iter::successors(tools.first_child(), |w| w.next_sibling()).any(|w| w.is_visible());
     let [search, tools_fold, launch] = folds;
     // Nothing to list under More: no key at all, rather than an empty menu.
@@ -786,18 +791,53 @@ fn fold_top_bar(top: &gtk::Box, tools: &gtk::Box, folds: &[crate::fold::Fold; 3]
     }
     let (_, natural, _, _) = top.measure(gtk::Orientation::Horizontal, -1);
     let shown = |f: &crate::fold::Fold| if f.is_visible() { f.measure(gtk::Orientation::Horizontal, -1).1 } else { 0 };
-    let fixed = natural - folds.iter().map(shown).sum::<i32>();
+    // The project's strip gives way first: its scope's name ellipsizes, so only its minimum is
+    // fixed.
+    let (project_min, project_natural, _, _) = project.measure(gtk::Orientation::Horizontal, -1);
+    // The captions of Design, Files and Git fold to their icons before any key leaves the bar:
+    // each caption and the 6px before it, whether it shows now or not.
+    let captions = panel_captions(project);
+    let caption_width = |l: &gtk::Label| l.layout().pixel_size().0 + 6;
+    let captions_shown: i32 = captions.iter().filter(|l| l.is_visible()).map(caption_width).sum();
+    let captions_full: i32 = captions.iter().map(caption_width).sum();
+    let fixed = natural - (project_natural - project_min) - captions_shown - folds.iter().map(shown).sum::<i32>();
     let need = |f: &crate::fold::Fold, full: bool| if f.is_visible() { f.width_of(full) } else { 0 };
-    let stages = [(true, true, true), (true, false, true), (false, false, true), (false, false, false)];
-    let (words, keys, caption) = stages
+    // The search key keeps its compact glass and chord: the bar's middle belongs to the project.
+    let stages = [(true, true, true), (false, true, true), (false, false, true), (false, false, false)];
+    let (named, keys, caption) = stages
         .into_iter()
-        .find(|&(words, keys, caption)| {
-            fixed + need(search, words) + need(tools_fold, keys) + need(launch, caption) <= width
+        .find(|&(named, keys, caption)| {
+            fixed + if named { captions_full } else { 0 } + need(search, false) + need(tools_fold, keys) + need(launch, caption) <= width
         })
         .unwrap_or((false, false, false));
-    search.set_prefer_full(words);
+    for label in &captions {
+        if label.is_visible() != named {
+            label.set_visible(named);
+        }
+    }
+    search.set_prefer_full(false);
     tools_fold.set_prefer_full(keys || !any_tool);
     launch.set_prefer_full(caption);
+}
+
+/// The captions of the project strip's panel keys (Design, Files, Git), which fold to icons.
+fn panel_captions(project: &gtk::Box) -> Vec<gtk::Label> {
+    fn walk(widget: &gtk::Widget, inside: bool, found: &mut Vec<gtk::Label>) {
+        let inside = inside || widget.has_css_class("panel-key");
+        if inside {
+            if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+                found.push(label.clone());
+            }
+        }
+        let mut child = widget.first_child();
+        while let Some(item) = child {
+            child = item.next_sibling();
+            walk(&item, inside, found);
+        }
+    }
+    let mut found = Vec::new();
+    walk(project.upcast_ref(), false, &mut found);
+    found
 }
 
 /// The More key's menu: the utility keys the bar has folded away, those the page shows.
@@ -814,9 +854,9 @@ fn more_menu(more: &gtk::Button, tools: &gtk::Box) {
         }
         let icon = match key.widget_name().as_str() {
             "project-skills-key" => "skills",
-            "project-plugins" => "plugins",
-            "window-presets" => "layout",
-            _ => "assistant",
+            "project-plugins" => "puzzle",
+            "window-presets" => "layout-tiles",
+            _ => "message-sparkle",
         };
         let row = button("", "registry-action");
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 9);
@@ -1368,6 +1408,37 @@ impl Ui {
             host.add_css_class("agents-host");
         }
         content.add_named(&editor.root, Some("agents"));
+        // One bar (DESIGN.md, Title bar): the project's strip rides in the title bar past the
+        // sidebar's edge, shown while the project's view is; Dev | Threads heads the sidebar.
+        let strip = editor.project_bar.clone();
+        editor.root.remove(&strip);
+        for class in ["code-bar", "workspace-strip", "page-layer"] {
+            strip.remove_css_class(class);
+        }
+        strip.add_css_class("topbar-project");
+        strip.set_hexpand(true);
+        strip.set_visible(false);
+        top.project_host.append(&strip);
+        editor.root.connect_map({
+            let strip = strip.clone();
+            move |_| strip.set_visible(true)
+        });
+        editor.root.connect_unmap({
+            let strip = strip.clone();
+            move |_| strip.set_visible(false)
+        });
+        strip.connect_visible_notify({
+            let refold = top.refold.clone();
+            move |_| refold()
+        });
+        if let Some(bar) = top.switcher.parent().and_downcast::<gtk::Box>() {
+            bar.remove(&top.switcher);
+        }
+        top.switcher.add_css_class("sidebar-switcher");
+        top.switcher.set_margin_start(0);
+        top.switcher.set_homogeneous(true);
+        top.switcher.set_halign(gtk::Align::Fill);
+        side.root.prepend(&top.switcher);
         let pages = pages(&content);
         crate::money::add_pages(&content);
         let sheet = launch_sheet(&body);
@@ -1507,19 +1578,22 @@ impl Ui {
         let ui = self;
         let nav = &side.nav;
         for (name, caption, icon) in [
-            ("board", "Board", "sidebar"),
-            ("skills", "Skills", "skills"),
-            ("plugins", "Plugins", "dashboard"),
-            ("notes", "Notes", "brief"),
+            ("board", "Board", "kanban"),
+            ("plugins", "Skills & plugins", "puzzle"),
+            ("notes", "Notes", "notebook-pen"),
         ] {
             let b = nav_button(caption, icon);
             b.set_widget_name(&format!("nav-{name}"));
-            match name {
-                "skills" => b.set_tooltip_text(Some("Skills: agent instructions, on or off per project")),
-                "plugins" => b.set_tooltip_text(Some("Plugins: skills, rules and MCP tools for a project")),
-                _ => {}
+            if name == "plugins" {
+                b.set_tooltip_text(Some("Skills and plugins: agent instructions and whole toolkits, on or off per project"));
             }
-            track_navigation(&ui.content, &b, name);
+            // Skills and Plugins are one entry: it stays lit on either page.
+            let pages: &'static [&'static str] = match name {
+                "board" => &["board"],
+                "plugins" => &["plugins", "skills"],
+                _ => &["notes"],
+            };
+            track_navigation(&ui.content, &b, pages);
             nav.append(&b);
             let weak = Rc::downgrade(ui);
             b.connect_clicked(move |_| {

@@ -233,6 +233,26 @@ pub fn image_with_stroke(name: &str, size: i32, stroke: f64) -> gtk::Image {
         }
         "save" => r##"<path d="M3 3h8l2 2v8H3z" /><path d="M5 3v4h5V3M5 13V9h6v4" />"##,
         "design" => r##"<path d="M5.5 2v12M10.5 2v12M2 5.5h12M2 10.5h12"/>"##,
+        // The redesign's marks (DESIGN.md, Icons), drawn on a 24-unit grid and scaled to 16: the
+        // group's 1.95 line lands at the set's 1.3.
+        "kanban" => {
+            r##"<g transform="scale(.6667)" stroke-width="1.95"><path d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z M8 7v7 M12 7v4 M16 7v9" /></g>"##
+        }
+        "puzzle" => {
+            r##"<g transform="scale(.6667)" stroke-width="1.95"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z" /></g>"##
+        }
+        "notebook-pen" => {
+            r##"<g transform="scale(.6667)" stroke-width="1.95"><path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4 M2 6h4 M2 10h4 M2 14h4 M2 18h4 M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z" /></g>"##
+        }
+        "pen-tool" => {
+            r##"<g transform="scale(.6667)" stroke-width="1.95"><path d="M15.707 21.293a1 1 0 0 1-1.414 0l-1.586-1.586a1 1 0 0 1 0-1.414l5.586-5.586a1 1 0 0 1 1.414 0l1.586 1.586a1 1 0 0 1 0 1.414z M18 13l-1.375-6.874a1 1 0 0 0-.746-.776L3.235 2.028a1 1 0 0 0-1.207 1.207L5.35 15.879a1 1 0 0 0 .776.746L13 18 M2.3 2.3l7.286 7.286" /><circle cx="11" cy="11" r="2" /></g>"##
+        }
+        "layout-tiles" => {
+            r##"<g transform="scale(.6667)" stroke-width="1.95"><rect x="3" y="3" width="7" height="9" rx="1" /><rect x="14" y="3" width="7" height="5" rx="1" /><rect x="14" y="12" width="7" height="9" rx="1" /><rect x="3" y="16" width="7" height="5" rx="1" /></g>"##
+        }
+        "message-sparkle" => {
+            r##"<g transform="scale(.6667)" stroke-width="1.95"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /><path d="M12 6.5l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9z" /></g>"##
+        }
         // The bundled plugins' marks (tools_market::plugin_mark): what each works on, drawn.
         "cube" => r##"<path d="M8 1.75l5.5 3v6.5L8 14.25l-5.5-3v-6.5z" /><path d="M2.5 4.75L8 7.75l5.5-3M8 7.75v6.5" />"##,
         "gauge" => r##"<path d="M2.25 11.5a5.75 5.75 0 1 1 11.5 0" /><path d="M8 11.5l2.75-3.25" /><path d="M4.25 11.5h.01M11.75 11.5h.01" />"##,

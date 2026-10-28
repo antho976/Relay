@@ -1,24 +1,25 @@
 ---
 name: Relay native
-description: Warm near-black chrome in Geist around the unchanged screen-black terminal wall.
+description: Neutral near-black chrome in Geist around the unchanged screen-black terminal wall.
 colors:
-  ground: "#131211"
-  pane-idle: "#161513"
-  pane: "#181715"
-  surface: "#1A1917"
-  raised: "#1C1B19"
-  selected: "#1F1D1B"
-  track: "#2A2826"
-  line-subtle: "#211F1D"
-  line: "#242220"
-  line-strong: "#262422"
-  line-emphasis: "#33302D"
-  line-focus: "#3A3733"
-  ink-dim: "#6E6A64"
-  ink-3: "#8C877F"
-  ink-2: "#B5B0A8"
-  ink: "#EDE9E2"
+  ground: "#070707"
+  pane-idle: "#0f0f0f"
+  pane: "#0f0f0f"
+  surface: "#141414"
+  raised: "#1c1c1c"
+  selected: "#1c1c1c"
+  track: "#2a2a2a"
+  line-subtle: "#1a1a1a"
+  line: "#1c1c1c"
+  line-strong: "#262626"
+  line-emphasis: "#333333"
+  line-focus: "#3a3a3a"
+  ink-dim: "#6e6e6e"
+  ink-3: "#878787"
+  ink-2: "#a3a3a3"
+  ink: "#ededed"
   screen: "#08090a"
+  signal: "#d97757"
   live: "#2ec469"
   held: "#e5382e"
   waiting: "#f0a828"
@@ -115,14 +116,23 @@ runtime behavior. Validation and remaining coverage belong in
 
 **The 2026-10 rework (Antho's mockup and token sheet).** Everything around the terminals is
 warm near-black chrome in Geist: rounded keys, fields and rows (10px), pills for small toggles,
-a search-field palette key with a Ctrl K keycap, the mark (three lanes staggered like a relay's start, the lime signal broken away ahead of the front one) and Sora wordmark, a segmented
+a search-field palette key with a Ctrl K keycap, the mark (three lanes staggered like a relay's start, the signal (lime then, coral since the 2026-10-28 redesign) broken away ahead of the front one) and Sora wordmark, a segmented
 view switch and a mono status bar. **The terminal panes are not part of it.** Their plates,
 identity strips, lamps, metadata, gutters, Fira faces and screen colour stay exactly as below;
 Antho asked for them to be left alone. The Dashboard page was removed at the same time.
 
+**The 2026-10-28 redesign (designs 12 and 13, "A2 · Workbench, reworked").** The chrome went
+from warm to neutral near-black (ground `#070707`, pages `#0f0f0f`), with one coral accent,
+`@signal`, for what asks for you (the notification count). There is one title bar: the brand
+over the sidebar, then the project's strip (scope key, Design, Files and Git as keys of their
+own) and the utility keys; Dev | Threads heads the sidebar. Every page but the project's view is
+a card inset from the window's edge, with no rule between it and the sidebar. The panes are
+untouched again: Antho chose to keep the plates, strips, gutters and Fira faces as they are.
+
 **Key Characteristics:**
 - Screen-black square plates with top session identity strips (unchanged).
-- Warm near-black chrome, off-white primary keys and state color only where it means state.
+- Neutral near-black chrome, off-white primary keys, coral only for what asks for you, and state
+  color only where it means state.
 - Geist for the interface, Geist Mono for figures, keycaps and code, Sora for the wordmark,
   Fira Mono (and Fira in the pane strips) for the terminals.
 - Native GTK controls, VTE terminals and GtkSourceView source editing.
@@ -140,6 +150,7 @@ Live and held colors retain their meanings in every mode.
   Primary keys use `wall` text and brighten to white on hover.
 
 ### Secondary
+- **Signal Coral** (`signal`): the one accent, for what asks for you: the notification count.
 - **Live Green** (`live`): running session lamp.
 - **Attention Red** (`held`): held session lamp and session name;
   also the notice underline.
@@ -181,24 +192,26 @@ Relay-2's syntax colours over Adwaita-dark), installed as `relay-matte`,
 ## Layout
 
 The sidebar requests 248px; dragged between 200 and 420px, it keeps that width
-across runs. The top bar has a 52px minimum height, the status
+across runs. The top bar has a 52px minimum height and no rule under it, the status
 line 30px and toolbars 38px; native theme metrics can increase these minimums.
 Task and module details occupy the content page. The command palette is centered
 inside the app and window presets open below the title bar. Only Notes and the
 emulator use separate app windows.
 
 The default window is 1440 by 900, and it can be made as narrow as the folded title bar
-(about 800px with the sidebar at its default width): as the bar narrows, its four utility keys
-fold into a More menu, then the search key keeps only its glass and Ctrl K, then New agent only
-its plus (`fold.rs`, `app::fold_top_bar`); nothing is clipped on the way. The bar keeps one
+(about 800px with the sidebar at its default width). The search key is always its glass and
+Ctrl K. As the bar narrows, the project's scope name ellipsizes, then Design, Files and Git fold
+to their icons, then the utility keys fold into a More menu, then New agent keeps only its plus
+(`fold.rs`, `app::fold_top_bar`); nothing is clipped on the way. The bar keeps one
 set of keys on every page of a space. Pages and the right-side launch sheet use
 20px insets; the sheet overlays the wall at 780px including its insets. It does not shrink
 the terminal wall. A scrim blocks background actions and Escape dismisses an idle sheet.
 
-Navigation lives in the sidebar (Board, Skills, Plugins, Notes), followed by projects grouped
+Dev | Threads heads the sidebar. Navigation follows it (Board, Skills & plugins, Notes), then projects grouped
 under workspaces. The footer is you: an initial in a round avatar, your first name and the gear
-that opens Settings. The top bar carries identity and utility controls,
-without a second row of page tabs. The bottom status bar exposes resource and
+that opens Settings. The top bar carries identity, the project's strip and utility controls,
+without a second row of page tabs. Every page but the project's view is a card (12px corners,
+a 1px `@edge` border) inset 8px from the window's right and bottom edges. The bottom status bar exposes resource and
 device tools.
 
 Grid mode uses square terminal plates with 2px gutters and one, two or three
@@ -307,12 +320,17 @@ Closed without launching, the sheet comes back as it was left, its tasks read ag
 project switch, a reconnect or opening it from a task starts a fresh one.
 
 ### Navigation
-Sidebar navigation (32px rows) selects with the selected fill and ink. Workspace groups take
+Sidebar navigation (32px rows) selects with the selected fill and ink. Skills and Plugins are
+one entry, lit on either page; each page switches to the other with Plugins | Skills tabs beside
+its "Skills & plugins" title. Under the active project's row, its open agents are listed: a lamp
+in their state's colour, the name in Geist Mono and their intent in faint ink under it; a click
+brings that agent's terminal up. Workspace groups take
 28px and project rows 30px, select with the selected fill, no rail; counts are plain Geist Mono.
 A workspace whose name is its folder's lower-case slug reads as words ("Northwind traders
-client work"). The project list fades at whichever edge has more. Above the wall, the project
-crumb is a glass pill; Agents | Design is the segmented view switch, its showing view lit, and
-Files and Git are glass toggle keys after it, lit while their panel is open. Focus-session tabs use
+client work"). The project list fades at whichever edge has more. In the title bar, the project's
+crumb is a quiet key (bold Geist, a hover wash), and Design, Files and Git are glass toggle keys
+after it, each lit while it shows. The agents are the view at rest; an Agents key with a back
+arrow appears only while a file is open in their place. Focus-session tabs use
 neutral wash for selection. The main window draws its own minimize, maximize
 and close keys in the top bar (`.window-control`: transparent, wash on hover,
 held red when hovering close). The Notes window styles its own titlebar
@@ -330,8 +348,8 @@ VS Code's status colours. Native widget fallback icons remain GTK-owned;
 matching path geometry alone is not proof of complete rendering fidelity.
 
 ### Records / Containers
-Records are flat square slabs with 12px padding. Board lanes use console fill
-and 8px padding. The notice is a card floating at the foot of the page (never over the sidebar,
+Records are flat square slabs with 12px padding. Board lanes are open columns on the page, no
+fill and no border, with 8px padding: the cards are the only boxes. The notice is a card floating at the foot of the page (never over the sidebar,
 never pushing anything down): opaque slab, a hairline, a soft shadow, a lamp in its state's
 colour (attention or live), plain words with the raw error in the tooltip, and Reconnect while
 the engine does not answer. A primary key not yet available is an outline in faint ink, not a

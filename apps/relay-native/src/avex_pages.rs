@@ -366,7 +366,7 @@ fn open_lift_action(ui: &Rc<Ui>, name: &str) -> Action {
     })
 }
 
-/// Bars over `values`, the last in Relay's lime and the rest in a quiet ink, with a caption under
+/// Bars over `values`, the last in Relay's coral signal and the rest in a quiet neutral ink, with a caption under
 /// the first and the last; hovering one says its label and value.
 fn bars(values: Vec<f64>, labels: Vec<String>, unit: &'static str, height: i32) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
@@ -382,7 +382,7 @@ fn bars(values: Vec<f64>, labels: Vec<String>, unit: &'static str, height: i32) 
         let bw = ((w - gap * (n - 1.0)) / n).max(2.0);
         for (i, v) in drawn.iter().enumerate() {
             let last = i + 1 == drawn.len();
-            let (r, g, b) = if last { (0.776, 0.949, 0.306) } else { (0.42, 0.40, 0.38) };
+            let (r, g, b) = if last { (0.851, 0.467, 0.341) } else { (0.34, 0.34, 0.34) };
             cr.set_source_rgb(r, g, b);
             let bh = if *v > 0.0 { (v / top * (h - 2.0)).max(2.0) } else { 1.0 };
             let x = i as f64 * (bw + gap);
@@ -476,7 +476,7 @@ fn progress_line(points: Vec<(String, f64, bool)>, unit: String, height: i32) ->
         let _ = cr.stroke();
         for (i, p) in drawn.iter().enumerate() {
             if p.2 {
-                cr.set_source_rgb(0.776, 0.949, 0.306);
+                cr.set_source_rgb(0.851, 0.467, 0.341);
                 cr.arc(x_of(i), y_of(p.1), 3.5, 0.0, 2.0 * std::f64::consts::PI);
                 let _ = cr.fill();
             } else if drawn.len() <= 40 {
@@ -1586,7 +1586,7 @@ fn lift_page(ui: &Rc<Ui>, page: &Page, d: &Value, age: Option<&Age>) {
         let rows = card_asking(body, "Estimated max over time", None, Some((ui, &question)));
         let b = block(&rows);
         b.append(&progress_line(points, unit.clone(), 150));
-        let l = label("Each workout's best set as an estimated one-rep max; records in lime.", "money-row-detail");
+        let l = label("Each workout's best set as an estimated one-rep max; records in coral.", "money-row-detail");
         l.set_wrap(true);
         l.set_tooltip_text(Some(EST_MAX));
         b.append(&l);

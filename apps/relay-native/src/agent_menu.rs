@@ -916,7 +916,7 @@ impl Ui {
             });
         });
         tools.append(&brief);
-        let designs = tool_key("design", "Designs", "This terminal's designs: what its agent drew, and canvases tied to it");
+        let designs = tool_key("pen-tool", "Designs", "This terminal's designs: what its agent drew, and canvases tied to it");
         designs.set_widget_name("agent-menu-designs");
         designs.set_hexpand(true);
         let weak = Rc::downgrade(self);
