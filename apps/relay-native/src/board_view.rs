@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use task_pages::{COLUMNS, COLUMN_TITLES, OPEN_COLUMNS, PRIORITIES, SIZES, TYPES};
 // The board's pure logic lives in relay-board, which builds without GTK so CI tests it.
-use relay_board::{drop_index, group_of, group_title, open_blockers, task_matches, zone, Filters, Nudge, Zone, URGENT_FIRST};
+use relay_board::{column_title, drop_index, group_of, group_title, open_blockers, task_matches, zone, Filters, Nudge, Zone, URGENT_FIRST};
 
 const GROUPS: [(&str, &str); 7] = [
     ("", "None"),
@@ -93,6 +93,13 @@ fn current() -> Option<Rc<Board>> {
     BOARD.with(|board| board.borrow().clone())
 }
 
+/// The board leaves `page` (no project to show): its keys go with it.
+pub fn unmount(page: &gtk::Box) {
+    if let Some(old) = BOARD.with(|board| board.borrow_mut().take()) {
+        page.remove_controller(&old.keys);
+    }
+}
+
 /// Every task by id, built once per render: a card's links are looked up, not scanned for.
 fn by_id(tasks: &[Value]) -> BTreeMap<i64, &Value> {
     tasks.iter().filter_map(|t| Some((t["id"].as_i64()?, t))).collect()
@@ -107,14 +114,6 @@ fn lane_meaning(column: &str) -> &'static str {
         "in_review" => "This item is in review",
         _ => "This has been completed",
     }
-}
-
-pub(super) fn caption(column: &str) -> &'static str {
-    COLUMN_TITLES
-        .iter()
-        .find(|(name, _)| *name == column)
-        .map(|(_, title)| *title)
-        .unwrap_or("Backlog")
 }
 
 /// `5m`, `3h`, `2d`: how long ago an RFC 3339 timestamp was, at a glance.
@@ -448,7 +447,7 @@ pub fn modules(ui: &Rc<Ui>, body: &gtk::Box, modules: &[Value]) {
     for (column, count) in &counts {
         let part = gtk::Box::new(gtk::Orientation::Horizontal, 5);
         part.append(&status_icon(column, 10));
-        part.append(&label(&format!("{} {count}", caption(column)), "stat-note"));
+        part.append(&label(&format!("{} {count}", column_title(column)), "stat-note"));
         if *count == 0 {
             part.add_css_class("stat-zero");
         }
@@ -539,7 +538,7 @@ fn module_card(ui: &Rc<Ui>, module: &Value, total: i64, count_of: &dyn Fn(&Value
         let part = gtk::Box::new(gtk::Orientation::Horizontal, 5);
         part.append(&status_icon(column, 11));
         part.append(&label(&count.to_string(), "module-card-meta"));
-        part.set_tooltip_text(Some(caption(column)));
+        part.set_tooltip_text(Some(column_title(column)));
         if *count == 0 {
             part.add_css_class("stat-zero");
         }
@@ -595,7 +594,7 @@ pub(super) fn flow_bar(counts: &[(&'static str, usize)], height: i32) -> gtk::Dr
     let counts = counts.to_vec();
     let total: usize = counts.iter().map(|(_, n)| n).sum();
     area.set_tooltip_text(Some(
-        &counts.iter().filter(|(_, n)| *n > 0).map(|(c, n)| format!("{} {n}", caption(c))).collect::<Vec<_>>().join(" · "),
+        &counts.iter().filter(|(_, n)| *n > 0).map(|(c, n)| format!("{} {n}", column_title(c))).collect::<Vec<_>>().join(" · "),
     ));
     area.set_draw_func(move |_, cr, w, h| {
         let (w, h) = (w as f64, h as f64);
@@ -853,7 +852,7 @@ fn copy_task(ui: &std::rc::Weak<Ui>, id: i64, clipboard: gdk::Clipboard) {
                 clipboard.set_text(&format!("{}\n\n{}\n\n#{id}", text(&task, "title"), text(&task, "body")));
                 ui.show_info(&format!("Copied #{id}"));
             }
-            Err(error) => ui.show_error(&error.to_string()),
+            Err(error) => ui.show_error(&crate::editor::readable(&error)),
         }
     });
 }
@@ -1047,7 +1046,7 @@ impl Board {
 
         let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         bar.add_css_class("board-quick");
-        let column = gtk::DropDown::from_strings(&OPEN_COLUMNS.iter().map(|c| caption(c)).collect::<Vec<_>>());
+        let column = gtk::DropDown::from_strings(&OPEN_COLUMNS.iter().map(|c| column_title(c)).collect::<Vec<_>>());
         column.set_tooltip_text(Some("Column"));
         let title = gtk::Entry::builder()
             .placeholder_text("Task title — Enter creates, Esc closes")
@@ -1932,11 +1931,9 @@ impl Board {
         if !query.is_empty() {
             self.read_bodies();
         }
-        let open = tasks.iter().filter(|t| text(t, "column") != "done").count();
-        let mut summary = format!("{open} open · {} done", tasks.len() - open);
-        if visible.len() != tasks.len() {
-            summary.push_str(&format!(" · {} shown", visible.len()));
-        }
+        // The stats line under the header counts the tasks; the header says only what a filter
+        // or search leaves out.
+        let summary = if visible.len() != tasks.len() { format!("{} of {} shown", visible.len(), tasks.len()) } else { String::new() };
         self.count.set_text(&summary);
         let active = filters.values().map(BTreeSet::len).sum::<usize>();
         if self.redraw("view", active.to_string()) {
@@ -2629,7 +2626,7 @@ impl Board {
             row.set_visible(filters.values().any(|v| !v.is_empty()) || !group.is_empty() || !hidden.is_empty());
         }
         for column in COLUMNS.iter().filter(|c| hidden.contains(**c)) {
-            self.strip.append(&self.removable(&format!("hidden: {}", caption(column)), move |board| {
+            self.strip.append(&self.removable(&format!("hidden: {}", column_title(column)), move |board| {
                 board.hidden.borrow_mut().remove(*column);
             }));
         }
@@ -2849,7 +2846,7 @@ impl Board {
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 7);
         head.add_css_class("lane-head-row");
         head.append(&status_icon(column, 14));
-        let title = label(caption(column), "lane-title");
+        let title = label(column_title(column), "lane-title");
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         head.append(&title);
         let count = shown.len();
@@ -2866,7 +2863,7 @@ impl Board {
         let more = gtk::MenuButton::new();
         more.set_child(Some(&crate::icons::image("more", 14)));
         more.add_css_class("lane-key");
-        more.set_tooltip_text(Some(&format!("{} options", caption(column))));
+        more.set_tooltip_text(Some(&format!("{} options", column_title(column))));
         let pop = gtk::Popover::new();
         pop.add_css_class("board-menu");
         pop.set_has_arrow(false);
@@ -2919,7 +2916,7 @@ impl Board {
         more.set_popover(Some(&pop));
         head.append(&more);
         if column != "done" {
-            let add = crate::app::icon_button("plus", &format!("New task in {}", caption(column)));
+            let add = crate::app::icon_button("plus", &format!("New task in {}", column_title(column)));
             add.add_css_class("lane-key");
             let weak = Rc::downgrade(self);
             add.connect_clicked(move |_| {
@@ -3789,7 +3786,7 @@ impl Board {
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 7);
         head.add_css_class("peek-head");
         head.append(&status_icon(&column, 13));
-        head.append(&label(&caption(&column).to_uppercase(), "lane-title"));
+        head.append(&label(&column_title(&column).to_uppercase(), "lane-title"));
         head.append(&label(&format!("#{id}"), "card-id"));
         head.append(&spacer());
         let open = crate::app::icon_button("external", "Open the full editor (Enter)");

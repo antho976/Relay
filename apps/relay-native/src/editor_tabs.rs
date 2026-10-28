@@ -147,7 +147,7 @@ impl Editor {
             match next.clone() {
                 Some(next) => e.open(ui, next),
                 None => {
-                    e.clear_document();
+                    e.close_document();
                     e.show_files();
                 }
             }
@@ -161,11 +161,13 @@ impl Editor {
         let tabs = self.tabs.borrow().clone();
         self.tab_scroll.set_visible(!tabs.is_empty() && !self.agents_visible() && !self.design_visible());
         let open = self.path.borrow().clone();
+        let mut lit = None;
         for tab in tabs {
             let key = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             key.add_css_class("editor-tab");
             if tab.path == open && !self.diff.get() {
                 key.add_css_class("open");
+                lit = Some(key.downgrade());
             }
             if !tab.kept {
                 key.add_css_class("preview");
@@ -207,6 +209,21 @@ impl Editor {
             });
             key.add_controller(click);
             self.tab_strip.append(&key);
+        }
+        // The open file's tab is scrolled into view once the strip has its new width.
+        if let Some(lit) = lit {
+            let (strip, scroll) = (self.tab_strip.downgrade(), self.tab_scroll.downgrade());
+            glib::idle_add_local_once(move || {
+                let (Some(key), Some(strip), Some(scroll)) = (lit.upgrade(), strip.upgrade(), scroll.upgrade()) else { return };
+                let Some(bounds) = key.compute_bounds(&strip) else { return };
+                let shown = scroll.hadjustment();
+                let (start, end) = (f64::from(bounds.x()), f64::from(bounds.x() + bounds.width()));
+                if start < shown.value() {
+                    shown.set_value(start);
+                } else if end > shown.value() + shown.page_size() {
+                    shown.set_value(end - shown.page_size());
+                }
+            });
         }
     }
 }

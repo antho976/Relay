@@ -67,6 +67,59 @@ thread_local! {
     static MAILBOX_LIMIT: std::cell::Cell<u32> = const { std::cell::Cell::new(MAILBOX_PAGE) };
 }
 
+/// A project page with no project chosen: what it would hold, and the way to a first project,
+/// instead of an empty pane.
+pub fn no_project(ui: &Rc<Ui>, name: &str) {
+    let (glyph, title, detail) = match name {
+        "board" => ("kanban", "No board yet", "Each project keeps its own board of tasks for you and its agents."),
+        "modules" => ("modules", "No modules yet", "Modules group a project's tasks into the larger pieces of work they belong to."),
+        "guardrails" => ("shield", "No guardrails yet", "Guardrails hold what a project's agents may run and change, and the exceptions they ask for."),
+        "mailbox" => ("send", "No mailbox yet", "Agents in a project write to each other here, and you can write to them."),
+        _ => return,
+    };
+    if ui.page_projects.borrow().get(name) == Some(&0) {
+        return;
+    }
+    let page = &ui.pages[name];
+    if name == "board" {
+        board_view::unmount(page);
+    }
+    clear(page);
+    page.remove_css_class("modules-page");
+    ui.page_projects.borrow_mut().insert(name.into(), 0);
+    let empty = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    empty.add_css_class("wall-empty");
+    empty.set_valign(gtk::Align::Center);
+    empty.set_halign(gtk::Align::Center);
+    empty.set_vexpand(true);
+    let icon = crate::icons::image_with_stroke(glyph, 28, 1.0);
+    icon.add_css_class("empty-glyph");
+    empty.append(&icon);
+    let heading = label(title, "title");
+    heading.set_halign(gtk::Align::Center);
+    empty.append(&heading);
+    let about = label(&format!("{detail} Add a project to start."), "empty-description");
+    about.set_wrap(true);
+    about.set_max_width_chars(52);
+    about.set_justify(gtk::Justification::Center);
+    empty.append(&about);
+    let add = button("", "primary");
+    add.set_widget_name("no-project-add");
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content.append(&crate::icons::image_with_stroke("plus", 14, 2.0));
+    content.append(&label("Add project", ""));
+    add.set_child(Some(&content));
+    add.set_halign(gtk::Align::Center);
+    let weak = Rc::downgrade(ui);
+    add.connect_clicked(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            ui.open_repository();
+        }
+    });
+    empty.append(&add);
+    page.append(&empty);
+}
+
 pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
     let (op, key) = match name {
         "board" => ("task.list", "tasks"),

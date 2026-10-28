@@ -1152,16 +1152,6 @@ pub fn install(ui: &Rc<Ui>) {
                 }
                 return;
             }
-            // The agents bar's Agent skills and Plugins sheets, over the agents page.
-            if matches!(page.as_str(), "project-skills" | "project-plugins") {
-                navigate.navigate("agents");
-                if page == "project-skills" {
-                    navigate.project_skills();
-                } else {
-                    navigate.project_plugins();
-                }
-                return;
-            }
             // Thumbnails read again on reopening a thread (scripts/perf/thumbs-reopen.py).
             if page == "thumbs" {
                 track("thumbs", measure_thumbs(navigate.clone()));

@@ -126,6 +126,8 @@ button.nav.selected { background: @wash; color: @ink; }
 .record { background: @slab; padding: 12px; }
 .launch { background: @console; border-left: 1px solid @edge; }
 entry, textview, textview text { background: @raised; color: @ink; caret-color: @ink; }
+/* A hint is not a value: every field's placeholder is drawn in faint ink, as search's always was. */
+text > placeholder { color: @faint; }
 entry { border: 1px solid @strong; border-radius: 10px; min-height: 30px; padding: 0 10px; background-image: none; box-shadow: none; }
 textview { padding: 8px; }
 entry:focus-within { border-color: @line_focus; box-shadow: 0 0 0 3px alpha(@ink, 0.06); }
@@ -212,6 +214,7 @@ button.quiet.selected { color: @ink; background: @wash; }
 .utility-panel .title { font-size: 13px; }
 .utility-panel .body { font-size: 12px; }
 .setup-body { padding: 24px 0; }
+.panel-footer { padding: 12px 18px; border-top: 1px solid @edge; }
 .setup-body > .title { font-size: 22px; }
 
 /* Breeze sets label colors directly in backdrop/disabled states. Keep light
@@ -276,12 +279,6 @@ button.small-key.text-button.quiet { border-color: @edge; }
 button.window-control { min-width: 44px; min-height: 52px; padding: 0; border: 0; border-radius: 0; background: transparent; color: @faint; }
 button.window-control:hover { background: @wash; color: @ink; }
 button.window-close:hover { background: @held; color: @ink; }
-.agent-skills-popover .panel-body { padding: 0; }
-.agent-skills-intro { font-size: 11px; color: @secondary; padding: 9px 12px; }
-.agent-skills-footer { min-height: 38px; padding: 0 12px; border-top: 1px solid @edge; }
-.agent-skill-row { min-height: 35px; padding: 7px 12px; border-bottom: 1px solid @edge; }
-.agent-skill-row .skill-title { font-size: 12px; }
-.agent-skill-row .skill-source { padding: 0; font-family: 'Geist'; font-size: 10px; color: @faint; background: transparent; }
 /* Inside the bell's key, clear of the window's top edge. */
 .notification-count { margin: 3px 1px 0 0; min-width: 10px; min-height: 15px; padding: 0 4px; border-radius: 999px; background: @signal; color: #0a0a0a; font-family: 'Geist Mono'; font-size: 9.5px; font-weight: 500; }
 /* The count reads the same whatever it holds; the bell's popover says which need you. */

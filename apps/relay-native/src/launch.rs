@@ -13,6 +13,8 @@ const AGENTS: usize = 6;
 
 /// The reasoning efforts the effort keys offer, in key order.
 const EFFORTS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+/// The efforts as the sheet names them, in sentence case like its other choices.
+const EFFORT_CAPTIONS: [&str; 6] = ["Minimal", "Low", "Medium", "High", "Extra high", "Max"];
 
 /// The task columns the filter keys offer, in key order; "" is every open column.
 const COLUMNS: [(&str, &str); 5] = [("", "All open"), ("backlog", "Backlog"), ("ready", "Ready"), ("active", "Active"), ("in_review", "In review")];
@@ -289,7 +291,7 @@ impl Profile {
         model.set_width_chars(1);
         form.append(&form_row("Model", &model));
 
-        let effort = segments(&EFFORTS, 3, "launch-segmented");
+        let effort = segments(&EFFORT_CAPTIONS, 3, "launch-segmented");
         effort.row.set_widget_name(&format!("launch-effort-{index}"));
         // Minimal is Codex's alone and max Claude's alone.
         effort.keys[0].set_visible(false);
@@ -789,7 +791,7 @@ impl Sheet {
             member.name.set_text(&name);
             let provider = provider_name(profile.provider.selected());
             member.facts.set_text(&if group {
-                format!("{provider} · {}", EFFORTS[profile.effort.selected() as usize])
+                format!("{provider} · {}", EFFORT_CAPTIONS[profile.effort.selected() as usize])
             } else {
                 format!("{provider} · {}", role_name(profile.role.selected()))
             });

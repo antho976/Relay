@@ -542,10 +542,6 @@ pub(super) fn folder_status(path: &str) -> Option<&'static str> {
     CHANGED.with(|changed| changed.borrow().get(path).map(|rank| FOLDER_CLASSES[*rank]))
 }
 
-const STATUS_CLASSES: [&str; 7] = [
-    "git-modified", "git-added", "git-untracked", "git-deleted", "git-renamed", "git-conflict", "git-ignored",
-];
-
 impl Editor {
     /// Record the latest status and re-tint the folders already drawn in the explorer.
     pub(super) fn note_changes(&self, files: &[Value]) {

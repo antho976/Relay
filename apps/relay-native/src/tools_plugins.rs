@@ -115,67 +115,6 @@ fn suggested(plugin: &Value, project: i64) -> bool {
             .is_some_and(|ids| ids.iter().any(|id| id.as_i64() == Some(project)))
 }
 
-/// A switch that enables `plugin` for `project`, restoring itself when the engine refuses.
-pub(crate) fn switch(
-    ui: &Rc<Ui>,
-    plugin: &Value,
-    project: i64,
-    feedback: Option<gtk::Label>,
-) -> gtk::Switch {
-    let toggle = gtk::Switch::new();
-    toggle.add_css_class("settings-switch");
-    toggle.set_valign(gtk::Align::Center);
-    toggle.set_active(enabled(plugin, project));
-    toggle.set_widget_name(&format!("plugin-{}-{project}", text(plugin, "id")));
-    toggle.set_tooltip_text(Some(&format!(
-        "Use {} in this project",
-        text(plugin, "name")
-    )));
-    let weak = Rc::downgrade(ui);
-    let id = text(plugin, "id").to_string();
-    toggle.connect_state_set(move |key, on| {
-        // A rejected write restores the switch while it is disabled.
-        if !key.is_sensitive() {
-            return glib::Propagation::Proceed;
-        }
-        if let Some(ui) = weak.upgrade() {
-            let key = key.clone();
-            let id = id.clone();
-            let feedback = feedback.clone();
-            key.set_sensitive(false);
-            glib::spawn_future_local(async move {
-                match ui
-                    .call(
-                        "plugin.enable",
-                        json!({"plugin_id":id,"project_id":project,"enabled":on}),
-                    )
-                    .await
-                {
-                    Ok(_) => {
-                        if let Some(feedback) = &feedback {
-                            feedback.set_visible(false);
-                        }
-                    }
-                    Err(error) => {
-                        key.set_active(!on);
-                        let message = explain_error("plugin.enable", &error);
-                        match &feedback {
-                            Some(feedback) => {
-                                feedback.set_text(&message);
-                                feedback.set_visible(true);
-                            }
-                            None => ui.show_error(&message),
-                        }
-                    }
-                }
-                key.set_sensitive(true);
-            });
-        }
-        glib::Propagation::Proceed
-    });
-    toggle
-}
-
 fn card(ui: &Rc<Ui>, market: &Rc<Market>, plugin: &Value) -> gtk::Widget {
     let scope = market.scope.get();
     let id = text(plugin, "id");

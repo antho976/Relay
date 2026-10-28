@@ -864,8 +864,9 @@ const STATUS_MAX_FILES: usize = 5000;
 const STATUS_MAX_BYTES: usize = 1024 * 1024;
 
 /// At most [`STATUS_MAX_FILES`] entries and [`STATUS_MAX_BYTES`] of paths, in path order. When
-/// some must go, conflicts are kept first and untracked files last: those are the changes a
-/// commit would otherwise trip over or make unseen.
+/// some must go, conflicts are kept first, then staged changes, and untracked files last: those
+/// are the changes a commit would otherwise trip over or make unseen. A staged file cut from the
+/// list would read as nothing staged, and a smart commit would then commit everything.
 fn cap_status(mut files: Vec<FileStatus>) -> Vec<FileStatus> {
     let size = |file: &FileStatus| file.path.len() + file.renamed_from.as_ref().map_or(0, String::len) + 64;
     if files.len() <= STATUS_MAX_FILES && files.iter().map(size).sum::<usize>() <= STATUS_MAX_BYTES {
@@ -874,10 +875,12 @@ fn cap_status(mut files: Vec<FileStatus>) -> Vec<FileStatus> {
     let rank = |file: &FileStatus| {
         if file.index == "U" || file.worktree == "U" || matches!((file.index.as_str(), file.worktree.as_str()), ("A", "A") | ("D", "D")) {
             0
-        } else if file.worktree == "?" {
-            2
-        } else {
+        } else if !matches!(file.index.trim(), "" | "?" | "!") {
             1
+        } else if file.worktree == "?" {
+            3
+        } else {
+            2
         }
     };
     // Stable: path order within each rank.
@@ -2551,6 +2554,10 @@ mod tests {
             assert!(kept.iter().any(|f| f.path == path), "{path} was dropped");
         }
         assert!(kept.windows(2).all(|pair| pair[0].path < pair[1].path), "kept in path order");
+        // A staged file outranks unstaged edits, so the list never reads as nothing staged.
+        let mut edits: Vec<FileStatus> = (0..STATUS_MAX_FILES + 10).map(|n| file(format!("a/edit{n:05}"), "", "M")).collect();
+        edits.push(file("zz/fix.rs".into(), "M", ""));
+        assert!(cap_status(edits).iter().any(|f| f.path == "zz/fix.rs"), "the staged file was dropped");
         // Long paths stop at the byte budget instead.
         let long: Vec<FileStatus> = (0..1000).map(|n| file(format!("{n:04}{}", "x".repeat(4000)), "", "M")).collect();
         let kept = cap_status(long);
