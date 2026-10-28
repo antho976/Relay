@@ -663,8 +663,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!((thumb.width, thumb.height), (THUMB_EDGE, THUMB_EDGE / 2));
-        assert_eq!(caption(&thumb, 3 * 1048576 / 2, "art/hero.png"), "1200 × 600 · 1.5 MiB · PNG");
-        assert_eq!(caption(&thumb, 10, "a.webp"), "1200 × 600 · 1 KiB · WEBP");
+        // Sizes read as every page writes them, in powers of 1000 (relay_client::figures::bytes).
+        assert_eq!(caption(&thumb, 1_500_000, "art/hero.png"), "1200 × 600 · 1.5 MB · PNG");
+        assert_eq!(caption(&thumb, 10, "a.webp"), "1200 × 600 · 10 B · WEBP");
         for n in 0..THUMB_CACHE + 5 {
             remember(n.to_string(), Thumb { texture: None, caption: String::new() });
         }
