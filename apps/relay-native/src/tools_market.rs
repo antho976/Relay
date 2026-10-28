@@ -1212,7 +1212,7 @@ pub(crate) fn facts(rows: &[(&str, String, bool)]) -> gtk::Grid {
 pub(crate) fn plugin_mark(plugin: &Value, large: bool) -> gtk::Widget {
     let glyph = match text(plugin, "id") {
         "blender" => "cube",
-        "design" => "design",
+        "design" => "pen-tool",
         "performance" => "gauge",
         "pictures" => "picture",
         "unreal-engine" => "gamepad",
