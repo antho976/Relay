@@ -31,6 +31,48 @@ pub fn is_provider_ref(value: &str) -> bool {
         && value.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
 }
 
+/// Where a provider keeps its own files: `CLAUDE_CONFIG_DIR` (which is the `.claude` folder
+/// itself) or `CODEX_HOME` when set and not empty, else `~/.claude` or `~/.codex`. An empty
+/// variable is unset, as the provider's own shell reads `VAR= relay …`: taken as `""`, every path
+/// under it was relative and matched nothing. `None` with no home either.
+pub fn config_dir(provider: Provider) -> Option<PathBuf> {
+    config_dir_in(provider, |variable| std::env::var_os(variable))
+}
+
+fn config_dir_in(provider: Provider, var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let (variable, fallback) = match provider {
+        Provider::Claude => ("CLAUDE_CONFIG_DIR", ".claude"),
+        Provider::Codex => ("CODEX_HOME", ".codex"),
+    };
+    let set = |name: &str| var(name).filter(|value| !value.is_empty()).map(PathBuf::from);
+    set(variable).or_else(|| set("HOME").or_else(account_home).map(|home| home.join(fallback)))
+}
+
+/// The person's home: `$HOME`, or the account's when it is unset or empty.
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").filter(|value| !value.is_empty()).map(PathBuf::from).or_else(account_home)
+}
+
+fn account_home() -> Option<PathBuf> {
+    directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf())
+}
+
+/// The folder Claude Code files a project under, in `<config>/projects`: the directory as its
+/// process sees it, symlinks resolved, with every character that is not an ASCII letter or digit
+/// made `-`. A path that does not resolve is taken as given.
+pub fn claude_project_key(dir: &Path) -> String {
+    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    dir.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
+}
+
+/// The file Claude's status-line hook writes its rate limits to (`hooks::claude_statusline_script`):
+/// `${CLAUDE_CONFIG_DIR:-$HOME}/.claude/relay-usage.json`. That reads the variable as a home, not
+/// as the `.claude` folder [`config_dir`] takes it for; it is read where the hook writes it.
+pub fn claude_usage_file() -> Option<PathBuf> {
+    let root = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|value| !value.is_empty()).map(PathBuf::from).or_else(home_dir)?;
+    Some(root.join(".claude").join("relay-usage.json"))
+}
+
 pub fn role_instructions_relative(session: &str) -> String {
     format!(".relay/sessions/{session}/role-instructions.md")
 }
@@ -508,6 +550,32 @@ fn first_line(raw: &str) -> String {
 mod tests {
     use super::*;
     use relay_bus::types::{Role, SessionState};
+
+    #[test]
+    fn a_config_dir_comes_from_its_variable_unless_it_is_empty() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| move |name: &str| {
+            pairs.iter().find(|(key, _)| *key == name).map(|(_, value)| std::ffi::OsString::from(value))
+        };
+        let both = env(&[("HOME", "/home/a"), ("CLAUDE_CONFIG_DIR", "/cfg/claude"), ("CODEX_HOME", "/cfg/codex")]);
+        assert_eq!(config_dir_in(Provider::Claude, both), Some(PathBuf::from("/cfg/claude")));
+        assert_eq!(config_dir_in(Provider::Codex, both), Some(PathBuf::from("/cfg/codex")));
+        let empty = env(&[("HOME", "/home/a"), ("CLAUDE_CONFIG_DIR", ""), ("CODEX_HOME", "")]);
+        assert_eq!(config_dir_in(Provider::Claude, empty), Some(PathBuf::from("/home/a/.claude")));
+        assert_eq!(config_dir_in(Provider::Codex, empty), Some(PathBuf::from("/home/a/.codex")));
+    }
+
+    #[test]
+    fn a_claude_project_key_is_the_resolved_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let real = root.path().join("real.checkout");
+        std::fs::create_dir(&real).unwrap();
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let key = claude_project_key(&link);
+        assert_eq!(key, claude_project_key(&real));
+        assert!(key.ends_with("-real-checkout") && !key.contains('/'), "{key}");
+        assert_eq!(claude_project_key(Path::new("/no/such dir")), "-no-such-dir");
+    }
 
     fn session(provider: Provider) -> Session {
         Session { id: 1, name: "calm-otter".into(), intent: None, project_id: 1, provider, role: Role::Builder,

@@ -22,18 +22,8 @@ pub fn read(provider: Provider) -> Option<Usage> {
     }
 }
 
-fn home(variable: &str, fallback_dir: &str) -> Option<PathBuf> {
-    std::env::var_os(variable).filter(|value| !value.is_empty()).map(PathBuf::from).or_else(|| {
-        std::env::var_os("HOME").map(PathBuf::from).map(|path| path.join(fallback_dir))
-    })
-}
-
 fn read_claude() -> Option<Usage> {
-    let root = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))?;
-    read_claude_file(&root.join(".claude").join("relay-usage.json"))
+    read_claude_file(&crate::providers::claude_usage_file()?)
 }
 
 fn read_claude_file(path: &Path) -> Option<Usage> {
@@ -53,7 +43,7 @@ fn read_claude_file(path: &Path) -> Option<Usage> {
 }
 
 fn read_codex() -> Option<Usage> {
-    let root = home("CODEX_HOME", ".codex")?.join("sessions");
+    let root = crate::providers::config_dir(Provider::Codex)?.join("sessions");
     let mut files = Vec::new();
     collect_jsonl(&root, 0, &mut files);
     files.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
