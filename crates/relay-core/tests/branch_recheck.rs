@@ -154,6 +154,33 @@ fn done_judges_every_commit_against_the_protected_paths() {
         json!({"session": f.name, "status": "partial", "blockers": ["a key slipped into history"]}));
 }
 
+/// A `blocked` done leaves the turn's done pending; a `completed` one after it, in the same turn,
+/// skipped the branch re-check and took a protected path to review.
+#[test]
+fn reporting_blocked_first_does_not_skip_the_recheck() {
+    let f = Fixture::new();
+    f.commit(&[("secret/key", Some("hunter2\n"))], "add a key");
+    ok_as(&f.engine, f.agent(), "session.done",
+        json!({"session": f.name, "status": "blocked", "blockers": ["waiting on a review"]}));
+    let refused = f.done().error.expect("the completed done after a blocked one is still re-checked");
+    assert_eq!(refused.code, "guardrail.protected_path");
+    assert_ne!(f.column(), "review");
+}
+
+/// The same sequence on a clean branch completes, as a plain completed done does.
+#[test]
+fn a_completed_done_after_a_blocked_one_on_clean_work_completes() {
+    let f = Fixture::new();
+    f.commit(&[("src/a.txt", Some("a\n"))], "work");
+    ok_as(&f.engine, f.agent(), "session.done",
+        json!({"session": f.name, "status": "blocked", "blockers": ["waiting on a review"]}));
+    assert!(f.done().ok, "a clean branch completes after a blocked report");
+    let plain = Fixture::new();
+    plain.commit(&[("src/a.txt", Some("a\n"))], "work");
+    assert!(plain.done().ok);
+    assert_eq!(plain.column(), f.column());
+}
+
 #[test]
 fn a_granted_path_passes_and_the_done_does_not_spend_the_grant() {
     let f = Fixture::new();

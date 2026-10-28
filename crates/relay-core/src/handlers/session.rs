@@ -1692,7 +1692,12 @@ pub fn register(e: &mut Engine) {
         let measure = ctx.read(|conn| {
             let row = sessions::by_name(conn, &p.session)?;
             let s = &row.session;
-            if s.role == Role::Reviewer || s.task_id.is_none() || done_pending(conn, s.id)?.is_some() {
+            // Skipped only for the done the write phase answers without acting on: one in a turn
+            // whose earlier done already moved the session on to another task. A `blocked` done
+            // on this same task leaves it pending too, and a `completed` one after it is judged
+            // like any other, or reporting blocked first waved the branch past the re-check.
+            let moved_on = done_pending(conn, s.id)?.is_some_and(|done| s.task_id.is_some_and(|task| task != done));
+            if s.role == Role::Reviewer || s.task_id.is_none() || moved_on {
                 return Ok(None);
             }
             let project = crate::handlers::workspace::get_project(conn, s.project_id)?;
