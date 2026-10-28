@@ -78,13 +78,21 @@ class Link(
     private var loop: Job? = null
     @Volatile private var wanted = wantedAtFirst
 
-    fun start() {
+    /**
+     * Bumped by [stop], under [lock]: a loop shows a state only while its generation is current,
+     * so one already past its last suspension when the link stops never writes over "Stopped".
+     */
+    private var generation = 0L
+    private val lock = Any()
+
+    fun start(): Unit = synchronized(lock) {
         wanted = true
         if (loop?.isActive == true) {
             wake.trySend(Unit)
             return
         }
-        loop = scope.launch { run() }
+        val mine = generation
+        loop = scope.launch { run(mine) }
     }
 
     /** Dial now instead of waiting out the backoff: the app came to the foreground, the network changed. */
@@ -94,13 +102,19 @@ class Link(
     }
 
     /** Disconnect and stay disconnected until [start]. A refused credential still says so. */
-    fun stop() {
+    fun stop(): Unit = synchronized(lock) {
         wanted = false
+        generation++
         loop?.cancel()
         loop = null
         _session.value?.close()
         _session.value = null
         if (_state.value !is LinkState.Revoked) _state.value = LinkState.Stopped
+    }
+
+    /** Show [state] from the loop of generation [gen], unless the link stopped since it began. */
+    private fun show(gen: Long, state: LinkState): Unit = synchronized(lock) {
+        if (gen == generation) _state.value = state
     }
 
     /** Drop the current session and dial again, e.g. after the profile's routes changed. */
@@ -112,22 +126,22 @@ class Link(
     /** The live session, or a `link.down` error the caller can queue around. */
     fun require(): BusSession = _session.value?.takeIf { it.isOpen } ?: throw BusException(com.quietsoftware.relay.core.wire.BusError.link("link.down", "Not connected to the PC"))
 
-    private suspend fun run() {
+    private suspend fun run(gen: Long) {
         var backoff = RECONNECT_MIN_MS
         var attempt = 0
         while (wanted) {
             val profile = profiles.current()
             if (profile == null) {
-                _state.value = LinkState.Unpaired
+                show(gen, LinkState.Unpaired)
                 wake.receive()
                 continue
             }
             attempt++
-            _state.value = LinkState.Connecting(attempt)
+            show(gen, LinkState.Connecting(attempt))
             val routes = orderRoutes(profile.routes, profile.policy, profile.lastRoute)
             val greeted = Handshake.greet(dialer, routes).getOrElse { e ->
                 val refusal = (e as? RefusalException)?.refusal
-                backoff = waitOut(refusal?.text ?: "The PC did not answer", backoff)
+                backoff = waitOut(gen, refusal?.text ?: "The PC did not answer", backoff)
                 continue
             }
             // Stopped before the session is handed over, this closes what it opened: the door may
@@ -138,11 +152,11 @@ class Link(
                     val refusal = (e as? RefusalException)?.refusal
                     // Neither a forgotten credential nor the wrong kind of door gets better by dialing again.
                     if (refusal is Refusal.Unpaired || refusal is Refusal.WrongDoor) {
-                        _state.value = LinkState.Revoked(refusal.text)
+                        show(gen, LinkState.Revoked(refusal.text))
                         wanted = false
                         return
                     }
-                    backoff = waitOut(refusal?.text ?: "The PC did not let this phone in", backoff)
+                    backoff = waitOut(gen, refusal?.text ?: "The PC did not let this phone in", backoff)
                     continue
                 }
                 check(welcome.ok)
@@ -150,7 +164,7 @@ class Link(
                 val session = BusSession(greeted.socket, greeted.route, greeting, profile.device, scope).also { opened = it }
                 profiles.connected(profile, greeted.route, greeting)
                 val starting = greeting.engine == "stopped" || greeting.engine == "starting"
-                if (starting) _state.value = LinkState.Starting(greeted.route, greeting)
+                if (starting) show(gen, LinkState.Starting(greeted.route, greeting))
                 // The first request waits for the engine when the door had to start it.
                 val ready = runCatching {
                     session.result("bus.ping", JsonObject(emptyMap()), timeoutMs = if (starting) ENGINE_START_TIMEOUT_MS else BusSession.DEFAULT_TIMEOUT_MS)
@@ -158,7 +172,7 @@ class Link(
                 ready.exceptionOrNull()?.let { if (it is CancellationException) throw it }
                 if (ready.isFailure) {
                     session.close()
-                    backoff = waitOut("The PC's engine did not answer", backoff)
+                    backoff = waitOut(gen, "The PC's engine did not answer", backoff)
                     continue
                 }
                 session
@@ -168,7 +182,7 @@ class Link(
             }
             // The session is usable before anyone is told the link is up.
             _session.value = session
-            _state.value = LinkState.Online(greeted.route, session.greeting)
+            show(gen, LinkState.Online(greeted.route, session.greeting))
             val began = now()
             runCatching { onSession(session) }
             keepAlive(session)
@@ -176,11 +190,11 @@ class Link(
             if (!wanted) break
             // A session that ends as soon as it starts is not a reason to dial in a tight loop.
             if (now() - began < STABLE_MS) {
-                backoff = waitOut("Connection lost, reconnecting", backoff)
+                backoff = waitOut(gen, "Connection lost, reconnecting", backoff)
             } else {
                 backoff = RECONNECT_MIN_MS
                 attempt = 0
-                _state.value = LinkState.Offline("Connection lost, reconnecting", now())
+                show(gen, LinkState.Offline("Connection lost, reconnecting", now()))
             }
         }
     }
@@ -204,10 +218,10 @@ class Link(
         }
     }
 
-    private suspend fun waitOut(reason: String, backoff: Long): Long {
+    private suspend fun waitOut(gen: Long, reason: String, backoff: Long): Long {
         // Stopped meanwhile: the state stop() set stands.
         currentCoroutineContext().ensureActive()
-        _state.value = LinkState.Offline(reason, now() + backoff)
+        show(gen, LinkState.Offline(reason, now() + backoff))
         select {
             wake.onReceive { }
             onTimeout(backoff) { }

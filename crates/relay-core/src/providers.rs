@@ -34,7 +34,7 @@ pub fn is_provider_ref(value: &str) -> bool {
 /// Where a provider keeps its own files: `CLAUDE_CONFIG_DIR` (which is the `.claude` folder
 /// itself) or `CODEX_HOME` when set and not empty, else `~/.claude` or `~/.codex`. An empty
 /// variable is unset, as the provider's own shell reads `VAR= relay …`: taken as `""`, every path
-/// under it was relative and matched nothing. `None` with no home either.
+/// under it was relative and matched nothing. `None` with no home either, and for a shell.
 pub fn config_dir(provider: Provider) -> Option<PathBuf> {
     config_dir_in(provider, |variable| std::env::var_os(variable))
 }
@@ -43,6 +43,8 @@ fn config_dir_in(provider: Provider, var: impl Fn(&str) -> Option<std::ffi::OsSt
     let (variable, fallback) = match provider {
         Provider::Claude => ("CLAUDE_CONFIG_DIR", ".claude"),
         Provider::Codex => ("CODEX_HOME", ".codex"),
+        // The person's own shell keeps no provider files.
+        Provider::Shell => return None,
     };
     let set = |name: &str| var(name).filter(|value| !value.is_empty()).map(PathBuf::from);
     set(variable).or_else(|| set("HOME").or_else(account_home).map(|home| home.join(fallback)))

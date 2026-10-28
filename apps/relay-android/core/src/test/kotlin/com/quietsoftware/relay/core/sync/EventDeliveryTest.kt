@@ -66,7 +66,6 @@ class EventDeliveryTest {
             "bus" to "the link's own ops; bus.lagged reaches every subscriber whatever it asked for",
             "app" to "the PC sends no app events; the backups page reads its list again after each backup",
             "dashboard" to "the PC sends no dashboard events; the syncer reads it again on the events that move it",
-            "ui" to "the phone switches the PC's page and shows none of its window state",
         )
         val wire = File("../../../crates/relay-remote/src/wire.rs")
         assertTrue("${wire.absolutePath} not found: run from apps/relay-android/core in the Relay tree", wire.isFile)
