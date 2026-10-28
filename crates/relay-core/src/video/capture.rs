@@ -11,7 +11,7 @@
 
 use super::{assets, inspect, media};
 use crate::device_lease::{Holder, Kind, Lease};
-use crate::engine::Engine;
+use crate::engine::{Engine, Unlocked};
 use relay_bus::error::BusError;
 use relay_bus::ops::video::{CaptureMark, CaptureStep, VideoAsset};
 use serde_json::json;
@@ -169,8 +169,9 @@ pub struct Plan<'a> {
     pub overwrite: bool,
 }
 
-/// Record, for the video at `dir`, as `holder`.
-pub fn capture(engine: &Engine, adb_path: &Path, dir: &Path, holder: Holder, plan: &Plan) -> Result<Captured, BusError> {
+/// Record, for the video at `dir`, as `holder`, in the prepare phase `ctx` of the request.
+pub fn capture(ctx: &Unlocked, adb_path: &Path, dir: &Path, holder: Holder, plan: &Plan) -> Result<Captured, BusError> {
+    let engine = ctx.engine();
     let commands: Vec<(Option<Vec<String>>, String)> = plan.steps.iter().map(command).collect::<Result<_, _>>()?;
     let opening = plan.launch.map(launch).transpose()?;
     let planned: f64 = plan.steps.iter().map(|s| s.wait.unwrap_or(0.0) + 0.3).sum::<f64>() + plan.tail + 2.0;
@@ -178,31 +179,51 @@ pub fn capture(engine: &Engine, adb_path: &Path, dir: &Path, holder: Holder, pla
         return Err(BusError::invalid("video.capture", format!("about {planned:.0} s of steps: a capture is at most {MOST_SECONDS} s (screenrecord's own limit)")));
     }
     let serial = device(adb_path, plan.device)?;
-    // The device for the whole capture, and back however it ends. A caller that holds it already
-    // (its own `device.claim`) keeps its lease as it was: taking one would renew and rename it,
-    // and giving it back would end the caller's claim.
+    // The device for the whole capture, and back however it ends.
     let action = "video.capture.android";
-    let own = engine.device_leases.holder_of(&serial).is_some_and(|held| held.holder == holder);
-    if !own {
-        let lease = Lease::new(&serial, holder.clone(), Kind::Claim, action, Some(Duration::from_secs_f64(planned + 120.0)));
-        let mut pruned = Vec::new();
-        engine.device_leases.acquire(lease.clone(), &mut pruned)?;
-        for gone in pruned {
+    let lasts = Duration::from_secs_f64(planned + 120.0);
+    // Given back only when this capture added it: a renewal of the caller's own Claim on the
+    // serial stays theirs. (The plan reads the lease others see, which may be the caller's on
+    // every device; acquiring then adds a Claim on the serial, which goes.)
+    let mut give_back = false;
+    if lease_plan(engine.device_leases.holder_of(&serial).as_ref(), &holder, lasts) {
+        // As `device_lease::acquire` takes one: leases of sessions that have ended go first,
+        // read through the request's own connection when it holds one.
+        let mut released = ctx.read(|conn| Ok(crate::handlers::device_lease::prune(engine, conn)))?;
+        let lease = Lease::new(&serial, holder.clone(), Kind::Claim, action, Some(lasts));
+        let taken = engine.device_leases.acquire(lease.clone(), &mut released);
+        for gone in released {
             engine.emit_system(crate::handlers::device_lease::RELEASED, gone.event());
         }
-        engine.emit_system(crate::handlers::device_lease::ACQUIRED, lease.event());
+        give_back = taken?;
+        if give_back {
+            engine.emit_system(crate::handlers::device_lease::ACQUIRED, lease.event());
+        }
     }
     let adb = Adb { path: adb_path.to_path_buf(), serial: serial.clone() };
     let result = record(engine, &adb, dir, plan, opening.as_deref(), &commands);
     if plan.demo {
         let _ = adb.shell(&demo_mode().1);
     }
-    if !own {
+    if give_back {
         for gone in engine.device_leases.release_where(|l| l.device == serial && l.holder == holder && l.kind == Kind::Claim && l.action == action) {
             engine.emit_system(crate::handlers::device_lease::RELEASED, gone.event());
         }
     }
     result
+}
+
+/// Whether a capture lasting `lasts` takes a Claim on the device, given the lease `held` there
+/// now. A Claim or a Run of the caller's own is theirs before and after: the capture rides on
+/// it (a Claim that would end sooner is renewed to last it, a renewal keeping the later end and
+/// naming the capture as what it is for). A Shell lease lapses moments after its command, so it
+/// never holds the device through a recording: the capture's Claim stacks on it.
+fn lease_plan(held: Option<&Lease>, holder: &Holder, lasts: Duration) -> bool {
+    match held.filter(|held| held.holder == *holder).map(|held| held.kind) {
+        Some(Kind::Run(_)) => false,
+        Some(Kind::Claim) => held.and_then(|held| held.view().expires_in_s).is_some_and(|s| (s as f64) < lasts.as_secs_f64()),
+        Some(Kind::Shell) | None => true,
+    }
 }
 
 fn record(engine: &Engine, adb: &Adb, dir: &Path, plan: &Plan, opening: Option<&[String]>, commands: &[(Option<Vec<String>>, String)]) -> Result<Captured, BusError> {
@@ -280,6 +301,34 @@ fn record(engine: &Engine, adb: &Adb, dir: &Path, plan: &Plan, opening: Option<&
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A capture holds the device through the recording: on a Claim or Run the caller has (a
+    /// Claim renewed when it would end first), else on a Claim of its own, which a lapsing Shell
+    /// lease of the caller's never stands in for.
+    #[test]
+    fn a_capture_holds_the_device_for_as_long_as_it_records() {
+        let me = Holder::Session { id: 4, name: "sharp-egret".into() };
+        let lease = |device: &str, kind, minutes: Option<u64>| Lease::new(device, me.clone(), kind, "testing", minutes.map(|m| Duration::from_secs(m * 60)));
+        let lasts = Duration::from_secs(300);
+        assert!(lease_plan(None, &me, lasts), "nothing held: a claim");
+        assert!(lease_plan(Some(&lease("R5", Kind::Shell, Some(15))), &me, lasts), "a shell lease lapses after its command");
+        assert!(!lease_plan(Some(&lease("R5", Kind::Claim, Some(30))), &me, lasts), "the caller's claim, long enough");
+        assert!(!lease_plan(Some(&lease("R5", Kind::Claim, None)), &me, lasts));
+        assert!(lease_plan(Some(&lease("R5", Kind::Claim, Some(1))), &me, lasts), "renewed to last it");
+        assert!(!lease_plan(Some(&lease("R5", Kind::Run(9), None)), &me, lasts));
+        // Someone else's lease: the claim is asked for, and refused as busy there.
+        assert!(lease_plan(Some(&lease("R5", Kind::Claim, Some(30))), &Holder::User, lasts));
+
+        // What acquiring says decides whether it is given back: a renewal of the caller's claim
+        // on the serial is theirs; a claim added beside their short one on every device goes.
+        let leases = crate::device_lease::Leases::default();
+        leases.acquire(lease("R5", Kind::Claim, Some(1)), &mut Vec::new()).unwrap();
+        assert!(!leases.acquire(lease("R5", Kind::Claim, Some(7)), &mut Vec::new()).unwrap(), "a renewal: kept after");
+        let whole = crate::device_lease::Leases::default();
+        whole.acquire(lease(crate::device_lease::ANY_DEVICE, Kind::Claim, Some(1)), &mut Vec::new()).unwrap();
+        assert!(lease_plan(whole.holder_of("R5").as_ref(), &me, lasts), "a short claim on every device");
+        assert!(whole.acquire(lease("R5", Kind::Claim, Some(7)), &mut Vec::new()).unwrap(), "added on the serial: given back");
+    }
 
     fn step(f: impl FnOnce(&mut CaptureStep)) -> CaptureStep {
         let mut s = CaptureStep { tap: None, swipe: None, ms: None, text: None, key: None, wait: None, launch: None };

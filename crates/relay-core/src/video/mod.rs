@@ -34,6 +34,12 @@ use std::sync::Mutex;
 /// The plugin the videos come with.
 pub const PLUGIN: &str = relay_bus::ops::video::PLUGIN;
 
+/// A video lock, taken whatever a panicking holder left: the state behind each is whole at every
+/// point a holder could stop.
+pub(crate) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// What the engine keeps for videos between requests: the worker, the kit's setup and the render
 /// queue. Its own locks; never the store's.
 #[derive(Default)]

@@ -250,8 +250,10 @@ fn current_render(renders: &[VideoRender]) -> Option<&VideoRender> {
     renders.iter().find(|r| r.state == RenderState::Rendering).or_else(|| renders.iter().rev().find(|r| !r.state.is_final()))
 }
 
+/// A render whose file plays: done, a format the player reads, and not replaced by a later render
+/// of the same name, which wrote over its file.
 fn playable(r: &VideoRender) -> bool {
-    r.state == RenderState::Done && r.path.is_some() && matches!(r.format.name(), "mp4" | "webm")
+    r.state == RenderState::Done && r.path.is_some() && r.replaced_by.is_none() && matches!(r.format.name(), "mp4" | "webm")
 }
 
 impl VideoBoard {
@@ -1549,11 +1551,11 @@ impl VideoBoard {
         if !cut.is_empty() {
             payload["composition"] = json!(cut);
         }
-        // A new preview supersedes those of the cut still waiting: Apply pressed three times
-        // renders once more, not three times over.
+        // A new preview supersedes the person's own of the cut still waiting: Apply pressed three
+        // times renders once more, not three times over. An agent's queued previews are its own.
         if payload["quality"] == "preview" {
             let waiting: Vec<i64> = self.detail.borrow().as_ref().map(|d| d.renders.iter()
-                .filter(|r| r.state == RenderState::Queued && r.quality == relay_bus::ops::video::Quality::Preview && r.composition == cut)
+                .filter(|r| r.state == RenderState::Queued && r.quality == relay_bus::ops::video::Quality::Preview && r.composition == cut && r.actor == "user")
                 .map(|r| r.id).collect()).unwrap_or_default();
             if let (Some(ui), false) = (self.ui.upgrade(), waiting.is_empty()) {
                 glib::spawn_future_local(async move {

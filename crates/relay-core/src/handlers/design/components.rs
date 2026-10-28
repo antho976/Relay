@@ -18,7 +18,7 @@
 use super::apply::Run;
 use super::node_of;
 use crate::engine::IntoBus;
-use relay_bus::design::{copy_id, Layout, Node, NOT_OVERRIDDEN};
+use relay_bus::design::{copy_id, Layout, Node, MAX_ID, NOT_OVERRIDDEN};
 use relay_bus::error::BusError;
 use relay_bus::ErrorKind;
 use rusqlite::params;
@@ -388,13 +388,15 @@ impl Run<'_> {
     }
 
     /// An id for the node an instance at `root` gains for the main's node `of`: by copy's rule
-    /// from the main's id to the root's, else with a number after it.
+    /// from the main's id to the root's, else with a number after it. Held to MAX_ID, a root's
+    /// id cut to fit (ids are ASCII).
     fn follower_id(&self, main: &str, root: &str, of: &str) -> Result<String, BusError> {
-        let base = copy_id(main, root, of).unwrap_or_else(|| format!("{root}:n"));
+        let base = copy_id(main, root, of).unwrap_or_else(|| format!("{}:n", &root[..root.len().min(MAX_ID - 2)]));
         let mut id = base.clone();
         let mut n = 2;
         while self.meta(&id)?.is_some() {
-            id = format!("{}-{n}", &base[..base.len().min(60)]);
+            let tail = format!("-{n}");
+            id = format!("{}{tail}", &base[..base.len().min(MAX_ID - tail.len())]);
             n += 1;
         }
         Ok(id)

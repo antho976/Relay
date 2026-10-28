@@ -194,3 +194,34 @@ fn delete_many_takes_what_it_picks_once() {
     let out = ok(&e, "design.apply", json!({"design_id": id, "ops": [{"op": "delete_many", "ids": ["card", "title"]}]}));
     assert_eq!(out["matched"], json!({"0": 1}), "title goes with card");
 }
+
+/// An edit of many nodes picks them from the design as stored: one an earlier edit of the same
+/// list deleted (or deleted with its frame) is left out, with a warning, not refused as missing.
+#[test]
+fn an_edit_of_many_nodes_leaves_out_what_the_list_deleted_first() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    let out = ok(&e, "design.apply", json!({"design_id": id, "ops": [
+        {"op": "delete_many", "where": {"inside": "card", "kind": ["rect"]}},
+        {"op": "delete", "id": "badge"},
+        {"op": "update_many", "where": {"kind": ["rect", "ellipse", "text"]}, "set": {"opacity": 0.5}},
+        {"op": "delete_many", "where": {"kind": ["rect", "ellipse"]}},
+    ]}));
+    assert_eq!(out["matched"], json!({"0": 1, "2": 3, "3": 2}), "picked before the list ran: {out}");
+    let warned: Vec<&str> = out["warnings"].as_array().unwrap().iter().map(|w| w.as_str().unwrap()).collect();
+    assert!(warned.contains(&"ops[2]: 2 nodes it found went with an earlier delete of this list, and were left out"), "{warned:?}");
+    assert!(warned.contains(&"ops[3]: 2 nodes it found went with an earlier delete of this list, and were left out"), "{warned:?}");
+    let got = ok(&e, "design.get", json!({"design_id": id}));
+    assert_eq!(node(&got, "title").unwrap()["opacity"], json!(0.5));
+    assert!(node(&got, "save").is_none() && node(&got, "badge").is_none());
+    // A frame deleted first takes its children with it: an edit of them after is left out too.
+    let out = ok(&e, "design.apply", json!({"design_id": id, "ops": [
+        {"op": "delete", "id": "card"},
+        {"op": "update_many", "where": {"text": "sign"}, "set": {"font_size": 20}},
+    ]}));
+    assert_eq!(out["ids"], json!(["card", "note"]));
+    assert_eq!(node(&ok(&e, "design.get", json!({"design_id": id})), "note").unwrap()["font_size"], json!(20.0));
+    // A node named outright that was never there is still refused.
+    let why = refused(call(&e, "design.apply", json!({"design_id": id, "ops": [{"op": "update_many", "ids": ["nope"], "set": {"opacity": 0.1}}]})));
+    assert!(why.message.starts_with(r#"ops[0] update "nope""#), "{}", why.message);
+}

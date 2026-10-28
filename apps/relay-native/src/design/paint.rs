@@ -10,7 +10,7 @@ use relay_bus::design::{
     parse_color, strip_controls, Blend, Gradient, GradientKind, ImageFit, Node, NodeKind, Pose, Shadow, StrokeCap, StrokeJoin, TextAlign, TextRun,
     MAX_COORD, MAX_SHADOW_BLUR,
 };
-use relay_client::design::layout::{Measure, Placed, STICKY_PAD};
+use relay_client::design::layout::{sticky_inner, Measure, Placed};
 use relay_client::design::motion::{self, Clocks};
 use relay_client::design::shapes::{self, ArcEnd, Seg};
 use relay_client::design::{bounds, text, Rect, Scene};
@@ -152,13 +152,19 @@ fn shown_text(n: &Node) -> (String, Vec<usize>) {
     (out, offsets)
 }
 
+/// `px` in Pango units, rounded, negative kept: every length a text sets (size, line height,
+/// rise, letter spacing) is converted so, the node's and its runs', on the canvas and in the
+/// editor alike.
+pub(super) fn text_units(px: f64) -> i32 {
+    (px * pango::SCALE as f64).round() as i32
+}
+
 /// What a run of a text sets of its own, as Pango attributes for its stretch (the caller sets
 /// where they start and end): colour (its alpha too), family, size with its line's height
 /// (`line_height` times it, so a larger run raises its line as CSS does), weight, italic,
 /// underline, strike, rise and letter spacing. A colour that does not parse (a `$name` not yet resolved) is left
 /// to the node's.
 fn run_attrs(n: &Node, run: &TextRun) -> Vec<pango::Attribute> {
-    let units = |px: f64| (px * pango::SCALE as f64).round() as i32;
     let mut out: Vec<pango::Attribute> = Vec::new();
     if let Some([r, g, b, a]) = run.color.as_deref().and_then(parse_color) {
         let wide = |c: u8| c as u16 * 257;
@@ -171,8 +177,8 @@ fn run_attrs(n: &Node, run: &TextRun) -> Vec<pango::Attribute> {
         out.push(pango::AttrString::new_family(&strip_controls(font, false)).into());
     }
     if let Some(px) = run.font_size {
-        out.push(pango::AttrSize::new_size_absolute(units(px)).into());
-        out.push(pango::AttrInt::new_line_height_absolute(units(n.line_height.unwrap_or(1.3) * px)).into());
+        out.push(pango::AttrSize::new_size_absolute(text_units(px)).into());
+        out.push(pango::AttrInt::new_line_height_absolute(text_units(n.line_height.unwrap_or(1.3) * px)).into());
     }
     if let Some(w) = run.font_weight {
         out.push(pango::AttrInt::new_weight(weight(w)).into());
@@ -187,10 +193,10 @@ fn run_attrs(n: &Node, run: &TextRun) -> Vec<pango::Attribute> {
         out.push(pango::AttrInt::new_strikethrough(strike).into());
     }
     if let Some(rise) = run.rise {
-        out.push(pango::AttrInt::new_rise(units(rise)).into());
+        out.push(pango::AttrInt::new_rise(text_units(rise)).into());
     }
     if let Some(ls) = run.letter_spacing {
-        out.push(pango::AttrInt::new_letter_spacing(units(ls)).into());
+        out.push(pango::AttrInt::new_letter_spacing(text_units(ls)).into());
     }
     out
 }
@@ -460,11 +466,11 @@ impl Painter {
             attrs.insert(pango::AttrInt::new_strikethrough(true));
         }
         if let Some(ls) = n.letter_spacing.filter(|v| *v != 0.0) {
-            attrs.insert(pango::AttrInt::new_letter_spacing((ls * pango::SCALE as f64) as i32));
+            attrs.insert(pango::AttrInt::new_letter_spacing(text_units(ls)));
         }
         // A multiple of the font size, as the model says, not of the font's own line.
         let line = n.line_height.unwrap_or(1.3) * font_size(n);
-        attrs.insert(pango::AttrInt::new_line_height_absolute((line * pango::SCALE as f64).round() as i32));
+        attrs.insert(pango::AttrInt::new_line_height_absolute(text_units(line)));
         // Each run's own look over its stretch, after the node's, so it wins there.
         for (start, end, run) in text::run_bytes(n, &offsets) {
             for mut attr in run_attrs(n, run) {
@@ -865,7 +871,7 @@ impl Painter {
                 self.border(snap, n, &r);
                 if n.kind == NodeKind::Sticky {
                     if !editing {
-                        let inner = Rect::new(r.x + STICKY_PAD, r.y + STICKY_PAD, (r.w - 2.0 * STICKY_PAD).max(1.0), r.h);
+                        let inner = sticky_inner(&r);
                         self.text(snap, scene, n, &inner, placed.wrap_width(n, &r));
                     }
                 } else if !editing {
@@ -2055,6 +2061,8 @@ mod tests {
         assert_eq!(text_height(i32::MAX, 2_000_000, 1_300.0), MAX_COORD);
         assert_eq!(pango_units(1e9), (PANGO_MAX_PX * pango::SCALE as f64) as i32);
         assert_eq!(pango_units(100.0), 100 * pango::SCALE);
+        // A text's lengths round, a node's letter spacing as its runs' (0.7 px is 717, not 716).
+        assert_eq!((text_units(0.7), text_units(-0.6)), (717, -614));
     }
 
     #[test]

@@ -10,6 +10,7 @@
 //! first request that needs it, dies with Relay (parent-death signal, as `local_models`), and
 //! stops itself after ten idle minutes, the browser's memory with it.
 
+use super::lock;
 use crate::engine::Engine;
 use relay_bus::error::BusError;
 use serde_json::{json, Map, Value};
@@ -48,10 +49,6 @@ pub struct Worker {
     last_used: Mutex<Instant>,
     gone: AtomicBool,
     tail: Mutex<VecDeque<String>>,
-}
-
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// The refusal a worker's `{code, message}` stands for.

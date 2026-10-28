@@ -184,7 +184,7 @@ def main():
                         "content": medians(text, "content", {"ms": 2}),
                         "draw": medians(text, "draw", {"ms": 2}),
                         "gallery_render": medians(text, "gallery render", {"ms": 3}),
-                        "thumb": medians(text, "thumb", {"ms": 3}),
+                        "thumb": medians(text, "thumb", {"ms": 3, "fetch": 6, "decode": 8, "layout": 10, "paint": 12, "texture": 14}),
                         "whole_rereads": text.count("reading it whole"),
                     }
                     results.append(row)

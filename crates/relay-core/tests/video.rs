@@ -284,6 +284,29 @@ fn a_render_is_cancelled_queued_or_running() {
     assert_eq!(ok(&e, "video.render.get", json!({"render_id": queued}))["started_at"], Value::Null);
 }
 
+/// A render waiting in the queue draws the code as it is when it starts, and its row names that
+/// version, not the one it was queued with.
+#[test]
+fn a_queued_render_is_of_the_code_it_starts_with() {
+    let (e, _root) = project();
+    with_worker(&e);
+    let (id, dir) = create(&e);
+    fs::write(dir.join("src/SLOW"), "").unwrap();
+    let running = ok(&e, "video.render", json!({"video_id": id}))["id"].as_i64().unwrap();
+    let queued = ok(&e, "video.render", json!({"video_id": id, "format": "webm"}));
+    let at_queue = queued["version"].as_i64().unwrap();
+    wait_until("the first to start", || ok(&e, "video.render.get", json!({"render_id": running}))["state"] == "rendering");
+    fs::remove_file(dir.join("src/SLOW")).unwrap();
+    fs::write(dir.join("src/Later.tsx"), "export const Later = 1;\n").unwrap();
+    ok(&e, "video.render.cancel", json!({"render_id": running}));
+    let queued = queued["id"].as_i64().unwrap();
+    wait_until("the second to finish", || ok(&e, "video.render.get", json!({"render_id": queued}))["state"] == "done");
+    let drawn = ok(&e, "video.render.get", json!({"render_id": queued}))["version"].as_i64().unwrap();
+    assert!(drawn > at_queue, "queued at v{at_queue}, drawn at v{drawn}");
+    let video = ok(&e, "video.get", json!({"video_id": id}));
+    assert_eq!(video["video"]["version"].as_i64(), Some(drawn), "the version it drew is the newest: {video}");
+}
+
 /// A stop that lands while the worker still bundles (it does not know the render yet, and
 /// answers that nothing was stopped) is kept, and the render ends stopped, not done.
 #[test]
@@ -583,9 +606,14 @@ fn some_files_of_a_version_can_be_put_back_and_the_changes_read_first() {
     assert_eq!(fs::read_to_string(dir.join("src/Open.tsx")).unwrap(), "export const Open = 'first';\n");
     assert!(!dir.join("src/End.tsx").exists());
     assert_eq!(fs::read_to_string(dir.join("src/Video.tsx")).unwrap(), "export const Video = () => null;\n", "not named: as it was");
+    // Work after the restore, outside the paths it named, is kept by its undo.
+    fs::write(dir.join("src/Video.tsx"), "export const Video = () => 'later';\n").unwrap();
+    fs::write(dir.join("src/New.tsx"), "export const New = 1;\n").unwrap();
     undo_last(&e, "video.version.restore");
     assert_eq!(fs::read_to_string(dir.join("src/Open.tsx")).unwrap(), "export const Open = 'second';\n");
     assert!(dir.join("src/End.tsx").exists());
+    assert_eq!(fs::read_to_string(dir.join("src/Video.tsx")).unwrap(), "export const Video = () => 'later';\n", "not named: kept");
+    assert!(dir.join("src/New.tsx").exists(), "a file made since is kept");
 
     for paths in [json!(["src/Nope.tsx"]), json!(["../escape"]), json!(["out/main-1.mp4"])] {
         assert_eq!(code(call(&e, "video.version.restore", json!({"video_id": id, "version": 2, "paths": paths}))), "video.version", "{paths}");
@@ -821,6 +849,14 @@ fn an_android_capture_holds_the_device_records_the_steps_and_adds_an_even_clip()
     ok(&e, "video.capture.android", json!({"video_id": id, "steps": [{"wait": 0.1}], "tail": 0.1, "name": "again", "demo": false}));
     let held = ok(&e, "device.leases", json!({}));
     assert!(held.to_string().contains("testing the release"), "the claim was kept as it was: {held}");
+    ok(&e, "device.release", json!({"device": "emulator-5554"}));
+    // A lease left by a session that has ended is pruned first, not a refusal naming it.
+    let (name, actor) = agent(&e);
+    ok_as(&e, actor, "device.claim", json!({"device": "emulator-5554", "action": "ended-session's install", "minutes": 30}));
+    e.store.lock().execute("UPDATE sessions SET state = 'closed' WHERE name = ?1", [&name]).unwrap();
+    std::env::set_var("FAKE_ADB_LOG", root.path().join("adb3.log"));
+    ok(&e, "video.capture.android", json!({"video_id": id, "steps": [{"wait": 0.1}], "tail": 0.1, "name": "third", "demo": false}));
+    assert!(!ok(&e, "device.leases", json!({})).to_string().contains("ended-session"), "pruned");
     let inspected = ok(&e, "video.asset.inspect", json!({"video_id": id, "asset": "assets/home.mp4"}));
     assert_eq!((inspected["fps"].as_f64(), inspected["frames"].as_u64(), inspected.get("variable_rate")), (Some(30.0), Some(60), None), "{inspected}");
 }
