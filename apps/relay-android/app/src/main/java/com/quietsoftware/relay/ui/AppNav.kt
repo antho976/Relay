@@ -40,6 +40,7 @@ import com.quietsoftware.relay.ui.pages.ShareScreen
 import com.quietsoftware.relay.ui.pages.SkillScreen
 import com.quietsoftware.relay.ui.pages.SkillsScreen
 import com.quietsoftware.relay.ui.start.StartScreen
+import com.quietsoftware.relay.ui.home.HomeScreen
 import com.quietsoftware.relay.ui.tasks.BoardScreen
 import com.quietsoftware.relay.ui.tasks.ModulesScreen
 import com.quietsoftware.relay.ui.tasks.TaskEditScreen
@@ -80,6 +81,7 @@ private fun Destinations(nav: Nav, startRoute: String) {
         exitTransition = { fadeOut() },
     ) {
         composable("start") { StartScreen(nav) }
+        composable("home") { HomeScreen(nav) }
         composable("agents") { AgentsScreen(nav) }
         composable("chat/{name}") { ChatScreen(it.str("name").orEmpty(), nav) }
         composable("terminal/{name}") { TerminalScreen(it.str("name").orEmpty(), nav) }

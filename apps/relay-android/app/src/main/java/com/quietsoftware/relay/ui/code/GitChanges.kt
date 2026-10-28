@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -97,6 +98,70 @@ fun ColumnScope.ChangesTab(nav: Nav, projectId: Long, wt: String?, status: Live,
             item { LiveWait(status, page = true) }
         } else {
             if (!status.fresh) item { StaleNote(status.at) }
+            if (files.isNotEmpty()) item {
+                val added = files.sumOf { (indexCounts[it.path]?.added ?: 0) + (workCounts[it.path]?.added ?: 0) }
+                val removed = files.sumOf { (indexCounts[it.path]?.removed ?: 0) + (workCounts[it.path]?.removed ?: 0) }
+                Summary(added, removed, files.size, branch)
+            }
+            if (files.isEmpty()) {
+                item { Empty("check", "No changes", "Nothing changed in this worktree.") }
+            }
+        }
+        if (staged.isNotEmpty()) {
+            item {
+                SectionLabel("In the next commit · ${staged.size}", Modifier.padding(horizontal = 14.dp)) {
+                    Key("Leave all out", { stage(staged.map { it.path }, false) }, kind = KeyKind.Quiet, compact = true, enabled = online)
+                }
+            }
+            item(key = "staged") {
+                FileCard {
+                    for (file in staged) {
+                        val key = "s:" + file.path
+                        ChangeRow(
+                            nav = nav,
+                            projectId = projectId,
+                            wt = wt,
+                            refresh = refresh,
+                            file = file,
+                            staged = true,
+                            count = indexCounts[file.path],
+                            expanded = openKey == key,
+                            online = online,
+                            onToggle = { openKey = if (openKey == key) null else key },
+                            onStage = { stage(listOf(file.path), false) },
+                        )
+                    }
+                }
+            }
+        }
+        if (unstaged.isNotEmpty()) {
+            item {
+                SectionLabel((if (staged.isEmpty()) "Changed files" else "Not in the commit") + " · ${unstaged.size}", Modifier.padding(horizontal = 14.dp)) {
+                    Key("Include all", { stage(unstaged.map { it.path }, true) }, kind = KeyKind.Quiet, compact = true, enabled = online)
+                }
+            }
+            item(key = "unstaged") {
+                FileCard {
+                    for (file in unstaged) {
+                        val key = "w:" + file.path
+                        ChangeRow(
+                            nav = nav,
+                            projectId = projectId,
+                            wt = wt,
+                            refresh = refresh,
+                            file = file,
+                            staged = false,
+                            count = workCounts[file.path],
+                            expanded = openKey == key,
+                            online = online,
+                            onToggle = { openKey = if (openKey == key) null else key },
+                            onStage = { stage(listOf(file.path), true) },
+                        )
+                    }
+                }
+            }
+        }
+        if (st != null) {
             item {
                 PublishCard(
                     st = st,
@@ -109,55 +174,6 @@ fun ColumnScope.ChangesTab(nav: Nav, projectId: Long, wt: String?, status: Live,
                     onPush = { sheet = ChangesSheet.Push },
                     onOpenPr = { sheet = ChangesSheet.OpenPr },
                     onViewPr = { url -> runCatching { uri.openUri(url) } },
-                )
-            }
-            if (files.isEmpty()) {
-                item { Empty("check", "No changes", "Nothing changed in this worktree.") }
-            }
-        }
-        if (staged.isNotEmpty()) {
-            item {
-                SectionLabel("Staged · ${staged.size}") {
-                    Key("Unstage all", { stage(staged.map { it.path }, false) }, kind = KeyKind.Quiet, compact = true, enabled = online)
-                }
-            }
-            items(staged, key = { "s:" + it.path }) { file ->
-                val key = "s:" + file.path
-                ChangeRow(
-                    nav = nav,
-                    projectId = projectId,
-                    wt = wt,
-                    refresh = refresh,
-                    file = file,
-                    staged = true,
-                    count = indexCounts[file.path],
-                    expanded = openKey == key,
-                    online = online,
-                    onToggle = { openKey = if (openKey == key) null else key },
-                    onStage = { stage(listOf(file.path), false) },
-                )
-            }
-        }
-        if (unstaged.isNotEmpty()) {
-            item {
-                SectionLabel("Changes · ${unstaged.size}") {
-                    Key("Stage all", { stage(unstaged.map { it.path }, true) }, kind = KeyKind.Quiet, compact = true, enabled = online)
-                }
-            }
-            items(unstaged, key = { "w:" + it.path }) { file ->
-                val key = "w:" + file.path
-                ChangeRow(
-                    nav = nav,
-                    projectId = projectId,
-                    wt = wt,
-                    refresh = refresh,
-                    file = file,
-                    staged = false,
-                    count = workCounts[file.path],
-                    expanded = openKey == key,
-                    online = online,
-                    onToggle = { openKey = if (openKey == key) null else key },
-                    onStage = { stage(listOf(file.path), true) },
                 )
             }
         }
@@ -220,6 +236,28 @@ private fun pushBody(st: GitStatus, branch: String): String {
     return "Push $commits on $branch to $upstream.$warning"
 }
 
+/** The change at a glance (design 14, "Summary"): lines added and taken out, across how many files, on which branch. */
+@Composable
+private fun Summary(added: Int, removed: Int, files: Int, branch: String) {
+    val c = Relay.colors
+    Slab(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), padding = PaddingValues(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            T("+$added", style = Relay.type.code.copy(fontSize = 17.sp), color = Palette.GIT_ADDED, weight = FontWeight.Medium)
+            T("−$removed", style = Relay.type.code.copy(fontSize = 17.sp), color = Palette.GIT_DELETED, weight = FontWeight.Medium)
+        }
+        T(
+            (if (files == 1) "1 file changed" else "$files files changed") + branch.takeIf { it.isNotEmpty() && it != "HEAD" }?.let { " on $it" }.orEmpty(),
+            Modifier.padding(top = 4.dp), Relay.type.ui, c.ink2,
+        )
+    }
+}
+
+/** A group of files on one card; a file opens to its diff in place. */
+@Composable
+private fun FileCard(content: @Composable ColumnScope.() -> Unit) {
+    Slab(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp), padding = PaddingValues(vertical = 4.dp), content = content)
+}
+
 @Composable
 private fun PublishCard(
     st: GitStatus,
@@ -262,11 +300,12 @@ private fun PublishCard(
             upstream == null -> "No PR · push the branch first"
             else -> "No PR for this branch"
         }
-    Slab(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), padding = PaddingValues(vertical = 4.dp)) {
+    SectionLabel("Save and share", Modifier.padding(horizontal = 14.dp))
+    Slab(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp), padding = PaddingValues(vertical = 4.dp)) {
         PublishRow(
             glyph = "commit",
             label = "Commit…",
-            detail = if (fileCount == 0) "Nothing to commit" else "$stagedCount staged of $fileCount · message from the diff",
+            detail = if (fileCount == 0) "Nothing to commit" else "$stagedCount of $fileCount files included · message written for you",
             enabled = fileCount > 0 && online,
             onClick = onCommit,
         )
@@ -339,7 +378,7 @@ private fun ChangeRow(
                 T("new", style = Relay.type.caption, color = c.ink3)
             }
             if (letter.isNotEmpty()) T(letter, style = Relay.type.mono, color = statusTint(letter, c), weight = FontWeight.Medium)
-            IconKey(if (staged) "minus" else "plus", onStage, size = 16.dp, enabled = online, label = if (staged) "Unstage" else "Stage")
+            IconKey(if (staged) "minus" else "plus", onStage, size = 16.dp, enabled = online, label = if (staged) "Leave out of the commit" else "Include in the commit")
         }
         if (expanded) DiffHunks(nav, projectId, wt, refresh, file.path, file.renamedFrom, staged, count?.binary == true)
     }

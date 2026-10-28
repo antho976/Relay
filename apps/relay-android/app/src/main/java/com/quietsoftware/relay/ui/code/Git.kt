@@ -85,7 +85,7 @@ fun GitScreen(projectId: Long, worktree: String?, session: String?, nav: Nav) {
     Page {
         Column(Modifier.fillMaxSize().navigationBarsPadding()) {
             PageBar(
-                title = "Git",
+                title = "Changes",
                 onBack = nav::back,
                 subtitle = listOfNotNull(listOfNotNull(st?.branch?.ifBlank { "detached HEAD" }, sync).joinToString(" ").ifBlank { null }, "fetching…".takeIf { fetching })
                     .joinToString(" · ").ifBlank { null },

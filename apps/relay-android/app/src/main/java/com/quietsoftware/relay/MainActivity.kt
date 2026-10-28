@@ -58,14 +58,14 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(paired) { if (paired) askNotifications() }
             val controller = rememberNavController()
             val nav = remember(controller, shell) { Nav(controller, shell) }
-            val start = remember { if (s.pc == null) "pair" else "start" }
+            val start = remember { if (s.pc == null) "pair" else "home" }
             val entry by controller.currentBackStackEntryAsState()
             // The inbox and Guardrails list the holds themselves; the tray over them would repeat one.
             val route = entry?.destination?.route
             val tray = route != "inbox" && route?.startsWith("guardrails") != true
-            RelayTheme(Palette.of(s.prefs.palette)) {
+            RelayTheme(Palette.of(s.prefs.palette, s.prefs.accent)) {
                 CompositionLocalProvider(LocalNav provides nav) {
-                    Box(Modifier.fillMaxSize().background(Palette.of(s.prefs.palette).wall).imePadding()) {
+                    Box(Modifier.fillMaxSize().background(Palette.base(s.prefs.palette).ground).imePadding()) {
                         AppNav(nav, start)
                         HoldTray(shell, show = tray, onOpen = { nav.inbox() })
                         ToastHost(shell, nav)

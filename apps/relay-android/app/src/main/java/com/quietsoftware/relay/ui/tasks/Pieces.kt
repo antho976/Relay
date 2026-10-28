@@ -479,8 +479,8 @@ internal fun cardInfos(tasks: List<Task>, sessions: Map<String, Session>, pendin
 }
 
 /**
- * A board card (board_view.rs `card`): the status ring, `#id`, the execution state; the title in
- * three lines; the rollup, blockers and duplicate; fields as pills; the agents on it.
+ * A board card (design 14, "Task card"): `#id` and the execution state over the title, a line of
+ * what it is, the rollup, blockers and fields as pills, then who is on it in words.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -488,26 +488,28 @@ internal fun TaskCard(info: CardInfo, onClick: () -> Unit, onLongClick: () -> Un
     val c = Relay.colors
     val t = info.task
     val done = t.column == "done"
-    val strong = c.strong
+    val strong = c.accent
     Column(
         modifier
             .fillMaxWidth()
-            .clip(Radii.board)
-            .background(c.ink.copy(alpha = if (done) .03f else .045f))
-            .border(1.dp, c.edge, Radii.board)
-            .then(if (t.parentId != null) Modifier.drawBehind { drawRect(strong, size = Size(2.dp.toPx(), size.height)) } else Modifier)
+            .clip(Radii.card)
+            .background(c.slab)
+            .border(1.dp, c.edge, Radii.card)
+            .then(if (t.parentId != null) Modifier.drawBehind { drawRect(strong, size = Size(3.dp.toPx(), size.height)) } else Modifier)
             .combinedClickable(onLongClick = onLongClick, onClick = onClick)
-            .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 11.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+            .padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            StatusRing(t.column, 12.dp)
-            T(t.num?.let { "#$it" } ?: "new", style = tiny, color = c.ink3, maxLines = 1)
+            T(t.num?.let { "#$it" } ?: "new", style = Relay.type.mono, color = c.ink3, maxLines = 1)
             StateBadge(t.state)
             Box(Modifier.weight(1f))
             if (info.refused) WaitingMark("not applied", c.held) else if (info.pending) WaitingMark()
         }
-        T(t.title.ifBlank { "Untitled" }, style = Relay.type.ui, color = if (done) c.ink2 else c.ink, maxLines = 3)
+        T(t.title.ifBlank { "Untitled" }, style = Relay.type.body, color = if (done) c.ink2 else c.ink, maxLines = 3, weight = FontWeight.SemiBold)
+        t.body.lineSequence().map { it.trim().trimStart('#', '-', '*', ' ') }.firstOrNull { it.isNotEmpty() }?.let {
+            T(it, style = Relay.type.caption.copy(fontSize = 13.sp, lineHeight = 18.sp), color = c.ink3, maxLines = 2)
+        }
         info.parent?.let { p ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                 Glyph("chevron-right", 10.dp, c.ink3)
@@ -530,13 +532,26 @@ internal fun TaskCard(info: CardInfo, onClick: () -> Unit, onLongClick: () -> Un
             t.labels.take(3).forEach { LabelChip(it) }
             if (t.labels.size > 3) T("+${t.labels.size - 3}", Modifier.padding(top = 3.dp), tiny, c.ink3)
         }
-        if (info.agents.isNotEmpty()) {
-            Column {
-                Hairline(color = c.edge)
-                Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    info.agents.distinctBy { it.first }.takeLast(3).forEach { (_, lamp) -> LampDot(lamp, 6.dp) }
-                    T(info.agents.joinToString(" · ") { it.first }, style = tiny, color = c.ink2, maxLines = 1)
-                }
+        val agent = info.agents.lastOrNull()
+        if (agent != null) {
+            val (name, lamp) = agent
+            Row(
+                Modifier.clip(Radii.key).background(c.wash).padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                LampDot(lamp, 7.dp)
+                T(
+                    name + when (lamp) {
+                        Lamp.Live -> " is working"
+                        Lamp.Held -> " needs you"
+                        Lamp.Waiting -> " is waiting"
+                        else -> " worked on it"
+                    } + if (info.agents.distinctBy { it.first }.size > 1) " · +${info.agents.distinctBy { it.first }.size - 1}" else "",
+                    style = Relay.type.caption,
+                    color = if (lamp == Lamp.Held) c.waiting else c.ink,
+                    maxLines = 1,
+                )
             }
         }
     }

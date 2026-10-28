@@ -152,7 +152,7 @@ internal fun DispatchSheet(task: Task, nav: Nav, onDismiss: () -> Unit) {
                 } else {
                     for (s in live) {
                         MenuRow(
-                            s.name, "terminal", { target = s.name },
+                            s.name, "agents", { target = s.name },
                             detail = listOfNotNull(titled(s.provider), titled(s.role), s.stateLabel.lowercase(), s.taskId?.let { "on #$it" }).joinToString(" · "),
                             selected = target == s.name,
                             lead = { LampDot(s.lamp, 8.dp) },

@@ -5,11 +5,34 @@ SQLite), no web view, no on-device model. It replaced the Expo app that lived in
 `apps/relay-mobile`. Tally is a separate app in its own repository (antho976/Tally) and is not part
 of it.
 
-It looks like the desktop app made for a phone: the same warm near-black chrome, Geist and Sora,
-the r mark, the Dev | Threads switch, the sidebar (a drawer here), the status bar, the
-screen-black terminal plates, and the same words. Its tokens come from `DESIGN.md` and
-`apps/relay-native` (palettes from `fonts.rs`, glyph geometry from `icons.rs`, generated into
-`ui/kit/Glyphs.kt`), and its fonts are the desktop's bundled files.
+It is chat first, as Claude's own app is (design 14, "Phone app · chat-first redesign"), and it
+shows no terminal: everything an agent's terminal asked for is a button. **Home** greets the
+person, says in one pill what needs them, offers a row of things to start, and has one message box
+whose chip says where it sends: a project, where the words open the New agent form with them as its
+task, or Tally, Arbiter or Avex, where they start a thread. The **drawer** has New chat, Agents,
+Board, Inbox, Changes and Notes, the three spaces as tiles, the agents at work, the recent threads,
+the projects, and the person and their PC at the foot (where the link stands, which was the status
+bar's). There is no Dev | Threads switch. **Agents** lists each agent as a card (what it is doing in
+words, its state, the one key its state offers) that opens its conversation.
+
+The rest follows the same design. The **board** shows one column at a time under a row of pill
+tabs, its cards saying who is on a task in words, with New task as a floating key; a **task**
+opens with its agent on a card (Open chat), or "Start an agent on it", and its foot moves it on
+(Start an agent, Send to review, Approve). **Changes** (the Git page) opens with how much changed,
+across how many files, then the files on cards that open to their diffs ("In the next commit",
+"Include all"), then Commit, Push and the pull request. The **inbox** puts what needs the person
+first (held commands, agents waiting on an answer), then finished work, then earlier
+notifications. **New agent** asks what it should do first, then the project, who works on it and
+how hard it thinks, with Start agent across the foot. **Tally**, **Arbiter** and **Avex** have pill
+tabs and a box at the foot whose words start a thread about that space.
+
+Settings › Appearance picks a **background** (Grey, Slate, Midnight, Forest, Plum, Black) and an
+**accent** (Clay, Ocean, Sage, Iris, Rose, Amber, Mint), with a preview of the pair
+(`ui/theme/Theme.kt`: `Palette.BASES`, `Accent`; stored as `palette` and `accent`, where the PC's
+older `matte`, `dark` and `oled` still read). The accent is the primary key, the send key,
+switches and selections; words and lamps keep their colours in every theme. Geist and Sora are the
+desktop's bundled files, glyph geometry comes from `icons.rs` (`ui/kit/Glyphs.kt`) with the phone's
+own in `ui/kit/Icon.kt`, and the agent's replies are set in the phone's serif.
 
 ## One set of data
 
@@ -120,17 +143,19 @@ serif across the column, reasoning folded to a "Thought process" line, Claude's 
 works, and Claude's bar at the foot: one rounded box, the words on top, round keys under them.
 In an agent's bar, **+** attaches a photo or screenshot (shrunk to 2048 px, sent to the agent's
 checkout with `session.upload` as soon as it is picked, and named in the message by its path,
-which both CLIs read as the picture); the settings key opens the agent's own keys in a sheet:
-`/` for its slash commands and the project's skills, the next mode (Shift-Tab), Esc, and the row
-of extra keys; its permission mode as Claude Code's footer says it sits where Claude's app names
-its model, and a tap cycles it. The round key sends, stops a working agent (Esc) with nothing
+which both CLIs read as the picture); the settings key opens the Commands sheet below; its
+permission mode as Claude Code's footer says it sits where Claude's app names its model, and a tap
+cycles it. The round key sends, stops a working agent (Esc) with nothing
 typed, is Enter while the agent asks something, and is the microphone otherwise.
 Its plan (Claude Code's to-do list, Codex's `update_plan`) is pinned under the header while any
 of it is left: how far along it is and the step under way, opening to every step. When the
-agent is held at a question in its terminal (a permission, a menu), the screen streams the
-terminal while the question shows, reads the question off it, and offers a key per numbered
-answer, and Esc. A row of keys (Esc, arrows, Enter, Tab, Space, `/`, Ctrl-C) covers the rest, and the terminal itself is
-one tap away in the header for whatever a conversation cannot show. The conversation is kept on
+agent is held at a question in its terminal (a permission, a menu), the phone follows the
+terminal unseen while the question shows, reads the question off it, and offers each numbered
+answer as a button, the first one in the accent, and Cancel (Esc); a yes/no prompt is Yes and
+No. Over the message box, **Stop** (while it works), **Review changes** and **Commands**; Commands
+opens a sheet with Stop, Free memory (`/compact`), Start fresh (`/clear`, Codex's `/new`), how much
+it does alone (its mode, changed as Shift-Tab does) and "Ask it to…" rows for its commands and
+skills. No screen of the phone opens the agent's terminal. The conversation is kept on
 the phone, so it opens with the PC away.
 
 ## The rest of Dev

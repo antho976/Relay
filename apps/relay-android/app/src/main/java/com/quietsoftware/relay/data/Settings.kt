@@ -21,8 +21,10 @@ data class Prefs(
     val keepScreenOn: Boolean = true,
     /** Borrow the PC's terminal at the phone's own width while one is open. */
     val fitTerminal: Boolean = true,
-    /** `matte`, `dark` or `oled`, as on the PC (DESIGN.md). */
-    val palette: String = "matte",
+    /** The background family (`Palette.BASES`); the PC's `matte`, `dark` and `oled` still read. */
+    val palette: String = "grey",
+    /** The accent (`Accent`): primary keys, the send key, switches, selections. */
+    val accent: String = "clay",
     val terminalFont: Float = 11f,
     /** The space the app opened last: `dev` or `threads`. */
     val space: String = "dev",
@@ -43,7 +45,8 @@ class Settings(private val context: Context) {
         notify = p[NOTIFY] ?: true,
         keepScreenOn = p[SCREEN] ?: true,
         fitTerminal = p[FIT] ?: true,
-        palette = p[PALETTE] ?: "matte",
+        palette = p[PALETTE] ?: "grey",
+        accent = p[ACCENT] ?: "clay",
         terminalFont = p[FONT] ?: 11f,
         space = p[SPACE] ?: "dev",
         name = p[NAME] ?: "",
@@ -60,6 +63,7 @@ class Settings(private val context: Context) {
             p[SCREEN] = next.keepScreenOn
             p[FIT] = next.fitTerminal
             p[PALETTE] = next.palette
+            p[ACCENT] = next.accent
             p[FONT] = next.terminalFont
             p[SPACE] = next.space
             p[NAME] = next.name
@@ -75,6 +79,7 @@ class Settings(private val context: Context) {
         val SCREEN = booleanPreferencesKey("keep_screen_on")
         val FIT = booleanPreferencesKey("fit_terminal")
         val PALETTE = stringPreferencesKey("palette")
+        val ACCENT = stringPreferencesKey("accent")
         val FONT = floatPreferencesKey("terminal_font")
         val SPACE = stringPreferencesKey("space")
         val NAME = stringPreferencesKey("name")

@@ -6,6 +6,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import com.quietsoftware.relay.ui.kit.IconKey
+import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -58,7 +61,6 @@ import com.quietsoftware.relay.ui.kit.Key
 import com.quietsoftware.relay.ui.kit.KeyKind
 import com.quietsoftware.relay.ui.kit.Pill
 import com.quietsoftware.relay.ui.kit.Radii
-import com.quietsoftware.relay.ui.kit.Segmented
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.column
 import com.quietsoftware.relay.ui.shell.SpaceFrame
@@ -103,6 +105,7 @@ private fun Board(projectId: Long?, nav: Nav) {
     var label by rememberSaveable(pid) { mutableStateOf<String?>(null) }
     var module by rememberSaveable(pid) { mutableStateOf<Long?>(null) }
     var showFilters by rememberSaveable(pid) { mutableStateOf(false) }
+    var searching by rememberSaveable(pid) { mutableStateOf(false) }
     var chose by rememberSaveable(pid) { mutableStateOf(false) }
     var menuFor by remember { mutableStateOf<String?>(null) }
     var moving by remember { mutableStateOf(false) }
@@ -147,11 +150,12 @@ private fun Board(projectId: Long?, nav: Nav) {
     val newTask = { nav.newTask(pid, column = shown.takeIf { it != "done" }) }
     val focus = LocalFocusManager.current
 
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).column().align(Alignment.CenterHorizontally)) {
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    T("Board", style = Relay.type.heading.copy(fontSize = 20.sp, lineHeight = 26.sp), color = c.ink)
+                    T("Board", style = Relay.type.heading.copy(fontSize = 24.sp, lineHeight = 30.sp), color = c.ink)
                     T(
                         buildString {
                             append("$open open · $done done")
@@ -160,19 +164,14 @@ private fun Board(projectId: Long?, nav: Nav) {
                         style = Relay.type.caption, color = c.ink3, maxLines = 1,
                     )
                 }
-                Key("New task", newTask, kind = KeyKind.Primary, glyph = "plus", compact = true)
+                if (!blank) IconKey("search", { searching = !searching; if (!searching) { search = ""; showFilters = false } }, size = 19.dp, tint = c.ink, selected = searching || search.isNotEmpty(), label = "Search the board")
             }
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Segmented(BOARD_VIEWS, "board", { if (it == "modules") nav.modules(pid) })
-                Box(Modifier.weight(1f))
-                if (shell.projects.size > 1) {
-                    Pill(project?.name ?: "Project", Modifier.widthIn(max = 180.dp), glyph = "folder", onClick = { picker = "project" })
-                } else {
-                    project?.let { T(it.name, style = Relay.type.caption, color = c.ink3, maxLines = 1) }
-                }
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Pill(project?.name ?: "Project", Modifier.widthIn(max = 200.dp), glyph = "folder", onClick = if (shell.projects.size > 1) ({ picker = "project" }) else null)
+                Pill("Modules", glyph = "modules", onClick = { nav.modules(pid) })
             }
             if (blank) return@Column
-            Field(
+            if (searching || search.isNotEmpty() || active > 0) Field(
                 search, { search = it }, Modifier.fillMaxWidth().padding(top = 12.dp),
                 placeholder = "Search title, description or #id",
                 leading = "search",
@@ -223,10 +222,19 @@ private fun Board(projectId: Long?, nav: Nav) {
                             showModule = module == null,
                         )
                     }
-                    item(key = "hint") { T("Swipe for the next column · hold a card for more", Modifier.padding(top = 8.dp), Relay.type.caption, c.ink3) }
+                    item(key = "room") { Box(Modifier.height(72.dp)) }
                 }
             }
         }
+    }
+
+    if (!blank) Key(
+        "New task",
+        newTask,
+        Modifier.align(Alignment.BottomEnd).padding(16.dp).shadow(10.dp, Radii.key),
+        kind = KeyKind.Primary,
+        glyph = "plus",
+    )
     }
 
     // ---- Sheets ----
@@ -240,7 +248,7 @@ private fun Board(projectId: Long?, nav: Nav) {
                 MenuRow("Move to…", "columns", { moving = true })
                 if (menuTask.column == "in_review") MenuRow("Approve", "check", { close { ops.approve(menuTask) } }, detail = "moves it to Done")
                 if (menuTask.column != "done") MenuRow("Dispatch…", "play", { close { dispatchFor = menuTask.id } }, enabled = menuTask.num != null, detail = if (menuTask.num == null) "once the PC has it" else null)
-                menuTask.sessions.lastOrNull()?.let { s -> MenuRow("Open terminal", "terminal", { close { nav.terminal(s) } }, detail = s) }
+                menuTask.sessions.lastOrNull()?.let { s -> MenuRow("Open the agent", "message", { close { nav.chat(s) } }, detail = s) }
                 MenuRow("Delete", "trash", { close { ops.delete(menuTask) } }, danger = true)
             }
         }
@@ -314,16 +322,15 @@ private fun ColumnStrip(selected: Int, onSelect: (Int) -> Unit, count: (String) 
             val on = i == selected
             Row(
                 Modifier.heightIn(min = 34.dp).clip(Radii.pill)
-                    .background(if (on) c.track else Color.Transparent)
-                    .border(1.dp, if (on) c.lineFocus else c.edge, Radii.pill)
+                    .background(if (on) c.ink else Color.Transparent)
+                    .border(1.dp, if (on) c.ink else c.strong, Radii.pill)
                     .clickable { onSelect(i) }
                     .padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(7.dp),
             ) {
-                StatusRing(col, 12.dp)
-                T(Task.columnLabel(col), style = Relay.type.uiMedium, color = if (on) c.ink else c.ink2, weight = if (on) FontWeight.SemiBold else FontWeight.Medium)
-                T(count(col).toString(), style = Relay.type.mono, color = if (on) c.ink2 else c.ink3)
+                T(Task.columnLabel(col), style = Relay.type.uiMedium, color = if (on) c.wall else c.ink, weight = if (on) FontWeight.SemiBold else FontWeight.Medium)
+                T(count(col).toString(), style = Relay.type.caption, color = if (on) c.wall.copy(alpha = .7f) else c.ink3)
             }
         }
     }

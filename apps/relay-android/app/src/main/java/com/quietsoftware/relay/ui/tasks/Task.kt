@@ -1,6 +1,9 @@
 package com.quietsoftware.relay.ui.tasks
 
 import androidx.compose.foundation.background
+import com.quietsoftware.relay.core.model.Session
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -188,7 +191,7 @@ private fun TaskBody(task: Task, all: List<Task>, pending: Boolean, refused: Out
         ) {
             item(key = "head") {
                 Column(Modifier.column().fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    T(task.title.ifBlank { "Untitled" }, style = Relay.type.heading, color = c.ink, weight = FontWeight.Medium)
+                    T(task.title.ifBlank { "Untitled" }, style = Relay.type.heading.copy(fontSize = 24.sp, lineHeight = 30.sp), color = c.ink, weight = FontWeight.SemiBold)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp), itemVerticalAlignment = Alignment.CenterVertically) {
                         ColumnPill(task.column) { open("move") }
                         StateBadge(task.state)
@@ -231,6 +234,23 @@ private fun TaskBody(task: Task, all: List<Task>, pending: Boolean, refused: Out
                                 Modifier.weight(1f), Relay.type.caption, c.ink2,
                             )
                         }
+                    }
+                }
+            }
+
+            // Who is on it, first (design 14, "Agent on it"): the conversation a tap away, or a way to start one.
+            section("agent") {
+                val on = task.sessions.distinct().mapNotNull { sessions[it] }.lastOrNull { it.state != "closed" }
+                when {
+                    on != null -> AgentOnIt(on) { if (on.attachable) nav.chat(on.name) else nav.session(on.name) }
+                    task.column != "done" && num != null -> Row(
+                        Modifier.fillMaxWidth().padding(top = 14.dp).clip(Radii.card).background(c.accentSoft).clickable { open("dispatch") }.padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Glyph("sparkle", 18.dp, c.accentText)
+                        T("Start an agent on it", Modifier.weight(1f), Relay.type.uiMedium, c.accentText, weight = FontWeight.SemiBold)
+                        Glyph("chevron-right", 14.dp, c.accentText)
                     }
                 }
             }
@@ -312,7 +332,7 @@ private fun TaskBody(task: Task, all: List<Task>, pending: Boolean, refused: Out
                             T(name, style = Relay.type.uiMedium, color = c.ink, maxLines = 1)
                             T(s?.let { listOf(titled(it.provider), titled(it.role), it.stateLabel.lowercase()).joinToString(" · ") } ?: "closed", style = Relay.type.caption, color = c.ink3, maxLines = 1)
                         }
-                        Glyph(if (s?.attachable == true) "terminal" else "chevron-right", 15.dp, c.ink3)
+                        Glyph(if (s?.attachable == true) "message" else "chevron-right", 15.dp, c.ink3)
                     }
                 }
                 if (num != null) section("ask") { Ask(task, num, nav) }
@@ -336,6 +356,32 @@ private fun TaskBody(task: Task, all: List<Task>, pending: Boolean, refused: Out
         }
         // While the keyboard is up the page is for typing; the keys come back when it goes down.
         if (!WindowInsets.isImeVisible) Actions(task, ops, open) { ops.delete(task); nav.back() }
+    }
+}
+
+/** The agent on a task as a card: its lamp, its name and what it is doing, and the way into its conversation. */
+@Composable
+private fun AgentOnIt(s: Session, onOpen: () -> Unit) {
+    val c = Relay.colors
+    Row(
+        Modifier.fillMaxWidth().padding(top = 14.dp).clip(Radii.card).background(c.slab).border(1.dp, c.edge, Radii.card).clickable(onClick = onOpen)
+            .padding(start = 14.dp, end = 10.dp, top = 12.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Glyph("sparkle", 19.dp, c.accent)
+        Column(Modifier.weight(1f)) {
+            T(
+                s.name + when (s.lamp) {
+                    Lamp.Live -> " is on it"
+                    Lamp.Held -> " needs you"
+                    else -> " · " + s.stateLabel.lowercase()
+                },
+                style = Relay.type.uiMedium, color = c.ink, weight = FontWeight.SemiBold, maxLines = 1,
+            )
+            s.intent?.ifBlank { null }?.let { T(it, style = Relay.type.caption, color = c.ink3, maxLines = 1) }
+        }
+        T("Open chat", Modifier.clip(Radii.key).background(c.wash).padding(horizontal = 12.dp, vertical = 8.dp), Relay.type.caption, c.ink, weight = FontWeight.SemiBold)
     }
 }
 
@@ -481,7 +527,11 @@ private fun Actions(task: Task, ops: TaskOps, open: (String) -> Unit, onDelete: 
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Key("Move", { open("move") }, Modifier.weight(1f), glyph = "columns", compact = true)
-            if (task.column != "done") Key("Dispatch", { open("dispatch") }, Modifier.weight(1f), glyph = "play", compact = true, enabled = task.num != null)
+            // An active task has its agent on the card above; the foot moves it on instead.
+            if (task.column != "done" && task.column != "in_review" && task.column != "active") {
+                Key("Start an agent", { open("dispatch") }, Modifier.weight(1f), kind = KeyKind.Primary, glyph = "sparkle", compact = true, enabled = task.num != null)
+            }
+            if (task.column == "active") Key("Send to review", { ops.move(task, "in_review", null) }, Modifier.weight(1f), kind = KeyKind.Primary, compact = true)
             if (task.column == "in_review") Key("Approve", { ops.approve(task) }, Modifier.weight(1f), kind = KeyKind.Primary, glyph = "check", compact = true)
             if (task.column == "done") Key("Reopen", { ops.reopen(task) }, Modifier.weight(1f), glyph = "undo", compact = true, enabled = task.num != null)
             IconKey("trash", onDelete, tint = c.heldText, label = "Delete task")
