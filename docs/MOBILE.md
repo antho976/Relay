@@ -262,8 +262,22 @@ stops that until you connect again.
   (`settings.set`, which holds provider and adb paths), quit it, or that no screen of the app
   uses are refused (`refused` / `remote.op`). A WebSocket frame holding several lines is
   gated line by line, so a permitted first line cannot carry a refused second one through.
+- A paired phone is trusted to execute on the PC as you: it starts agents and shells, edits
+  files and runs builds, so a lost phone's credential can run code here until you revoke that
+  phone (the table in §2). What it may not do is weaken the guardrails that hold agents back:
+  a `guardrail.config.set` patch that touches what agents may run or where they may write
+  (`denied_commands`, `allowed_write_roots`, `roles`, `shape_gates`, `agent_builds`), or a
+  `settings.reset` at or above one of them (the whole tree, `guardrails`, a whole layer), is
+  refused (`remote.command`). So, as defence in depth, is `project.update` with a `build_cmd`
+  or `run_cmd` (other than `null`, back to the default), which the PC runs with no agent in
+  between; it is not a wall, since a phone that edits the repository can change what a build
+  runs in other ways. The app shows those values; they change on the PC. A phone also
+  publishes no release (`remote.publish`) and starts no session on the API key
+  (`remote.api_key`).
 - **App developers:** an op the phone starts calling must be added to `PHONE_OPS` (it is
-  sorted; the gate binary-searches it), or the door refuses it.
+  sorted; the gate binary-searches it), or the door refuses it. `wire.rs`'s
+  `every_op_the_app_sends_is_open_to_a_phone` reads the app's sources and fails when one is
+  missing.
 - Pairing codes live ten minutes and are single use, a new code replaces any older one, and the
   PC approves each phone that presents one before it gets a token (unless `--no-confirm`), so
   a code seen by someone else — a screen share, scrollback — pairs nothing on its own. Every

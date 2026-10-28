@@ -256,18 +256,11 @@ private fun ProjectFields(projectId: Long, p: Project, nav: Nav) {
     // Saveable, so an edit is still here after Devices, Merge tests or Guardrails and back.
     var name by rememberSaveable(p.name) { mutableStateOf(p.name) }
     var branch by rememberSaveable(p.baseBranch) { mutableStateOf(p.baseBranch) }
-    var buildCmd by rememberSaveable(p.buildCmd) { mutableStateOf(p.buildCmd.orEmpty()) }
-    var runCmd by rememberSaveable(p.runCmd) { mutableStateOf(p.runCmd.orEmpty()) }
     val nameText = name.trim()
     val branchText = branch.trim()
-    // An empty command goes back to Relay's default, which the PC stores as null.
-    val buildText = buildCmd.trim().ifEmpty { null }
-    val runText = runCmd.trim().ifEmpty { null }
     val changes = buildJsonObject {
         if (nameText.isNotEmpty() && nameText != p.name) put("name", nameText)
         if (branchText.isNotEmpty() && branchText != p.baseBranch) put("base_branch", branchText)
-        if (buildText != p.buildCmd) put("build_cmd", buildText)
-        if (runText != p.runCmd) put("run_cmd", runText)
     }
     val canSave = changes.isNotEmpty() && nameText.isNotEmpty() && branchText.isNotEmpty()
 
@@ -285,12 +278,14 @@ private fun ProjectFields(projectId: Long, p: Project, nav: Nav) {
             Field(branch, { branch = it }, Modifier.fillMaxWidth(), placeholder = "main", style = Relay.type.mono, keyboardOptions = codeKeys)
         }
         Gap(14.dp)
-        FieldBlock("Build command", "Run by an integration build. Empty uses Relay's default.") {
-            Field(buildCmd, { buildCmd = it }, Modifier.fillMaxWidth(), placeholder = "Automatic", style = Relay.type.mono, keyboardOptions = codeKeys)
+        // The PC runs these as they are, with no agent or guardrail in between, so the door takes
+        // them only from the PC (`remote.command`): a phone shows them.
+        FieldBlock("Build command", "Run by an integration build. Changed on the PC.") {
+            SelectionContainer { T(p.buildCmd ?: "Automatic", style = Relay.type.mono, color = c.ink2, maxLines = 3) }
         }
         Gap(14.dp)
-        FieldBlock("Run command", "Run for Run on device. Empty uses Gradle's install and launch.") {
-            Field(runCmd, { runCmd = it }, Modifier.fillMaxWidth(), placeholder = "Automatic", style = Relay.type.mono, keyboardOptions = codeKeys)
+        FieldBlock("Run command", "Run for Run on device. Changed on the PC.") {
+            SelectionContainer { T(p.runCmd ?: "Automatic", style = Relay.type.mono, color = c.ink2, maxLines = 3) }
         }
         Gap(12.dp)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End), verticalAlignment = Alignment.CenterVertically) {
@@ -300,8 +295,6 @@ private fun ProjectFields(projectId: Long, p: Project, nav: Nav) {
                     {
                         name = p.name
                         branch = p.baseBranch
-                        buildCmd = p.buildCmd.orEmpty()
-                        runCmd = p.runCmd.orEmpty()
                     },
                     kind = KeyKind.Quiet,
                 )
@@ -419,8 +412,12 @@ private fun GuardrailValues(projectId: Long, nav: Nav, online: Boolean) {
 
 private enum class GuardKind { Count, Percent, Toggle, List }
 
-/** One field of the form: where it is in the config, the desktop's words for it, and its least value. */
-private class GuardField(val path: String, val title: String, val hint: String, val kind: GuardKind, val min: Long = 0)
+/**
+ * One field of the form: where it is in the config, the desktop's words for it, and its least value.
+ * [pcOnly] fields decide what agents may run and where they may write, so the door refuses them
+ * from a phone (`remote.command`): shown here, changed on the PC.
+ */
+private class GuardField(val path: String, val title: String, val hint: String, val kind: GuardKind, val min: Long = 0, val pcOnly: Boolean = false)
 
 /** The desktop's form (guardrail_settings.rs `GROUPS`), group by group. */
 private val GUARD_GROUPS = listOf(
@@ -436,8 +433,8 @@ private val GUARD_GROUPS = listOf(
     ),
     "Paths and commands" to listOf(
         GuardField("protected_paths", "Protected paths", "Worktree-relative paths or globs agents may not write. One per line.", GuardKind.List),
-        GuardField("denied_commands", "Denied commands", "Commands agents may not run, matched word by word. One per line.", GuardKind.List),
-        GuardField("allowed_write_roots", "Extra write roots", "Absolute directories outside the worktree agents may write to. One per line.", GuardKind.List),
+        GuardField("denied_commands", "Denied commands", "Commands agents may not run, matched word by word. Changed on the PC.", GuardKind.List, pcOnly = true),
+        GuardField("allowed_write_roots", "Extra write roots", "Absolute directories outside the worktree agents may write to. Changed on the PC.", GuardKind.List, pcOnly = true),
     ),
     "Pushes" to listOf(
         GuardField("check_on_push", "Check an agent's push", "Runs the project's build command, or its detected tests, first. A failing check refuses the push.", GuardKind.Toggle),
@@ -546,6 +543,7 @@ private fun GuardrailForm(projectId: Long, config: JsonObject, layers: JsonObjec
     val patch = buildJsonObject {
         val groups = LinkedHashMap<String, MutableMap<String, JsonElement>>()
         for (f in GUARD_FIELDS) {
+            if (f.pcOnly) continue
             val value = if (f.path in cleared) JsonNull else valueOf(f)?.takeIf { changed(f) } ?: continue
             val dot = f.path.indexOf('.')
             if (dot < 0) put(f.path, value) else groups.getOrPut(f.path.substring(0, dot)) { LinkedHashMap() }[f.path.substring(dot + 1)] = value
@@ -561,9 +559,12 @@ private fun GuardrailForm(projectId: Long, config: JsonObject, layers: JsonObjec
         for (f in fields) {
             Gap(10.dp)
             val text = edits[f.path] ?: fieldText(f, config.at(f.path))
-            when (f.kind) {
-                GuardKind.Toggle -> SwitchLine(f.title, f.hint, text == "true") { on -> edit(f, on.toString()) }
-                GuardKind.List -> FieldBlock(f.title, f.hint) {
+            when {
+                f.pcOnly -> FieldBlock(f.title, f.hint) {
+                    SelectionContainer { T(text.ifEmpty { "None" }, style = Relay.type.mono, color = c.ink2) }
+                }
+                f.kind == GuardKind.Toggle -> SwitchLine(f.title, f.hint, text == "true") { on -> edit(f, on.toString()) }
+                f.kind == GuardKind.List -> FieldBlock(f.title, f.hint) {
                     Field(
                         text,
                         { edit(f, it) },
@@ -580,7 +581,7 @@ private fun GuardrailForm(projectId: Long, config: JsonObject, layers: JsonObjec
                 }
             }
             val said = caption(f)
-            val canReset = layers != null && (here(f) || changed(f)) && f.path !in cleared
+            val canReset = layers != null && !f.pcOnly && (here(f) || changed(f)) && f.path !in cleared
             if (said != null || canReset) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     T(
@@ -624,7 +625,7 @@ private fun GuardrailForm(projectId: Long, config: JsonObject, layers: JsonObjec
     if (resetAsk) {
         Ask(
             title = "Use the workspace's guardrails?",
-            body = "This project forgets its own guardrail values and follows the PC-wide settings.",
+            body = "This project forgets the guardrail values set here and follows the PC-wide settings. Denied commands and write roots change on the PC.",
             onDismiss = { resetAsk = false },
         ) {
             ToolKey("Cancel", { resetAsk = false }, kind = KeyKind.Quiet)
@@ -632,9 +633,12 @@ private fun GuardrailForm(projectId: Long, config: JsonObject, layers: JsonObjec
                 "Reset",
                 {
                     resetAsk = false
+                    // Each field the phone tunes, cleared back to the inherited value. Resetting the
+                    // whole layer would clear the PC-only ones too, which the door refuses.
+                    val tuned = GUARD_FIELDS.filterNot { it.pcOnly }.map { it.path.substringBefore('.') }.distinct()
                     nav.shell.act(
-                        "settings.reset",
-                        buildJsonObject { put("path", "guardrails.projects.$projectId") },
+                        "guardrail.config.set",
+                        buildJsonObject { put("project_id", projectId); put("patch", JsonObject(tuned.associateWith { JsonNull })) },
                         done = "Guardrails reset",
                     ) { onReset() }
                 },

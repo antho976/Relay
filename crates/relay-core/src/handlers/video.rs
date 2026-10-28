@@ -903,9 +903,11 @@ pub fn register(e: &mut Engine) {
         let video = read_video(ctx, p.video_id, false)?;
         let dir = PathBuf::from(&video.dir);
         let path = asset_path(&dir, &p.asset).or_else(|e| {
-            // A render, by its name in out/.
-            let out = dir.join("out").join(p.asset.trim());
-            if out.is_file() { Ok(out) } else { Err(e) }
+            // A render, by its name in out/: one plain name, so `../` cannot leave the folder.
+            let name = Path::new(p.asset.trim());
+            let plain = matches!(name.components().collect::<Vec<_>>()[..], [std::path::Component::Normal(_)]);
+            let out = dir.join("out").join(name);
+            if plain && out.is_file() { Ok(out) } else { Err(e) }
         })?;
         let (text, language, words) = video::eleven::hear(ctx.engine(), &path, p.language.as_deref())?;
         let misheard = p.expect.as_deref().map(|e| video::eleven::misheard(e, &words)).unwrap_or_default();

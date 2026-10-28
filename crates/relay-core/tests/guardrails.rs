@@ -465,7 +465,7 @@ fn sessions_install_git_and_claude_hooks_without_clobbering_local_settings() {
         assert_eq!(settings["permissions"]["allow"][0], "Bash(cargo test)");
         let groups = settings["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(groups.len(), 2);
-        assert!(groups.iter().any(|group| group["matcher"] == "Edit|Write|MultiEdit|Bash"));
+        assert!(groups.iter().any(|group| group["matcher"] == "Edit|Write|MultiEdit|NotebookEdit|Bash"));
         for event in ["SessionStart", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop", "Notification"] {
             let groups = settings["hooks"][event].as_array().unwrap();
             assert_eq!(groups.len(), 1, "Relay installed {event} reporting");
@@ -613,6 +613,23 @@ fn workspace_layer_sits_between_global_and_project_and_null_clears_back() {
     assert_eq!(error(&missing).code, "workspace.not_found");
     let nested = call(engine, Actor::User, "guardrail.config.set", json!({"patch": {"workspaces": {"1": {}}}}));
     assert_eq!(error(&nested).code, "guardrail.config");
+}
+
+/// The phone's "Use the workspace's guardrails?" clears what it tunes with one patch of nulls,
+/// since the door refuses a reset of the whole layer; what is set only on the PC stays.
+#[test]
+fn the_phones_reset_clears_what_it_tunes_and_keeps_the_pc_only_keys() {
+    let fixture = Fixture::new();
+    let engine = &fixture.engine;
+    ok(engine, Actor::User, "guardrail.config.set", json!({"project_id": 1, "patch": {
+        "caps": {"files": 10}, "protected_paths": ["deploy/**"], "check_on_push": false,
+        "destructive_write": {"min_removed_lines": 5}, "denied_commands": ["make deploy"],
+    }}));
+    ok(engine, Actor::User, "guardrail.config.set", json!({"project_id": 1, "patch": {
+        "caps": null, "destructive_write": null, "protected_paths": null, "check_on_push": null,
+    }}));
+    let layers = ok(engine, Actor::User, "guardrail.config.layers", json!({"project_id": 1}));
+    assert_eq!(layers["overrides"], json!({"denied_commands": ["make deploy"]}));
 }
 
 #[test]
