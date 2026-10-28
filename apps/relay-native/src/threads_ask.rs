@@ -10,7 +10,7 @@
 //! A row that changed or went since the agent asked says so, and the key waits until the person
 //! looks again ("Review again"); approving then binds to that reading (`seen`).
 
-use super::pages::{badge_sized, human_date, icon_row, tile};
+use super::pages::{human_date, icon_row, tile};
 use crate::app::{button, clear, label};
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -342,14 +342,6 @@ fn signed(fmt: &MoneyFormatter, tx: &Value) -> String {
     }
 }
 
-fn kind_word(kind: &str) -> &'static str {
-    match kind {
-        "INCOME" => "Income",
-        "TRANSFER" => "Transfer",
-        _ => "Expense",
-    }
-}
-
 /// One thing the proposal acts on, as Tally draws it.
 fn row(op: &str, item: &Value, fmt: &MoneyFormatter) -> gtk::Box {
     match op {
@@ -377,8 +369,8 @@ fn entry_row(item: &Value, fmt: &MoneyFormatter) -> gtk::Box {
     }
     let kind = tx["type"].as_str().unwrap_or("EXPENSE");
     let transfer = kind == "TRANSFER";
-    let lead = badge_sized(if transfer { "repeat" } else { tx["icon"].as_str().unwrap_or("dot") }, if transfer { 10 } else { tx["color"].as_i64().unwrap_or(10) }, 28);
-    let category = tx["category"].as_str().map_or_else(|| kind_word(kind).to_string(), str::to_string);
+    let lead = super::pages::entry_badge(tx, 28);
+    let category = super::pages::entry_category(tx);
     let note = tx["note"].as_str().unwrap_or("").trim();
     let what = if note.is_empty() { category.clone() } else { note.to_string() };
     let after = &item["entry_after"];
@@ -386,7 +378,7 @@ fn entry_row(item: &Value, fmt: &MoneyFormatter) -> gtk::Box {
     let mut figure = signed(fmt, tx);
     if after.is_object() {
         // What the change does, before → after, in place of what it leaves alone.
-        let category_after = after["category"].as_str().map_or_else(|| kind_word(after["type"].as_str().unwrap_or(kind)).to_string(), str::to_string);
+        let category_after = super::pages::entry_category(after);
         detail.push(if category_after != category { format!("{category} \u{2192} {category_after}") } else { category.clone() });
         detail.push(if after["account"] != tx["account"] { format!("{} \u{2192} {}", tx["account"].as_str().unwrap_or(""), after["account"].as_str().unwrap_or("")) } else { tx["account"].as_str().unwrap_or("").to_string() });
         let (date, date_after) = (tx["date"].as_str().unwrap_or(""), after["date"].as_str().unwrap_or(""));

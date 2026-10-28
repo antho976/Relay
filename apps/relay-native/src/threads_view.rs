@@ -1614,7 +1614,16 @@ fn choose(model: Option<&str>, effort: Option<&str>) {
                     header(&v, &thread);
                 }
             }
-            Err(e) => ui.show_error(&e.to_string()),
+            Err(e) => {
+                ui.show_error(&e.to_string());
+                // Refused (a turn under way, say): the pickers show what the thread still runs on,
+                // read without its messages (none come after the last possible id).
+                if let Ok(read) = ui.call("thread.get", json!({"id": id, "after": i64::MAX})).await {
+                    if let (Some(v), true) = (view(), current() == Some(id)) {
+                        header(&v, &read["thread"]);
+                    }
+                }
+            }
         }
     });
 }
@@ -4113,6 +4122,23 @@ pub async fn refresh(ui: &Rc<Ui>) {
     refresh_panel(ui);
 }
 
+/// A panel read of `tab` starts: its key is marked in `tabs`, and the serial it returns is the
+/// newest, so an older read that lands after it draws nothing.
+fn panel_read_starts(tabs: &[(&'static str, gtk::Button)], tab: &str) -> u64 {
+    for (key, button) in tabs {
+        if *key == tab {
+            button.add_css_class("selected");
+        } else {
+            button.remove_css_class("selected");
+        }
+    }
+    STATE.with(|s| {
+        let next = s.panel_serial.get().wrapping_add(1);
+        s.panel_serial.set(next);
+        next
+    })
+}
+
 /// `arbiter.changed`: re-read the panel when it shows Arbiter.
 pub fn refresh_arbiter_panel(ui: &Rc<Ui>) {
     if STATE.with(|s| s.source.get()) == "arbiter" {
@@ -4123,18 +4149,7 @@ pub fn refresh_arbiter_panel(ui: &Rc<Ui>) {
 /// Re-read Arbiter's panel view; one source's read never lands on the other's panel.
 fn refresh_arbiter(ui: &Rc<Ui>, v: &View) {
     let tab = STATE.with(|s| s.arbiter_tab.get());
-    for (key, button) in &v.arbiter_panel_tabs {
-        if *key == tab {
-            button.add_css_class("selected");
-        } else {
-            button.remove_css_class("selected");
-        }
-    }
-    let serial = STATE.with(|s| {
-        let next = s.panel_serial.get().wrapping_add(1);
-        s.panel_serial.set(next);
-        next
-    });
+    let serial = panel_read_starts(&v.arbiter_panel_tabs, tab);
     let ui = ui.clone();
     glib::spawn_future_local(async move {
         let read = super::arbiter::panel_read(&ui, tab).await;
@@ -4160,18 +4175,7 @@ pub fn refresh_avex_panel(ui: &Rc<Ui>) {
 /// Re-read Avex's panel view; one source's read never lands on another's panel.
 fn refresh_avex(ui: &Rc<Ui>, v: &View) {
     let tab = STATE.with(|s| s.avex_tab.get());
-    for (key, button) in &v.avex_panel_tabs {
-        if *key == tab {
-            button.add_css_class("selected");
-        } else {
-            button.remove_css_class("selected");
-        }
-    }
-    let serial = STATE.with(|s| {
-        let next = s.panel_serial.get().wrapping_add(1);
-        s.panel_serial.set(next);
-        next
-    });
+    let serial = panel_read_starts(&v.avex_panel_tabs, tab);
     let ui = ui.clone();
     glib::spawn_future_local(async move {
         let read = super::avex::panel_read(&ui, tab).await;
@@ -4212,18 +4216,7 @@ pub fn refresh_panel(ui: &Rc<Ui>) {
         _ => {}
     }
     let tab = STATE.with(|s| s.panel_tab.get());
-    for (key, button) in &v.panel_tabs {
-        if *key == tab {
-            button.add_css_class("selected");
-        } else {
-            button.remove_css_class("selected");
-        }
-    }
-    let serial = STATE.with(|s| {
-        let next = s.panel_serial.get().wrapping_add(1);
-        s.panel_serial.set(next);
-        next
-    });
+    let serial = panel_read_starts(&v.panel_tabs, tab);
     if v.panel_body.first_child().is_none() {
         v.panel_body.append(&label("Reading the ledger…", "money-muted"));
     }
@@ -4675,17 +4668,17 @@ fn entry_row(ui: &Rc<Ui>, tx: &Value, dated: bool) -> gtk::Button {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row.add_css_class("threads-entry");
     let transfer = tx["type"] == "TRANSFER";
-    row.append(&badge_sized(if transfer { "repeat" } else { tx["icon"].as_str().unwrap_or("dots") }, if transfer { 10 } else { tx["color"].as_i64().unwrap_or(10) }, 24));
+    row.append(&super::pages::entry_badge(tx, 24));
     let words = gtk::Box::new(gtk::Orientation::Vertical, 1);
     words.set_hexpand(true);
-    let category = tx["category"].as_str().unwrap_or(if transfer { "Transfer" } else { "Entry" });
+    let category = super::pages::entry_category(tx);
     let note = tx["note"].as_str().map(str::trim).filter(|n| !n.is_empty());
-    let title = label(note.unwrap_or(category), "threads-panel-name");
+    let title = label(note.unwrap_or(&category), "threads-panel-name");
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
     words.append(&title);
     let mut detail = Vec::new();
     if note.is_some() {
-        detail.push(category.to_string());
+        detail.push(category.clone());
     }
     if transfer {
         detail.push(format!("{} → {}", tx["account"].as_str().unwrap_or(""), tx["to_account"].as_str().unwrap_or("")));

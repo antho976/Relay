@@ -877,11 +877,23 @@ fn entry_name(tx: &Value) -> String {
     if !note.is_empty() {
         return note.to_string();
     }
+    entry_category(tx)
+}
+
+/// An entry's category as every row names it (Entries, the thread panel, a proposal's card): its
+/// own, else "Transfer" or its kind ("Expense", "Income").
+pub(super) fn entry_category(tx: &Value) -> String {
     match text(tx, "category") {
         "" if text(tx, "type") == "TRANSFER" => String::from("Transfer"),
         "" => word(text(tx, "type")),
         name => name.to_string(),
     }
+}
+
+/// An entry's badge, `size` square: a transfer's arrows, else its category's glyph and hue.
+pub(super) fn entry_badge(tx: &Value, size: i32) -> gtk::Box {
+    let transfer = text(tx, "type") == "TRANSFER";
+    badge_sized(if transfer { "repeat" } else { text(tx, "icon") }, if transfer { 10 } else { n(tx, "color") }, size)
 }
 
 /// "Thu 8 Oct", another year adding it: a day as words that still mean it later, unlike "Today".
@@ -1045,7 +1057,7 @@ fn tx_row(ui: &Rc<Ui>, tx: &Value, actions: bool, dated: bool) -> gtk::Box {
     let kind = text(tx, "type");
     let transfer = kind == "TRANSFER";
     let what = entry_name(tx);
-    let badge = badge_sized(if transfer { "repeat" } else { text(tx, "icon") }, if transfer { 10 } else { n(tx, "color") }, 28);
+    let badge = entry_badge(tx, 28);
     // In Entries the badge leads the row outside its key: for an expense or income it is a key of
     // its own, which changes the category.
     let badge_key: Option<gtk::Widget> = if actions && !transfer {
@@ -1075,11 +1087,7 @@ fn tx_row(ui: &Rc<Ui>, tx: &Value, actions: bool, dated: bool) -> gtk::Box {
     let words = gtk::Box::new(gtk::Orientation::Vertical, 1);
     words.set_hexpand(true);
     words.set_valign(gtk::Align::Center);
-    let category = match text(tx, "category") {
-        "" if transfer => String::from("Transfer"),
-        "" => word(kind),
-        name => name.to_string(),
-    };
+    let category = entry_category(tx);
     let mut detail = if text(tx, "note").trim().is_empty() { Vec::new() } else { vec![category] };
     if transfer {
         detail.push(format!("{} → {}", text(tx, "account"), text(tx, "to_account")));
@@ -2666,9 +2674,19 @@ fn export(ui: &Rc<Ui>) {
 #[cfg(test)]
 #[allow(clippy::inconsistent_digit_grouping)]
 mod tests {
-    use super::{left_or_over, plan_reading, signed_whole};
+    use super::{entry_category, left_or_over, plan_reading, signed_whole};
     use relay_money::money::{Locale, MoneyFormatter};
     use serde_json::json;
+
+    /// An entry with no category reads the same on every row: "Transfer" or its kind, never
+    /// "Entry" on one and "Expense" on another.
+    #[test]
+    fn an_entry_without_a_category_is_named_by_its_kind() {
+        assert_eq!(entry_category(&json!({"type": "EXPENSE", "category": "Groceries"})), "Groceries");
+        assert_eq!(entry_category(&json!({"type": "EXPENSE"})), "Expense");
+        assert_eq!(entry_category(&json!({"type": "INCOME", "category": null})), "Income");
+        assert_eq!(entry_category(&json!({"type": "TRANSFER"})), "Transfer");
+    }
 
     /// A strip's signed figure is signed by what it shows: 1–49 cents is "$0", never "+$0".
     #[test]
