@@ -30,6 +30,10 @@ struct Sidebar {
     filter: Option<gtk::SearchEntry>,
     /// Hash of what the tree last rendered; `None` forces the next render to rebuild.
     rendered: Option<u64>,
+    /// What the last rebuild drew that follows the agents without a rebuild: each shown
+    /// project's lamp, and each agent row under the active project by session name.
+    lamps: Vec<(i64, gtk::Box)>,
+    agent_rows: Vec<(String, AgentRow)>,
     /// Projects whose repository is not at its path, as a worker last found: a stat on an
     /// unreachable mount blocks, and the tree is rebuilt on every lamp change and keystroke.
     missing: BTreeSet<i64>,
@@ -88,12 +92,47 @@ fn lamp(agents: &Agents) -> gtk::Box {
     lamp.add_css_class("lamp");
     lamp.add_css_class("small-lamp");
     lamp.set_valign(gtk::Align::Center);
-    if agents.held {
-        lamp.add_css_class("held");
-    } else if agents.running {
-        lamp.add_css_class("live");
-    }
+    light(&lamp, agents.held, agents.running);
     lamp
+}
+
+/// Sets a lamp to held, live or neither, touching its classes only when they change: each
+/// change restyles it.
+fn light(lamp: &gtk::Box, held: bool, running: bool) {
+    for (class, on) in [("held", held), ("live", !held && running)] {
+        if lamp.has_css_class(class) != on {
+            if on {
+                lamp.add_css_class(class);
+            } else {
+                lamp.remove_css_class(class);
+            }
+        }
+    }
+}
+
+/// An agent row's parts that change with its state and intent.
+#[derive(Clone)]
+struct AgentRow {
+    key: gtk::Button,
+    lamp: gtk::Box,
+    doing: gtk::Label,
+}
+
+impl AgentRow {
+    fn show(&self, session: &Value) {
+        let state = text(session, "state");
+        light(&self.lamp, state == "blocked", matches!(state, "running" | "spawning"));
+        let intent = text(session, "intent");
+        if self.doing.text() != intent {
+            self.doing.set_text(intent);
+        }
+        self.doing.set_visible(!intent.is_empty());
+        let name = text(session, "name");
+        let tip = if intent.is_empty() { name.to_string() } else { format!("{name}\n{intent}") };
+        if self.key.tooltip_text().as_deref() != Some(tip.as_str()) {
+            self.key.set_tooltip_text(Some(&tip));
+        }
+    }
 }
 
 fn sorted_children<'a>(projects: &'a [Value], workspace: &Value) -> Vec<&'a Value> {
@@ -174,8 +213,10 @@ impl Ui {
         self.check_paths(&projects);
         let (collapsed, expanded, missing) = sidebar(|s| (s.collapsed.clone(), s.expanded.clone(), s.missing.clone()));
         let sessions = self.sidebar_sessions.borrow().clone();
-        // Only registry, lamp, folding or filter changes rebuild the tree: an agent going
-        // idle in a project that still has one running leaves its lamp, and the tree, as is.
+        // Only what moves rows rebuilds the tree: the registry, folding, the filter, which projects
+        // hold an agent waiting (they never fold away) and the agents listed under the active
+        // project. A lamp, an agent's state and its intent change in place below: rebuilding the
+        // tree for each was ~40 M instructions on the GTK thread per event (a6701d2).
         let signature = {
             use std::hash::{Hash, Hasher};
             let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -192,17 +233,38 @@ impl Ui {
             registry.hash(&mut hash);
             for project in &projects {
                 let agents = agents_in(&sessions, &[id_of(project)]);
-                (agents.open, agents.held, agents.running).hash(&mut hash);
+                (agents.open, agents.held).hash(&mut hash);
             }
-            // The active project's agents are listed under it: who, their state and intent.
+            // A folded group shows a lamp only while an agent in it works or waits.
+            for workspace in workspaces.iter().filter(|w| collapsed.contains(&id_of(w))) {
+                let ids: Vec<i64> = sorted_children(&projects, workspace).iter().map(|p| id_of(p)).collect();
+                let agents = agents_in(&sessions, &ids);
+                (agents.held || agents.running).hash(&mut hash);
+            }
+            // The active project's agents are listed under it, by name.
             for session in sessions.iter().filter(|s| s["project_id"].as_i64() == Some(active) && text(s, "state") != "closed") {
-                (text(session, "name"), text(session, "state"), text(session, "intent")).hash(&mut hash);
+                text(session, "name").hash(&mut hash);
             }
             hash.finish()
         };
         if sidebar(|s| s.rendered.replace(signature)) == Some(signature) {
+            // Cloned out first: GTK may re-enter `render_projects` while the state is borrowed.
+            let (lamps, rows) = sidebar(|s| (s.lamps.clone(), s.agent_rows.clone()));
+            for (id, lamp) in &lamps {
+                let agents = agents_in(&sessions, &[*id]);
+                light(lamp, agents.held, agents.running);
+            }
+            for (name, row) in &rows {
+                if let Some(session) = sessions.iter().find(|s| text(s, "name") == name) {
+                    row.show(session);
+                }
+            }
             return;
         }
+        sidebar(|s| {
+            s.lamps.clear();
+            s.agent_rows.clear();
+        });
         clear(&self.projects_box);
         let mut first_match = None;
         for workspace in &workspaces {
@@ -457,7 +519,9 @@ impl Ui {
         b.set_focus_on_click(false);
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         content.add_css_class("project-content");
-        content.append(&lamp(agents));
+        let light = lamp(agents);
+        sidebar(|s| s.lamps.push((id, light.clone())));
+        content.append(&light);
         let title = label(name, "project-name");
         title.set_hexpand(true);
         title.set_width_chars(1);
@@ -527,7 +591,6 @@ impl Ui {
     /// name and what it says it is doing; a click brings its terminal up.
     fn agent_row(self: &Rc<Self>, session: &Value) -> gtk::Button {
         let name = text(session, "name").to_string();
-        let intent = text(session, "intent").to_string();
         let key = button("", "agent-row");
         key.set_widget_name(&format!("sidebar-agent:{name}"));
         key.set_focus_on_click(false);
@@ -536,11 +599,6 @@ impl Ui {
         lamp.add_css_class("lamp");
         lamp.add_css_class("small-lamp");
         lamp.set_valign(gtk::Align::Start);
-        match text(session, "state") {
-            "blocked" => lamp.add_css_class("held"),
-            "running" | "spawning" => lamp.add_css_class("live"),
-            _ => {}
-        }
         line.append(&lamp);
         let words = gtk::Box::new(gtk::Orientation::Vertical, 1);
         words.set_hexpand(true);
@@ -549,16 +607,17 @@ impl Ui {
         title.set_width_chars(1);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         words.append(&title);
-        if !intent.is_empty() {
-            let doing = label(&intent, "agent-row-doing");
-            doing.set_xalign(0.0);
-            doing.set_width_chars(1);
-            doing.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            words.append(&doing);
-        }
+        // Always there, hidden while there is no intent, so a new intent is a set_text.
+        let doing = label("", "agent-row-doing");
+        doing.set_xalign(0.0);
+        doing.set_width_chars(1);
+        doing.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        words.append(&doing);
         line.append(&words);
         key.set_child(Some(&line));
-        key.set_tooltip_text(Some(&if intent.is_empty() { name.clone() } else { format!("{name}\n{intent}") }));
+        let row = AgentRow { key: key.clone(), lamp, doing };
+        row.show(session);
+        sidebar(|s| s.agent_rows.push((name.clone(), row)));
         let weak = Rc::downgrade(self);
         key.connect_clicked(move |_| {
             if let Some(ui) = weak.upgrade() {

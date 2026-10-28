@@ -726,12 +726,20 @@ impl Pane {
             "exited" => "Resume starts it again where it left off.",
             _ => "No signal from this session.",
         });
+        // Only the classes that change: removing and adding them all restyled the whole pane,
+        // terminal included, on every update.
         for class in ["live", "held", "waiting", "off", "starting"] {
-            self.root.remove_css_class(class);
-            self.lamp.remove_css_class(class);
+            let on = class == lamp;
+            for widget in [self.root.upcast_ref::<gtk::Widget>(), self.lamp.upcast_ref()] {
+                if widget.has_css_class(class) != on {
+                    if on {
+                        widget.add_css_class(class);
+                    } else {
+                        widget.remove_css_class(class);
+                    }
+                }
+            }
         }
-        self.root.add_css_class(lamp);
-        self.lamp.add_css_class(lamp);
     }
 
     /// A launch in flight: the pane is on the wall before its provider exists, and says which

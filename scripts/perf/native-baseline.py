@@ -153,6 +153,8 @@ def main():
                     help="with --board-tasks: the first launch of each size runs under perf record from just before the timed opening")
     ap.add_argument("--burst-only", action="store_true",
                     help="only the session-event row: user-space instructions on the GTK thread per session.changed on the Agents page")
+    ap.add_argument("--burst-page", default="agents",
+                    help="with --burst-only: the page the client sits on (board puts the terminal panes off screen, leaving the sidebar)")
     ap.add_argument("--events-only", action="store_true",
                     help="only the file-event row: the main thread's path syscalls while files change under the Code page (lead 10)")
     ap.add_argument("--skip-build", action="store_true")
@@ -339,14 +341,17 @@ def main():
                 return {"page": "code", "touches": touches, "window_s": round(end - start, 2), "path_syscalls_main_thread": calls,
                         "per_touch": round(calls / touches, 1) if touches else None}
 
-            def session_burst_row(label, events):
+            def session_burst_row(label, events, intent=False):
                 # `events` session.update calls (allow_ui flipped on the fixture's sessions, 50 a
                 # second), each answered by a session.changed row the client applies in place:
-                # sidebar, wall and status bar. perf counts the GTK thread's user-space
-                # instructions over the burst and its settle, against the same window idle.
+                # sidebar, wall and status bar. With `intent`, session.intent calls instead: the
+                # sidebar shows an active project's agents and what each says it is doing, which
+                # allow_ui never reaches (a6701d2 rebuilt the whole tree on each, 2026-10-28).
+                # perf counts the GTK thread's user-space instructions over the burst and its
+                # settle, against the same window idle.
                 quiet = int(args.quiet_after + 0.999)
                 shot = out_dir / f"{label}.png"
-                penv = dict(desktop_env, RELAY_NATIVE_SCREENSHOT=str(shot), RELAY_NATIVE_SIZE=args.size, RELAY_NATIVE_PAGE="agents",
+                penv = dict(desktop_env, RELAY_NATIVE_SCREENSHOT=str(shot), RELAY_NATIVE_SIZE=args.size, RELAY_NATIVE_PAGE=args.burst_page,
                             RELAY_NATIVE_SMOKE_SECONDS=str(2 + quiet + 10 + EXIT_MARGIN))
                 with open(out_dir / f"{label}.log", "w") as plog:
                     native = subprocess.Popen([str(NATIVE)], env=penv, stdout=plog, stderr=plog)
@@ -356,7 +361,10 @@ def main():
                         stat = subprocess.Popen(["perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-t", str(native.pid), "-o", str(stat_out), "--", "sleep", "8"])
                         time.sleep(0.3)
                         for i in range(events):
-                            call("session.update", {"session": sessions[i % len(sessions)], "allow_ui": bool(i % 2)})
+                            if intent:
+                                call("session.intent", {"session": sessions[i % len(sessions)], "text": f"Burst intent step {i}"})
+                            else:
+                                call("session.update", {"session": sessions[i % len(sessions)], "allow_ui": bool(i % 2)})
                             time.sleep(float(os.environ.get("RELAY_PERF_BURST_GAP", "0.02")))
                         stat.wait(timeout=30)
                         native.wait(timeout=60)
@@ -369,7 +377,8 @@ def main():
                     parts = line.split(",")
                     if len(parts) > 2 and parts[0].replace(".", "", 1).isdigit():
                         counts[parts[2].split(":")[0]] = float(parts[0])
-                return {"page": "agents", "events": events, "instructions_u": counts.get("instructions"), "task_clock_ms": counts.get("task-clock")}
+                return {"page": args.burst_page, "events": events, "op": "session.intent" if intent else "session.update",
+                        "instructions_u": counts.get("instructions"), "task_clock_ms": counts.get("task-clock")}
 
             def board_row(label, total):
                 # Tasks added up to `total` across the columns, then the board opened six times
@@ -450,15 +459,17 @@ def main():
                 args.events_only = True
             elif args.burst_only:
                 rows = {}
-                for label, events in (("burst-idle", 0), ("burst-200", 200)):
+                for label, events, intent in (("burst-idle", 0, False), ("burst-200", 200, False), ("burst-intent-200", 200, True)):
                     log(f"{label}: {events} session.changed on the Agents page")
                     try:
-                        rows[label] = result["pages"][label] = session_burst_row(label, events)
+                        rows[label] = result["pages"][label] = session_burst_row(label, events, intent)
                     except Exception as e:
                         result["pages"][label] = {"page": "agents", "error": str(e)}
-                idle, busy = rows.get("burst-idle", {}), rows.get("burst-200", {})
-                if idle.get("instructions_u") and busy.get("instructions_u"):
-                    result["pages"]["burst-200"]["instructions_per_event"] = round((busy["instructions_u"] - idle["instructions_u"]) / 200)
+                idle = rows.get("burst-idle", {})
+                for label in ("burst-200", "burst-intent-200"):
+                    busy = rows.get(label, {})
+                    if idle.get("instructions_u") and busy.get("instructions_u"):
+                        result["pages"][label]["instructions_per_event"] = round((busy["instructions_u"] - idle["instructions_u"]) / 200)
                 args.pages = ""
                 args.hidden_only = True
                 args.events_only = True
@@ -541,10 +552,10 @@ def main():
             lines.append(f"| {name} | {row['tasks']} | {row['cold_ms']} ms | {', '.join(f'{t:.0f}' for t in row['cold_ms_all'])} | {row['reopen_ms_median']} ms | {row['reopen_ms_max']} ms |")
     bursts = [(n, r) for n, r in result["pages"].items() if "instructions_u" in r]
     if bursts:
-        lines += ["", "## GTK thread during a session.changed burst (Agents page, 8 s window)", "",
-                  "| row | events | instructions (user) | task-clock | per event, over idle |", "|---|---:|---:|---:|---:|"]
+        lines += ["", "## GTK thread during a session.changed burst (8 s window)", "",
+                  "| row | page | events | instructions (user) | task-clock | per event, over idle |", "|---|---|---:|---:|---:|---:|"]
         for name, row in bursts:
-            lines.append(f"| {name} | {row['events']} | {row['instructions_u']:,.0f} | {row['task_clock_ms']:.1f} ms | {row.get('instructions_per_event', '')} |")
+            lines.append(f"| {name} | {row['page']} | {row['events']} | {row['instructions_u']:,.0f} | {row['task_clock_ms']:.1f} ms | {row.get('instructions_per_event', '')} |")
     events = [(n, r) for n, r in result["pages"].items() if "path_syscalls_main_thread" in r]
     if events:
         lines += ["", "## Path lookups on the GTK thread while files change (Code page)", "",
