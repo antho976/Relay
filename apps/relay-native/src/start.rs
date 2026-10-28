@@ -220,6 +220,48 @@ const RIPPLE_US: f64 = 1_800_000.0;
 /// A click on the field: where, and the frame-clock time it landed.
 type Tap = ((f64, f64), i64);
 
+/// The stage's tick, run only while something on it moves: the opening, a ripple, the pointer's
+/// light easing, a pulse. Between pulses it stops and a timeout brings it back for the next one;
+/// pointer motion and clicks bring it back at once. Ticking every frame for the screen's whole
+/// life was 16 % CPU and 360 wakeups/s with the screen sitting open (2026-10-28 audit).
+/// One frame of the stage: `None` while something moves, else how long until the next pulse.
+type Frame = Box<dyn Fn(&gtk::gdk::FrameClock, bool) -> Option<std::time::Duration>>;
+
+struct Ticker {
+    screen: glib::WeakRef<gtk::Box>,
+    frame: Frame,
+    ticking: Cell<bool>,
+    /// The frame after the tick (re)starts measures no time: the pointer eases from there.
+    fresh: Cell<bool>,
+    wake: Cell<Option<glib::SourceId>>,
+}
+
+fn arm(ticker: &Rc<Ticker>) {
+    if let Some(wake) = ticker.wake.take() {
+        wake.remove();
+    }
+    if ticker.ticking.replace(true) {
+        return;
+    }
+    let Some(screen) = ticker.screen.upgrade() else {
+        return;
+    };
+    ticker.fresh.set(true);
+    let me = ticker.clone();
+    screen.add_tick_callback(move |_, clock| {
+        let Some(wait) = (me.frame)(clock, me.fresh.replace(false)) else {
+            return glib::ControlFlow::Continue;
+        };
+        me.ticking.set(false);
+        let again = me.clone();
+        me.wake.set(Some(glib::timeout_add_local_once(wait, move || {
+            again.wake.set(None);
+            arm(&again);
+        })));
+        glib::ControlFlow::Break
+    });
+}
+
 /// The farthest corner of a `w`×`h` field from `p`.
 fn farthest((w, h): (f64, f64), p: (f64, f64)) -> f64 {
     [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].iter().map(|&(x, y)| (x - p.0).hypot(y - p.1)).fold(1.0, f64::max)
@@ -653,87 +695,116 @@ pub fn build(greeting: &str, remembered: &str, pick: Rc<dyn Fn(usize)>) -> Built
         // there. Where the pointer is, and each ripple with the frame it started on.
         let aim: Rc<Cell<Option<(f64, f64)>>> = Rc::default();
         let taps: Rc<std::cell::RefCell<Vec<Tap>>> = Rc::default();
+
+        let start = Cell::new(None::<i64>);
+        let last = Cell::new(None::<i64>);
+        let ticker = {
+            let (field, mark, aim, taps) = (field.clone(), mark.clone(), aim.clone(), taps.clone());
+            Rc::new(Ticker {
+                screen: screen.downgrade(),
+                ticking: Cell::new(false),
+                fresh: Cell::new(true),
+                wake: Cell::new(None),
+                frame: Box::new(move |clock, fresh| {
+                    let now = clock.frame_time();
+                    let began = start.get().unwrap_or(now);
+                    start.set(Some(began));
+                    let elapsed = (now - began) as f64;
+                    if fresh {
+                        last.set(None);
+                    }
+                    let dt = (now - last.replace(Some(now)).unwrap_or(now)) as f64;
+                    // The pointer's light eases after it and fades in and out, rather than snapping.
+                    let was = pointer.get();
+                    let k = 1.0 - (-dt / 70_000.0).exp();
+                    let mut next = was;
+                    next.strength += (if aim.get().is_some() { 1.0 } else { 0.0 } - was.strength) * k;
+                    if let Some(to) = aim.get() {
+                        next.at = if was.strength < 0.01 { to } else { (was.at.0 + (to.0 - was.at.0) * k, was.at.1 + (to.1 - was.at.1) * k) };
+                    }
+                    if next.strength < 0.005 && aim.get().is_none() {
+                        next.strength = 0.0;
+                    }
+                    pointer.set(next);
+                    let moved = (next.at.0 - was.at.0).hypot(next.at.1 - was.at.1) > 0.2 || (next.strength - was.strength).abs() > 0.002;
+
+                    let mut list = waves.borrow_mut();
+                    let before = !list.is_empty() || beat.get() > 0.0;
+                    list.clear();
+                    taps.borrow_mut().retain(|&(_, at)| ((now - at) as f64) < RIPPLE_US);
+                    for &(from, at) in taps.borrow().iter() {
+                        list.push(Wave { from: Some(from), progress: (now - at) as f64 / RIPPLE_US, strength: 0.7 });
+                    }
+                    if t.get() < 1.0 {
+                        drop(list);
+                        let p = (elapsed / DURATION_US).clamp(0.0, 1.0);
+                        t.set(p);
+                        apply(p);
+                        return None;
+                    }
+                    // Settled: a pulse every few seconds, the first one shortly after the opening.
+                    let since = elapsed - DURATION_US - 900_000.0;
+                    let mut next_pulse = -since;
+                    if since >= 0.0 {
+                        let into = since.rem_euclid(PULSE_EVERY_US);
+                        next_pulse = PULSE_EVERY_US - into;
+                        if into < PULSE_US {
+                            list.push(Wave { from: None, progress: into / PULSE_US, strength: 0.55 });
+                        }
+                        // The signal swells and eases back as the wave leaves it.
+                        let b = (into / 420_000.0).min(1.0);
+                        beat.set(if into < 420_000.0 { (b * PI).sin() } else { 0.0 });
+                    }
+                    let busy = !list.is_empty() || before || moved;
+                    if busy {
+                        field.queue_draw();
+                    }
+                    if beat.get() > 0.0 || before {
+                        mark.queue_draw();
+                    }
+                    // Still for now: sleep until the next pulse, a frame or so early.
+                    (!busy && !fresh && beat.get() == 0.0).then(|| {
+                        std::time::Duration::from_micros(next_pulse.max(0.0) as u64)
+                            .saturating_sub(std::time::Duration::from_millis(20))
+                    })
+                }),
+            })
+        };
         let motion = gtk::EventControllerMotion::new();
         {
-            let aim = aim.clone();
-            motion.connect_enter(move |_, x, y| aim.set(Some((x, y))));
+            let (aim, ticker) = (aim.clone(), ticker.clone());
+            motion.connect_enter(move |_, x, y| {
+                aim.set(Some((x, y)));
+                arm(&ticker);
+            });
         }
         {
-            let aim = aim.clone();
-            motion.connect_motion(move |_, x, y| aim.set(Some((x, y))));
+            let (aim, ticker) = (aim.clone(), ticker.clone());
+            motion.connect_motion(move |_, x, y| {
+                aim.set(Some((x, y)));
+                arm(&ticker);
+            });
         }
         {
-            let aim = aim.clone();
-            motion.connect_leave(move |_| aim.set(None));
+            let (aim, ticker) = (aim.clone(), ticker.clone());
+            motion.connect_leave(move |_| {
+                aim.set(None);
+                arm(&ticker);
+            });
         }
         stage.add_controller(motion);
         let click = gtk::GestureClick::new();
         {
-            let taps = taps.clone();
+            let (taps, ticker) = (taps.clone(), ticker.clone());
             click.connect_pressed(move |gesture, _, x, y| {
                 if let Some(clock) = gesture.widget().and_then(|w| w.frame_clock()) {
                     taps.borrow_mut().push(((x, y), clock.frame_time()));
+                    arm(&ticker);
                 }
             });
         }
         stage.add_controller(click);
-
-        let start = Cell::new(None::<i64>);
-        let last = Cell::new(None::<i64>);
-        let (field, mark) = (field.clone(), mark.clone());
-        screen.add_tick_callback(move |_, clock| {
-            let now = clock.frame_time();
-            let began = start.get().unwrap_or(now);
-            start.set(Some(began));
-            let elapsed = (now - began) as f64;
-            let dt = (now - last.replace(Some(now)).unwrap_or(now)) as f64;
-            // The pointer's light eases after it and fades in and out, rather than snapping.
-            let was = pointer.get();
-            let k = 1.0 - (-dt / 70_000.0).exp();
-            let mut next = was;
-            next.strength += (if aim.get().is_some() { 1.0 } else { 0.0 } - was.strength) * k;
-            if let Some(to) = aim.get() {
-                next.at = if was.strength < 0.01 { to } else { (was.at.0 + (to.0 - was.at.0) * k, was.at.1 + (to.1 - was.at.1) * k) };
-            }
-            if next.strength < 0.005 && aim.get().is_none() {
-                next.strength = 0.0;
-            }
-            pointer.set(next);
-            let moved = (next.at.0 - was.at.0).hypot(next.at.1 - was.at.1) > 0.2 || (next.strength - was.strength).abs() > 0.002;
-
-            let mut list = waves.borrow_mut();
-            let before = !list.is_empty() || beat.get() > 0.0;
-            list.clear();
-            taps.borrow_mut().retain(|&(_, at)| ((now - at) as f64) < RIPPLE_US);
-            for &(from, at) in taps.borrow().iter() {
-                list.push(Wave { from: Some(from), progress: (now - at) as f64 / RIPPLE_US, strength: 0.7 });
-            }
-            if t.get() < 1.0 {
-                drop(list);
-                let p = (elapsed / DURATION_US).clamp(0.0, 1.0);
-                t.set(p);
-                apply(p);
-                return glib::ControlFlow::Continue;
-            }
-            // Settled: a pulse every few seconds, the first one shortly after the opening.
-            let since = elapsed - DURATION_US - 900_000.0;
-            if since >= 0.0 {
-                let into = since.rem_euclid(PULSE_EVERY_US);
-                if into < PULSE_US {
-                    list.push(Wave { from: None, progress: into / PULSE_US, strength: 0.55 });
-                }
-                // The signal swells and eases back as the wave leaves it.
-                let b = (into / 420_000.0).min(1.0);
-                beat.set(if into < 420_000.0 { (b * PI).sin() } else { 0.0 });
-            }
-            if !list.is_empty() || before || moved {
-                field.queue_draw();
-            }
-            if beat.get() > 0.0 || before {
-                mark.queue_draw();
-            }
-            glib::ControlFlow::Continue
-        });
+        arm(&ticker);
     }
     let lines: [gtk::Label; 3] = lines.try_into().expect("three cards");
     let rows: [gtk::Box; 3] = recents.try_into().expect("three cards");
