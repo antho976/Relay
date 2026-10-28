@@ -361,13 +361,9 @@ fn caption(decoded: &Decoded, size: u64, path: &str) -> String {
     format!("{} × {} · {} · {format}", decoded.original.0, decoded.original.1, file_size(size))
 }
 
-/// A file's size in MiB from one MiB up, else in whole KiB (never 0).
+/// A file's size, as every other page writes one.
 fn file_size(size: u64) -> String {
-    if size >= 1048576 {
-        format!("{:.1} MiB", size as f64 / 1048576.)
-    } else {
-        format!("{:.0} KiB", (size as f64 / 1024.).max(1.))
-    }
+    relay_client::figures::bytes(size)
 }
 
 /// Fill a hover card from a thumbnail, or its error.

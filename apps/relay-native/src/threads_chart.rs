@@ -23,7 +23,7 @@
 //! payload>, "cutoff": "2025-03-01"}`. It draws the closes, a strategy's buys (filled green) and
 //! sells (hollow), and, given `cutoff`, where the model's memory ends: what it may remember is
 //! shaded. It reads again on every `arbiter.changed` (`refresh_prices`).
-use super::pages::HUES;
+use super::pages::{rgb, HUES};
 use crate::app::{clear, label};
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -62,11 +62,6 @@ thread_local! {
     static PRICES: RefCell<Vec<PriceLive>> = const { RefCell::new(Vec::new()) };
     /// Training charts, to read again when a newer Avex export comes in.
     static GYM: RefCell<Vec<GymLive>> = const { RefCell::new(Vec::new()) };
-}
-
-fn rgb(hex: &str) -> (f64, f64, f64) {
-    let v = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(0xEDE9E2);
-    (f64::from((v >> 16) & 0xFF) / 255.0, f64::from((v >> 8) & 0xFF) / 255.0, f64::from(v & 0xFF) / 255.0)
 }
 
 fn series_color(index: usize, count: usize) -> &'static str {

@@ -18,6 +18,7 @@ use gtk::prelude::*;
 use gtk::{gdk, gio};
 use gtk4 as gtk;
 use relay_bus::ops::video::{frame_label, Composition, GetOut, RenderState, Video, VideoRender};
+use relay_client::figures::group;
 use serde_json::{json, Map, Value};
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -217,7 +218,7 @@ fn clear(b: &gtk::Box) {
 }
 
 fn megabytes(bytes: i64) -> String {
-    if bytes >= 1_000_000 { format!("{:.1} MB", bytes as f64 / 1e6) } else { format!("{} kB", (bytes as f64 / 1e3).round()) }
+    relay_client::figures::bytes(bytes.max(0) as u64)
 }
 
 /// Whether a render's file plays here.
@@ -231,18 +232,6 @@ fn sound_line(audio: &relay_bus::ops::video::AudioReport) -> String {
     line
 }
 
-/// 99000 as 99,000.
-fn group(n: i64) -> String {
-    let digits = n.unsigned_abs().to_string();
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    if n < 0 { format!("-{out}") } else { out }
-}
 
 /// The render the progress bar shows and Stop cancels: the one rendering, else the oldest still
 /// queued, the next to run. `renders` comes newest first.

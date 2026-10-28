@@ -1175,12 +1175,7 @@ fn backup_reason(reason: &str) -> String {
 }
 
 fn size(bytes: u64) -> String {
-    match bytes {
-        b if b >= 1 << 30 => format!("{:.1} GB", b as f64 / f64::from(1u32 << 30)),
-        b if b >= 1 << 20 => format!("{:.1} MB", b as f64 / f64::from(1u32 << 20)),
-        b if b >= 1 << 10 => format!("{:.0} KB", b as f64 / 1024.),
-        b => format!("{b} B"),
-    }
+    relay_client::figures::bytes(bytes)
 }
 
 /// Search hides the categories with no match and shows the first that has one.

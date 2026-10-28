@@ -31,13 +31,7 @@ const WIDTH: i32 = 420;
 
 /// The Claude models the assistant may run on: (id, caption). An empty id is Claude's default.
 /// The models on this PC follow them in the picker (`thread.models`).
-const MODELS: [(&str, &str); 5] = [
-    ("", "Default model"),
-    ("claude-opus-5-5", "Opus 5.5"),
-    ("claude-sonnet-5-5", "Sonnet 5.5"),
-    ("claude-haiku-5-5", "Haiku 5.5"),
-    ("claude-fable-5-1", "Fable 5.1"),
-];
+const MODELS: [(&str, &str); 5] = relay_client::models::CLAUDE;
 
 /// How hard a Claude model thinks: (value, caption), as `claude --effort` takes them. A model on
 /// this PC has none.
@@ -1481,7 +1475,7 @@ fn fill_efforts(a: &Assistant) {
 }
 
 fn is_local(a: &Assistant, model: &str) -> bool {
-    a.local.borrow().iter().any(|(id, _)| id == model) || (!model.is_empty() && !model.starts_with("claude-"))
+    relay_client::models::is_local(model, a.local.borrow().iter().map(|(id, _)| id.as_str()))
 }
 
 /// A model's caption: Claude's name for it, the local model's, or its id.

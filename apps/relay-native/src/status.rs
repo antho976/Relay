@@ -230,13 +230,10 @@ struct RowData {
     size: f64,
 }
 
-/// Megabytes as people read them: MB below a gigabyte, one decimal below ten.
+/// The engine's mebibytes (`rss_mb`, `disk_mb`) as every page writes a size: MB below a
+/// gigabyte, one decimal below ten.
 fn amount(mb: f64) -> String {
-    match mb.max(0.) {
-        mb if mb < 1024. => format!("{mb:.0} MB"),
-        mb if mb < 10240. => format!("{:.1} GB", mb / 1024.),
-        mb => format!("{:.0} GB", mb / 1024.),
-    }
+    relay_client::figures::mebibytes(mb)
 }
 
 /// The project a worktree belongs to: the directory holding `.relay/worktrees`, or the one
@@ -548,9 +545,10 @@ mod tests {
 
     #[test]
     fn amounts_read_in_the_unit_people_use() {
-        assert_eq!(amount(75.4), "75 MB");
-        assert_eq!(amount(2432.7), "2.4 GB");
-        assert_eq!(amount(64887.8), "63 GB");
+        // In powers of 1000, as every page writes a size: 75.4 MiB is 79 MB.
+        assert_eq!(amount(75.4), "79 MB");
+        assert_eq!(amount(2432.7), "2.6 GB");
+        assert_eq!(amount(64887.8), "68 GB");
     }
 
     #[test]

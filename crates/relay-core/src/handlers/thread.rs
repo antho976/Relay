@@ -132,9 +132,9 @@ fn register_asks(e: &mut Engine) {
         };
         let now = ctx.now.clone();
         let allowed = asks::Allowed::read(ctx.tx());
-        let ask = asks::ask(ctx.engine(), thread, p.steps, &p.why, &allowed, &now)?;
+        let (ask, runs) = asks::ask(ctx.engine(), thread, p.steps, &p.why, &allowed, &now)?;
         ctx.emit("thread.ask", json!({"thread": thread, "ask": ask}));
-        if ask.status == "running" {
+        if runs {
             let id = ask.id;
             ctx.finish_reply(move |engine, reply| match asks::carry_out(engine, id) {
                 Ok(done) => {

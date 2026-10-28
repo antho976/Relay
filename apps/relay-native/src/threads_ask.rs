@@ -413,13 +413,12 @@ fn activity_row(a: &Value) -> gtk::Box {
     }
     let currency = a["currency"].as_str().unwrap_or("CAD");
     let fmt = MoneyFormatter::new(currency, Locale::from_env());
-    let kind = a["type"].as_str().unwrap_or("").replace('_', " ").to_lowercase();
-    let title = match a["symbol"].as_str().filter(|s| !s.is_empty()) {
-        Some(symbol) => format!("{symbol}, {kind}"),
-        None => kind,
-    };
+    let kind = a["type"].as_str().unwrap_or("");
+    // As the Investments page shows it.
+    let (glyph, flow, class) = super::invest::activity_look(kind, a["symbol"].as_str().is_some_and(|s| !s.is_empty()));
+    let figure = if kind == "SPLIT" { String::new() } else { super::invest::activity_figure(&fmt, n(&a["amount"]), flow) };
     let detail = [a["account"].as_str().unwrap_or("").to_string(), human_date(a["date"].as_str().unwrap_or(""))].join(" \u{b7} ");
-    icon_row(&tile("invest"), &title, &detail, &fmt.format(n(&a["amount"])), "")
+    icon_row(&tile(glyph), &super::invest::activity_title(a), &detail, &figure, class)
 }
 
 fn account_row(item: &Value, fmt: &MoneyFormatter) -> gtk::Box {

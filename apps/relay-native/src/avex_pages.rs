@@ -71,22 +71,14 @@ fn trimmed(x: f64) -> String {
     }
 }
 
-/// `12,500`.
-pub(super) fn group(n: i64) -> String {
-    let digits = n.unsigned_abs().to_string();
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    if n < 0 {
-        format!("−{out}")
-    } else {
-        out
-    }
+/// "1 day", "3 days", "2.5 days": `one` only for what reads as 1.
+fn counted(x: f64, one: &str, many: &str) -> String {
+    let shown = trimmed(x);
+    format!("{shown} {}", if shown == "1" { one } else { many })
 }
+
+/// `12,500`; the charts and the thread panel group with it too.
+pub(super) use relay_client::figures::group;
 
 fn volume(v: &Value, unit: &str) -> String {
     format!("{} {unit}", group(num(v).unwrap_or(0.0).round() as i64))
@@ -109,23 +101,14 @@ fn minutes(m: i64) -> String {
     }
 }
 
-/// `+4.9%`, `−3.1%`.
+/// `+4.9%`, `−3.1%`, and `0.0%` for a change that rounds to none.
 fn pct(c: f64) -> String {
-    if c < 0.0 {
-        format!("−{:.1}%", -c)
-    } else {
-        format!("+{c:.1}%")
-    }
+    relay_client::figures::percent(c, true)
 }
 
-/// `+5%`, `−12%`.
+/// `+5%`, `−12%`, `0%`.
 fn whole_pct(c: f64) -> String {
-    let r = c.round() as i64;
-    if r < 0 {
-        format!("−{}%", -r)
-    } else {
-        format!("+{r}%")
-    }
+    relay_client::figures::whole_percent(c)
 }
 
 /// `+10 lb`, `−2.5 kg`.
@@ -140,13 +123,7 @@ fn signed_weight(d: f64, unit: &str) -> String {
 /// What a failed call says on the page: the engine's own sentence, never its code. An engine
 /// without Avex says so plainly.
 pub(super) fn said(e: &Error) -> String {
-    match e {
-        Error::Bus(b) if matches!(b.code.as_str(), "bus.unknown_op" | "bus.not_implemented") => {
-            String::from("This engine does not read Avex yet. Update Relay's engine to see your training here.")
-        }
-        Error::Bus(b) => b.message.clone(),
-        e => e.to_string(),
-    }
+    super::kit::said(e, "This engine does not read Avex yet. Update Relay's engine to see your training here.")
 }
 
 // ---- How old the copy is -------------------------------------------------------------------
@@ -663,16 +640,7 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str) {
 
 fn failed(ui: &Rc<Ui>, page: &Page, name: &str, error: &Error) {
     heading(&page.head, name, "", &[]);
-    message(&page.body, &said(error));
-    let retry = button("Try again", "money-secondary");
-    retry.set_halign(gtk::Align::Start);
-    let weak = Rc::downgrade(ui);
-    retry.connect_clicked(move |_| {
-        if let Some(ui) = weak.upgrade() {
-            ui.refresh_page();
-        }
-    });
-    page.body.append(&retry);
+    super::kit::failed(ui, &page.body, &said(error));
 }
 
 /// Before anything was imported: what Avex is to Relay, and the three steps to bring it in.
@@ -1054,9 +1022,9 @@ fn goal_row(ui: &Rc<Ui>, g: &Value, unit: &str) -> gtk::Box {
             let lift = if best.is_object() { text(best, "lift").to_string() } else { word(key) };
             format!("{lift} to an est. max of {} {unit}", trimmed(v))
         }
-        ("consistency", Some(v)) => format!("Train {} days a week", trimmed(v)),
+        ("consistency", Some(v)) => format!("Train {} a week", counted(v, "day", "days")),
         ("conditioning", Some(v)) => format!("{} min of cardio a week", trimmed(v)),
-        ("muscle_volume", Some(v)) => format!("{}: {} sets a week", word(key), trimmed(v)),
+        ("muscle_volume", Some(v)) => format!("{}: {} a week", word(key), counted(v, "set", "sets")),
         ("bodyweight", Some(v)) => format!("Body weight {} {unit}", trimmed(v)),
         (k, Some(v)) if key.is_empty() => format!("{}: {}", word(k), trimmed(v)),
         (k, Some(v)) => format!("{}: {} · {}", word(k), word(key), trimmed(v)),
@@ -1699,21 +1667,10 @@ pub(super) fn panel_draw(ui: &Rc<Ui>, body: &gtk::Box, _tab: &str, v: &Value) {
 
 /// A titled block of the thread panel, as Tally's panel draws them, with a quiet way into Avex.
 fn panel_block(body: &gtk::Box, name: &str, link: Option<(&str, Action)>) -> gtk::Box {
-    let b = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    b.add_css_class("threads-block");
-    let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let title = label(name, "threads-caption");
-    title.set_hexpand(true);
-    title.set_valign(gtk::Align::Center);
-    head.append(&title);
+    let b = super::kit::panel_block(body, name, "");
     if let Some((caption, run)) = link {
-        let key = button(caption, "money-text-action");
-        key.add_css_class("avex-panel-link");
-        key.connect_clicked(move |_| run());
-        head.append(&key);
+        super::kit::block_link(&b, caption, move || run());
     }
-    b.append(&head);
-    body.append(&b);
     b
 }
 
@@ -1800,7 +1757,7 @@ fn panel_overview(ui: &Rc<Ui>, body: &gtk::Box, s: &Value, age: Option<&Age>) {
         words.set_ellipsize(gtk::pango::EllipsizeMode::End);
         notice.append(&words);
         let key = import_key(ui, "Import newer…", "money-text-action");
-        key.add_css_class("avex-panel-link");
+        key.add_css_class("threads-panel-link");
         notice.append(&key);
         head.append(&notice);
     }
@@ -1855,5 +1812,19 @@ mod tests {
         assert_eq!(exported_at_in(head).as_deref(), Some("2026-10-08 21:14"));
         assert_eq!(exported_at_in("{\"exportedAt\": \"soon\"}"), None);
         assert_eq!(exported_at_in("{\"sessions\": ["), None);
+    }
+
+    /// A goal of one day reads "Train 1 day a week", not "1 days"; a change that rounds to none
+    /// has no sign.
+    #[test]
+    fn counts_and_changes_read_right_at_one_and_zero() {
+        assert_eq!(counted(1.0, "day", "days"), "1 day");
+        assert_eq!(counted(1.02, "day", "days"), "1 day");
+        assert_eq!(counted(3.0, "day", "days"), "3 days");
+        assert_eq!(counted(2.5, "set", "sets"), "2.5 sets");
+        assert_eq!(pct(0.0), "0.0%");
+        assert_eq!(pct(-3.12), "\u{2212}3.1%");
+        assert_eq!(whole_pct(0.2), "0%");
+        assert_eq!(group(-1_200), "\u{2212}1,200");
     }
 }

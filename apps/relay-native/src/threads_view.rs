@@ -12,11 +12,14 @@
 //! The page never holds the window open: its scrollers keep their content's width to themselves
 //! (`PolicyType::External`), and width probes size the conversation (`fit`) and put the panel away
 //! on a narrow page (`apply_panel`).
-use super::pages::{badge, badge_sized, human_date, meter_in, tile, tone, tone_class, Tone};
+use super::invest::gain_class;
+use super::kit::{block_link, panel_block as block};
+use super::pages::{badge, badge_sized, human_date, left_or_over, meter_in, tile, tone, tone_class, Tone};
 use super::pictures::{self, Attached, Source, MAX_PICTURES};
 use crate::app::{button, clear, label, Ui};
 use gtk::prelude::*;
 use gtk4 as gtk;
+use relay_client::models;
 use relay_client::thread_view::{chart_spec, import_spec, markdown, tool_caption, tool_op, tool_writes, Block};
 use relay_money::copy::{plural, plural_as};
 use relay_money::money::{Locale, MoneyFormatter};
@@ -46,14 +49,8 @@ const AVEX_SUGGESTIONS: [(&str, &str); 4] = [
     ("Am I training consistently?", "Weeks in a row and days a week"),
 ];
 
-/// The models a thread may run on: (id, caption). An empty id is Claude's own default.
-const MODELS: [(&str, &str); 5] = [
-    ("", "Default model"),
-    ("claude-opus-5-5", "Opus 5.5"),
-    ("claude-sonnet-5-5", "Sonnet 5.5"),
-    ("claude-haiku-5-5", "Haiku 5.5"),
-    ("claude-fable-5-1", "Fable 5.1"),
-];
+/// The Claude models a thread may run on: (id, caption). An empty id is Claude's own default.
+const MODELS: [(&str, &str); 5] = models::CLAUDE;
 
 /// How long a local model may sit unused before its server stops: (minutes, caption); 0 never.
 const IDLE_CHOICES: [(u64, &str); 5] = [(5, "5 min"), (15, "15 min"), (30, "30 min"), (60, "1 hour"), (0, "Never")];
@@ -1542,7 +1539,7 @@ fn fill_local(v: &View, models: &[(String, String)], idle_minutes: u64) {
 }
 
 fn is_local(model: &str) -> bool {
-    !model.is_empty() && STATE.with(|s| s.local_models.borrow().iter().any(|(id, _)| id == model))
+    STATE.with(|s| models::is_local(model, s.local_models.borrow().iter().map(|(id, _)| id.as_str())))
 }
 
 fn caption_of(options: &[(&str, &'static str)], value: &str) -> String {
@@ -1595,7 +1592,9 @@ fn choose(model: Option<&str>, effort: Option<&str>) {
     if let Some(v) = view() {
         show_choice(&v, &model, &effort);
     }
-    if picked.is_some() {
+    // Only a local pick goes to `thread.pick`: picking Claude there would stop the local model
+    // the assistant's drawer, or another conversation, may be answering on.
+    if picked.is_some() && is_local(&model) {
         if let Some(ui) = the_ui() {
             let model = model.clone();
             glib::spawn_future_local(async move {
@@ -1606,6 +1605,8 @@ fn choose(model: Option<&str>, effort: Option<&str>) {
         }
     }
     let (Some(ui), Some(id)) = (the_ui(), current()) else { return };
+    // A local model has no effort: the thread keeps none while on it.
+    let effort = if is_local(&model) { String::new() } else { effort };
     glib::spawn_future_local(async move {
         match ui.call("thread.set", json!({"id": id, "model": model, "effort": effort})).await {
             Ok(thread) => {
@@ -1800,11 +1801,6 @@ fn month_line(s: &Value) -> String {
     } else {
         format!("{when} so far: {spent} spent. Ask anything, or tell it what to change.")
     }
-}
-
-/// "$475 left", or "$50 over" once it is spent past: never "−$50 left".
-fn left_or_over(fmt: &MoneyFormatter, left: i64) -> String {
-    if left < 0 { format!("{} over", fmt.format_whole(-left)) } else { format!("{} left", fmt.format_whole(left)) }
 }
 
 /// The questions a new thread offers, from what the ledger shows: the budget furthest ahead of its
@@ -3363,12 +3359,8 @@ fn activity_card(a: &Value) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     card.add_css_class("threads-card");
     let kind = a["type"].as_str().unwrap_or("");
-    // Money in, money out, or neither (an exchange, a split, a reinvested dividend).
-    let (icon, sign) = match kind {
-        "DEPOSIT" | "TRANSFER_IN" | "DIVIDEND" | "INTEREST" | "CREDIT" | "RETURN_OF_CAPITAL" | "SELL" => ("income", "+"),
-        "WITHDRAWAL" | "TRANSFER_OUT" | "FEE" | "TAX" | "BUY" => ("spend", "−"),
-        _ => ("repeat", ""),
-    };
+    // As the Investments page shows it: money in, money out, or neither.
+    let (icon, flow, class) = super::invest::activity_look(kind, a["symbol"].as_str().is_some_and(|s| !s.is_empty()));
     card.append(&tile(icon));
     let words = gtk::Box::new(gtk::Orientation::Vertical, 2);
     words.set_hexpand(true);
@@ -3404,16 +3396,17 @@ fn activity_card(a: &Value) -> gtk::Box {
     about.set_ellipsize(gtk::pango::EllipsizeMode::End);
     words.append(&about);
     card.append(&words);
-    let amount = fmt.format(minor(&a["amount"], fmt.fraction_digits).unwrap_or(0));
+    let amount = minor(&a["amount"], fmt.fraction_digits).unwrap_or(0);
     let to_fmt = a["to_currency"].as_str().map(|to_currency| MoneyFormatter::new(to_currency, Locale::from_env()));
     let shown = match (kind, to_fmt.and_then(|f| Some((minor(&a["to_amount"], f.fraction_digits)?, f)))) {
-        ("FX", Some((to, to_fmt))) => format!("{amount} → {}", to_fmt.format(to)),
-        _ => format!("{sign}{amount}"),
+        ("FX", Some((to, to_fmt))) => format!("{} → {}", fmt.format(amount), to_fmt.format(to)),
+        ("SPLIT", _) => String::new(),
+        _ => super::invest::activity_figure(&fmt, amount, flow),
     };
     let figure = label(&shown, "money-amount");
     figure.set_valign(gtk::Align::Center);
-    if matches!(kind, "DIVIDEND" | "INTEREST") {
-        figure.add_css_class("money-in");
+    if !class.is_empty() {
+        figure.add_css_class(class);
     }
     card.append(&figure);
     if let Some(id) = a["id"].as_i64() {
@@ -4199,15 +4192,7 @@ fn panel_failed(ui: &Rc<Ui>, body: &gtk::Box, why: &str) {
     let l = label(why, "money-muted");
     l.set_wrap(true);
     body.append(&l);
-    let again = button("Try again", "money-secondary");
-    again.set_halign(gtk::Align::Start);
-    let weak = Rc::downgrade(ui);
-    again.connect_clicked(move |_| {
-        if let Some(ui) = weak.upgrade() {
-            refresh_panel(&ui);
-        }
-    });
-    body.append(&again);
+    body.append(&super::kit::retry_key(ui, refresh_panel));
 }
 
 /// Re-read the panel's view, Tally's, Arbiter's or Avex's, if it is open. Only the newest read
@@ -4281,32 +4266,6 @@ pub fn refresh_panel(ui: &Rc<Ui>) {
 
 fn caption(text: &str) -> gtk::Label {
     label(text, "threads-caption")
-}
-
-/// A titled block of the panel: its caption, an optional count on the right, and its rows.
-fn block(body: &gtk::Box, name: &str, aside: &str) -> gtk::Box {
-    let block = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    block.add_css_class("threads-block");
-    let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let title = caption(name);
-    title.set_hexpand(true);
-    head.append(&title);
-    if !aside.is_empty() {
-        head.append(&label(aside, "threads-panel-aside"));
-    }
-    block.append(&head);
-    body.append(&block);
-    block
-}
-
-/// A quiet key at the end of `block`'s head into the Tally page that has all of it, as the
-/// Overview page's cards and Avex's panel blocks have.
-fn block_link(block: &gtk::Box, caption: &str, run: impl Fn() + 'static) {
-    let Some(head) = block.first_child().and_downcast::<gtk::Box>() else { return };
-    let key = button(caption, "money-text-action");
-    key.add_css_class("threads-panel-link");
-    key.connect_clicked(move |_| run());
-    head.append(&key);
 }
 
 /// `row` as a key. The panel's rows act where the person is: an entry opens its editor, a budget
@@ -4826,23 +4785,9 @@ fn registration_name(registration: Option<&str>) -> &'static str {
     super::invest::registration_label(registration.unwrap_or(""))
 }
 
-/// "+0.7%", "−1.2%": basis points as a signed share.
+/// "+0.7%", "−1.2%": basis points as a signed share, as the Investments page writes them.
 fn percent(bps: i64) -> String {
-    let sign = match bps.signum() {
-        1 => "+",
-        -1 => "−",
-        _ => "",
-    };
-    format!("{sign}{:.1}%", bps.unsigned_abs() as f64 / 100.0)
-}
-
-/// Up is money in's green, down the over red; a sign says it too.
-fn gain_class(n: i64) -> Option<&'static str> {
-    match n.signum() {
-        1 => Some("money-in"),
-        -1 => Some("money-over"),
-        _ => None,
-    }
+    relay_client::figures::percent_bps(bps, true)
 }
 
 /// A holding's symbol as its mark.

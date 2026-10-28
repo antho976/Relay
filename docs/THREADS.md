@@ -754,7 +754,11 @@ The person lets whole kinds of ask run as they are asked: `launch` (`session.cre
 kind and always ask. An ask made only of steps let through is stored `running` with `auto` set
 (`threads.db` version 6), its steps run after the request's transaction exactly as an approval's
 do, and its reply (`finish_reply`) is what came of them, `approved` or `failed`: the agent hears it
-there, and is not told again with the next message. The drawer's gear holds the three switches;
+there, and is not told again with the next message. It stays bounded: the same steps asked again
+within 10 minutes are the first ask's answer and run nothing (a small model repeats tool calls);
+past 10 in an hour, each waits on a card (`MAX_AUTO_PER_HOUR`); and a launch into any checkout but
+a new one of its own (`worktree` `"primary"` or a path) or beside a peer (`pair_with`) waits on a
+card at any depth (`asks::reaches`). The drawer's gear holds the three switches;
 an auto card says "Done without asking" with the way back.
 
 **Cards and pages** (`relay_client::assistant_view`). A reply may hold fenced blocks the drawer

@@ -798,6 +798,45 @@ fn the_assistant_does_at_once_what_the_person_lets_it() {
     ok(&engine, "thread.stop", json!({"id": id}));
 }
 
+/// What runs without asking is still bounded: a repeated launch is the first one's answer and
+/// starts nothing; a launch into the person's own checkout waits on a card; and past
+/// `MAX_AUTO_PER_HOUR` in an hour, each ask waits on a card.
+#[test]
+fn what_runs_without_asking_is_deduplicated_capped_and_kept_to_its_own_checkout() {
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    with_fake(&engine, dir.path());
+    let repo = dir.path().join("ws").join("Shooter");
+    std::fs::create_dir_all(&repo).unwrap();
+    common::init_repo(&repo);
+    let workspace = ok(&engine, "workspace.create", json!({"path": dir.path().join("ws")}));
+    let project = ok(&engine, "project.add", json!({"workspace_id": workspace["id"], "path": repo}))["id"].clone();
+    let id = ok(&engine, "thread.create", json!({"kind": "assistant", "text": "Set up a builder"}))["id"].clone();
+    settled(&engine, &id, 4);
+    let sessions = || ok(&engine, "session.list", json!({"project_id": project}))["sessions"].as_array().unwrap().len();
+
+    let launch = json!({"steps": [{"op": "session.create", "payload": {"project_id": project, "provider": "claude"}}], "why": "You asked for a builder"});
+    let made = from_agent(&engine, &id, "thread.ask", launch.clone()).into_result().unwrap();
+    assert_eq!(made["status"], "approved", "{made}");
+    let again = from_agent(&engine, &id, "thread.ask", launch).into_result().unwrap();
+    assert_eq!((&again["id"], sessions()), (&made["id"], 1), "the repeat is the first ask's answer: {again}");
+
+    let primary = json!({"steps": [{"op": "session.create", "payload": {"project_id": project, "provider": "claude", "worktree": "primary"}}], "why": "Work here"});
+    let waits = from_agent(&engine, &id, "thread.ask", primary).into_result().unwrap();
+    assert_eq!((waits["status"].as_str(), waits["auto"].as_bool(), sessions()), (Some("pending"), Some(false), 1), "{waits}");
+
+    ok(&engine, "settings.set", json!({"path": "threads.assistant.without_asking.stop", "value": true}));
+    let park = |n: i64| json!({"steps": [{"op": "session.park", "payload": {"session": format!("nobody-{n}")}}], "why": "Idle"});
+    // The launch above ran without asking: one of the hour's MAX_AUTO_PER_HOUR (10).
+    for n in 1..10 {
+        let ran = from_agent(&engine, &id, "thread.ask", park(n)).into_result().unwrap();
+        assert_eq!(ran["auto"], true, "ask {n}: {ran}");
+    }
+    let capped = from_agent(&engine, &id, "thread.ask", park(10)).into_result().unwrap();
+    assert_eq!((capped["status"].as_str(), capped["auto"].as_bool()), (Some("pending"), Some(false)), "{capped}");
+    ok(&engine, "thread.stop", json!({"id": id}));
+}
+
 /// A turn that ends with nothing written for the person says so in the thread, and one that
 /// answers does not.
 #[test]
