@@ -313,6 +313,15 @@ fn an_agent_reads_nothing_of_another_project() {
     // A person at the PC reads every project.
     ok(&f.engine, Actor::User, "file.tree", json!({"project_id": 2}));
     ok(&f.engine, Actor::User, "git.log", json!({"project_id": 2}));
+
+    // A workspace's guardrail layer is read by its id alone: the agent's own, and no other.
+    let elsewhere = tempfile::tempdir().unwrap();
+    let other = ok(&f.engine, Actor::User, "workspace.create", json!({"path": elsewhere.path()}))["id"].clone();
+    for op in ["guardrail.config.get", "guardrail.config.layers"] {
+        assert_eq!(refusal(&f.engine, f.me(), op, json!({"workspace_id": other})).code, "actor.scope", "{op}");
+        ok(&f.engine, f.me(), op, json!({"workspace_id": 1}));
+    }
+    ok(&f.engine, Actor::User, "guardrail.config.get", json!({"workspace_id": other}));
 }
 
 /// F12: an agent already *is* a project and a session; every call began with guess-and-retry

@@ -183,8 +183,9 @@ pub const PHONE_OPS: &[&str] = &[
     "session.scrollback", "session.spawn", "session.transcript", "session.update", "session.upload",
     "session.wake",
     "settings.reset",
-    // A skill is installed from its repository and switched per project from the phone; its text,
-    // which every agent loads, is never written from one.
+    // A skill is installed from a repository and switched per project from the phone, and no
+    // skill text is typed on one. An install, or one that replaces a skill (`replace_skill_id`),
+    // takes whatever text that repository holds, which every agent then loads.
     "skill.enable", "skill.get", "skill.install", "skill.list",
     "task.activity", "task.approve", "task.changelog.write",
     "task.comment", "task.create", "task.delete", "task.dispatch", "task.get",
@@ -270,15 +271,37 @@ fn asks_for_api_key(value: &serde_json::Value, op: &str) -> bool {
 /// goes back to Relay's default and is allowed; caps, protected paths and the destructive-write
 /// thresholds stay the phone's to tune.
 fn changes_what_runs(value: &serde_json::Value, op: &str) -> Option<&'static str> {
+    const GUARDS: &str = "the commands agents may run and the folders they may write";
     let payload = &value["payload"];
     match op {
         "project.update" => ["build_cmd", "run_cmd"].iter().any(|key| payload.get(key).is_some_and(|v| !v.is_null()))
             .then_some("a project's build and run commands"),
         // Any mention, `null` included: clearing a project's own list brings back a looser one.
-        "guardrail.config.set" => ["denied_commands", "allowed_write_roots", "roles", "shape_gates", "agent_builds"]
-            .iter().any(|key| payload["patch"].get(key).is_some())
-            .then_some("the commands agents may run and the folders they may write"),
+        "guardrail.config.set" => PC_GUARDS.iter().any(|key| payload["patch"].get(key).is_some()).then_some(GUARDS),
+        // A reset deletes everything under its path, so one at or above those keys clears them
+        // too: the whole tree (`""`), `guardrails`, a layer, or every layer of a kind.
+        "settings.reset" => resets_pc_guards(payload["path"].as_str().unwrap_or("")).then_some(GUARDS),
         _ => None,
+    }
+}
+
+/// The guardrail keys that decide what agents may execute and where they may write: set from
+/// the PC alone.
+const PC_GUARDS: [&str; 5] = ["denied_commands", "allowed_write_roots", "roles", "shape_gates", "agent_builds"];
+
+/// Whether `settings.reset` at `path` would clear a [`PC_GUARDS`] key of some guardrail layer.
+/// The global layer is `guardrails.<key>`; a workspace's and a project's are
+/// `guardrails.workspaces.<id>.<key>` and `guardrails.projects.<id>.<key>`.
+fn resets_pc_guards(path: &str) -> bool {
+    let segments: Vec<&str> = path.trim().split('.').collect();
+    match segments.as_slice() {
+        [""] | ["guardrails"] => true,
+        ["guardrails", "workspaces" | "projects", rest @ ..] => match rest {
+            [] | [_] => true,
+            [_, key, ..] => PC_GUARDS.contains(key),
+        },
+        ["guardrails", key, ..] => PC_GUARDS.contains(key),
+        _ => false,
     }
 }
 
@@ -461,6 +484,11 @@ mod tests {
             ("guardrail.config.set", r#"{"project_id":1,"patch":{"destructive_write":{"min_removed_lines":40}}}"#),
             ("device.run", r#"{"project_id":1,"device":"emulator-5554"}"#),
             ("session.create", r#"{"project_id":1,"provider":"claude"}"#),
+            // Resets of what the phone tunes, and of settings that are not guardrails.
+            ("settings.reset", r#"{"path":"guardrails.projects.1.caps"}"#),
+            ("settings.reset", r#"{"path":"guardrails.projects.1.protected_paths"}"#),
+            ("settings.reset", r#"{"path":"guardrails.caps.files"}"#),
+            ("settings.reset", r#"{"path":"notify"}"#),
         ] {
             assert!(matches!(gate(&line(op, payload), Instance::Stable), Gate::Forward), "{op} {payload}");
         }
@@ -475,6 +503,18 @@ mod tests {
             ("guardrail.config.set", r#"{"project_id":1,"patch":{"agent_builds":true}}"#),
             ("guardrail.config.set", r#"{"project_id":1,"patch":{"roles":{}}}"#),
             ("guardrail.config.set", r#"{"project_id":1,"patch":{"shape_gates":[]}}"#),
+            // A reset deletes its whole subtree: at or above one of those keys, it clears it.
+            ("settings.reset", r#"{}"#),
+            ("settings.reset", r#"{"path":""}"#),
+            ("settings.reset", r#"{"path":null}"#),
+            ("settings.reset", r#"{"path":"guardrails"}"#),
+            ("settings.reset", r#"{"path":"guardrails.projects"}"#),
+            ("settings.reset", r#"{"path":"guardrails.projects.1"}"#),
+            ("settings.reset", r#"{"path":"guardrails.projects.1.denied_commands"}"#),
+            ("settings.reset", r#"{"path":"guardrails.workspaces.1.allowed_write_roots"}"#),
+            ("settings.reset", r#"{"path":"guardrails.workspaces"}"#),
+            ("settings.reset", r#"{"path":"guardrails.denied_commands"}"#),
+            ("settings.reset", r#"{"path":"guardrails.roles.builder"}"#),
         ] {
             match gate(&line(op, payload), Instance::Stable) {
                 Gate::Reject(resp) => {
@@ -490,15 +530,23 @@ mod tests {
     /// Every op a screen of the app sends must be open at the door, or the door refuses it with
     /// `remote.op` and the button does nothing: that is how Aide's "Not now" shipped broken. The
     /// app's sources are read here, so this runs with the engine's tests on a change to either
-    /// side. Only an op name passed to one of the app's send helpers counts: the app also names
-    /// ops as labels for what a thread's agent did.
+    /// side. The app sends ops through many helpers, an op name in any argument, a constant or a
+    /// list, so every op name the app's code spells counts, except the few it names only as a
+    /// label (what a thread's agent did, a hold's kind): those are listed here, and a send of one
+    /// of them is the one case this cannot see.
     #[test]
     fn every_op_the_app_sends_is_open_to_a_phone() {
+        const LABELS_ONLY: &[&str] = &[
+            "aide.job.propose", "aide.notify", "aide.run.finish", "arbiter.backtest", "arbiter.order.place",
+            "arbiter.products", "arbiter.propose", "bus.schema", "guardrail.gate", "guardrail.request",
+            "money.account.add", "money.account.update", "money.budget.set", "money.invest.add", "money.tx.add",
+            "thread.propose",
+        ];
         let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/relay-android");
-        let senders = ["act", "answer", "attempt", "cached", "call", "change", "live", "liveAlso", "post", "query", "rememberLive", "result", "send"];
         let registry = relay_bus::registry::Registry::global();
         let mut files = vec![app];
         let mut sent = std::collections::BTreeMap::<String, String>::new();
+        let mut labels = std::collections::BTreeSet::<String>::new();
         while let Some(path) = files.pop() {
             if path.is_dir() {
                 if !matches!(path.file_name().and_then(|n| n.to_str()), Some("build" | "test" | "androidTest" | ".gradle")) {
@@ -515,16 +563,22 @@ mod tests {
                 if registry.get(name).is_none() {
                     continue;
                 }
-                let before = text[..at].trim_end().strip_suffix('(').map(str::trim_end).unwrap_or("");
-                let callee = before.rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).next().unwrap_or("");
-                if senders.contains(&callee) {
+                if LABELS_ONLY.contains(&name) {
+                    labels.insert(name.to_string());
+                } else {
                     sent.entry(name.to_string()).or_insert_with(|| path.display().to_string());
                 }
             }
         }
-        assert!(sent.len() > 100, "found only {} sent ops: has the app moved?", sent.len());
+        assert!(sent.len() > 150, "found only {} ops: has the app moved?", sent.len());
         let closed: Vec<_> = sent.iter().filter(|(op, _)| PHONE_OPS.binary_search(&op.as_str()).is_err()).collect();
-        assert!(closed.is_empty(), "the app sends ops the phone door refuses: {closed:?}");
+        assert!(closed.is_empty(), "the app sends ops the phone door refuses (or names a new label: list it above): {closed:?}");
+        // A label the app no longer names leaves the list, so it cannot hide a later send.
+        let unused: Vec<_> = LABELS_ONLY.iter().filter(|op| !labels.contains(**op)).collect();
+        assert!(unused.is_empty(), "no longer named by the app: {unused:?}");
+        for op in LABELS_ONLY {
+            assert!(PHONE_OPS.binary_search(op).is_err(), "{op} is open to a phone, so it is not only a label");
+        }
     }
 
     #[test]

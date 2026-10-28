@@ -266,8 +266,9 @@ stops that until you connect again.
   commands with no agent or guardrail in between, so `project.update` with a `build_cmd` or
   `run_cmd` (other than `null`, back to the default) is refused (`remote.command`), as is a
   `guardrail.config.set` patch that touches what agents may run or where they may write
-  (`denied_commands`, `allowed_write_roots`, `roles`, `shape_gates`, `agent_builds`). The app
-  shows those values; they change on the PC. A phone also publishes no release
+  (`denied_commands`, `allowed_write_roots`, `roles`, `shape_gates`, `agent_builds`), or a
+  `settings.reset` at or above one of them (the whole tree, `guardrails`, a whole layer). The
+  app shows those values; they change on the PC. A phone also publishes no release
   (`remote.publish`) and starts no session on the API key (`remote.api_key`).
 - **App developers:** an op the phone starts calling must be added to `PHONE_OPS` (it is
   sorted; the gate binary-searches it), or the door refuses it. `wire.rs`'s

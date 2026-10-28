@@ -625,7 +625,7 @@ private fun GuardrailForm(projectId: Long, config: JsonObject, layers: JsonObjec
     if (resetAsk) {
         Ask(
             title = "Use the workspace's guardrails?",
-            body = "This project forgets its own guardrail values and follows the PC-wide settings.",
+            body = "This project forgets the guardrail values set here and follows the PC-wide settings. Denied commands and write roots change on the PC.",
             onDismiss = { resetAsk = false },
         ) {
             ToolKey("Cancel", { resetAsk = false }, kind = KeyKind.Quiet)
@@ -633,9 +633,12 @@ private fun GuardrailForm(projectId: Long, config: JsonObject, layers: JsonObjec
                 "Reset",
                 {
                     resetAsk = false
+                    // Each field the phone tunes, cleared back to the inherited value. Resetting the
+                    // whole layer would clear the PC-only ones too, which the door refuses.
+                    val tuned = GUARD_FIELDS.filterNot { it.pcOnly }.map { it.path.substringBefore('.') }.distinct()
                     nav.shell.act(
-                        "settings.reset",
-                        buildJsonObject { put("path", "guardrails.projects.$projectId") },
+                        "guardrail.config.set",
+                        buildJsonObject { put("project_id", projectId); put("patch", JsonObject(tuned.associateWith { JsonNull })) },
                         done = "Guardrails reset",
                     ) { onReset() }
                 },

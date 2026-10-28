@@ -444,6 +444,19 @@ pub fn authorize(
     if payload.get("project_id").and_then(Value::as_i64).is_some_and(|asked| asked != session.project_id) {
         return Err(BusError::not_own("project"));
     }
+    // The same for a workspace: its own project's, and no other (`guardrail.config.get` reads a
+    // workspace's layer by `workspace_id` alone). Rare enough that the lookup runs only then.
+    if let Some(asked) = payload.get("workspace_id").and_then(Value::as_i64) {
+        let own: Option<Id> = conn
+            .prepare_cached("SELECT workspace_id FROM projects WHERE id=?1")
+            .map_err(crate::engine::internal)?
+            .query_row([session.project_id], |record| record.get(0))
+            .optional()
+            .map_err(crate::engine::internal)?;
+        if own != Some(asked) {
+            return Err(BusError::not_own("workspace"));
+        }
+    }
 
     if let Some(name) = payload.get("session").and_then(Value::as_str) {
         let own = name == session.name;

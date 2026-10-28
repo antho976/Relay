@@ -615,6 +615,23 @@ fn workspace_layer_sits_between_global_and_project_and_null_clears_back() {
     assert_eq!(error(&nested).code, "guardrail.config");
 }
 
+/// The phone's "Use the workspace's guardrails?" clears what it tunes with one patch of nulls,
+/// since the door refuses a reset of the whole layer; what is set only on the PC stays.
+#[test]
+fn the_phones_reset_clears_what_it_tunes_and_keeps_the_pc_only_keys() {
+    let fixture = Fixture::new();
+    let engine = &fixture.engine;
+    ok(engine, Actor::User, "guardrail.config.set", json!({"project_id": 1, "patch": {
+        "caps": {"files": 10}, "protected_paths": ["deploy/**"], "check_on_push": false,
+        "destructive_write": {"min_removed_lines": 5}, "denied_commands": ["make deploy"],
+    }}));
+    ok(engine, Actor::User, "guardrail.config.set", json!({"project_id": 1, "patch": {
+        "caps": null, "destructive_write": null, "protected_paths": null, "check_on_push": null,
+    }}));
+    let layers = ok(engine, Actor::User, "guardrail.config.layers", json!({"project_id": 1}));
+    assert_eq!(layers["overrides"], json!({"denied_commands": ["make deploy"]}));
+}
+
 #[test]
 fn a_bad_guardrails_key_is_refused_on_write_and_ignored_when_already_stored() {
     let fixture = Fixture::new();
