@@ -216,8 +216,10 @@ payload!(#[schemars(rename = "SessionTranscriptIn")] TranscriptIn {
 result!(#[schemars(rename = "SessionTranscriptMessage")] TranscriptMessage {
     /// Stable across reads: the provider's own id for the record, or its byte offset.
     pub id: String,
-    /// `user`, `assistant` (`blocks` of `text` and `tool_use {id, name, summary}`), or `tool`
-    /// (`{tool_use_id, is_error, text}`) — a thread message's shape (`thread.get`).
+    /// `user`, `assistant` (`blocks` of `text` and `tool_use {id, name, summary}`), `tool`
+    /// (`{tool_use_id, is_error, text}`) — a thread message's shape (`thread.get`) — `error
+    /// {text}`, or `note {text, kind, detail?}` for neither side's words: `compact`, `summary`
+    /// (what a compaction kept, in `detail`), `relay` (what Relay typed in), `task`, `interrupt`.
     pub role: String,
     pub body: Value,
     pub created_at: String,

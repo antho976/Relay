@@ -92,6 +92,7 @@ fn check_task_module(conn: &Connection, project_id: Id, task_id: Option<Id>, mod
     Ok(())
 }
 
+/// `transcript::relay_typed` reads this back as Relay's line in the agent's chat: keep its opening.
 fn assignment_text(task_id: Id, review: bool) -> String {
     if review {
         format!("All builders finished Task #{task_id}. Review the current task in the shared worktree; report your review outcome before the group advances.")
@@ -203,6 +204,7 @@ fn complete_group_assignment(ctx: &mut Ctx, session: &Session, task_id: Id, sha:
 /// work to begin only on the session's first spawn: a later fresh start
 /// (`session.clear_restorable`) may come long after that work was finished, so it begins the
 /// current task instead and offers the launch text only as background (RA-397).
+/// `transcript::relay_typed` reads these back as Relay's lines in the agent's chat: keep their openings.
 fn launch_nudge(row: &Row_, first_launch: bool) -> Option<String> {
     let assignment = row.launch_prompt.as_deref().map(str::trim).filter(|text| !text.is_empty());
     if let Some(assignment) = assignment.filter(|_| first_launch) {

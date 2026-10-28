@@ -216,4 +216,40 @@ class ChatTest {
         assertEquals(null, latestPlan(listOf(msg("u", "user", """{"text":"go"}"""))))
         assertEquals(listOf(PlanStep("read", 'x'), PlanStep("fix", '~'), PlanStep("test", ' ')), latestPlan(listOf(first, answer("1"), later)))
     }
+
+    /** A compaction is one line that opens to what it kept, never a message of the person's, and the turn before it stays theirs. */
+    @Test
+    fun aCompactionIsOneLineWithWhatItKept() {
+        val log = listOf(
+            msg("u", "user", """{"text":"fix the build"}"""),
+            tool("1", "Bash", "cargo build"),
+            msg("b", "note", """{"text":"Context full, compacted automatically · 973k → 28k tokens","kind":"compact"}"""),
+            msg("s", "note", """{"text":"What it kept from before","kind":"summary","detail":"1. Fix the build"}"""),
+            msg("w", "assistant", """{"blocks":[{"type":"text","text":"Carrying on."}]}"""),
+        )
+        val pieces = chatPieces(log, emptyList(), working = true, today = today)
+        assertEquals(listOf("User", "Tool", "Note", "Reply"), pieces.map { it::class.simpleName })
+        val note = pieces[2] as ChatPiece.Note
+        assertEquals(ChatPiece.Note("m:b", "Context full, compacted automatically · 973k → 28k tokens", "compact", "1. Fix the build"), note)
+        // The call before it is still this turn's, so it is waiting rather than cut off.
+        assertEquals(Step.Running, (pieces[1] as ChatPiece.Tool).call.step)
+
+        // An older PC sent the summary as the person's turn: it still reads as a compaction.
+        val old = listOf(
+            msg("u", "user", """{"text":"fix the build"}"""),
+            tool("1", "Bash", "cargo build"),
+            msg("s", "user", """{"text":"This session is being continued from a previous conversation that ran out of context.\n\nSummary: build"}"""),
+        )
+        val legacy = chatPieces(old, emptyList(), working = true, today = today)
+        assertEquals(listOf("User", "Tool", "Note"), legacy.map { it::class.simpleName })
+        assertEquals("compact", (legacy[2] as ChatPiece.Note).kind)
+        assertTrue((legacy[2] as ChatPiece.Note).detail!!.endsWith("Summary: build"))
+        assertEquals(Step.Running, (legacy[1] as ChatPiece.Tool).call.step)
+    }
+
+    @Test
+    fun relaysLinesAreNotesWithTheirKind() {
+        val pieces = chatPieces(listOf(msg("r", "note", """{"text":"Relay started Task #42","kind":"relay"}""")), emptyList(), working = false, today = today)
+        assertEquals(listOf(ChatPiece.Note("m:r", "Relay started Task #42", "relay")), pieces)
+    }
 }

@@ -13687,7 +13687,7 @@
         },
         "role": {
           "type": "string",
-          "description": "`user`, `assistant` (`blocks` of `text` and `tool_use {id, name, summary}`), or `tool`\n(`{tool_use_id, is_error, text}`) — a thread message's shape (`thread.get`)."
+          "description": "`user`, `assistant` (`blocks` of `text` and `tool_use {id, name, summary}`), `tool`\n(`{tool_use_id, is_error, text}`) — a thread message's shape (`thread.get`) — `error\n{text}`, or `note {text, kind, detail?}` for neither side's words: `compact`, `summary`\n(what a compaction kept, in `detail`), `relay` (what Relay typed in), `task`, `interrupt`."
         },
         "body": true,
         "created_at": {
