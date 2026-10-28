@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 410,
+  "op_count": 411,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -7900,6 +7900,26 @@
       },
       "result": {
         "$ref": "#/$defs/AideMessagesOut"
+      }
+    },
+    "aide.chat": {
+      "summary": "A bot's chat, or the Chief of Staff's (Aide's main conversation, where every bot reports and new bots are asked for); made on first use",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "thread.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/AideChatIn"
+      },
+      "result": {
+        "$ref": "#/$defs/AideChatOut"
       }
     }
   },
@@ -36891,6 +36911,33 @@
       },
       "required": [
         "messages"
+      ]
+    },
+    "AideChatIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "The bot (job) whose chat to open; the Chief of Staff's when absent."
+        }
+      }
+    },
+    "AideChatOut": {
+      "type": "object",
+      "properties": {
+        "thread_id": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The chat's thread (kind `aide`): a bot's channel, where its runs talk, or the Chief of\nStaff's, where the person talks to Aide itself, asks for new bots and every bot reports."
+        }
+      },
+      "required": [
+        "thread_id"
       ]
     }
   }

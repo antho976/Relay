@@ -1203,6 +1203,17 @@ pub fn post_wake(engine: &Engine, id: Id, text: &str, now: &str) -> Result<(Mess
     }).map(|m| (m, token))
 }
 
+/// Something an Aide bot said, posted in an Aide thread as a `note`: shown in the conversation,
+/// never handed to its agent. Its turn, if one is running, goes on.
+pub fn post_note(engine: &Engine, id: Id, body: &Value, now: &str) -> Result<MessageView, BusError> {
+    if get(engine, id)?.kind != AIDE {
+        return Err(BusError::invalid("thread.invalid", format!("Thread {id} is not Aide's")));
+    }
+    let message = with_db(engine, |db| db.add(id, "note", body, now))?;
+    engine.emit_system("thread.message", json!({"thread": id, "message": message}));
+    Ok(message)
+}
+
 /// End the turn `token`, if it is still the thread's.
 fn end_turn(engine: &Engine, id: Id, token: u64) -> bool {
     let mut live = lock(&engine.threads.live);
