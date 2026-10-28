@@ -790,6 +790,7 @@ fn notifications(ui: &Rc<Ui>, stack: &gtk::Stack, form: &Form, data: &Value) {
             ("agent_blocked", "Agent needs you", "Blocked on a question or waiting for approval."),
             ("agent_done", "Agent finished", "Once per terminal, and again after you type into it."),
             ("guardrail", "Guardrail needs you", "An action held for approval, or an exception request. Refusals are filed quietly."),
+            ("aide", "Aide", "When Aide has something to tell you now. What can wait goes in its brief."),
         ][..]),
         ("System", "", &[
             ("provider", "Providers", "Claude or Codex limits, outages and sign-in issues."),

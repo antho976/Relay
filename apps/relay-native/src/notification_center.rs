@@ -263,7 +263,7 @@ impl Center {
         dot.add_css_class("notification-dot");
         dot.add_css_class(match category {
             "agent_blocked" | "guardrail" => "held",
-            "agent_done" => "live",
+            "agent_done" | "aide" => "live",
             _ => "neutral",
         });
         dot.set_valign(gtk::Align::Start);
@@ -366,6 +366,11 @@ impl Center {
                 let _ = ui.call("notify.ack", json!({"notification_id": id})).await;
             });
         }
+        // Aide speaks for no project: its page keeps what it said.
+        if text(item, "category") == "aide" {
+            ui.navigate(page);
+            return;
+        }
         let project = item["project_id"].as_i64().unwrap_or(ui.project.get());
         let link = &item["link"];
         let payload = &link["payload"];
@@ -448,6 +453,8 @@ fn route(item: &Value) -> Option<&str> {
         // A hold or exception request waits on its session's tile (D121), which the focus
         // in follow() brings forward; the Guardrails page would leave that focus on a hidden wall.
         "session.get" | "guardrail.confirm" => "agents",
+        // Aide's notifications carry no link: its Overview holds the message and what waits.
+        _ if text(item, "category") == "aide" => "aide-home",
         _ => return None,
     })
 }
@@ -463,6 +470,12 @@ mod tests {
         assert_eq!(excerpt("  Short.  "), ("Short.".into(), false));
         assert_eq!(excerpt(""), (String::new(), false));
         assert_eq!(excerpt("2026 was a year"), ("2026 was a year".into(), false));
+    }
+
+    #[test]
+    fn an_aide_notice_opens_its_overview() {
+        assert_eq!(route(&json!({"category": "aide", "link": null})), Some("aide-home"));
+        assert_eq!(route(&json!({"category": "system", "link": null})), None);
     }
 
     #[test]
