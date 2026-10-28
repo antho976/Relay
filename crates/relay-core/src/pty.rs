@@ -755,11 +755,18 @@ pub fn paste_bytes(data: &str, bracketed: bool) -> Vec<u8> {
 /// Killing one at a time cost up to `grace` per stubborn session, which at shutdown summed to
 /// more than a desktop logout or a service stop allows (RA-311).
 pub fn kill_all(ptys: &[&Pty], grace: Duration) {
-    // Each look scans all of /proc once per group still running: every 50 ms, not 10, during
-    // park, close and shutdown (a group that leaves is seen within one look either way).
+    // Each look scans all of /proc once per group still running. A shell that takes SIGTERM is
+    // gone within a few ms, so the looks back off from 1 ms to every 50 ms: a fixed 50 ms first
+    // wait made every park and close cost at least 50 ms.
     let wait = |deadline: Instant| {
-        while Instant::now() < deadline && !ptys.iter().all(|pty| pty.settled()) {
-            std::thread::sleep(Duration::from_millis(50));
+        let mut pause = Duration::from_millis(1);
+        while !ptys.iter().all(|pty| pty.settled()) {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            std::thread::sleep(pause.min(deadline - now));
+            pause = (pause * 2).min(Duration::from_millis(50));
         }
     };
     let pending: Vec<&&Pty> = ptys.iter().filter(|pty| !pty.settled()).collect();
