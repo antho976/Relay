@@ -1150,27 +1150,10 @@ fn tree_numstat(root: &Path, repo: &gix::Repository, parent: Option<&str>, tree:
         &["diff-tree", "-r", "-z", "-M", "--numstat", "--no-ext-diff", "--no-textconv", from, tree],
     )
     .map_err(git_mutation("git.commit_failed"))?;
-    Ok(numstat_lines(&raw))
-}
-
-/// `diff-tree -z --numstat` records — `a\tr\tpath\0`, or `a\tr\t\0source\0dest\0` for a
-/// rename — as the gate's lines.
-fn numstat_lines(raw: &str) -> String {
-    let mut out = String::new();
-    let mut fields = raw.split('\0');
-    while let Some(record) = fields.next() {
-        let mut parts = record.splitn(3, '\t');
-        let (Some(added), Some(removed), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
-            continue;
-        };
-        if path.is_empty() {
-            let (Some(source), Some(dest)) = (fields.next(), fields.next()) else { break };
-            out.push_str(&format!("0\t0\t{source}\n{added}\t{removed}\t{dest}\n"));
-        } else {
-            out.push_str(&format!("{added}\t{removed}\t{path}\n"));
-        }
-    }
-    out
+    // Handed to the gate as git wrote it: `-z` keeps every path verbatim, and a rename is one
+    // file naming both sides. Rewritten as plain lines, a rename counted twice and a path with
+    // ` => ` or a newline in it was read back as other paths.
+    Ok(raw)
 }
 
 /// The message as `git commit -m` leaves it under commit.cleanup, which with no editor open is
@@ -2574,17 +2557,6 @@ mod tests {
         assert!(kept.len() < 1000 && kept.iter().map(|f| f.path.len()).sum::<usize>() <= STATUS_MAX_BYTES);
         let few = vec![file("one".into(), "M", "")];
         assert_eq!(cap_status(few.clone()), few);
-    }
-
-    #[test]
-    fn numstat_records_become_gate_lines_with_a_rename_source_of_its_own() {
-        let raw = "1\t2\tsrc/a.rs\0-\t-\tlogo.png\0\
-                   0\t1\t\0secret/key.txt\0public/key.txt\0";
-        assert_eq!(
-            numstat_lines(raw),
-            "1\t2\tsrc/a.rs\n-\t-\tlogo.png\n0\t0\tsecret/key.txt\n0\t1\tpublic/key.txt\n"
-        );
-        assert_eq!(numstat_lines(""), "");
     }
 
     fn git(root: &Path, args: &[&str]) -> String {
