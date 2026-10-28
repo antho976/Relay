@@ -286,7 +286,21 @@ class Syncer(
             Fetch.Restorable -> list(s, "session.restorable", JsonObject(emptyMap()), "sessions", Kind.Restorable, Scope.All)
             Fetch.Holds -> list(s, "guardrail.holds.list", buildJsonObject { put("open_only", true) }, "holds", Kind.Hold, Scope.All)
             Fetch.Notifications -> list(s, "notify.list", buildJsonObject { put("limit", 200) }, "notifications", Kind.Notification, Scope.All)
-            Fetch.Threads -> list(s, "thread.list", JsonObject(emptyMap()), "threads", Kind.Thread, Scope.All)
+            // Threads' own and Aide's chats, in one read: either alone would drop the other's rows.
+            Fetch.Threads -> reading { since ->
+                val rows = mutableListOf<Row>()
+                for (kind in listOf(null, "aide")) {
+                    val payload = buildJsonObject { kind?.let { put("kind", it) } }
+                    // An engine without Aide refuses its kind: Threads' own still come.
+                    val result = try {
+                        s.result("thread.list", payload) as? JsonObject
+                    } catch (e: BusException) {
+                        if (kind == null) throw e else null
+                    } ?: continue
+                    result.arr("threads").mapNotNullTo(rows) { (it as? JsonObject)?.let { t -> Row.of(Kind.Thread, t) } }
+                }
+                ledger.replace(Kind.Thread, Scope.All, rows, since)
+            }
             is Fetch.Tasks -> reading { since ->
                 val rows = mutableListOf<Row>()
                 var offset = 0L

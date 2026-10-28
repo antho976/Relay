@@ -130,10 +130,11 @@ internal fun titleOf(route: String?): String? = when (route) {
     else -> null
 }
 
-/** The space a page belongs to; null for a page both share (the inbox, search, settings). */
+/** The space a page belongs to; null for a page both share (the inbox, search, settings) and for Aide, a place of its own. */
 internal fun spaceOf(route: String?): String? = when {
     route == null -> null
-    route == "threads" || route.startsWith("thread/") || route == "tally" || route == "arbiter" || route == "avex" || route == "aide" -> "threads"
+    route == "aide" -> null
+    route == "threads" || route.startsWith("thread/") || route == "tally" || route == "arbiter" || route == "avex" -> "threads"
     route == "home" -> null
     route == "agents" || route == "board" || route == "notes" || route == "skills" || route == "plugins" -> "dev"
     else -> null

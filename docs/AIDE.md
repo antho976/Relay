@@ -295,8 +295,39 @@ waits on Aide, and a channel the person is typing in keeps its run queued.
   notification of a category (never Aide's own), an Arbiter halt or unreachable exchange, a new
   Avex upload. A rule's first look takes what is already there as seen.
 - **No connectors yet** (Gmail, Calendar): they need an OAuth client of Antho's own. Phase 2.
-- **The phone** shows Aide (Now, Jobs, Memory) and rings for its interrupts; its settings stay on
-  the PC, so a lost phone cannot point Aide at another server or open private data to Claude.
+- **The phone** shows Aide (Chats, Activity, Memory) and rings for its interrupts; its settings
+  stay on the PC, so a lost phone cannot point Aide at another server or open private data to
+  Claude.
+
+## The Aide space (2026-10-28)
+
+The first build put Aide inside Threads, beside Tally, Arbiter and Avex, as pages of settings:
+Overview, Jobs with an editor, Memory, Settings. Antho wanted it like Grok Bot instead: its own
+space, and chats first. So:
+
+- **Its own space.** The title bar's switch is Dev | Threads | Aide (Ctrl ` goes round), the start
+  screen has a third card (3 picks it), and `native.space` remembers `aide`. On the phone, whose
+  drawer has no switch, Aide's page opens on its chats and Aide's threads are kept out of Threads'
+  lists.
+- **Each job is a bot, with a chat of its own**: its channel, made on first use (`aide.chat
+  {job_id}`), where its runs talk and the person answers it. The person reads "bot" everywhere;
+  the engine still says job.
+- **The Chief of Staff** is Aide itself: one more `aide` thread, no job's (`aide.chat {}`, kept in
+  `aide.db`'s meta as `chief_thread`). Its agent reads every source the tiers allow, answers across
+  them, and drafts a new bot with `aide.job.propose` when asked for one in words. New bot (Ctrl N)
+  opens it with "Make a bot that " in the message box.
+- **What a bot says is a message in the chats.** `aide.notify` and a proposal are posted as a
+  `note` (`threads::post_note`, never handed to an agent) in the bot's chat and, unless quiet, in
+  the Chief of Staff's. A proposal's note carries Turn on, Change and Not now while it waits. The
+  `aide.notify`, `aide.job.propose` and `aide.run.finish` calls themselves are not drawn: the note
+  says it.
+- **The desktop's sidebar** is New bot, the Chief of Staff, the bots (green while one runs, amber
+  when proposed, hollow when paused), and at its foot Activity (what was the Overview), Memory and
+  Settings. A chat is the Threads page showing an Aide thread, without Tally's panel, the bot's
+  state, Pause or Turn on, Run now and Details in its strip. Details is the bot's page with its
+  runs; Bots, from the list's heading, has every bot and the starters.
+- `scripts/aide-smoke.py` captures the Chief of Staff, a bot's chat and the start screen against a
+  disposable engine, with a fake Claude that calls Aide's ops through the door as a run would.
 
 ## The ops
 
@@ -320,6 +351,7 @@ the person, and the engine tells its calls apart by their thread (`Ctx::thread`)
 | `aide.errand.list` / `.add` / `.update` | what it is on and what waits on you | yes; its "done" asks you |
 | `aide.page.list` / `.get` / `.write` / `.delete` | living pages | `list`, `write` |
 | `aide.message.list` | what it said | — |
+| `aide.chat` | a bot's chat, or the Chief of Staff's; made on first use | — |
 
 ## Your own server
 

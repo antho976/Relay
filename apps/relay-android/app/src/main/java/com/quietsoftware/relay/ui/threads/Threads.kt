@@ -165,7 +165,7 @@ private fun gutter(width: Dp) = if (width < 600.dp) 16.dp else 24.dp
  *
  * Used from the main thread only.
  */
-private object Drafts {
+internal object Drafts {
     private val held = HashMap<String, String>()
     private val boxes = HashMap<String, SnapshotStateList<Attachment<JsonObject>>>()
 
@@ -519,7 +519,14 @@ private sealed interface Piece {
     data class Error(override val key: String, val text: String) : Piece
     /** The end of a finished turn: a quiet Copy key for its words. */
     data class Copy(override val key: String, val text: String) : Piece
+    /** What an Aide bot said, in its chat and the Chief of Staff's (a `note`). */
+    data class Note(override val key: String, val body: JsonObject) : Piece
+    /** Relay's words that woke an Aide bot for a run, folded to a line. */
+    data class Wake(override val key: String, val text: String) : Piece
 }
+
+/** An Aide bot's own calls, which its notes show instead: what it said, a bot it proposed, how its run ended. */
+private val AIDE_SAID = setOf("aide.notify", "aide.job.propose", "aide.run.finish")
 
 /** The op an agent's tool call ran: `mcp__relay__money_tx_add` is `money.tx.add`. */
 private fun toolOp(name: String): String = name.removePrefix("mcp__relay__").takeIf { it != name }?.replace('_', '.').orEmpty()
@@ -672,6 +679,7 @@ private fun pieces(messages: List<ThreadMessage>, working: Boolean, today: Local
                     "tool_use" -> {
                         val name = o.str("name")
                         val op = toolOp(name)
+                        if (op in AIDE_SAID) return@forEachIndexed
                         // Asking first stands alone, as a change does: it is what the agent did instead of one.
                         val writes = op in WRITES || op == "thread.propose"
                         val id = o.s("id")
@@ -696,6 +704,14 @@ private fun pieces(messages: List<ThreadMessage>, working: Boolean, today: Local
             "error" -> {
                 flushReads()
                 out += Piece.Error("m:${m.id}", m.text.ifBlank { "Something went wrong" })
+            }
+            "note" -> {
+                endTurn(true)
+                (m.body as? JsonObject)?.let { out += Piece.Note("m:${m.id}", it) }
+            }
+            "wake" -> {
+                endTurn(true)
+                out += Piece.Wake("m:${m.id}", m.text)
             }
         }
     }
@@ -1199,6 +1215,8 @@ private fun PieceView(
             retry?.let { RetryKey(idle, it) }
         }
         is Piece.Copy -> ReplyKeys(p.text, cell)
+        is Piece.Note -> AideNote(p.body, cell.padding(top = 12.dp))
+        is Piece.Wake -> WakeLine(p.text, cell.padding(top = 12.dp))
     }
 }
 

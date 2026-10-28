@@ -121,6 +121,11 @@ class LiveDoorTest {
         // The ops this app added to the door answer.
         val threads = hub.call("thread.list") as JsonObject
         println("threads on the PC: ${threads.arr("threads").size}")
+        // Aide's chats: the Chief of Staff's opens through the door, and its kind lists.
+        val chief = (hub.call("aide.chat") as JsonObject).l("thread_id")
+        assertTrue(chief != null)
+        val aide = hub.call("thread.list", buildJsonObject { put("kind", "aide") }) as JsonObject
+        assertTrue(aide.arr("threads").any { (it as JsonObject).l("id") == chief })
         val money = hub.query("money.summary")
         assertTrue(money.fresh)
         println("money.summary currency: ${(money.result as JsonObject).s("currency")}, empty: ${(money.result as JsonObject)["empty"]}")

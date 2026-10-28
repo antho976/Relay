@@ -18,7 +18,16 @@ import com.quietsoftware.relay.core.wire.arr
 import com.quietsoftware.relay.core.wire.b
 import com.quietsoftware.relay.core.wire.l
 import com.quietsoftware.relay.core.wire.s
+import androidx.compose.foundation.background
+import androidx.compose.runtime.remember
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import com.quietsoftware.relay.core.wire.o
+import com.quietsoftware.relay.ui.LocalNav
 import com.quietsoftware.relay.ui.Nav
+import com.quietsoftware.relay.ui.kit.Glyph
+import com.quietsoftware.relay.ui.kit.Markdown
+import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.Key
 import com.quietsoftware.relay.ui.kit.KeyKind
 import com.quietsoftware.relay.ui.kit.Segmented
@@ -30,26 +39,96 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * Aide on the phone (docs/AIDE.md), as the PC's Aide pages: what waits on you first, what runs now
- * and what Aide said; its jobs, to run or pause; and what it learned, to confirm or forget. Its
- * settings (models, your servers, privacy, quiet hours) stay on the PC: a phone that is lost
- * should not be able to point Aide somewhere else.
+ * Aide on the phone (docs/AIDE.md), as the PC's Aide space: chats first, as Grok Bot has them. The
+ * Chief of Staff, Aide itself, where every bot reports and a new bot is asked for in words; then
+ * each bot, a chat of its own, with its keys. Activity is what waits on you, what runs and what
+ * Aide said; Memory what it learned, to confirm or forget. Its settings (models, your servers,
+ * privacy, quiet hours) stay on the PC: a phone that is lost should not be able to point Aide
+ * somewhere else.
  */
 @Composable
 fun AideScreen(nav: Nav) {
     SpaceFrame(nav) {
         val summary = rememberLive("aide.summary")
         val s = summary.result as? JsonObject
-        var tab by rememberSaveable { mutableStateOf("now") }
+        var tab by rememberSaveable { mutableStateOf("chats") }
         val missing = "This engine has no Aide yet. Update Relay's engine to use it."
         SourcePage("Aide", context = s?.let { { AideContext(it) } }) {
-            Segmented(listOf("now" to "Now", "jobs" to "Jobs", "memory" to "Memory"), tab, { tab = it }, Modifier.fillMaxWidth(), fill = true)
+            Segmented(listOf("chats" to "Chats", "now" to "Activity", "memory" to "Memory"), tab, { tab = it }, Modifier.fillMaxWidth(), fill = true)
             when (tab) {
-                "jobs" -> Reading(rememberLive("aide.job.list"), missing) { Jobs(it, nav) }
+                "now" -> Reading(summary, missing) { Now(it, nav, missing) }
                 "memory" -> Reading(rememberLive("aide.fact.list"), missing) { Facts(it, nav) }
-                else -> Reading(summary, missing) { Now(it, nav, missing) }
+                else -> {
+                    Chief(nav)
+                    Reading(rememberLive("aide.job.list"), missing) { Jobs(it, nav) }
+                }
             }
         }
+    }
+}
+
+/** Opens an Aide chat, made on the PC on first use: bot [job]'s, or the Chief of Staff's. [draft] waits in its message box. */
+private fun openChat(nav: Nav, job: Long? = null, draft: String? = null) {
+    nav.shell.act("aide.chat", buildJsonObject { job?.let { put("job_id", it) } }) { r ->
+        val id = (r as? JsonObject)?.l("thread_id") ?: return@act
+        draft?.let { Drafts[id.toString()] = it }
+        nav.thread(id.toString())
+    }
+}
+
+/** The Chief of Staff: Aide itself, where the bots report and new ones are asked for. */
+@Composable
+private fun Chief(nav: Nav) {
+    val c = Relay.colors
+    Card("Chief of Staff") {
+        T("Every bot reports here. Ask it anything across your data, or for a new bot in your own words.", style = Relay.type.caption, color = c.ink3)
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+            Key("New bot", { openChat(nav, draft = "Make a bot that ") }, kind = KeyKind.Quiet, glyph = "plus")
+            Key("Open", { openChat(nav) }, kind = KeyKind.Primary)
+        }
+    }
+}
+
+/** What an Aide bot said, in a chat: who and how it reached you, its title, its words; a bot it proposes, with Turn on and Not now while it waits. */
+@Composable
+internal fun AideNote(body: JsonObject, modifier: Modifier) {
+    val c = Relay.colors
+    val nav = LocalNav.current
+    Column(modifier.clip(Radii.card).background(c.slab).padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Glyph("aide", 14.dp, c.ink3)
+            T(body.s("bot") ?: "Aide", style = Relay.type.caption, color = c.ink2, weight = FontWeight.SemiBold, maxLines = 1)
+            when {
+                body.b("notified") == true -> T("told you now", style = Relay.type.caption, color = c.waiting)
+                body.b("held") == true && body.l("proposal") == null -> T("for the brief", style = Relay.type.caption, color = c.ink3)
+            }
+        }
+        T(body.str("title"), style = Relay.type.uiMedium, color = c.ink, weight = FontWeight.SemiBold)
+        body.str("body").takeIf { it.isNotBlank() }?.let { Markdown(it, style = Relay.type.body, color = c.ink2) }
+        body.l("proposal")?.let { id ->
+            // As it stands now: the keys only while it still waits, so Not now never removes a bot turned on since.
+            val job = (rememberLive("aide.job.get", remember(id) { buildJsonObject { put("id", id) } }).result as? JsonObject)?.o("job")
+            when (job?.s("state")) {
+                null -> {}
+                "proposed" -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                    Key("Not now", { nav.shell.act("aide.job.delete", buildJsonObject { put("id", id) }, done = "Not made") }, kind = KeyKind.Quiet)
+                    Key("Turn on", { nav.shell.act("aide.job.set", buildJsonObject { put("id", id); put("state", "active") }, done = "Turned on") }, kind = KeyKind.Primary)
+                }
+                "active" -> T("Turned on", style = Relay.type.caption, color = c.ink3)
+                else -> T("Made, paused", style = Relay.type.caption, color = c.ink3)
+            }
+        }
+    }
+}
+
+/** Relay's words that woke a bot, as one quiet line: what woke it. */
+@Composable
+internal fun WakeLine(text: String, modifier: Modifier) {
+    val c = Relay.colors
+    val first = text.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().removePrefix("[").removeSuffix("]")
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Glyph("aide", 13.dp, c.ink3)
+        T("Relay woke it · $first", Modifier.weight(1f), style = Relay.type.caption, color = c.ink3, maxLines = 2)
     }
 }
 
@@ -60,7 +139,7 @@ private fun AideContext(s: JsonObject) {
     val words = when {
         s.b("paused") == true -> "Paused: nothing runs, nothing is said"
         s.s("next_job") != null -> "Next: ${s.str("next_job")} ${untilOf(s.s("next_at"))}"
-        else -> "No job is scheduled"
+        else -> "No bot wakes by the clock"
     }
     T("$words · ${s.l("interrupts_today") ?: 0} of ${s.l("interrupt_cap") ?: 0} interrupts today", style = Relay.type.caption, color = c.ink3, maxLines = 2)
 }
@@ -151,8 +230,8 @@ private fun MessageRow(m: JsonObject, divider: Boolean) {
 private fun Jobs(j: JsonObject, nav: Nav) {
     val c = Relay.colors
     val jobs = j.objs("jobs")
-    Card("Jobs", aside = jobs.size.toString()) {
-        if (jobs.isEmpty()) Quiet("No jobs yet. Make one in Aide on the PC, or ask Aide for one.")
+    Card("Bots", aside = jobs.size.toString()) {
+        if (jobs.isEmpty()) Quiet("No bots yet. Ask the Chief of Staff for one, in your own words.")
         jobs.forEachIndexed { i, job ->
             val state = job.str("state")
             val when_ = (job.arr("when").mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }).joinToString(" · ")
@@ -161,6 +240,7 @@ private fun Jobs(j: JsonObject, nav: Nav) {
                 figureColor = when (state) { "active" -> c.live; "proposed" -> c.waiting; else -> c.ink3 })
             Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
                 val id = job.l("id") ?: 0
+                Key("Chat", { openChat(nav, id) }, kind = KeyKind.Quiet)
                 when (state) {
                     "proposed" -> Key("Turn on", { nav.shell.act("aide.job.set", buildJsonObject { put("id", id); put("state", "active") }, done = "Turned on") }, kind = KeyKind.Primary)
                     "active" -> {
