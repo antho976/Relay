@@ -428,3 +428,5 @@ button.panel-key.open image { color: @ink; }
 /* The sidebar meets the page's card with no rule: the card's edge is the border. */
 paned.sidebar-split > separator { background-color: transparent; }
 paned.sidebar-split > separator:hover { background-color: @line_focus; }
+/* Plugins | Skills on the one Skills & plugins page (tools_market.rs). */
+.ext-tabs { margin-left: 12px; }

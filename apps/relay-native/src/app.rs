@@ -280,11 +280,11 @@ pub fn confirm_inline_if(
     key.add_controller(keys);
 }
 
-fn track_navigation(stack: &gtk::Stack, key: &gtk::Button, name: &'static str) {
+fn track_navigation(stack: &gtk::Stack, key: &gtk::Button, pages: &'static [&'static str]) {
     let weak = key.downgrade();
     stack.connect_visible_child_name_notify(move |s| {
         if let Some(key) = weak.upgrade() {
-            if s.visible_child_name().as_deref() == Some(name) {
+            if s.visible_child_name().is_some_and(|page| pages.contains(&page.as_str())) {
                 key.add_css_class("selected");
             } else {
                 key.remove_css_class("selected");
@@ -1579,18 +1579,21 @@ impl Ui {
         let nav = &side.nav;
         for (name, caption, icon) in [
             ("board", "Board", "kanban"),
-            ("skills", "Skills", "skills"),
-            ("plugins", "Plugins", "puzzle"),
+            ("plugins", "Skills & plugins", "puzzle"),
             ("notes", "Notes", "notebook-pen"),
         ] {
             let b = nav_button(caption, icon);
             b.set_widget_name(&format!("nav-{name}"));
-            match name {
-                "skills" => b.set_tooltip_text(Some("Skills: agent instructions, on or off per project")),
-                "plugins" => b.set_tooltip_text(Some("Plugins: skills, rules and MCP tools for a project")),
-                _ => {}
+            if name == "plugins" {
+                b.set_tooltip_text(Some("Skills and plugins: agent instructions and whole toolkits, on or off per project"));
             }
-            track_navigation(&ui.content, &b, name);
+            // Skills and Plugins are one entry: it stays lit on either page.
+            let pages: &'static [&'static str] = match name {
+                "board" => &["board"],
+                "plugins" => &["plugins", "skills"],
+                _ => &["notes"],
+            };
+            track_navigation(&ui.content, &b, pages);
             nav.append(&b);
             let weak = Rc::downgrade(ui);
             b.connect_clicked(move |_| {

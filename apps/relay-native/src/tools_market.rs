@@ -186,10 +186,41 @@ fn build(ui: &Rc<Ui>, spec: &'static Spec) -> Rc<Market> {
     words.set_hexpand(true);
     words.set_valign(gtk::Align::Center);
     let title_line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let title = label(spec.title, "ext-title");
-    title.set_hexpand(true);
+    // One page in the sidebar, so one name; the tabs beside it say which half shows.
+    let title = label("Skills & plugins", "ext-title");
+    title.set_tooltip_text(Some(spec.title));
     title.set_valign(gtk::Align::Center);
     title_line.append(&title);
+    // Skills and Plugins are one entry in the sidebar: each page switches to the other here.
+    let tabs = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    tabs.add_css_class("space-switch");
+    tabs.add_css_class("ext-tabs");
+    tabs.set_valign(gtk::Align::Center);
+    let plugins_tab = gtk::ToggleButton::with_label("Plugins");
+    plugins_tab.set_widget_name(&format!("{}-tab-plugins", spec.page));
+    let skills_tab = gtk::ToggleButton::with_label("Skills");
+    skills_tab.set_widget_name(&format!("{}-tab-skills", spec.page));
+    skills_tab.set_group(Some(&plugins_tab));
+    let own = if spec.page == "skills" { skills_tab.clone() } else { plugins_tab.clone() };
+    own.set_active(true);
+    for (key, page) in [(&plugins_tab, "plugins"), (&skills_tab, "skills")] {
+        let (weak, own) = (Rc::downgrade(ui), own.clone());
+        key.connect_toggled(move |key| {
+            if !key.is_active() || page == spec.page {
+                return;
+            }
+            if let Some(ui) = weak.upgrade() {
+                ui.navigate(page);
+            }
+            // Lit on its own page again for the next visit.
+            own.set_active(true);
+        });
+        tabs.append(key);
+    }
+    title_line.append(&tabs);
+    let rest = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    rest.set_hexpand(true);
+    title_line.append(&rest);
     words.append(&title_line);
     let subtitle = label(spec.subtitle, "ext-subtitle");
     subtitle.set_wrap(true);

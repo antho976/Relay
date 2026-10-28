@@ -207,7 +207,7 @@ set of keys on every page of a space. Pages and the right-side launch sheet use
 20px insets; the sheet overlays the wall at 780px including its insets. It does not shrink
 the terminal wall. A scrim blocks background actions and Escape dismisses an idle sheet.
 
-Dev | Threads heads the sidebar. Navigation follows it (Board, Skills, Plugins, Notes), then projects grouped
+Dev | Threads heads the sidebar. Navigation follows it (Board, Skills & plugins, Notes), then projects grouped
 under workspaces. The footer is you: an initial in a round avatar, your first name and the gear
 that opens Settings. The top bar carries identity, the project's strip and utility controls,
 without a second row of page tabs. Every page but the project's view is a card (12px corners,
@@ -320,7 +320,11 @@ Closed without launching, the sheet comes back as it was left, its tasks read ag
 project switch, a reconnect or opening it from a task starts a fresh one.
 
 ### Navigation
-Sidebar navigation (32px rows) selects with the selected fill and ink. Workspace groups take
+Sidebar navigation (32px rows) selects with the selected fill and ink. Skills and Plugins are
+one entry, lit on either page; each page switches to the other with Plugins | Skills tabs beside
+its "Skills & plugins" title. Under the active project's row, its open agents are listed: a lamp
+in their state's colour, the name in Geist Mono and their intent in faint ink under it; a click
+brings that agent's terminal up. Workspace groups take
 28px and project rows 30px, select with the selected fill, no rail; counts are plain Geist Mono.
 A workspace whose name is its folder's lower-case slug reads as words ("Northwind traders
 client work"). The project list fades at whichever edge has more. In the title bar, the project's
@@ -344,8 +348,8 @@ VS Code's status colours. Native widget fallback icons remain GTK-owned;
 matching path geometry alone is not proof of complete rendering fidelity.
 
 ### Records / Containers
-Records are flat square slabs with 12px padding. Board lanes use console fill
-and 8px padding. The notice is a card floating at the foot of the page (never over the sidebar,
+Records are flat square slabs with 12px padding. Board lanes are open columns on the page, no
+fill and no border, with 8px padding: the cards are the only boxes. The notice is a card floating at the foot of the page (never over the sidebar,
 never pushing anything down): opaque slab, a hairline, a soft shadow, a lamp in its state's
 colour (attention or live), plain words with the raw error in the tooltip, and Reconnect while
 the engine does not answer. A primary key not yet available is an outline in faint ink, not a
