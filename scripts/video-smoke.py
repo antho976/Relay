@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Videos in the Design view against a disposable engine (docs/VIDEO.md): two videos made,
-checked, looked at and one rendered through the real worker, then relay-native's captures of the
-gallery's Videos section and of each video's board.
+checked, looked at and one rendered through the real worker, with a second cut, a named version
+and a diff, then relay-native's captures of the gallery's Videos section, each video's board, and
+two renders compared.
 
     python3 scripts/video-smoke.py
 
@@ -113,6 +114,26 @@ try:
     assert abs(done["audio"]["lufs"] + 14) < 0.6, done["audio"]
     timeline = timed("timeline", "video.timeline", {"video_id": promo})
     print("timeline", timeline["png"], json.dumps([s["name"] for s in timeline["sounds"]]))
+    # Cuts and takes: a square cut beside the vertical one, the version with both named, a render
+    # of each and a second of the vertical, so the board has cuts, a kept version and two renders
+    # of one cut to compare.
+    root_tsx = video_tsx.parent / "Root.tsx"
+    root = root_tsx.read_text()
+    root = root.replace("export const Root: React.FC = () => (\n  <Composition", "export const Root: React.FC = () => (\n  <>\n  <Composition", 1)
+    root = root.replace("  />\n);", "  />\n  <Composition id=\"square\" component={Video} schema={schema} width={1080} height={1080} fps={30} durationInFrames={180}\n"
+                        "    defaultProps={{ title: 'Every euro, square', subtitle: 'For the feed', cta: 'Get Tally', accent: '#34D399' }} />\n  </>\n);", 1)
+    root_tsx.write_text(root)
+    checked = call("video.check", {"video_id": promo})
+    assert checked["ok"] and [c["id"] for c in checked["compositions"]] == ["main", "square"], checked
+    named = call("video.version.label", {"video_id": promo, "version": checked["version"], "label": "Two cuts: vertical and square"})
+    assert named["label"] == "Two cuts: vertical and square", named
+    square = call("video.render", {"video_id": promo, "composition": "square", "quality": "preview", "wait": True})
+    assert square["state"] == "done", square
+    vertical = call("video.render", {"video_id": promo, "quality": "preview", "wait": True})
+    assert vertical["state"] == "done", vertical
+    diff = timed("diff since v1", "video.version.diff", {"video_id": promo, "from": 1})
+    print("diff", json.dumps([(f["path"], f["change"]) for f in diff["files"]]))
+    assert any(f["path"] == "src/Root.tsx" and "square" in (f.get("diff") or "") for f in diff["files"]), diff
     recap = call("video.create", {"project_id": 1, "title": "Avex weekly recap", "shape": "landscape", "seconds": 8})["video"]["id"]
     call("video.check", {"video_id": recap})
     call("video.still", {"video_id": recap, "at": ["2s"]})
@@ -129,6 +150,9 @@ try:
                       XDG_CONFIG_HOME=str(base / "native-config"), WAYLAND_DISPLAY=sock, DISPLAY="", GDK_BACKEND="wayland")
     for key in ("RELAY_SESSION", "RELAY_TOKEN", "RELAY_BRIEF"):
         native_env.pop(key, None)
+    # No sound: the virtual compositor hides the window, not what it plays. The board mutes its
+    # media in a screenshot run; no audio server is reachable either.
+    native_env.update(PULSE_SERVER="unix:/nonexistent", PIPEWIRE_REMOTE="/nonexistent")
 
     def native(shot, seconds=7, **extra):
         output = OUT / f"video-{shot}.png"; output.unlink(missing_ok=True)
@@ -149,7 +173,9 @@ try:
         print(shot, "->", output)
 
     for shot, extra in [("gallery", {}), ("board", {"RELAY_SMOKE_VIDEO_ID": promo}), ("board-unrendered", {"RELAY_SMOKE_VIDEO_ID": recap}),
-                        ("board-playing", {"RELAY_SMOKE_VIDEO_ID": promo, "RELAY_SMOKE_VIDEO_PLAY": 1})]:
+                        ("board-playing", {"RELAY_SMOKE_VIDEO_ID": promo, "RELAY_SMOKE_VIDEO_PLAY": 1}),
+                        ("board-compare", {"RELAY_SMOKE_VIDEO_ID": promo, "RELAY_SMOKE_VIDEO_COMPARE": 1}),
+                        ("board-versions", {"RELAY_SMOKE_VIDEO_ID": promo, "RELAY_SMOKE_VIDEO_VERSIONS": 1})]:
         try:
             native(shot, **extra)
         except Exception as e:  # noqa: BLE001 - each shot fails on its own

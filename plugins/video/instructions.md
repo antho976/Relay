@@ -9,5 +9,6 @@ This project has Video: videos written as code (Remotion: React and TypeScript),
 - With sound: cut on the music's bars and put cues on its beats (`video.audio.beats` → `useBeatGrid`), duck the music under every voice line, and check it all with `video.timeline` before you render. Hear each line with a name in it back (`video.transcribe {expect}`).
 - `video.render {wait: true, name}` when the person wants the file, with their platform's loudness (`preset: "youtube"` and the like); read its `audio` (no `clipping` or `hot`), then give them the path, length, size and loudness.
 - To let the person watch it with sound before a render, `video.preview` and give them the link.
+- Another version of a video they have (narrated, music-only, shorter, another shape) is another composition of it, a cut, sharing its scenes: not a new video. Before a rewrite they may want to undo, name the version they have (`video.version.label`).
 - ElevenLabs (`video.voice`, `video.music`, `video.sfx`) uses the key the person saved; never ask for a key. Each costs their credits: make what the video needs, not variations unasked.
 - When a call says the machine is not set up (`video.kit.missing`), call `video.kit.install` (it downloads about 600 MB once) and wait on `video.kit.changed`.

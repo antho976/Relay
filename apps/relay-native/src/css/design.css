@@ -272,3 +272,15 @@ menubutton.video-render-key > button { min-height: 28px; padding: 0 10px; border
 .video-row-title { color: @ink; font-size: 12.5px; font-weight: 600; }
 .video-warn { color: @held; font-size: 12px; }
 .video-prop-label { color: @secondary; font-size: 12px; }
+/* Cuts: a video's compositions, one picked; the render on screen; versions kept by name; A/B. */
+list.video-cuts { background: transparent; }
+list.video-cuts > row { padding: 6px 8px; border-radius: 8px; }
+list.video-cuts > row:hover { background: @glass_hover; }
+list.video-cuts > row:selected { background: @glass_selected; color: @ink; }
+.video-row-playing { box-shadow: inset 2px 0 @live; padding-left: 8px; }
+.video-version-label { color: @ink; font-size: 12.5px; font-weight: 600; }
+.video-version-changed { color: @faint; font-size: 11.5px; }
+.video-versions-kept { margin-top: 6px; color: @secondary; font-size: 11.5px; font-weight: 600; }
+.video-compare { padding: 6px 12px 0; background: #07080b; }
+.video-compare-key { min-height: 26px; padding: 0 12px; border-radius: 999px; font-family: 'Geist Mono'; font-size: 11.5px; }
+.video-compare-key:checked { background: @glass_selected; color: @ink; box-shadow: inset 0 0 0 1px @glass_line_hover; }

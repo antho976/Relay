@@ -179,7 +179,7 @@ pub fn live_video(conn: &Connection, id: Id) -> Result<Video, BusError> {
 }
 
 pub const RENDER_COLUMNS: &str = "id, video_id, project_id, composition, format, quality, state, progress, version, range_from, range_to, \
-    path, bytes, error, actor, created_at, started_at, finished_at, name, audio, loudness, peak";
+    path, bytes, error, actor, created_at, started_at, finished_at, name, audio, loudness, peak, replaced_by";
 
 pub fn render_row(row: &Row) -> rusqlite::Result<VideoRender> {
     let range = match (row.get::<_, Option<u32>>(9)?, row.get::<_, Option<u32>>(10)?) {
@@ -203,6 +203,7 @@ pub fn render_row(row: &Row) -> rusqlite::Result<VideoRender> {
         range,
         path: row.get(11)?,
         bytes: row.get(12)?,
+        replaced_by: row.get(22)?,
         error: row.get(13)?,
         actor: row.get(14)?,
         created_at: row.get(15)?,

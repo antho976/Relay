@@ -57,7 +57,9 @@ rows, so a render that finished before anyone waited is never missed; `bus.wait`
 
 A render is drawn to a hidden partial file beside its own and renamed once done: `out/<name>.<ext>`
 when it was given a `name` (a render of the same name replaces the file), else
-`out/<composition>-<id>.<ext>`. A failed render leaves the file it would have replaced.
+`out/<composition>-<id>.<ext>`. A failed render leaves the file it would have replaced. A render
+whose file a later one of the same name wrote over says so (`replaced_by`, the render whose file
+it is now), so nothing plays one render's file as another's.
 
 ## Sound
 
@@ -151,7 +153,10 @@ offline. It stops when another video is previewed, after two hours, or with Rela
 One Node.js process per engine, `node videos/.relay/worker.mjs`, started by the first request that
 needs it and stopped after ten idle minutes or when the engine stops. It keeps, between requests,
 each video's bundle (rebuilt only when `src/` or `public/` changed), a TypeScript language service
-per video, and one headless browser. It speaks JSON lines on stdin and stdout (`check`, `meta`,
+per video, and one headless browser. A bundle folder a worker before it left (the folder is named
+by the files' sizes and times, so an unchanged video names the same one) is removed and built
+again: Remotion's copy of `public/` will not write over the links in it, which failed every render
+and still of a video with assets after the worker had stopped. It speaks JSON lines on stdin and stdout (`check`, `meta`,
 `still`, `render`, `cancel`); Remotion's own console output is moved to stderr. Errors come back as
 places in the video's code: esbuild's `file:line:col`, webpack's unresolved imports, TypeScript's
 diagnostics, and a frame that threw mapped through the bundle's source maps.
@@ -199,6 +204,16 @@ the code as it is, then puts the version's back, and is undone by restoring the 
 file over 2 MiB, or a link, that the version does not name is left in place: no version keeps a
 copy to put it back.
 
+A video has several versions in two senses, and Relay keeps both:
+
+- **Takes** are versions of its code. `video.version.label` names one ("narrated, before the HUD"),
+  by the person from the board or by an agent; `video.get` lists the newest twenty and every
+  named one however old. `video.version.diff` answers what changed between two (or since one) as
+  unified diffs, and `video.version.restore {paths}` puts back only some files: a scene from an
+  earlier take without undoing what came after.
+- **Cuts** are compositions of one video sharing its scenes: narrated and music-only, vertical and
+  square, the first film kept beside the second. The board shows them side by side (below).
+
 ## In the Design view
 
 - The gallery shows the project's videos after its designs, under the same chips and search:
@@ -208,7 +223,20 @@ copy to put it back.
 - A video's board plays its newest MP4 or WebM render, and says when the code has changed since
   (with **Render a preview**). Beside it: the composition, the **props** its schema declares as
   fields (text, numbers, switches, choices, colours), applied with a preview render; its renders,
-  to play or show in their folder; and its versions, to restore.
+  to play, compare or show in their folder; and its versions.
+- A video with several compositions lists them as **Cuts**, each with its size, length and newest
+  render. Picking one shows that cut: the stage plays its renders, the props are its own, and
+  Render and Ask are about it. The video's default composition, which agents draw unless they name
+  another, is marked and is not changed by looking.
+- **Compare** on a render plays it against the one on screen: **A** and **B** under the picture
+  switch between them at the same moment of their compositions (a render of part of one starts at
+  its first frame; cuts at other rates meet at the same second), playing on if it was.
+- A render the person picks from the list stays on screen; the cut's newest is replaced by the next
+  one as it lands. The renders list marks the one on screen and says which a later render of the
+  same name replaced.
+- **Versions** lists each with who made it, when and what it changed, a key to play a render of
+  it, and a menu to **name** it (a pin marks named ones, which stay listed however old) or
+  **restore** it.
 - **Render** offers a preview (half size), MP4, high-quality MP4, WebM, GIF, ProRes with
   transparency, and the sound alone. Progress shows over the player, with **Stop**.
 - A video opens on its poster; **Play** loads its newest render into the player (the media pipeline
@@ -218,10 +246,13 @@ copy to put it back.
   sound (LUFS and true peak, red when it clips or runs hot).
 - **ElevenLabs**, at the foot of the side panel: the person saves their key there (a password
   field) and sees the account's tier and characters left.
-- **Ask agent** pauses the player and sends the video's terminal one line: the video, the moment
-  on screen (`1.5s · f45`), your request and the `video.still` that shows the agent that frame. It
-  goes as a design's Ask does: typed at an agent at its prompt, priority mail to one at work, held
-  for one waiting on you.
+- **Ask agent** pauses the player and sends the video's terminal one line: the video, the cut and
+  the moment on screen (`1.5s · f45`, in that cut's frames), your request and the `video.still`
+  that shows the agent that frame of that cut, and, when the render on screen is older than the
+  code, which render and version the person watched. It goes as a design's Ask does: typed at an
+  agent at its prompt, priority mail to one at work, held for one waiting on you.
+- In a screenshot run (`RELAY_NATIVE_SCREENSHOT`) the board's media is muted: a virtual compositor
+  keeps the window off the desktop, not its sound off the speakers.
 
 ## Implementation
 
@@ -246,7 +277,7 @@ copy to put it back.
 | The live preview | `crates/relay-core/src/video/preview.rs`, `plugins/video/runtime/loopback.cjs` |
 | Versions | `crates/relay-core/src/video/versions.rs` |
 | The render queue | `crates/relay-core/src/video/jobs.rs` |
-| Storage (migration v34) | `crates/relay-core/src/store.rs` |
+| Storage (migrations v34 to v36) | `crates/relay-core/src/store.rs` |
 | The worker, the kit, the starter | `plugins/video/runtime/` |
 | Rules and the skill | `plugins/video/instructions.md`, `plugins/video/skills/video-code/SKILL.md` |
 | The gallery's section | `apps/relay-native/src/design/videos.rs` |
@@ -262,6 +293,11 @@ copy to put it back.
 - `crates/relay-core/tests/video_e2e.rs` (ignored; needs Node.js and, once, the network) sets the kit
   up for real and checks, looks at and renders the starter, finding a planted line in a missing font,
   too small and faint, under a platform's buttons; and a typo and a throw at their lines.
+  `video_e2e_a_worker_started_again_bundles_a_video_with_assets` stops the worker between two
+  stills of a video with an asset. On a machine whose Relay already set the kit up with the same
+  pinned packages, `target/video-e2e/store/videos/` can be seeded from it instead of the network:
+  `cp -a --reflink=always` of its `node_modules/`, and its `package.json`, `package-lock.json` and
+  `.relay/kit.json`.
 - `video_e2e_sound_from_cues_to_loudness` (ignored, needs ffmpeg) makes music, a voice line and
   cues, draws the kit's new pieces, checks the timeline, the beats, a render brought to −14 LUFS,
   and the MP4's sync against a WAV render to the sample; `video_e2e_the_preview_is_studio_on_loopback`
@@ -270,8 +306,9 @@ copy to put it back.
   (`Hub::use_elevenlabs`), the capture through a fake adb (`fixtures/video/fake_adb.py`), and the
   preview through a plain server.
 - `scripts/video-smoke.py` makes two videos through the real worker on a disposable engine, borrowing
-  the kit `video_e2e` set up (the promo with a music bed, rendered to YouTube's loudness), and
-  captures the gallery and both boards in a private virtual KWin.
+  the kit `video_e2e` set up (the promo with a music bed, rendered to YouTube's loudness, then a
+  square cut, a named version and a diff), and captures the gallery, both boards, the player, two
+  renders compared and the versions in a private virtual KWin, with no sound.
 
 Readings on this machine (Ryzen, the engine's debug build, the kit warm in the page cache): a first
 check 3.9 s (worker start, bundle, typecheck, browser), a check with nothing changed 0.10 s, a contact

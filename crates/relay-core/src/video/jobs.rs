@@ -192,8 +192,13 @@ fn render_one(engine: &Arc<Engine>, id: Id, project_id: Id) {
     lock(&engine.video.jobs.stopping).remove(&id);
     let _ = advance(engine, id, project_id, |tx, now| {
         match &outcome {
-            Ok((path, bytes, audio)) => tx.prepare_cached("UPDATE video_renders SET state = 'done', progress = 1, path = ?2, bytes = ?3, audio = ?4, finished_at = ?5 WHERE id = ?1").bus()?
-                .execute(params![id, path, bytes, audio.as_ref().and_then(|a| serde_json::to_string(a).ok()), now]).bus()?,
+            Ok((path, bytes, audio)) => {
+                // A render of the same name before it no longer has its file: this one does.
+                tx.prepare_cached("UPDATE video_renders SET replaced_by = ?1 WHERE video_id = ?2 AND path = ?3 AND id <> ?1 AND state = 'done'").bus()?
+                    .execute(params![id, render.video_id, path]).bus()?;
+                tx.prepare_cached("UPDATE video_renders SET state = 'done', progress = 1, path = ?2, bytes = ?3, audio = ?4, finished_at = ?5 WHERE id = ?1").bus()?
+                    .execute(params![id, path, bytes, audio.as_ref().and_then(|a| serde_json::to_string(a).ok()), now]).bus()?
+            }
             Err(e) => {
                 let state = if e.code == "video.render.cancelled" { "cancelled" } else { "failed" };
                 tx.prepare_cached("UPDATE video_renders SET state = ?2, error = ?3, finished_at = ?4 WHERE id = ?1").bus()?
