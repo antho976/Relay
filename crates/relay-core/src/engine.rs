@@ -754,6 +754,12 @@ impl Engine {
         self.handlers.insert(O::NAME, Handler { call });
     }
 
+    /// Whether `op` was registered with [`Engine::register_staged`].
+    #[cfg(test)]
+    pub(crate) fn is_staged(&self, op: &str) -> bool {
+        self.prepares.contains_key(op)
+    }
+
     /// One short read of the store for `op`, measured as a lock span: what work that runs with
     /// nothing locked ([`Ctx::finish_reply`]) takes the store for.
     pub fn read_store<T>(&self, op: &'static str, f: impl FnOnce(&rusqlite::Connection) -> Result<T, BusError>) -> Result<T, BusError> {

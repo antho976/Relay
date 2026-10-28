@@ -1248,12 +1248,13 @@ fn fill(slot: &gtk::Box, ask: &Value) {
     slot.append(&card);
 }
 
-/// A payload on one line: `key: value` pairs, strings unquoted and control characters shown.
+/// A payload on one line: `key: value` pairs, strings unquoted and every control character
+/// shown, as the engine's summary shows them (`thread::shown`).
 fn compact(payload: &Value) -> String {
     let Some(fields) = payload.as_object() else { return payload.to_string() };
     fields.iter().map(|(k, v)| {
         let v = match v {
-            Value::String(s) => s.replace('\r', "⏎").replace('\n', "↵"),
+            Value::String(s) => relay_bus::ops::thread::shown(s),
             other => other.to_string(),
         };
         format!("{k}: {v}")

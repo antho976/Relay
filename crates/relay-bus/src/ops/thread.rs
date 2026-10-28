@@ -367,6 +367,28 @@ payload!(
     /// session it made.
     pub payload: Value,
 });
+/// An ask's text as the person reads it, on the card and in its summary: every control character
+/// shown, so nothing typed into a session or named in a step is hidden from the one approving it.
+/// Enter is ⏎, a newline ↵, a tab ⇥, another C0 character its control picture (Escape is ␛),
+/// Delete ␡, and any other control or direction mark (which can reorder what is read) `\u{…}`.
+pub fn shown(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\r' => out.push('\u{23ce}'),
+            '\n' => out.push('\u{21b5}'),
+            '\t' => out.push('\u{21e5}'),
+            '\u{0}'..='\u{1f}' => out.push(char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}')),
+            '\u{7f}' => out.push('\u{2421}'),
+            c if c.is_control() || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}') => {
+                out.push_str(&format!("\\u{{{:x}}}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 payload!(#[schemars(rename = "ThreadAskIn")] AskIn {
     /// What approving runs, in order, at most 5; the first that fails stops the rest.
     pub steps: Vec<AskStep>,
@@ -411,3 +433,18 @@ op!(AskResolve, "thread.ask.resolve", AskResolveIn => AskView,
         .actors(Actors::UserOnly).emits(&["thread.ask"]));
 
 entries!(List, Get, Create, Send, Upload, Image, Stop, Set, Rename, Delete, Models, Pick, Propose, ProposalList, ProposalGet, ProposalResolve, ProposalUndo, Ask, AskList, AskResolve);
+
+#[cfg(test)]
+mod tests {
+    use super::shown;
+
+    #[test]
+    fn an_asks_text_shows_every_control_character() {
+        assert_eq!(shown("yes\r"), "yes\u{23ce}");
+        assert_eq!(shown("a\nb\tc"), "a\u{21b5}b\u{21e5}c");
+        assert_eq!(shown("\u{1b}[2J\u{3}"), "\u{241b}[2J\u{2403}");
+        assert_eq!(shown("\u{7f}\u{9b}"), "\u{2421}\\u{9b}");
+        assert_eq!(shown("rm\u{202e}txt.sh"), "rm\\u{202e}txt.sh");
+        assert_eq!(shown("Fix the build — vite"), "Fix the build — vite");
+    }
+}

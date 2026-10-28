@@ -26,7 +26,7 @@
 //! ([`heard`]), once per answer.
 use super::{cut, with_db, ThreadStore};
 use crate::engine::Engine;
-use relay_bus::ops::thread::{AskStep, AskView};
+use relay_bus::ops::thread::{shown, AskStep, AskView};
 use relay_bus::types::Id;
 use relay_bus::{Actor, BusError, Request};
 use rusqlite::{params, OptionalExtension};
@@ -303,10 +303,11 @@ pub fn checked(steps: &[AskStep]) -> Result<(), BusError> {
     Ok(())
 }
 
-/// A step in words, for the summary and the agent: the op and what it names.
+/// A step in words, for the summary and the agent: the op and what it names, its control
+/// characters shown (`thread::shown`) once the Enter that ends a line is trimmed.
 fn step_words(step: &AskStep) -> String {
     let p = &step.payload;
-    let text = |key: &str| p.get(key).and_then(Value::as_str).map(|s| cut(s, 60));
+    let text = |key: &str| p.get(key).and_then(Value::as_str).map(|s| cut(&shown(s.trim_end_matches(['\r', '\n'])), 60));
     let id = |key: &str| p.get(key).and_then(Value::as_i64);
     let session = text("session").unwrap_or_else(|| "the new session".into());
     match step.op.as_str() {
@@ -321,7 +322,7 @@ fn step_words(step: &AskStep) -> String {
         "session.park" => format!("park {session}"),
         "session.wake" => format!("wake {session}"),
         "session.close" => format!("close {session}"),
-        "session.input" => format!("type \u{201c}{}\u{201d} into {session}", text("data").unwrap_or_default().trim_end()),
+        "session.input" => format!("type \u{201c}{}\u{201d} into {session}", text("data").unwrap_or_default()),
         "session.update" => format!("change {session}"),
         "task.create" => format!("create the task \u{201c}{}\u{201d}", text("title").unwrap_or_default()),
         "task.update" => format!("edit task #{}", id("task_id").unwrap_or_default()),
@@ -614,5 +615,8 @@ mod tests {
         ];
         assert_eq!(summary(&steps), "Create a claude builder in project 1, then start the new session");
         assert_eq!(summary(&[step("session.input", json!({"session": "calm-otter", "data": "yes\r"}))]), "Type \u{201c}yes\u{201d} into calm-otter");
+        // What else is typed shows, so the person sees an Escape or a Ctrl-C before approving it.
+        let hidden = step("session.input", json!({"session": "calm-otter", "data": "\u{1b}[2Jy\u{3}\r"}));
+        assert_eq!(summary(&[hidden]), "Type \u{201c}\u{241b}[2Jy\u{2403}\u{201d} into calm-otter");
     }
 }
