@@ -229,10 +229,10 @@ several may turn out to be cheap enough not to matter. File paths are current as
     profiling style recalculation. Original lead: **CSS**: one ~2 600-line static provider; broad selectors (`*`, `window > box, stack,
     scrolledwindow`, `> *:not(button)`); transitions on every button. Measure style-recalc cost in
     sysprof during a sidebar rebuild before touching anything.
-22. **Measured 2026-10-28, open** (`FIXES-2026-10-28.md`): the start screen's pulse. Left open,
-    the screen idles at 0.07 % CPU between pulses, but each pulse (2.6 s of every 4.8 s) redraws the
-    whole field in Cairo on the CPU, 29 % CPU over a 29 s window. Pulse less often or stop after a
-    minute idle (taste), or draw the field as GSK nodes with the dot layer cached (M).
+22. **Measured 2026-10-28, open** (`FIXES-2026-10-28.md`): the start screen's pulse. It now runs
+    only while the window is focused and someone used it in the last 10 s (idle: 20 % → 0.07 % CPU),
+    but while it runs each pulse (2.6 s of every 4.8 s) redraws the whole field in Cairo on the CPU,
+    ~25–30 % CPU. Draw the field as GSK nodes with the dot layer cached (M).
 
 ### Android
 

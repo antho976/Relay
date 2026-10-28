@@ -220,13 +220,44 @@ const RIPPLE_US: f64 = 1_800_000.0;
 /// A click on the field: where, and the frame-clock time it landed.
 type Tap = ((f64, f64), i64);
 
-/// The stage's tick, run only while something on it moves: the opening, a ripple, the pointer's
-/// light easing, a pulse. Between pulses it stops and a timeout brings it back for the next one;
-/// pointer motion and clicks bring it back at once. Ticking every frame for the screen's whole
-/// life was 16 % CPU and 360 wakeups/s with the screen sitting open (2026-10-28 audit).
-/// One frame of the stage: `None` while something moves, else how long until the next pulse.
+/// The pulse pauses after this long with no input on the screen.
+const IDLE_US: i64 = 10_000_000;
+
+/// The pulse's own clock: it stands still while the pulse is paused, so a resumed pulse picks up
+/// at the phase it stopped at instead of jumping.
+#[derive(Default)]
+struct PulseClock {
+    /// Time spent paused before the current pause.
+    paused: Cell<i64>,
+    /// When the current pause began.
+    since: Cell<Option<i64>>,
+}
+
+impl PulseClock {
+    /// The pulse's time at `now`, pausing or resuming it as `live` says.
+    fn at(&self, now: i64, live: bool) -> i64 {
+        match (live, self.since.get()) {
+            (false, None) => self.since.set(Some(now)),
+            (true, Some(at)) => {
+                self.paused.set(self.paused.get() + now - at);
+                self.since.set(None);
+            }
+            _ => {}
+        }
+        self.since.get().unwrap_or(now) - self.paused.get()
+    }
+}
+
+/// One frame of the stage: `None` while something moves, else how long until it next needs a
+/// frame (`Duration::MAX`: not until focus or input brings it back).
 type Frame = Box<dyn Fn(&gtk::gdk::FrameClock, bool) -> Option<std::time::Duration>>;
 
+/// The stage's tick, run only while something on it moves: the opening, a ripple, the pointer's
+/// light easing, a pulse. Between pulses it stops and a timeout brings it back for the next one;
+/// pointer motion, keys, clicks and the window's focus bring it back at once. The pulse itself
+/// runs only while the window is focused and on screen and someone has used it in the last
+/// [`IDLE_US`]. Ticking every frame for the screen's whole life was 16 % CPU and 360 wakeups/s
+/// with the screen sitting open, and each pulse redraws the whole field (2026-10-28 audit).
 struct Ticker {
     screen: glib::WeakRef<gtk::Box>,
     frame: Frame,
@@ -253,11 +284,13 @@ fn arm(ticker: &Rc<Ticker>) {
             return glib::ControlFlow::Continue;
         };
         me.ticking.set(false);
-        let again = me.clone();
-        me.wake.set(Some(glib::timeout_add_local_once(wait, move || {
-            again.wake.set(None);
-            arm(&again);
-        })));
+        if wait != std::time::Duration::MAX {
+            let again = me.clone();
+            me.wake.set(Some(glib::timeout_add_local_once(wait, move || {
+                again.wake.set(None);
+                arm(&again);
+            })));
+        }
         glib::ControlFlow::Break
     });
 }
@@ -698,8 +731,12 @@ pub fn build(greeting: &str, remembered: &str, pick: Rc<dyn Fn(usize)>) -> Built
 
         let start = Cell::new(None::<i64>);
         let last = Cell::new(None::<i64>);
+        let last_input = Rc::new(Cell::new(glib::monotonic_time()));
+        let pulse_clock = PulseClock::default();
+        let drew = Cell::new(false);
         let ticker = {
-            let (field, mark, aim, taps) = (field.clone(), mark.clone(), aim.clone(), taps.clone());
+            let (field, mark, aim, taps, last_input) = (field.clone(), mark.clone(), aim.clone(), taps.clone(), last_input.clone());
+            let on_screen = screen.downgrade();
             Rc::new(Ticker {
                 screen: screen.downgrade(),
                 ticking: Cell::new(false),
@@ -729,7 +766,6 @@ pub fn build(greeting: &str, remembered: &str, pick: Rc<dyn Fn(usize)>) -> Built
                     let moved = (next.at.0 - was.at.0).hypot(next.at.1 - was.at.1) > 0.2 || (next.strength - was.strength).abs() > 0.002;
 
                     let mut list = waves.borrow_mut();
-                    let before = !list.is_empty() || beat.get() > 0.0;
                     list.clear();
                     taps.borrow_mut().retain(|&(_, at)| ((now - at) as f64) < RIPPLE_US);
                     for &(from, at) in taps.borrow().iter() {
@@ -742,68 +778,128 @@ pub fn build(greeting: &str, remembered: &str, pick: Rc<dyn Fn(usize)>) -> Built
                         apply(p);
                         return None;
                     }
-                    // Settled: a pulse every few seconds, the first one shortly after the opening.
-                    let since = elapsed - DURATION_US - 900_000.0;
+                    // Settled: a pulse every few seconds, the first one shortly after the opening,
+                    // while the window is focused and on screen and someone is there.
+                    let shown = on_screen
+                        .upgrade()
+                        .and_then(|screen| screen.root())
+                        .and_downcast::<gtk::Window>()
+                        .is_some_and(|w| w.is_active() && !w.is_suspended());
+                    let live = shown && now - last_input.get() < IDLE_US;
+                    let since = (pulse_clock.at(now, live) - began) as f64 - DURATION_US - 900_000.0;
                     let mut next_pulse = -since;
+                    let mut pulsing = false;
                     if since >= 0.0 {
                         let into = since.rem_euclid(PULSE_EVERY_US);
                         next_pulse = PULSE_EVERY_US - into;
                         if into < PULSE_US {
                             list.push(Wave { from: None, progress: into / PULSE_US, strength: 0.55 });
+                            pulsing = true;
                         }
                         // The signal swells and eases back as the wave leaves it.
                         let b = (into / 420_000.0).min(1.0);
                         beat.set(if into < 420_000.0 { (b * PI).sin() } else { 0.0 });
                     }
-                    let busy = !list.is_empty() || before || moved;
-                    if busy {
+                    // A paused wave stays where it stopped, drawn once and then left still.
+                    let moving = !taps.borrow().is_empty() || moved || (live && (pulsing || beat.get() > 0.0));
+                    let was_moving = drew.replace(moving);
+                    if moving || was_moving {
                         field.queue_draw();
                     }
-                    if beat.get() > 0.0 || before {
+                    if (live && beat.get() > 0.0) || was_moving {
                         mark.queue_draw();
                     }
-                    // Still for now: sleep until the next pulse, a frame or so early.
-                    (!busy && !fresh && beat.get() == 0.0).then(|| {
-                        std::time::Duration::from_micros(next_pulse.max(0.0) as u64)
-                            .saturating_sub(std::time::Duration::from_millis(20))
-                    })
+                    if moving || was_moving || fresh {
+                        return None;
+                    }
+                    if !live {
+                        return Some(std::time::Duration::MAX);
+                    }
+                    // Still for now: sleep until the next pulse, a frame or so early, or until the
+                    // idle pause would begin, whichever is first.
+                    let idle_in = (IDLE_US - (now - last_input.get())).max(0) as u64;
+                    Some(
+                        std::time::Duration::from_micros((next_pulse.max(0.0) as u64).min(idle_in))
+                            .saturating_sub(std::time::Duration::from_millis(20)),
+                    )
                 }),
+            })
+        };
+        // Input wakes the stage and holds off the idle pause.
+        let wake = {
+            let (ticker, last_input) = (ticker.clone(), last_input.clone());
+            Rc::new(move || {
+                last_input.set(glib::monotonic_time());
+                arm(&ticker);
             })
         };
         let motion = gtk::EventControllerMotion::new();
         {
-            let (aim, ticker) = (aim.clone(), ticker.clone());
+            let (aim, wake) = (aim.clone(), wake.clone());
             motion.connect_enter(move |_, x, y| {
                 aim.set(Some((x, y)));
-                arm(&ticker);
+                wake();
             });
         }
         {
-            let (aim, ticker) = (aim.clone(), ticker.clone());
+            let (aim, wake) = (aim.clone(), wake.clone());
             motion.connect_motion(move |_, x, y| {
                 aim.set(Some((x, y)));
-                arm(&ticker);
+                wake();
             });
         }
         {
-            let (aim, ticker) = (aim.clone(), ticker.clone());
+            let (aim, wake) = (aim.clone(), wake.clone());
             motion.connect_leave(move |_| {
                 aim.set(None);
-                arm(&ticker);
+                wake();
             });
         }
         stage.add_controller(motion);
         let click = gtk::GestureClick::new();
         {
-            let (taps, ticker) = (taps.clone(), ticker.clone());
+            let (taps, wake) = (taps.clone(), wake.clone());
             click.connect_pressed(move |gesture, _, x, y| {
                 if let Some(clock) = gesture.widget().and_then(|w| w.frame_clock()) {
                     taps.borrow_mut().push(((x, y), clock.frame_time()));
-                    arm(&ticker);
+                    wake();
                 }
             });
         }
         stage.add_controller(click);
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        {
+            let wake = wake.clone();
+            keys.connect_key_pressed(move |_, _, _, _| {
+                wake();
+                glib::Propagation::Proceed
+            });
+        }
+        screen.add_controller(keys);
+        // Focus counts as someone there; losing it or being minimized pauses the pulse, which the
+        // stage notices on its next frame or wake.
+        let hooked = Cell::new(false);
+        screen.connect_map(move |screen| {
+            let Some(window) = screen.root().and_downcast::<gtk::Window>() else {
+                return;
+            };
+            if hooked.replace(true) {
+                return;
+            }
+            let on_focus = wake.clone();
+            window.connect_is_active_notify(move |w| {
+                if w.is_active() {
+                    on_focus();
+                }
+            });
+            let on_suspend = wake.clone();
+            window.connect_suspended_notify(move |w| {
+                if !w.is_suspended() {
+                    on_suspend();
+                }
+            });
+        });
         arm(&ticker);
     }
     let lines: [gtk::Label; 3] = lines.try_into().expect("three cards");
@@ -954,5 +1050,17 @@ mod tests {
         assert!(CARD_DEV.0 > QUESTION.0 - 0.1 && CARD_THREADS.0 > CARD_DEV.0 && CARD_AIDE.0 > CARD_THREADS.0);
         assert!(CARD_THREADS.1 <= 1.0 && CARD_AIDE.1 <= 1.0 && HINT.1 <= 1.0 && PING.0 < SIGNAL_IN.1);
         assert!(RECOIL.0 >= PING.0 - 0.05 && RECOIL.1 + RECOIL_STEP * 2.0 <= 1.0);
+    }
+
+    #[test]
+    fn a_paused_pulse_resumes_where_it_stopped() {
+        let clock = PulseClock::default();
+        assert_eq!(clock.at(1_000, true), 1_000);
+        assert_eq!(clock.at(5_000, false), 5_000);
+        assert_eq!(clock.at(9_000, false), 5_000, "still while paused");
+        assert_eq!(clock.at(20_000, true), 5_000, "resumes at the paused phase");
+        assert_eq!(clock.at(21_000, true), 6_000);
+        clock.at(30_000, false);
+        assert_eq!(clock.at(40_000, true), 15_000);
     }
 }

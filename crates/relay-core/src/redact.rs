@@ -144,6 +144,45 @@ mod tests {
         }
     }
 
+    /// Past the short streams above: a 4 KiB read, so memchr's and memmem's vector paths run, with
+    /// keys past offset 64 beside high bytes and invalid UTF-8, split at a few places.
+    #[test]
+    fn a_long_read_with_high_bytes_blanks_what_a_walk_of_every_byte_does() {
+        let mut stream = Vec::new();
+        let mut n = 0u32;
+        while stream.len() < 4096 {
+            n += 1;
+            stream.extend_from_slice(format!("line {n} ").as_bytes());
+            stream.extend_from_slice(&[0xc3, 0xa9, 0xff, 0xfe, 0x80]);
+            if n.is_multiple_of(7) {
+                stream.extend_from_slice(b"\xe2sk-ant-api03-KEY");
+                stream.extend_from_slice(n.to_string().as_bytes());
+                stream.push(0xf0);
+            }
+            if n.is_multiple_of(11) {
+                stream.extend_from_slice(b"ssk-an\x9fsk-");
+            }
+            stream.push(b'\n');
+        }
+        let keys = stream.windows(PREFIX.len()).filter(|w| *w == PREFIX).count();
+        assert!(keys > 20 && stream.windows(PREFIX.len()).position(|w| w == PREFIX).unwrap() > 64);
+        let len = stream.len();
+        for splits in [vec![len], vec![64, len], vec![1, 2000, 2001, len], vec![99, 100, 101, 3000, len], (1..=len).step_by(97).chain([len]).collect()] {
+            let mut fast = stream.clone();
+            let mut slow = stream.clone();
+            let (mut f, mut s) = (Redactor::default(), Redactor::default());
+            let mut from = 0;
+            for to in splits {
+                f.redact(&mut fast[from..to]);
+                every_byte(&mut s, &mut slow[from..to]);
+                from = to;
+            }
+            assert_eq!(fast, slow);
+            assert_eq!(fast.windows(PREFIX.len()).filter(|w| *w == PREFIX).count(), keys);
+            assert!(!fast.windows(3).any(|w| w == b"KEY"), "every key blanked");
+        }
+    }
+
     #[test]
     fn a_key_split_across_reads_is_blanked_whole() {
         let stream = b"key: sk-ant-api03-SECRETSECRET\r\nnext";
