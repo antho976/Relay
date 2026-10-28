@@ -139,13 +139,34 @@ mod tests {
         assert_eq!(get("CLAUDE_CODE_MAX_CONTEXT_TOKENS"), Some("131072"));
     }
 
+    /// A port on this machine that is bound and held, but not listening: a connection to it is
+    /// refused, and no other test can take it while the socket is open. (A listener dropped to
+    /// close its port leaves the port free for a test running beside this one.)
+    #[cfg(unix)]
+    fn held_closed_port() -> (std::os::fd::OwnedFd, u16) {
+        use std::os::fd::FromRawFd;
+        // SAFETY: a fresh socket, owned at once; the addresses are plain structs of the size given.
+        unsafe {
+            let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+            assert!(fd >= 0, "socket: {}", std::io::Error::last_os_error());
+            let socket = std::os::fd::OwnedFd::from_raw_fd(fd);
+            let mut addr: libc::sockaddr_in = std::mem::zeroed();
+            addr.sin_family = libc::AF_INET as libc::sa_family_t;
+            addr.sin_addr.s_addr = u32::from(std::net::Ipv4Addr::LOCALHOST).to_be();
+            let mut len = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+            assert_eq!(libc::bind(fd, (&raw const addr).cast(), len), 0, "bind: {}", std::io::Error::last_os_error());
+            assert_eq!(libc::getsockname(fd, (&raw mut addr).cast(), &mut len), 0);
+            (socket, u16::from_be(addr.sin_port))
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn a_closed_port_is_unreachable() {
+        let endpoint = |port: u16| Endpoint { id: "x".into(), name: "x".into(), url: format!("http://127.0.0.1:{port}"), model: None, context: None, vision: false };
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let e = Endpoint { id: "x".into(), name: "x".into(), url: format!("http://127.0.0.1:{port}"), model: None, context: None, vision: false };
-        assert!(reachable(&e).is_ok());
-        drop(listener);
-        assert!(reachable(&e).is_err());
+        assert!(reachable(&endpoint(listener.local_addr().unwrap().port())).is_ok());
+        let (_held, closed) = held_closed_port();
+        assert!(reachable(&endpoint(closed)).is_err());
     }
 }
