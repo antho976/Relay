@@ -1428,7 +1428,7 @@ impl Ui {
         }
         for (key, caption) in crate::money::palette_entries() {
             let (icon, hint) = match key {
-                "space" => ("refresh", chord("space")),
+                _ if key.starts_with("space-") => ("refresh", chord("space")),
                 "thread" | "add" => ("plus", None),
                 "start" => ("dashboard", None),
                 "arbiter-halt" => ("stop", None),
@@ -1436,7 +1436,8 @@ impl Ui {
                 _ if caption.starts_with("Avex") => ("history", None),
                 _ => ("dashboard", None),
             };
-            palette.add("Threads", icon, &caption, hint, false, Box::new(move |ui| crate::money::run_palette(ui, key)));
+            let group = if key.starts_with("aide-") { "Aide" } else { "Threads" };
+            palette.add(group, icon, &caption, hint, false, Box::new(move |ui| crate::money::run_palette(ui, key)));
         }
         for s in self.sessions.borrow().iter() {
             let name = text(s, "name").to_string();
@@ -1557,7 +1558,7 @@ impl Ui {
             for t in threads.as_ref().map(|v| rows(v, "threads")).unwrap_or_default() {
                 let Some(id) = t["id"].as_i64() else { continue };
                 p.add("Threads", "notes", text(&t, "title"), None, true, Box::new(move |ui| {
-                    crate::money::set_space(ui, true);
+                    crate::money::set_space(ui, crate::money::Space::Threads);
                     crate::money::threads::open(ui, id);
                 }));
             }
@@ -1620,8 +1621,8 @@ impl Ui {
                             continue;
                         }
                     }
-                    // In Money the same chord logs an entry.
-                    "new_session" if crate::money::active() => crate::money::new_thread(&ui),
+                    // In Threads the same chord starts a thread; in Aide, a bot.
+                    "new_session" if crate::money::space() != crate::money::Space::Dev => crate::money::new_in_space(&ui),
                     // Rebuilding an open sheet would discard what is being typed into it.
                     "new_session" if ui.launch.reveals_child() => {}
                     "new_session" => ui.show_launch(None),

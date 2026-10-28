@@ -120,6 +120,8 @@ struct Picker {
 struct View {
     title: gtk::Label,
     title_key: gtk::MenuButton,
+    /// An Aide chat's keys in the strip (`aide::fill_strip`): a bot's state, Turn on, Run, Details.
+    aide_keys: gtk::Box,
     rename: gtk::Entry,
     middle: gtk::Stack,
     /// A new thread: the greeting, where the message box sits, and questions to start with.
@@ -223,11 +225,22 @@ struct Draft {
     pictures: Vec<Rc<Attached>>,
 }
 
+/// The Aide chat showing ([`open_aide`]): a bot's, by its job, or the Chief of Staff's.
+#[derive(Clone, PartialEq, Debug)]
+pub struct AideChat {
+    pub job: Option<i64>,
+    pub name: String,
+}
+
 #[derive(Default)]
 struct State {
     view: RefCell<Option<Rc<View>>>,
     list: RefCell<Option<gtk::Box>>,
     current: Cell<Option<i64>>,
+    /// The page shows an Aide chat, in the Aide space: no Threads panel, its own keys in the strip.
+    aide: RefCell<Option<AideChat>>,
+    /// The conversation's width as [`fit`] last saw it.
+    width: Cell<i32>,
     working: Cell<bool>,
     /// The thread's agent is running, so a reply starts without a resume.
     live: Cell<bool>,
@@ -478,6 +491,11 @@ pub fn page() -> gtk::Box {
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     strip.append(&spacer);
+    let aide_keys = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    aide_keys.add_css_class("aide-strip");
+    aide_keys.set_valign(gtk::Align::Center);
+    aide_keys.set_visible(false);
+    strip.append(&aide_keys);
     // A toggle, so it shows whether the panel is open.
     let panel_key = gtk::ToggleButton::new();
     panel_key.set_child(Some(&crate::icons::image("sidebar", 16)));
@@ -773,7 +791,7 @@ pub fn page() -> gtk::Box {
     });
 
     let built = Rc::new(View {
-        title, title_key, rename, middle, empty, empty_slot, empty_line, suggestions, dock, dock_slot, message_box,
+        title, title_key, aide_keys, rename, middle, empty, empty_slot, empty_line, suggestions, dock, dock_slot, message_box,
         notice, notice_text, composer, input, hint, chips, chips_scroll, picture_key, picture_note, send: send_key,
         limits, model, effort, scroll, jump, column, pending,
         working, working_text, split: body.clone(), panel, panel_key, panel_body, panel_tabs,
@@ -1005,7 +1023,8 @@ fn fit(v: &View, width: i32) {
         part.set_margin_start(start);
         part.set_margin_end(end);
     }
-    v.limits.set_visible(width >= 640);
+    STATE.with(|s| s.width.set(width));
+    v.limits.set_visible(width >= 640 && aide().is_none());
     v.effort.key.set_visible(width >= 420);
     let one = width < 600;
     if STATE.with(|s| s.one_column.replace(one)) != one {
@@ -1015,7 +1034,8 @@ fn fit(v: &View, width: i32) {
 
 /// Show or hide the Tally panel: the person's choice, else whether the page is wide enough.
 fn apply_panel(v: &View) {
-    let open = STATE.with(|s| s.panel_pinned.get().unwrap_or(!s.narrow_page.get()));
+    // An Aide chat has no Threads panel: Tally, Arbiter and Avex are not what it is about.
+    let open = aide().is_none() && STATE.with(|s| s.panel_pinned.get().unwrap_or(!s.narrow_page.get()));
     let was = v.panel.is_visible();
     v.panel.set_visible(open);
     if v.panel_key.is_active() != open {
@@ -1142,14 +1162,16 @@ fn place_composer(v: &View, empty: bool) {
 /// The message box's placeholder: an open question on a new thread, then what the source showing
 /// is about.
 fn show_hint(v: &View, empty: bool) {
-    let hint = match STATE.with(|s| s.source.get()) {
-        _ if empty => "What do you want to know?",
-        "avex" => "Ask about your training",
-        "arbiter" => "Ask about your strategies and orders",
-        _ => "Ask about your money, or tell it what to change",
+    let hint = match (aide(), STATE.with(|s| s.source.get())) {
+        (Some(AideChat { job: None, .. }), _) => String::from("Message Aide, or ask for a new bot"),
+        (Some(chat), _) => format!("Message {}", chat.name),
+        (None, _) if empty => String::from("What do you want to know?"),
+        (None, "avex") => String::from("Ask about your training"),
+        (None, "arbiter") => String::from("Ask about your strategies and orders"),
+        (None, _) => String::from("Ask about your money, or tell it what to change"),
     };
-    v.hint.set_text(hint);
-    v.input.update_property(&[gtk::accessible::Property::Placeholder(hint)]);
+    v.hint.set_text(&hint);
+    v.input.update_property(&[gtk::accessible::Property::Placeholder(&hint)]);
 }
 
 /// What the send key does now: stop a reply, or send what is written when there is something to
@@ -1681,6 +1703,7 @@ pub fn new_thread(ui: &Rc<Ui>) {
 
 /// [`new_thread`]; with `show` false the window stays on the page it shows, its focus too.
 fn start_thread(ui: &Rc<Ui>, show: bool) {
+    set_aide(ui, None);
     reset(None);
     if let Some(v) = view() {
         show_empty(&v);
@@ -2001,7 +2024,7 @@ fn check_claude(ui: &Rc<Ui>) {
 
 /// The capture harness's way in (smoke.rs `thread` and `threads`): the newest thread, or a new one.
 pub fn smoke_open(ui: &Rc<Ui>, newest: bool) {
-    crate::money::set_space(ui, true);
+    crate::money::set_space(ui, crate::money::Space::Threads);
     if !newest {
         new_thread(ui);
         return;
@@ -2023,6 +2046,42 @@ pub fn smoke_open(ui: &Rc<Ui>, newest: bool) {
 
 /// Open thread `id`: read it whole and draw it.
 pub fn open(ui: &Rc<Ui>, id: i64) {
+    set_aide(ui, None);
+    show(ui, id);
+}
+
+/// Open Aide chat `chat`, its thread `id`: the page shows it in the Aide space, without Threads'
+/// panel, its keys in the strip.
+pub fn open_aide(ui: &Rc<Ui>, id: i64, chat: AideChat) {
+    set_aide(ui, Some(chat));
+    show(ui, id);
+}
+
+/// The Aide chat showing, if the page shows one.
+pub fn aide() -> Option<AideChat> {
+    STATE.with(|s| s.aide.borrow().clone())
+}
+
+/// Put the page in or out of an Aide chat. Showing already, the window follows it into its space.
+fn set_aide(ui: &Rc<Ui>, chat: Option<AideChat>) {
+    let changed = STATE.with(|s| s.aide.replace(chat.clone()) != chat);
+    if let Some(v) = view() {
+        let on = chat.is_some();
+        v.panel_key.set_visible(!on);
+        v.aide_keys.set_visible(on);
+        super::aide::fill_strip(ui, &v.aide_keys, chat.as_ref());
+        apply_panel(&v);
+        let width = STATE.with(|s| s.width.get());
+        v.limits.set_visible(width >= 640 && !on);
+        show_hint(&v, current().is_none());
+    }
+    if changed && *ui.page.borrow() == PAGE {
+        crate::money::follow(ui, PAGE, false);
+    }
+}
+
+/// Read thread `id` whole and draw it, on the page.
+fn show(ui: &Rc<Ui>, id: i64) {
     reset(Some(id));
     if let Some(v) = view() {
         clear(&v.column);
@@ -2107,7 +2166,7 @@ fn failed_open(ui: &Rc<Ui>, id: i64, why: &str) {
     let weak = Rc::downgrade(ui);
     again.connect_clicked(move |_| {
         if let Some(ui) = weak.upgrade() {
-            open(&ui, id);
+            show(&ui, id);
         }
     });
     v.column.append(&again);
@@ -2125,6 +2184,13 @@ fn draw_thread(read: &Value, hold: Option<f64>) {
         *s.turn.borrow_mut() = None;
         *s.group.borrow_mut() = None;
     });
+    // An Aide thread opened as one of Threads' (a thread restored as it was left) is Aide's to show.
+    if read["thread"]["kind"] == "aide" && aide().is_none() {
+        if let (Some(ui), Some(id)) = (the_ui(), read["thread"]["id"].as_i64()) {
+            super::aide::open_thread(&ui, id);
+        }
+        return;
+    }
     header(&v, &read["thread"]);
     // A long thread is read its newest messages first (about 1 MiB); the rest a key away.
     if read["earlier"] == true {
@@ -2532,6 +2598,17 @@ fn draw_message(v: &View, m: &Value) {
             });
             v.column.append(&super::aide::wake_note(body["text"].as_str().unwrap_or("")));
         }
+        // What a bot said, in its chat and the Chief of Staff's: a message from it, its keys
+        // for a bot it proposes.
+        "note" => {
+            STATE.with(|s| {
+                *s.turn.borrow_mut() = None;
+                *s.group.borrow_mut() = None;
+            });
+            if let Some(ui) = the_ui() {
+                v.column.append(&super::aide::note(&ui, body));
+            }
+        }
         "error" => {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             row.add_css_class("threads-error-row");
@@ -2814,6 +2891,10 @@ fn show_step(mark: &gtk::Box, step: Step, writes: bool) {
 fn draw_tool(v: &View, parent: &gtk::Box, block: &Value) {
     let name = block["name"].as_str().unwrap_or("").to_string();
     let op = tool_op(&name).unwrap_or_default();
+    // In an Aide chat, what a bot says and proposes shows as its note; how a run ended, on its page.
+    if aide().is_some() && matches!(op.as_str(), "aide.notify" | "aide.job.propose" | "aide.run.finish") {
+        return;
+    }
     let writes = tool_writes(&name) || super::arbiter::tool_writes(&op) || op == "thread.propose";
     let id = block["id"].as_str().map(str::to_string);
     let slot = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -4133,7 +4214,7 @@ fn panel_failed(ui: &Rc<Ui>, body: &gtk::Box, why: &str) {
 /// draws, and none while a budget is being changed in it: that one comes when its editor closes.
 pub fn refresh_panel(ui: &Rc<Ui>) {
     let Some(v) = view() else { return };
-    if !v.panel.is_visible() {
+    if !v.panel.is_visible() || aide().is_some() {
         return;
     }
     if STATE.with(|s| s.editing_budget.get()) {

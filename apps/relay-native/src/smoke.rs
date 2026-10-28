@@ -1216,6 +1216,11 @@ pub fn install(ui: &Rc<Ui>) {
                 crate::money::threads::smoke_open(&navigate, page == "thread");
                 return;
             }
+            // Aide: the Chief of Staff's chat, or the first bot's (scripts/aide-smoke.py seeds them).
+            if page == "aide" || page == "aide-bot" {
+                crate::money::aide_smoke_open(&navigate, page == "aide-bot");
+                return;
+            }
             navigate.navigate(if page == "launch" { "agents" } else { &page });
             if fixture && matches!(page.as_str(), "board" | "notes" | "launch") {
                 track("fixture edit", edit_fixture(navigate.clone(), page.clone()));

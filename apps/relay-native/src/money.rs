@@ -1,5 +1,6 @@
 //! The Threads space, beside the dev workspace: conversations with an agent about the person's
-//! own data, and Tally's ledger beside them (docs/THREADS.md).
+//! own data, and Tally's ledger beside them (docs/THREADS.md). And the Aide space, the third:
+//! the person's own bots, each a chat, under a Chief of Staff (`aide_pages.rs`, docs/AIDE.md).
 //!
 //! The space is a mode of the one window, in the dev space's own look: only the sidebar's keys
 //! and the middle change. Its pages live in the main content stack: `threads` (`threads_view.rs`)
@@ -45,6 +46,50 @@ pub const PAGES: [(&str, &str, &str); 5] = [
     ("money-data", "Data", "data"),
 ];
 
+/// The window's three spaces, as the title bar's switch shows them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Space {
+    #[default]
+    Dev,
+    Threads,
+    Aide,
+}
+
+impl Space {
+    pub const ALL: [Space; 3] = [Space::Dev, Space::Threads, Space::Aide];
+
+    pub fn caption(self) -> &'static str {
+        match self {
+            Space::Dev => "Dev",
+            Space::Threads => "Threads",
+            Space::Aide => "Aide",
+        }
+    }
+
+    /// Its value in `native.space`; Threads keeps the name it had as Money's.
+    fn setting(self) -> &'static str {
+        match self {
+            Space::Dev => "dev",
+            Space::Threads => "money",
+            Space::Aide => "aide",
+        }
+    }
+
+    fn from_setting(value: Option<&str>) -> Space {
+        Space::ALL.into_iter().find(|s| Some(s.setting()) == value).unwrap_or_default()
+    }
+
+    /// Its place on the switch and the start screen: 0, 1, 2.
+    pub fn index(self) -> usize {
+        Space::ALL.iter().position(|s| *s == self).unwrap_or(0)
+    }
+
+    /// The one after it, round: what Ctrl ` switches to.
+    fn next(self) -> Space {
+        Space::ALL[(self.index() + 1) % Space::ALL.len()]
+    }
+}
+
 /// What a toast's Undo key runs.
 pub(crate) type Action = Rc<dyn Fn()>;
 
@@ -67,13 +112,15 @@ struct Toast {
 
 #[derive(Default)]
 struct State {
-    money: Cell<bool>,
+    space: Cell<Space>,
     /// The space last read from or written to `native.space`; `None` until it was read.
-    saved: Cell<Option<bool>>,
+    saved: Cell<Option<Space>>,
     started: Cell<bool>,
-    toggles: RefCell<Option<(gtk::ToggleButton, gtk::ToggleButton)>>,
+    /// The switch's keys, in [`Space::ALL`]'s order.
+    toggles: RefCell<Vec<gtk::ToggleButton>>,
     dev_only: RefCell<Vec<gtk::Widget>>,
     money_only: RefCell<Vec<gtk::Widget>>,
+    aide_only: RefCell<Vec<gtk::Widget>>,
     /// The title bar's + Entry: Tally's, so it shows on the threads and Tally's pages only.
     add_key: RefCell<Option<gtk::Button>>,
     pages: RefCell<BTreeMap<&'static str, Rc<Page>>>,
@@ -96,9 +143,23 @@ pub fn is_page(page: &str) -> bool {
     page == threads::PAGE || page.starts_with("money-") || page.starts_with("arbiter-") || page.starts_with("avex-") || page.starts_with("aide-")
 }
 
-/// Whether the Money space is the one showing.
-pub fn active() -> bool {
-    STATE.with(|s| s.money.get())
+/// The space showing.
+pub fn space() -> Space {
+    STATE.with(|s| s.space.get())
+}
+
+/// The space page `page` belongs to; `None` for Settings, which every space shares. The threads
+/// page is Aide's while it shows an Aide chat.
+pub fn space_of(page: &str) -> Option<Space> {
+    if page == "settings" {
+        None
+    } else if page.starts_with("aide-") || (page == threads::PAGE && threads::aide().is_some()) {
+        Some(Space::Aide)
+    } else if is_page(page) {
+        Some(Space::Threads)
+    } else {
+        Some(Space::Dev)
+    }
 }
 
 pub(crate) fn page(name: &str) -> Option<Rc<Page>> {
@@ -148,23 +209,29 @@ pub(crate) fn set_filters(account: Option<i64>, category: Option<i64>) {
     STATE.with(|s| s.filters.set((account, category)));
 }
 
-/// The title bar's Dev | Threads pill. Wired by [`install`].
+/// The title bar's Dev | Threads | Aide pill. Wired by [`install`].
 pub fn switcher() -> gtk::Box {
     let pill = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     pill.add_css_class("space-switch");
     pill.set_valign(gtk::Align::Center);
     pill.set_margin_start(16);
-    let dev = gtk::ToggleButton::with_label("Dev");
-    dev.set_widget_name("space-dev");
-    dev.set_tooltip_text(Some("Dev: agents, tasks and code · Ctrl `"));
-    let money = gtk::ToggleButton::with_label("Threads");
-    money.set_widget_name("space-money");
-    money.set_tooltip_text(Some("Threads: ask about your data, with Tally beside you · Ctrl `"));
-    money.set_group(Some(&dev));
-    dev.set_active(true);
-    pill.append(&dev);
-    pill.append(&money);
-    STATE.with(|s| *s.toggles.borrow_mut() = Some((dev, money)));
+    let mut keys: Vec<gtk::ToggleButton> = Vec::new();
+    for (space, name, about) in [
+        (Space::Dev, "space-dev", "Dev: agents, tasks and code · Ctrl `"),
+        (Space::Threads, "space-money", "Threads: ask about your data, with Tally beside you · Ctrl `"),
+        (Space::Aide, "space-aide", "Aide: your bots, working while you are away · Ctrl `"),
+    ] {
+        let key = gtk::ToggleButton::with_label(space.caption());
+        key.set_widget_name(name);
+        key.set_tooltip_text(Some(about));
+        if let Some(first) = keys.first() {
+            key.set_group(Some(first));
+        }
+        pill.append(&key);
+        keys.push(key);
+    }
+    keys[0].set_active(true);
+    STATE.with(|s| *s.toggles.borrow_mut() = keys);
     pill
 }
 
@@ -196,14 +263,23 @@ pub fn sidebar_keys() -> gtk::Box {
     nav
 }
 
+/// The Aide space's sidebar: New bot, the Chief of Staff, the bots, and its pages at the foot,
+/// hidden until the space shows.
+pub fn aide_sidebar() -> gtk::Box {
+    let nav = aide::sidebar();
+    nav.set_visible(false);
+    STATE.with(|s| s.aide_only.borrow_mut().push(nav.clone().upcast()));
+    nav
+}
+
 /// Money's pages, added to the window's content stack: the threads, Tally's, Arbiter's, Avex's
-/// and Aide's.
+/// and Aide's. Aide's need no tabs: its sidebar holds its pages.
 pub fn add_pages(content: &gtk::Stack) {
     content.add_named(&threads::page(), Some(threads::PAGE));
     let tally = PAGES.iter().map(|(name, _, _)| (*name, tally_tabs(name)));
     let arbiter = arbiter::ALL.iter().map(|name| (*name, arbiter::tabs(name)));
     let avex = avex::ALL.iter().map(|name| (*name, avex::tabs(name)));
-    let aide = aide::ALL.iter().map(|name| (*name, aide::tabs(name)));
+    let aide = aide::ALL.iter().map(|name| (*name, gtk::Box::new(gtk::Orientation::Horizontal, 0)));
     for (name, tabs) in tally.chain(arbiter).chain(avex).chain(aide) {
         let head = gtk::Box::new(gtk::Orientation::Vertical, 4);
         head.add_css_class("money-head");
@@ -351,15 +427,14 @@ fn typing(ui: &Ui) -> bool {
 /// `dev_only` what the dev space shows and Money hides.
 pub fn install(ui: &Rc<Ui>, nav: &gtk::Box, add: &gtk::Button, dev_only: Vec<gtk::Widget>) {
     STATE.with(|s| *s.dev_only.borrow_mut() = dev_only);
-    if let Some((dev, money)) = STATE.with(|s| s.toggles.borrow().clone()) {
-        for (key, to_money) in [(dev, false), (money, true)] {
-            let weak = Rc::downgrade(ui);
-            key.connect_clicked(move |_| {
-                if let Some(ui) = weak.upgrade() {
-                    set_space(&ui, to_money);
-                }
-            });
-        }
+    let toggles = STATE.with(|s| s.toggles.borrow().clone());
+    for (key, space) in toggles.into_iter().zip(Space::ALL) {
+        let weak = Rc::downgrade(ui);
+        key.connect_clicked(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                set_space(&ui, space);
+            }
+        });
     }
     threads::install(ui);
     // New thread, then Tally (its pages carry their own tabs), then the threads.
@@ -426,21 +501,7 @@ pub fn install(ui: &Rc<Ui>, nav: &gtk::Box, add: &gtk::Button, dev_only: Vec<gtk
         }
     });
     nav.append(&avex_key);
-    // Aide, the person's own agent: its jobs, what it learned and what waits on them.
-    let aide_key = button("", "nav");
-    aide_key.set_widget_name("nav-aide-home");
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 9);
-    row.append(&aide::icon("aide", 16));
-    row.append(&label("Aide", "nav-label"));
-    aide_key.set_child(Some(&row));
-    let weak = Rc::downgrade(ui);
-    aide_key.connect_clicked(move |_| {
-        if let Some(ui) = weak.upgrade() {
-            ui.navigate("aide-home");
-        }
-    });
-    nav.append(&aide_key);
-    let keys = [(tally_key.downgrade(), "money-"), (arbiter_key.downgrade(), "arbiter-"), (avex_key.downgrade(), "avex-"), (aide_key.downgrade(), "aide-")];
+    let keys = [(tally_key.downgrade(), "money-"), (arbiter_key.downgrade(), "arbiter-"), (avex_key.downgrade(), "avex-")];
     ui.content.connect_visible_child_name_notify(move |stack| {
         let showing = stack.visible_child_name();
         for (key, prefix) in &keys {
@@ -469,7 +530,7 @@ pub fn install(ui: &Rc<Ui>, nav: &gtk::Box, add: &gtk::Button, dev_only: Vec<gtk
         use gtk::gdk::ModifierType;
         let Some(ui) = weak.upgrade() else { return glib::Propagation::Proceed };
         let mods = mods & (ModifierType::CONTROL_MASK | ModifierType::SHIFT_MASK | ModifierType::ALT_MASK | ModifierType::META_MASK);
-        let open = active() && ui.panels.borrow().is_empty() && STATE.with(|s| s.start.borrow().is_none());
+        let open = space() == Space::Threads && ui.panels.borrow().is_empty() && STATE.with(|s| s.start.borrow().is_none());
         if !open || mods != ModifierType::CONTROL_MASK || crate::shortcuts::latin(key, keycode).to_lower() != gtk::gdk::Key::e {
             return glib::Propagation::Proceed;
         }
@@ -501,84 +562,129 @@ pub fn install(ui: &Rc<Ui>, nav: &gtk::Box, add: &gtk::Button, dev_only: Vec<gtk
     pages::install(ui);
     arbiter::install();
     avex::install();
-    aide::install();
+    aide::install(ui);
 }
 
-/// Shows `money`'s keys and look. Navigation calls it through [`follow`].
-fn apply(ui: &Ui, money: bool) {
+/// Shows `space`'s keys and look. Navigation calls it through [`follow`].
+fn apply(ui: &Ui, space: Space) {
     STATE.with(|s| {
-        s.money.set(money);
+        s.space.set(space);
         for w in s.dev_only.borrow().iter() {
-            w.set_visible(!money);
+            w.set_visible(space == Space::Dev);
         }
         for w in s.money_only.borrow().iter() {
-            w.set_visible(money);
+            w.set_visible(space == Space::Threads);
+        }
+        for w in s.aide_only.borrow().iter() {
+            w.set_visible(space == Space::Aide);
         }
     });
-    if money {
-        ui.window.add_css_class("space-money");
-    } else {
+    // Both spaces past Dev hide what is Dev's alone (`space-money`); Aide adds its own class.
+    if space == Space::Dev {
         ui.window.remove_css_class("space-money");
+    } else {
+        ui.window.add_css_class("space-money");
+    }
+    if space == Space::Aide {
+        ui.window.add_css_class("space-aide");
+    } else {
+        ui.window.remove_css_class("space-aide");
     }
     sync_toggles();
 }
 
 fn sync_toggles() {
-    let money = active();
-    if let Some((dev, key)) = STATE.with(|s| s.toggles.borrow().clone()) {
-        dev.set_active(!money);
-        key.set_active(money);
+    let showing = space();
+    let toggles = STATE.with(|s| s.toggles.borrow().clone());
+    for (key, space) in toggles.iter().zip(Space::ALL) {
+        key.set_active(space == showing);
     }
 }
 
-/// Called by `Ui::navigate` once `page` shows. A Money page puts the window in Money, any other
-/// page but Settings (which both spaces share) in Dev. `restoring` is a layout restore or an
-/// engine echo: it changes the space shown but is never remembered as the person's choice.
+/// Called by `Ui::navigate` once `page` shows, and by the threads page when it moves in or out of
+/// an Aide chat. A page puts the window in its space; Settings, which every space shares, leaves
+/// it where it is. `restoring` is a layout restore or an engine echo: it changes the space shown
+/// but is never remembered as the person's choice.
 pub fn follow(ui: &Rc<Ui>, page: &str, restoring: bool) {
-    if page == "settings" {
-        return;
+    let Some(to) = space_of(page) else { return };
+    if space() != to {
+        apply(ui, to);
     }
-    let money = is_page(page);
-    if active() != money {
-        apply(ui, money);
+    if to == Space::Aide {
+        aide::mark_sidebar(ui);
     }
-    // Avex, Arbiter and Aide have no entries to add: no Tally key over them.
-    let entries = money && !["avex-", "arbiter-", "aide-"].iter().any(|p| page.starts_with(p));
+    // Avex and Arbiter have no entries to add: no Tally key over them.
+    let entries = to == Space::Threads && !["avex-", "arbiter-"].iter().any(|p| page.starts_with(p));
     if let Some(key) = STATE.with(|s| s.add_key.borrow().clone()) {
         key.set_visible(entries);
     }
     let start_open = STATE.with(|s| s.start.borrow().is_some());
     let saved = STATE.with(|s| s.saved.get());
-    if !restoring && !start_open && saved.is_some_and(|saved| saved != money) {
-        remember(ui, money);
+    if !restoring && !start_open && saved.is_some_and(|saved| saved != to) {
+        remember(ui, to);
     }
 }
 
-fn remember(ui: &Rc<Ui>, money: bool) {
-    STATE.with(|s| s.saved.set(Some(money)));
+fn remember(ui: &Rc<Ui>, space: Space) {
+    STATE.with(|s| s.saved.set(Some(space)));
     let ui = ui.clone();
     glib::spawn_future_local(async move {
-        let value = if money { "money" } else { "dev" };
-        if let Err(e) = ui.call("settings.set", json!({"path":"native.space","value":value})).await {
+        if let Err(e) = ui.call("settings.set", json!({"path":"native.space","value":space.setting()})).await {
             ui.show_error(&e.to_string());
         }
     });
 }
 
-/// Switch space: Threads lands on its threads, Dev on the agent wall.
-pub fn set_space(ui: &Rc<Ui>, money: bool) {
+/// Switch space: Threads lands on its threads, Aide on the Chief of Staff, Dev on the agent wall.
+pub fn set_space(ui: &Rc<Ui>, to: Space) {
     dismiss_start(ui, None);
-    if active() != money {
-        ui.navigate(if money { threads::PAGE } else { "agents" });
-    } else if money && !is_page(&ui.page.borrow()) {
-        ui.navigate(threads::PAGE);
+    let showing = space_of(&ui.page.borrow());
+    if space() != to || showing != Some(to) {
+        match to {
+            Space::Dev => ui.navigate("agents"),
+            // The threads page showing an Aide chat leaves it for a new thread of its own.
+            Space::Threads if threads::aide().is_some() => threads::new_thread(ui),
+            Space::Threads => ui.navigate(threads::PAGE),
+            Space::Aide => aide::open_chief(ui, None),
+        }
     }
     // A refused navigation (unsaved work in a panel) leaves the pill where the window is.
     sync_toggles();
 }
 
 pub fn toggle_space(ui: &Rc<Ui>) {
-    set_space(ui, !active());
+    set_space(ui, space().next());
+}
+
+/// Ctrl N in the space showing past Dev: a new thread in Threads, a new bot in Aide.
+pub fn new_in_space(ui: &Rc<Ui>) {
+    if space() == Space::Aide {
+        aide::new_bot(ui);
+    } else {
+        threads::new_thread(ui);
+    }
+}
+
+/// The capture harness's way into Aide (smoke.rs `aide` and `aide-bot`): the Chief of Staff, or
+/// the first bot's chat.
+pub fn aide_smoke_open(ui: &Rc<Ui>, bot: bool) {
+    if !bot {
+        aide::open_chief(ui, None);
+        return;
+    }
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        let jobs = ui.call("aide.job.list", json!({})).await.map(|j| crate::app::rows(&j, "jobs")).unwrap_or_default();
+        if let Some(j) = jobs.first() {
+            aide::open_bot(&ui, j["id"].as_i64().unwrap_or(0), crate::app::text(j, "name"));
+        }
+    });
+}
+
+/// Aide's Chief of Staff: a notification from Aide opens it.
+pub fn open_aide(ui: &Rc<Ui>) {
+    dismiss_start(ui, None);
+    aide::open_chief(ui, None);
 }
 
 pub fn add_entry(ui: &Rc<Ui>) {
@@ -673,7 +779,7 @@ pub fn gym_changed(ui: &Rc<Ui>) {
 }
 
 /// `aide.changed`: a job, a run, a fact, an errand, a message, a page or the settings moved. The
-/// Aide page showing reads again, once for several in a moment.
+/// Aide page showing and its sidebar read again, once for several in a moment.
 pub fn aide_changed(ui: &Rc<Ui>) {
     aide::changed(ui);
 }
@@ -688,19 +794,19 @@ pub fn thread_event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
     threads::event(ui, ev, payload);
 }
 
-/// Ctrl N in this space: a new thread.
-pub fn new_thread(ui: &Rc<Ui>) {
-    threads::new_thread(ui);
-}
-
 /// Entries for the command palette: (key, caption).
 pub fn palette_entries() -> Vec<(&'static str, String)> {
-    let mut entries = vec![
-        ("space", String::from(if active() { "Switch to Dev" } else { "Switch to Threads" })),
+    let showing = space();
+    let mut entries: Vec<(&'static str, String)> = [("space-dev", Space::Dev), ("space-money", Space::Threads), ("space-aide", Space::Aide)]
+        .into_iter()
+        .filter(|(_, s)| *s != showing)
+        .map(|(key, s)| (key, format!("Switch to {}", s.caption())))
+        .collect();
+    entries.extend([
         ("start", String::from("Start screen")),
         ("thread", String::from("New thread")),
         ("add", String::from("Add a Tally entry")),
-    ];
+    ]);
     for (name, caption, _) in PAGES {
         entries.push((name, format!("Tally {}", caption.to_lowercase())));
     }
@@ -713,7 +819,9 @@ pub fn palette_entries() -> Vec<(&'static str, String)> {
     for (name, caption) in aide::PAGES {
         entries.push((name, format!("Aide {}", caption.to_lowercase())));
     }
-    entries.push(("aide-new-job", String::from("Aide: new job")));
+    entries.push(("aide-chief", String::from("Aide: Chief of Staff")));
+    entries.push(("aide-new-bot", String::from("Aide: new bot")));
+    entries.push(("aide-new-job", String::from("Aide: new bot from a form")));
     entries.push(("avex-import", String::from("Avex: import training history")));
     // The kill switch, from anywhere (docs/ARBITER.md).
     entries.push(("arbiter-halt", String::from("Arbiter: halt all")));
@@ -722,12 +830,16 @@ pub fn palette_entries() -> Vec<(&'static str, String)> {
 
 pub fn run_palette(ui: &Rc<Ui>, key: &str) {
     match key {
-        "space" => toggle_space(ui),
+        "space-dev" => set_space(ui, Space::Dev),
+        "space-money" => set_space(ui, Space::Threads),
+        "space-aide" => set_space(ui, Space::Aide),
         "start" => show_start(ui),
         "thread" => threads::new_thread(ui),
         "add" => add_entry(ui),
         "arbiter-halt" => arbiter::halt_all(ui),
         "avex-import" => avex::import(ui),
+        "aide-chief" => open_aide(ui),
+        "aide-new-bot" => aide::new_bot(ui),
         "aide-new-job" => aide::editor(ui, None, &Value::Null),
         page => ui.navigate(page),
     }
@@ -748,11 +860,11 @@ pub fn startup(ui: &Rc<Ui>) {
     threads::restore(ui);
     let ui = ui.clone();
     glib::spawn_future_local(async move {
-        let money = match ui.call("settings.get", json!({"path":"native.space"})).await {
-            Ok(v) => v["value"].as_str() == Some("money"),
-            Err(_) => false,
+        let space = match ui.call("settings.get", json!({"path":"native.space"})).await {
+            Ok(v) => Space::from_setting(v["value"].as_str()),
+            Err(_) => Space::Dev,
         };
-        STATE.with(|s| s.saved.set(Some(money)));
+        STATE.with(|s| s.saved.set(Some(space)));
         show_start(&ui);
     });
 }
@@ -783,15 +895,15 @@ pub fn show_start(ui: &Rc<Ui>) {
     if !ui.dismiss_panels() {
         return;
     }
-    let remembered = STATE.with(|s| s.saved.get()).unwrap_or(active());
+    let remembered = STATE.with(|s| s.saved.get()).unwrap_or(space());
     let weak = Rc::downgrade(ui);
-    let pick: Rc<dyn Fn(bool)> = Rc::new(move |to_money| {
+    let pick: Rc<dyn Fn(usize)> = Rc::new(move |index| {
         if let Some(ui) = weak.upgrade() {
-            dismiss_start(&ui, Some(to_money));
+            dismiss_start(&ui, Some(Space::ALL[index]));
         }
     });
-    let crate::start::Built { screen, lines, rows, keys } = crate::start::build(&greeting(), remembered, pick);
-    // Escape opens the space used last; 1 and 2 pick Dev and Threads, as the cards say.
+    let crate::start::Built { screen, lines, rows, keys } = crate::start::build(&greeting(), remembered.caption(), pick);
+    // Escape opens the space used last; 1, 2 and 3 pick Dev, Threads and Aide, as the cards say.
     let escape = gtk::EventControllerKey::new();
     escape.set_propagation_phase(gtk::PropagationPhase::Capture);
     let weak = Rc::downgrade(ui);
@@ -799,8 +911,9 @@ pub fn show_start(ui: &Rc<Ui>) {
         use gtk::gdk::Key;
         let pick = match key {
             Key::Escape => remembered,
-            Key::_1 | Key::KP_1 => false,
-            Key::_2 | Key::KP_2 => true,
+            Key::_1 | Key::KP_1 => Space::Dev,
+            Key::_2 | Key::KP_2 => Space::Threads,
+            Key::_3 | Key::KP_3 => Space::Aide,
             _ => return glib::Propagation::Proceed,
         };
         if let Some(ui) = weak.upgrade() {
@@ -820,17 +933,28 @@ pub fn show_start(ui: &Rc<Ui>) {
     }
     ui.overlay.add_overlay(&screen);
     STATE.with(|s| *s.start.borrow_mut() = Some(screen.clone().upcast()));
-    keys[usize::from(remembered)].grab_focus();
-    let [dev_line, money_line] = lines;
-    let [dev_rows, thread_rows] = rows;
+    keys[remembered.index()].grab_focus();
+    let [dev_line, money_line, aide_line] = lines;
+    let [dev_rows, thread_rows, aide_rows] = rows;
     let reader = ui.clone();
     glib::spawn_future_local(async move {
         use crate::start::Lamp;
-        let (dashboard, summary, threads) = tokio::join!(
+        let (dashboard, summary, threads, aide_summary, bots) = tokio::join!(
             reader.call("dashboard.get", json!({})),
             reader.call("money.summary", json!({})),
-            reader.call("thread.list", json!({}))
+            reader.call("thread.list", json!({})),
+            reader.call("aide.summary", json!({})),
+            reader.call("aide.job.list", json!({}))
         );
+        match aide_summary {
+            Ok(a) => {
+                let (reading, lamp) = aide::start_reading(&a);
+                crate::start::reading(&aide_line, &reading, lamp);
+            }
+            Err(e) => crate::start::reading(&aide_line, &pages::unavailable(&e), Lamp::Idle),
+        }
+        let bots = bots.map(|b| aide::start_rows(&b)).unwrap_or_default();
+        crate::start::recent(&aide_rows, &bots, "No bots yet");
         match dashboard {
             Ok(d) => {
                 let lamp = if waiting_on_you(&d) > 0 {
@@ -962,13 +1086,13 @@ pub fn escape_start(ui: &Rc<Ui>) -> bool {
     if STATE.with(|s| s.start.borrow().is_none()) {
         return false;
     }
-    let remembered = STATE.with(|s| s.saved.get()).unwrap_or(active());
+    let remembered = STATE.with(|s| s.saved.get()).unwrap_or(space());
     dismiss_start(ui, Some(remembered));
     true
 }
 
 /// Closes the start screen; with `pick`, into that space.
-fn dismiss_start(ui: &Rc<Ui>, pick: Option<bool>) {
+fn dismiss_start(ui: &Rc<Ui>, pick: Option<Space>) {
     let Some(screen) = STATE.with(|s| s.start.borrow_mut().take()) else {
         return;
     };
@@ -986,11 +1110,11 @@ fn dismiss_start(ui: &Rc<Ui>, pick: Option<bool>) {
             content.set_sensitive(true);
         }
     }
-    if let Some(money) = pick {
-        set_space(ui, money);
+    if let Some(to) = pick {
+        set_space(ui, to);
         // Picking the space already showing navigates nowhere, so `follow` never saw it.
-        if STATE.with(|s| s.saved.get()).is_some_and(|saved| saved != money) && active() == money {
-            remember(ui, money);
+        if STATE.with(|s| s.saved.get()).is_some_and(|saved| saved != to) && space() == to {
+            remember(ui, to);
         }
     }
 }

@@ -53,6 +53,7 @@ const GREETING: (f64, f64) = (0.50, 0.78);
 const QUESTION: (f64, f64) = (0.56, 0.84);
 const CARD_DEV: (f64, f64) = (0.62, 0.92);
 const CARD_THREADS: (f64, f64) = (0.70, 1.0);
+const CARD_AIDE: (f64, f64) = (0.78, 1.0);
 const HINT: (f64, f64) = (0.84, 1.0);
 
 /// The mark on its 120 grid: each lane (y, from x, to x), back to front, and the stroke.
@@ -70,12 +71,20 @@ const DOT_STEP: f64 = 26.0;
 const BASE_DOT: f64 = 0.11;
 
 /// What `build` hands back: the screen, each card's live line, the box for its recent rows, and
-/// the cards (Dev, Threads).
+/// the cards (Dev, Threads, Aide).
 pub struct Built {
     pub screen: gtk::Box,
-    pub lines: [gtk::Label; 2],
-    pub rows: [gtk::Box; 2],
-    pub keys: [gtk::Button; 2],
+    pub lines: [gtk::Label; 3],
+    pub rows: [gtk::Box; 3],
+    pub keys: [gtk::Button; 3],
+}
+
+/// Which card's glyph to draw.
+#[derive(Clone, Copy, PartialEq)]
+enum Glyph {
+    Dev,
+    Threads,
+    Aide,
 }
 
 /// The lamp beside a card's live line: grey, signal-lit, or amber when something waits on you.
@@ -384,8 +393,9 @@ fn fixed_point() -> Option<f64> {
     (!animating()).then_some(1.0)
 }
 
-/// The small line drawing on each card: a prompt for Dev, two speech bubbles for Threads.
-fn draw_glyph(cr: &gtk::cairo::Context, size: f64, threads: bool) {
+/// The small line drawing on each card: a prompt for Dev, two speech bubbles for Threads, a bot's
+/// face for Aide.
+fn draw_glyph(cr: &gtk::cairo::Context, size: f64, glyph: Glyph) {
     let s = size / 24.0;
     cr.scale(s, s);
     cr.set_line_width(1.6);
@@ -393,7 +403,27 @@ fn draw_glyph(cr: &gtk::cairo::Context, size: f64, threads: bool) {
     cr.set_line_join(gtk::cairo::LineJoin::Round);
     let (ir, ig, ib) = INK;
     let (dr, dg, db) = DIM;
-    if threads {
+    if glyph == Glyph::Aide {
+        // A rounded head with its aerial, and two eyes.
+        let (x, y, w, h, r) = (4.0, 8.0, 16.0, 12.0, 3.5);
+        cr.new_sub_path();
+        cr.arc(x + w - r, y + r, r, -PI / 2.0, 0.0);
+        cr.arc(x + w - r, y + h - r, r, 0.0, PI / 2.0);
+        cr.arc(x + r, y + h - r, r, PI / 2.0, PI);
+        cr.arc(x + r, y + r, r, PI, 1.5 * PI);
+        cr.close_path();
+        cr.move_to(12.0, 8.0);
+        cr.line_to(12.0, 4.5);
+        cr.set_source_rgb(ir, ig, ib);
+        let _ = cr.stroke();
+        cr.set_source_rgb(dr, dg, db);
+        for eye in [9.0, 15.0] {
+            cr.arc(eye, 14.0, 1.3, 0.0, 2.0 * PI);
+            let _ = cr.fill();
+        }
+        return;
+    }
+    if glyph == Glyph::Threads {
         // A bubble with its tail, and a second, smaller one answering it.
         let bubble = |cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64| {
             let r = 3.0;
@@ -427,9 +457,9 @@ fn draw_glyph(cr: &gtk::cairo::Context, size: f64, threads: bool) {
     }
 }
 
-/// The screen for `greeting`, with the Dev and Threads cards; `remembered` is the space Escape
-/// opens (true is Threads). `pick(true)` is Threads.
-pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built {
+/// The screen for `greeting`, with the Dev, Threads and Aide cards; `remembered` names the space
+/// Escape opens. `pick(index)` picks a card: 0, 1 or 2.
+pub fn build(greeting: &str, remembered: &str, pick: Rc<dyn Fn(usize)>) -> Built {
     let screen = gtk::Box::new(gtk::Orientation::Vertical, 0);
     screen.add_css_class("start-screen");
     screen.set_widget_name("start-screen");
@@ -512,25 +542,32 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
     let mut lines = Vec::new();
     let mut recents = Vec::new();
     let mut keys = Vec::new();
-    for (index, (to_threads, title, about)) in [
-        (false, "Dev", "Agents, tasks and code across your projects"),
-        (true, "Threads", "Talk it through with agents that know your data"),
+    for (index, (glyph, title, about)) in [
+        (Glyph::Dev, "Dev", "Agents, tasks and code across your projects"),
+        (Glyph::Threads, "Threads", "Talk it through with agents that know your data"),
+        (Glyph::Aide, "Aide", "Your bots, working while you are away"),
     ]
     .into_iter()
     .enumerate()
     {
         let card = button("", "start-card");
-        card.add_css_class(if to_threads { "threads" } else { "dev" });
-        card.set_widget_name(if to_threads { "start-money" } else { "start-dev" });
+        let (class, name) = match glyph {
+            Glyph::Dev => ("dev", "start-dev"),
+            Glyph::Threads => ("threads", "start-money"),
+            Glyph::Aide => ("aide", "start-aide"),
+        };
+        card.add_css_class(class);
+        card.set_widget_name(name);
         card.set_tooltip_text(Some(&format!("Open {title}")));
         let inner = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let kind = glyph;
         let glyph = gtk::DrawingArea::new();
         glyph.add_css_class("start-glyph");
         glyph.set_content_width(22);
         glyph.set_content_height(22);
         glyph.set_valign(gtk::Align::Center);
-        glyph.set_draw_func(move |_, cr, w, h| draw_glyph(cr, f64::from(w.min(h)), to_threads));
+        glyph.set_draw_func(move |_, cr, w, h| draw_glyph(cr, f64::from(w.min(h)), kind));
         top.append(&glyph);
         let name = label(title, "start-title");
         name.set_xalign(0.0);
@@ -570,7 +607,7 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
         inner.append(&recent);
         card.set_child(Some(&inner));
         let pick = pick.clone();
-        card.connect_clicked(move |_| pick(to_threads));
+        card.connect_clicked(move |_| pick(index));
         cards.append(&card);
         lines.push(line);
         recents.push(recent);
@@ -584,7 +621,7 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
     let esc = label("Esc", "start-key");
     esc.set_valign(gtk::Align::Center);
     hint.append(&esc);
-    hint.append(&label(&format!("opens {}", if remembered { "Threads" } else { "Dev" }), "start-hint-text"));
+    hint.append(&label(&format!("opens {remembered}"), "start-hint-text"));
     column.append(&hint);
     stage.add_overlay(&column);
     screen.append(&stage);
@@ -606,6 +643,7 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
             reveal(&ask, t, QUESTION, 8);
             reveal(&cards[0], t, CARD_DEV, 22);
             reveal(&cards[1], t, CARD_THREADS, 22);
+            reveal(&cards[2], t, CARD_AIDE, 22);
             reveal(&hint, t, HINT, 0);
         }
     };
@@ -697,10 +735,10 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
             glib::ControlFlow::Continue
         });
     }
-    let [dev, threads]: [gtk::Label; 2] = lines.try_into().expect("two cards");
-    let [dev_rows, threads_rows]: [gtk::Box; 2] = recents.try_into().expect("two cards");
-    let [dev_key, threads_key]: [gtk::Button; 2] = keys.try_into().expect("two cards");
-    Built { screen, lines: [dev, threads], rows: [dev_rows, threads_rows], keys: [dev_key, threads_key] }
+    let lines: [gtk::Label; 3] = lines.try_into().expect("three cards");
+    let rows: [gtk::Box; 3] = recents.try_into().expect("three cards");
+    let keys: [gtk::Button; 3] = keys.try_into().expect("three cards");
+    Built { screen, lines, rows, keys }
 }
 
 /// Puts a card's live reading in place of its "Reading…", its lamp lit as `lamp` says.
@@ -795,7 +833,7 @@ mod tests {
 
     #[test]
     fn every_part_starts_hidden_and_ends_in_place() {
-        for span in [WAVE, PING, WORDMARK, GREETING, QUESTION, CARD_DEV, CARD_THREADS, HINT] {
+        for span in [WAVE, PING, WORDMARK, GREETING, QUESTION, CARD_DEV, CARD_THREADS, CARD_AIDE, HINT] {
             assert_eq!(phase(0.0, span), 0.0);
             assert!((phase(1.0, span) - 1.0).abs() < 1e-9);
         }
@@ -842,8 +880,8 @@ mod tests {
     #[test]
     fn the_words_follow_the_mark_and_the_cards_come_one_after_the_other() {
         assert!(WORDMARK.0 >= LANES[0].0 && GREETING.0 > WORDMARK.0 && QUESTION.0 > GREETING.0);
-        assert!(CARD_DEV.0 > QUESTION.0 - 0.1 && CARD_THREADS.0 > CARD_DEV.0);
-        assert!(CARD_THREADS.1 <= 1.0 && HINT.1 <= 1.0 && PING.0 < SIGNAL_IN.1);
+        assert!(CARD_DEV.0 > QUESTION.0 - 0.1 && CARD_THREADS.0 > CARD_DEV.0 && CARD_AIDE.0 > CARD_THREADS.0);
+        assert!(CARD_THREADS.1 <= 1.0 && CARD_AIDE.1 <= 1.0 && HINT.1 <= 1.0 && PING.0 < SIGNAL_IN.1);
         assert!(RECOIL.0 >= PING.0 - 0.05 && RECOIL.1 + RECOIL_STEP * 2.0 <= 1.0);
     }
 }

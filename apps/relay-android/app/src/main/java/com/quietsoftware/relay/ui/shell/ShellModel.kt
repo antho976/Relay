@@ -62,7 +62,8 @@ class ShellModel @Inject constructor(val relay: Relay, private val settings: Set
     private data class Data(val w: List<Workspace>, val p: List<Project>, val s: List<Session>, val h: List<Hold>, val unread: Int)
 
     val state: StateFlow<ShellState> = combine(pcFlow, dataFlow, relay.outbox(), relay.threads(), settings.prefs) { (link, pc, seen), d, out, threads, prefs ->
-        ShellState(link, pc, seen, d.w, d.p, d.s, d.h, d.unread, out, threads, prefs, loaded = true)
+        // Aide's chats are reached from Aide's page, not listed among Threads'.
+        ShellState(link, pc, seen, d.w, d.p, d.s, d.h, d.unread, out, threads.filter { it.kind != "aide" }, prefs, loaded = true)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ShellState())
 
     private val _toasts = MutableSharedFlow<Toast>(extraBufferCapacity = 8)

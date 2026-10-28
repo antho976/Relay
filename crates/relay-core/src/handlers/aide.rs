@@ -146,7 +146,7 @@ pub fn register(e: &mut Engine) {
         let why = text("why", &p.why, 600)?;
         let now = ctx.now.clone();
         let id = with_db(ctx.engine(), |db| db.add_job(&spec, JobState::Proposed, None, &now))?;
-        let title = format!("Aide proposes a job: {}", spec.name);
+        let title = format!("A new bot to turn on: {}", spec.name);
         let (job_id, run_id) = match ctx.thread() {
             Some(t) => {
                 let run = with_db(ctx.engine(), |db| db.last_run_of_thread(t))?;
@@ -154,7 +154,8 @@ pub fn register(e: &mut Engine) {
             }
             None => (None, None),
         };
-        outbox::keep(ctx.engine(), job_id, run_id, Level::Brief, &title, &why, false, true)?;
+        let message = outbox::keep(ctx.engine(), job_id, run_id, Level::Brief, &title, &why, false, true)?;
+        ctx.after_commit(move |engine| outbox::post(&engine, &message, Some(id)));
         ctx.emit("aide.changed", json!({"what": "job", "id": id}));
         Ok(view(job(ctx.engine(), id)?))
     });
@@ -253,6 +254,8 @@ pub fn register(e: &mut Engine) {
             ctx.emit("notify.new", json!({"category": outbox::CATEGORY, "notification_id": id}));
         }
         ctx.emit("aide.changed", json!({"what": "message", "id": message.id}));
+        let posted = message.clone();
+        ctx.after_commit(move |engine| outbox::post(&engine, &posted, None));
         Ok(NotifyOut { message, notified, held })
     });
     e.register::<Followup>(|ctx, p| {
@@ -368,6 +371,18 @@ pub fn register(e: &mut Engine) {
         }
         ctx.emit("aide.changed", json!({"what": "page", "id": p.id}));
         Ok(Empty {})
+    });
+
+    e.register::<Chat>(|ctx, p| {
+        let engine = ctx.engine();
+        let (thread_id, made) = match p.job_id {
+            Some(id) => outbox::bot_chat(engine, &job(engine, id)?)?,
+            None => outbox::chief_or_make(engine)?,
+        };
+        if made {
+            ctx.emit("thread.changed", json!({"thread": crate::threads::get(ctx.engine(), thread_id).ok()}));
+        }
+        Ok(ChatOut { thread_id })
     });
 
     e.register_unlocked::<MessageList>(|ctx, p| Ok(MessagesOut { messages: with_db(ctx.engine(), |db| db.messages(p.limit.unwrap_or(50).clamp(1, 500)))? }));

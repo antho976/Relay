@@ -9,6 +9,10 @@
 //! from it (`Ctx::thread`): a job it writes waits as a proposal, a fact it adds waits to be
 //! confirmed, and an errand it calls done waits for the person to close it.
 //!
+//! Each job is a **bot** with its own chat (its channel); `aide.chat` opens one, or the main chat over them,
+//! the Chief of Staff. What a bot says (`aide.notify`, a proposal) is also posted, as a `note`, in
+//! its channel and, unless it is quiet, in the Chief of Staff's.
+//!
 //! Events: `aide.changed` (a job, run, fact, errand, message, page or the settings changed).
 use crate::registry::{Actors, OpMeta, Scope};
 use crate::{op, Empty};
@@ -239,8 +243,19 @@ payload!(#[schemars(rename = "AideMessageListIn")] MessageListIn {
 result!(#[schemars(rename = "AideMessagesOut")] MessagesOut { pub messages: Vec<Message> });
 op!(MessageList, "aide.message.list", MessageListIn => MessagesOut, person(OpMeta::query(Scope::Global, 12, "What Aide said, newest first")));
 
+payload!(#[schemars(rename = "AideChatIn")] ChatIn {
+    /// The bot (job) whose chat to open; the Chief of Staff's when absent.
+    pub job_id: Option<i64>,
+});
+result!(#[schemars(rename = "AideChatOut")] ChatOut {
+    /// The chat's thread (kind `aide`): a bot's channel, where its runs talk, or the Chief of
+    /// Staff's, where the person talks to Aide itself, asks for new bots and every bot reports.
+    pub thread_id: i64,
+});
+op!(Chat, "aide.chat", ChatIn => ChatOut, person(OpMeta::mutation(Scope::Global, 12, "A bot's chat, or the Chief of Staff's (Aide's main conversation, where every bot reports and new bots are asked for); made on first use").emits(&["thread.changed"])));
+
 entries!(
     Summary, SettingsGet, SettingsSet, Models, JobList, JobTemplates, JobGet, JobSave, JobPropose, JobSet, JobDelete, RunNow, RunStop, RunList, RunGet,
     RunFinish, Notify, Followup, FactList, FactAdd, FactUpdate, FactForget, ErrandList, ErrandAdd, ErrandUpdate, PageList, PageGet,
-    PageWrite, PageDelete, MessageList,
+    PageWrite, PageDelete, MessageList, Chat,
 );

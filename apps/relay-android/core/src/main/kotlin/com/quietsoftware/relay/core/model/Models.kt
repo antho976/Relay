@@ -230,6 +230,8 @@ data class Thread(
     val working: Boolean = false,
     val live: Boolean = false,
     val preview: String? = null,
+    /** `money` (Threads'), `assistant` (Relay's own) or `aide` (an Aide bot's chat, or its Chief of Staff's). */
+    val kind: String = "money",
 ) {
     val num: Long? get() = id.num()
 }

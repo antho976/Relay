@@ -339,3 +339,53 @@ fn a_channel_moved_to_claude_after_a_run_on_your_own_model_starts_afresh() {
     assert!(last.contains("--model claude-sonnet-5-5") && !last.contains("--resume"), "{last}");
     drop(listener);
 }
+
+#[test]
+fn bots_talk_in_their_own_chat_and_report_to_the_chief_of_staff() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine();
+    relay_core::aide::spawn(&engine);
+    with_fake(&engine, dir.path());
+    let chief = ok(&engine, "aide.chat", json!({}))["thread_id"].clone();
+    assert_eq!(ok(&engine, "aide.chat", json!({}))["thread_id"], chief, "one Chief of Staff, made once");
+    assert_eq!(ok(&engine, "thread.get", json!({"id": chief}))["thread"]["kind"], "aide");
+
+    let j = job(&engine, json!({"name": "Dev watch", "instructions": "Say which agents wait on me.", "sources": ["dev"]}));
+    // A bot's chat is there before it ever ran, and its runs talk in it.
+    let opened = ok(&engine, "aide.chat", json!({"job_id": j["id"]}))["thread_id"].clone();
+    assert_eq!(ok(&engine, "thread.get", json!({"id": opened}))["thread"]["title"], "Dev watch");
+    let r = ok(&engine, "aide.run.now", json!({"job_id": j["id"]}));
+    let channel = ended(&engine, &r["id"])["thread_id"].clone();
+    assert_eq!(channel, opened);
+    let said = from_agent(&engine, &channel, "aide.notify", json!({"title": "Two agents wait", "body": "amber-walrus and coral-marten", "level": "brief"}))
+        .into_result().unwrap();
+    let note = |thread: &Value| {
+        let mut found = Value::Null;
+        wait_until("the note in the chat", || {
+            let t = ok(&engine, "thread.get", json!({"id": thread}));
+            found = t["messages"].as_array().unwrap().iter().find(|m| m["role"] == "note").cloned().unwrap_or(Value::Null);
+            !found.is_null()
+        });
+        found
+    };
+    for thread in [&channel, &chief] {
+        let n = note(thread);
+        assert_eq!((n["body"]["bot"].as_str(), n["body"]["title"].as_str()), (Some("Dev watch"), Some("Two agents wait")), "{n}");
+        assert_eq!(n["body"]["message_id"], said["message"]["id"]);
+    }
+
+    // The Chief of Staff reads every source; a bot's chat only its own.
+    let ops = relay_core::aide::runs::ops_for_thread(&engine, chief.as_i64().unwrap());
+    assert!(ops.contains(&"money.summary") && ops.contains(&"session.list") && ops.contains(&"aide.job.propose"), "{ops:?}");
+    let ops = relay_core::aide::runs::ops_for_thread(&engine, channel.as_i64().unwrap());
+    assert!(!ops.contains(&"money.summary"), "{ops:?}");
+
+    // A bot asked for in the Chief of Staff waits there as a proposal to turn on.
+    let proposed = from_agent(&engine, &chief, "aide.job.propose",
+        json!({"spec": {"name": "Budget watch", "instructions": "Tell me when a budget runs hot.", "rules": [{"kind": "budget", "percent": 90}]},
+               "why": "You asked for it"})).into_result().unwrap();
+    wait_until("the proposal in the Chief of Staff", || {
+        let t = ok(&engine, "thread.get", json!({"id": chief}));
+        t["messages"].as_array().unwrap().iter().any(|m| m["role"] == "note" && m["body"]["proposal"] == proposed["id"])
+    });
+}

@@ -1,5 +1,5 @@
-/* Aide (aide_pages.rs) in the dev space's tokens, beside Tally's, Arbiter's and Avex's pages: the
-   same cards, strips, rows and pills (money.css, arbiter.css). Green marks what ran and a source
+/* Aide (aide_pages.rs), its own space beside Dev and Threads, in the dev space's tokens: the
+   same cards, strips, rows and pills as Tally's and Arbiter's pages (money.css, arbiter.css). Green marks what ran and a source
    read, amber what waits or ran late, red what failed; the rest is Dev's ink, on glass (DESIGN.md,
    The Glass Rule). */
 
@@ -39,3 +39,25 @@ textview.aide-instructions-field, textview.aide-instructions-field text { backgr
 .aide-wake-title { font-size: 11.5px; font-weight: 600; color: @faint; }
 .aide-wake-text { font-size: 12.5px; color: @faint; }
 button.money-text-action.aide-wake-more { min-height: 20px; padding: 0 2px; font-size: 11.5px; }
+
+/* The Aide space's sidebar: New bot and the Chief of Staff, the bots under their heading (a lamp
+   while one runs, amber when proposed, hollow when paused), its pages at the foot. */
+.aide-nav-heading { padding: 14px 4px 4px 12px; }
+.aide-nav-heading .section-label { color: @faint; font-size: 12.5px; font-weight: 500; letter-spacing: 0; }
+.aide-nav-foot { padding-top: 6px; border-top: 1px solid @line_subtle; }
+.aide-lamp-proposed { min-width: 6px; min-height: 6px; border-radius: 3px; background: @waiting; }
+.aide-lamp-paused { min-width: 4px; min-height: 4px; border-radius: 3px; border: 1px solid @faint; }
+
+/* A chat's keys in the strip: the bot's state, Turn on or Pause, Run now, Details. */
+.aide-strip { margin-right: 4px; }
+
+/* What a bot said, in a chat: who and how loudly, its title, its words, and a proposal's keys. */
+.aide-note { padding: 12px 16px 14px; border: 1px solid @glass_edge; border-radius: 14px; background: @glass_card; }
+.aide-note-mark { color: @faint; }
+.aide-note-who { font-size: 12px; font-weight: 600; color: @secondary; }
+button.aide-note-bot { min-height: 0; padding: 0; border: 0; background: transparent; box-shadow: none; font-size: 12px; font-weight: 600; color: @secondary; }
+button.aide-note-bot:hover { color: @ink; text-decoration: underline; }
+.aide-note-held { font-size: 11.5px; color: @faint; }
+.aide-note-title { font-size: 14px; font-weight: 600; color: @ink; }
+.aide-note-body .threads-reply { font-size: 13.5px; line-height: 21px; color: @secondary; }
+.aide-note-keys { margin-top: 4px; }
