@@ -94,6 +94,12 @@ fn view() -> Option<Rc<View>> {
     VIEW.with(|v| v.borrow().clone())
 }
 
+/// Wait for the main loop to run what is due before low-priority work: input, layout and the
+/// next frame go first.
+async fn yield_low() {
+    gtk::glib::timeout_future_with_priority(gtk::glib::Priority::LOW, std::time::Duration::ZERO).await;
+}
+
 /// Build the view and mount it beside the agent wall.
 pub fn install(ui: &Rc<Ui>) {
     let gallery = Gallery::new(ui);

@@ -10,6 +10,7 @@
 //! https, never follow a redirect, and each has a deadline and a cap on its answer. The engine
 //! tests stand a fake in for the network ([`super::Hub::use_elevenlabs`]).
 
+use super::lock;
 use super::assets;
 use crate::engine::Engine;
 use crate::pictures::SecretKey;
@@ -84,10 +85,6 @@ pub struct State {
 
 /// How long a keyring's "no key" or failure is taken as its answer.
 const ASK_AGAIN: Duration = Duration::from_secs(60);
-
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
-}
 
 // ---------------------------------------------------------------- the key
 

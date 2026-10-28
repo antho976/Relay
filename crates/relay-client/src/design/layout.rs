@@ -129,6 +129,11 @@ impl Placed {
     }
 }
 
+/// The box a sticky's words are drawn and typed in: its own, inset by [`STICKY_PAD`] all round.
+pub fn sticky_inner(r: &Rect) -> Rect {
+    Rect::new(r.x + STICKY_PAD, r.y + STICKY_PAD, (r.w - 2.0 * STICKY_PAD).max(1.0), (r.h - 2.0 * STICKY_PAD).max(1.0))
+}
+
 /// Where a text's words wrap, given its placed box: `None` while it hugs them, unless a min or
 /// max width bounds it (it was measured at its box then). A hugging text a column stretches
 /// wraps too, which only [`Placed::wrap_width`] knows.

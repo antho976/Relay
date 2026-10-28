@@ -108,6 +108,24 @@ fn an_instance_takes_the_mains_structure() {
     assert_eq!(children(&e, id, "rent"), ["rent-title", "rent-badge"]);
 }
 
+/// An instance whose id is as long as an id may be still follows what its main gains: the ids
+/// its new nodes are given are cut to fit, never refused as too long.
+#[test]
+fn an_instance_with_a_long_id_follows_what_its_main_gains() {
+    let (e, _root) = project();
+    let id = ok(&e, "design.create", json!({"project_id": 1, "title": "Long"}))["design"]["id"].as_i64().unwrap();
+    let long = format!("c{}", "x".repeat(62));
+    apply(&e, id, json!([{"op": "add", "node": {"id": "card", "parent": "page-1", "kind": "frame", "w": 100, "h": 40}}]));
+    apply(&e, id, json!([{"op": "copy", "id": "card", "as": long, "instance": true}]));
+    apply(&e, id, json!([
+        {"op": "add", "node": {"id": "card-badge", "parent": "card", "kind": "ellipse", "w": 8, "h": 8}},
+        {"op": "add", "node": {"id": "card-dot", "parent": "card", "kind": "ellipse", "w": 4, "h": 4}},
+    ]));
+    let kids = children(&e, id, &long);
+    assert_eq!(kids.len(), 2, "{kids:?}");
+    assert!(kids.iter().all(|k| k.len() <= 64 && k.starts_with("cxxx")), "{kids:?}");
+}
+
 /// The instance's structure is the main's: a node of it is not added to, moved or deleted by
 /// hand, and only the root detaches; detaching leaves plain nodes as they looked.
 #[test]

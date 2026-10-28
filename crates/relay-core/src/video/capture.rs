@@ -178,31 +178,49 @@ pub fn capture(engine: &Engine, adb_path: &Path, dir: &Path, holder: Holder, pla
         return Err(BusError::invalid("video.capture", format!("about {planned:.0} s of steps: a capture is at most {MOST_SECONDS} s (screenrecord's own limit)")));
     }
     let serial = device(adb_path, plan.device)?;
-    // The device for the whole capture, and back however it ends. A caller that holds it already
-    // (its own `device.claim`) keeps its lease as it was: taking one would renew and rename it,
-    // and giving it back would end the caller's claim.
+    // The device for the whole capture, and back however it ends.
     let action = "video.capture.android";
-    let own = engine.device_leases.holder_of(&serial).is_some_and(|held| held.holder == holder);
-    if !own {
-        let lease = Lease::new(&serial, holder.clone(), Kind::Claim, action, Some(Duration::from_secs_f64(planned + 120.0)));
-        let mut pruned = Vec::new();
-        engine.device_leases.acquire(lease.clone(), &mut pruned)?;
-        for gone in pruned {
+    let lasts = Duration::from_secs_f64(planned + 120.0);
+    let (take, give_back) = lease_plan(engine.device_leases.holder_of(&serial).as_ref(), &holder, lasts);
+    if take {
+        // As `device_lease::acquire` takes one: leases of sessions that have ended go first.
+        let mut released = engine.read_store(action, |conn| Ok(crate::handlers::device_lease::prune(engine, conn)))?;
+        let lease = Lease::new(&serial, holder.clone(), Kind::Claim, action, Some(lasts));
+        let taken = engine.device_leases.acquire(lease.clone(), &mut released);
+        for gone in released {
             engine.emit_system(crate::handlers::device_lease::RELEASED, gone.event());
         }
-        engine.emit_system(crate::handlers::device_lease::ACQUIRED, lease.event());
+        if taken? {
+            engine.emit_system(crate::handlers::device_lease::ACQUIRED, lease.event());
+        }
     }
     let adb = Adb { path: adb_path.to_path_buf(), serial: serial.clone() };
     let result = record(engine, &adb, dir, plan, opening.as_deref(), &commands);
     if plan.demo {
         let _ = adb.shell(&demo_mode().1);
     }
-    if !own {
+    if give_back {
         for gone in engine.device_leases.release_where(|l| l.device == serial && l.holder == holder && l.kind == Kind::Claim && l.action == action) {
             engine.emit_system(crate::handlers::device_lease::RELEASED, gone.event());
         }
     }
     result
+}
+
+/// Whether a capture lasting `lasts` takes a Claim on the device, and whether it gives that back
+/// when it ends, given the lease `held` there now. A Claim or a Run of the caller's own is theirs
+/// before and after: the capture rides on it (a Claim that would end sooner is renewed to last
+/// it, a renewal keeping the later end and naming the capture as what it is for). A Shell lease lapses moments after its command, so it
+/// never holds the device through a recording: the capture's Claim stacks on it, and goes.
+fn lease_plan(held: Option<&Lease>, holder: &Holder, lasts: Duration) -> (bool, bool) {
+    match held.filter(|held| held.holder == *holder).map(|held| held.kind) {
+        Some(Kind::Run(_)) => (false, false),
+        Some(Kind::Claim) => {
+            let left = held.and_then(|held| held.view().expires_in_s);
+            (left.is_some_and(|s| (s as f64) < lasts.as_secs_f64()), false)
+        }
+        Some(Kind::Shell) | None => (true, true),
+    }
 }
 
 fn record(engine: &Engine, adb: &Adb, dir: &Path, plan: &Plan, opening: Option<&[String]>, commands: &[(Option<Vec<String>>, String)]) -> Result<Captured, BusError> {
@@ -280,6 +298,24 @@ fn record(engine: &Engine, adb: &Adb, dir: &Path, plan: &Plan, opening: Option<&
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A capture holds the device through the recording: on a Claim or Run the caller has, kept
+    /// as theirs (renewed when it would end first); else on a Claim of its own, given back after,
+    /// which a lapsing Shell lease of the caller's never stands in for.
+    #[test]
+    fn a_capture_holds_the_device_for_as_long_as_it_records() {
+        let me = Holder::Session { id: 4, name: "sharp-egret".into() };
+        let lease = |kind, minutes: Option<u64>| Lease::new("R5", me.clone(), kind, "testing", minutes.map(|m| Duration::from_secs(m * 60)));
+        let lasts = Duration::from_secs(300);
+        assert_eq!(lease_plan(None, &me, lasts), (true, true), "nothing held: a claim, given back");
+        assert_eq!(lease_plan(Some(&lease(Kind::Shell, Some(15))), &me, lasts), (true, true), "a shell lease lapses after its command");
+        assert_eq!(lease_plan(Some(&lease(Kind::Claim, Some(30))), &me, lasts), (false, false), "the caller's claim, long enough");
+        assert_eq!(lease_plan(Some(&lease(Kind::Claim, None)), &me, lasts), (false, false));
+        assert_eq!(lease_plan(Some(&lease(Kind::Claim, Some(1))), &me, lasts), (true, false), "renewed to last it, still theirs after");
+        assert_eq!(lease_plan(Some(&lease(Kind::Run(9), None)), &me, lasts), (false, false));
+        // Someone else's lease: the claim is asked for, and refused as busy there.
+        assert_eq!(lease_plan(Some(&lease(Kind::Claim, Some(30))), &Holder::User, lasts), (true, true));
+    }
 
     fn step(f: impl FnOnce(&mut CaptureStep)) -> CaptureStep {
         let mut s = CaptureStep { tap: None, swipe: None, ms: None, text: None, key: None, wait: None, launch: None };

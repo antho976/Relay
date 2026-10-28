@@ -15,6 +15,9 @@ pub(super) struct Expanded {
     pub ops: Vec<NodeOp>,
     /// For each edit of `ops`, the index of the edit it came from in the list as sent.
     pub origin: Vec<usize>,
+    /// For each edit of `ops`, whether an edit of many nodes made it: its node was picked from the
+    /// design as stored, so an earlier edit of the list may have deleted it.
+    pub picked: Vec<bool>,
     /// How many edits were sent.
     pub sent: usize,
     /// Each edit of many nodes, by its index as sent: how many nodes it picked.
@@ -24,12 +27,14 @@ pub(super) struct Expanded {
 }
 
 impl Expanded {
-    /// The reply's `ids`, one an edit as sent: an edit of many nodes gives its first, "" for
-    /// none, every other edit its own.
+    /// The reply's `ids`, one an edit as sent: an edit of many nodes gives the first it edited,
+    /// "" for none, every other edit its own.
     pub fn collapse(&self, ids: Vec<String>) -> Vec<String> {
         let mut out = vec![String::new(); self.sent];
         for (id, &at) in ids.into_iter().zip(&self.origin).rev() {
-            out[at] = id;
+            if !id.is_empty() {
+                out[at] = id;
+            }
         }
         out
     }
@@ -37,17 +42,18 @@ impl Expanded {
 
 /// `ops` with each `update_many` and `delete_many` made an `update` or `delete` of each node it
 /// picks: those its `ids` names, then those its `where` finds in the design as stored, each
-/// once. A delete_many leaves out a node inside another it deletes, which goes with it. A list
+/// once. A delete_many leaves out a node inside another it deletes, which goes with it, and the
+/// list leaves out a node picked here that an earlier edit of it deleted (`picked`). A list
 /// without one comes back as it was.
 pub(super) fn expand(conn: &Connection, design: Id, ops: Vec<NodeOp>) -> Result<Expanded, BusError> {
     let sent = ops.len();
     if !ops.iter().any(|op| matches!(op, NodeOp::UpdateMany { .. } | NodeOp::DeleteMany { .. })) {
-        return Ok(Expanded { ops, origin: (0..sent).collect(), sent, matched: BTreeMap::new(), warnings: Vec::new() });
+        return Ok(Expanded { ops, origin: (0..sent).collect(), picked: vec![false; sent], sent, matched: BTreeMap::new(), warnings: Vec::new() });
     }
     // The design's rows, read once for every `where` of the list, and its parents for a delete.
     let mut rows: Option<(Vec<super::get::Raw>, String)> = None;
     let mut parents: Option<HashMap<String, Option<String>>> = None;
-    let mut out = Expanded { ops: Vec::with_capacity(sent), origin: Vec::with_capacity(sent), sent, matched: BTreeMap::new(), warnings: Vec::new() };
+    let mut out = Expanded { ops: Vec::with_capacity(sent), origin: Vec::with_capacity(sent), picked: Vec::with_capacity(sent), sent, matched: BTreeMap::new(), warnings: Vec::new() };
     for (at, op) in ops.into_iter().enumerate() {
         let (ids, where_, set, delete) = match op {
             NodeOp::UpdateMany { ids, where_, set } => (ids, where_, Some(set), false),
@@ -55,6 +61,7 @@ pub(super) fn expand(conn: &Connection, design: Id, ops: Vec<NodeOp>) -> Result<
             op => {
                 out.ops.push(op);
                 out.origin.push(at);
+                out.picked.push(false);
                 continue;
             }
         };
@@ -121,6 +128,7 @@ pub(super) fn expand(conn: &Connection, design: Id, ops: Vec<NodeOp>) -> Result<
                 None => NodeOp::Delete { id },
             });
             out.origin.push(at);
+            out.picked.push(true);
         }
     }
     Ok(out)

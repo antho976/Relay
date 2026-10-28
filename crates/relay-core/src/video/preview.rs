@@ -5,6 +5,7 @@
 //! stops when another video is previewed, after two hours, or with Relay (parent-death signal,
 //! as the worker).
 
+use super::lock;
 use super::Video;
 use crate::engine::Engine;
 use relay_bus::error::BusError;
@@ -34,10 +35,6 @@ pub struct Slot {
     opening: Mutex<()>,
     /// Tests only: the program to run instead of Studio, `{port}` in its arguments replaced.
     program: Mutex<Option<Vec<String>>>,
-}
-
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl Slot {

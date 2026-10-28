@@ -231,6 +231,12 @@ impl Unlocked<'_> {
             None => self.engine.store.backup_then(reason, at_end),
         }
     }
+    /// Whether this runs inside a transaction that already holds the store (a staged op reached
+    /// from another's handler, an undo's replay): an [`Engine::system_write`] here would wait on
+    /// the lock it is under.
+    pub fn holds_store(&self) -> bool {
+        self.held.is_some()
+    }
     /// Take the store for one short read. Keep the closure to plain queries: whatever runs in
     /// here is back on the one global lock, which is the thing this context exists to avoid.
     pub fn read<T>(

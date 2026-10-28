@@ -8,7 +8,7 @@
 //! brought to the loudness asked for, `audio`): a render that fails leaves the file it would have
 //! replaced as it was.
 
-use super::{bundle_dir, get_render, get_video, worker, Video};
+use super::{bundle_dir, get_render, get_video, lock, worker, Video};
 use crate::engine::{Engine, IntoBus};
 use relay_bus::error::BusError;
 use relay_bus::ops::video::{AudioReport, Format, Quality, RenderState, VideoRender};
@@ -35,10 +35,6 @@ pub struct Queue {
     /// bundled, and drops it before its sound is measured, so a stop that lands outside that
     /// window is kept here and honoured when the worker answers.
     stopping: Mutex<std::collections::HashSet<Id>>,
-}
-
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Wake every [`wait`]: a render's row changed.
@@ -151,14 +147,25 @@ fn run(weak: Weak<Engine>) {
                 conn.prepare_cached("SELECT id, project_id FROM video_renders WHERE state = 'queued' ORDER BY id LIMIT 1").bus()?
                     .query_row([], |r| Ok((r.get(0)?, r.get(1)?))).optional().bus()
             }).unwrap_or(None);
-            if next.is_none() || engine.is_quitting() {
+            // While the kit is set up again no worker can run: the queue waits, and the setup
+            // starts it again when it ends.
+            if next.is_none() || engine.is_quitting() || engine.video.kit.installing.load(Ordering::SeqCst) {
                 *running = false;
                 return;
             }
             next
         };
         if let Some((id, project_id)) = next {
-            render_one(&engine, id, project_id);
+            // A render that panics fails alone: its row is failed and the queue goes on.
+            let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render_one(&engine, id, project_id)));
+            if ran.is_err() {
+                lock(&engine.video.jobs.stopping).remove(&id);
+                let _ = advance(&engine, id, project_id, |tx, now| {
+                    tx.prepare_cached("UPDATE video_renders SET state = 'failed', error = 'the render stopped on an error in Relay', finished_at = ?2
+                        WHERE id = ?1 AND state IN ('queued', 'rendering')").bus()?.execute(params![id, now]).bus()?;
+                    Ok(())
+                });
+            }
         }
     }
 }
@@ -214,6 +221,15 @@ fn render_with_worker(engine: &Arc<Engine>, render: &VideoRender) -> Result<(Str
         let props: String = conn.prepare_cached("SELECT props FROM video_renders WHERE id = ?1").bus()?.query_row([render.id], |r| r.get(0)).bus()?;
         Ok((get_video(conn, render.video_id)?, props))
     })?;
+    // The worker draws the folder as it is now, which may have changed since the render was
+    // queued: that code is recorded, and the row names its version.
+    let version = super::stills::snapshot(engine, &video, &super::stills::Caller { actor: &render.actor, session_id: None })?;
+    if version != render.version {
+        advance(engine, render.id, render.project_id, |tx, _| {
+            tx.prepare_cached("UPDATE video_renders SET version = ?2 WHERE id = ?1").bus()?.execute(params![render.id, version]).bus()?;
+            Ok(())
+        })?;
+    }
     let path = output(&video, &render.composition, render.id, render.format, render.name.as_deref());
     std::fs::create_dir_all(std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new(&video.dir)))
         .map_err(|e| BusError::internal(format!("out/: {e}")))?;
@@ -247,6 +263,11 @@ fn render_with_worker(engine: &Arc<Engine>, render: &VideoRender) -> Result<(Str
         "crf": crf, "props": serde_json::from_str::<Value>(&props).unwrap_or(json!({})), "range": range,
     }), RENDER_WITHIN);
     worker::unwatch(engine, &job(render.id));
+    // Past its time the worker may still be drawing: it is told to stop, so nothing keeps
+    // writing for a row that says failed.
+    if result.as_ref().is_err_and(|e| e.code == "video.timeout") {
+        let _ = worker::call(engine, "cancel", json!({"job": job(render.id)}), Duration::from_secs(10));
+    }
     let stopped = || if lock(&engine.video.jobs.stopping).contains(&render.id) { Err(BusError::new(relay_bus::ErrorKind::Conflict, "video.render.cancelled", "the render was stopped")) } else { Ok(()) };
     let finished = result.and_then(|_| stopped())
         .and_then(|_| super::audio::finish(engine, render, std::path::Path::new(&drawn)))
@@ -288,9 +309,11 @@ pub fn reconcile(engine: &Arc<Engine>) {
             Ok(())
         });
         let out = std::path::Path::new(&dir).join("out");
+        // The partial file, and the scratch files its sound is rewritten through (`..{id}.partial.`).
         let prefix = format!(".{id}.partial.");
         for entry in std::fs::read_dir(&out).into_iter().flatten().flatten() {
-            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with(&prefix) || name.strip_prefix('.').is_some_and(|n| n.starts_with(&prefix)) {
                 let _ = std::fs::remove_file(entry.path());
             }
         }

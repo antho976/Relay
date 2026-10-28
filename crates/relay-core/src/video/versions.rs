@@ -210,6 +210,12 @@ pub fn restore(dir: &Path, blobs: &Path, entries: &[Entry], only: Option<&[Strin
             continue;
         }
         let target = dir.join(&entry.path);
+        // A link where the version had a file (or a folder of it) is left: writing through it
+        // would change what it points at, outside the folder.
+        if through_link(dir, &entry.path) {
+            left.push(entry.path.clone());
+            continue;
+        }
         if fs::read(&target).ok().is_some_and(|b| hex(&Sha256::digest(&b)) == entry.hash) {
             continue;
         }
@@ -225,6 +231,15 @@ pub fn restore(dir: &Path, blobs: &Path, entries: &[Entry], only: Option<&[Strin
         }
     }
     Ok(Restored { written, removed, missing, left })
+}
+
+/// Whether `rel` in `dir`, or a folder on the way to it, is a link.
+fn through_link(dir: &Path, rel: &str) -> bool {
+    let mut at = dir.to_path_buf();
+    rel.split('/').any(|part| {
+        at.push(part);
+        fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink())
+    })
 }
 
 /// Most lines of diff one answer holds: the files past them are listed without theirs.
@@ -378,6 +393,29 @@ mod tests {
         left.sort();
         assert_eq!(left, ["public/clip.mp4", "public/music.mp3"]);
         assert!(dir.join("public/music.mp3").exists() && fs::symlink_metadata(dir.join("public/clip.mp4")).is_ok());
+    }
+
+    /// A file the version holds, now a link (or in a folder that is now a link), is not written
+    /// through it: what it points at, outside the folder, stays as it is.
+    #[test]
+    fn a_restore_never_writes_through_a_link() {
+        let root = tempfile::tempdir().unwrap();
+        let (dir, blobs) = (root.path().join("v"), root.path().join("blobs"));
+        tree(&dir, &[("public/music.mp3", "old"), ("src/a.ts", "a")]);
+        let first = scan(&dir, &blobs).unwrap();
+        let outside = root.path().join("outside");
+        tree(&outside, &[("song.mp3", "mine"), ("a.ts", "theirs")]);
+        fs::remove_file(dir.join("public/music.mp3")).unwrap();
+        std::os::unix::fs::symlink(outside.join("song.mp3"), dir.join("public/music.mp3")).unwrap();
+        fs::remove_file(dir.join("src/a.ts")).unwrap();
+        fs::remove_dir(dir.join("src")).unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("src")).unwrap();
+        let done = restore(&dir, &blobs, &first.entries, None).unwrap();
+        let mut left = done.left.clone();
+        left.sort();
+        assert_eq!(left, ["public/music.mp3", "src", "src/a.ts"], "the link itself, and what the version holds through each");
+        assert_eq!(fs::read_to_string(outside.join("song.mp3")).unwrap(), "mine");
+        assert_eq!(fs::read_to_string(outside.join("a.ts")).unwrap(), "theirs");
     }
 
     #[test]

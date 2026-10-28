@@ -1605,8 +1605,16 @@ pub(super) fn register(e: &mut Engine) {
         // the list only grows it, so one over the cap by then is refused at the edit that took
         // it over rather than after writing the rest.
         let grows_from = ops.iter().rposition(|op| !matches!(op, NodeOp::Add { .. } | NodeOp::Copy { .. }));
+        // Nodes an edit of many nodes picked that an earlier edit of the list deleted, by the
+        // index of that edit as sent.
+        let mut gone_before: BTreeMap<usize, usize> = BTreeMap::new();
         for (at, op) in std::mem::take(&mut many.ops).into_iter().enumerate() {
             let sent_at = many.origin[at];
+            if many.picked[at] && run.removed_at.contains_key(op.target()) && run.row(op.target())?.is_none() {
+                *gone_before.entry(sent_at).or_default() += 1;
+                run.ids.push(String::new());
+                continue;
+            }
             (run.at, run.label) = (sent_at, label(sent_at, &op));
             run.target = Some(op.target()).filter(|id| !id.is_empty()).map(str::to_string);
             let id = match op {
@@ -1623,6 +1631,12 @@ pub(super) fn register(e: &mut Engine) {
             run.ids.push(id.unwrap_or_default());
             if run.bytes > MAX_DESIGN_BYTES && run.bytes > bytes && grows_from.is_none_or(|last| at >= last) && run.settled() {
                 return Err(run.too_large(true));
+            }
+        }
+        for (sent_at, n) in gone_before {
+            if run.warnings.len() < MAX_WARNINGS {
+                run.warnings.push(format!("ops[{sent_at}]: {n} node{} it found went with an earlier delete of this list, and {} left out",
+                    if n == 1 { "" } else { "s" }, if n == 1 { "was" } else { "were" }));
             }
         }
         run.draw_charts()?;

@@ -283,10 +283,29 @@ fn save_thumb(dir: &Path, id: i64, rev: i64, png: &[u8]) -> std::io::Result<Path
     Ok(path)
 }
 
+/// The calling thread's CPU time so far: a step's cost apart from waiting for a busy machine.
+fn thread_cpu() -> Duration {
+    let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: `t` is a valid timespec for the call to write.
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
+    Duration::new(t.tv_sec as u64, t.tv_nsec as u32)
+}
+
+/// Where a thumbnail's CPU went, for `RELAY_DESIGN_TRACE`: decoding off the main thread, then
+/// each step on it.
+#[derive(Default)]
+struct ThumbSplit {
+    decode: Duration,
+    layout: Duration,
+    paint: Duration,
+    texture: Duration,
+}
+
 /// What a page's thumbnail frames: everything its nodes paint, a line's points beyond its box,
-/// a turned node's corners, shadows and words included (B3, E-export-8).
+/// a turned node's corners, shadows and words included (B3, E-export-8), less what is hidden or
+/// wholly clear, as the shared bounds count a page.
 fn page_fit(scene: &Scene, placed: &Placed, measure: &dyn Measure, page: &str) -> Option<Rect> {
-    scene.children(page).iter().filter_map(|id| bounds::painted_bounds(scene, placed, measure, id)).reduce(|a, b| a.union(&b))
+    bounds::painted_bounds(scene, placed, measure, page)
 }
 
 /// A rename as typed: the title to send, or `None` when it leaves the title as it was. Control
@@ -1963,11 +1982,23 @@ impl Gallery {
         let started = Instant::now();
         glib::spawn_future_local(async move {
             let got = ui.call("design.get", json!({"design_id": id})).await;
-            if let Ok(got) = got.map_err(|e| e.to_string()).and_then(|v| serde_json::from_value::<GetOut>(v).map_err(|e| e.to_string())) {
-                *g.painter.assets_dir.borrow_mut() = got.assets_dir.clone();
-                let rev = got.design.rev.max(rev);
-                // Drawn as the board draws it: named colours and styles resolved.
-                let scene = Scene::new(got.nodes).with_styles(Styles { colors: got.colors, styles: got.styles });
+            let fetched = started.elapsed();
+            let mut split = ThumbSplit::default();
+            // Read into a scene off the main thread: a large design's is several milliseconds.
+            let decoded = match got {
+                Ok(v) => gio::spawn_blocking(move || {
+                    let cpu = thread_cpu();
+                    let got = serde_json::from_value::<GetOut>(v).ok()?;
+                    // Drawn as the board draws it: named colours and styles resolved.
+                    let scene = Scene::new(got.nodes).with_styles(Styles { colors: got.colors, styles: got.styles });
+                    Some((got.assets_dir, got.design.rev, scene, thread_cpu() - cpu))
+                }).await.ok().flatten(),
+                Err(_) => None,
+            };
+            if let Some((assets_dir, got_rev, scene, decode)) = decoded {
+                *g.painter.assets_dir.borrow_mut() = assets_dir;
+                let rev = got_rev.max(rev);
+                split.decode = decode;
                 let first = scene.first_page().cloned();
                 // Pictures decode off the main thread: wait for the first page's (a few seconds
                 // at most), or the thumbnail would keep their grey placeholders (E-export-9).
@@ -1979,7 +2010,7 @@ impl Gallery {
                     glib::timeout_future(Duration::from_millis(50)).await;
                 }
                 let settled = !loading(&g);
-                let texture = g.draw_thumb(&scene);
+                let texture = g.draw_thumb(&scene, &mut split).await;
                 // Only this design's pictures stay decoded (B33).
                 g.painter.retain(&scene);
                 g.painter.retain_pictures(&scene, true);
@@ -2006,7 +2037,9 @@ impl Gallery {
                 }
             }
             if trace() {
-                println!("DESIGN_TRACE thumb {id} {:.3} ms", started.elapsed().as_secs_f64() * 1e3);
+                let ms = |d: Duration| d.as_secs_f64() * 1e3;
+                println!("DESIGN_TRACE thumb {id} {:.3} ms fetch {:.3} decode {:.3} layout {:.3} paint {:.3} texture {:.3}",
+                    ms(started.elapsed()), ms(fetched), ms(split.decode), ms(split.layout), ms(split.paint), ms(split.texture));
             }
             g.rendering.set(false);
             // Low priority: the gallery stays responsive while the rest draw.
@@ -2020,10 +2053,17 @@ impl Gallery {
         });
     }
 
-    fn draw_thumb(&self, scene: &Scene) -> Option<gdk::Texture> {
+    /// Lay out, paint and render the first page's thumbnail, each step its own turn of the main
+    /// loop at low priority: a frame due in between is drawn first, rather than waiting on all
+    /// three (at 4,903 nodes about 2, 4 and 4.5 ms of CPU; DESIGN-2026-10-28-thumbs.md).
+    async fn draw_thumb(&self, scene: &Scene, split: &mut ThumbSplit) -> Option<gdk::Texture> {
         let page = scene.first_page()?.clone();
+        let at = thread_cpu();
         let placed = layout::place(scene, &page, &*self.painter);
         let bounds = page_fit(scene, &placed, &*self.painter, &page);
+        split.layout = thread_cpu() - at;
+        super::yield_low().await;
+        let at = thread_cpu();
         let canvas = scene.node(&page).and_then(super::paint::fill_of).unwrap_or_else(|| super::paint::CANVAS.into());
         let snap = gtk::Snapshot::new();
         snap.append_color(&super::paint::rgba(&canvas), &graphene::Rect::new(0.0, 0.0, THUMB_W as f32, THUMB_H as f32));
@@ -2037,8 +2077,13 @@ impl Gallery {
             snap.restore();
         }
         let node = snap.to_node()?;
+        split.paint = thread_cpu() - at;
+        super::yield_low().await;
+        let at = thread_cpu();
         let renderer = self.root.native()?.renderer()?;
-        Some(renderer.render_texture(&node, Some(&graphene::Rect::new(0.0, 0.0, THUMB_W as f32, THUMB_H as f32))))
+        let texture = renderer.render_texture(&node, Some(&graphene::Rect::new(0.0, 0.0, THUMB_W as f32, THUMB_H as f32)));
+        split.texture = thread_cpu() - at;
+        Some(texture)
     }
 }
 
@@ -2090,6 +2135,13 @@ mod tests {
         assert!(stored.right() < 400.0 && stored.bottom() < 259.0, "the stored boxes alone would cut both short: {stored:?}");
         let bare = Scene::new(vec![node("p", None, NodeKind::Page, [0.0; 4])]);
         assert!(page_fit(&bare, &layout::place(&bare, "p", &Mono), &Mono, "p").is_none());
+        // A clear layer parked far off the artboards paints nothing, so it does not shrink the
+        // thumbnail to fit it in.
+        let mut clear = node("hit", Some("p"), NodeKind::Rect, [5000.0, 5000.0, 10.0, 10.0]);
+        clear.opacity = Some(0.0);
+        let with_clear = Scene::new(vec![node("p", None, NodeKind::Page, [0.0; 4]), node("a", Some("p"), NodeKind::Rect, [0.0, 0.0, 100.0, 50.0]), clear]);
+        let fit = page_fit(&with_clear, &layout::place(&with_clear, "p", &Mono), &Mono, "p").unwrap();
+        assert_eq!((fit.right(), fit.bottom()), (100.0, 50.0), "{fit:?}");
     }
 
     /// B43, B88: what a rename sends.

@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// The Remotion the kit pins (`runtime/package.json`).
 pub const REMOTION: &str = "4.0.534";
@@ -42,12 +42,18 @@ const BROWSER_BYTES: u64 = 240 * 1024 * 1024;
 /// How the setup's progress divides between the stages.
 const PACKAGES_SHARE: f64 = 0.6;
 
+/// The last look for Node: when, the version found (20 or newer), and the binary on the PATH
+/// it asked (its real path, and when it last changed).
+type NodeLook = (Instant, Option<String>, Option<(PathBuf, SystemTime)>);
+
 /// What the setup thread and the status share.
 #[derive(Default)]
 pub struct State {
     pub(super) installing: std::sync::atomic::AtomicBool,
     error: Mutex<Option<String>>,
-    node: Mutex<Option<(Instant, Option<String>)>>,
+    /// When Node was last looked for, what was found, and the binary it asked (its path and
+    /// when it changed), so an old one is not asked again until it is another.
+    node: Mutex<Option<NodeLook>>,
     /// While installing: the stage, its start, and the latest progress reading.
     progress: Mutex<Option<(Instant, KitProgress)>>,
 }
@@ -135,20 +141,33 @@ fn installed(root: &Path) -> Option<Installed> {
 }
 
 /// `node --version` when it is 20 or newer, looked up again after a while when there was none.
+/// A Node too old (or one that would not answer) is asked again only once the binary on the
+/// PATH is another or has changed: callers hold the store, and asking runs a process.
 pub fn node_version(hub: &Hub) -> Option<String> {
     let mut cached = hub.kit.node.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((at, found)) = cached.as_ref() {
+    if let Some((at, found, _)) = cached.as_ref() {
         if found.is_some() || at.elapsed() < NO_NODE_FOR {
             return found.clone();
         }
     }
-    let found = which::which("node").ok().and_then(|node| {
+    let binary = which::which("node").ok().and_then(|node| {
+        let node = fs::canonicalize(&node).unwrap_or(node);
+        let changed = fs::metadata(&node).and_then(|m| m.modified()).ok()?;
+        Some((node, changed))
+    });
+    if let Some((at, None, asked)) = cached.as_mut() {
+        if binary.is_some() && *asked == binary {
+            *at = Instant::now();
+            return None;
+        }
+    }
+    let found = binary.as_ref().and_then(|(node, _)| {
         let out = crate::proc::output_with_timeout(Command::new(node).arg("--version"), Duration::from_secs(5)).ok()??;
         let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
         let major: u32 = text.trim_start_matches('v').split('.').next()?.parse().ok()?;
         (major >= NODE_MAJOR).then_some(text)
     });
-    *cached = Some((Instant::now(), found.clone()));
+    *cached = Some((Instant::now(), found.clone(), binary));
     found
 }
 
@@ -295,6 +314,8 @@ pub fn install(engine: &Arc<Engine>) -> KitStatus {
         hub.kit.installing.store(false, Ordering::SeqCst);
         let status = status(&engine);
         engine.emit_system("video.kit.changed", serde_json::to_value(&status).unwrap_or_default());
+        // Renders queued while it was set up waited for it.
+        super::jobs::enqueue(&engine);
     });
     if started.is_err() {
         hub.kit.installing.store(false, Ordering::SeqCst);

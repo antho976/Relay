@@ -758,21 +758,6 @@ fn send_request(b: &Rc<Board>, session: String, request: String, with_picture: b
         let scene = b.doc.scene.borrow();
         export::moves(&scene, &b.page.borrow(), &ids)
     };
-    // On its real ground, sized for a model (TM-26, I-8): a contact sheet of six frames when it
-    // moves. The encode and the write are off the main thread.
-    let rendered = with_picture.then(|| {
-        let drawn = if moving {
-            export::contact_sheet(b, &ids, true, 4.0, export::ASK_SIDE, export::ASK_FRAMES).map(|(texture, times)| (texture, Some(times)))
-        } else {
-            export::extent(b, &ids).ok_or(export::Failure::Empty).and_then(|area| export::render(b, &ids, true, export::ask_scale(&area))).map(|(texture, _)| (texture, None))
-        };
-        drawn.map_err(|e| match e {
-            export::Failure::Empty => "nothing chosen shows anything to picture",
-            export::Failure::NoRenderer => "the canvas isn't ready to draw yet",
-            export::Failure::Still => "nothing chosen moves",
-        })
-    });
-    let sheet_times = rendered.as_ref().and_then(|r| r.as_ref().ok()).and_then(|(_, times)| times.clone());
     let selected: Vec<(String, String, String)> = {
         let scene = b.doc.scene.borrow();
         ids.iter().filter_map(|id| scene.node(id).map(|n| (id.clone(), n.kind.name().to_string(), display_name(n)))).collect()
@@ -788,6 +773,26 @@ fn send_request(b: &Rc<Board>, session: String, request: String, with_picture: b
     let weak = Rc::downgrade(b);
     let rt = ui.rt.clone();
     glib::spawn_future_local(async move {
+        // On its real ground, sized for a model (TM-26, I-8): a contact sheet of six frames when
+        // it moves. It is drawn with the board's renderer, so on the main thread, but after the
+        // frame the press asked for; the encode and the write are off it.
+        if with_picture {
+            super::yield_low().await;
+        }
+        let draw = || {
+            let b = weak.upgrade().ok_or(export::Failure::NoRenderer)?;
+            if moving {
+                export::contact_sheet(&b, &ids, true, 4.0, export::ASK_SIDE, export::ASK_FRAMES).map(|(texture, times)| (texture, Some(times)))
+            } else {
+                export::extent(&b, &ids).ok_or(export::Failure::Empty).and_then(|area| export::render(&b, &ids, true, export::ask_scale(&area))).map(|(texture, _)| (texture, None))
+            }
+        };
+        let rendered = with_picture.then(|| draw().map_err(|e| match e {
+            export::Failure::Empty => "nothing chosen shows anything to picture",
+            export::Failure::NoRenderer => "the canvas isn't ready to draw yet",
+            export::Failure::Still => "nothing chosen moves",
+        }));
+        let sheet_times = rendered.as_ref().and_then(|r| r.as_ref().ok()).and_then(|(_, times)| times.clone());
         let picture: Result<Option<String>, String> = match rendered {
             None => Ok(None),
             Some(Err(why)) => Err(why.to_string()),

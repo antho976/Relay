@@ -168,8 +168,18 @@ pub struct StagedRender {
 pub struct StagedRestore {
     before: versions::Scan,
     after: versions::Scan,
+    only: Option<Vec<String>>,
     missing: Vec<String>,
     left: Vec<String>,
+}
+
+/// A staged op's commit: video `id` still there and the caller's to change, and the audit row
+/// under its project.
+fn commit_to(ctx: &mut Ctx, id: Id) -> Result<(), BusError> {
+    let video = live_video(ctx.tx(), id)?;
+    assert_actor_project(ctx, video.project_id)?;
+    ctx.set_project(video.project_id);
+    Ok(())
 }
 
 /// `paths` an agent or the person gave, made a version's own, each naming a file (or a folder of
@@ -360,39 +370,45 @@ pub fn register(e: &mut Engine) {
 
     e.register_unlocked::<Get>(|ctx, p| {
         let video = read_video(ctx, p.video_id, false)?;
-        let (compositions, props, versions, renders) = ctx.read(|conn| {
+        // Only the rows are read with the store held: the manifests (up to thousands of entries
+        // each) are parsed and compared after.
+        let (compositions, props, recent, named, renders) = ctx.read(|conn| {
             let props: String = conn.prepare_cached("SELECT props FROM videos WHERE id = ?1").bus()?.query_row([video.id], |r| r.get(0)).bus()?;
             // The newest 20 and the one before them, each told by what it changed; then every
             // older one with a name, told against the one before it.
             let row = |r: &rusqlite::Row| Ok((Version { n: r.get(0)?, actor: r.get(1)?, files: r.get(2)?, created_at: r.get(3)?, changed: Vec::new(), label: r.get(5)? }, r.get::<_, String>(4)?));
-            let rows = conn.prepare_cached("SELECT n, actor, files, created_at, manifest, label FROM video_versions WHERE video_id = ?1 ORDER BY n DESC LIMIT 21").bus()?
+            let recent = conn.prepare_cached("SELECT n, actor, files, created_at, manifest, label FROM video_versions WHERE video_id = ?1 ORDER BY n DESC LIMIT 21").bus()?
                 .query_map([video.id], row).bus()?
                 .collect::<rusqlite::Result<Vec<_>>>().bus()?;
-            let manifests: Vec<Vec<versions::Entry>> = rows.iter().map(|(_, m)| serde_json::from_str(m).unwrap_or_default()).collect();
-            let changed = |n: i64, before: Option<&Vec<versions::Entry>>, after: &[versions::Entry]| match before {
-                Some(before) => versions::changes(before, after, 12),
-                None if n == 1 => vec!["the starter".to_string()],
-                None => Vec::new(),
-            };
-            let mut versions = rows.iter().take(20).enumerate().map(|(i, (v, _))| {
-                Version { changed: changed(v.n, manifests.get(i + 1), &manifests[i]), ..v.clone() }
-            }).collect::<Vec<_>>();
-            if let Some(oldest) = versions.last().map(|v| v.n).filter(|_| rows.len() > 20) {
-                let named = conn.prepare_cached("SELECT n, actor, files, created_at, manifest, label FROM video_versions
+            let mut named = Vec::new();
+            if let Some((oldest, _)) = recent.get(19).filter(|_| recent.len() > 20) {
+                let rows = conn.prepare_cached("SELECT n, actor, files, created_at, manifest, label FROM video_versions
                     WHERE video_id = ?1 AND n < ?2 AND label IS NOT NULL ORDER BY n DESC").bus()?
-                    .query_map(params![video.id, oldest], row).bus()?.collect::<rusqlite::Result<Vec<_>>>().bus()?;
-                for (v, manifest) in named {
-                    let before: Option<Vec<versions::Entry>> = conn.prepare_cached("SELECT manifest FROM video_versions WHERE video_id = ?1 AND n < ?2 ORDER BY n DESC LIMIT 1").bus()?
-                        .query_row(params![video.id, v.n], |r| r.get::<_, String>(0)).optional().bus()?
-                        .map(|m| serde_json::from_str(&m).unwrap_or_default());
-                    let after: Vec<versions::Entry> = serde_json::from_str(&manifest).unwrap_or_default();
-                    versions.push(Version { changed: changed(v.n, before.as_ref(), &after), ..v });
+                    .query_map(params![video.id, oldest.n], row).bus()?.collect::<rusqlite::Result<Vec<_>>>().bus()?;
+                for (v, manifest) in rows {
+                    let before: Option<String> = conn.prepare_cached("SELECT manifest FROM video_versions WHERE video_id = ?1 AND n < ?2 ORDER BY n DESC LIMIT 1").bus()?
+                        .query_row(params![video.id, v.n], |r| r.get(0)).optional().bus()?;
+                    named.push((v, manifest, before));
                 }
             }
             let renders = conn.prepare_cached(&format!("SELECT {RENDER_COLUMNS} FROM video_renders WHERE video_id = ?1 ORDER BY id DESC LIMIT 20")).bus()?
                 .query_map([video.id], render_row).bus()?.collect::<rusqlite::Result<Vec<_>>>().bus()?;
-            Ok((compositions(conn, video.id)?, serde_json::from_str(&props).unwrap_or(json!({})), versions, renders))
+            Ok((compositions(conn, video.id)?, serde_json::from_str(&props).unwrap_or(json!({})), recent, named, renders))
         })?;
+        let parse = |m: &str| -> Vec<versions::Entry> { serde_json::from_str(m).unwrap_or_default() };
+        let changed = |n: i64, before: Option<&Vec<versions::Entry>>, after: &[versions::Entry]| match before {
+            Some(before) => versions::changes(before, after, 12),
+            None if n == 1 => vec!["the starter".to_string()],
+            None => Vec::new(),
+        };
+        let manifests: Vec<Vec<versions::Entry>> = recent.iter().map(|(_, m)| parse(m)).collect();
+        let mut versions = recent.into_iter().take(20).enumerate().map(|(i, (v, _))| {
+            Version { changed: changed(v.n, manifests.get(i + 1), &manifests[i]), ..v }
+        }).collect::<Vec<_>>();
+        for (v, manifest, before) in named {
+            let before = before.as_deref().map(parse);
+            versions.push(Version { changed: changed(v.n, before.as_ref(), &parse(&manifest)), ..v });
+        }
         let entry = Path::new(&video.dir).join("src/Video.tsx").display().to_string();
         Ok(GetOut { video, entry, compositions, props, versions, renders })
     });
@@ -744,9 +760,7 @@ pub fn register(e: &mut Engine) {
         }
         Ok(StagedAsset { out: AssetAddOut { assets: added, font: None } })
     }, |ctx: &mut Ctx, p, staged| {
-        let video = live_video(ctx.tx(), p.video_id)?;
-        assert_actor_project(ctx, video.project_id)?;
-        ctx.set_project(video.project_id);
+        commit_to(ctx, p.video_id)?;
         Ok(staged.out)
     });
 
@@ -805,9 +819,7 @@ pub fn register(e: &mut Engine) {
         let asset = video::eleven::keep(Path::new(&video.dir), &audio, &name, "mp3", p.overwrite.unwrap_or(false), made)?;
         Ok(Staged(VoiceOut { asset, seconds, words, captions, voice_id, voice, model }))
     }, |ctx: &mut Ctx, p, staged| {
-        let video = live_video(ctx.tx(), p.video_id)?;
-        assert_actor_project(ctx, video.project_id)?;
-        ctx.set_project(video.project_id);
+        commit_to(ctx, p.video_id)?;
         Ok(staged.0)
     });
 
@@ -845,9 +857,7 @@ pub fn register(e: &mut Engine) {
         let c = video::capture::capture(ctx.engine(), &adb, Path::new(&video.dir), holder, &plan)?;
         Ok(Staged(CaptureOut { asset: c.asset, seconds: c.seconds, fps, frames: c.frames, steps: c.marks, motion: c.motion, device: c.device }))
     }, |ctx: &mut Ctx, p, staged| {
-        let video = live_video(ctx.tx(), p.video_id)?;
-        assert_actor_project(ctx, video.project_id)?;
-        ctx.set_project(video.project_id);
+        commit_to(ctx, p.video_id)?;
         Ok(staged.0)
     });
 
@@ -872,9 +882,7 @@ pub fn register(e: &mut Engine) {
         let seconds = length_of(ctx.engine(), Path::new(&asset.path));
         Ok(Staged(MadeOut { asset, seconds }))
     }, |ctx: &mut Ctx, p, staged| {
-        let video = live_video(ctx.tx(), p.video_id)?;
-        assert_actor_project(ctx, video.project_id)?;
-        ctx.set_project(video.project_id);
+        commit_to(ctx, p.video_id)?;
         Ok(staged.0)
     });
 
@@ -893,9 +901,7 @@ pub fn register(e: &mut Engine) {
         let seconds = length_of(ctx.engine(), Path::new(&asset.path));
         Ok(Staged(MadeOut { asset, seconds }))
     }, |ctx: &mut Ctx, p, staged| {
-        let video = live_video(ctx.tx(), p.video_id)?;
-        assert_actor_project(ctx, video.project_id)?;
-        ctx.set_project(video.project_id);
+        commit_to(ctx, p.video_id)?;
         Ok(staged.0)
     });
 
@@ -940,9 +946,16 @@ pub fn register(e: &mut Engine) {
             Some(raw) => Some(only_paths(raw, &[&entries, &before.entries], &format!("v{} or the code now", p.version))?),
             None => None,
         };
+        // The code as it is now is a version before anything is written, so a restore that fails
+        // halfway can still be undone from it. Inside a transaction already (an undo's replay)
+        // the commit below records it.
+        if !ctx.holds_store() {
+            let actor = caller_name(ctx);
+            stills::snapshot(ctx.engine(), &video, &Caller { actor: &actor, session_id: ctx.actor_session_id() })?;
+        }
         let versions::Restored { missing, left, .. } = versions::restore(&dir, &blobs, &entries, only.as_deref()).map_err(folder)?;
         let after = versions::scan(&dir, &blobs).map_err(folder)?;
-        Ok(StagedRestore { before, after, missing, left })
+        Ok(StagedRestore { before, after, only, missing, left })
     }, |ctx: &mut Ctx, p, staged| {
         let video = live_video(ctx.tx(), p.video_id)?;
         assert_actor_project(ctx, video.project_id)?;
@@ -950,7 +963,12 @@ pub fn register(e: &mut Engine) {
         let (previous, _) = versions::record(ctx.tx(), video.id, &staged.before, &by, &ctx.now)?;
         versions::record(ctx.tx(), video.id, &staged.after, &by, &ctx.now)?;
         ctx.tx().execute("UPDATE videos SET updated_at = ?2, updated_by = ?3 WHERE id = ?1", params![video.id, ctx.now, by]).bus()?;
-        ctx.set_undo("video.version.restore", json!({"video_id": video.id, "version": previous}), None);
+        // A restore of some paths is undone for those paths only.
+        let mut undo = json!({"video_id": video.id, "version": previous});
+        if let Some(only) = &staged.only {
+            undo["paths"] = json!(only);
+        }
+        ctx.set_undo("video.version.restore", undo, None);
         let video = emit(ctx, video.id)?;
         let changed = versions::changes(&staged.before.entries, &staged.after.entries, 100);
         Ok(VersionRestoreOut { video, previous, changed, missing: staged.missing, left: staged.left })

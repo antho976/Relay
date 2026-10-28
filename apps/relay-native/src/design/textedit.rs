@@ -15,7 +15,7 @@ use gtk::prelude::*;
 use gtk::{gdk, pango};
 use gtk4 as gtk;
 use relay_bus::design::{parse_color, strip_controls, title_starts, Node, NodeKind, NodeOp, Sizing, TextAlign, TextCase, TextRun, MAX_TEXT};
-use relay_client::design::layout::STICKY_PAD;
+use relay_client::design::layout::sticky_inner;
 use relay_client::design::names::cut_text;
 use relay_client::design::{edit, text, Rect, Scene};
 use serde_json::{json, Map, Value};
@@ -284,7 +284,7 @@ impl Board {
         let rect = if is_shape(n.kind) {
             super::paint::shape_text_box(&self.painter, n, &r)?
         } else if n.kind == NodeKind::Sticky {
-            Rect::new(r.x + STICKY_PAD, r.y + STICKY_PAD, (r.w - 2.0 * STICKY_PAD).max(1.0), (r.h - 2.0 * STICKY_PAD).max(1.0))
+            sticky_inner(&r)
         } else {
             match placed.wrap_width(n, &r) {
                 // As the canvas lays it out (`paint::new_layout`): the last letter's spacing is
@@ -629,10 +629,10 @@ fn run_tag(tag: &gtk::TextTag, run: &TextRun, zoom: f64, clear: bool) {
         (None, false) => {}
     }
     if let Some(rise) = run.rise {
-        tag.set_rise((rise * zoom * pango::SCALE as f64).round() as i32);
+        tag.set_rise(super::paint::text_units(rise * zoom));
     }
     if let Some(ls) = run.letter_spacing {
-        tag.set_letter_spacing((ls * zoom * pango::SCALE as f64).round() as i32);
+        tag.set_letter_spacing(super::paint::text_units(ls * zoom));
     }
     if let Some(on) = run.underline {
         tag.set_underline(if on { pango::Underline::Single } else { pango::Underline::None });
