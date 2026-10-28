@@ -348,14 +348,16 @@ impl Recent {
     }
 
     /// For an agent's wait: the earliest event since its last refusal that the wait would have
-    /// taken live. The mark is spent either way; the wait now covers everything after it.
-    fn replay(&self, req: &Request, filter: &Filter, matching: Option<&serde_json::Value>) -> Option<Event> {
+    /// taken live. The mark is spent either way; the wait now covers everything after it. What it
+    /// may see is judged in the search, as in [`Recent::since`]: another session's event first
+    /// must not spend the mark and hide its own.
+    fn replay(&self, req: &Request, filter: &Filter, matching: Option<&serde_json::Value>, sees: impl Fn(&Event) -> bool) -> Option<Event> {
         let relay_bus::Actor::Agent(name) = &req.actor else { return None };
         let mut inner = self.lock();
         let (floor, _) = inner.refused.remove(name)?;
         inner.drain();
         inner.events.iter()
-            .find(|(seq, _, event)| *seq > floor && filter.matches(&event.ev) && payload_matches(&event.payload, matching))
+            .find(|(seq, _, event)| *seq > floor && filter.matches(&event.ev) && payload_matches(&event.payload, matching) && sees(event))
             .map(|(_, _, event)| event.clone())
     }
 
@@ -637,7 +639,7 @@ fn visible(scope: Option<&AgentScope>, ev: &Event) -> bool {
 /// refusal to send; `Ok(Some)` is an agent, scoped to its own project and mail.
 async fn door_preflight(engine: &Arc<Engine>, req: &Request) -> Result<Result<Option<AgentScope>, Response>> {
     let (e, r) = (engine.clone(), req.clone());
-    Ok(tokio::task::spawn_blocking(move || {
+    let joined = tokio::task::spawn_blocking(move || {
         let id = r.id;
         let actor = r.actor.clone();
         let resp = e.dispatch(r, Door::Socket);
@@ -650,7 +652,8 @@ async fn door_preflight(engine: &Arc<Engine>, req: &Request) -> Result<Result<Op
             .map_err(|_| Response::err(id, BusError::actor(format!("unknown session {name:?}"))))?;
         Ok(Some(AgentScope { project_id: row.session.project_id, session: name }))
     })
-    .await?)
+    .await;
+    Ok(joined.unwrap_or_else(|error| Err(failed(req.id, &req.op, &error))))
 }
 
 /// `session.attach {}` / `session.detach {}` from an agent mean its own session, which the
@@ -667,19 +670,32 @@ fn own_session(mut req: Request) -> Request {
 }
 
 /// The pipeline on the blocking pool: it takes the store lock, which a runtime thread must
-/// not wait on.
+/// not wait on. A handler that panics is answered like an unlocked query ([`answered`]).
 async fn dispatch_blocking(engine: &Arc<Engine>, req: Request) -> Result<Response> {
-    let e = engine.clone();
-    Ok(tokio::task::spawn_blocking(move || e.dispatch(req, Door::Socket)).await?)
+    let (e, id, op) = (engine.clone(), req.id, req.op.clone());
+    Ok(answered(id, &op, tokio::task::spawn_blocking(move || e.dispatch(req, Door::Socket)).await))
 }
 
-/// The answer to an unlocked query run on the blocking pool. One that panicked is still
-/// answered, with an internal error: dropped, its caller waited for an answer forever.
+/// The pipeline on this runtime thread, for a request that never waits ([`Engine::answers_from_memory`]).
+/// A panic is answered here: unwound through the connection's loop, it would end the connection
+/// with its streams and leave the keystroke unanswered.
+fn dispatch_inline(engine: &Engine, req: Request) -> Response {
+    let (id, op) = (req.id, req.op.clone());
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.dispatch(req, Door::Socket)))
+        .unwrap_or_else(|_| failed(id, &op, &"it panicked"))
+}
+
+/// The answer to a request run on the blocking pool. One that panicked is still answered, with
+/// an internal error: dropped, its caller waited for an answer forever, and the `?` that dropped
+/// it ended the whole connection.
 fn answered(id: uuid::Uuid, op: &str, joined: Result<Response, tokio::task::JoinError>) -> Response {
-    joined.unwrap_or_else(|error| {
-        tracing::error!(%op, %error, "an unlocked query did not finish");
-        Response::err(id, BusError::internal(format!("{op} failed inside Relay")))
-    })
+    joined.unwrap_or_else(|error| failed(id, op, &error))
+}
+
+/// The internal error a request that did not finish is answered with.
+fn failed(id: uuid::Uuid, op: &str, why: &dyn std::fmt::Display) -> Response {
+    tracing::error!(%op, %why, "a request did not finish");
+    Response::err(id, BusError::internal(format!("{op} failed inside Relay")))
 }
 
 /// A `logcat` or `mirror` frame (§7); `pty` frames have their own writer.
@@ -871,8 +887,10 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
             } else {
                 resource_watch.clone()
             };
-            tokio::task::spawn_blocking(move || {
-                let mut active = lease.active.lock().unwrap();
+            let (id, op) = (req.id, req.op.clone());
+            let resp = tokio::task::spawn_blocking(move || {
+                // A flag: a panic that poisoned it left it as true as it was.
+                let mut active = lease.active.lock().unwrap_or_else(|poison| poison.into_inner());
                 let on = req.payload["on"].as_bool();
                 let response = lease.engine.dispatch_socket_watch(req, *active);
                 if response.ok {
@@ -880,7 +898,8 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
                 }
                 response
             })
-            .await?
+            .await;
+            answered(id, &op, resp)
         } else if req.op == relay_bus::ops::bus::Subscribe::NAME {
             match door_preflight(&engine, &req).await? {
                 Err(refused) => refused,
@@ -951,8 +970,8 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
                         };
                         // Then whatever fired between this agent's last refusal and now.
                         let answered = answered
-                            .or_else(|| recent.replay(&req, &filter, p.matching.as_ref()))
                             .filter(|ev| visible(scope.as_ref(), ev))
+                            .or_else(|| recent.replay(&req, &filter, p.matching.as_ref(), |ev| visible(scope.as_ref(), ev)))
                             .or_else(|| since.and_then(|since| recent.since(since, &filter, p.matching.as_ref(), |ev| visible(scope.as_ref(), ev))));
                         let wait = tokio::time::timeout(timeout, async {
                             if answered.is_some() {
@@ -1074,7 +1093,8 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
                 };
                 (resp, pty)
             })
-            .await?;
+            .await
+            .unwrap_or_else(|error| (failed(req.id, &req.op, &error), None));
             match (pty, parsed) {
                 (Some(Ok((_, pty))), Some(p)) => {
                     if let Some(h) = streams.attached.remove(&p.session) {
@@ -1132,7 +1152,7 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
                 (pty, size)
             });
             let resp = if engine.answers_from_memory(&req) {
-                engine.dispatch(req, Door::Socket)
+                dispatch_inline(&engine, req)
             } else {
                 dispatch_blocking(&engine, req).await?
             };
@@ -1345,12 +1365,12 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
             // A keystroke is the one request whose latency a person can feel, and it is also the
             // one that never reaches the store. Answer it here rather than paying a trip to the
             // blocking pool and back for a map lookup and a write.
-            engine.dispatch(req, Door::Socket)
+            dispatch_inline(&engine, req)
         } else if let Some(thread) = thread {
             // A thread's agent reaches only its own ops (`threads::AGENT_OPS`), none of which
             // the branches above answer.
-            let e = engine.clone();
-            tokio::task::spawn_blocking(move || e.dispatch_from_thread(req, Door::Socket, thread)).await?
+            let (e, id, op) = (engine.clone(), req.id, req.op.clone());
+            answered(id, &op, tokio::task::spawn_blocking(move || e.dispatch_from_thread(req, Door::Socket, thread)).await)
         } else {
             dispatch_blocking(&engine, req).await?
         };
@@ -1695,6 +1715,41 @@ mod conn_tests {
         let mut other = Client::connect(&server.path).await.unwrap();
         assert_eq!(wait(&mut other, Actor::agent("bystander")).await["timed_out"], true);
         assert_eq!(wait(&mut other, Actor::User).await["timed_out"], true);
+    }
+
+    /// A locked handler that panics (here on a mutex an earlier panic poisoned) is answered with
+    /// an internal error under its id, and the connection goes on answering.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_panicking_locked_handler_is_answered_and_the_connection_lives() {
+        let (engine, _fixture, server) = server().await;
+        let poisoner = engine.clone();
+        let _ = std::thread::spawn(move || {
+            let _held = poisoner.ui.lock().unwrap();
+            panic!("poison the UI state");
+        })
+        .join();
+        let mut conn = Client::connect(&server.path).await.unwrap();
+        let req = Request::new(Actor::User, "ui.state", json!({}));
+        let resp = conn.call(&req, |_| {}).await.unwrap();
+        assert_eq!(resp.id, Some(req.id));
+        assert_eq!(resp.error.map(|e| e.kind), Some(relay_bus::ErrorKind::Internal));
+        let ping = conn.call(&Request::new(Actor::User, "bus.ping", json!({})), |_| {}).await.unwrap();
+        assert!(ping.ok, "{:?}", ping.error);
+    }
+
+    /// Another project's event between the refusal and the wait neither wakes the agent nor
+    /// spends the mark that its own event, fired after it, is handed by.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_wait_after_a_refusal_is_not_spent_on_an_event_it_may_not_see() {
+        let (engine, _fixture, server) = server().await;
+        agents(&engine);
+        let mut conn = Client::connect(&server.path).await.unwrap();
+        let refused = conn.call(&agent("ghost", "session.get", json!({"session": "nope"})), |_| {}).await.unwrap();
+        assert!(!refused.ok);
+        engine.emit_system("task.changed", json!({"id": 1, "project_id": 2}));
+        engine.emit_system("task.changed", json!({"id": 2, "project_id": 1}));
+        let woken = wait_as(&mut conn, agent("ghost", "bus.wait", json!({"events": ["task.changed"], "timeout_ms": 1000}))).await;
+        assert_eq!((woken["timed_out"].as_bool(), woken["event"]["payload"]["id"].as_i64()), (Some(false), Some(2)), "{woken}");
     }
 
     /// A wait given `since` wakes on what fired after that moment even though it started later:
