@@ -54,8 +54,12 @@ pub fn defaults() -> &'static Value {
                 "projects": {},
             },
             // Threads' local models (local_models.rs): where their files are, llama-server
-            // when it is not on PATH, and the minutes unused before it stops (0 = never).
-            "threads": { "local": { "dir": null, "server": null, "idle_minutes": 15 } },
+            // when it is not on PATH, and the minutes unused before it stops (0 = never). What
+            // the Dev space's assistant does without asking, by kind (threads/asks.rs `KINDS`).
+            "threads": {
+                "local": { "dir": null, "server": null, "idle_minutes": 15 },
+                "assistant": { "without_asking": { "launch": true, "type": false, "stop": false } }
+            },
             "undo": { "grace_days": 7 },
             // Gaming mode (gaming.rs): `on` caps every agent to `threads` CPU threads at the
             // lowest CPU and disk priority; `auto` also does while a game runs.

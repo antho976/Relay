@@ -593,7 +593,9 @@ queries `design.asset.get` (an agent reads a picture from `assets_dir`) and `des
 every actor may call; it only turns resource sampling on and off.
 SPEC §10 says no swarm: an agent never spawns, closes, or types into a session, full stop. The one
 exception is the Dev space's assistant (docs/THREADS.md, "The assistant"), which may *ask* for
-these with `thread.ask`; only the person's `thread.ask.resolve` runs them, as the person.
+these with `thread.ask`; only the person's `thread.ask.resolve` runs them, as the person, or the
+person's own setting `threads.assistant.without_asking`, which lets whole kinds of ask (launching
+and waking, typing into a session, parking and closing) run when they are asked, as the person.
 
 **Layer 2 — row scope (runtime).** See *Own task / self* below: an op naming a `session` or a
 `task_id` only ever acts on the caller's own. Reads reach any session in the caller's **own

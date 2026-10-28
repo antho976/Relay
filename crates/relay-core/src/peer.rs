@@ -426,13 +426,18 @@ mod tests {
         let peer = classify_with(960, ENGINE, &sessions(), &threads, tree(&links));
         assert_eq!(peer, Peer::Assistant(9));
         assert!(!peer.may_act_as_user());
-        for op in ["session.list", "session.transcript", "task.list", "mailbox.send", "thread.ask", "bus.ops"] {
+        for op in [
+            "session.list", "session.transcript", "task.list", "dashboard.get", "mailbox.send", "task.create", "task.move",
+            "notes.create", "skill.enable", "plugin.enable", "thread.ask", "bus.ops",
+        ] {
             assert!(peer.may_act_as_user_for(op), "{op}");
         }
-        // What it asks for runs only when the person approves it, from the app.
+        // What it asks for runs only when the person approves it, from the app, or lets that kind
+        // through in a setting it cannot change itself.
         for op in [
-            "session.create", "session.spawn", "session.close", "session.input", "workspace.create", "project.add",
-            "thread.ask.resolve", "guardrail.confirm", "settings.set", "project.remove", "money.summary", "thread.propose",
+            "session.create", "session.spawn", "session.close", "session.input", "task.delete", "task.dispatch", "workspace.create",
+            "project.add", "thread.ask.resolve", "guardrail.confirm", "settings.set", "project.remove", "skill.delete",
+            "skill.install", "audit.undo", "money.summary", "thread.propose",
         ] {
             assert!(!peer.may_act_as_user_for(op), "{op}");
         }
