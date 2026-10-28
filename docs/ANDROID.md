@@ -10,10 +10,21 @@ shows no terminal: everything an agent's terminal asked for is a button. **Home*
 person, says in one pill what needs them, offers a row of things to start, and has one message box
 whose chip says where it sends: a project, where the words open the New agent form with them as its
 task, or Tally, Arbiter or Avex, where they start a thread. The **drawer** has New chat, Agents,
-Board, Inbox, Changes and Notes, the three spaces as tiles, the agents at work, the recent threads,
-the projects, and the person and their PC at the foot (where the link stands, which was the status
-bar's). There is no Dev | Threads switch. **Agents** lists each agent as a card (what it is doing in
-words, its state, the one key its state offers) that opens its conversation.
+Board, Inbox, Changes, Files, Designs (the desktop's top-bar keys) and Notes, the three spaces as
+tiles, the agents at work, the recent threads, the projects, and the person and their PC at the foot
+(where the link stands, which was the status bar's; the person glyph until Settings has their name).
+There is no Dev | Threads switch.
+
+**Agents** lists every project's agents in one place, under each project's name, what needs the
+person first and then the newest. A field finds one by what it is doing, its name, its task, its
+branch or its project; chips keep only the ones that need the person, are working, are ready or are
+parked, and one project or all of them (a project's row in the drawer opens it on that project,
+with Files, Changes and Designs beside). Each agent is told apart the same way wherever it is
+listed (`ui/dev/Identity.kt`): a badge in a colour of its own, picked from its name, with its
+name's initials and its lamp; a title that is its intent, else its task's title, else its name; and
+a line with its name, its project, its role and its task, then its state and when it last said
+anything. The card's one key is the one its state offers, and a tap opens its conversation, whose
+header carries the same badge and title.
 
 The rest follows the same design. The **board** shows one column at a time under a row of pill
 tabs, its cards saying who is on a task in words, with New task as a floating key; a **task**
@@ -213,7 +224,7 @@ a holding opens to the question it asks; asking starts a new thread with those w
 
 ## Design on the phone
 
-Design is read only. **Design** in a project lists its canvases (`design.list`, the deleted ones
+Design is read only on the phone; an agent changes it (Ask, below). **Design** in a project lists its canvases (`design.list`, the deleted ones
 apart) as the gallery's cards do: title, the terminal it belongs to with its lamp or "Project only",
 when it last changed and by whom, its pages and its layers. A design opens to its page, one at a time
 (`design.get` with `pages_only` for the page chips, then with `page`; a PC too old for the flag is read
@@ -249,7 +260,13 @@ What it leaves out, said in a line under each page ("Not drawn on the phone: …
   nested more than 64 deep. A node whose fields a newer Relay wrote that this phone cannot read is
   left out or drawn without that field, and the screen says how many.
 
-It does not edit, ask, restore, delete for good or export; a stock photo's credit is read but no
+**Ask** (the pen key over a design or a page) is the PC's Ask for a whole page: what should change
+is written as the PC writes it (`ui/code/DesignAsk.kt`, word for word as `ask.rs` `prompt` with
+nothing selected and no picture, held to it by `DesignAskTest`), then either put in the design's
+own agent's message box, its conversation open and the words ready to send, or given to the New
+agent form as its task. The phone has no selection and sends no picture.
+
+It does not edit, restore, delete for good or export; a stock photo's credit is read but no
 screen shows it; and Play, the inspector and the time bar are the PC's.
 
 Two tests tie it to the PC. `crates/relay-client/tests/phone_fixtures.rs` lays out every case of

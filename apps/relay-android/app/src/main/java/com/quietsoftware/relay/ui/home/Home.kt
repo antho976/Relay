@@ -168,9 +168,6 @@ private fun Home(nav: Nav, s: ShellState, target: Target) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
         ) {
-            Box(Modifier.size(48.dp).clip(CircleShape).background(c.accent), contentAlignment = Alignment.Center) {
-                T("r", Modifier.padding(bottom = 3.dp), Relay.type.brand.copy(fontSize = 24.sp), c.onAccent)
-            }
             T(
                 greeting(s.prefs.name),
                 Modifier.fillMaxWidth(),

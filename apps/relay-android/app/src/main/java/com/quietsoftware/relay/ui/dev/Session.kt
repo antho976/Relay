@@ -98,7 +98,7 @@ fun SessionScreen(name: String, nav: Nav) {
 
     Page {
         Column(Modifier.fillMaxSize()) {
-            PageBar(name, nav::back, subtitle = session?.let { "${it.provider} · ${it.role}" }) {
+            PageBar(name, nav::back, subtitle = session?.let { "${providerName(it.provider)} · ${it.role}" }) {
                 if (session != null && session.state != "closed" && !session.pending) {
                     IconKey("notes", { nav.chat(name) }, size = 18.dp, tint = Relay.colors.ink2, label = "Conversation")
                 }

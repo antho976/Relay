@@ -25,9 +25,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.core.model.Note
 import com.quietsoftware.relay.core.model.Task
 import com.quietsoftware.relay.ui.Nav
+import com.quietsoftware.relay.ui.dev.AgentBadge
+import com.quietsoftware.relay.ui.dev.agentTitle
+import com.quietsoftware.relay.ui.dev.agentWhere
+import com.quietsoftware.relay.ui.dev.stateWord
 import com.quietsoftware.relay.ui.kit.Field
 import com.quietsoftware.relay.ui.kit.Glyph
-import com.quietsoftware.relay.ui.kit.LampDot
 import com.quietsoftware.relay.ui.kit.ListRow
 import com.quietsoftware.relay.ui.kit.SectionLabel
 import com.quietsoftware.relay.ui.kit.T
@@ -76,7 +79,11 @@ fun SearchScreen(nav: Nav) {
     ).filter { q.isEmpty() || it.first.lowercase().contains(q) }
 
     fun Task.matches() = q.isNotEmpty() && (title.lowercase().contains(q) || ref == q || ref == "#$q" || body.lowercase().contains(q))
-    val sessions = if (q.isEmpty()) emptyList() else s.sessions.filter { it.name.lowercase().contains(q) || (it.intent ?: "").lowercase().contains(q) || it.branch.lowercase().contains(q) }
+    val taskOf = tasks.associateBy { it.num }
+    val projectOf = s.projects.associateBy { it.num }
+    val sessions = if (q.isEmpty()) emptyList() else s.sessions.filter { a ->
+        a.state != "closed" && listOfNotNull(a.name, a.intent, a.branch, a.taskId?.let(taskOf::get)?.title, projectOf[a.projectId]?.name).any { it.lowercase().contains(q) }
+    }
     val foundTasks = tasks.filter { it.matches() }.sortedByDescending { it.title.lowercase().contains(q) }.take(30)
     val foundNotes = if (q.isEmpty()) emptyList() else notes.filter { it.heading.lowercase().contains(q) || it.body.lowercase().contains(q) }.take(20)
     val threads = if (q.isEmpty()) emptyList() else s.threads.filter { it.title.lowercase().contains(q) || (it.preview ?: "").lowercase().contains(q) }.take(20)
@@ -88,7 +95,7 @@ fun SearchScreen(nav: Nav) {
         when {
             pages.isNotEmpty() -> pages.first().third()
             projects.isNotEmpty() -> projects.first().num?.let(nav::project)
-            sessions.isNotEmpty() -> nav.terminal(sessions.first().name)
+            sessions.isNotEmpty() -> nav.chat(sessions.first().name)
             foundTasks.isNotEmpty() -> nav.task(foundTasks.first().id)
             foundNotes.isNotEmpty() -> nav.note(foundNotes.first().id)
             threads.isNotEmpty() -> nav.thread(threads.first().id)
@@ -120,11 +127,13 @@ fun SearchScreen(nav: Nav) {
                 }
                 if (sessions.isNotEmpty()) item { SectionLabel("Agents") }
                 items(sessions, key = { "s" + it.name }) { a ->
-                    ListRow(onClick = { nav.terminal(a.name) }) {
-                        LampDot(a.lamp)
+                    ListRow(onClick = { nav.chat(a.name) }) {
+                        val task = a.taskId?.let(taskOf::get)
+                        val title = agentTitle(a, task)
+                        AgentBadge(a, 30.dp, ring = c.wall)
                         Column(Modifier.weight(1f)) {
-                            T(a.name, style = Relay.type.uiMedium, color = c.ink)
-                            T("${a.provider} · ${a.role} · ${a.branch}", style = Relay.type.caption, color = c.ink3, maxLines = 1)
+                            T(title, style = Relay.type.uiMedium, color = c.ink, maxLines = 1)
+                            T(listOf(agentWhere(a, title, projectOf[a.projectId], task), stateWord(a)).filter { it.isNotEmpty() }.joinToString(" · "), style = Relay.type.caption, color = c.ink3, maxLines = 1)
                         }
                     }
                 }

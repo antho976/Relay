@@ -62,7 +62,11 @@ internal fun leadAct(state: String): Act? = actsFor(state).firstOrNull { it != A
 internal fun reviveAct(state: String): Act? = leadAct(state)?.takeIf { it != Act.Park }
 
 /** An agent the wall folds into "N stopped agents": a restorable or exited session, or an offer after a restart. */
-internal class Stopped(val name: String, val provider: String, val role: String, val offered: Boolean, val dirty: Boolean)
+internal class Stopped(val session: Session, val offered: Boolean, val dirty: Boolean) {
+    val name: String get() = session.name
+    val provider: String get() = session.provider
+    val role: String get() = session.role
+}
 
 /**
  * Runs lifecycle acts against the PC, asking first where the PC asks: Start takes an optional

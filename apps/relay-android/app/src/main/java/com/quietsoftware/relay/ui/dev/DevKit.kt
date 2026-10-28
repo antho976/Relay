@@ -168,9 +168,10 @@ internal fun crumb(project: Project, workspaces: List<Workspace>): String =
 
 /** Every project, under its workspace, the current one checked. */
 @Composable
-internal fun ProjectSheet(projects: List<Project>, workspaces: List<Workspace>, current: Long?, onPick: (Project) -> Unit, onDismiss: () -> Unit) {
+internal fun ProjectSheet(projects: List<Project>, workspaces: List<Workspace>, current: Long?, onPick: (Project) -> Unit, onDismiss: () -> Unit, onAll: (() -> Unit)? = null) {
     val c = Relay.colors
     DevSheet(onDismiss, "Project") { close ->
+        if (onAll != null) SheetRow("All projects", "grid", { close { onAll() } }, selected = current == null)
         if (projects.isEmpty()) {
             T("No projects yet. Add one on the PC.", Modifier.padding(horizontal = 6.dp, vertical = 8.dp), Relay.type.caption, c.ink3)
         }

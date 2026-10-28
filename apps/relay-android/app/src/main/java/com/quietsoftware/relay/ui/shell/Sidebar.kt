@@ -32,6 +32,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.quietsoftware.relay.core.model.Lamp
 import com.quietsoftware.relay.core.model.Project
+import com.quietsoftware.relay.core.model.Session
+import com.quietsoftware.relay.ui.dev.AgentBadge
+import com.quietsoftware.relay.ui.dev.agentTitle
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.Hairline
@@ -51,6 +54,8 @@ interface SidebarNav {
     fun search()
     fun board()
     fun changes()
+    fun files()
+    fun designs()
     fun notes()
     fun inbox()
     fun outbox()
@@ -102,6 +107,8 @@ fun Sidebar(s: ShellState, route: String?, nav: SidebarNav, @Suppress("UNUSED_PA
                 NavRow("Inbox", "inbox", route == "inbox", count = (s.holds.size + s.unread).takeIf { it > 0 }?.toString(), onClick = nav::inbox)
             }
             item { NavRow("Changes", "branch", route?.startsWith("git/") == true, onClick = nav::changes) }
+            item { NavRow("Files", "folder", route?.startsWith("files/") == true, onClick = nav::files) }
+            item { NavRow("Designs", "pen-tool", route?.startsWith("design") == true, onClick = nav::designs) }
             item { NavRow("Notes", "notes", route?.startsWith("notes") == true, onClick = nav::notes) }
             item { NavRow("Aide", "aide", route == "aide", onClick = nav::aide) }
             if (s.outbox.isNotEmpty()) item { NavRow("Waiting to send", "outbox", route == "outbox", count = s.outbox.size.toString(), onClick = nav::outbox) }
@@ -115,14 +122,19 @@ fun Sidebar(s: ShellState, route: String?, nav: SidebarNav, @Suppress("UNUSED_PA
             val working = s.sessions.filter { it.state in WORKING }.sortedByDescending { it.state == "blocked" }
             if (working.isNotEmpty()) {
                 item { Eyebrow("Working now", Modifier.padding(start = 4.dp, top = 16.dp, bottom = 4.dp)) }
+                val mixed = working.map { it.projectId }.distinct().size > 1
                 items(working, key = { "s${it.name}" }) { a ->
                     val blocked = a.state == "blocked"
-                    ChatRow(
-                        title = a.intent?.ifBlank { null } ?: a.name,
-                        line = a.name + " · " + if (blocked) "needs you" else if (a.state == "idle") "waiting" else "working",
-                        dot = if (blocked) c.waiting else if (a.state == "idle") c.ink3 else c.live,
+                    val title = agentTitle(a)
+                    AgentRow(
+                        a,
+                        title = title,
+                        line = listOfNotNull(
+                            a.name.takeIf { it != title },
+                            s.projects.firstOrNull { it.num == a.projectId }?.name?.takeIf { mixed },
+                            if (blocked) "needs you" else if (a.state == "idle") "ready" else "working",
+                        ).joinToString(" · "),
                         lineColor = if (blocked) c.waiting else c.ink3,
-                        selected = false,
                     ) { nav.chat(a.name) }
                 }
             }
@@ -148,8 +160,11 @@ fun Sidebar(s: ShellState, route: String?, nav: SidebarNav, @Suppress("UNUSED_PA
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Box(Modifier.size(36.dp).clip(CircleShape).background(c.wash), contentAlignment = Alignment.Center) {
-                T(s.prefs.name.take(1).uppercase().ifEmpty { "·" }, style = Relay.type.uiMedium, color = c.ink, weight = FontWeight.SemiBold)
+            // The person's initial on the accent, or the person glyph until they give a name (Settings).
+            val initial = s.prefs.name.trim().take(1).uppercase()
+            Box(Modifier.size(36.dp).clip(CircleShape).background(if (initial.isEmpty()) c.wash else c.accentSoft), contentAlignment = Alignment.Center) {
+                if (initial.isEmpty()) Glyph("user", 18.dp, c.ink2)
+                else T(initial, style = Relay.type.uiMedium, color = c.accentText, weight = FontWeight.SemiBold)
             }
             Column(Modifier.weight(1f)) {
                 T(s.prefs.name.ifBlank { "You" }, style = Relay.type.uiMedium, color = c.ink, weight = FontWeight.SemiBold, maxLines = 1)
@@ -173,6 +188,19 @@ private fun SpaceTile(label: String, glyph: String, tint: Color, selected: Boole
     ) {
         Glyph(glyph, 18.dp, tint)
         T(label, style = Relay.type.uiMedium, color = c.ink, weight = FontWeight.SemiBold, maxLines = 1)
+    }
+}
+
+/** An agent at work in the drawer: its badge, what it is doing over who it is and its state. */
+@Composable
+private fun AgentRow(a: Session, title: String, line: String, lineColor: Color, onClick: () -> Unit) {
+    val c = Relay.colors
+    ListRow(onClick = onClick, padding = PaddingValues(horizontal = 6.dp, vertical = 6.dp)) {
+        AgentBadge(a, 30.dp, ring = c.pane)
+        Column(Modifier.weight(1f)) {
+            T(title, style = Relay.type.ui, color = c.ink, maxLines = 1, weight = FontWeight.Medium)
+            T(line, style = Relay.type.caption, color = lineColor, maxLines = 1)
+        }
     }
 }
 

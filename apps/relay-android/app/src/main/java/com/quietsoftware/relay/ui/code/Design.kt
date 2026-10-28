@@ -82,7 +82,7 @@ fun DesignsScreen(projectId: Long, nav: Nav) {
     val lamps = remember(s.sessions) { s.sessions.associate { it.name to it.lamp } }
     Page {
         Column(Modifier.fillMaxSize()) {
-            PageBar("Design", nav::back, subtitle = project?.name)
+            PageBar("Designs", nav::back, subtitle = project?.name)
             ScrollBody {
                 if (all == null) {
                     LiveWait(live, page = true)
@@ -179,7 +179,10 @@ fun DesignScreen(id: Long, nav: Nav) {
     val design = got?.design ?: listed?.design
     Page {
         Column(Modifier.fillMaxSize()) {
-            PageBar(design?.title?.ifBlank { null } ?: "Design", nav::back, subtitle = "Design")
+            val pageName = pages.indexOfFirst { it.id == page }.let { i -> pages.getOrNull(i)?.name?.ifBlank { null } ?: "Page ${i + 1}" }
+            PageBar(design?.title?.ifBlank { null } ?: "Design", nav::back, subtitle = "Design") {
+                AskDesignKey(nav, design, page.takeIf { !whole }, pageName)
+            }
             ScrollBody {
                 if (!whole && listed == null) {
                     LiveWait(pagesLive, page = true)
@@ -264,7 +267,9 @@ fun DesignPageScreen(id: Long, page: String, nav: Nav) {
     var pan by remember(id, page) { mutableStateOf(Offset.Zero) }
     Page {
         Column(Modifier.fillMaxSize()) {
-            PageBar(shown?.name ?: "Page", nav::back, subtitle = plan?.got?.design?.title?.ifBlank { null } ?: "Design")
+            PageBar(shown?.name ?: "Page", nav::back, subtitle = plan?.got?.design?.title?.ifBlank { null } ?: "Design") {
+                AskDesignKey(nav, plan?.got?.design, page, shown?.name ?: "Page")
+            }
             if (shown?.bounds == null) {
                 ScrollBody {
                     when {

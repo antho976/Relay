@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.navigation.NavHostController
+import com.quietsoftware.relay.ui.dev.AgentsScope
 import com.quietsoftware.relay.data.Relay
 import com.quietsoftware.relay.ui.shell.ShellModel
 import com.quietsoftware.relay.ui.shell.SidebarNav
@@ -62,8 +63,13 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
         go("home", top = true)
     }
 
-    override fun agents() = go("agents")
+    override fun agents() {
+        AgentsScope.project = null
+        go("agents")
+    }
     /** The current project's changes, as a review. */
+    override fun files() { shell.state.value.project?.num?.let { files(it) } ?: agents() }
+    override fun designs() { shell.state.value.project?.num?.let { designs(it) } ?: agents() }
     override fun changes() { shell.state.value.project?.num?.let { git(it) } ?: board() }
     /** An agent's own page: its conversation ([chat]), with its terminal one tap under it. */
     fun terminal(name: String) = chat(name)
@@ -127,6 +133,7 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     override fun plugins() = go("plugins")
     override fun project(id: Long) {
         shell.pickProject(id)
+        AgentsScope.project = id
         go("agents")
     }
     override fun pc() = go("pc")

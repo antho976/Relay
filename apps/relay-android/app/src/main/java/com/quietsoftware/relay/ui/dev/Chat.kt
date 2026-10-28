@@ -149,6 +149,8 @@ import kotlinx.serialization.json.put
 import java.time.LocalDate
 import androidx.compose.foundation.layout.statusBarsPadding
 import com.quietsoftware.relay.core.model.Session
+import com.quietsoftware.relay.core.model.Project
+import com.quietsoftware.relay.core.model.Task
 import com.quietsoftware.relay.ui.kit.LampDot
 import com.quietsoftware.relay.ui.threads.BUBBLE
 import com.quietsoftware.relay.ui.threads.BarButton
@@ -271,7 +273,10 @@ fun ChatScreen(name: String, nav: Nav) {
 
     Page {
         Column(Modifier.fillMaxSize()) {
-            AgentBar(session, name, onBack = nav::back, onDetails = { nav.session(name) }, onMenu = { menu = true }) {
+            val taskId = session?.taskId
+            val task by remember(taskId) { if (taskId != null) nav.relay.task(taskId.toString()) else flowOf(null) }.collectAsStateWithLifecycle(null)
+            val project = s.projects.firstOrNull { it.num == session?.projectId }?.takeIf { s.projects.size > 1 }
+            AgentBar(session, name, task, project, onBack = nav::back, onDetails = { nav.session(name) }, onMenu = { menu = true }) {
                 session?.let { ss -> IconKey("branch", { nav.git(ss.projectId, ss.worktree.ifBlank { null }, name) }, size = 18.dp, tint = c.ink2, label = "Review changes") }
             }
             ChatBanner(status, session, s.online, life)
@@ -405,12 +410,12 @@ fun ChatScreen(name: String, nav: Nav) {
 }
 
 /**
- * The conversation's top bar, drawn as a thread's: back, the agent's name over what it is in
- * plain words (its provider, its state, its branch when that is not its own), its keys and ⋯.
- * A tap on the name opens its details.
+ * The conversation's top bar, drawn as a thread's: back, the agent's badge, what it is doing over
+ * who it is in plain words (its name, its project, its provider, its state, its branch when that
+ * is not its own), its keys and ⋯. A tap on the title opens its details.
  */
 @Composable
-private fun AgentBar(session: Session?, name: String, onBack: () -> Unit, onDetails: () -> Unit, onMenu: () -> Unit, extra: @Composable () -> Unit = {}) {
+private fun AgentBar(session: Session?, name: String, task: Task?, project: Project?, onBack: () -> Unit, onDetails: () -> Unit, onMenu: () -> Unit, extra: @Composable () -> Unit = {}) {
     val c = Relay.colors
     val held = session?.state == "blocked"
     Row(
@@ -418,11 +423,19 @@ private fun AgentBar(session: Session?, name: String, onBack: () -> Unit, onDeta
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconKey("arrow-left", onBack, size = 18.dp, tint = c.ink2)
-        Column(Modifier.weight(1f).clip(Radii.icon).clickable(onClickLabel = "Session details", onClick = onDetails).padding(horizontal = 2.dp, vertical = 4.dp)) {
-            T(name, style = Relay.type.title, color = c.ink, maxLines = 1)
-            if (session != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                LampDot(session.lamp, 6.dp)
-                T(agentLine(session), style = Relay.type.caption, color = if (held) c.heldText else c.ink3, maxLines = 1)
+        Row(
+            Modifier.weight(1f).clip(Radii.icon).clickable(onClickLabel = "Session details", onClick = onDetails).padding(horizontal = 2.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (session != null) AgentBadge(session, 32.dp, ring = c.wall)
+            Column(Modifier.weight(1f)) {
+                val title = session?.let { agentTitle(it, task) } ?: name
+                T(title, style = Relay.type.title, color = c.ink, maxLines = 1)
+                if (session != null) {
+                    val line = listOfNotNull(name.takeIf { it != title }, project?.name, stateWord(session), providerName(session.provider)).joinToString(" · ")
+                    T(line, style = Relay.type.caption, color = if (held) c.heldText else c.ink3, maxLines = 1)
+                }
             }
         }
         extra()
@@ -434,15 +447,6 @@ private fun AgentBar(session: Session?, name: String, onBack: () -> Unit, onDeta
 internal fun agentLine(session: Session): String {
     val branch = session.branch.takeIf { it.isNotBlank() && it != "relay/${session.name}" }
     return listOfNotNull(providerName(session.provider), stateWord(session), branch).joinToString(" · ")
-}
-
-/** An agent's state as a word in a sentence: "Working", "Needs you", "Parked". */
-private fun stateWord(session: Session): String = when (session.state) {
-    "running" -> "Working"
-    "spawning" -> "Starting"
-    "idle" -> "Ready"
-    "blocked" -> "Needs you"
-    else -> session.stateLabel.lowercase().replaceFirstChar(Char::uppercase)
 }
 
 // ---- The conversation as pieces ----
