@@ -146,7 +146,7 @@ pub fn register(e: &mut Engine) {
         let why = text("why", &p.why, 600)?;
         let now = ctx.now.clone();
         let id = with_db(ctx.engine(), |db| db.add_job(&spec, JobState::Proposed, None, &now))?;
-        let title = format!("Aide proposes a job: {}", spec.name);
+        let title = format!("A new bot to turn on: {}", spec.name);
         let (job_id, run_id) = match ctx.thread() {
             Some(t) => {
                 let run = with_db(ctx.engine(), |db| db.last_run_of_thread(t))?;

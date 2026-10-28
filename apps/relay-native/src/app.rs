@@ -569,7 +569,7 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     crumb.set_visible(false);
     top_left.append(&crumb);
     top.append(&top_left);
-    // Dev | Threads switches what the page shows, so it sits over the page, past the sidebar's
+    // Dev | Threads | Aide switches what the page shows, so it sits over the page, past the sidebar's
     // edge: the block before it keeps the sidebar's width (`follow_sidebar`).
     let switcher = crate::money::switcher();
     top.append(&switcher);
@@ -999,6 +999,7 @@ fn sidebar() -> Sidebar {
     sidebar.append(&nav);
     let money_nav = crate::money::sidebar_keys();
     sidebar.append(&money_nav);
+    sidebar.append(&crate::money::aide_sidebar());
     let section = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     section.add_css_class("workspace-heading");
     let heading = label("Workspaces", "section-label");
@@ -2333,7 +2334,7 @@ impl Ui {
         let design = page == "design";
         let page = if files || design { "agents" } else { page };
         // A restored layout or an engine echo does not take the window out of Money.
-        if self.applying_ui.get() && crate::money::active() && !crate::money::is_page(page) {
+        if self.applying_ui.get() && crate::money::space() != crate::money::Space::Dev && !crate::money::is_page(page) {
             return;
         }
         if *self.page.borrow() != page && !self.dismiss_panels() {

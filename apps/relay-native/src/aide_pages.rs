@@ -1,12 +1,19 @@
-//! Aide in the Threads space, beside Tally, Arbiter and Avex (docs/AIDE.md): the person's own
-//! agent, which wakes by the clock or on their data, runs on the model each job names, speaks
-//! first, and keeps what it learns. Its pages: Overview (what waits on the person, what runs, what
-//! it said), Jobs and one job with its runs, Memory (facts and living pages) and Settings.
+//! The Aide space, the third beside Dev and Threads (docs/AIDE.md): the person's own bots, in the
+//! manner of Grok Bot. Each job is a bot with a chat of its own, which wakes by the clock or on
+//! the person's data, runs on the model it names, speaks first and keeps what it learns. Over them
+//! is the Chief of Staff, Aide itself: a chat where every bot's messages land and where the person
+//! asks for a new bot in words, which Aide drafts for them to turn on.
 //!
-//! Everything is the engine's (`aide.*`); this module reads it and sends the person's changes. A
-//! job's channel is a thread of kind `aide`, which the Threads page opens like any other; the
-//! `wake` messages in it, Relay's words to the agent, are drawn by [`wake_note`].
+//! The sidebar ([`sidebar`]) is New bot, the Chief of Staff, the bots, and at its foot Activity
+//! (what waits on the person, what runs, what was said), Memory and Settings. A chat is the
+//! Threads page showing an Aide thread (`threads::open_aide`): no Threads panel, the bot's keys in
+//! its strip ([`fill_strip`]), a bot's messages as notes ([`note`]) and Relay's words that woke it
+//! folded ([`wake_note`]). One bot's page, its instructions and runs, is a key away ([`JOB`]).
+//!
+//! Everything is the engine's (`aide.*`, `aide.chat` for a chat's thread); this module reads it and
+//! sends the person's changes.
 use super::pages::{card, cell, columns, glyph_image, plural, setting_row, strip};
+use super::threads::{self, AideChat};
 use super::{message, page, toast, Action, Page};
 use crate::app::{button, clear, confirm_inline, label, rows, text, Ui};
 use crate::client::Error;
@@ -18,9 +25,10 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-/// Aide's tabbed pages: (stack name, caption).
-pub const PAGES: [(&str, &str); 4] = [("aide-home", "Overview"), ("aide-jobs", "Jobs"), ("aide-memory", "Memory"), ("aide-settings", "Settings")];
-/// One job and its runs, opened from a row; it carries no tab of its own.
+/// Aide's pages: (stack name, caption). Activity, Memory and Settings sit at the sidebar's foot;
+/// Bots, every bot and the ones Aide starts with, is reached from the bots' heading.
+pub const PAGES: [(&str, &str); 4] = [("aide-home", "Activity"), ("aide-jobs", "Bots"), ("aide-memory", "Memory"), ("aide-settings", "Settings")];
+/// One bot's page, its instructions and runs, opened from its chat.
 pub const JOB: &str = "aide-job";
 /// Every Aide page, for `money::add_pages`.
 pub const ALL: [&str; 5] = ["aide-home", "aide-jobs", "aide-memory", "aide-settings", JOB];
@@ -88,6 +96,23 @@ struct State {
     job: Cell<Option<i64>>,
     /// An `aide.changed` is being waited on: a run announces several in a moment.
     pending: Cell<bool>,
+    sidebar: RefCell<Option<Rc<Sidebar>>>,
+    /// The chat strip's box, once the threads page asked for it to be filled.
+    strip: RefCell<Option<gtk::Box>>,
+    /// Which fill of the strip is the newest: an older read draws nothing.
+    strip_serial: Cell<u64>,
+}
+
+/// The sidebar's parts that change: the Chief of Staff's key, the bots' list and its rows, and
+/// the foot's keys.
+struct Sidebar {
+    chief: gtk::Button,
+    bots: gtk::Box,
+    rows: RefCell<Vec<(i64, gtk::Button)>>,
+    feet: Vec<(&'static str, gtk::Button)>,
+    /// A read is under way, and one more is wanted after it.
+    reading: Cell<bool>,
+    again: Cell<bool>,
 }
 
 thread_local! {
@@ -688,14 +713,14 @@ fn op_key(ui: &Rc<Ui>, caption: &str, class: &str, op: &'static str, payload: Va
     key
 }
 
-/// A key that opens job `id`'s channel on the Threads page.
-fn channel_key(ui: &Rc<Ui>, thread: i64) -> gtk::Button {
-    let key = button("Channel", "money-secondary");
-    key.set_tooltip_text(Some("Open the thread its runs talk in. You can answer there."));
-    let weak = Rc::downgrade(ui);
+/// A key that opens bot `job`'s chat, where its runs talk and the person can answer.
+fn chat_key(ui: &Rc<Ui>, job: i64, name: &str) -> gtk::Button {
+    let key = button("Chat", "money-secondary");
+    key.set_tooltip_text(Some("Open its chat: what it said, and where you can answer it"));
+    let (weak, name) = (Rc::downgrade(ui), name.to_string());
     key.connect_clicked(move |_| {
         if let Some(ui) = weak.upgrade() {
-            super::threads::open(&ui, thread);
+            open_bot(&ui, job, &name);
         }
     });
     key
@@ -831,33 +856,9 @@ const FOLD_CHARS: usize = 240;
 
 // ---- The pages -----------------------------------------------------------------------------
 
-/// Aide's tabs as Dev's segmented control, above each Aide page. One job shows under Jobs.
-pub fn tabs(showing: &str) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    row.add_css_class("money-tabs");
-    let tabs = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    tabs.add_css_class("view-tabs");
-    tabs.set_halign(gtk::Align::Start);
-    for (name, caption) in PAGES {
-        let tab = button(caption, "quiet");
-        tab.set_widget_name(&format!("{name}-tab"));
-        if name == showing || (showing == JOB && name == "aide-jobs") {
-            tab.add_css_class("selected");
-        }
-        tab.connect_clicked(move |_| {
-            if let Some(ui) = super::threads::the_ui_pub() {
-                ui.navigate(name);
-            }
-        });
-        tabs.append(&tab);
-    }
-    row.append(&tabs);
-    row
-}
-
 /// A title and a first message on every page, before its first read.
-pub fn install() {
-    for (name, title) in ALL.into_iter().zip(["Aide", "Jobs", "Memory", "Settings", "Job"]) {
+pub fn install(_ui: &Rc<Ui>) {
+    for (name, title) in ALL.into_iter().zip(["Activity", "Bots", "Memory", "Settings", "Bot"]) {
         if let Some(page) = page(name) {
             heading(&page.head, title, "", &[]);
             message(&page.body, "Reading Aide…");
@@ -886,6 +887,8 @@ pub(super) fn changed(ui: &Rc<Ui>) {
     glib::timeout_add_local_once(Duration::from_millis(300), move || {
         STATE.with(|s| s.pending.set(false));
         let Some(ui) = weak.upgrade() else { return };
+        refresh_sidebar(&ui);
+        refill_strip(&ui);
         let showing = ui.page.borrow().clone();
         if !showing.starts_with("aide-") || showing == "aide-settings" {
             return;
@@ -949,7 +952,7 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str) {
             }
             match jobs {
                 Ok(j) => jobs_page(ui, &page, &rows(&j, "jobs"), &runs.ok().map(|r| rows(&r, "runs")).unwrap_or_default(), &templates.ok().map(|t| rows(&t, "templates")).unwrap_or_default()),
-                Err(e) => failed(ui, &page, "Jobs", &e),
+                Err(e) => failed(ui, &page, "Bots", &e),
             }
         }
         JOB => {
@@ -963,7 +966,7 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str) {
             }
             match read {
                 Ok(d) => job_page(ui, &page, &d),
-                Err(e) => failed(ui, &page, "Job", &e),
+                Err(e) => failed(ui, &page, "Bot", &e),
             }
         }
         "aide-memory" => {
@@ -1019,7 +1022,7 @@ struct Home {
 fn pause_key(ui: &Rc<Ui>, paused: bool) -> gtk::Button {
     let key = button(if paused { "Resume" } else { "Pause all" }, if paused { "primary" } else { "money-secondary" });
     key.set_widget_name("aide-pause");
-    key.set_tooltip_text(Some(if paused { "Let jobs run and Aide speak again" } else { "Nothing runs and nothing is said until you resume" }));
+    key.set_tooltip_text(Some(if paused { "Let bots run and Aide speak again" } else { "Nothing runs and nothing is said until you resume" }));
     let weak = Rc::downgrade(ui);
     key.connect_clicked(move |key| {
         let Some(ui) = weak.upgrade() else { return };
@@ -1055,7 +1058,7 @@ fn next_line(s: &Value, jobs: &[Value]) -> Option<String> {
     Some(next_wake(name, when, minutes_until(at)))
 }
 
-/// Overview: what waits on the person first, then what runs, what Aide said and what it is on.
+/// Activity: what waits on the person first, then what runs, what Aide said and what it is on.
 fn home(ui: &Rc<Ui>, page: &Page, s: &Value, read: &Home) {
     let paused = s["paused"] == true;
     let next = next_line(s, &read.jobs);
@@ -1063,14 +1066,14 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value, read: &Home) {
         _ if paused => String::from("Paused: nothing runs and nothing is said until you resume."),
         (Some(n), _) => format!("Next: {n}"),
         (None, true) => String::from("Your own agent: it works while you are away, speaks first when something needs you, and asks before anything that matters."),
-        (None, false) => String::from("No job wakes by the clock now."),
+        (None, false) => String::from("No bot wakes by the clock now."),
     };
     let pause = pause_key(ui, paused);
-    heading(&page.head, "Aide", &context, &[pause.upcast_ref()]);
+    heading(&page.head, "Activity", &context, &[pause.upcast_ref()]);
     clear(&page.body);
     let body = &page.body;
     if paused {
-        body.append(&notice("Aide is paused. Jobs do not run, rules do not wake them, and nothing is said until you resume.", None));
+        body.append(&notice("Aide is paused. Bots do not run, rules do not wake them, and nothing is said until you resume.", None));
     }
 
     let errands: Vec<&Value> = read.errands.iter().filter(|e| text(e, "state") == "waiting" || e["proposed_done"] == true).collect();
@@ -1101,7 +1104,7 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value, read: &Home) {
 
     // No jobs yet: the ones Aide starts with come first.
     if read.jobs.is_empty() && !read.templates.is_empty() {
-        templates_card(ui, body, &read.templates, &read.jobs, "Start with a job");
+        templates_card(ui, body, &read.templates, &read.jobs, "Start with a bot");
     }
 
     let pair = columns(body, 2);
@@ -1133,7 +1136,7 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value, read: &Home) {
         });
         let remove = op_key(ui, "Remove", "quiet", "aide.job.delete", json!({"id": id}), "Removed.", Some("Remove it"));
         let on = op_key(ui, "Turn on", "primary", "aide.job.set", json!({"id": id, "state": "active"}), "Turned on.", None);
-        list.append(&ask_row("job", &format!("Aide proposes a job: {}", text(j, "name")), &when_line(j), &[look, remove, on]));
+        list.append(&ask_row("job", &format!("A new bot to turn on: {}", text(j, "name")), &when_line(j), &[look, remove, on]));
     }
     for f in unconfirmed {
         let id = f["id"].as_i64().unwrap_or(0);
@@ -1143,7 +1146,7 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value, read: &Home) {
         list.append(&ask_row("fact", text(f, "text"), &detail, &[forget, confirm]));
     }
 
-    let list = card(&pair[0], "Running now", Some(("All jobs", go(ui, "aide-jobs"))));
+    let list = card(&pair[0], "Running now", Some(("All bots", go(ui, "aide-jobs"))));
     if running.is_empty() {
         quiet_row(&list, "Nothing is running.");
     }
@@ -1187,8 +1190,8 @@ fn running_row(ui: &Rc<Ui>, r: &Value) -> gtk::Box {
         detail.push(text(r, "trigger").to_string());
     }
     let mut keys = Vec::new();
-    if let Some(t) = r["thread_id"].as_i64() {
-        keys.push(channel_key(ui, t));
+    if let Some(job) = r["job_id"].as_i64() {
+        keys.push(chat_key(ui, job, text(r, "job_name")));
     }
     keys.push(op_key(ui, "Stop", "money-destructive", "aide.run.stop", json!({"id": id}), "Stopped.", None));
     ask_row("run", text(r, "job_name"), &detail.join(" · "), &keys)
@@ -1264,7 +1267,7 @@ fn when_of_spec(spec: &Value) -> String {
 // ---- Jobs ----------------------------------------------------------------------------------
 
 fn new_key(ui: &Rc<Ui>) -> gtk::Button {
-    let key = button("New job", "primary");
+    let key = button("New bot", "primary");
     key.set_widget_name("aide-new-job");
     let weak = Rc::downgrade(ui);
     key.connect_clicked(move |_| {
@@ -1282,7 +1285,7 @@ fn job_keys(ui: &Rc<Ui>, j: &Value, removable: bool) -> Vec<gtk::Button> {
     let state = text(j, "state");
     let mut keys = Vec::new();
     if state != "proposed" {
-        let run = op_key(ui, "Run now", "money-secondary", "aide.run.now", json!({"job_id": id}), "Running. Its channel shows it as it goes.", None);
+        let run = op_key(ui, "Run now", "money-secondary", "aide.run.now", json!({"job_id": id}), "Running. Its chat shows it as it goes.", None);
         run.set_widget_name(&format!("aide-run-{id}"));
         keys.push(run);
     }
@@ -1310,18 +1313,18 @@ fn job_keys(ui: &Rc<Ui>, j: &Value, removable: bool) -> Vec<gtk::Button> {
 
 fn jobs_page(ui: &Rc<Ui>, page: &Page, jobs: &[Value], runs: &[Value], templates: &[Value]) {
     let new = new_key(ui);
-    heading(&page.head, "Jobs", "What Aide does, and what wakes it. Each job reads only what you allow, on the model it names.", &[new.upcast_ref()]);
+    heading(&page.head, "Bots", "What each bot does, and what wakes it. Each reads only what you allow, on the model it names. Asking the Chief of Staff for one works too.", &[new.upcast_ref()]);
     clear(&page.body);
-    let list = card(&page.body, "Jobs", None);
+    let list = card(&page.body, "Your bots", None);
     if jobs.is_empty() {
-        quiet_row(&list, "No jobs yet. A job is a few plain sentences and what wakes it: a time of day, or something in your data. Start from one below, or write your own.");
+        quiet_row(&list, "No bots yet. A bot is a few plain sentences and what wakes it: a time of day, or something in your data. Start from one below, write your own, or ask the Chief of Staff.");
     }
     for j in jobs {
         let id = j["id"].as_i64();
         let last = runs.iter().find(|r| r["job_id"].as_i64() == id);
         list.append(&job_row(ui, j, last));
     }
-    templates_card(ui, &page.body, templates, jobs, "Jobs Aide starts with");
+    templates_card(ui, &page.body, templates, jobs, "Bots Aide starts with");
 }
 
 fn job_row(ui: &Rc<Ui>, j: &Value, last: Option<&Value>) -> gtk::Box {
@@ -1332,7 +1335,7 @@ fn job_row(ui: &Rc<Ui>, j: &Value, last: Option<&Value>) -> gtk::Box {
     let main = button("", "money-row-key");
     main.set_widget_name(&format!("aide-job-{id}"));
     main.set_hexpand(true);
-    main.set_tooltip_text(Some("Open this job and its runs"));
+    main.set_tooltip_text(Some("Open this bot and its runs"));
     let inner = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     inner.append(&mark("job"));
     let words = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -1379,19 +1382,19 @@ fn job_row(ui: &Rc<Ui>, j: &Value, last: Option<&Value>) -> gtk::Box {
 fn job_page(ui: &Rc<Ui>, page: &Page, d: &Value) {
     let j = &d["job"];
     let mut keys: Vec<gtk::Widget> = job_keys(ui, j, false).into_iter().map(|k| k.upcast()).collect();
-    if let Some(t) = j["thread_id"].as_i64() {
-        let key = channel_key(ui, t);
+    if let Some(id) = j["id"].as_i64() {
+        let key = chat_key(ui, id, text(j, "name"));
         key.set_widget_name("aide-channel");
         keys.push(key.upcast());
     }
     heading(&page.head, text(j, "name"), &when_line(j), &keys.iter().collect::<Vec<_>>());
-    back_key(ui, &page.head, "Jobs", "aide-jobs");
+    back_key(ui, &page.head, "Bots", "aide-jobs");
     clear(&page.body);
     let body = &page.body;
     if text(j, "state") == "proposed" {
         let id = j["id"].as_i64().unwrap_or(0);
         let on = op_key(ui, "Turn on", "primary", "aide.job.set", json!({"id": id, "state": "active"}), "Turned on.", None);
-        body.append(&notice("Aide proposed this job. It does nothing until you turn it on.", Some(on)));
+        body.append(&notice("Aide proposed this bot. It does nothing until you turn it on.", Some(on)));
     }
 
     let about = card(body, "What it does", None);
@@ -1500,11 +1503,6 @@ fn run_row(ui: &Rc<Ui>, r: &Value) -> gtk::Box {
     t.set_hexpand(true);
     t.set_valign(gtk::Align::Center);
     foot.append(&t);
-    if let Some(thread) = r["thread_id"].as_i64() {
-        let key = channel_key(ui, thread);
-        key.add_css_class("arbiter-small");
-        foot.append(&key);
-    }
     if matches!(state, "queued" | "running") {
         let stop = op_key(ui, "Stop", "money-destructive", "aide.run.stop", json!({"id": r["id"]}), "Stopped.", None);
         stop.add_css_class("arbiter-small");
@@ -1595,7 +1593,7 @@ impl Form {
 /// The job editor: a new job when `id` is none, filled from `seed` (a job, a template's spec, or
 /// nothing). Saving is `aide.job.save`; a refusal shows the engine's sentence above the keys.
 pub(super) fn editor(ui: &Rc<Ui>, id: Option<i64>, seed: &Value) {
-    let title = if id.is_some() { "Edit job" } else { "New job" };
+    let title = if id.is_some() { "Edit bot" } else { "New bot" };
     let Some(panel) = Panel::toggle(ui, title, 600) else { return };
     panel.add_css_class("money-sheet");
     panel.add_css_class("aide-sheet");
@@ -1724,7 +1722,7 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, id: Option<i64>, seed: &Value, models: &
     rules_block.append(&rules_list);
     rules_block.append(&add_rule);
     let rules_field = field(&body, "What wakes it in your data", &rules_block);
-    let rules_about = label("Relay checks a rule itself when the data changes, without a model, and wakes the job once for each thing it finds.", "money-row-detail");
+    let rules_about = label("Relay checks a rule itself when the data changes, without a model, and wakes the bot once for each thing it finds.", "money-row-detail");
     rules_about.set_wrap(true);
     rules_field.append(&rules_about);
 
@@ -1861,7 +1859,7 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, id: Option<i64>, seed: &Value, models: &
             return true;
         }
         if let Some(problem) = shown.upgrade() {
-            show_problem(&problem, "Save the job, or Cancel to discard it.");
+            show_problem(&problem, "Save the bot, or Cancel to discard it.");
         }
         false
     });
@@ -1979,7 +1977,7 @@ fn memory_page(ui: &Rc<Ui>, page: &Page, facts: &[Value], pages: Option<&[Value]
     let list = card(&pair[1], "Living pages", None);
     match pages {
         None => quiet_row(&list, "Its pages could not be read."),
-        Some([]) => quiet_row(&list, "None yet. A living page answers one question, and each run of its job writes it again from current data."),
+        Some([]) => quiet_row(&list, "None yet. A living page answers one question, and each run of its bot writes it again from current data."),
         Some(pages) => {
             for p in pages {
                 list.append(&page_row(ui, p));
@@ -2100,7 +2098,7 @@ fn read_page(ui: &Rc<Ui>, id: i64) {
         let page = gtk::Box::new(gtk::Orientation::Vertical, 10);
         page.add_css_class("aide-page-body");
         if text(&p, "body").trim().is_empty() {
-            page.append(&label("Not written yet: its job's next run writes it.", "money-muted"));
+            page.append(&label("Not written yet: its bot's next run writes it.", "money-muted"));
         } else {
             super::threads::draw_reply(&page, text(&p, "body"));
         }
@@ -2146,9 +2144,9 @@ fn settings_page(ui: &Rc<Ui>, page: &Page, s: &Value, models: Result<Vec<Value>,
     let fallback_list = model_choices(listed, s["fallback"].as_str(), "None");
     let at = |l: &[(Option<String>, String)], c: Option<&str>| l.iter().position(|(id, _)| id.as_deref() == c).unwrap_or(0);
     let model = picker(&model_list.iter().map(|m| m.1.as_str()).collect::<Vec<_>>(), at(&model_list, s["model"].as_str()), "aide-settings-model");
-    setting_row(&list, "spark", "Default model", "A job that names no model runs on this.", &model);
+    setting_row(&list, "spark", "Default model", "A bot that names no model runs on this.", &model);
     let fallback = picker(&fallback_list.iter().map(|m| m.1.as_str()).collect::<Vec<_>>(), at(&fallback_list, s["fallback"].as_str()), "aide-settings-fallback");
-    setting_row(&list, "repeat", "If it cannot run", "Tried when the default is not loaded, not answering, or not allowed to read a job's data.", &fallback);
+    setting_row(&list, "repeat", "If it cannot run", "Tried when the default is not loaded, not answering, or not allowed to read a bot's data.", &fallback);
     if let Err(e) = &models {
         quiet_row(&list, &format!("Could not list the models: {e}"));
     }
@@ -2156,7 +2154,7 @@ fn settings_page(ui: &Rc<Ui>, page: &Page, s: &Value, models: Result<Vec<Value>,
     let list = card(&pair[0], "What each model may read", None);
     let b = block(&list);
     let about = label(
-        "\u{201c}Your own models only\u{201d} means only a model on this PC or on your own server reads it: it never goes to Claude, and a job that would need Claude for it does not run. Off means no model reads it.",
+        "\u{201c}Your own models only\u{201d} means only a model on this PC or on your own server reads it: it never goes to Claude, and a bot that would need Claude for it does not run. Off means no model reads it.",
         "money-muted",
     );
     about.set_wrap(true);
@@ -2211,7 +2209,7 @@ fn settings_page(ui: &Rc<Ui>, page: &Page, s: &Value, models: Result<Vec<Value>,
         row.append(&l);
         list.append(&row);
     }
-    quiet_row(&list, "Relay refuses these to it whatever a job says. It asks you before a new job, and a fact it guesses waits for you.");
+    quiet_row(&list, "Relay refuses these to it whatever a bot says. It asks you before a new bot, and a fact it guesses waits for you.");
 
     let (weak, read) = (Rc::downgrade(ui), s.clone());
     save.connect_clicked(move |key| {
@@ -2285,7 +2283,7 @@ fn server_row(ui: &Rc<Ui>, e: &Value, models: &[Value]) -> gtk::Box {
                 Err(e) => Err(e),
             };
             match result {
-                Ok(_) => toast(&ui, "Removed. A job that named it runs on its fallback.", None),
+                Ok(_) => toast(&ui, "Removed. A bot that named it runs on its fallback.", None),
                 Err(e) => ui.show_error(&said(&e)),
             }
             ui.refresh_page();
@@ -2309,7 +2307,7 @@ fn server_sheet(ui: &Rc<Ui>, editing: Option<&Value>) {
     body.append(&about);
     let id = sheet_entry("aide-server-id", text(&e, "id"), "farm-qwen");
     let id_field = field(&body, "Id", &id);
-    id_field.append(&label("What a job names: letters, digits, - and _.", "money-row-detail"));
+    id_field.append(&label("What a bot names: letters, digits, - and _.", "money-row-detail"));
     let name = sheet_entry("aide-server-name", text(&e, "name"), "Qwen on the farm");
     field(&body, "Name", &name);
     let url = sheet_entry("aide-server-url", text(&e, "url"), "http://10.0.0.5:8080");
@@ -2377,6 +2375,559 @@ fn server_sheet(ui: &Rc<Ui>, editing: Option<&Value>) {
         });
     });
     panel.present();
+}
+
+// ---- The space: the sidebar, the chats and their notes --------------------------------------
+
+/// The window, for keys built before it existed (the sidebar).
+fn the_ui() -> Option<Rc<Ui>> {
+    threads::the_ui_pub()
+}
+
+/// A sidebar key: its mark, its caption, and a keycap at its end when given.
+fn nav_key(mark: &gtk::Image, caption: &str, name: &str, keycap: Option<&str>) -> gtk::Button {
+    let key = button("", "nav");
+    key.set_widget_name(name);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 9);
+    row.append(mark);
+    let words = label(caption, "nav-label");
+    words.set_hexpand(true);
+    words.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    row.append(&words);
+    if let Some(cap) = keycap {
+        // The keycap keeps its own height: a box row would stretch it to the key's.
+        let cap = label(cap, "keycap");
+        cap.set_valign(gtk::Align::Center);
+        row.append(&cap);
+    }
+    key.set_child(Some(&row));
+    key
+}
+
+/// The Aide space's sidebar: New bot and the Chief of Staff, the bots under their heading, and
+/// Activity, Memory and Settings at its foot. Filled from the engine when it shows.
+pub fn sidebar() -> gtk::Box {
+    let nav = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    nav.add_css_class("navigation");
+    nav.add_css_class("money-nav");
+    nav.add_css_class("aide-nav");
+    nav.set_vexpand(true);
+    let new = nav_key(&crate::icons::image("plus", 16), "New bot", "nav-aide-new", Some("Ctrl N"));
+    new.set_tooltip_text(Some("Say what you want done, and Aide drafts the bot"));
+    new.connect_clicked(|_| {
+        if let Some(ui) = the_ui() {
+            new_bot(&ui);
+        }
+    });
+    nav.append(&new);
+    let chief = nav_key(&icon("aide", 16), "Chief of Staff", "nav-aide-chief", None);
+    chief.set_tooltip_text(Some("Aide itself: every bot reports here, and you ask it for new ones"));
+    chief.connect_clicked(|_| {
+        if let Some(ui) = the_ui() {
+            open_chief(&ui, None);
+        }
+    });
+    nav.append(&chief);
+
+    let head = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    head.add_css_class("aide-nav-heading");
+    let caption = label("Bots", "section-label");
+    caption.set_hexpand(true);
+    head.append(&caption);
+    let all = crate::app::icon_button("layout-tiles", "Every bot, and the ones Aide starts with");
+    all.set_widget_name("nav-aide-bots");
+    all.connect_clicked(|_| {
+        if let Some(ui) = the_ui() {
+            ui.navigate("aide-jobs");
+        }
+    });
+    head.append(&all);
+    nav.append(&head);
+    let bots = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    bots.add_css_class("threads-list");
+    let scroll = crate::app::scrolled(&bots);
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_vexpand(true);
+    nav.append(&scroll);
+
+    let foot = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    foot.add_css_class("aide-nav-foot");
+    let mut feet = Vec::new();
+    for (page, caption, mark) in [
+        ("aide-home", "Activity", icon("run", 16)),
+        ("aide-memory", "Memory", icon("fact", 16)),
+        ("aide-settings", "Settings", crate::icons::image("gear", 16)),
+    ] {
+        let key = nav_key(&mark, caption, &format!("nav-{page}"), None);
+        key.connect_clicked(move |_| {
+            if let Some(ui) = the_ui() {
+                ui.navigate(page);
+            }
+        });
+        foot.append(&key);
+        feet.push((page, key));
+    }
+    nav.append(&foot);
+    // The bots are read when the space first shows, and on each `aide.changed` after.
+    bots.connect_map(|_| {
+        if let Some(ui) = the_ui() {
+            refresh_sidebar(&ui);
+        }
+    });
+    let built = Rc::new(Sidebar { chief, bots, rows: RefCell::default(), feet, reading: Cell::new(false), again: Cell::new(false) });
+    STATE.with(|s| *s.sidebar.borrow_mut() = Some(built));
+    nav
+}
+
+/// Reads the bots again into the sidebar, while it shows: one read at a time, and a change during
+/// a read reads once more.
+fn refresh_sidebar(ui: &Rc<Ui>) {
+    let Some(side) = STATE.with(|s| s.sidebar.borrow().clone()) else { return };
+    if !side.bots.is_mapped() {
+        return;
+    }
+    if side.reading.replace(true) {
+        side.again.set(true);
+        return;
+    }
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        loop {
+            side.again.set(false);
+            let (jobs, summary) = tokio::join!(ui.call("aide.job.list", json!({})), ui.call("aide.summary", json!({})));
+            match jobs {
+                Ok(j) => {
+                    let running: Vec<i64> = summary.ok().map(|s| rows(&s, "running")).unwrap_or_default().iter().filter(|r| text(r, "state") == "running").filter_map(|r| r["job_id"].as_i64()).collect();
+                    draw_bots(&ui, &side, &rows(&j, "jobs"), &running);
+                }
+                Err(e) => {
+                    clear(&side.bots);
+                    let note = label(&said(&e), "threads-list-note");
+                    note.set_wrap(true);
+                    side.bots.append(&note);
+                    side.rows.borrow_mut().clear();
+                }
+            }
+            if !side.again.get() {
+                break;
+            }
+        }
+        side.reading.set(false);
+        mark_sidebar(&ui);
+    });
+}
+
+/// What a bot's row says beside its name: proposed, paused or running; nothing when it is on.
+fn bot_state(state: &str, running: bool) -> (&'static str, &'static str) {
+    match state {
+        _ if running => ("threads-lamp", "Running now"),
+        "proposed" => ("aide-lamp-proposed", "Proposed: waits for you to turn it on"),
+        "paused" => ("aide-lamp-paused", "Paused"),
+        _ => ("", ""),
+    }
+}
+
+fn draw_bots(ui: &Rc<Ui>, side: &Sidebar, jobs: &[Value], running: &[i64]) {
+    clear(&side.bots);
+    let mut drawn = Vec::new();
+    if jobs.is_empty() {
+        let note = label("No bots yet. Ask the Chief of Staff for one, in your own words.", "threads-list-note");
+        note.set_wrap(true);
+        side.bots.append(&note);
+    }
+    for j in jobs {
+        let Some(id) = j["id"].as_i64() else { continue };
+        let name = text(j, "name").to_string();
+        let key = button("", "nav");
+        key.add_css_class("threads-row");
+        key.set_widget_name(&format!("aide-bot-{id}"));
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let title = label(&name, "nav-label");
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        title.set_hexpand(true);
+        row.append(&title);
+        let (class, about) = bot_state(text(j, "state"), running.contains(&id));
+        if !class.is_empty() {
+            let lamp = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            lamp.add_css_class(class);
+            lamp.set_valign(gtk::Align::Center);
+            row.append(&lamp);
+            key.update_property(&[gtk::accessible::Property::Description(about)]);
+        }
+        key.set_tooltip_text(Some(&match (about, j["when"][0].as_str()) {
+            ("", Some(when)) => format!("{name} · {when}"),
+            ("", None) => name.clone(),
+            (about, _) => format!("{name} · {about}"),
+        }));
+        key.set_child(Some(&row));
+        let weak = Rc::downgrade(ui);
+        key.connect_clicked(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                open_bot(&ui, id, &name);
+            }
+        });
+        side.bots.append(&key);
+        drawn.push((id, key));
+    }
+    *side.rows.borrow_mut() = drawn;
+}
+
+/// Lights the sidebar's key for what shows: the Chief of Staff, a bot (its chat or its page), or
+/// one of the foot's pages.
+pub(super) fn mark_sidebar(ui: &Ui) {
+    let Some(side) = STATE.with(|s| s.sidebar.borrow().clone()) else { return };
+    let page = ui.page.borrow().clone();
+    let chat = (page == threads::PAGE).then(threads::aide).flatten();
+    let bot = match &chat {
+        Some(c) => c.job,
+        None if page == JOB => STATE.with(|s| s.job.get()),
+        None => None,
+    };
+    let select = |key: &gtk::Button, on: bool| {
+        if on {
+            key.add_css_class("selected");
+        } else {
+            key.remove_css_class("selected");
+        }
+    };
+    select(&side.chief, chat.as_ref().is_some_and(|c| c.job.is_none()));
+    for (id, key) in side.rows.borrow().iter() {
+        select(key, bot == Some(*id));
+    }
+    for (name, key) in &side.feet {
+        select(key, page == *name);
+    }
+}
+
+/// Open the Chief of Staff's chat, made on first use; with `draft`, those words wait in its
+/// message box to be finished.
+pub(super) fn open_chief(ui: &Rc<Ui>, draft: Option<&str>) {
+    let (ui, draft) = (ui.clone(), draft.map(str::to_string));
+    glib::spawn_future_local(async move {
+        match ui.call("aide.chat", json!({})).await {
+            Ok(v) => {
+                let Some(id) = v["thread_id"].as_i64() else { return };
+                threads::open_aide(&ui, id, AideChat { job: None, name: String::from("Chief of Staff") });
+                if let Some(words) = draft {
+                    threads::draft(&ui, &words);
+                }
+            }
+            // An engine without Aide: Activity says so.
+            Err(e) => {
+                ui.show_error(&said(&e));
+                ui.navigate("aide-home");
+            }
+        }
+    });
+}
+
+/// A new bot: the Chief of Staff, its message box started for the person to say what they want.
+pub(super) fn new_bot(ui: &Rc<Ui>) {
+    open_chief(ui, Some("Make a bot that "));
+}
+
+/// Open bot `job`'s chat, made on first use.
+pub(super) fn open_bot(ui: &Rc<Ui>, job: i64, name: &str) {
+    let (ui, name) = (ui.clone(), name.to_string());
+    glib::spawn_future_local(async move {
+        match ui.call("aide.chat", json!({"job_id": job})).await {
+            Ok(v) => {
+                if let Some(id) = v["thread_id"].as_i64() {
+                    threads::open_aide(&ui, id, AideChat { job: Some(job), name });
+                }
+            }
+            Err(e) => ui.show_error(&said(&e)),
+        }
+    });
+}
+
+/// Open Aide thread `thread` in its chat, whichever it is: the Chief of Staff's or a bot's.
+pub(super) fn open_thread(ui: &Rc<Ui>, thread: i64) {
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        let (chief, jobs) = tokio::join!(ui.call("aide.chat", json!({})), ui.call("aide.job.list", json!({})));
+        if chief.as_ref().ok().and_then(|c| c["thread_id"].as_i64()) == Some(thread) {
+            threads::open_aide(&ui, thread, AideChat { job: None, name: String::from("Chief of Staff") });
+            return;
+        }
+        let bot = jobs.ok().map(|j| rows(&j, "jobs")).unwrap_or_default().into_iter().find(|j| j["thread_id"].as_i64() == Some(thread));
+        match bot {
+            Some(j) => threads::open_aide(&ui, thread, AideChat { job: j["id"].as_i64(), name: text(&j, "name").to_string() }),
+            // A chat no bot owns any more: the Chief of Staff instead.
+            None => open_chief(&ui, None),
+        }
+    });
+}
+
+/// Fills an Aide chat's keys in the threads page's strip: a bot's state, Turn on or Pause, Run
+/// now and its page; the Chief of Staff's way to every bot.
+pub(super) fn fill_strip(ui: &Rc<Ui>, strip: &gtk::Box, chat: Option<&AideChat>) {
+    STATE.with(|s| *s.strip.borrow_mut() = Some(strip.clone()));
+    let serial = STATE.with(|s| {
+        let next = s.strip_serial.get().wrapping_add(1);
+        s.strip_serial.set(next);
+        next
+    });
+    let Some(chat) = chat else {
+        clear(strip);
+        return;
+    };
+    let Some(job) = chat.job else {
+        clear(strip);
+        let all = button("All bots", "money-secondary");
+        all.add_css_class("arbiter-small");
+        all.set_tooltip_text(Some("Every bot, what wakes it, and the ones Aide starts with"));
+        let weak = Rc::downgrade(ui);
+        all.connect_clicked(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                ui.navigate("aide-jobs");
+            }
+        });
+        strip.append(&all);
+        return;
+    };
+    let (ui, strip) = (ui.clone(), strip.clone());
+    glib::spawn_future_local(async move {
+        let read = ui.call("aide.job.get", json!({"id": job})).await;
+        if STATE.with(|s| s.strip_serial.get()) != serial {
+            return;
+        }
+        clear(&strip);
+        let Ok(d) = read else { return };
+        let j = &d["job"];
+        let state = text(j, "state");
+        let running = rows(&d, "runs").iter().any(|r| matches!(text(r, "state"), "running" | "queued"));
+        let (words, tone) = match state {
+            _ if running => ("Running", "arbiter-live"),
+            "proposed" => ("Proposed", "arbiter-paper"),
+            "paused" => ("Paused", ""),
+            _ => ("On", "arbiter-live"),
+        };
+        let p = pill(words, tone);
+        if let Some(when) = j["when"][0].as_str() {
+            p.set_tooltip_text(Some(when));
+        }
+        strip.append(&p);
+        let mut keys = Vec::new();
+        if state == "active" {
+            keys.push(strip_op(&ui, "Pause", "money-secondary", "aide.job.set", json!({"id": job, "state": "paused"}), "Paused."));
+        } else {
+            keys.push(strip_op(&ui, "Turn on", "primary", "aide.job.set", json!({"id": job, "state": "active"}), "Turned on."));
+        }
+        if state != "proposed" && !running {
+            keys.push(strip_op(&ui, "Run now", "money-secondary", "aide.run.now", json!({"job_id": job}), "Running. It talks here as it goes."));
+        }
+        let details = button("Details", "money-secondary");
+        details.set_tooltip_text(Some("What it does, what wakes it, and its runs"));
+        let weak = Rc::downgrade(&ui);
+        details.connect_clicked(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                open_job(&ui, job);
+            }
+        });
+        keys.push(details);
+        for key in keys {
+            key.add_css_class("arbiter-small");
+            strip.append(&key);
+        }
+    });
+}
+
+/// The strip showing an Aide chat reads its bot again.
+fn refill_strip(ui: &Rc<Ui>) {
+    let Some(chat) = threads::aide() else { return };
+    if let Some(strip) = STATE.with(|s| s.strip.borrow().clone()) {
+        fill_strip(ui, &strip, Some(&chat));
+    }
+}
+
+/// A strip key that runs `op`: it waits while the op runs, and the page's toast says what was done.
+/// The strip reads again on the `aide.changed` that follows.
+fn strip_op(ui: &Rc<Ui>, caption: &str, class: &str, op: &'static str, payload: Value, done: &'static str) -> gtk::Button {
+    let key = button(caption, class);
+    let weak = Rc::downgrade(ui);
+    key.connect_clicked(move |key| {
+        let Some(ui) = weak.upgrade() else { return };
+        key.set_sensitive(false);
+        let (key, payload) = (key.clone(), payload.clone());
+        glib::spawn_future_local(async move {
+            match ui.call(op, payload).await {
+                Ok(_) => toast(&ui, done, None),
+                Err(e) => {
+                    key.set_sensitive(true);
+                    ui.show_error(&said(&e));
+                }
+            }
+        });
+    });
+    key
+}
+
+/// What a bot said, in a chat: who said it and how loudly, its title and its words. In the Chief
+/// of Staff the bot's name opens its chat. A bot Aide proposes carries Turn on, Change and Not now
+/// until the person answers.
+pub(super) fn note(ui: &Rc<Ui>, body: &Value) -> gtk::Box {
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    card.add_css_class("aide-note");
+    let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let m = icon("aide", 14);
+    m.add_css_class("aide-note-mark");
+    m.set_valign(gtk::Align::Center);
+    head.append(&m);
+    let bot = body["bot"].as_str().filter(|b| !b.is_empty());
+    let showing_bot = threads::aide().and_then(|c| c.job);
+    match (bot, body["job_id"].as_i64()) {
+        // In the Chief of Staff, a bot's name is a way to its chat.
+        (Some(name), Some(job)) if showing_bot != Some(job) => {
+            let key = button(name, "aide-note-bot");
+            key.add_css_class("link");
+            key.set_tooltip_text(Some(&format!("Open {name}'s chat")));
+            let (weak, name) = (Rc::downgrade(ui), name.to_string());
+            key.connect_clicked(move |_| {
+                if let Some(ui) = weak.upgrade() {
+                    open_bot(&ui, job, &name);
+                }
+            });
+            head.append(&key);
+        }
+        (Some(name), _) => head.append(&label(name, "aide-note-who")),
+        (None, _) => head.append(&label("Aide", "aide-note-who")),
+    }
+    // How it reached the person: a notification now, or held for the next brief (quiet hours,
+    // the day's cap, or a brief message). A proposal waits here for its answer instead.
+    if body["notified"] == true {
+        head.append(&pill("Told you now", "arbiter-paper"));
+    } else if body["held"] == true && body["proposal"].is_null() {
+        let held = label(if text(body, "level") == "interrupt" { "held for the brief" } else { "for the brief" }, "aide-note-held");
+        held.set_valign(gtk::Align::Center);
+        head.append(&held);
+    }
+    card.append(&head);
+    let title = label(text(body, "title"), "aide-note-title");
+    title.set_wrap(true);
+    title.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    title.set_selectable(true);
+    title.set_focusable(false);
+    card.append(&title);
+    let words = text(body, "body");
+    if !words.trim().is_empty() {
+        let at = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        at.add_css_class("aide-note-body");
+        threads::draw_reply(&at, words);
+        card.append(&at);
+    }
+    if let Some(job) = body["proposal"].as_i64() {
+        let keys = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        keys.add_css_class("aide-note-keys");
+        card.append(&keys);
+        proposal_keys(ui, &keys, job);
+    }
+    card
+}
+
+/// A proposed bot's keys, as it stands now: Turn on, Change and Not now while it waits; what
+/// became of it once answered.
+fn proposal_keys(ui: &Rc<Ui>, keys: &gtk::Box, job: i64) {
+    let (ui, keys) = (ui.clone(), keys.clone());
+    glib::spawn_future_local(async move {
+        let read = ui.call("aide.job.get", json!({"id": job})).await;
+        clear(&keys);
+        let j = match read {
+            Ok(d) => d["job"].clone(),
+            Err(_) => {
+                keys.append(&label("Not made", "aide-note-held"));
+                return;
+            }
+        };
+        if text(&j, "state") != "proposed" {
+            keys.append(&label(if text(&j, "state") == "active" { "Turned on" } else { "Made, paused" }, "aide-note-held"));
+            return;
+        }
+        let on = button("Turn on", "primary");
+        let change = button("Change", "money-secondary");
+        let no = button("Not now", "money-secondary");
+        for key in [&on, &change, &no] {
+            key.add_css_class("arbiter-small");
+            keys.append(key);
+        }
+        let answer = |key: &gtk::Button, op: &'static str, payload: Value, done: &'static str| {
+            let (weak, keys) = (Rc::downgrade(&ui), keys.clone());
+            key.connect_clicked(move |key| {
+                let Some(ui) = weak.upgrade() else { return };
+                key.set_sensitive(false);
+                let (keys, payload) = (keys.clone(), payload.clone());
+                glib::spawn_future_local(async move {
+                    match ui.call(op, payload).await {
+                        Ok(_) => {
+                            clear(&keys);
+                            keys.append(&label(done, "aide-note-held"));
+                        }
+                        Err(e) => {
+                            ui.show_error(&said(&e));
+                            proposal_keys(&ui, &keys, job);
+                        }
+                    }
+                });
+            });
+        };
+        answer(&on, "aide.job.set", json!({"id": job, "state": "active"}), "Turned on");
+        answer(&no, "aide.job.delete", json!({"id": job}), "Not made");
+        let (weak, seed) = (Rc::downgrade(&ui), j.clone());
+        change.connect_clicked(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                editor(&ui, Some(job), &seed);
+            }
+        });
+    });
+}
+
+/// The start screen's Aide card: "3 bots on · 1 running", lit as it stands.
+pub(super) fn start_reading(s: &Value) -> (String, crate::start::Lamp) {
+    use crate::start::Lamp;
+    let n = |key: &str| s[key].as_u64().unwrap_or(0);
+    if s["paused"] == true {
+        return (String::from("Paused"), Lamp::Idle);
+    }
+    if n("jobs") == 0 {
+        return (String::from("Ask for your first bot"), Lamp::Idle);
+    }
+    let running = s["running"].as_array().map_or(0, Vec::len);
+    let mut parts = vec![match n("active") {
+        0 => String::from("No bots on"),
+        1 => String::from("1 bot on"),
+        k => format!("{k} bots on"),
+    }];
+    if running > 0 {
+        parts.push(format!("{running} running"));
+    }
+    let waiting = n("waiting") + n("proposed");
+    if waiting > 0 {
+        parts.push(format!("{waiting} {}", if waiting == 1 { "needs you" } else { "need you" }));
+    }
+    let lamp = if waiting > 0 {
+        Lamp::Attention
+    } else if n("active") > 0 {
+        Lamp::Live
+    } else {
+        Lamp::Idle
+    };
+    (parts.join(" · "), lamp)
+}
+
+/// The start screen's Aide rows: the first two bots, each with how it stands or when it wakes.
+pub(super) fn start_rows(jobs: &Value) -> Vec<(String, String)> {
+    rows(jobs, "jobs")
+        .iter()
+        .take(2)
+        .map(|j| {
+            let detail = match text(j, "state") {
+                "proposed" => String::from("proposed"),
+                "paused" => String::from("paused"),
+                _ => j["next_due_at"].as_str().map(clock_time).or_else(|| j["when"][0].as_str().map(str::to_string)).unwrap_or_else(|| String::from("on")),
+            };
+            (text(j, "name").to_string(), detail)
+        })
+        .collect()
 }
 
 #[cfg(test)]

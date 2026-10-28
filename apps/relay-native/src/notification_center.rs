@@ -366,9 +366,9 @@ impl Center {
                 let _ = ui.call("notify.ack", json!({"notification_id": id})).await;
             });
         }
-        // Aide speaks for no project: its page keeps what it said.
+        // Aide speaks for no project: the Chief of Staff's chat holds what each bot said.
         if text(item, "category") == "aide" {
-            ui.navigate(page);
+            crate::money::open_aide(&ui);
             return;
         }
         let project = item["project_id"].as_i64().unwrap_or(ui.project.get());
