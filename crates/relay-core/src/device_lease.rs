@@ -506,8 +506,9 @@ pub struct DeviceCommand {
 pub fn device_command(line: &str) -> Option<DeviceCommand> {
     let mut exported_serial: Option<String> = None;
     // The same reader the denied-command guardrail uses: `( )`, `$( )`, backticks and
-    // `sh -c '…'` each start a command, and a quoted argument stays one word.
-    for segment in crate::shell::commands(line) {
+    // `sh -c '…'` each start a command, a quoted argument stays one word, and a heredoc or a
+    // quoted script fed to a shell (`bash <<EOF`, `echo '…' | sh`) is read as the commands it is.
+    for segment in crate::guardrail::shell_commands(line) {
         let tokens: Vec<String> = segment.into_iter().map(|word| word.text).collect();
         let mut index = 0;
         let mut serial = exported_serial.clone();
@@ -737,6 +738,17 @@ mod tests {
         // Someone else is refused while the kept lease stands.
         let other = Lease::new("phone", Holder::User, Kind::Claim, "testing", None);
         assert!(leases.acquire_pending(other, &mut Vec::new()).is_err());
+    }
+
+    /// A script fed to a shell on its input installs as surely as one typed: the lease reads it as
+    /// the denied-command guardrail does, and a heredoc fed to `cat` is still only text.
+    #[test]
+    fn a_device_write_inside_a_heredoc_or_a_piped_script_is_recognized() {
+        assert_eq!(device("bash <<EOF\nadb -s R5CT install app.apk\nEOF").unwrap().0, "R5CT");
+        assert!(device("echo 'adb install x.apk' | sh").is_some());
+        assert!(device("bash <<< './gradlew installDebug'").is_some());
+        assert!(device("cat <<EOF > notes.md\nadb install x.apk\nEOF").is_none());
+        assert!(device("echo 'adb install x.apk'").is_none());
     }
 
     #[test]

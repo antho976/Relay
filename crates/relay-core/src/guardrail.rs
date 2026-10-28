@@ -2016,8 +2016,9 @@ const MAX_SCRIPT_DEPTH: usize = 4;
 /// own: a heredoc or a quoted script fed to a shell on standard input (`echo '…' | sh`,
 /// `bash <<< '…'`, `bash <<EOF`), and the strings in an interpreter's inline code
 /// (`python3 -c "os.system('…')"`), each read as a command line (RA-098, RA-099). A script
-/// file (`bash deploy.sh`) is not opened.
-fn shell_commands(line: &str) -> Vec<Vec<Word>> {
+/// file (`bash deploy.sh`) is not opened. Device leases read commands with it too
+/// (`device_lease::device_command`).
+pub(crate) fn shell_commands(line: &str) -> Vec<Vec<Word>> {
     let mut out = Vec::new();
     expand(line, 0, &mut out);
     out
