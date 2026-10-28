@@ -226,7 +226,7 @@ fun ChatScreen(name: String, nav: Nav) {
     val doing = remember(pieces, working, asking) { if (working && !asking) doingNow(pieces) else null }
     val mode by remember(screen) { derivedStateOf { screen.value?.let(::modeOf) } }
     // When the turn the agent is working on began: the person's last message.
-    val since = remember(messages, sending) { epoch((sending.lastOrNull() ?: messages.lastOrNull { it.role == "user" })?.createdAt).takeIf { it > 0 } }
+    val since = remember(messages, sending) { epoch((sending.lastOrNull() ?: messages.lastOrNull { it.isPersons })?.createdAt).takeIf { it > 0 } }
 
     KeepScreenOn(s.prefs.keepScreenOn)
 
@@ -470,7 +470,12 @@ internal sealed interface ChatPiece {
     data class Tool(override val key: String, val call: Call) : ChatPiece
     /** Three or more steps in a row, folded under one line: "Ran 3 commands, read 2 files". */
     data class Steps(override val key: String, val calls: List<Call>) : ChatPiece
-    data class Note(override val key: String, val text: String) : ChatPiece
+    /**
+     * A line that is neither side's words, by [kind]: `compact` (the context was compacted, with
+     * what it kept in [detail] once its summary follows), `relay` (what Relay typed in), `task`
+     * (a background task finished), `interrupt`.
+     */
+    data class Note(override val key: String, val text: String, val kind: String = "", val detail: String? = null) : ChatPiece
     data class Error(override val key: String, val text: String) : ChatPiece
     /** The end of a finished turn: a quiet Copy key for the agent's words in it. */
     data class Copy(override val key: String, val text: String) : ChatPiece
@@ -485,7 +490,7 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
         val b = m.body as? JsonObject ?: continue
         answers[b.str("tool_use_id")] = ((b["is_error"] as? JsonPrimitive)?.booleanOrNull == true) to b.str("text")
     }
-    val lastUser = messages.indexOfLast { it.role == "user" }
+    val lastUser = messages.indexOfLast { it.isPersons }
     val out = ArrayList<ChatPiece>()
     val steps = ArrayList<Call>()
     // The agent's words since the person last spoke: copied together at the end of the turn.
@@ -514,12 +519,12 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
     messages.forEachIndexed { index, m ->
         if (m.role == "tool") return@forEachIndexed
         // The turn before ends (its Copy key) ahead of the day the next one starts on.
-        if (m.role == "user") {
+        if (m.isPersons) {
             flush()
             endTurn()
         }
         day(m)
-        when (m.role) {
+        when (if (m.role == "user" && !m.isPersons) "note" else m.role) {
             "user" -> {
                 turn = m.id
                 out += ChatPiece.User("m:${m.id}", m.text, sending = false)
@@ -556,7 +561,16 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
             }
             "note" -> {
                 flush()
-                out += ChatPiece.Note("m:${m.id}", m.text)
+                val b = m.body as? JsonObject
+                // A summary logged as the person's turn, as a PC from before notes said otherwise sent it.
+                val legacy = m.role == "user"
+                val kind = if (legacy) "summary" else b?.str("kind").orEmpty()
+                val detail = (if (legacy) m.text else b?.str("detail"))?.trim()?.ifEmpty { null }
+                val before = out.lastOrNull() as? ChatPiece.Note
+                // What a compaction kept opens under the line that says it happened.
+                if (kind == "summary" && before?.kind == "compact" && before.detail == null) out[out.lastIndex] = before.copy(detail = detail)
+                else if (kind == "summary") out += ChatPiece.Note("m:${m.id}", "Context compacted", "compact", detail)
+                else out += ChatPiece.Note("m:${m.id}", m.text, kind, detail)
             }
             "error" -> {
                 flush()
@@ -569,6 +583,13 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
     for (m in sending) out += ChatPiece.User("m:${m.id}", m.text, sending = true)
     return out
 }
+
+/**
+ * Words the person wrote: not the summary Claude Code hands the model after a compaction, which
+ * an older PC sent as a user turn.
+ */
+private val ThreadMessage.isPersons: Boolean
+    get() = role == "user" && !text.trimStart().startsWith("This session is being continued from a previous conversation")
 
 /** A step of the agent's plan: its words, and `x` done, `~` under way or ` ` to do. */
 internal data class PlanStep(val text: String, val state: Char)
@@ -643,9 +664,10 @@ internal fun stepsLine(calls: List<Call>): String {
 
 private fun transcriptText(messages: List<ThreadMessage>): String = messages.mapNotNull { m ->
     when (m.role) {
-        "user" -> "> ${m.text}"
+        "user" -> if (m.isPersons) "> ${m.text}" else "— Context compacted —"
         "assistant" -> m.text.takeIf { it.isNotBlank() }
         "error" -> "! ${m.text}"
+        "note" -> m.text.takeIf { it.isNotBlank() && (m.body as? JsonObject)?.str("kind") != "summary" }?.let { "— $it —" }
         else -> null
     }
 }.joinToString("\n\n")
@@ -737,7 +759,7 @@ private fun PieceView(p: ChatPiece, cell: Modifier, online: Boolean) {
             }
         }
         is ChatPiece.Steps -> Box(cell.padding(top = 2.dp)) { StepsView(p) }
-        is ChatPiece.Note -> T(p.text, cell.padding(top = 14.dp), Relay.type.caption.copy(textAlign = TextAlign.Center), c.ink3)
+        is ChatPiece.Note -> NoteView(p, cell.padding(top = 14.dp))
         is ChatPiece.Error -> Row(cell.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Glyph("close", 13.dp, c.heldText, Modifier.padding(top = 4.dp))
             SelectionContainer { T(p.text, style = Relay.type.ui.copy(fontSize = 13.5.sp, lineHeight = 20.sp), color = c.heldText) }
@@ -1033,6 +1055,51 @@ private fun CodeBox(text: String, color: Color, maxHeight: Dp) {
                 .verticalScroll(rememberScrollState()).padding(10.dp),
         ) {
             T(text, style = Relay.type.mono.copy(fontSize = 11.sp, lineHeight = 15.sp), color = color)
+        }
+    }
+}
+
+/** A note's glyph: what kind of line it is, at a glance. */
+private fun noteGlyph(kind: String): String = when (kind) {
+    "compact" -> "collapse"
+    "relay" -> "board"
+    "task" -> "terminal"
+    "interrupt" -> "stop"
+    else -> "minus"
+}
+
+/**
+ * A line that is neither side's words, drawn as a divider across the conversation so it never
+ * reads as either: its glyph and words between two rules. One with more to it (what a compaction
+ * kept, the instructions Relay typed again) opens under the line.
+ */
+@Composable
+private fun NoteView(p: ChatPiece.Note, modifier: Modifier) {
+    val c = Relay.colors
+    var open by rememberSaveable(p.key) { mutableStateOf(false) }
+    val detail = p.detail
+    val tint = if (p.kind == "compact") c.ink2 else c.ink3
+    Column(modifier) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = if (detail != null) TOUCH else 24.dp).clip(Radii.icon)
+                .clickable(enabled = detail != null, onClickLabel = if (open) "Fold it" else if (p.kind == "compact") "Show what it kept" else "Show more") { open = !open },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Box(Modifier.weight(1f).height(1.dp).background(c.edge))
+            Glyph(noteGlyph(p.kind), 13.dp, tint)
+            T(p.text, Modifier.widthIn(max = 280.dp), Relay.type.caption.copy(textAlign = TextAlign.Center), tint, weight = if (p.kind == "compact") FontWeight.Medium else null)
+            if (detail != null) Glyph(if (open) "chevron-up" else "chevron-down", 12.dp, c.inkDim)
+            Box(Modifier.weight(1f).height(1.dp).background(c.edge))
+        }
+        if (detail != null) AnimatedVisibility(open) {
+            Column(Modifier.padding(top = 6.dp)) {
+                if (p.kind == "compact") T("The agent carries on from this summary; what came before it is no longer in its context.", Modifier.padding(bottom = 6.dp), Relay.type.caption, c.ink3)
+                Box(
+                    Modifier.fillMaxWidth().heightIn(max = 360.dp).clip(Radii.keycap).border(1.dp, c.edge, Radii.keycap)
+                        .verticalScroll(rememberScrollState()).padding(12.dp),
+                ) { Markdown(detail, style = Relay.type.ui.copy(fontSize = 13.5.sp, lineHeight = 20.sp), color = c.ink2) }
+            }
         }
     }
 }

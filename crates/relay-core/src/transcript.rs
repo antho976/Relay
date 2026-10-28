@@ -2,8 +2,11 @@
 //! keeps anyway: Claude Code's `projects/<cwd>/<session id>.jsonl` and Codex's
 //! `sessions/YYYY/MM/DD/rollout-…-<id>.jsonl`. The phone draws a terminal agent from it as it
 //! draws a thread, so the messages take a thread message's shape (`thread.get`): `user {text}`,
-//! `assistant {blocks}`, `tool {tool_use_id, is_error, text}`, `error {text}`, and `note {text}`
-//! for a quiet line (an interrupt, a compaction).
+//! `assistant {blocks}`, `tool {tool_use_id, is_error, text}`, `error {text}`, and
+//! `note {text, kind, detail?}` for a line that is neither side's words: `compact` (the context
+//! was compacted), `summary` (what the compaction kept, in `detail`), `relay` (what Relay typed
+//! in: an assignment, a restart), `task` (a background task finished), `interrupt` and
+//! `skipped`.
 //!
 //! Only what a person reads is kept: a tool call carries its name, a one-line `summary` (the
 //! command, the file) and a `detail` cut to its head (the whole command, an edit as `-`/`+`
@@ -28,6 +31,8 @@ const MAX_SUMMARY: usize = 300;
 /// What a call did, opened under its line: enough of a diff or a script to read on a phone.
 const MAX_DETAIL: usize = 4000;
 const MAX_THINKING: usize = 6000;
+/// A compaction's summary runs to tens of thousands of characters; its head is what a person skims.
+const MAX_COMPACT_SUMMARY: usize = 12_000;
 /// The cursor's low bits are the byte offset; the 12 above them name the file it is in, so the
 /// whole stays under 2^53 and reads exactly as a JSON number anywhere.
 const OFFSET_BITS: u32 = 40;
@@ -127,7 +132,7 @@ pub fn read(provider: Provider, path: &Path, worktree: &Path, after: Option<u64>
         // One line longer than a whole read (a tool result of many images, logged as base64
         // twice): passed over once it ends, or every later read would read it again for nothing.
         if let Some(past) = line_end(&mut file, end)? {
-            messages.push(TranscriptMessage { id: format!("o{start}"), role: "note".into(), body: json!({"text": "A long entry was skipped"}), created_at: String::new() });
+            messages.push(TranscriptMessage { id: format!("o{start}"), role: "note".into(), body: json!({"text": "A long entry was skipped", "kind": "skipped"}), created_at: String::new() });
             return Ok(TranscriptOut { messages, cursor: (tag << OFFSET_BITS) | past, reset, found: true });
         }
     }
@@ -196,9 +201,22 @@ fn claude_record(record: &Value, at: u64, worktree: &Path, out: &mut Vec<Transcr
     let id = record.get("uuid").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| format!("o{at}"));
     let content = record.pointer("/message/content");
     match record.get("type").and_then(Value::as_str) {
+        // After a compaction Claude Code hands the model its summary as a user turn: the
+        // person never wrote it.
+        Some("user") if record.get("isCompactSummary").and_then(Value::as_bool) == Some(true) => {
+            let text = match content {
+                Some(Value::String(text)) => text.clone(),
+                Some(Value::Array(blocks)) => blocks.iter().filter_map(|block| block.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n\n"),
+                _ => String::new(),
+            };
+            let mut body = json!({"text": "What it kept from before", "kind": "summary"});
+            let summary = compact_summary(&text);
+            if !summary.is_empty() { body["detail"] = json!(cut_lines(&summary, MAX_COMPACT_SUMMARY)); }
+            out.push(message(id, "note", body, record));
+        }
         Some("user") => match content {
             Some(Value::String(text)) => {
-                if let Some((role, text)) = claude_user_text(text) { out.push(message(id, role, json!({"text": text}), record)); }
+                if let Some((role, body)) = claude_user_text(text) { out.push(message(id, role, body, record)); }
             }
             Some(Value::Array(blocks)) => {
                 let mut words = Vec::new();
@@ -215,8 +233,9 @@ fn claude_record(record: &Value, at: u64, worktree: &Path, out: &mut Vec<Transcr
                         Some("text") => {
                             let text = block.get("text").and_then(Value::as_str).unwrap_or_default();
                             if text.starts_with("[Image") { words.push("[image]".to_string()) }
-                            else if let Some((role, text)) = claude_user_text(text) {
-                                if role == "note" { out.push(message(format!("{id}:{i}"), role, json!({"text": text}), record)) } else { words.push(text) }
+                            else if let Some((role, body)) = claude_user_text(text) {
+                                if role == "note" { out.push(message(format!("{id}:{i}"), role, body, record)) }
+                                else { words.push(body["text"].as_str().unwrap_or_default().to_string()) }
                             }
                         }
                         Some("image") => words.push("[image]".to_string()),
@@ -259,27 +278,99 @@ fn claude_record(record: &Value, at: u64, worktree: &Path, out: &mut Vec<Transcr
             if !kept.is_empty() { out.push(message(id, "assistant", json!({"blocks": kept}), record)); }
         }
         Some("system") if record.get("subtype").and_then(Value::as_str) == Some("compact_boundary") => {
-            out.push(message(id, "note", json!({"text": "Conversation compacted"}), record));
+            let meta = record.get("compactMetadata");
+            let manual = meta.and_then(|meta| meta.get("trigger")).and_then(Value::as_str) == Some("manual");
+            let mut text = String::from(if manual { "Context compacted" } else { "Context full, compacted automatically" });
+            let count = |key: &str| meta.and_then(|meta| meta.get(key)).and_then(Value::as_u64);
+            if let (Some(before), Some(after)) = (count("preTokens"), count("postTokens")) {
+                text.push_str(&format!(" · {} → {} tokens", tokens(before), tokens(after)));
+            }
+            out.push(message(id, "note", json!({"text": text, "kind": "compact"}), record));
         }
         _ => {}
     }
 }
 
-/// What a person typed, as they would read it; `None` for what Claude Code added itself.
-fn claude_user_text(text: &str) -> Option<(&'static str, String)> {
+/// "973k", "1.2M": a context's size, as a person reads it.
+fn tokens(n: u64) -> String {
+    match n {
+        0..=999 => n.to_string(),
+        1_000..=999_499 => format!("{}k", (n + 500) / 1000),
+        _ => format!("{:.1}M", n as f64 / 1e6),
+    }
+}
+
+/// A compaction's summary without the lines addressed to the model: the opening that says a
+/// summary follows, and the closing that tells it to carry on.
+fn compact_summary(text: &str) -> String {
+    let mut lines: Vec<&str> = text.trim().lines().collect();
+    if lines.first().is_some_and(|line| line.starts_with("This session is being continued")) {
+        let body = lines.iter().position(|line| line.trim() == "Summary:").filter(|at| *at < 6).map_or(1, |at| at + 1);
+        lines.drain(..body.min(lines.len()));
+    }
+    while lines.last().is_some_and(|line| {
+        let line = line.trim();
+        line.is_empty() || line.starts_with("If you need specific details from before compaction") || line.starts_with("Continue the conversation from where it left off")
+            || line.starts_with("Please continue the conversation from where we left")
+    }) {
+        lines.pop();
+    }
+    lines.join("\n").trim().to_string()
+}
+
+/// A note's body.
+fn note(text: impl Into<String>, kind: &str) -> Value { json!({"text": text.into(), "kind": kind}) }
+
+/// What a person typed, as they would read it, or a note for what Relay or Claude Code typed in
+/// their place; `None` for context Claude Code added for the model.
+fn claude_user_text(text: &str) -> Option<(&'static str, Value)> {
     let trimmed = text.trim();
-    if trimmed.starts_with("[Request interrupted") { return Some(("note", "Interrupted".into())); }
+    if trimmed.starts_with("[Request interrupted") { return Some(("note", note("Interrupted", "interrupt"))); }
     if let Some(name) = between(trimmed, "<command-name>", "</command-name>") {
         let args = between(trimmed, "<command-args>", "</command-args>").unwrap_or_default();
         let name = if name.starts_with('/') { name.to_string() } else { format!("/{name}") };
-        return Some(("user", if args.trim().is_empty() { name } else { format!("{name} {}", args.trim()) }));
+        return Some(("user", json!({"text": if args.trim().is_empty() { name } else { format!("{name} {}", args.trim()) }})));
     }
-    if trimmed.starts_with("<task-notification>") { return Some(("note", "A background task finished".into())); }
+    if trimmed.starts_with("<task-notification>") {
+        // Claude Code's own line for it: `Background command "Run the tests" completed (exit code 0)`.
+        let said = between(trimmed, "<summary>", "</summary>").map(str::trim).filter(|summary| !summary.is_empty());
+        return Some(("note", note(said.map_or_else(|| "A background task finished".to_string(), line_of), "task")));
+    }
     // `<local-command-stdout>`, `<system-reminder>` and the like: context, not words.
     if trimmed.starts_with('<') && trimmed.split_once('>').is_some_and(|(tag, _)| tag[1..].chars().all(|c| c.is_ascii_lowercase() || c == '-')) {
         return None;
     }
-    (!trimmed.is_empty()).then(|| ("user", trimmed.to_string()))
+    if let Some(found) = relay_typed(trimmed) { return Some(found); }
+    (!trimmed.is_empty()).then(|| ("user", json!({"text": trimmed})))
+}
+
+/// What Relay types into an agent's terminal (`handlers::session`: `launch_nudge`,
+/// `assignment_text`), read back as what it was: the person's own launch words where it carries
+/// them, otherwise a line saying what Relay asked.
+fn relay_typed(text: &str) -> Option<(&'static str, Value)> {
+    let task = |rest: &str| rest.split_once("Task #").and_then(|(_, n)| n.split(|c: char| !c.is_ascii_digit()).next()).filter(|n| !n.is_empty()).map(str::to_string);
+    if let Some(rest) = text.strip_prefix("Call session.bootstrap first") {
+        if let Some(words) = rest.strip_prefix(", then begin this assignment:") {
+            return Some(("user", json!({"text": words.trim()})));
+        }
+        if let Some((_, words)) = rest.split_once("check before acting on them:") {
+            let mut body = note("Relay restarted this agent with the instructions it was launched with", "relay");
+            body["detail"] = json!(cut_lines(words.trim(), MAX_DETAIL));
+            return Some(("note", body));
+        }
+        let n = task(rest)?;
+        let what = if rest.contains("review-group work") { format!("Relay started the review of Task #{n}") }
+            else if rest.contains("documentation work") { format!("Relay started the docs for Task #{n}") }
+            else { format!("Relay started Task #{n}") };
+        return Some(("note", note(what, "relay")));
+    }
+    if let Some(rest) = text.strip_prefix("Your current assignment is Task #") {
+        return Some(("note", note(format!("Relay assigned Task #{}", task(&format!("Task #{rest}"))?), "relay")));
+    }
+    if text.starts_with("All builders finished Task #") {
+        return Some(("note", note(format!("The builders finished Task #{}; Relay asked for its review", task(text)?), "relay")));
+    }
+    None
 }
 
 fn between<'a>(text: &'a str, open: &str, close: &str) -> Option<&'a str> {
@@ -400,9 +491,12 @@ fn codex_record(record: &Value, at: u64, out: &mut Vec<TranscriptMessage>) {
         // The user's words as typed; the `response_item` copy carries the context Codex adds.
         ("event_msg", "user_message") => {
             let text = str_of("message").trim();
-            if !text.is_empty() { out.push(message(id, "user", json!({"text": text}), record)); }
+            if let Some((role, body)) = relay_typed(text) { out.push(message(id, role, body, record)); }
+            else if !text.is_empty() { out.push(message(id, "user", json!({"text": text}), record)); }
         }
-        ("event_msg", "turn_aborted") => out.push(message(id, "note", json!({"text": "Interrupted"}), record)),
+        ("event_msg", "turn_aborted") => out.push(message(id, "note", note("Interrupted", "interrupt"), record)),
+        // The history replaced by a summary of it, which Codex keeps to itself.
+        ("compacted", _) => out.push(message(id, "note", note("Context compacted", "compact"), record)),
         ("event_msg", "error") => out.push(message(id, "error", json!({"text": str_of("message")}), record)),
         ("response_item", "message") if str_of("role") == "assistant" => {
             let text = payload.get("content").and_then(Value::as_array).into_iter().flatten()
@@ -590,7 +684,50 @@ mod tests {
         assert_eq!(out.messages[2].body["blocks"][0]["detail"], "-a\n-b\n+c");
         assert_eq!(out.messages[3].body["text"], "ok");
         assert_eq!(out.messages[5].body["text"], "/compact");
+        assert_eq!(out.messages[6].body, json!({"text": "Interrupted", "kind": "interrupt"}));
         assert!(out.found && !out.reset);
+    }
+
+    /// A compaction reads as a line saying so, and the summary Claude Code hands the model as a
+    /// user turn reads as what the agent kept, never as the person's words.
+    #[test]
+    fn a_compaction_is_a_note_with_what_it_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("c.jsonl");
+        let summary = "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. Primary Request:\n   - Fix the build\n\nIf you need specific details from before compaction (like exact code snippets), read the full transcript at: /x.jsonl\nContinue the conversation from where it left off without asking the user any further questions.";
+        fs::write(&path, lines(&[
+            json!({"type": "user", "uuid": "u1", "message": {"content": "fix the build"}}),
+            json!({"type": "system", "subtype": "compact_boundary", "uuid": "b1", "content": "Conversation compacted", "compactMetadata": {"trigger": "auto", "preTokens": 972_511, "postTokens": 27_710}}),
+            json!({"type": "user", "uuid": "s1", "isCompactSummary": true, "isVisibleInTranscriptOnly": true, "message": {"content": summary}}),
+            json!({"type": "system", "subtype": "compact_boundary", "uuid": "b2", "compactMetadata": {"trigger": "manual", "preTokens": 1_260_000, "postTokens": 900}}),
+            json!({"type": "user", "uuid": "s2", "isCompactSummary": true, "message": {"content": [{"type": "text", "text": "Just this."}]}}),
+        ])).unwrap();
+        let out = read(Provider::Claude, &path, Path::new("/wt"), None, 200).unwrap();
+        let roles: Vec<(&str, &str)> = out.messages.iter().map(|m| (m.id.as_str(), m.role.as_str())).collect();
+        assert_eq!(roles, [("u1", "user"), ("b1", "note"), ("s1", "note"), ("b2", "note"), ("s2", "note")]);
+        assert_eq!(out.messages[1].body, json!({"text": "Context full, compacted automatically · 973k → 28k tokens", "kind": "compact"}));
+        assert_eq!(out.messages[2].body, json!({"text": "What it kept from before", "kind": "summary", "detail": "1. Primary Request:\n   - Fix the build"}));
+        assert_eq!(out.messages[3].body["text"], "Context compacted · 1.3M → 900 tokens");
+        assert_eq!(out.messages[4].body["detail"], "Just this.");
+    }
+
+    /// What Relay types into the terminal is said to be Relay's, and a background task's note
+    /// says which task.
+    #[test]
+    fn what_relay_typed_reads_as_relay() {
+        let said = |text: &str| claude_user_text(text).unwrap();
+        assert_eq!(said("Call session.bootstrap first, then begin this assignment: make the icons crisp"), ("user", json!({"text": "make the icons crisp"})));
+        assert_eq!(said("Call session.bootstrap first, then begin current Task #42. Work through queued tasks one at a time; session.done completes only the current task."), ("note", json!({"text": "Relay started Task #42", "kind": "relay"})));
+        assert_eq!(said("Call session.bootstrap first, then begin the review-group work for current Task #7. Watch Relay mailbox for file-ready messages from the builders.").1["text"], "Relay started the review of Task #7");
+        let restarted = said("Call session.bootstrap first. This session was launched earlier with these instructions, which may already be done; check before acting on them: ship it");
+        assert_eq!((restarted.0, &restarted.1["kind"], &restarted.1["detail"]), ("note", &json!("relay"), &json!("ship it")));
+        assert_eq!(said("Your current assignment is Task #9. Read session.bootstrap for the task and group context before continuing.").1["text"], "Relay assigned Task #9");
+        assert_eq!(said("All builders finished Task #9. Review the current task in the shared worktree; report your review outcome before the group advances.").1["text"], "The builders finished Task #9; Relay asked for its review");
+        let task = said("<task-notification>\n<task-id>b8</task-id>\n<status>completed</status>\n<summary>Background command \"Run the tests\" completed (exit code 0)</summary>\n</task-notification>");
+        assert_eq!(task, ("note", json!({"text": "Background command \"Run the tests\" completed (exit code 0)", "kind": "task"})));
+        assert_eq!(said("<task-notification>\n<task-id>b8</task-id>\n</task-notification>").1["text"], "A background task finished");
+        // The person's own words, even about Relay, stay theirs.
+        assert_eq!(said("Call session.bootstrap first please"), ("user", json!({"text": "Call session.bootstrap first please"})));
     }
 
     /// A resumed read keeps the oldest `limit` and leaves its cursor after them, so a phone that
@@ -713,10 +850,12 @@ mod tests {
             json!({"type": "response_item", "payload": {"type": "reasoning", "summary": [{"type": "summary_text", "text": "**Checking** the tests"}]}}),
             json!({"type": "event_msg", "payload": {"type": "agent_message", "message": "Added."}}),
             json!({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Added."}]}}),
+            json!({"type": "compacted", "payload": {"message": "", "replacement_history": []}}),
         ])).unwrap();
         let out = read(Provider::Codex, &path, Path::new("/wt"), None, 200).unwrap();
         let roles: Vec<&str> = out.messages.iter().map(|m| m.role.as_str()).collect();
-        assert_eq!(roles, ["user", "assistant", "tool", "assistant", "assistant", "tool", "assistant", "assistant"]);
+        assert_eq!(roles, ["user", "assistant", "tool", "assistant", "assistant", "tool", "assistant", "assistant", "note"]);
+        assert_eq!(out.messages[8].body, json!({"text": "Context compacted", "kind": "compact"}));
         assert_eq!(out.messages[0].body["text"], "add a test");
         assert_eq!(out.messages[1].body["blocks"][0]["summary"], "cargo test -p x");
         assert_eq!(out.messages[2].body["text"], "ok");

@@ -206,6 +206,8 @@ textview.design-ask-text, textview.design-ask-text text { background: transparen
 .design-agent-head .design-segmented button.toggle:hover { color: @ink; }
 .design-agent-head .design-segmented button.toggle:checked { background: @track; color: @ink; font-weight: 600; }
 .design-agent-asked { font-size: 11px; color: @faint; margin-bottom: -6px; }
+.design-agent-note { font-size: 11px; color: @faint; }
+.design-agent-note-detail { font-size: 12px; line-height: 18px; color: @ink_dim; padding: 6px 0 0 18px; }
 .design-agent-scroll, .design-agent-scroll viewport { background: transparent; }
 .design-agent-column { padding: 14px 16px 16px 16px; }
 .design-agent-column .threads-user { font-size: 13px; line-height: 20px; padding: 8px 12px; }

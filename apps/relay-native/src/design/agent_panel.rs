@@ -1092,6 +1092,37 @@ impl AgentPanel {
                 }
                 return drawn;
             }
+            // Neither side's words: a compaction, what it kept, what Relay typed in. A quiet
+            // centred line, so the summary of a compaction never reads as the person's.
+            "note" => {
+                let text = body["text"].as_str().unwrap_or("").trim();
+                let detail = body["detail"].as_str().map(str::trim).filter(|d| !d.is_empty());
+                if text.is_empty() {
+                    return false;
+                }
+                match detail {
+                    Some(detail) => {
+                        let more = label(detail, "design-agent-note-detail");
+                        more.set_wrap(true);
+                        more.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+                        more.set_selectable(true);
+                        more.set_focusable(false);
+                        more.set_xalign(0.0);
+                        let fold = gtk::Expander::new(Some(text));
+                        fold.add_css_class("design-agent-note");
+                        fold.set_child(Some(&more));
+                        self.put(&fold);
+                    }
+                    None => {
+                        let line = label(text, "design-agent-note");
+                        line.set_wrap(true);
+                        line.set_justify(gtk::Justification::Center);
+                        line.set_halign(gtk::Align::Center);
+                        self.put(&line);
+                    }
+                }
+                drawn = true;
+            }
             _ => {}
         }
         if drawn {
