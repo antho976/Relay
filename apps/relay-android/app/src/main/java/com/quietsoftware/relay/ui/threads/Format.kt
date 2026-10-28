@@ -86,6 +86,7 @@ internal fun JsonObject.minor(key: String, digits: Int): Long? {
 
 internal fun JsonObject.objs(key: String): List<JsonObject> = arr(key).mapNotNull { it as? JsonObject }
 
+/** A field as text, `""` when it is missing; a number reads as its digits ([s]). */
 internal fun JsonObject.str(key: String): String = s(key).orEmpty()
 
 internal val JsonElement?.o: JsonObject? get() = this as? JsonObject
@@ -260,10 +261,7 @@ internal fun periodName(period: JsonObject?): String {
 }
 
 /** "5m ago" from an RFC 3339 time; empty when it does not parse. */
-internal fun agoOf(ts: String?): String {
-    val at = com.quietsoftware.relay.ui.kit.epoch(ts)
-    return if (at > 0) com.quietsoftware.relay.ui.kit.ago(at) else ""
-}
+internal fun agoOf(ts: String?): String = com.quietsoftware.relay.ui.kit.ago(com.quietsoftware.relay.ui.kit.epoch(ts))
 
 /** What a refused read says on a page: the engine's own sentence, and plainly when this engine lacks the op. */
 internal fun said(e: BusError, missing: String): String = when {

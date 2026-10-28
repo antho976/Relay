@@ -58,7 +58,6 @@ import com.quietsoftware.relay.core.wire.s
 import com.quietsoftware.relay.data.Relay as Data
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.code.fileGlyph
-import com.quietsoftware.relay.ui.code.sizeText
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Empty
 import com.quietsoftware.relay.ui.kit.Field
@@ -77,6 +76,7 @@ import com.quietsoftware.relay.ui.kit.Segmented
 import com.quietsoftware.relay.ui.kit.StaleNote
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.ago
+import com.quietsoftware.relay.ui.kit.byteSize
 import com.quietsoftware.relay.ui.kit.column
 import com.quietsoftware.relay.ui.kit.epoch
 import com.quietsoftware.relay.ui.shell.Page
@@ -510,7 +510,7 @@ private fun AttachmentRow(a: Task.Attachment) {
         Glyph(glyph, 16.dp, tint)
         Column(Modifier.weight(1f)) {
             T(a.name.ifBlank { "attachment" }, style = Relay.type.ui, color = c.ink, maxLines = 1)
-            T(listOf(a.mime, sizeText(a.bytes)).filter { it.isNotBlank() }.joinToString(" · "), style = Relay.type.caption, color = c.ink3, maxLines = 1)
+            T(listOf(a.mime, byteSize(a.bytes)).filter { it.isNotBlank() }.joinToString(" · "), style = Relay.type.caption, color = c.ink3, maxLines = 1)
         }
     }
 }

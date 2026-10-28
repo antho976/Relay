@@ -50,6 +50,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -59,6 +60,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.quietsoftware.relay.core.model.Lamp
@@ -362,8 +364,10 @@ fun LampDot(lamp: Lamp, size: Dp = 7.dp, modifier: Modifier = Modifier) {
     val c = Relay.colors
     val fill = when (lamp) {
         Lamp.Live -> c.live
-        Lamp.Held -> c.held
-        Lamp.Waiting -> c.waiting
+        // Amber is "needs you", here as in every line that says so; a parked agent's lamp is lit
+        // but quiet, apart from one that is gone (an outline).
+        Lamp.Held -> c.waiting
+        Lamp.Waiting -> c.ink3
         Lamp.Off -> null
     }?.let { it.copy(alpha = it.alpha * lampAlpha()) }
     Box(
@@ -425,30 +429,93 @@ private fun Modifier.touchHeight(min: Dp) = layout { measurable, constraints ->
 
 /**
  * The view switch (DESIGN.md "Navigation"): slab, 12dp outside, 9dp tabs; the showing one lit
- * with track and ink.
+ * with track and ink. [fill] spreads the tabs across the width. When the labels do not fit on one
+ * line (a narrow phone, a large font), the tabs wrap onto more lines at their own width rather
+ * than cutting a label short.
  */
 @Composable
 fun <T> Segmented(options: List<Pair<T, String>>, selected: T, onSelect: (T) -> Unit, modifier: Modifier = Modifier, fill: Boolean = false) {
     val c = Relay.colors
-    Row(
-        modifier.clip(Radii.popover).background(c.slab).border(1.dp, c.edge, Radii.popover).padding(3.dp).selectableGroup(),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        for ((value, label) in options) {
-            val on = value == selected
-            Box(
-                (if (fill) Modifier.weight(1f) else Modifier)
-                    .heightIn(min = 34.dp)
-                    .clip(Radii.tab)
-                    .background(if (on) c.track else Color.Transparent)
-                    .selectable(selected = on, role = Role.Tab) { onSelect(value) }
-                    .padding(horizontal = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                T(label, style = Relay.type.uiMedium, color = if (on) c.ink else c.ink3, maxLines = 1)
+    Layout(
+        content = {
+            for ((value, label) in options) {
+                val on = value == selected
+                Box(
+                    Modifier
+                        .heightIn(min = SEGMENT)
+                        .clip(Radii.tab)
+                        .background(if (on) c.track else Color.Transparent)
+                        .selectable(selected = on, role = Role.Tab) { onSelect(value) }
+                        .padding(horizontal = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    T(label, style = Relay.type.uiMedium, color = if (on) c.ink else c.ink3, maxLines = 1)
+                }
+            }
+        },
+        modifier = modifier.clip(Radii.popover).background(c.slab).border(1.dp, c.edge, Radii.popover).padding(3.dp).selectableGroup(),
+    ) { tabs, constraints ->
+        val gap = SEGMENT_GAP.roundToPx()
+        val room = constraints.maxWidth
+        val natural = tabs.map { minOf(it.maxIntrinsicWidth(Constraints.Infinity), room) }
+        val lines = segmentLines(natural, gap, room)
+        val spread = fill && constraints.hasBoundedWidth
+        val rows = lines.map { line ->
+            val widths = segmentWidths(line.map { natural[it] }, gap, if (spread) room else line.sumOf { natural[it] } + gap * (line.size - 1))
+            line.mapIndexed { k, i -> tabs[i].measure(Constraints(minWidth = widths[k], maxWidth = widths[k])) }
+        }
+        val width = (if (spread) room else rows.maxOf { row -> row.sumOf { it.width } + gap * (row.size - 1) }).coerceIn(constraints.minWidth, room)
+        val heights = rows.map { row -> row.maxOf { it.height } }
+        val height = (heights.sum() + gap * (rows.size - 1)).coerceAtLeast(constraints.minHeight)
+        layout(width, height) {
+            var y = 0
+            rows.forEachIndexed { r, row ->
+                var x = 0
+                for (tab in row) {
+                    tab.place(x, y)
+                    x += tab.width + gap
+                }
+                y += heights[r] + gap
             }
         }
     }
+}
+
+/** A tab is this tall, so the switch with its 3dp rim is [TOUCH] tall to the finger. */
+private val SEGMENT = 38.dp
+private val SEGMENT_GAP = 2.dp
+
+/** Tabs of these [widths] split into lines no wider than [room], in order: one line when they all fit. */
+internal fun segmentLines(widths: List<Int>, gap: Int, room: Int): List<List<Int>> {
+    if (widths.isEmpty()) return emptyList()
+    val lines = mutableListOf(mutableListOf<Int>())
+    var used = 0
+    widths.forEachIndexed { i, w ->
+        val line = lines.last()
+        if (line.isNotEmpty() && used + gap + w > room) {
+            lines += mutableListOf(i)
+            used = w
+        } else {
+            used += (if (line.isEmpty()) 0 else gap) + w
+            line += i
+        }
+    }
+    return lines
+}
+
+/**
+ * One line's tabs across [span]: equal shares when every label fits in one, otherwise each its own
+ * width and an equal part of what is left over. The last takes the rounding.
+ */
+internal fun segmentWidths(natural: List<Int>, gap: Int, span: Int): List<Int> {
+    val inner = span - gap * (natural.size - 1)
+    val share = inner / natural.size
+    val widths = if (natural.all { it <= share }) MutableList(natural.size) { share } else {
+        val extra = (inner - natural.sum()).coerceAtLeast(0) / natural.size
+        natural.map { it + extra }.toMutableList()
+    }
+    widths[widths.lastIndex] += (inner - widths.sum()).coerceAtLeast(0)
+    return widths
 }
 
 /**
@@ -555,11 +622,23 @@ fun plural(n: Long, word: String): String = if (n == 1L) "1 $word" else "$n ${wo
 
 fun plural(n: Int, word: String): String = plural(n.toLong(), word)
 
+/** "512 B", "1.5 KB", "3.2 MB", "2.00 GB": a file's, a backup's or a worktree's size. */
+fun byteSize(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024L * 1024 -> "%.1f KB".format(bytes / 1024.0)
+    bytes < 1024L * 1024 * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024)
+    else -> "%.2f GB".format(bytes / 1024.0 / 1024 / 1024)
+}
+
 /** What [StaleNote] says, for a caption laid out its own way; [cloud] when the server's copy answered. */
 fun staleText(at: Long, cloud: Boolean = false): String = (if (cloud) "From your server's copy" else "Saved on this phone") + " · ${ago(at)}"
 
-/** "just now", "5m ago", "3h ago", "2d ago", "3w ago", then "on Mar 1": the desktop's (relative.rs `CompactAgo`). */
+/**
+ * "just now", "5m ago", "3h ago", "2d ago", "3w ago", then "on Mar 1": the desktop's (relative.rs
+ * `CompactAgo`). Empty for no time at all ([epoch] of a missing field), which is not Jan 1 1970.
+ */
 fun ago(epochMs: Long, now: Long = System.currentTimeMillis()): String {
+    if (epochMs <= 0) return ""
     val s = maxOf(0L, (now - epochMs) / 1000)
     return when {
         s < 60 -> "just now"

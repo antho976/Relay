@@ -267,6 +267,7 @@ class Syncer(
         when (f) {
             Fetch.All -> {
                 val projects = run(s, Fetch.Projects).let { store.all(Kind.Project).mapNotNull { it.id.toLongOrNull() } }
+                val tolerant = Tolerant()
                 for (each in listOf(Fetch.Workspaces, Fetch.Sessions, Fetch.Restorable, Fetch.Tasks(null), Fetch.Modules(null),
                     Fetch.Holds, Fetch.Notifications, Fetch.Threads, Fetch.Dashboard, Fetch.Usage, Fetch.Providers)) {
                     tolerant { run(s, each) }
@@ -368,12 +369,21 @@ class Syncer(
         store.putQuery(QueryKey.of(op, payload), result.toString(), now())
     }
 
-    /** One failed read (an op an older PC lacks, a refusal) must not stop the rest of a resync. */
-    private suspend fun tolerant(block: suspend () -> Unit) {
-        try {
-            block()
-        } catch (e: BusException) {
-            if (e.error.code == "link.down") throw e
+    /**
+     * One failed read (an op an older PC lacks, a refusal, one slow answer) must not stop the rest
+     * of a resync. A lost link does, and so does a second read the PC did not answer in time: the
+     * link is likely gone without saying so, and every read after would wait out its own timeout.
+     */
+    private class Tolerant {
+        private var timeouts = 0
+
+        suspend operator fun invoke(block: suspend () -> Unit) {
+            try {
+                block()
+            } catch (e: BusException) {
+                if (e.error.code == "link.down") throw e
+                if (e.error.code == "link.timeout" && ++timeouts >= TIMEOUTS_TO_STOP) throw e
+            }
         }
     }
 
@@ -381,5 +391,7 @@ class Syncer(
         const val COALESCE_MS = 250L
         const val PAGE = 1000
         const val RECENT_THREADS = 12
+        /** Reads a resync lets time out before it counts the link as gone. */
+        const val TIMEOUTS_TO_STOP = 2
     }
 }

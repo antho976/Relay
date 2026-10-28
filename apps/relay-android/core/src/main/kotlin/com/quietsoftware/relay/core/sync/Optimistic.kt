@@ -1,5 +1,6 @@
 package com.quietsoftware.relay.core.sync
 
+import com.quietsoftware.relay.core.model.titleOf
 import com.quietsoftware.relay.core.wire.l
 import com.quietsoftware.relay.core.wire.s
 import kotlinx.serialization.json.JsonArray
@@ -194,7 +195,7 @@ object Optimistic {
             }
             "thread.create" -> buildJsonObject {
                 put("id", tempId(entryId))
-                put("title", payload.s("text")?.lineSequence()?.firstOrNull()?.take(60)?.ifBlank { null } ?: "New thread")
+                put("title", titleOf(payload.s("text"), 60) ?: "New thread")
                 put("provider", "claude")
                 payload.s("model")?.let { put("model", it) }
                 payload.s("effort")?.let { put("effort", it) }

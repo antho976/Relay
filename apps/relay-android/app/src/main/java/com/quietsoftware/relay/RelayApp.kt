@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Application
 import android.content.Intent
 import android.os.Bundle
+import android.os.StrictMode
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
@@ -56,6 +57,12 @@ class RelayApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        // A debug build logs disk and network on the main thread, and leaked closeables, so a slow
+        // call there shows in logcat before anyone feels it.
+        if (BuildConfig.DEBUG) {
+            StrictMode.setThreadPolicy(StrictMode.ThreadPolicy.Builder().detectDiskReads().detectDiskWrites().detectNetwork().penaltyLog().build())
+            StrictMode.setVmPolicy(StrictMode.VmPolicy.Builder().detectLeakedClosableObjects().detectLeakedSqlLiteObjects().penaltyLog().build())
+        }
         val notifier = Notifier(this, relay, settings)
         notifier.start(scope) { foreground }
         relay.start()

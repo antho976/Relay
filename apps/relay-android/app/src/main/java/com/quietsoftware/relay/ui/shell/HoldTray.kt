@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -50,6 +49,7 @@ import com.quietsoftware.relay.ui.kit.KeyKind
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.ago
 import com.quietsoftware.relay.ui.kit.epoch
+import com.quietsoftware.relay.ui.kit.refusal
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -69,9 +69,10 @@ fun BoxScope.HoldTray(model: ShellModel, show: Boolean = true, onOpen: () -> Uni
     val s by model.state.collectAsStateWithLifecycle()
     var dismissed by remember { mutableStateOf(setOf<Long>()) }
     val shown = s.holds.filter { it.id !in dismissed }
+    val floor = aboveBars(model)
     AnimatedVisibility(
         visible = show && shown.isNotEmpty() && s.online,
-        modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(start = 12.dp, end = 12.dp, bottom = 44.dp),
+        modifier = Modifier.align(Alignment.BottomCenter).then(floor).padding(start = 12.dp, end = 12.dp),
         enter = fadeIn(tween(260)) + slideInVertically(tween(260)) { it / 3 },
         exit = fadeOut(tween(180)),
     ) {
@@ -126,7 +127,7 @@ fun HoldCard(
     val asked = details?.s("requested_scope") ?: "once"
     val ready = armed && open && s.online && !busy
 
-    fun failed(e: BusException) = if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code }
+    fun failed(e: BusException) = refusal(e)
 
     fun allow() {
         busy = true

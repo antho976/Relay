@@ -68,6 +68,7 @@ import com.quietsoftware.relay.ui.kit.LampDot
 import com.quietsoftware.relay.ui.kit.ListRow
 import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.T
+import com.quietsoftware.relay.ui.kit.refusal
 import com.quietsoftware.relay.ui.theme.Palette
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.flow.first
@@ -190,7 +191,7 @@ internal class TaskOps(private val nav: Nav) {
             val undo = try {
                 approvalUndo(nav, num)
             } catch (e: BusException) {
-                nav.shell.toast(if (e.error.code == "link.down") "Needs the PC, which is out of reach" else e.error.message.ifBlank { e.error.code })
+                nav.shell.toast(refusal(e))
                 return@launch
             }
             // The end of In review: the PC clamps a slot past the last to it.

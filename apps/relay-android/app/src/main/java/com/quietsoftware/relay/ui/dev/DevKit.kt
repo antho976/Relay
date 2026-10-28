@@ -30,7 +30,6 @@ import androidx.compose.ui.platform.Clipboard
 import androidx.compose.ui.unit.dp
 import com.quietsoftware.relay.core.model.Project
 import com.quietsoftware.relay.core.model.Workspace
-import com.quietsoftware.relay.core.wire.BusError
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.Key
 import com.quietsoftware.relay.ui.kit.KeyKind
@@ -44,17 +43,6 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-
-/** What `nav.shell.act` says with the PC away, for keys that check before they ask. */
-internal const val NEEDS_PC = "Needs the PC, which is out of reach"
-
-/** What a refused act says to the person. */
-internal fun refusal(e: BusError): String = when {
-    e.code == "link.down" -> NEEDS_PC
-    e.kind == "held" -> "Held for approval on the PC. Decide it in the inbox."
-    e.message.isNotBlank() -> e.message
-    else -> e.code
-}
 
 /** `{"session": name}`, the payload most session ops take. */
 internal fun named(name: String): JsonObject = buildJsonObject { put("session", name) }

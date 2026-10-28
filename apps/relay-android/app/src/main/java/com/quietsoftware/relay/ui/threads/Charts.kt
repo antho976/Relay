@@ -48,6 +48,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.quietsoftware.relay.core.wire.Wire
 import com.quietsoftware.relay.core.wire.arr
 import com.quietsoftware.relay.core.wire.b
+import com.quietsoftware.relay.core.wire.l
 import com.quietsoftware.relay.core.wire.s
 import com.quietsoftware.relay.data.Relay as RelayData
 import com.quietsoftware.relay.ui.LocalNav
@@ -278,8 +279,6 @@ private val MONTH_NAMES = listOf("January", "February", "March", "April", "May",
 
 /** "October 2026" as "Oct 2026": a month's name cut to three letters, for an axis with little room. */
 private fun shortMonths(label: String): String = MONTH_NAMES.fold(label) { s, m -> s.replace(m, m.take(3)) }
-
-private fun JsonObject.l(key: String): Long? = (this[key] as? JsonPrimitive)?.longOrNull
 
 /** Round axis steps for values up to [max] (relay_client::thread_view::ticks): the step, and how many reach it. */
 private fun ticks(max: Long, digits: Int): Pair<Long, Int> {

@@ -80,7 +80,16 @@ data class Session(
         }
 
     /** Live enough to have a terminal worth attaching to. */
-    val attachable: Boolean get() = state in setOf("running", "idle", "blocked", "spawning")
+    val attachable: Boolean get() = state in ATTACHABLE
+
+    /** The owner's own login shell, not an agent: never "working", however long it stays open. */
+    val shell: Boolean get() = provider == "shell"
+
+    /** At work on a turn: what every "working" count on the phone counts. */
+    val working: Boolean get() = !shell && (state == "running" || state == "spawning")
+
+    /** Stopped on a question or a menu, waiting for the person. */
+    val blocked: Boolean get() = state == "blocked"
 
     /** The word the plate's strip shows. */
     val stateLabel: String
@@ -97,6 +106,12 @@ data class Session(
         }
 }
 
+private val ATTACHABLE = setOf("running", "idle", "blocked", "spawning")
+
+/**
+ * A session's lamp: [Live] at work, [Held] stopped on the person (drawn in the needs-you amber),
+ * [Waiting] parked and ready to start again, [Off] gone.
+ */
 enum class Lamp { Live, Held, Waiting, Off }
 
 @Serializable
@@ -190,8 +205,16 @@ data class Note(
     val num: Long? get() = id.num()
 
     /** The title, or the body's first line. */
-    val heading: String get() = title?.takeIf { it.isNotBlank() } ?: body.lineSequence().firstOrNull { it.isNotBlank() }?.trimStart('#', ' ')?.take(80) ?: "Untitled"
+    val heading: String get() = title?.takeIf { it.isNotBlank() } ?: titleOf(body, 80) ?: "Untitled"
 }
+
+/**
+ * A title from the first line of [text] with words on it, a Markdown heading's `#` taken off, at
+ * most [max] characters; null when there is none. A note, a share and a thread made offline are
+ * named this way.
+ */
+fun titleOf(text: String?, max: Int): String? =
+    text?.lineSequence()?.map { it.trim().trimStart('#').trim() }?.firstOrNull { it.isNotEmpty() }?.take(max)
 
 @Serializable
 data class Hold(

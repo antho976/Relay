@@ -106,7 +106,7 @@ fun InboxScreen(nav: Nav) {
                     }
                 }
 
-                val stuck = s.sessions.filter { it.state == "blocked" }
+                val stuck = s.sessions.filter { it.blocked }
                 if (s.holds.isNotEmpty() || stuck.isNotEmpty()) {
                     item { Eyebrow("Needs you · ${s.holds.size + stuck.size}", Modifier.padding(start = 4.dp, top = 16.dp, bottom = 8.dp), Relay.colors.waiting) }
                     items(stuck, key = { "stuck:${it.name}" }) { a ->
@@ -185,7 +185,7 @@ fun InboxScreen(nav: Nav) {
 private fun NotificationRow(n: Notification, project: String?, onClick: () -> Unit) {
     val c = Relay.colors
     val dot: Color? = if (n.read) null else when (n.category) {
-        "agent_blocked", "guardrail" -> c.held
+        "agent_blocked", "guardrail" -> c.waiting
         "agent_done" -> c.live
         "aide" -> c.waiting
         else -> c.ink3

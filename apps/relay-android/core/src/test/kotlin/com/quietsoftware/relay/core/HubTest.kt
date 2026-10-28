@@ -99,6 +99,31 @@ class HubTest {
     }
 
     @Test
+    fun `a turn that ends while a message is on its way does not leave the message waiting`() = runBlocking {
+        // The agent is answering when the message goes; its turn ends while the PC's thread.busy is
+        // on its way back, so the phone reads the end before the refusal it would have waited on.
+        answering = true
+        val handled = door.handle
+        door.handle = { op, p ->
+            if (op == "thread.send" && answering) {
+                answering = false
+                door.emit("thread.changed", obj("thread" to obj("id" to 31, "title" to "Budget", "working" to false)))
+                Thread.sleep(300)
+                throw FakeDoor.Refuse("conflict", "thread.busy", "The agent is still answering in this thread")
+            }
+            handled(op, p)
+        }
+        val hub = Hub(scope, door, source, replica, outbox)
+        hub.start()
+        withTimeout(10_000) { hub.state.first { it is LinkState.Online } }
+        withTimeout(10_000) { while (replica.all(Kind.Project).isEmpty()) delay(20) }
+        hub.change("thread.send", obj("id" to 31, "text" to "Am I on pace?"), "Message")
+        withTimeout(10_000) { while (sent.isEmpty()) delay(20) }
+        assertEquals(listOf("Am I on pace?"), sent.toList())
+        withTimeout(10_000) { while (outbox.open().isNotEmpty()) delay(20) }
+    }
+
+    @Test
     fun `an answer the PC could not keep counts as applied, and the row is read again`() = runBlocking {
         val hub = Hub(scope, door, source, replica, outbox)
         hub.start()

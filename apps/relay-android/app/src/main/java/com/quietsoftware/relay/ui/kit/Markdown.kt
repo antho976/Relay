@@ -363,7 +363,8 @@ private fun blocks(lines: List<String>, st: Inline): List<Block> {
 
 private val BULLETS = listOf("•", "◦", "▪", "▫")
 
-private fun fenceOf(t: String): String? = when {
+/** The fence a code block opens with, ``` or ~~~; the same fence closes it. */
+internal fun fenceOf(t: String): String? = when {
     t.startsWith("```") -> "```"
     t.startsWith("~~~") -> "~~~"
     else -> null

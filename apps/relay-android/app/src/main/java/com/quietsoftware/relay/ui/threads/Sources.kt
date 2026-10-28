@@ -106,11 +106,8 @@ import kotlin.math.roundToLong
 
 /** A query a page shows: the phone's cached answer first, then the PC's. */
 @Composable
-internal fun rememberLive(op: String, payload: JsonObject = JsonObject(emptyMap())): RelayData.Live {
-    val nav = LocalNav.current
-    val live by remember(op, payload) { nav.relay.live(op, payload) }.collectAsStateWithLifecycle(RelayData.Live())
-    return live
-}
+internal fun rememberLive(op: String, payload: JsonObject = JsonObject(emptyMap())): RelayData.Live =
+    com.quietsoftware.relay.ui.code.rememberLive(LocalNav.current, op, payload)
 
 /** A source's page: a column of at most 720dp that scrolls, its title and context over the body. */
 @Composable

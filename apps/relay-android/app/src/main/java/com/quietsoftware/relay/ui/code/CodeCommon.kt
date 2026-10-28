@@ -32,7 +32,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.quietsoftware.relay.core.wire.BusError
 import com.quietsoftware.relay.core.wire.BusException
 import com.quietsoftware.relay.data.Relay.Live
 import com.quietsoftware.relay.ui.Nav
@@ -49,6 +48,7 @@ import com.quietsoftware.relay.ui.kit.Pill
 import com.quietsoftware.relay.ui.kit.Radii
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.column
+import com.quietsoftware.relay.ui.kit.refusal
 import com.quietsoftware.relay.ui.tasks.rememberSheetFocus
 import com.quietsoftware.relay.ui.theme.Palette
 import com.quietsoftware.relay.ui.theme.Relay
@@ -105,14 +105,6 @@ suspend fun restoreFromTrash(nav: Nav, projectId: Long, trashId: Long, name: Str
     } catch (e: BusException) {
         nav.shell.toast(refusal(e.error))
     }
-}
-
-/** What a refused or failed write says to the person. */
-fun refusal(e: BusError): String = when {
-    e.code == "link.down" -> "Needs the PC, which is out of reach"
-    e.kind == "held" -> "Held for approval on the PC. Decide it in the inbox."
-    e.message.isNotBlank() -> e.hint?.let { "${e.message} ($it)" } ?: e.message
-    else -> e.code
 }
 
 /** A bottom sheet in the desktop's panel style: a slab, 14dp top corners, a short grip. */
@@ -302,12 +294,6 @@ fun statusTint(letter: String, c: Palette): Color = when (letter) {
 /** The SHA-256 of a text as the PC computes it for `file.write`'s expected_sha256. */
 fun sha256Hex(text: String): String =
     MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
-
-fun sizeText(bytes: Long): String = when {
-    bytes < 1024 -> "$bytes B"
-    bytes < (1 shl 20) -> "${bytes / 1024} KB"
-    else -> "%.1f MB".format(bytes / 1048576.0)
-}
 
 /** The advance of one monospace cell at [style], in pixels, measured rather than guessed. */
 @Composable

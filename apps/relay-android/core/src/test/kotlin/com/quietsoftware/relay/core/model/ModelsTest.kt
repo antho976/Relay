@@ -36,4 +36,22 @@ class ModelsTest {
         assertEquals(Lamp.Held, s.lamp)
         assertEquals("NEEDS YOU", s.stateLabel)
     }
+
+    @Test
+    fun `working and blocked are one definition each`() {
+        fun session(state: String, provider: String = "claude") = Session(name = "a", state = state, provider = provider)
+        assertEquals(listOf("running", "spawning"), listOf("running", "spawning", "idle", "blocked", "created").filter { session(it).working })
+        assertEquals(true, session("blocked").blocked)
+        // The owner's own shell is never at work on a turn.
+        assertEquals(false, session("running", provider = "shell").working)
+    }
+
+    @Test
+    fun `a title is the first line with words, without its heading marks`() {
+        assertEquals("Groceries", titleOf("\n  \n# Groceries\nmilk", 60))
+        assertEquals("Plan", titleOf("## Plan", 60))
+        assertEquals("abc", titleOf("abcdef", 3))
+        assertNull(titleOf("\n \n", 60))
+        assertNull(titleOf(null, 60))
+    }
 }

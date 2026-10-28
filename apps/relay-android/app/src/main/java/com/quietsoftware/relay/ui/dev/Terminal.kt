@@ -339,7 +339,7 @@ internal fun holdScreen(view: android.view.View, by: Int) {
 @Composable
 internal fun Header(session: Session?, name: String, onBack: () -> Unit, onDetails: () -> Unit, onMenu: () -> Unit, extra: @Composable () -> Unit = {}) {
     val c = Relay.colors
-    val held = session?.state == "blocked"
+    val held = session?.blocked == true
     Column(Modifier.fillMaxWidth().background(c.console).statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(end = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             IconKey("arrow-left", onBack, size = 18.dp, tint = c.ink2)
@@ -349,8 +349,8 @@ internal fun Header(session: Session?, name: String, onBack: () -> Unit, onDetai
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     if (session != null) LampDot(session.lamp, 6.dp)
-                    T(name, Modifier.weight(1f, fill = false), Relay.type.plateName, if (held) c.heldText else c.ink, maxLines = 1)
-                    session?.let { T(it.stateLabel, style = Relay.type.plateState, color = if (held) c.heldText else c.ink3, maxLines = 1) }
+                    T(name, Modifier.weight(1f, fill = false), Relay.type.plateName, if (held) c.waiting else c.ink, maxLines = 1)
+                    session?.let { T(it.stateLabel, style = Relay.type.plateState, color = if (held) c.waiting else c.ink3, maxLines = 1) }
                 }
                 if (session != null) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -366,27 +366,26 @@ internal fun Header(session: Session?, name: String, onBack: () -> Unit, onDetai
     }
 }
 
+/**
+ * What the band over a stream that is not live says, and its dot (none: the agent's own lamp);
+ * nothing while it is live. [word] names a stopped agent's state in the screen's own vocabulary.
+ */
+@Composable
+internal fun bannerLine(status: TerminalFeed.Status, session: Session?, online: Boolean, word: (Session) -> String): Pair<String, Color?>? {
+    val c = Relay.colors
+    return when (status) {
+        TerminalFeed.Status.Live -> null
+        TerminalFeed.Status.Connecting -> "Reaching the PC" to c.waiting
+        TerminalFeed.Status.Saved -> "Saved on this phone · the PC is away" to c.inkDim
+        TerminalFeed.Status.Stopped -> (session?.let { "${word(it)} · ${slateHint(it, online)}" } ?: "Closed · this agent is gone from the PC") to null
+    }
+}
+
 /** Where the stream stands when it is not live, with the key that brings a stopped agent back. */
 @Composable
 internal fun Banner(status: TerminalFeed.Status, session: Session?, online: Boolean, life: Lifecycle) {
     val c = Relay.colors
-    val line: String
-    val dot: Color?
-    when (status) {
-        TerminalFeed.Status.Live -> return
-        TerminalFeed.Status.Connecting -> {
-            line = "Reaching the PC"
-            dot = c.waiting
-        }
-        TerminalFeed.Status.Saved -> {
-            line = "Saved on this phone · the PC is away"
-            dot = c.inkDim
-        }
-        TerminalFeed.Status.Stopped -> {
-            line = session?.let { "${it.stateLabel} · ${slateHint(it, online)}" } ?: "Closed · this agent is gone from the PC"
-            dot = null
-        }
-    }
+    val (line, dot) = bannerLine(status, session, online) { it.stateLabel } ?: return
     val revive = session?.takeIf { status == TerminalFeed.Status.Stopped && !it.pending }?.let { reviveAct(it.state) }
     Row(
         Modifier.fillMaxWidth().background(c.slab).padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp).heightIn(min = 32.dp),

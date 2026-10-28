@@ -46,6 +46,7 @@ import com.quietsoftware.relay.core.Hub
 import com.quietsoftware.relay.core.model.Note
 import com.quietsoftware.relay.core.model.Task
 import com.quietsoftware.relay.core.model.decodeAs
+import com.quietsoftware.relay.core.model.titleOf
 import com.quietsoftware.relay.core.sync.Kind
 import com.quietsoftware.relay.core.sync.Optimistic
 import com.quietsoftware.relay.core.sync.Refs
@@ -215,7 +216,7 @@ internal data class Draft(val title: String, val body: String, val base: Note?) 
 
     /** What the note is called as it stands: its title, else its first line (doc.rs `name`). */
     val name: String
-        get() = title.trim().ifEmpty { body.lineSequence().firstOrNull { it.isNotBlank() }?.trimStart('#', ' ')?.take(80) ?: "Untitled" }
+        get() = title.trim().ifEmpty { titleOf(body, 80) ?: "Untitled" }
 }
 
 /**

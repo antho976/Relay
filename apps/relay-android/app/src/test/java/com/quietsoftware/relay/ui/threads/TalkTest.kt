@@ -27,6 +27,14 @@ class TalkTest {
     }
 
     @Test
+    fun aTildeFenceIsAFenceAndOnlyItsOwnKindClosesIt() {
+        val (done, now) = splitStream("Here:\n\n~~~\nval a = 1\n```\n\nval b = 2")
+        assertEquals("Here:", done)
+        assertEquals("~~~\nval a = 1\n```\n\nval b = 2", now)
+        assertEquals("~~~\nx\n\ny\n~~~" to "After", splitStream("~~~\nx\n\ny\n~~~\n\nAfter"))
+    }
+
+    @Test
     fun aClosedFenceSettles() {
         val (done, now) = splitStream("```\nx\n\ny\n```\n\nAfter")
         assertEquals("```\nx\n\ny\n```", done)

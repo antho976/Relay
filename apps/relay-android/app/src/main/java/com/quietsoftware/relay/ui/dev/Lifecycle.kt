@@ -19,7 +19,10 @@ import com.quietsoftware.relay.core.wire.BusException
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.kit.Field
 import com.quietsoftware.relay.ui.kit.KeyKind
+import com.quietsoftware.relay.ui.kit.NEEDS_PC
 import com.quietsoftware.relay.ui.kit.T
+import com.quietsoftware.relay.ui.kit.byteSize
+import com.quietsoftware.relay.ui.kit.refusal
 import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
@@ -269,7 +272,7 @@ internal class Lifecycle(private val nav: Nav) {
     }
 }
 
-internal fun megabytes(mb: Double): String = if (mb >= 1024) "%.1f GB".format(mb / 1024) else "${mb.toLong().coerceAtLeast(1)} MB"
+internal fun megabytes(mb: Double): String = byteSize((mb * 1024 * 1024).toLong())
 
 @Composable
 internal fun rememberLifecycle(nav: Nav, onClosed: (String) -> Unit = {}): Lifecycle {
