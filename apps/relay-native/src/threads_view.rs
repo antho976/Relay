@@ -2657,10 +2657,10 @@ fn numeric(markup: &str) -> bool {
 /// The longest the last label of a reply being written grows before the text up to its last line
 /// break moves into a label of its own. Setting a label's text lays all of it out again, so a long
 /// reply set whole on every word costs more with each word.
-const PENDING_KEEP: usize = 240;
+pub(crate) const PENDING_KEEP: usize = 240;
 
 /// One label of the reply being written: its words as they came, not yet read as Markdown.
-fn pending_label() -> gtk::Label {
+pub(crate) fn pending_label() -> gtk::Label {
     let l = label("", "threads-reply");
     l.set_wrap(true);
     l.set_wrap_mode(gtk::pango::WrapMode::WordChar);
@@ -2671,7 +2671,7 @@ fn pending_label() -> gtk::Label {
 /// Where the last label of a reply being written, holding `rest`, splits: at its last line break,
 /// once it is longer than [`PENDING_KEEP`] and has text after that break (so the new last label is
 /// never empty). The break itself becomes the boundary between the two labels.
-fn pending_split(rest: &str) -> Option<usize> {
+pub(crate) fn pending_split(rest: &str) -> Option<usize> {
     if rest.len() <= PENDING_KEEP {
         return None;
     }

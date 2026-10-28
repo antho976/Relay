@@ -32,7 +32,8 @@ if sys.flags.optimize:
 
 ROOT = Path(__file__).resolve().parents[2]
 ENGINE = ROOT / "target/debug/relay"
-NATIVE = ROOT / "target/debug/relay-native"
+# RELAY_PERF_NATIVE runs another build of the client, kept aside, against the same fixture.
+NATIVE = Path(os.environ.get("RELAY_PERF_NATIVE") or ROOT / "target/debug/relay-native")
 CLK_TCK = os.sysconf("SC_CLK_TCK")
 PAGE = os.sysconf("SC_PAGE_SIZE")
 # Seconds the client stays open past the 2 s settle and the measured window, so the window
@@ -45,6 +46,30 @@ PROVIDER = '''#!/usr/bin/env python3
 import os, sys, time
 if "--version" in sys.argv:
     print("native-perf 1.0"); sys.exit()
+if "--output-format" in sys.argv:
+    # A thread's agent (`claude -p`, stream-json both ways). "native-stream <chars> <chunk> <ms>
+    # [<hold ms>]" in a message streams a Markdown reply of <chars> characters in <chunk>-character
+    # deltas <ms> apart, then waits <hold ms> before the finished message.
+    import json, re
+    def say(event): print(json.dumps(event), flush=True)
+    say({"type": "system", "subtype": "init", "session_id": "native-perf", "tools": ["mcp__relay__bus_ping"],
+         "mcp_servers": [{"name": "relay", "status": "connected"}]})
+    for line in sys.stdin:
+        m = re.search(r"native-stream (\\d+) (\\d+) (\\d+)(?: (\\d+))?", line)
+        chars, chunk, ms, hold = (int(g or 0) for g in m.groups()) if m else (200, 8, 10, 0)
+        para = "A sentence of an ordinary reply, about a line long, with a figure like 1,284.50 in it. "
+        reply, n = "", 0
+        while len(reply) < chars:
+            n += 1
+            reply += f"## Part {n}\\n\\n" + para * 3 + "\\n\\n- one point\\n- another point\\n\\n" + para * 2 + "\\n\\n"
+        reply = reply[:chars]
+        for i in range(0, len(reply), chunk):
+            say({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": reply[i:i + chunk]}}})
+            time.sleep(ms / 1000)
+        time.sleep(hold / 1000)
+        say({"type": "assistant", "message": {"content": [{"type": "text", "text": reply}]}})
+        say({"type": "result", "subtype": "success", "result": reply})
+    sys.exit()
 if "auth" in sys.argv or "login" in sys.argv:
     print('{"loggedIn":true}'); sys.exit()
 print("\\033[1;36mRELAY NATIVE BASELINE\\033[0m", flush=True)
@@ -153,6 +178,10 @@ def main():
                     help="with --board-tasks: the first launch of each size runs under perf record from just before the timed opening")
     ap.add_argument("--burst-only", action="store_true",
                     help="only the session-event row: user-space instructions on the GTK thread per session.changed on the Agents page")
+    ap.add_argument("--stream-only", action="store_true",
+                    help="only the streaming rows: a reply streamed into the assistant drawer, GTK-thread instructions and GDK frames (N7)")
+    ap.add_argument("--stream-chars", type=lambda s: [int(n) for n in s.split(",")], default=[2000, 8000],
+                    help="with --stream-only: comma-separated reply lengths in characters")
     ap.add_argument("--events-only", action="store_true",
                     help="only the file-event row: the main thread's path syscalls while files change under the Code page (lead 10)")
     ap.add_argument("--skip-build", action="store_true")
@@ -371,6 +400,67 @@ def main():
                         counts[parts[2].split(":")[0]] = float(parts[0])
                 return {"page": "agents", "events": events, "instructions_u": counts.get("instructions"), "task_clock_ms": counts.get("task-clock")}
 
+            def stream_row(label, chars, chunk=8, gap_ms=10):
+                # The assistant drawer open over the Board page while a reply of `chars`
+                # characters streams into it: the fixture's provider answers in `chunk`-character
+                # thread.delta events `gap_ms` apart; with 0, the same window idle. perf counts the
+                # GTK thread's user-space instructions over the stream and its settle, and GDK's
+                # frame log gives every frame drawn during the stream.
+                # RELAY_PERF_STREAM_HOLD=<s>: the provider holds the whole reply unfinished for that
+                # long and the screenshot is taken in the middle of the hold, so two builds can be
+                # compared showing the same words still being written.
+                hold = float(os.environ.get("RELAY_PERF_STREAM_HOLD") or 0)
+                quiet = int(args.quiet_after + 0.999)
+                stream_s = chars / chunk * gap_ms / 1000
+                window = int(stream_s + hold + 0.999) + 4
+                smoke = 2 + quiet + int(stream_s + hold / 2) if hold else 2 + quiet + window + 2 + EXIT_MARGIN
+                thread = call("thread.create", {"kind": "assistant"})["id"]
+                shot = out_dir / f"{label}.png"
+                penv = dict(desktop_env, RELAY_NATIVE_SCREENSHOT=str(shot), RELAY_NATIVE_SIZE=args.size, RELAY_NATIVE_PAGE="board",
+                            RELAY_NATIVE_ASSISTANT="3", GDK_DEBUG="frames", RELAY_NATIVE_SMOKE_SECONDS=str(smoke))
+                with open(out_dir / f"{label}.log", "w") as plog:
+                    native = subprocess.Popen([str(NATIVE)], env=penv, stdout=plog, stderr=plog)
+                    try:
+                        time.sleep(2 + quiet)
+                        stat_out = out_dir / f"{label}.perfstat"
+                        stat = subprocess.Popen(["perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-t", str(native.pid), "-o", str(stat_out), "--", "sleep", str(window)])
+                        time.sleep(0.3)
+                        start = end = datetime.datetime.now()
+                        if chars:
+                            call("thread.send", {"id": thread, "text": f"native-stream {chars} {chunk} {gap_ms} {int(hold * 1000)}"})
+                            deadline = time.monotonic() + window
+                            while call("thread.get", {"id": thread, "after": 1 << 62})["thread"]["working"] and time.monotonic() < deadline:
+                                time.sleep(0.1)
+                            end = datetime.datetime.now()
+                        else:
+                            end = start + datetime.timedelta(seconds=window - 1)
+                        stat.wait(timeout=window + 30)
+                        native.wait(timeout=60)
+                    finally:
+                        if native.poll() is None:
+                            native.terminate()
+                            native.wait(timeout=5)
+                counts = {}
+                for line in stat_out.read_text().splitlines():
+                    parts = line.split(",")
+                    if len(parts) > 2 and parts[0].replace(".", "", 1).isdigit():
+                        counts[parts[2].split(":")[0]] = float(parts[0])
+                # "Gdk-Message: HH:MM:SS.mmm:     N: interval=… layout_start=… paint_start=… frame_end=…":
+                # frame_end is the frame's time from its start to the end of its paint, in ms.
+                frames = []
+                for line in (out_dir / f"{label}.log").read_text(errors="replace").splitlines():
+                    if not line.startswith("Gdk-Message: ") or "frame_end=" not in line:
+                        continue
+                    at = datetime.datetime.combine(start.date(), datetime.time.fromisoformat(line.split()[1].rstrip(":")))
+                    took = float(line.split("frame_end=", 1)[1].split()[0])
+                    if start <= at <= end + datetime.timedelta(seconds=0.5) and took < 1e6:
+                        frames.append(took)
+                frames.sort()
+                pick = lambda q: round(frames[min(len(frames) - 1, int(len(frames) * q))], 1) if frames else None
+                return {"page": "board", "stream_chars": chars, "stream_s": round((end - start).total_seconds(), 2), "gtk_instructions_u": counts.get("instructions"),
+                        "task_clock_ms": counts.get("task-clock"), "frames": len(frames), "frame_end_p50_ms": pick(0.5), "frame_end_p95_ms": pick(0.95),
+                        "frame_end_max_ms": frames[-1] if frames else None, "frames_over_16_7": sum(f > 16.7 for f in frames)}
+
             def board_row(label, total):
                 # Tasks added up to `total` across the columns, then the board opened six times
                 # from the wall: the first is the cold mount, the rest reopen it (PAGE_MS lines).
@@ -462,6 +552,16 @@ def main():
                 args.pages = ""
                 args.hidden_only = True
                 args.events_only = True
+            elif args.stream_only:
+                for label, chars in (("stream-idle", 0), *((f"stream-{n}", n) for n in args.stream_chars)):
+                    log(f"{label}: a {chars}-character reply streamed into the assistant drawer")
+                    try:
+                        result["pages"][label] = stream_row(label, chars)
+                    except Exception as e:
+                        result["pages"][label] = {"page": "board", "error": str(e)}
+                args.pages = ""
+                args.hidden_only = True
+                args.events_only = True
             elif args.events_only:
                 for label, touches in (("code-events-quiet", 0), ("code-events", 100)):
                     log(f"{label}: {touches} files changed under the Code page")
@@ -545,6 +645,14 @@ def main():
                   "| row | events | instructions (user) | task-clock | per event, over idle |", "|---|---:|---:|---:|---:|"]
         for name, row in bursts:
             lines.append(f"| {name} | {row['events']} | {row['instructions_u']:,.0f} | {row['task_clock_ms']:.1f} ms | {row.get('instructions_per_event', '')} |")
+    streams = [(n, r) for n, r in result["pages"].items() if "gtk_instructions_u" in r]
+    if streams:
+        lines += ["", "## GTK thread while a reply streams into the assistant drawer (Board page)", "",
+                  "| row | characters | stream | instructions (user) | task-clock | frames | frame_end p50 | p95 | max | over 16.7 ms |",
+                  "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+        for name, row in streams:
+            lines.append(f"| {name} | {row['stream_chars']} | {row['stream_s']} s | {row['gtk_instructions_u'] or 0:,.0f} | {row['task_clock_ms'] or 0:.1f} ms | {row['frames']} | "
+                         f"{row['frame_end_p50_ms']} | {row['frame_end_p95_ms']} | {row['frame_end_max_ms']} | {row['frames_over_16_7']} |")
     events = [(n, r) for n, r in result["pages"].items() if "path_syscalls_main_thread" in r]
     if events:
         lines += ["", "## Path lookups on the GTK thread while files change (Code page)", "",

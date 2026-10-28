@@ -17,6 +17,7 @@
 //!
 //! The agent acts only on what the person writes here: nothing starts it but a message.
 use crate::app::{button, clear, icon_button, label, Ui};
+use crate::money::threads::{pending_label, pending_split};
 use gtk::prelude::*;
 use gtk4 as gtk;
 use relay_client::assistant_view::{self as view, Part, Target};
@@ -129,7 +130,16 @@ struct Assistant {
     /// The local model the server runs and whether it is `loading` or `ready`.
     local_state: RefCell<(String, String)>,
     working: gtk::Box,
-    pending: gtk::Label,
+    /// The reply being written, shown while `thread.delta` text arrives: a label per finished
+    /// stretch of it and, last, the one still being written ([`show_pending`]).
+    pending: gtk::Box,
+    /// Its words so far, and how much of them the finished labels hold (up to and including a
+    /// line break).
+    pending_text: RefCell<String>,
+    pending_kept: Cell<usize>,
+    /// How much of `pending_text` shows, and whether a frame is due to show the rest.
+    pending_shown: Cell<usize>,
+    pending_due: Cell<bool>,
     /// The thread shown, once there is one; a new chat has none until its first message.
     thread: Cell<Option<i64>>,
     /// The newest message drawn, so a catch-up draws each message once.
@@ -259,9 +269,8 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
     spinner.set_size_request(13, 13);
     working.append(&spinner);
     working.append(&label("Working…", "threads-tool-text"));
-    let pending = label("", "threads-reply");
-    pending.set_wrap(true);
-    pending.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    let pending = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    pending.append(&pending_label());
 
     let composer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     composer.add_css_class("threads-composer");
@@ -364,6 +373,10 @@ pub fn install(ui: &Rc<Ui>, key: &gtk::Button, host: &gtk::Overlay) {
         local_state: RefCell::default(),
         working,
         pending,
+        pending_text: RefCell::default(),
+        pending_kept: Cell::new(0),
+        pending_shown: Cell::new(0),
+        pending_due: Cell::new(false),
         thread: Cell::new(None),
         last: Cell::new(0),
         busy: Cell::new(false),
@@ -588,7 +601,7 @@ fn reset(id: Option<i64>) {
     a.cards.borrow_mut().clear();
     a.live.borrow_mut().clear();
     clear(&a.column);
-    a.pending.set_text("");
+    drop_pending(&a);
     a.column.append(&a.empty);
     a.empty.set_visible(id.is_none());
     if id.is_none() {
@@ -718,10 +731,7 @@ fn set_busy(a: &Assistant, busy: bool) {
         if a.working.parent().is_some() {
             a.column.remove(&a.working);
         }
-        if a.pending.parent().is_some() {
-            a.column.remove(&a.pending);
-        }
-        a.pending.set_text("");
+        drop_pending(a);
     }
 }
 
@@ -750,14 +760,71 @@ fn stick_to_bottom(a: &Assistant, force: bool) {
     });
 }
 
-/// Keep the working row last while a turn runs.
+/// Keep the working row last while a turn runs, and the reply being written just before it.
 fn keep_working_last(a: &Assistant) {
-    for w in [a.pending.clone().upcast::<gtk::Widget>(), a.working.clone().upcast()] {
-        if w.parent().is_some() {
-            a.column.remove(&w);
-            a.column.append(&w);
-        }
+    let tail: Vec<gtk::Widget> = [a.pending.clone().upcast::<gtk::Widget>(), a.working.clone().upcast()].into_iter().filter(|w| w.parent().is_some()).collect();
+    // Already last, in order: moving them would lay the column out again for nothing, on every
+    // word of a reply.
+    let mut at = a.column.last_child();
+    let in_place = tail.iter().rev().all(|w| {
+        let here = at.as_ref() == Some(w);
+        at = w.prev_sibling();
+        here
+    });
+    if in_place {
+        return;
     }
+    for w in tail {
+        a.column.remove(&w);
+        a.column.append(&w);
+    }
+}
+
+/// Show the reply being written as it now stands, split into labels as Threads splits it
+/// (`pending_split`): only the last label is set again, so a long reply costs no more per word
+/// than a short one.
+fn show_pending() {
+    let Some(a) = the() else { return };
+    a.pending_due.set(false);
+    let Some(mut last) = a.pending.last_child().and_downcast::<gtk::Label>() else { return };
+    {
+        let text = a.pending_text.borrow();
+        if a.pending_shown.replace(text.len()) == text.len() {
+            return;
+        }
+        let mut kept = a.pending_kept.get().min(text.len());
+        if let Some(at) = pending_split(&text[kept..]) {
+            last.set_text(&text[kept..kept + at]);
+            last = pending_label();
+            a.pending.append(&last);
+            kept += at + 1;
+            a.pending_kept.set(kept);
+        }
+        last.set_text(&text[kept..]);
+    }
+    // Once the frame has laid the new words out, down to them, if the reader was at the bottom.
+    let adj = a.scroll.vadjustment();
+    if adj.value() + adj.page_size() >= adj.upper() - 48.0 {
+        glib::idle_add_local_once(move || adj.set_value(adj.upper() - adj.page_size()));
+    }
+}
+
+/// Take the reply being written out of the conversation, emptied for the next one.
+fn drop_pending(a: &Assistant) {
+    if a.pending.parent().is_some() {
+        a.column.remove(&a.pending);
+    }
+    while let Some(first) = a.pending.first_child().filter(|w| w.next_sibling().is_some()) {
+        a.pending.remove(&first);
+    }
+    if let Some(last) = a.pending.last_child().and_downcast::<gtk::Label>() {
+        last.set_text("");
+    }
+    a.pending_text.borrow_mut().clear();
+    a.pending_kept.set(0);
+    a.pending_shown.set(0);
+    // A show still due went with the labels it was for; the next reply asks for its own.
+    a.pending_due.set(false);
 }
 
 fn draw_message(a: &Assistant, m: &Value) {
@@ -780,10 +847,7 @@ fn draw_message(a: &Assistant, m: &Value) {
             a.column.append(&bubble);
         }
         "assistant" => {
-            if a.pending.parent().is_some() {
-                a.column.remove(&a.pending);
-            }
-            a.pending.set_text("");
+            drop_pending(a);
             for block in body["blocks"].as_array().into_iter().flatten() {
                 match block["type"].as_str() {
                     Some("text") => {
@@ -1635,12 +1699,18 @@ pub fn event(_ui: &Rc<Ui>, ev: &str, payload: &Value) -> bool {
     let shown = thread.is_some() && thread == a.thread.get();
     match ev {
         "thread.delta" if shown => {
-            a.pending.set_text(&format!("{}{}", a.pending.text(), payload["text"].as_str().unwrap_or("")));
+            a.pending_text.borrow_mut().push_str(payload["text"].as_str().unwrap_or(""));
             if a.pending.parent().is_none() {
                 a.column.append(&a.pending);
             }
             keep_working_last(&a);
-            stick_to_bottom(&a, false);
+            // Words arrive faster than frames: the next frame shows all that came before it.
+            if !a.pending_due.replace(true) {
+                a.pending.add_tick_callback(|_, _| {
+                    show_pending();
+                    glib::ControlFlow::Break
+                });
+            }
         }
         "thread.message" if shown => {
             draw_message(&a, &payload["message"]);
