@@ -3,15 +3,15 @@
 
 mod common;
 
-use common::{call, code, engine, ok, wait_until};
+use common::{call, code, engine, ok, wait_until, wait_until_within};
 use relay_bus::{Actor, Request, Response};
 use relay_core::engine::{Door, Engine};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 /// A Claude that logs its arguments and the lines it is given, and answers each with a short
-/// reply and a result, as the real one does.
-fn fake_claude(dir: &Path) -> PathBuf {
+/// reply and a result, as the real one does; `pause` seconds after reading each.
+fn fake_claude(dir: &Path, pause: u32) -> PathBuf {
     let log = dir.join("args.log");
     let script = dir.join("claude");
     let body = r#"#!/bin/sh
@@ -19,13 +19,15 @@ printf 'OPS=%s %s\n' "$RELAY_MCP_OPS" "$*" | tr '\n' ' ' >> "LOG"; echo >> "LOG"
 printf 'BASE=%s MODEL=%s\n' "$ANTHROPIC_BASE_URL" "$ANTHROPIC_MODEL" >> "DIR/env.log"
 while IFS= read -r line; do
   printf '%s\n' "$line" >> "DIR/lines.log"
+  sleep PAUSE
   echo '{"type":"system","subtype":"init","session_id":"fake-aide-1","mcp_servers":[{"name":"relay","status":"connected"}],"tools":[]}'
   echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Looked; nothing new."}]},"parent_tool_use_id":null}'
   echo '{"type":"result","subtype":"success","is_error":false,"result":"Looked; nothing new."}'
 done
 "#
     .replace("LOG", &log.display().to_string())
-    .replace("DIR", &dir.display().to_string());
+    .replace("DIR", &dir.display().to_string())
+    .replace("PAUSE", &pause.to_string());
     std::fs::write(&script, body).unwrap();
     #[cfg(unix)]
     {
@@ -36,7 +38,11 @@ done
 }
 
 fn with_fake(engine: &Engine, dir: &Path) -> PathBuf {
-    let log = fake_claude(dir);
+    with_fake_pausing(engine, dir, 0)
+}
+
+fn with_fake_pausing(engine: &Engine, dir: &Path, pause: u32) -> PathBuf {
+    let log = fake_claude(dir, pause);
     ok(engine, "settings.set", json!({"path": "providers.claude.path", "value": dir.join("claude")}));
     log
 }
@@ -244,6 +250,15 @@ fn aide_learns_and_keeps_errands_but_only_the_person_confirms_and_closes() {
     let again = from_agent(&engine, &thread, "aide.page.write", json!({"title": "Week", "question": "How did the week go?", "body": "Better."})).into_result().unwrap();
     assert_eq!(page["id"], again["id"]);
     assert_eq!(ok(&engine, "aide.page.get", json!({"id": page["id"]}))["body"], "Better.");
+    // A bot writes its own pages, never another's; and it cannot reopen what the person closed.
+    let other = job(&engine, brief_spec());
+    let channel = ok(&engine, "thread.create", json!({"kind": "aide"}));
+    relay_core::aide::with_db(&engine, |db| db.set_job_thread(other["id"].as_i64().unwrap(), channel["id"].as_i64().unwrap())).unwrap();
+    let theirs = from_agent(&engine, &channel["id"], "aide.page.write", json!({"title": "Week", "question": "q", "body": "Mine now."})).into_result().unwrap_err();
+    assert_eq!(theirs.code, "aide.person");
+    assert_eq!(ok(&engine, "aide.page.get", json!({"id": page["id"]}))["body"], "Better.");
+    let reopened = from_agent(&engine, &thread, "aide.errand.update", json!({"id": errand["id"], "state": "open"})).into_result().unwrap_err();
+    assert_eq!(reopened.code, "aide.person");
 
     // The run-only ops are the agent's.
     assert_eq!(code(call(&engine, "aide.run.finish", json!({"outcome": "done"}))), "aide.agent");
@@ -388,4 +403,274 @@ fn bots_talk_in_their_own_chat_and_report_to_the_chief_of_staff() {
         let t = ok(&engine, "thread.get", json!({"id": chief}));
         t["messages"].as_array().unwrap().iter().any(|m| m["role"] == "note" && m["body"]["proposal"] == proposed["id"])
     });
+}
+
+/// A server of the person's own that answers, named `farm` in Aide's settings, with Tally for
+/// their own models only.
+fn own_server(engine: &Engine) -> std::net::TcpListener {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut settings = ok(engine, "aide.settings.get", json!({}));
+    settings["tiers"]["money"] = json!("local_only");
+    settings["endpoints"] = json!([{"id": "farm", "name": "Farm", "url": format!("http://{}", listener.local_addr().unwrap())}]);
+    ok(engine, "aide.settings.set", settings);
+    listener
+}
+
+/// Sends `text` in `thread` and waits for the answer; the agent's command line.
+fn talk(engine: &Engine, dir: &Path, thread: &Value, text: &str) -> String {
+    let before = ok(engine, "thread.get", json!({"id": thread}))["messages"].as_array().unwrap().len();
+    ok(engine, "thread.send", json!({"id": thread, "text": text}));
+    wait_until("the answer", || {
+        let t = ok(engine, "thread.get", json!({"id": thread}));
+        t["thread"]["working"] == false && t["messages"].as_array().unwrap().len() >= before + 2
+    });
+    std::fs::read_to_string(dir.join("args.log")).unwrap().lines().last().unwrap().to_string()
+}
+
+#[test]
+fn a_chat_on_your_own_model_is_never_resumed_on_claude() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine();
+    relay_core::aide::spawn(&engine);
+    with_fake(&engine, dir.path());
+    let listener = own_server(&engine);
+    let mut settings = ok(&engine, "aide.settings.get", json!({}));
+    settings["model"] = json!("farm");
+    ok(&engine, "aide.settings.set", settings);
+
+    // The Chief of Staff has no runs: what it said on the person's server is theirs.
+    let chief = ok(&engine, "aide.chat", json!({}))["thread_id"].clone();
+    assert_eq!(ok(&engine, "thread.get", json!({"id": chief}))["thread"]["model"], "farm");
+    let first = talk(&engine, dir.path(), &chief, "How is my money this month?");
+    assert!(!first.contains("--resume"), "{first}");
+    ok(&engine, "thread.set", json!({"id": chief, "model": "claude-sonnet-5-5"}));
+    let on_claude = talk(&engine, dir.path(), &chief, "And in short?");
+    assert!(on_claude.contains("--model claude-sonnet-5-5") && !on_claude.contains("--resume"), "starts afresh: {on_claude}");
+
+    // A conversation had on Claude's goes on there, and back on the person's own model.
+    ok(&engine, "thread.set", json!({"id": chief, "model": "claude-haiku-5-5"}));
+    let resumed = talk(&engine, dir.path(), &chief, "Thanks");
+    assert!(resumed.contains("--model claude-haiku-5-5") && resumed.contains("--resume fake-aide-1"), "{resumed}");
+    ok(&engine, "thread.set", json!({"id": chief, "model": "farm"}));
+    assert!(talk(&engine, dir.path(), &chief, "One more").contains("--resume fake-aide-1"));
+    // Having been on the person's own model again, it is not Claude's to resume.
+    ok(&engine, "thread.set", json!({"id": chief, "model": "claude-sonnet-5-5"}));
+    assert!(!talk(&engine, dir.path(), &chief, "Last one").contains("--resume"));
+    drop(listener);
+}
+
+#[test]
+fn what_your_own_model_wrote_from_private_data_never_reaches_claude() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine();
+    relay_core::aide::spawn(&engine);
+    with_fake(&engine, dir.path());
+    let listener = own_server(&engine);
+
+    // A money job on the person's server keeps what it read.
+    let local = job(&engine, json!({"name": "Spending", "instructions": "Look at my spending.", "sources": ["money"], "model": "farm"}));
+    let ran = ended(&engine, &ok(&engine, "aide.run.now", json!({"job_id": local["id"]}))["id"]);
+    assert_eq!(ran["host"], "server", "{ran}");
+    let mine = ran["thread_id"].clone();
+    let said = from_agent(&engine, &mine, "aide.notify", json!({"title": "SECRET412 at Costco", "level": "brief"})).into_result().unwrap();
+    assert_eq!(said["held"], "for the brief");
+    from_agent(&engine, &mine, "aide.page.write", json!({"title": "Money review", "question": "How is the month?", "body": "SECRET412"})).into_result().unwrap();
+    let errand = from_agent(&engine, &mine, "aide.errand.add", json!({"title": "Ask about SECRET412"})).into_result().unwrap();
+    let fact = from_agent(&engine, &mine, "aide.fact.add", json!({"text": "Shops at SECRET412"})).into_result().unwrap();
+    ok(&engine, "aide.fact.update", json!({"id": fact["id"], "confirmed": true}));
+    from_agent(&engine, &mine, "aide.job.propose", json!({"spec": {"name": "SECRET412 watch", "instructions": "x"}, "why": "SECRET412"})).into_result().unwrap();
+    // The person's own words are no secret.
+    ok(&engine, "aide.notify", json!({"title": "PR 162 merged", "level": "brief"}));
+
+    // A brief on Claude's: due now, so the scheduler starts it.
+    let brief = job(&engine, json!({"name": "Brief", "instructions": "Brief me.", "sources": ["dev"], "model": "claude-haiku-5-5",
+        "schedule": {"every": "day", "hour": 7}}));
+    let half_a_minute_ago = relay_core::time::stamp(jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_secs(30)).unwrap());
+    relay_core::aide::with_db(&engine, |db| db.set_job_due(brief["id"].as_i64().unwrap(), Some(&half_a_minute_ago))).unwrap();
+    relay_core::aide::runs::tick(&engine);
+    let run = ok(&engine, "aide.run.list", json!({"job_id": brief["id"]}))["runs"][0].clone();
+    let done = ended(&engine, &run["id"]);
+    assert_eq!((done["state"].as_str(), done["host"].as_str()), (Some("done"), Some("claude")), "{done}");
+    let theirs = done["thread_id"].clone();
+    let wake = ok(&engine, "thread.get", json!({"id": theirs}))["messages"][0]["body"]["text"].as_str().unwrap().to_string();
+    assert!(wake.contains("PR 162 merged"), "{wake}");
+    assert!(!wake.contains("SECRET412"), "{wake}");
+    assert!(wake.contains("- 2 private messages in Spending's chat"), "the note and the proposal: {wake}");
+    assert_eq!(ok(&engine, "aide.summary", json!({}))["held"], 0, "both were briefed");
+
+    // Nor can its agent list them; the money job's agent and the person can.
+    for (op, list) in [("aide.page.list", "pages"), ("aide.errand.list", "errands"), ("aide.fact.list", "facts"), ("aide.job.list", "jobs")] {
+        let claude = from_agent(&engine, &theirs, op, json!({})).into_result().unwrap();
+        assert!(!claude[list].to_string().contains("SECRET412"), "{op}: {claude}");
+        assert!(from_agent(&engine, &mine, op, json!({})).into_result().unwrap()[list].to_string().contains("SECRET412"), "{op}");
+        assert!(ok(&engine, op, json!({}))[list].to_string().contains("SECRET412"), "{op}");
+    }
+    let reached = from_agent(&engine, &theirs, "aide.errand.update", json!({"id": errand["id"], "detail": "x"})).into_result().unwrap_err();
+    assert_eq!(reached.code, "aide.not_found", "not by its id either");
+    drop(listener);
+}
+
+#[test]
+fn a_run_ends_with_its_own_turn_not_an_older_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine();
+    relay_core::aide::spawn(&engine);
+    with_fake_pausing(&engine, dir.path(), 2);
+    let j = job(&engine, json!({"name": "Dev watch", "instructions": "Look.", "sources": ["dev"], "model": "claude-haiku-5-5"}));
+    let r = ok(&engine, "aide.run.now", json!({"job_id": j["id"]}));
+    let mut thread = Value::Null;
+    wait_until("the run's turn", || {
+        let got = run(&engine, &r["id"]);
+        thread = got["thread_id"].clone();
+        got["state"] == "running" && ok(&engine, "thread.get", json!({"id": thread}))["thread"]["working"] == true
+    });
+    // An earlier "turn ended" for the channel, read only now (as the watcher may, having
+    // started this very run), leaves the run going.
+    relay_core::aide::runs::turn_ended(&engine, thread.as_i64().unwrap());
+    assert_eq!(run(&engine, &r["id"])["state"], "running");
+    let done = ended(&engine, &r["id"]);
+    assert_eq!(done["state"], "done", "{done}");
+
+    // Its turn over, the agent cannot rewrite how it ended.
+    let late = from_agent(&engine, &thread, "aide.run.finish", json!({"outcome": "nothing", "note": "rewritten"})).into_result().unwrap_err();
+    assert_eq!(late.code, "aide.no_run");
+    assert_eq!(run(&engine, &r["id"])["note"], done["note"]);
+}
+
+#[test]
+fn a_brief_waits_while_you_talk_in_its_chat_and_keeps_what_was_held() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine();
+    relay_core::aide::spawn(&engine);
+    with_fake_pausing(&engine, dir.path(), 2);
+    let j = job(&engine, json!({"name": "Brief", "instructions": "Brief me.", "sources": ["dev"], "model": "claude-haiku-5-5",
+        "schedule": {"every": "day", "hour": 7}}));
+    ok(&engine, "aide.notify", json!({"title": "PR 162 merged", "level": "brief"}));
+    // The person talks in the bot's chat, on another model than its runs'.
+    let chat = ok(&engine, "aide.chat", json!({"job_id": j["id"]}))["thread_id"].clone();
+    ok(&engine, "thread.set", json!({"id": chat, "model": "claude-sonnet-5-5"}));
+    ok(&engine, "thread.send", json!({"id": chat, "text": "What did you see today?"}));
+
+    let half_a_minute_ago = relay_core::time::stamp(jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_secs(30)).unwrap());
+    relay_core::aide::with_db(&engine, |db| db.set_job_due(j["id"].as_i64().unwrap(), Some(&half_a_minute_ago))).unwrap();
+    relay_core::aide::runs::tick(&engine);
+    let r = ok(&engine, "aide.run.list", json!({"job_id": j["id"]}))["runs"][0].clone();
+    assert_eq!(run(&engine, &r["id"])["state"], "queued", "it waits for the person's turn");
+    assert_eq!(ok(&engine, "aide.summary", json!({}))["held"], 1, "and what it would say is still held");
+
+    let done = ended(&engine, &r["id"]);
+    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(done["thread_id"], chat);
+    assert_eq!(ok(&engine, "aide.summary", json!({}))["held"], 0);
+}
+
+#[test]
+fn a_new_chat_on_claude_keeps_its_first_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine();
+    relay_core::aide::spawn(&engine);
+    with_fake(&engine, dir.path());
+    let listener = own_server(&engine);
+
+    // A chat that starts on Claude's keeps its conversation from its first turn.
+    let chief = ok(&engine, "aide.chat", json!({}))["thread_id"].clone();
+    assert!(!talk(&engine, dir.path(), &chief, "Hello").contains("--resume"));
+    ok(&engine, "thread.set", json!({"id": chief, "model": "claude-haiku-5-5"}));
+    assert!(talk(&engine, dir.path(), &chief, "And then?").contains("--resume fake-aide-1"), "turn 1 is not forgotten at turn 2");
+    drop(listener);
+}
+
+#[test]
+fn a_new_aide_thread_with_a_deleted_ones_id_keeps_nothing_of_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine();
+    relay_core::aide::spawn(&engine);
+    with_fake(&engine, dir.path());
+    let listener = own_server(&engine);
+    // A Chief of Staff on Claude's, its conversation kept as Claude's.
+    let chief = ok(&engine, "aide.chat", json!({}))["thread_id"].clone();
+    talk(&engine, dir.path(), &chief, "Hello");
+    ok(&engine, "thread.set", json!({"id": chief, "model": "claude-haiku-5-5"}));
+    talk(&engine, dir.path(), &chief, "And then?");
+
+    // Deleted, it leaves nothing behind for a new thread that gets its id.
+    ok(&engine, "thread.delete", json!({"id": chief}));
+    let key = format!("conversation:{chief}");
+    assert_eq!(relay_core::aide::with_db(&engine, |db| db.meta(&key)).unwrap(), None);
+    let mut settings = ok(&engine, "aide.settings.get", json!({}));
+    settings["model"] = json!("farm");
+    ok(&engine, "aide.settings.set", settings);
+    let again = ok(&engine, "aide.chat", json!({}))["thread_id"].clone();
+    assert_eq!(again, chief, "the new Chief of Staff has the old one's id");
+    talk(&engine, dir.path(), &again, "How is my money?");
+    ok(&engine, "thread.set", json!({"id": again, "model": "claude-sonnet-5-5"}));
+    assert!(!talk(&engine, dir.path(), &again, "In short?").contains("--resume"));
+    drop(listener);
+}
+
+#[test]
+fn a_follow_up_set_from_private_data_does_not_say_why_on_claude() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine();
+    relay_core::aide::spawn(&engine);
+    with_fake(&engine, dir.path());
+    let listener = own_server(&engine);
+    let spec = |model: &str| json!({"name": "Dev watch", "instructions": "Look.", "sources": ["dev"], "model": model});
+    let j = job(&engine, spec("farm"));
+    let channel = ended(&engine, &ok(&engine, "aide.run.now", json!({"job_id": j["id"]}))["id"])["thread_id"].clone();
+    from_agent(&engine, &channel, "aide.followup", json!({"minutes": 60, "note": "SECRET412 again"})).into_result().unwrap();
+    // The person moves the job to Claude's; then its follow-up comes due.
+    ok(&engine, "aide.job.save", json!({"id": j["id"], "spec": spec("claude-haiku-5-5")}));
+    let past = relay_core::time::stamp(jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_secs(5)).unwrap());
+    relay_core::aide::with_db(&engine, |db| {
+        let f = db.follow_ups()?.remove(0);
+        assert!(f.private, "set on the person's own model while Tally is theirs only");
+        db.drop_follow_up(f.id)?;
+        db.add_follow_up(f.job_id, &past, &f.note, f.private)
+    }).unwrap();
+    relay_core::aide::runs::tick(&engine);
+    let woke = ok(&engine, "aide.run.list", json!({"job_id": j["id"]}))["runs"][0].clone();
+    assert_eq!(woke["reason"], "follow_up");
+    let done = ended(&engine, &woke["id"]);
+    assert_eq!(done["host"], "claude");
+    let messages = ok(&engine, "thread.get", json!({"id": channel}))["messages"].clone();
+    let wake = messages.as_array().unwrap().iter().rev().find(|m| m["role"] == "wake").unwrap()["body"]["text"].as_str().unwrap().to_string();
+    assert!(!wake.contains("SECRET412") && wake.contains("its note is not shown here"), "{wake}");
+
+    // One set on Claude's says why.
+    from_agent(&engine, &channel, "aide.followup", json!({"minutes": 60, "note": "look at PR 165"})).into_result().unwrap();
+    relay_core::aide::with_db(&engine, |db| {
+        let f = db.follow_ups()?.remove(0);
+        assert!(!f.private);
+        db.drop_follow_up(f.id)?;
+        db.add_follow_up(f.job_id, &past, &f.note, f.private)
+    }).unwrap();
+    relay_core::aide::runs::tick(&engine);
+    let woke = ok(&engine, "aide.run.list", json!({"job_id": j["id"]}))["runs"][0].clone();
+    ended(&engine, &woke["id"]);
+    let messages = ok(&engine, "thread.get", json!({"id": channel}))["messages"].clone();
+    let wake = messages.as_array().unwrap().iter().rev().find(|m| m["role"] == "wake").unwrap()["body"]["text"].as_str().unwrap().to_string();
+    assert!(wake.contains("a follow-up you set: look at PR 165"), "{wake}");
+    drop(listener);
+}
+
+#[test]
+fn a_run_ends_with_its_own_turn_when_the_person_writes_right_after() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine();
+    // No watcher: the test says when the turn's end is seen, after the person has written.
+    with_fake_pausing(&engine, dir.path(), 2);
+    let j = job(&engine, json!({"name": "Dev watch", "instructions": "Look.", "sources": ["dev"], "model": "claude-haiku-5-5"}));
+    let r = ok(&engine, "aide.run.now", json!({"job_id": j["id"]}));
+    let mut thread = Value::Null;
+    wait_until("the run's turn", || {
+        let got = run(&engine, &r["id"]);
+        thread = got["thread_id"].clone();
+        got["state"] == "running" && ok(&engine, "thread.get", json!({"id": thread}))["thread"]["working"] == true
+    });
+    wait_until_within("its turn to end", std::time::Duration::from_secs(20), || ok(&engine, "thread.get", json!({"id": thread}))["thread"]["working"] == false);
+    ok(&engine, "thread.send", json!({"id": thread, "text": "Anything else?"}));
+    relay_core::aide::runs::turn_ended(&engine, thread.as_i64().unwrap());
+    let got = run(&engine, &r["id"]);
+    assert_eq!(got["state"], "done", "its own turn is over, whatever the person does next: {got}");
 }

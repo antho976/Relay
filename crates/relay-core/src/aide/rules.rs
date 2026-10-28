@@ -1,7 +1,9 @@
 //! Data rules: conditions on the person's data that Relay checks itself, without a model, when
 //! the data changes. A rule that finds something wakes its job once per thing found (the `seen`
 //! table); what was already there when the job was made is taken as seen, so a new rule speaks
-//! of what happens next, not of the past.
+//! of what happens next, not of the past. A condition that lasts (a halt, an outage) is seen
+//! while it lasts and forgotten once it has passed ([`LASTING`]), so it speaks again when it
+//! comes back.
 //!
 //! The watcher reads the engine's events on a thread of its own. A burst (a phone sync is many
 //! `money.changed`) is gathered for [`SETTLE`] before the rules are checked once.
@@ -93,10 +95,27 @@ pub fn check(engine: &Arc<Engine>, events: &BTreeSet<String>) {
                 continue;
             }
             match findings(engine, rule) {
-                Ok(found) => fire(engine, job, i, found),
+                Ok(found) => {
+                    forget_passed(engine, job, rule, &found);
+                    fire(engine, job, i, found);
+                }
                 Err(why) => tracing::debug!(job = job.id, why, "aide rule not checked"),
             }
         }
+    }
+}
+
+/// The key prefixes of the Arbiter rule's findings, which are conditions that last, not events.
+const LASTING: &[&str] = &["arbiter-halt:", "arbiter-unreachable", "strategy-halt:"];
+
+/// Forgets the conditions `rule` no longer finds, so each is new again when it comes back.
+fn forget_passed(engine: &Engine, job: &Job, rule: &Rule, found: &[Finding]) {
+    if !matches!(rule, Rule::Arbiter {}) {
+        return;
+    }
+    let keys: Vec<&str> = found.iter().map(|f| f.key.as_str()).collect();
+    for prefix in LASTING {
+        let _ = with_db(engine, |db| db.forget_seen_but(job.id, prefix, &keys));
     }
 }
 
@@ -109,7 +128,7 @@ fn fire(engine: &Arc<Engine>, job: &Job, index: usize, found: Vec<Finding>) {
         return;
     }
     let summary = fresh.iter().map(|f| f.summary.as_str()).collect::<Vec<_>>().join("; ");
-    let _ = runs::queue(engine, job.id, Reason::Rule, &summary);
+    let _ = runs::queue(engine, job.id, Reason::Rule, &summary, false);
 }
 
 /// Takes what each of the job's rules finds now as seen: called when a job is saved or turned on,
@@ -185,7 +204,8 @@ pub fn findings(engine: &Engine, rule: &Rule) -> Result<Vec<Finding>, String> {
                 found.push(Finding { key: format!("arbiter-halt:{why}"), summary: format!("Arbiter's kill switch is on: {why}") });
             }
             if s["connection"]["state"] == "error" {
-                found.push(Finding { key: format!("arbiter-unreachable:{}", s["checked_at"].as_str().unwrap_or("")), summary: "The exchange did not answer Arbiter".into() });
+                // One outage is one finding, however many passes see it.
+                found.push(Finding { key: "arbiter-unreachable".into(), summary: "The exchange did not answer Arbiter".into() });
             }
             for st in s["strategies"].as_array().into_iter().flatten().filter(|st| st["state"] == "halted") {
                 found.push(Finding {
@@ -235,7 +255,7 @@ pub fn check_stuck(engine: &Arc<Engine>, jobs: &[Job], now: Timestamp) -> Option
                 }
                 let key = format!("stuck:{name}:{since}");
                 if with_db(engine, |db| db.see(job.id, &key, &crate::time::now())).unwrap_or(false) {
-                    let _ = runs::queue(engine, job.id, Reason::Rule, &format!("session {name} has waited on you since {since}"));
+                    let _ = runs::queue(engine, job.id, Reason::Rule, &format!("session {name} has waited on you since {since}"), false);
                 }
             }
         }

@@ -4,6 +4,10 @@
 //!
 //! A call from an Aide thread's agent (`Ctx::thread`) is Aide's own: the job it saves waits as a
 //! proposal, the fact it adds waits to be confirmed, and the errand it closes asks the person.
+//! What it writes on one of the person's own models is private, and an agent on Claude's lists
+//! none of that (`runs::reads_private`, `runs::writes_private`). The lists an agent may call are
+//! registered locked only to know whose thread asks; they read `aide.db` and `threads.db`, never
+//! the store, so the lock is held for no work of theirs.
 
 use crate::aide::{self, outbox, runs, with_db};
 use crate::engine::{Ctx, Engine};
@@ -86,11 +90,11 @@ pub fn register(e: &mut Engine) {
             next_job: next.as_ref().map(|n| n.1.clone()),
             next_at: next.map(|n| n.0),
             running: with_db(engine, |db| db.open_runs())?,
-            waiting: with_db(engine, |db| db.errands(false))?.iter().filter(|e| e.state == ErrandState::Waiting || e.proposed_done).count() as u32,
-            held: with_db(engine, |db| db.held())?.len() as u32,
+            waiting: with_db(engine, |db| db.errands(false, true))?.iter().filter(|e| e.state == ErrandState::Waiting || e.proposed_done).count() as u32,
+            held: with_db(engine, |db| db.held(true))?.len() as u32,
             interrupts_today: with_db(engine, |db| db.notified_since(&today))?,
             interrupt_cap: settings.interrupt_cap,
-            unconfirmed: with_db(engine, |db| db.facts())?.iter().filter(|f| !f.confirmed).count() as u32,
+            unconfirmed: with_db(engine, |db| db.facts(true))?.iter().filter(|f| !f.confirmed).count() as u32,
         })
     });
 
@@ -111,7 +115,10 @@ pub fn register(e: &mut Engine) {
         Ok(ModelsOut { models: aide::models::options(engine, &aide::settings(engine)?, true) })
     });
 
-    e.register_unlocked::<JobList>(|ctx, _: Empty| Ok(JobsOut { jobs: with_db(ctx.engine(), |db| db.jobs())?.into_iter().map(view).collect() }));
+    e.register::<JobList>(|ctx, _: Empty| {
+        let private = runs::reads_private(ctx.engine(), ctx.thread());
+        Ok(JobsOut { jobs: with_db(ctx.engine(), |db| db.jobs_listed(private))?.into_iter().map(view).collect() })
+    });
     e.register_unlocked::<JobTemplates>(|_, _: Empty| Ok(TemplatesOut { templates: relay_aide::templates::all() }));
     e.register_unlocked::<JobGet>(|ctx, p| {
         let engine = ctx.engine();
@@ -122,6 +129,7 @@ pub fn register(e: &mut Engine) {
         let spec = checked_spec(p.spec)?;
         let now = ctx.now.clone();
         let from_aide = ctx.thread().is_some();
+        let private = runs::writes_private(ctx.engine(), ctx.thread());
         let id = match p.id {
             Some(id) => {
                 let old = job(ctx.engine(), id)?;
@@ -129,12 +137,12 @@ pub fn register(e: &mut Engine) {
                     return Err(BusError::refused("aide.person", "Aide may change only a job it proposed and the person has not turned on")
                         .with_hint("propose a new job with aide.job.propose"));
                 }
-                with_db(ctx.engine(), |db| db.update_job(id, &spec, next_due(&spec, old.state).as_deref(), &now))?;
+                with_db(ctx.engine(), |db| db.update_job(id, &spec, next_due(&spec, old.state).as_deref(), private, &now))?;
                 id
             }
             None => {
                 let state = if from_aide { JobState::Proposed } else if p.active.unwrap_or(true) { JobState::Active } else { JobState::Paused };
-                with_db(ctx.engine(), |db| db.add_job(&spec, state, next_due(&spec, state).as_deref(), &now))?
+                with_db(ctx.engine(), |db| db.add_job(&spec, state, next_due(&spec, state).as_deref(), private, &now))?
             }
         };
         ctx.emit("aide.changed", json!({"what": "job", "id": id}));
@@ -145,7 +153,8 @@ pub fn register(e: &mut Engine) {
         let spec = checked_spec(p.spec)?;
         let why = text("why", &p.why, 600)?;
         let now = ctx.now.clone();
-        let id = with_db(ctx.engine(), |db| db.add_job(&spec, JobState::Proposed, None, &now))?;
+        let private = runs::writes_private(ctx.engine(), ctx.thread());
+        let id = with_db(ctx.engine(), |db| db.add_job(&spec, JobState::Proposed, None, private, &now))?;
         let title = format!("A new bot to turn on: {}", spec.name);
         let (job_id, run_id) = match ctx.thread() {
             Some(t) => {
@@ -154,7 +163,7 @@ pub fn register(e: &mut Engine) {
             }
             None => (None, None),
         };
-        let message = outbox::keep(ctx.engine(), job_id, run_id, Level::Brief, &title, &why, false, true)?;
+        let message = outbox::keep(ctx.engine(), job_id, run_id, Level::Brief, &title, &why, false, true, private)?;
         ctx.after_commit(move |engine| outbox::post(&engine, &message, Some(id)));
         ctx.emit("aide.changed", json!({"what": "job", "id": id}));
         Ok(view(job(ctx.engine(), id)?))
@@ -199,7 +208,7 @@ pub fn register(e: &mut Engine) {
         let trigger = p.note.map(|n| n.trim().chars().take(1000).collect::<String>()).filter(|n| !n.is_empty()).unwrap_or_else(|| "pressed Run".into());
         // Queued now, so the answer carries the run; started after the handler returns.
         let at = ctx.now.clone();
-        let id = with_db(ctx.engine(), |db| db.add_run(p.job_id, Reason::Manual, &trigger, RunState::Queued, None, &at))?;
+        let id = with_db(ctx.engine(), |db| db.add_run(p.job_id, Reason::Manual, &trigger, false, RunState::Queued, None, &at))?;
         ctx.emit("aide.changed", json!({"what": "run", "id": id}));
         ctx.after_commit(runs::advance_soon);
         with_db(ctx.engine(), |db| db.run(id))?.ok_or_else(|| not_found("run", id))
@@ -247,7 +256,8 @@ pub fn register(e: &mut Engine) {
         };
         let level = p.level.or(job_level).unwrap_or_default();
         let (notified, held) = outbox::decide(ctx.engine(), level)?;
-        let message = outbox::keep(ctx.engine(), job_id, run_id, level, &title, &body, notified, held.is_some())?;
+        let private = runs::writes_private(ctx.engine(), ctx.thread());
+        let message = outbox::keep(ctx.engine(), job_id, run_id, level, &title, &body, notified, held.is_some(), private)?;
         if notified {
             let now = ctx.now.clone();
             let id = outbox::notification(ctx.tx(), &title, &body, &now).map_err(|e| BusError::internal(e.to_string()))?;
@@ -270,13 +280,21 @@ pub fn register(e: &mut Engine) {
         let note = text("note", &p.note, 600)?;
         let due = jiff::Timestamp::now().checked_add(jiff::SignedDuration::from_mins(i64::from(p.minutes))).map_err(|e| invalid(e.to_string()))?;
         let due_at = crate::time::stamp(due);
-        with_db(ctx.engine(), |db| db.add_follow_up(j.id, &due_at, &note))?;
+        let private = runs::writes_private(ctx.engine(), Some(thread));
+        with_db(ctx.engine(), |db| db.add_follow_up(j.id, &due_at, &note, private))?;
         ctx.emit("aide.changed", json!({"what": "follow_up"}));
         ctx.after_commit(|engine| aide::poke(&engine));
         Ok(FollowupOut { due_at })
     });
 
-    e.register_unlocked::<FactList>(|ctx, _: Empty| Ok(FactsOut { facts: with_db(ctx.engine(), |db| db.facts())? }));
+    e.register::<FactList>(|ctx, _: Empty| {
+        let engine = ctx.engine();
+        let private = runs::reads_private(engine, ctx.thread());
+        let settings = aide::settings(engine)?;
+        // The person sees every fact; an agent, those its model may be handed.
+        let facts = with_db(engine, |db| db.facts(private))?.into_iter().filter(|f| ctx.thread().is_none() || runs::fact_for(&settings, f, private)).collect();
+        Ok(FactsOut { facts })
+    });
     e.register::<FactAdd>(|ctx, p| {
         let fact_text = text("A fact", &p.text, 400)?;
         let now = ctx.now.clone();
@@ -291,7 +309,8 @@ pub fn register(e: &mut Engine) {
             Some(t) => own_job(ctx.engine(), t)?.map(|j| j.id),
             None => None,
         };
-        let id = with_db(ctx.engine(), |db| db.add_fact(&fact_text, &source, job_id, from_aide.is_none(), &now))?;
+        let private = runs::writes_private(ctx.engine(), from_aide);
+        let id = with_db(ctx.engine(), |db| db.add_fact(&fact_text, &source, job_id, from_aide.is_none(), private, &now))?;
         ctx.emit("aide.changed", json!({"what": "fact", "id": id}));
         with_db(ctx.engine(), |db| db.fact(id))?.ok_or_else(|| not_found("fact", id))
     });
@@ -313,7 +332,10 @@ pub fn register(e: &mut Engine) {
         Ok(FactForgetOut { forgotten })
     });
 
-    e.register_unlocked::<ErrandList>(|ctx, p| Ok(ErrandsOut { errands: with_db(ctx.engine(), |db| db.errands(p.closed.unwrap_or(false)))? }));
+    e.register::<ErrandList>(|ctx, p| {
+        let private = runs::reads_private(ctx.engine(), ctx.thread());
+        Ok(ErrandsOut { errands: with_db(ctx.engine(), |db| db.errands(p.closed.unwrap_or(false), private))? })
+    });
     e.register::<ErrandAdd>(|ctx, p| {
         let title = text("An errand's title", &p.title, 200)?;
         let detail = p.detail.unwrap_or_default().trim().chars().take(2000).collect::<String>();
@@ -324,13 +346,22 @@ pub fn register(e: &mut Engine) {
         };
         let state = if p.waiting.unwrap_or(false) { ErrandState::Waiting } else { ErrandState::Open };
         let now = ctx.now.clone();
-        let id = with_db(ctx.engine(), |db| db.add_errand(&title, &detail, job_id, state, due.as_deref(), &now))?;
+        let private = runs::writes_private(ctx.engine(), ctx.thread());
+        let id = with_db(ctx.engine(), |db| db.add_errand(&title, &detail, job_id, state, due.as_deref(), private, &now))?;
         ctx.emit("aide.changed", json!({"what": "errand", "id": id}));
         ctx.after_commit(|engine| aide::poke(&engine));
         with_db(ctx.engine(), |db| db.errand(id))?.ok_or_else(|| not_found("errand", id))
     });
     e.register::<ErrandUpdate>(|ctx, p| {
-        with_db(ctx.engine(), |db| db.errand(p.id))?.ok_or_else(|| not_found("errand", p.id))?;
+        let old = with_db(ctx.engine(), |db| db.errand(p.id))?.ok_or_else(|| not_found("errand", p.id))?;
+        // An agent that may not read a private errand may not reach it by its id either.
+        if !runs::reads_private(ctx.engine(), ctx.thread()) && with_db(ctx.engine(), |db| db.errand_is_private(p.id))? {
+            return Err(not_found("errand", p.id));
+        }
+        if ctx.thread().is_some() && matches!(old.state, ErrandState::Done | ErrandState::Dropped) {
+            return Err(BusError::refused("aide.person", "The person closed this errand; only they reopen or change it")
+                .with_hint("add a new errand with aide.errand.add"));
+        }
         let title = p.title.as_deref().map(|t| text("An errand's title", t, 200)).transpose()?;
         let detail = p.detail.map(|d| d.trim().chars().take(2000).collect::<String>());
         let due = p.due_at.as_deref().map(|d| rfc3339("due_at", d)).transpose()?;
@@ -342,14 +373,21 @@ pub fn register(e: &mut Engine) {
             None => (None, None),
         };
         let now = ctx.now.clone();
-        with_db(ctx.engine(), |db| db.update_errand(p.id, title.as_deref(), detail.as_deref(), state, due.as_deref().map(Some), proposed, &now))?;
+        let private = runs::writes_private(ctx.engine(), ctx.thread());
+        with_db(ctx.engine(), |db| db.update_errand(p.id, title.as_deref(), detail.as_deref(), state, due.as_deref().map(Some), proposed, private, &now))?;
         ctx.emit("aide.changed", json!({"what": "errand", "id": p.id}));
         ctx.after_commit(|engine| aide::poke(&engine));
         with_db(ctx.engine(), |db| db.errand(p.id))?.ok_or_else(|| not_found("errand", p.id))
     });
 
-    e.register_unlocked::<PageList>(|ctx, _: Empty| Ok(PagesOut { pages: with_db(ctx.engine(), |db| db.pages())? }));
-    e.register_unlocked::<PageGet>(|ctx, p| with_db(ctx.engine(), |db| db.page(p.id))?.ok_or_else(|| not_found("page", p.id)));
+    e.register::<PageList>(|ctx, _: Empty| {
+        let private = runs::reads_private(ctx.engine(), ctx.thread());
+        Ok(PagesOut { pages: with_db(ctx.engine(), |db| db.pages(private))? })
+    });
+    e.register::<PageGet>(|ctx, p| {
+        let private = runs::reads_private(ctx.engine(), ctx.thread());
+        with_db(ctx.engine(), |db| db.page(p.id, private))?.ok_or_else(|| not_found("page", p.id))
+    });
     e.register::<PageWrite>(|ctx, p| {
         let title = text("A page's title", &p.title, 120)?;
         let question = text("A page's question", &p.question, 1000)?;
@@ -360,10 +398,20 @@ pub fn register(e: &mut Engine) {
             Some(t) => own_job(ctx.engine(), t)?.map(|j| j.id),
             None => None,
         };
+        // An agent writes its own job's pages, and new ones: never one another job keeps.
+        if ctx.thread().is_some() {
+            if let Some(owner) = with_db(ctx.engine(), |db| db.page_owner(&title))? {
+                if owner != job_id {
+                    return Err(BusError::refused("aide.person", format!("The page \"{title}\" is another bot's"))
+                        .with_hint("write a page of your own under another title"));
+                }
+            }
+        }
         let now = ctx.now.clone();
-        let id = with_db(ctx.engine(), |db| db.write_page(&title, &question, p.body.trim(), job_id, &now))?;
+        let private = runs::writes_private(ctx.engine(), ctx.thread());
+        let id = with_db(ctx.engine(), |db| db.write_page(&title, &question, p.body.trim(), job_id, private, &now))?;
         ctx.emit("aide.changed", json!({"what": "page", "id": id}));
-        with_db(ctx.engine(), |db| db.page(id))?.ok_or_else(|| not_found("page", id))
+        with_db(ctx.engine(), |db| db.page(id, true))?.ok_or_else(|| not_found("page", id))
     });
     e.register::<PageDelete>(|ctx, p| {
         if !with_db(ctx.engine(), |db| db.delete_page(p.id))? {

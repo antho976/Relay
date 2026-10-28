@@ -281,19 +281,36 @@ waits on Aide, and a channel the person is typing in keeps its run queued.
 **Where it differs from the plan:**
 
 - **Each run starts a fresh conversation** (its `agent_ref` cleared). Cost does not grow with each
-  run, and what one of your own models read is never resumed on Claude's. Continuity is what Aide
-  keeps: facts, errands, follow-ups and held messages. Talking in a channel after a run continues
-  that run's conversation.
+  run. Continuity is what Aide keeps: facts, errands, follow-ups and held messages. Talking in a
+  channel after a run continues that run's conversation.
+- **A conversation is resumed only where it may be read** (`runs::may_resume`). `aide.db` keeps the
+  host each Aide thread's conversation was last had on (`conversation:<thread>` in its meta). One
+  that any of your own models took part in is resumed on your own models only; moved to Claude's,
+  any Aide chat (a bot's, or the Chief of Staff's, which never has runs) starts afresh. So does one
+  whose host was not kept. The host is kept from a thread's first turn, and forgotten when the
+  thread is deleted (a new thread may get its id).
+- **What your own models write from private data stays theirs.** While any source is local only,
+  what an agent on your own model writes (a message, a page, an errand or a change to one, a fact,
+  a proposal, a follow-up's note) is marked private in `aide.db`. A run on Claude's is handed
+  none of it. Its brief says only how many private messages wait in which bot's chat ("2 private
+  messages in Spending's chat"), and its `aide.fact.list`, `.errand.list`, `.page.list` and
+  `.job.list` leave them out (a proposal stops being private once you turn it on). A follow-up
+  run on Claude's is told it was set from private data, not what it says. A fact
+  learned from a local-only source is not handed to Claude's either, nor one from a source turned
+  off to any model. You see everything. What was kept before rows were marked cannot be told
+  apart, so with any source local only, all of it is taken as private.
 - **Approvals.** Aide has no outward action to approve: it cannot pay, trade, delete, send to
   anyone but you, or change settings (`policy::REFUSED`); those ops are not in any run's list. What
   needs you is a job it proposes (does nothing until turned on), a fact it learned (not given to
   runs until confirmed), and an errand it calls done (you close it). Interrupts are its limited
   rung: the daily cap and quiet hours, past which they are held for the brief. Asking for a Relay
   action (the assistant's `thread.ask`) is left for later.
-- **A brief is any scheduled run**: it carries what was held, and marks it briefed.
+- **A brief is any scheduled run**: it carries what was held, and marks it briefed once its wake is
+  posted. A brief that does not start (stopped, or waiting while you talk in its chat) keeps them.
 - **Rules built**: spend over an amount, budget past a share, an agent waiting N minutes, a Relay
   notification of a category (never Aide's own), an Arbiter halt or unreachable exchange, a new
-  Avex upload. A rule's first look takes what is already there as seen.
+  Avex upload. A rule's first look takes what is already there as seen. A halt and an unreachable
+  exchange are conditions that last: seen once while they last, and new again after they pass.
 - **No connectors yet** (Gmail, Calendar): they need an OAuth client of Antho's own. Phase 2.
 - **The phone** shows Aide (Chats, Activity, Memory) and rings for its interrupts; its settings
   stay on the PC, so a lost phone cannot point Aide at another server or open private data to
@@ -344,12 +361,12 @@ the person, and the engine tells its calls apart by their thread (`Ctx::thread`)
 | `aide.job.save` / `.set` / `.delete` | make or change a job; turn on (approving a proposal) or pause; remove | `save` only as a proposal |
 | `aide.job.propose` | a job that waits for you to turn it on | yes |
 | `aide.run.now` / `.stop` / `.list` / `.get` | run a job now; stop a run; runs, newest first | — |
-| `aide.run.finish` | how this run ended: done, nothing, waiting, failed | its own run only |
+| `aide.run.finish` | how this run ended: done, nothing, waiting, failed | its own run only, while it runs |
 | `aide.notify` | say something: interrupt, brief or quiet | yes |
 | `aide.followup` | wake this job again in N minutes (five waiting at most) | its own job only |
 | `aide.fact.list` / `.add` / `.update` / `.forget` | what it learned; forget one, or all from one source | `list`, `add` (unconfirmed) |
-| `aide.errand.list` / `.add` / `.update` | what it is on and what waits on you | yes; its "done" asks you |
-| `aide.page.list` / `.get` / `.write` / `.delete` | living pages | `list`, `write` |
+| `aide.errand.list` / `.add` / `.update` | what it is on and what waits on you | yes; its "done" asks you; not one you closed |
+| `aide.page.list` / `.get` / `.write` / `.delete` | living pages | `list`, `write` (its own job's pages, and new ones) |
 | `aide.message.list` | what it said | — |
 | `aide.chat` | a bot's chat, or the Chief of Staff's; made on first use | — |
 

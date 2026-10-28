@@ -447,6 +447,9 @@ pub struct FollowUp {
     pub job_id: i64,
     pub due_at: String,
     pub note: String,
+    /// Its note was written from private data (`crate::store`).
+    #[serde(default)]
+    pub private: bool,
 }
 
 /// A page Aide keeps current: it stores its question, and each run of its job writes it again.

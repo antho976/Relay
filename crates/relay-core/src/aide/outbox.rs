@@ -38,11 +38,12 @@ pub fn decide(engine: &Engine, level: Level) -> Result<(bool, Option<String>), B
     })
 }
 
-/// Keeps a message as [`decide`] decided.
+/// Keeps a message as [`decide`] decided; `private` when it was written from private data
+/// (`relay_aide::store`).
 #[allow(clippy::too_many_arguments)]
-pub fn keep(engine: &Engine, job_id: Option<i64>, run_id: Option<i64>, level: Level, title: &str, body: &str, notified: bool, held: bool) -> Result<Message, BusError> {
+pub fn keep(engine: &Engine, job_id: Option<i64>, run_id: Option<i64>, level: Level, title: &str, body: &str, notified: bool, held: bool, private: bool) -> Result<Message, BusError> {
     let at = crate::time::now();
-    let m = NewMessage { job_id, run_id, level, title, body, notified, held };
+    let m = NewMessage { job_id, run_id, level, title, body, notified, held, private };
     let id = with_db(engine, |db| db.add_message(&m, &at))?;
     let kept = with_db(engine, |db| db.messages(1))?.into_iter().find(|m| m.id == id);
     kept.ok_or_else(|| BusError::internal("the message went missing"))
@@ -119,9 +120,9 @@ pub fn notification(conn: &rusqlite::Connection, title: &str, body: &str, now: &
 }
 
 /// Says something from outside a handler (the scheduler, a run ending).
-pub fn say_now(engine: &Engine, job_id: Option<i64>, run_id: Option<i64>, level: Level, title: &str, body: &str) {
+pub fn say_now(engine: &Engine, job_id: Option<i64>, run_id: Option<i64>, level: Level, title: &str, body: &str, private: bool) {
     let Ok((notified, held)) = decide(engine, level) else { return };
-    let Ok(message) = keep(engine, job_id, run_id, level, title, body, notified, held.is_some()) else {
+    let Ok(message) = keep(engine, job_id, run_id, level, title, body, notified, held.is_some(), private) else {
         return;
     };
     post(engine, &message, None);
