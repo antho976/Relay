@@ -810,12 +810,13 @@ impl ThreadStore {
         Ok(self.conn.prepare_cached("UPDATE thread SET model = ?2, effort = ?3 WHERE id = ?1")?.execute(params![id, model, effort])? > 0)
     }
 
-    /// Whether the agent wrote the person any words since their last message.
+    /// Whether the agent wrote the person any words since their last message, or since the wake
+    /// that started an Aide run's turn.
     pub fn answered(&self, id: Id) -> rusqlite::Result<bool> {
         self.conn.prepare_cached(
             "SELECT EXISTS (SELECT 1 FROM message m, json_each(m.body, '$.blocks') b
              WHERE m.thread_id = ?1 AND m.role = 'assistant' AND json_extract(b.value, '$.type') = 'text'
-               AND m.id > (SELECT COALESCE(MAX(id), 0) FROM message WHERE thread_id = ?1 AND role = 'user'))",
+               AND m.id > (SELECT COALESCE(MAX(id), 0) FROM message WHERE thread_id = ?1 AND role IN ('user', 'wake')))",
         )?.query_row([id], |r| r.get(0))
     }
 
@@ -1928,6 +1929,33 @@ mod tests {
         fail(&engine, id, second, "The model did not load");
         assert_eq!(token(&engine), None);
         assert_eq!(page(&engine, id, None, None).unwrap().messages.len(), 3);
+    }
+
+    #[test]
+    fn a_turn_answers_only_with_words_after_what_started_it() {
+        let db = ThreadStore::open_in_memory().unwrap();
+        let now = crate::time::now();
+        let said = |words: &str| json!({"blocks": [{"type": "text", "text": words}]});
+        let tools = json!({"blocks": [{"type": "tool_use", "id": "t", "name": "aide.notify", "input": {}}]});
+
+        // Any other thread: words after the person's last message, as before.
+        let money = db.create(MONEY, "Groceries", "claude", None, None, &now).unwrap();
+        assert!(!db.answered(money).unwrap());
+        db.add(money, "user", &json!({"text": "How much?"}), &now).unwrap();
+        db.add(money, "assistant", &said("40 dollars."), &now).unwrap();
+        assert!(db.answered(money).unwrap());
+        db.add(money, "user", &json!({"text": "And last week?"}), &now).unwrap();
+        db.add(money, "assistant", &tools, &now).unwrap();
+        assert!(!db.answered(money).unwrap(), "only a tool call since the person's last message");
+
+        // An Aide channel: a run's wake starts the turn, so an earlier run's words do not count.
+        let aide = db.create(AIDE, "Dev watch", "claude", None, None, &now).unwrap();
+        db.add(aide, "wake", &json!({"text": "[Aide · run 1]"}), &now).unwrap();
+        db.add(aide, "assistant", &said("Two agents wait."), &now).unwrap();
+        assert!(db.answered(aide).unwrap());
+        db.add(aide, "wake", &json!({"text": "[Aide · run 2]"}), &now).unwrap();
+        db.add(aide, "assistant", &tools, &now).unwrap();
+        assert!(!db.answered(aide).unwrap(), "the second run only called tools");
     }
 
     /// A thread of heavy tool calls past the desktop's 2 MiB line still opens: `thread.get`

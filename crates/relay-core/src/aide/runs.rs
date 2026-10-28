@@ -173,19 +173,24 @@ fn launch(engine: &Arc<Engine>, run: &Run) -> bool {
         Ok(c) => c,
         Err(refusal) => {
             end(RunState::Skipped, &format!("No model may run it: {}", refusal.0));
-            outbox::say_now(engine, Some(job.id), Some(run.id), Level::Brief, &format!("{} did not run", job.spec.name), &format!("No model may run it: {}.", refusal.0));
+            outbox::say_now(engine, Some(job.id), Some(run.id), Level::Brief, &format!("{} did not run", job.spec.name), &format!("No model may run it: {}.", refusal.0), false);
             return false;
         }
     };
+    // The person is talking in the channel: this waits for that turn to end. Asked before the
+    // channel is moved to the run's model, which cannot happen mid-reply.
+    if job.thread_id.is_some_and(|t| threads::get(engine, t).is_ok_and(|t| t.working)) {
+        return false;
+    }
     let thread = match channel(engine, &job, &choice) {
         Ok(t) => t,
+        Err(e) if e.code == "thread.busy" => return false,
         Err(e) => {
             end(RunState::Failed, &e.message);
             return false;
         }
     };
     if threads::get(engine, thread).is_ok_and(|t| t.working) {
-        // The person is talking in the channel: this waits for that turn to end.
         return false;
     }
     // Each run starts a fresh conversation: its cost does not grow with every run before it, and
@@ -193,16 +198,21 @@ fn launch(engine: &Arc<Engine>, run: &Run) -> bool {
     // what Aide keeps: facts, errands, follow-ups and what was held for the brief.
     threads::stop(engine, thread);
     let _ = threads::with_db(engine, |db| db.set_agent_ref(thread, ""));
-    let (text, reads, facts) = wake_text(engine, &job, run, &choice);
+    let wake = wake_text(engine, &job, run, &choice);
     let deadline = Timestamp::now().checked_add(SignedDuration::from_mins(i64::from(job.spec.minutes_per_run()))).unwrap_or(Timestamp::MAX);
-    if !with_db(engine, |db| db.start_run(run.id, choice.model.as_deref(), choice.host.as_str(), thread, &reads, &stamp(deadline))).unwrap_or(false) {
+    if !with_db(engine, |db| db.start_run(run.id, choice.model.as_deref(), choice.host.as_str(), thread, &wake.reads, &stamp(deadline))).unwrap_or(false) {
         return false;
     }
-    match threads::post_wake(engine, thread, &text, &at) {
+    match threads::post_wake(engine, thread, &wake.text, &at) {
         Ok((message, token)) => {
-            let _ = with_db(engine, |db| db.used_facts(&facts, &at));
+            // What it was handed is used, and what was held for the brief is said, only now
+            // that the wake is posted: a run that did not start keeps them for the next.
+            let _ = with_db(engine, |db| {
+                db.used_facts(&wake.facts, &at)?;
+                db.briefed(&wake.briefed, &at)
+            });
             engine.emit_system("thread.message", json!({"thread": thread, "message": message}));
-            threads::deliver(engine, thread, token, &text, &[]);
+            threads::deliver(engine, thread, token, &wake.text, &[]);
             super::changed(engine, "run");
             super::poke(engine);
             true
@@ -248,8 +258,7 @@ pub fn ops_for_thread(engine: &Engine, thread: i64) -> Vec<&'static str> {
         _ => with_db(engine, |db| db.job_of_thread(thread)).ok().flatten().map(|j| j.spec.all_sources()).unwrap_or_default(),
     };
     // The thread's own model decides what private data it may read when no run chose one.
-    let model = threads::get(engine, thread).ok().and_then(|t| t.model);
-    let host = policy::host_of(model.as_deref(), &settings, &models::pc_models(engine));
+    let host = thread_host(engine, &settings, thread);
     let allowed: Vec<Source> = sources.into_iter().filter(|s| match settings.tiers.of(*s) {
         Tier::Any => true,
         Tier::LocalOnly => host.is_own(),
@@ -258,20 +267,87 @@ pub fn ops_for_thread(engine: &Engine, thread: i64) -> Vec<&'static str> {
     policy::ops(&allowed)
 }
 
-/// Whether an Aide thread's agent may resume its conversation on `model`: not on Claude's after a
-/// run on one of the person's own models, whose conversation holds what that model read. The
-/// person may move a channel to Claude; it then starts afresh.
+/// Where `model` runs, for what it may read and write: a model of the catalogue's counts as this
+/// PC's whether or not its file is there (it never runs anywhere else), and this asks nothing of
+/// the store, so a handler holding the store's lock may call it.
+fn host(model: Option<&str>, settings: &Settings) -> Host {
+    let catalogue: Vec<&str> = crate::local_models::MODELS.iter().map(|m| m.id).collect();
+    policy::host_of(model, settings, &catalogue)
+}
+
+/// Where Aide thread `thread`'s agent runs: on its model's host. A thread that is not there is
+/// Claude's, which may read the least.
+fn thread_host(engine: &Engine, settings: &Settings, thread: i64) -> Host {
+    let model = threads::get(engine, thread).ok().and_then(|t| t.model);
+    host(model.as_deref(), settings)
+}
+
+/// Whether a caller may read what is private (`relay_aide::store`): the person (no thread) and
+/// an Aide thread on one of their own models may; one on Claude's may not.
+pub fn reads_private(engine: &Engine, thread: Option<i64>) -> bool {
+    let Some(thread) = thread else { return true };
+    super::settings(engine).is_ok_and(|s| thread_host(engine, &s, thread).is_own())
+}
+
+/// Whether what a caller writes is private: an Aide thread on one of the person's own models
+/// writes it while some source is for their own models only, so it may hold what it read. The
+/// person's own words are not.
+pub fn writes_private(engine: &Engine, thread: Option<i64>) -> bool {
+    let Some(thread) = thread else { return false };
+    let Ok(settings) = super::settings(engine) else { return true };
+    thread_host(engine, &settings, thread).is_own() && Source::ALL.iter().any(|s| settings.tiers.of(*s) == Tier::LocalOnly)
+}
+
+/// Whether a fact may be handed to a caller that reads private data or not (`private`): one
+/// learned from a source turned off is handed to none, and one from a source for the person's
+/// own models only is not handed to Claude's.
+pub fn fact_for(settings: &Settings, fact: &Fact, private: bool) -> bool {
+    match Source::parse(&fact.source).map(|s| settings.tiers.of(s)) {
+        Some(Tier::Off) => false,
+        Some(Tier::LocalOnly) => private,
+        _ => true,
+    }
+}
+
+/// `aide.db`'s meta key for the host Aide thread `thread`'s conversation was had on.
+fn conversation_key(thread: i64) -> String {
+    format!("conversation:{thread}")
+}
+
+/// Whether an Aide thread's agent, starting now on `model`, may resume the thread's conversation,
+/// which from then on is that host's. A conversation one of the person's own models had may hold
+/// what it read: it is resumed on their own models only. On Claude's it starts afresh, as does one
+/// whose host was not kept (from before Relay kept it). The person may move any
+/// Aide chat to Claude; it then starts a new conversation.
 pub fn may_resume(engine: &Engine, thread: i64, model: Option<&str>) -> bool {
     let Ok(settings) = super::settings(engine) else { return false };
-    if policy::host_of(model, &settings, &models::pc_models(engine)).is_own() {
-        return true;
+    let now = host(model, &settings);
+    let key = conversation_key(thread);
+    let had = with_db(engine, |db| db.meta(&key)).ok().flatten();
+    let resume = now.is_own() || had.as_deref() == Some(Host::Claude.as_str());
+    // Claude's resumes only Claude's, so what the conversation is from here is the host's kind.
+    let kept = if now.is_own() { "own" } else { Host::Claude.as_str() };
+    let recorded = with_db(engine, |db| db.set_meta(&key, kept)).is_ok();
+    if !resume || !recorded {
+        let _ = threads::with_db(engine, |db| db.set_agent_ref(thread, ""));
     }
-    let last = with_db(engine, |db| db.last_run_of_thread(thread)).ok().flatten();
-    !last.and_then(|r| r.host).is_some_and(|h| h != Host::Claude.as_str())
+    resume && recorded
+}
+
+/// A run's wake: the message, what each source read gave, the facts it was handed, and the
+/// messages held for the brief it says.
+struct Wake {
+    text: String,
+    reads: Vec<SourceRead>,
+    facts: Vec<i64>,
+    briefed: Vec<i64>,
 }
 
 /// The message that wakes the agent, what each source read gave, and the facts it was handed.
-fn wake_text(engine: &Engine, job: &Job, run: &Run, choice: &Choice) -> (String, Vec<SourceRead>, Vec<i64>) {
+fn wake_text(engine: &Engine, job: &Job, run: &Run, choice: &Choice) -> Wake {
+    // A run on Claude's is handed nothing a model of the person's own wrote from private data.
+    let private = choice.host.is_own();
+    let settings = super::settings(engine).unwrap_or_default();
     let local = jiff::Zoned::now();
     let mut parts = vec![format!(
         "[Aide · run {} of \"{}\" · {} · {}]",
@@ -290,12 +366,13 @@ fn wake_text(engine: &Engine, job: &Job, run: &Run, choice: &Choice) -> (String,
     if run.reason == Reason::Manual && !run.trigger.is_empty() && run.trigger != "pressed Run" {
         parts.push(format!("The person added: {}", run.trigger));
     }
-    let facts: Vec<Fact> = with_db(engine, |db| db.facts()).unwrap_or_default().into_iter().filter(|f| f.confirmed || f.pinned).take(30).collect();
+    let facts: Vec<Fact> = with_db(engine, |db| db.facts(private)).unwrap_or_default().into_iter()
+        .filter(|f| (f.confirmed || f.pinned) && fact_for(&settings, f, private)).take(30).collect();
     if !facts.is_empty() {
         let lines: Vec<String> = facts.iter().map(|f| format!("- {} ({})", f.text, f.source)).collect();
         parts.push(format!("What you know about the person:\n{}", lines.join("\n")));
     }
-    let errands = with_db(engine, |db| db.errands(false)).unwrap_or_default();
+    let errands = with_db(engine, |db| db.errands(false, private)).unwrap_or_default();
     if !errands.is_empty() {
         let lines: Vec<String> = errands.iter().take(20).map(|e| {
             let due = e.due_at.as_deref().map(|d| format!(", due {d}")).unwrap_or_default();
@@ -303,15 +380,22 @@ fn wake_text(engine: &Engine, job: &Job, run: &Run, choice: &Choice) -> (String,
         }).collect();
         parts.push(format!("Open errands:\n{}", lines.join("\n")));
     }
-    // A scheduled run is a brief: it carries what was held for one, and they are marked briefed.
+    // A scheduled run is a brief: it carries what was held for one, which is then briefed. One
+    // on Claude's says only how many private ones there were: they are in their bots' chats.
+    let mut briefed = Vec::new();
     if matches!(run.reason, Reason::Schedule | Reason::CatchUp) {
-        let held = with_db(engine, |db| db.held()).unwrap_or_default();
-        if !held.is_empty() {
-            let lines: Vec<String> = held.iter().map(|m| format!("- {} ({}): {}", m.title, m.created_at, m.body)).collect();
+        let held = with_db(engine, |db| db.held(true)).unwrap_or_default();
+        let shown = if private { held.clone() } else { with_db(engine, |db| db.held(false)).unwrap_or_default() };
+        if !shown.is_empty() {
+            let lines: Vec<String> = shown.iter().map(|m| format!("- {} ({}): {}", m.title, m.created_at, m.body)).collect();
             parts.push(format!("Held for this brief (say them, then they are done):\n{}", lines.join("\n")));
-            let ids: Vec<i64> = held.iter().map(|m| m.id).collect();
-            let _ = with_db(engine, |db| db.briefed(&ids, &now()));
         }
+        let unshown = held.len() - shown.len();
+        if unshown > 0 {
+            parts.push(format!("{unshown} more held for this brief came from the person's own models working on \
+private data: do not guess at them, and say only that they are in their bots' chats."));
+        }
+        briefed = held.iter().map(|m| m.id).collect();
     }
     let mut reads = Vec::new();
     for s in &choice.sources {
@@ -331,7 +415,7 @@ fn wake_text(engine: &Engine, job: &Job, run: &Run, choice: &Choice) -> (String,
         reads.push(SourceRead { source: *s, ok: false, detail: "turned off".into() });
     }
     parts.push("[End of what Relay handed you. Do the job, then aide.run.finish.]".into());
-    (parts.join("\n\n"), reads, facts.iter().map(|f| f.id).collect())
+    Wake { text: parts.join("\n\n"), reads, facts: facts.iter().map(|f| f.id).collect(), briefed }
 }
 
 fn read(engine: &Engine, op: &str, payload: Value) -> Result<Value, String> {
@@ -413,14 +497,28 @@ fn read_source(engine: &Engine, source: Source) -> Result<(String, String), Stri
 
 /// An Aide thread's turn ended: its open run ends with it, done unless the agent said otherwise
 /// or the turn failed. Then the next queued run may start.
+///
+/// The event that says so may be older than the run: a run started since (its channel made, or
+/// started by the watcher itself while it held the event) is still working, and is left be. The
+/// start lock makes the look and the end one step against a run being started.
 pub fn turn_ended(engine: &Arc<Engine>, thread: i64) {
-    let Ok(Some(run)) = with_db(engine, |db| db.open_run_of_thread(thread)) else {
-        advance(engine);
-        return;
+    let ended = {
+        let _starting = super::lock(&engine.aide.starting);
+        end_with_turn(engine, thread)
     };
-    if run.state != RunState::Running {
-        advance(engine);
-        return;
+    if let Some((run, note)) = ended {
+        // How a model of the person's own failed may quote what it was saying.
+        let private = run.host.as_deref().is_some_and(|h| h != Host::Claude.as_str());
+        outbox::say_now(engine, Some(run.job_id), Some(run.id), Level::Brief, &format!("{} failed", run.job_name), &note, private);
+    }
+    advance(engine);
+}
+
+/// Ends `thread`'s running run if its turn is over; the run and why when it failed.
+fn end_with_turn(engine: &Engine, thread: i64) -> Option<(Run, String)> {
+    let run = with_db(engine, |db| db.open_run_of_thread(thread)).ok().flatten().filter(|r| r.state == RunState::Running)?;
+    if threads::get(engine, thread).is_ok_and(|t| t.working) {
+        return None;
     }
     let failed = threads::page(engine, thread, None, None).ok().and_then(|p| p.messages.last().cloned()).filter(|m| m.role == "error");
     let at = now();
@@ -432,24 +530,22 @@ pub fn turn_ended(engine: &Arc<Engine>, thread: i64) {
         }
     };
     let _ = with_db(engine, |db| db.end_run(run.id, state, Some(&note), &at));
-    if state == RunState::Failed {
-        outbox::say_now(engine, Some(run.job_id), Some(run.id), Level::Brief, &format!("{} failed", run.job_name), &note);
-    }
     super::changed(engine, "run");
-    advance(engine);
+    (state == RunState::Failed).then_some((run, note))
 }
 
-/// The agent's own word on how its run ended. It may come before the turn ends; the run is over
-/// either way.
+/// The agent's own word on how its run ended, said within the run's turn; the run is over. A run
+/// already over (ended late, stopped, or the agent answering a chat after it) keeps how it ended.
 pub fn finish(engine: &Engine, thread: i64, outcome: RunState, note: Option<&str>) -> Result<Run, BusError> {
     if !matches!(outcome, RunState::Done | RunState::Nothing | RunState::Waiting | RunState::Failed) {
         return Err(BusError::invalid("aide.invalid", "A run ends done, nothing, waiting or failed"));
     }
-    let run = with_db(engine, |db| db.last_run_of_thread(thread))?
-        .ok_or_else(|| BusError::conflict("aide.no_run", "No run of Aide's is open in this thread").with_hint("aide.run.finish ends the run that woke you"))?;
+    let run = with_db(engine, |db| db.open_run_of_thread(thread))?
+        .filter(|r| r.state == RunState::Running)
+        .ok_or_else(|| BusError::conflict("aide.no_run", "No run of Aide's is open in this thread").with_hint("aide.run.finish ends the run that woke you; a chat needs none"))?;
     let at = now();
     let note = note.map(|n| super::cut(n.trim(), 300));
-    with_db(engine, |db| if run.state.is_open() { db.end_run(run.id, outcome, note.as_deref(), &at) } else { db.report_run(run.id, outcome, note.as_deref()) })?;
+    with_db(engine, |db| db.end_run(run.id, outcome, note.as_deref(), &at))?;
     with_db(engine, |db| db.run(run.id))?.ok_or_else(|| BusError::internal("the run went missing"))
 }
 
@@ -531,7 +627,7 @@ pub fn tick(engine: &Arc<Engine>) -> Option<Timestamp> {
             Some(d) if d <= now_t => {
                 let _ = stop(engine, r.id, "late");
                 outbox::say_now(engine, Some(r.job_id), Some(r.id), Level::Interrupt, &format!("{} ran late", r.job_name),
-                    "It was stopped at its time limit. What it did so far is in its channel.");
+                    "It was stopped at its time limit. What it did so far is in its channel.", false);
             }
             Some(d) => soonest(d),
             None => {}
@@ -553,7 +649,7 @@ pub fn tick(engine: &Arc<Engine>) -> Option<Timestamp> {
 /// Errands past their time, said once each (for the brief); the next one's time.
 fn late_errands(engine: &Engine, now_t: Timestamp) -> Option<Timestamp> {
     let mut next = None;
-    for e in with_db(engine, |db| db.errands(false)).unwrap_or_default() {
+    for e in with_db(engine, |db| db.errands(false, true)).unwrap_or_default() {
         let Some(due) = e.due_at.as_deref().and_then(parse) else { continue };
         if due > now_t {
             next = Some(next.map_or(due, |n: Timestamp| n.min(due)));
@@ -564,7 +660,8 @@ fn late_errands(engine: &Engine, now_t: Timestamp) -> Option<Timestamp> {
             continue;
         }
         let _ = with_db(engine, |db| db.set_meta(&key, &now()));
-        outbox::say_now(engine, e.job_id, None, Level::Brief, &format!("Late: {}", e.title), "Aide said it would be done by now.");
+        let private = with_db(engine, |db| db.errand_is_private(e.id)).unwrap_or(true);
+        outbox::say_now(engine, e.job_id, None, Level::Brief, &format!("Late: {}", e.title), "Aide said it would be done by now.", private);
     }
     next
 }
