@@ -170,7 +170,12 @@ pub struct Summary {
     /// from these few instead of the period's entries.
     #[schemars(extend("x-unit" = "omit"))]
     pub recent: Vec<Tx>,
+    /// Entries that may be one logged twice, over the whole ledger: each group shares its day,
+    /// amount, type, account and note (a note is needed). Newest first, at most [`DUPLICATE_GROUPS`].
+    pub duplicates: Vec<Vec<Tx>>,
 }
+
+pub const DUPLICATE_GROUPS: usize = 10;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "MoneyLists")]

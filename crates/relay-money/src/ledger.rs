@@ -924,7 +924,35 @@ impl Ledger {
             bills,
             goals,
             recent: self.recent(8)?,
+            duplicates: self.duplicates()?,
         })
+    }
+
+    /// Entries that share a day, amount, type, account and note with another, grouped, newest
+    /// first: an entry logged twice, which a model reading one month at a time never sees whole.
+    pub fn duplicates(&self) -> Result<Vec<Vec<Tx>>> {
+        let mut st = self.conn.prepare_cached(&format!(
+            "{} WHERE t.deleted = 0 AND trim(t.note) <> '' AND EXISTS (
+                 SELECT 1 FROM transactions d WHERE d.deleted = 0 AND d.id <> t.id AND d.date = t.date AND d.amount = t.amount
+                   AND d.type = t.type AND d.account_id = t.account_id AND lower(trim(d.note)) = lower(trim(t.note)))
+             ORDER BY t.date DESC, t.id",
+            Self::TX_SELECT
+        ))?;
+        let rows: Vec<Tx> = st.query_map([], Self::tx_row)?.collect::<std::result::Result<_, _>>()?;
+        let mut groups: Vec<Vec<Tx>> = Vec::new();
+        for t in rows {
+            let same = |g: &Vec<Tx>| {
+                let o = &g[0];
+                (o.date.as_str(), o.amount, o.r#type, o.account_id) == (t.date.as_str(), t.amount, t.r#type, t.account_id)
+                    && o.note.trim().to_lowercase() == t.note.trim().to_lowercase()
+            };
+            if let Some(g) = groups.iter_mut().find(|g| same(g)) {
+                g.push(t);
+            } else if groups.len() < crate::views::DUPLICATE_GROUPS {
+                groups.push(vec![t]);
+            }
+        }
+        Ok(groups)
     }
 
     /// Active bills due within `days` of `today`, overdue ones included, soonest first.
@@ -1555,6 +1583,30 @@ mod tests {
         assert_eq!((page.transactions.len(), page.spent), (2, 50_00));
         let found = l.tx_list(&TxQuery { query: Some("dining".into()), limit: Some(1), ..Default::default() }, date(2026, 10, 6)).unwrap();
         assert_eq!(found.spent, 50_00, "the filters count, the limit does not");
+    }
+
+    /// Two entries alike in day, amount, type, account and note are a possible duplicate, in any
+    /// period; no note, another day or another account is not.
+    #[test]
+    fn entries_logged_twice_are_found_across_the_ledger() {
+        let (mut l, acct) = with_account();
+        let dining = category(&l, "Dining");
+        let add = |l: &mut Ledger, day: &str, cents: i64, note: &str| {
+            l.tx_add(&TxInput { r#type: TxType::Expense, amount: cents, date: day.into(), account_id: acct, to_account_id: None, category_id: Some(dining), note: Some(note.into()) }).unwrap().id
+        };
+        let a = add(&mut l, "2026-03-02", 45_99, "Amazon.ca");
+        let b = add(&mut l, "2026-03-02", 45_99, "amazon.ca ");
+        let c = add(&mut l, "2026-09-16", 32_40, "Uber Eats");
+        let d = add(&mut l, "2026-09-16", 32_40, "Uber Eats");
+        add(&mut l, "2026-09-17", 32_40, "Uber Eats");
+        add(&mut l, "2026-09-16", 12_00, "Uber Eats");
+        spend(&mut l, acct, dining, 5_00, "2026-09-10");
+        spend(&mut l, acct, dining, 5_00, "2026-09-10");
+        let found: Vec<Vec<i64>> = l.duplicates().unwrap().iter().map(|g| g.iter().map(|t| t.id).collect()).collect();
+        assert_eq!(found, [vec![c, d], vec![a, b]], "newest first; no note, no pair");
+        assert_eq!(l.summary(date(2026, 9, 18), &en()).unwrap().duplicates.len(), 2);
+        l.tx_delete(d).unwrap();
+        assert_eq!(l.duplicates().unwrap().len(), 1, "a deleted entry is not a duplicate");
     }
 
     /// A range of days crosses budget periods: a calendar month in a ledger whose month starts on

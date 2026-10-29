@@ -276,7 +276,41 @@ pub struct Summary {
     pub lifts: Vec<LiftRow>,
     /// Goals neither met nor archived.
     pub goals: Vec<GoalRow>,
+    /// The longest breaks between counted workouts, longest first: at most [`BREAKS`], each of
+    /// [`MIN_BREAK_DAYS`] or more.
+    pub breaks: Vec<Break>,
+    /// Counted workouts Avex gave a type other than `normal` (a deload, a test day…), by type.
+    pub marked: Vec<Marked>,
 }
+
+/// A gap between two counted workouts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename = "GymBreak")]
+pub struct Break {
+    /// The last workout before it and the first after (`YYYY-MM-DD`).
+    pub last_before: String,
+    pub first_after: String,
+    /// Days from the one to the other.
+    pub days: i64,
+    /// Weeks in a row with a workout up to and including the week of `last_before`.
+    pub streak_before_weeks: u32,
+}
+
+/// The counted workouts of one Avex session type.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename = "GymMarked")]
+pub struct Marked {
+    /// Avex's `session_type`: `deload`, `test`, `first_back`…
+    pub kind: String,
+    /// How many in all.
+    pub sessions: u32,
+    /// Their days, oldest first: the newest [`MARKED_DAYS`].
+    pub days: Vec<String>,
+}
+
+pub const BREAKS: usize = 3;
+pub const MIN_BREAK_DAYS: i64 = 8;
+pub const MARKED_DAYS: usize = 8;
 
 /// What [`series`] reads. Every field is optional.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -572,14 +606,7 @@ pub fn summary(h: &History, clock: &Clock, imported: bool) -> Summary {
     if !trained.contains(&at) {
         at = at.checked_sub(7.days()).unwrap_or(at);
     }
-    let mut streak = 0;
-    while trained.contains(&at) {
-        streak += 1;
-        match at.checked_sub(7.days()) {
-            Ok(d) => at = d,
-            Err(_) => break,
-        }
-    }
+    let streak = weeks_in_a_row(&trained, at);
     let rows: Vec<SessionRow> = tracked(h).map(|s| row(h, s, clock)).collect();
     let totals = Totals {
         sessions: rows.len() as u32,
@@ -638,11 +665,60 @@ pub fn summary(h: &History, clock: &Clock, imported: bool) -> Summary {
         records,
         lifts,
         goals: h.goals.iter().filter(|g| g.completed_at.is_none() && g.archived_at.is_none()).map(|g| goal_row(h, g, clock)).collect(),
+        breaks: breaks(h, clock, &trained),
+        marked: marked(h, clock),
     }
 }
 
-/// Sessions newest first, from `offset`, at most `limit`; only those with `lift` when given.
-/// Returns the page and how many match in all.
+/// Weeks in a row in `trained` counting back from the one that starts on `at`.
+fn weeks_in_a_row(trained: &std::collections::HashSet<Date>, mut at: Date) -> u32 {
+    let mut n = 0;
+    while trained.contains(&at) {
+        n += 1;
+        match at.checked_sub(7.days()) {
+            Ok(d) => at = d,
+            Err(_) => break,
+        }
+    }
+    n
+}
+
+fn breaks(h: &History, clock: &Clock, trained: &std::collections::HashSet<Date>) -> Vec<Break> {
+    let mut days: Vec<Date> = tracked(h).map(|s| date_of(s.started_at, &clock.tz)).collect();
+    days.sort();
+    days.dedup();
+    let mut gaps: Vec<(Date, Date, i64)> = days.windows(2).map(|w| (w[0], w[1], i64::from((w[1] - w[0]).get_days()))).filter(|g| g.2 >= MIN_BREAK_DAYS).collect();
+    gaps.sort_by(|a, b| b.2.cmp(&a.2).then(b.0.cmp(&a.0)));
+    gaps.truncate(BREAKS);
+    gaps.into_iter()
+        .map(|(a, b, n)| Break {
+            last_before: a.to_string(),
+            first_after: b.to_string(),
+            days: n,
+            streak_before_weeks: weeks_in_a_row(trained, week_start(a, h.meta.first_day_monday)),
+        })
+        .collect()
+}
+
+fn marked(h: &History, clock: &Clock) -> Vec<Marked> {
+    let mut by: Vec<Marked> = Vec::new();
+    for s in tracked(h).filter(|s| !s.session_type.trim().is_empty() && !s.session_type.eq_ignore_ascii_case("normal")) {
+        let day = date_of(s.started_at, &clock.tz).to_string();
+        match by.iter_mut().find(|m| m.kind == s.session_type) {
+            Some(m) => {
+                m.sessions += 1;
+                m.days.push(day);
+            }
+            None => by.push(Marked { kind: s.session_type.clone(), sessions: 1, days: vec![day] }),
+        }
+    }
+    for m in &mut by {
+        let cut = m.days.len().saturating_sub(MARKED_DAYS);
+        m.days.drain(..cut);
+    }
+    by
+}
+
 /// Workouts newest first, from `offset`, at most `limit`: with `lift` only those with it, with
 /// `days` only those from its first day to its last. With them, how many match in all and how
 /// many of those are untracked.
@@ -1130,6 +1206,19 @@ mod tests {
         assert_eq!(summary(&h, &early, true).days_since_last, Some(0));
         assert_eq!((s.totals.sessions, s.totals.untracked), (3, 1));
         assert_eq!(s.totals.untracked_days, ["2026-10-06"]);
+    }
+
+    /// The long gaps between counted workouts (the untracked one does not end a gap), and the
+    /// workouts Avex typed as something other than normal.
+    #[test]
+    fn a_summary_names_its_breaks_and_its_marked_workouts() {
+        let mut h = history(false);
+        h.sessions[1].session_type = "deload".into();
+        h.sessions[2].session_type = "test".into();
+        let s = summary(&h, &clock(), true);
+        let breaks: Vec<(&str, &str, i64, u32)> = s.breaks.iter().map(|b| (b.last_before.as_str(), b.first_after.as_str(), b.days, b.streak_before_weeks)).collect();
+        assert_eq!(breaks, [("2026-09-15", "2026-09-29", 14, 1), ("2026-09-29", "2026-10-07", 8, 1)]);
+        assert_eq!(s.marked, [Marked { kind: "deload".into(), sessions: 1, days: vec!["2026-09-29".into()] }], "the untracked test day is not counted");
     }
 
     #[test]

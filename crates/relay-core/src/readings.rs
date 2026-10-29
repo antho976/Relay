@@ -58,6 +58,8 @@ pub fn extras(op: &str, result: &Value) -> Vec<(&'static str, Value)> {
         "money.invest.summary" => vec![("money.lists", json!({}))],
         // Which accounts Wealthsimple's files fill, which an activity does not say.
         "money.invest.list" => vec![("money.lists", json!({}))],
+        // Which categories are for spending, so money back filed under one is told apart.
+        "money.tx.list" => vec![("money.lists", json!({}))],
         // A workout list does not say its unit; a week's volume does.
         "gym.sessions" => vec![("gym.series", json!({"periods": 1}))],
         _ => Vec::new(),
@@ -70,7 +72,7 @@ pub fn render(op: &str, payload: &Value, result: &Value, extras: &[Option<Value>
     let extra = |i: usize| extras.get(i).and_then(Option::as_ref);
     let text = match op {
         "money.summary" => money_summary(result, [extra(0), extra(1), extra(2)], [extra(3), extra(4)], extra(5), extra(6), ctx),
-        "money.tx.list" => tx_list(payload, result, ctx),
+        "money.tx.list" => tx_list(payload, result, extra(0), ctx),
         "money.lists" => money_lists(result, ctx),
         "money.series" => money_series(payload, result, ctx),
         "money.invest.summary" => invest_summary(result, extra(0), ctx),
@@ -575,12 +577,41 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
         }
         let _ = writeln!(o, "Entries this month: {}.", if e.rows.is_empty() { format!("{NONE_LOGGED} yet") } else { e.counts() });
     }
+    if let Some(groups) = r["duplicates"].as_array() {
+        let named: Vec<String> = groups.iter().filter_map(|g| {
+            let g = g.as_array().filter(|g| !g.is_empty())?;
+            let ids: Vec<String> = g.iter().map(|t| format!("#{}", int(t, "id"))).collect();
+            let t = &g[0];
+            Some(format!("{} {}, {} {}, {}, {}", ids.join(" and "), entry_name(t), m.fmt(int(t, "amount")), s(t, "type").to_ascii_lowercase(), s(t, "account"), day_of(s(t, "date"), today)))
+        }).collect();
+        let _ = writeln!(o, "Possible duplicates in the whole ledger (same day, amount, account and note: maybe logged twice): {}.",
+            if named.is_empty() { "none".to_string() } else { named.join("; ") });
+    }
     if let Some(page) = last_month {
         let e = Entries::of(page);
         let _ = writeln!(o, "\nLAST MONTH: {}.", period_name(&page["period"], today));
         let _ = writeln!(o, "- Spent: {}. Income: {}.", logged(e.spent, &m), logged(e.income, &m));
         if !e.expenses.is_empty() {
             let _ = writeln!(o, "- Biggest expenses: {}.", e.largest(3, &m, today));
+        }
+        // Tally keeps one amount per budget, so a past month is read against it as it is now;
+        // no tool said where last month stood, and a model did the subtraction itself, wrongly.
+        let standing = |name: &str, spent: i64, budget: i64| {
+            let gap = budget - spent;
+            let verdict = if gap < 0 { format!("{} over budget", m.fmt(-gap)) } else { format!("{} left", m.fmt(gap)) };
+            format!("{name} {} of {}, {verdict}", m.fmt(spent), m.fmt(budget))
+        };
+        let mut cells: Vec<String> = Vec::new();
+        let overall = int(&r["pace"], "budget");
+        if overall > 0 {
+            cells.push(standing("all spending", e.spent, overall));
+        }
+        for b in list(r, "budgets").iter().filter(|b| int(b, "category_id") != 0 && int(b, "budget") > 0) {
+            let spent = e.by_category.iter().find(|c| c.0 == s(b, "name")).map_or(0, |c| c.1);
+            cells.push(standing(s(b, "name"), spent, int(b, "budget")));
+        }
+        if !cells.is_empty() {
+            let _ = writeln!(o, "- Budgets last month, against each budget as it is set now: {}.", cells.join("; "));
         }
     }
     month_by_month(&mut o, pages, series, &m);
@@ -689,7 +720,13 @@ fn accounts(o: &mut String, rows: &[Value], net_worth: Option<&Value>, m: &Money
     }
 }
 
-fn tx_list(payload: &Value, r: &Value, ctx: &Ctx) -> String {
+/// A range of days longer than this is added up by month, not by week and day.
+const LONG_RANGE_DAYS: i64 = 62;
+/// The most entries a list of them writes out one by one: a range of a year would fill a small
+/// model's context with lines its figures already add up.
+const LISTED_ENTRIES: usize = 80;
+
+fn tx_list(payload: &Value, r: &Value, lists: Option<&Value>, ctx: &Ctx) -> String {
     let today = ctx.today;
     let m = Money::of(&ctx.currency);
     let offset = payload["period_offset"].as_i64().unwrap_or(0);
@@ -736,6 +773,33 @@ fn tx_list(payload: &Value, r: &Value, ctx: &Ctx) -> String {
     if !e.by_category.is_empty() {
         let _ = writeln!(o, "- Spent by category, largest first: {}.", e.categories(&m));
     }
+    let incomes: Vec<&Value> = e.rows.iter().filter(|t| s(t, "type") == "INCOME").collect();
+    if !incomes.is_empty() {
+        let mut sums: Vec<(&str, i64, i64)> = Vec::new();
+        for t in &incomes {
+            match sums.iter_mut().find(|c| c.0 == category_of(t)) {
+                Some(c) => {
+                    c.1 += int(t, "amount");
+                    c.2 += 1;
+                }
+                None => sums.push((category_of(t), int(t, "amount"), 1)),
+            }
+        }
+        sums.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        let cells: Vec<String> = sums.iter().map(|(name, amount, n)| format!("{name} {} ({n})", m.fmt(*amount))).collect();
+        let _ = writeln!(o, "- Income by category, largest first: {}.", cells.join("; "));
+        // A return filed under the category it was bought in is income there: it does not lower
+        // that category's spending, and a model asked for refunds never looked for it.
+        let spending: Vec<&str> = lists.map_or_else(Vec::new, |l| list(l, "categories").iter().filter(|c| s(c, "kind") == "EXPENSE").map(|c| s(c, "name")).collect());
+        let filed = |t: &&&Value| spending.contains(&s(t, "category"));
+        if incomes.iter().any(|t| filed(&t)) {
+            // Tally's own Refunds category is money back too: together, what came back.
+            let back: Vec<&&Value> = incomes.iter().filter(|t| filed(t) || s(t, "category").eq_ignore_ascii_case("Refunds")).collect();
+            let named: Vec<String> = back.iter().map(|t| format!("#{} {}, {} ({}), {}", int(t, "id"), entry_name(t), m.fmt(int(t, "amount")), category_of(t), day_of(s(t, "date"), today))).collect();
+            let _ = writeln!(o, "- Money back (refunds and returns: income in Refunds, or filed under a spending category, which does not lower its spending): {} in all: {}.",
+                m.fmt(back.iter().map(|t| int(t, "amount")).sum()), named.join("; "));
+        }
+    }
     if !e.expenses.is_empty() {
         let _ = writeln!(o, "- Biggest expenses: {}.", e.largest(3, &m, today));
     }
@@ -761,6 +825,26 @@ fn tx_list(payload: &Value, r: &Value, ctx: &Ctx) -> String {
     }
     weeks.sort_by_key(|w| w.0);
     days.sort_by_key(|d| std::cmp::Reverse(d.0));
+    // Over a long range of days, weeks and days run to hundreds of figures: months instead.
+    let span = match (date(s(&r["period"], "start")), date(s(&r["period"], "end_exclusive"))) {
+        (Some(a), Some(b)) => i64::from((b - a).get_days()),
+        _ => 0,
+    };
+    if span > LONG_RANGE_DAYS {
+        let mut months: BTreeMap<(i16, i8), (i64, i64)> = BTreeMap::new();
+        for (d, sum, n) in &days {
+            let row = months.entry((d.year(), d.month())).or_default();
+            row.0 += sum;
+            row.1 += n;
+        }
+        let shown: Vec<String> = months.iter().map(|((y, mo), (sum, n))| {
+            let first = jiff::civil::date(*y, *mo, 1);
+            format!("{} {} ({n})", if *y == today.year() { first.strftime("%B").to_string() } else { first.strftime("%B %Y").to_string() }, m.fmt(*sum))
+        }).collect();
+        let _ = writeln!(o, "- Spent by calendar month, oldest first (cut to the days asked for): {}.", shown.join("; "));
+        weeks.clear();
+        days.clear();
+    }
     if !weeks.is_empty() {
         let shown: Vec<String> = weeks.iter().map(|(start, sum, n)| {
             let end = start.checked_add(jiff::Span::new().days(6)).unwrap_or(*start);
@@ -772,8 +856,13 @@ fn tx_list(payload: &Value, r: &Value, ctx: &Ctx) -> String {
         let shown: Vec<String> = days.iter().map(|(d, sum, n)| format!("{} {} ({n})", day(*d, today), m.fmt(*sum))).collect();
         let _ = writeln!(o, "- Spent by day, newest first (days with no expense left out): {}.", shown.join("; "));
     }
-    let _ = writeln!(o, "\nENTRIES, newest first (#id, day, note, amount, category, account):");
-    for t in e.rows {
+    let shown = e.rows.len().min(LISTED_ENTRIES);
+    if shown < e.rows.len() {
+        let _ = writeln!(o, "\nENTRIES, the newest {shown} of {} (every figure above counts them all; a query, a category_id or fewer days lists the others) (#id, day, note, amount, category, account):", e.rows.len());
+    } else {
+        let _ = writeln!(o, "\nENTRIES, newest first (#id, day, note, amount, category, account):");
+    }
+    for t in &e.rows[..shown] {
         let amount = m.fmt(int(t, "amount"));
         let what = match s(t, "type") {
             "TRANSFER" => format!("{amount} transfer, {} to {}", s(t, "account"), s(t, "to_account")),
@@ -1167,6 +1256,9 @@ fn lift_line(l: &Value, unit: &str, today: Date) -> String {
             if let Some(h) = l.get("heaviest").filter(|h| h["weight"].as_f64() > b["weight"].as_f64()) {
                 let w = h["weight"].as_f64().unwrap_or(0.0);
                 let _ = write!(line, "; heaviest weight ever lifted {}{} on {}", set(&h["weight"], &h["reps"], unit), other_unit(w, unit), day_of(s(h, "day"), today));
+                if let (Some(he), Some(be)) = (h["e1rm"].as_f64().filter(|he| Some(*he) <= b["e1rm"].as_f64()), b["e1rm"].as_f64()) {
+                    let _ = write!(line, ", heavier but not a better set: its estimated 1-rep max is {} {unit}, the best set's {} {unit}", weight(he), weight(be));
+                }
             }
         }
         None => match l["best_reps"].as_i64() {
@@ -1273,6 +1365,21 @@ fn gym_summary(r: &Value, lifts: Option<&Value>, cardio: Option<&Value>, months:
         let _ = writeln!(o, "Last workout: {last_day} ({}).", plural(since, "day ago", "days ago"));
     }
     let _ = writeln!(o, "Streak: {} in a row with at least one workout.", plural(int(r, "streak_weeks"), "week", "weeks"));
+    let breaks: Vec<String> = list(r, "breaks").iter().map(|b| format!(
+        "{} to {}, {} days, after {} in a row with a workout",
+        day_of(s(b, "last_before"), today), day_of(s(b, "first_after"), today), int(b, "days"), plural(int(b, "streak_before_weeks"), "week", "weeks"),
+    )).collect();
+    if !breaks.is_empty() {
+        let _ = writeln!(o, "Longest breaks (last workout before, first one back): {}.", breaks.join("; "));
+    }
+    let marked: Vec<String> = list(r, "marked").iter().map(|m| {
+        let days: Vec<String> = list(m, "days").iter().filter_map(|d| d.as_str()).map(|d| day_of(d, today)).collect();
+        let shown = if days.len() as i64 == int(m, "sessions") { days.join(", ") } else { format!("the newest {}", days.join(", ")) };
+        format!("{} {} ({shown})", s(m, "kind").replace('_', " "), int(m, "sessions"))
+    }).collect();
+    if !marked.is_empty() {
+        let _ = writeln!(o, "Workouts Avex marks with a type (a deload, a test day…), how many and when: {}.", marked.join("; "));
+    }
     let per_week = int(&r["imported"], "days_per_week");
     if per_week > 0 {
         let _ = writeln!(o, "Plan in Avex: {per_week} training days a week.");
@@ -1284,6 +1391,7 @@ fn gym_summary(r: &Value, lifts: Option<&Value>, cardio: Option<&Value>, months:
             let _ = writeln!(o, "Cardio in all: no cardio in this Avex copy.");
         } else {
             let _ = writeln!(o, "Cardio in all: {}, {} minutes, {} km.", plural(moving.len() as i64, "session", "sessions"), moving.iter().map(|x| int(x, "minutes")).sum::<i64>(), (km * 100.0).round() / 100.0);
+            cardio_kinds(&mut o, list(c, "entries"), today);
         }
     }
     gym_months(&mut o, months, unit);
@@ -1557,6 +1665,46 @@ fn duration(minutes: i64) -> String {
     }
 }
 
+/// Cardio added up by kind over every entry read, most first: a run is not a treadmill session,
+/// and a model adding a year of months mixes them. A kind done three times or fewer lists each,
+/// with its note (where a hike went).
+fn cardio_kinds(o: &mut String, rows: &[Value], today: Date) {
+    let mut kinds: Vec<(String, Vec<&Value>)> = Vec::new();
+    for x in rows.iter().filter(|x| s(x, "kind") != "rest") {
+        let kind = s(x, "kind").trim().to_ascii_lowercase();
+        match kinds.iter_mut().find(|k| k.0 == kind) {
+            Some(k) => k.1.push(x),
+            None => kinds.push((kind, vec![x])),
+        }
+    }
+    if kinds.is_empty() {
+        return;
+    }
+    kinds.sort_by_key(|k| std::cmp::Reverse(k.1.len()));
+    let cells: Vec<String> = kinds.iter().map(|(kind, xs)| {
+        let km: f64 = xs.iter().map(|x| num(x, "distance_km")).sum();
+        let mut cell = format!("{}, {}", cardio_count(kind, xs.len() as i64), duration(xs.iter().map(|x| int(x, "minutes")).sum()));
+        if km > 0.0 {
+            let _ = write!(cell, ", {} km", (km * 100.0).round() / 100.0);
+        }
+        if xs.len() <= 3 {
+            let each: Vec<String> = xs.iter().map(|x| {
+                let mut one = day_of(s(x, "day"), today);
+                if let Some(d) = x["distance_km"].as_f64() {
+                    let _ = write!(one, " {d} km");
+                }
+                if !s(x, "note").trim().is_empty() {
+                    let _ = write!(one, " \"{}\"", s(x, "note").trim());
+                }
+                one
+            }).collect();
+            let _ = write!(cell, " ({})", each.join("; "));
+        }
+        cell
+    }).collect();
+    let _ = writeln!(o, "Cardio by kind, every entry read (each kind its own; a treadmill run is not a run): {}.", cells.join("; "));
+}
+
 /// Cardio counted month by month, oldest first, each kind on its own: "- August: 5 runs, 2 h 41
 /// min, 26.1 km". A small model miscounts a month's runs from a list. `partial` when the entries
 /// were cut at a limit, so the oldest month may be missing some.
@@ -1620,6 +1768,7 @@ fn gym_cardio(payload: &Value, r: &Value, ctx: &Ctx) -> String {
         match rows.len() - moving.len() { 0 => String::new(), n => format!("; {} rest days", n) },
         if partial { format!(" (the newest {} entries only: a larger limit reads older ones)", rows.len()) } else { String::new() }
     );
+    cardio_kinds(&mut o, rows, ctx.today);
     cardio_months(&mut o, rows, partial, ctx.today);
     let _ = writeln!(o, "\nEACH ENTRY:");
     for x in rows {
@@ -1725,8 +1874,34 @@ mod tests {
         assert!(!text.contains("\"icon\"") && !text.contains("color"), "{text}");
         let mut days = page();
         days["period"] = json!({"start": "2026-10-02", "end_exclusive": "2026-10-09", "days": 7, "days_left": 0});
+        let mut back = page();
+        back["transactions"].as_array_mut().unwrap().push(tx(131, "INCOME", 5900, "2026-10-09", Some("Shopping"), "Remboursement Simons"));
+        let lists = json!({"categories": [{"id": 7, "name": "Shopping", "kind": "EXPENSE"}, {"id": 14, "name": "Salary", "kind": "INCOME"}]});
+        let text = render("money.tx.list", &json!({}), &back, &[Some(lists)], &ctx()).unwrap();
+        for want in [
+            "- Income by category, largest first: Salary $2,150.00 (1); Shopping $59.00 (1).",
+            "- Money back (refunds and returns: income in Refunds, or filed under a spending category, which does not lower its spending): $59.00 in all: #131 Remboursement Simons, $59.00 (Shopping), Fri Oct 9.",
+        ] {
+            assert!(text.contains(want), "missing {want:?} in\n{text}");
+        }
         let ranged = render("money.tx.list", &json!({"from": "2026-10-02", "to": "2026-10-08"}), &days, &[], &ctx()).unwrap();
         assert!(ranged.starts_with("TALLY ENTRIES for Oct 2 to Oct 8, the days asked for, not a budget month."), "{ranged}");
+    }
+
+    /// A long range is added up by month, and lists only its newest entries, its figures whole.
+    #[test]
+    fn a_long_range_of_entries_reads_by_month_and_lists_the_newest() {
+        let rows: Vec<Value> = (0..100).map(|i| {
+            let day = jiff::civil::date(2026, 1, 1).checked_add(jiff::Span::new().days(i * 2)).unwrap();
+            tx(1000 + i, "EXPENSE", 1000, &day.to_string(), Some("Dining"), "Lunch")
+        }).rev().collect();
+        let r = json!({"period": {"start": "2026-01-01", "end_exclusive": "2026-07-20", "days": 200, "days_left": 0}, "income": 0, "spent": 100000, "transactions": rows});
+        let text = render("money.tx.list", &json!({"from": "2026-01-01"}), &r, &[], &ctx()).unwrap();
+        assert!(text.contains("- Spent (all expenses added up): $1,000.00"), "{text}");
+        assert!(text.contains("- Spent by calendar month, oldest first (cut to the days asked for): January $160.00 (16); February $140.00 (14);"), "{text}");
+        assert!(!text.contains("Spent by week") && !text.contains("Spent by day"), "{text}");
+        assert!(text.contains("ENTRIES, the newest 80 of 100"), "{text}");
+        assert!(text.contains("- #1099 ") && !text.contains("- #1019 "), "the newest are listed: {text}");
     }
 
     fn summary() -> Value {
@@ -1757,7 +1932,10 @@ mod tests {
     fn the_money_summary_names_the_entries_with_no_category() {
         let mut month = page();
         month["transactions"].as_array_mut().unwrap().push(tx(140, "EXPENSE", 985, "2026-10-13", None, "Dépanneur Chez Ben"));
-        let text = render("money.summary", &json!({}), &summary(), &[Some(month)], &ctx()).unwrap();
+        let mut r = summary();
+        r["duplicates"] = json!([[tx(141, "EXPENSE", 3240, "2026-10-12", Some("Dining"), "Uber Eats"), tx(142, "EXPENSE", 3240, "2026-10-12", Some("Dining"), "Uber Eats")]]);
+        let text = render("money.summary", &json!({}), &r, &[Some(month)], &ctx()).unwrap();
+        assert!(text.contains("Possible duplicates in the whole ledger (same day, amount, account and note: maybe logged twice): #141 and #142 Uber Eats, $32.40 expense, Visa, Mon Oct 12."), "{text}");
         assert!(text.contains("- No category: $9.85 (1): #140 $9.85, Dépanneur Chez Ben, Tue Oct 13\n"), "{text}");
     }
 
@@ -1773,6 +1951,7 @@ mod tests {
         for want in [
             "TALLY (budget app). Today is Thursday, October 15, 2026 (2026-10-15). Amounts are in CAD. Only what the person has logged in their Tally app: not their bank, not everything they did.\n",
             "THIS MONTH: October 2026 (Oct 1 to Oct 31), day 15 of 31, 17 days left counting today.",
+            "- Budgets last month, against each budget as it is set now: all spending $90.00 of $2,900.00, $2,810.00 left; Dining $90.00 of $320.00, $230.00 left; Groceries $0.00 of $500.00, $500.00 left; Entertainment $0.00 of $80.00, $80.00 left.",
             "- Spent so far (all expenses): $2,425.26",
             "- Monthly budget: $2,900.00. Left to spend: $474.74 (83.6% of the budget used).",
             "- Pace: $1,022.03 OVER pace (an even pace would be $1,403.23 spent by today).",
@@ -1948,11 +2127,13 @@ mod tests {
                        "last_week": {"start": "2026-10-05", "sessions": 3, "sets": 36, "volume": 46405.0, "active_minutes": 129, "cardio_minutes": 0},
                        "weeks": [{"start": "2026-10-05", "sessions": 3, "sets": 36, "volume": 46405.0, "active_minutes": 129, "cardio_minutes": 0}],
                        "streak_weeks": 13, "days_since_last": 7, "recent": [session(149, "2026-10-08")], "records": [], "lifts": [lift("Bench Press", Some(215.0))],
-                       "goals": [{"kind": "lift_target", "target_key": "bench", "target_value": 225.0, "created_day": "2026-07-13", "note": "Two plates"}]});
+                       "goals": [{"kind": "lift_target", "target_key": "bench", "target_value": 225.0, "created_day": "2026-07-13", "note": "Two plates"}],
+                       "breaks": [{"last_before": "2026-08-20", "first_after": "2026-09-05", "days": 16, "streak_before_weeks": 6}],
+                       "marked": [{"kind": "deload", "sessions": 2, "days": ["2026-09-28", "2026-09-29"]}, {"kind": "first_back", "sessions": 1, "days": ["2026-09-05"]}]});
         let mut pull_up = lift("Pull-up", None);
         pull_up["best_reps"] = json!(12);
         let mut deadlift = lift("Deadlift", Some(335.0));
-        deadlift["heaviest"] = json!({"lift": "Deadlift", "day": "2026-09-26", "session_id": 140, "weight": 365.0, "reps": 1, "e1rm": 377.2});
+        deadlift["heaviest"] = json!({"lift": "Deadlift", "day": "2026-09-26", "session_id": 140, "weight": 365.0, "reps": 1, "e1rm": 240.0});
         let lifts = json!({"unit": "lb", "lifts": [lift("Bench Press", Some(215.0)), deadlift, lift("Dips", None), pull_up]});
         let cardio = json!({"entries": [{"day": "2026-10-03", "time": "08:00", "kind": "run", "minutes": 36, "distance_km": 5.65, "effort": "easy", "note": ""},
                                         {"day": "2026-08-30", "time": "08:00", "kind": "rest", "minutes": 0, "distance_km": null, "effort": "", "note": ""},
@@ -1977,12 +2158,16 @@ mod tests {
             "These are the only lifts ever logged: Bench Press, Deadlift, Dips, Pull-up. Any other lift has never been logged.",
             "Last workout: Thu Oct 8 (7 days ago).",
             "Streak: 13 weeks in a row",
+            "Longest breaks (last workout before, first one back): Thu Aug 20 to Sat Sep 5, 16 days, after 6 weeks in a row with a workout.",
+            "Workouts Avex marks with a type (a deload, a test day…), how many and when: deload 2 (Mon Sep 28, Tue Sep 29); first back 1 (Sat Sep 5).",
             "- Thu Oct 8 18:32 (7 days ago): Legs A, 44 min, 12 sets, 26,185 lb lifted, 4 records; lifts: Back Squat, Leg Press; felt good [id 149]",
-            "- Deadlift: best set 335 lb x 5 (152 kg) on Mon Oct 5, estimated 1-rep max 250.8 lb (113.8 kg); heaviest weight ever lifted 365 lb x 1 (165.6 kg) on Sat Sep 26;",
+            "- Deadlift: best set 335 lb x 5 (152 kg) on Mon Oct 5, estimated 1-rep max 250.8 lb (113.8 kg); heaviest weight ever lifted 365 lb x 1 (165.6 kg) on Sat Sep 26, heavier but not a better set: its estimated 1-rep max is 240 lb, the best set's 250.8 lb;",
             "- Dips: bodyweight or timed only",
             "- Pull-up: bodyweight, no weighted best set, so no estimated max; most reps in one set: 12;",
             "Most improved first (estimated max, last 4 weeks vs the 4 before): Bench Press +4.9%",
             "Cardio in all: 4 sessions, 141 minutes, 31.15 km.",
+            "Cardio by kind, every entry read (each kind its own; a treadmill run is not a run): 3 runs, 1 h 41 min, 16.15 km (Sat Oct 3 5.65 km; Thu Aug 20 5.5 km; ",
+            "1 bike ride, 40 min, 15 km (Wed Aug 12 15 km).",
             "MONTH BY MONTH (calendar months, oldest first): Aug: nothing in this Avex copy; Sep: 15 workouts, 180,000 lb lifted, no cardio; Oct so far: 5 workouts, 60,000 lb lifted, 36 cardio minutes, 5.65 km.",
             "OPEN GOALS:\n- lift target bench",
             "LAST WORKOUT IN DETAIL (Thu Oct 8, Legs A: 12 sets in all, 26,185 lb lifted in all). A lift's volume is weight x reps added up over its working sets; warm-ups are not counted:",

@@ -19369,6 +19369,16 @@
           },
           "description": "The latest few entries, for Home. Left out for a model, which answered \"the biggest expense\"\nfrom these few instead of the period's entries.",
           "x-unit": "omit"
+        },
+        "duplicates": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/MoneyTx"
+            }
+          },
+          "description": "Entries that may be one logged twice, over the whole ledger: each group shares its day,\namount, type, account and note (a note is needed). Newest first, at most [`DUPLICATE_GROUPS`]."
         }
       },
       "required": [
@@ -19386,7 +19396,8 @@
         "net_worth",
         "bills",
         "goals",
-        "recent"
+        "recent",
+        "duplicates"
       ],
       "description": "The Home reading (docs/MONEY.md)."
     },
@@ -25516,6 +25527,20 @@
             "$ref": "#/$defs/GymGoalRow"
           },
           "description": "Goals neither met nor archived."
+        },
+        "breaks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GymBreak"
+          },
+          "description": "The longest breaks between counted workouts, longest first: at most [`BREAKS`], each of\n[`MIN_BREAK_DAYS`] or more."
+        },
+        "marked": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GymMarked"
+          },
+          "description": "Counted workouts Avex gave a type other than `normal` (a deload, a test day…), by type."
         }
       },
       "required": [
@@ -25529,7 +25554,9 @@
         "recent",
         "records",
         "lifts",
-        "goals"
+        "goals",
+        "breaks",
+        "marked"
       ]
     },
     "GymImported": {
@@ -25906,6 +25933,64 @@
         "source",
         "note"
       ]
+    },
+    "GymBreak": {
+      "type": "object",
+      "properties": {
+        "last_before": {
+          "type": "string",
+          "description": "The last workout before it and the first after (`YYYY-MM-DD`)."
+        },
+        "first_after": {
+          "type": "string"
+        },
+        "days": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Days from the one to the other."
+        },
+        "streak_before_weeks": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Weeks in a row with a workout up to and including the week of `last_before`."
+        }
+      },
+      "required": [
+        "last_before",
+        "first_after",
+        "days",
+        "streak_before_weeks"
+      ],
+      "description": "A gap between two counted workouts."
+    },
+    "GymMarked": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "Avex's `session_type`: `deload`, `test`, `first_back`…"
+        },
+        "sessions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How many in all."
+        },
+        "days": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Their days, oldest first: the newest [`MARKED_DAYS`]."
+        }
+      },
+      "required": [
+        "kind",
+        "sessions",
+        "days"
+      ],
+      "description": "The counted workouts of one Avex session type."
     },
     "GymSessionsIn": {
       "type": "object",
