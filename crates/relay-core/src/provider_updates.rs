@@ -27,6 +27,7 @@ fn title(provider: Provider) -> &'static str {
     match provider {
         Provider::Claude => "Claude Code",
         Provider::Codex => "Codex",
+        Provider::Shell => "Shell",
     }
 }
 

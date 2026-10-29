@@ -5,6 +5,8 @@ import com.quietsoftware.relay.core.link.LinkState
 import com.quietsoftware.relay.core.link.PcProfile
 import com.quietsoftware.relay.core.sync.Kind
 import com.quietsoftware.relay.core.sync.OutboxEntry
+import com.quietsoftware.relay.core.sync.OutboxRunner
+import com.quietsoftware.relay.core.sync.Refs
 import com.quietsoftware.relay.core.testing.FakeDoor
 import com.quietsoftware.relay.core.testing.MemoryOutbox
 import com.quietsoftware.relay.core.testing.MemoryReplica
@@ -13,8 +15,10 @@ import com.quietsoftware.relay.core.wire.Greeting
 import com.quietsoftware.relay.core.wire.Route
 import com.quietsoftware.relay.core.wire.Wire
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -27,6 +31,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /** The hub's own rules around the outbox: what a failed first read and a lost answer leave behind. */
 class HubTest {
@@ -121,6 +126,23 @@ class HubTest {
         withTimeout(10_000) { while (sent.isEmpty()) delay(20) }
         assertEquals(listOf("Am I on pace?"), sent.toList())
         withTimeout(10_000) { while (outbox.open().isNotEmpty()) delay(20) }
+    }
+
+    @Test
+    fun `a shell opened while the PC was away is dropped after two minutes, and its start with it`() = runBlocking {
+        val clock = AtomicLong(1_000_000)
+        val hub = Hub(scope, door, source, replica, outbox, now = clock::get)
+        val dropped = async(start = CoroutineStart.UNDISPATCHED) { hub.expired.first() }
+        val create = hub.change("session.create", obj("project_id" to 1, "provider" to "shell"), "New shell") as Hub.Change.Queued
+        hub.change("session.spawn", obj("session" to Refs.ref(create.entry.id, "name")), "Open shell")
+        // A fresh one, opened just now, still goes.
+        clock.addAndGet(OutboxRunner.SHELL_OPEN_MS + 1)
+        hub.change("session.create", obj("project_id" to 1, "provider" to "shell"), "New shell")
+        hub.start()
+        assertEquals(create.entry.id, withTimeout(10_000) { dropped.await() }.id)
+        withTimeout(10_000) { while (outbox.open().isNotEmpty()) delay(20) }
+        assertEquals("the old create and its start never reached the PC", 1, door.requests.count { it.first == "session.create" })
+        assertEquals(0, door.requests.count { it.first == "session.spawn" })
     }
 
     @Test

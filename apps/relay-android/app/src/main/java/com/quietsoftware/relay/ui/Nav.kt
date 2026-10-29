@@ -74,8 +74,10 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     /** An agent's own page: its conversation ([chat]), with its terminal one tap under it. */
     fun terminal(name: String) = chat(name)
 
-    /** The agent as a conversation; back to it when the screen under this one already is. */
-    override fun chat(name: String) = swap("chat", name)
+    /** The agent as a conversation; back to it when the screen under this one already is. A shell has
+     *  no conversation, so it opens on its terminal. */
+    override fun chat(name: String) =
+        swap(if (shell.state.value.sessions.any { it.name == name && it.shell }) "terminal" else "chat", name)
 
     /** The agent's raw terminal, for what a conversation cannot show. */
     fun console(name: String) = swap("terminal", name)
@@ -87,7 +89,8 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
         else go("$screen/${Uri.encode(name)}", stack = true)
     }
     fun session(name: String) = go("session/${Uri.encode(name)}")
-    fun launch(projectId: Long? = null, taskId: Long? = null, prompt: String? = null) = go("launch" + q("project" to projectId, "task" to taskId, "prompt" to prompt))
+    fun launch(projectId: Long? = null, taskId: Long? = null, prompt: String? = null, provider: String? = null) =
+        go("launch" + q("project" to projectId, "task" to taskId, "prompt" to prompt, "provider" to provider))
     fun board(projectId: Long?) = go("board" + q("project" to projectId))
 
     /** A project's board from a page opened on it: back to it when it is the screen below, rather than a second one. */

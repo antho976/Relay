@@ -832,7 +832,18 @@ fn plan_launch(conn: &Connection, engine: &Engine, row: Row_, kind: LaunchKind, 
     let brief = crate::awareness::brief(conn, &row.session.name, Some(engine), git)?;
     let cfg = crate::guardrail::config(conn, Some(row.session.project_id))?;
     let write_roots = crate::guardrail::write_roots(&cfg, &cwd).into_iter().filter(|root| root != &cwd).collect();
-    let initial_scrollback = match kind {
+    let initial_scrollback = initial_scrollback(conn, engine, &row, kind)?;
+    Ok(LaunchPlan {
+        row, kind, cmd, project_path: PathBuf::from(&project.path), relay_bin, plugin_servers, skills,
+        brief_compact: brief.compact, brief_skills: brief.parts.skills, write_roots, initial_scrollback,
+    })
+}
+
+/// What a relaunch shows before the new process prints anything.
+fn initial_scrollback(conn: &Connection, engine: &Engine, row: &Row_, kind: LaunchKind) -> Result<Vec<u8>, BusError> {
+    Ok(match kind {
+        // A shell keeps nothing of what it showed, not even from its dead PTY: it comes back blank.
+        _ if is_shell(&row.session) => Vec::new(),
         LaunchKind::Fresh => Vec::new(),
         // An exited session's history is still in its dead PTY: nothing saves it at exit, so
         // the stored copy is stale or missing until the engine shuts down.
@@ -842,11 +853,42 @@ fn plan_launch(conn: &Connection, engine: &Engine, row: Row_, kind: LaunchKind, 
                 .map(|saved| saved.0.into_bytes())
                 .unwrap_or_default(),
         },
-    };
-    Ok(LaunchPlan {
-        row, kind, cmd, project_path: PathBuf::from(&project.path), relay_bin, plugin_servers, skills,
-        brief_compact: brief.compact, brief_skills: brief.parts.skills, write_roots, initial_scrollback,
     })
+}
+
+/// The variables of an agent's launch (and Relay's own): a shell inherits none of them, even when
+/// the engine was started from inside a session, so nothing run in it acts on the bus as one.
+const AGENT_ENV: &[&str] = &[
+    "RELAY_SESSION", "RELAY_TOKEN", "RELAY_INSTANCE", "RELAY_PROJECT", "RELAY_WORKTREE", "RELAY_BRIEF", "RELAY_BIN", "RELAY_STORE",
+];
+
+/// A shell's launch: the person's login shell in the project's folder, or their home when the
+/// folder is gone. No hooks, brief, token or Relay variables: there is no agent to tell anything.
+fn shell_launch(row: Row_, kind: LaunchKind, cmd: PathBuf, project_path: &str, initial_scrollback: Vec<u8>) -> PreparedLaunch {
+    let cwd = Some(PathBuf::from(project_path)).filter(|path| path.is_dir())
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from).filter(|home| home.is_dir()))
+        .unwrap_or_else(|| PathBuf::from("/"));
+    let args = crate::providers::driver(Provider::Shell).args(&row.session, crate::providers::Launch::Fresh, None, &[]);
+    PreparedLaunch {
+        session_id: row.session.id,
+        name: row.session.name.clone(),
+        expect: row.session.state,
+        epoch: row.epoch,
+        kind,
+        launch_prompt: None,
+        clear: false,
+        spec: SpawnSpec {
+            cmd: cmd.display().to_string(),
+            args,
+            env: Vec::new(),
+            env_remove: AGENT_ENV.iter().map(|name| name.to_string()).collect(),
+            cwd,
+            cols: 120,
+            rows: 40,
+            epoch: row.epoch + 1,
+            initial_scrollback,
+        },
+    }
 }
 
 /// The external half of a launch: git hooks, provider adapters, skill folders, the brief and
@@ -1052,6 +1094,18 @@ fn stage_launch(
     adjust: impl FnOnce(&mut Row_),
 ) -> Result<PreparedLaunch, BusError> {
     let engine = ctx.engine();
+    if ctx.read(|conn| sessions::by_name(conn, session))?.session.provider == Provider::Shell {
+        let (row, project_path, cmd, initial) = ctx.read(|conn| {
+            let mut row = sessions::by_name(conn, session)?;
+            check(&row)?;
+            adjust(&mut row);
+            let project = crate::handlers::workspace::get_project(conn, row.session.project_id)?;
+            let cmd = crate::providers::executable(conn, Provider::Shell)?;
+            let initial = initial_scrollback(conn, engine, &row, kind)?;
+            Ok((row, project.path, cmd, initial))
+        })?;
+        return Ok(shell_launch(row, kind, cmd, &project_path, initial));
+    }
     let git = brief_git(ctx, session)?;
     let plan = ctx.read(|conn| {
         let mut row = sessions::by_name(conn, session)?;
@@ -1187,6 +1241,10 @@ type UpdateValues = (Option<String>, Option<String>, Option<Id>, Option<Id>);
 /// rename never runs for an update the transaction would then refuse.
 fn check_update(conn: &Connection, before: &Row_, p: &UpdateIn) -> Result<UpdateValues, BusError> {
     let s = &before.session;
+    if is_shell(s) && (p.branch.is_some() || p.model.is_some() || p.effort.is_some() || p.task_id.is_some()
+        || p.module_id.is_some() || p.bus_writes == Some(true) || p.allow_ui == Some(true)) {
+        return Err(BusError::invalid("session.shell", format!("{} is a shell: it takes no branch, model, task or agent setting", s.name)));
+    }
     let spawned = before.epoch > 0 || s.spawned_at.is_some();
     if spawned && (p.branch.is_some() || p.model.is_some() || p.effort.is_some()) {
         return Err(BusError::conflict("session.already_spawned", "branch, model, and effort cannot change after first spawn"));
@@ -1232,8 +1290,42 @@ impl Drop for PreparedCreate {
     }
 }
 
+/// A shell (`Provider::Shell`) is the person's own login shell in a real PTY: no agent runs, so
+/// it has no checkout, branch, hooks, brief, task or pair, and nothing an agent is set up with.
+pub(crate) fn is_shell(s: &Session) -> bool {
+    s.provider == Provider::Shell
+}
+
+/// What a shell create may not carry: everything that only means something to an agent.
+fn validate_shell(p: &CreateIn) -> Result<(), BusError> {
+    let set = [
+        ("role", p.role.is_some()), ("model", p.model.is_some()), ("effort", p.effort.is_some()),
+        ("branch", p.branch.is_some()), ("worktree", p.worktree.is_some()), ("task_id", p.task_id.is_some()),
+        ("module_id", p.module_id.is_some()), ("pair_with", p.pair_with.is_some()),
+        ("bus_writes", p.bus_writes == Some(true)), ("allow_ui", p.allow_ui == Some(true)),
+        ("use_api_key", p.use_api_key == Some(true)),
+        ("prompt", p.prompt.as_deref().is_some_and(|prompt| !prompt.trim().is_empty())),
+    ];
+    match set.iter().find(|(_, given)| *given) {
+        Some((field, _)) => Err(BusError::invalid("session.shell", format!("a shell takes no {field}: it runs your login shell in the project's folder"))),
+        None => Ok(()),
+    }
+}
+
+/// A shell's terminal is the person's alone. A thread's agent (the assistant, Aide) reads other
+/// sessions as the person, so it is refused here: it neither opens one nor reads from one.
+fn refuse_shell_to_thread(thread: Option<Id>, s: &Session) -> Result<(), BusError> {
+    if thread.is_some() && is_shell(s) {
+        return Err(BusError::refused("session.shell", format!("{} is the person's own shell; an assistant neither opens nor reads one", s.name)));
+    }
+    Ok(())
+}
+
 fn validate_create(conn: &Connection, p: &CreateIn) -> Result<relay_bus::types::Project, BusError> {
     let project = crate::handlers::workspace::get_project(conn, p.project_id)?;
+    if p.provider == Provider::Shell {
+        validate_shell(p)?;
+    }
     crate::providers::validate_options(p.provider, p.model.as_deref(), p.effort.as_deref())?;
     check_task_module(conn, project.id, p.task_id, p.module_id)?;
     Ok(project)
@@ -1243,6 +1335,9 @@ fn validate_create(conn: &Connection, p: &CreateIn) -> Result<relay_bus::types::
 /// prepare phase can refuse a bad pairing before it touches the partner's checkout.
 fn validate_pair(conn: &Connection, p: &CreateIn, project_id: Id, name: &str) -> Result<Row_, BusError> {
     let pair = sessions::by_name(conn, name)?;
+    if is_shell(&pair.session) {
+        return Err(BusError::invalid("session.shell", format!("{name} is a shell: it runs no agent to pair with")));
+    }
     if pair.session.project_id != project_id { return Err(BusError::invalid("session.pair_project", "PAIR sessions must belong to the same project")); }
     if pair.session.pair_with.is_some() {
         let role = p.role.unwrap_or(Role::Builder);
@@ -1330,6 +1425,9 @@ fn own_branch(repo: &Path, name: &str) -> Result<String, BusError> {
 
 pub fn register(e: &mut Engine) {
     e.register_staged::<Create, _>(|ctx, p| {
+        if p.provider == Provider::Shell && ctx.thread().is_some() {
+            return Err(BusError::refused("session.shell", "only the person opens a shell, from the desktop or a paired phone"));
+        }
         let mut prepared = ctx.read(|conn| {
             let project = validate_create(conn, p)?;
             let default_checkout = crate::plugins::default_checkout(conn, project.id).bus()?;
@@ -1345,6 +1443,12 @@ pub fn register(e: &mut Engine) {
             }
             Err(BusError::conflict("session.names_busy", "Could not reserve a free session name"))
         })?;
+        // A shell has no checkout of its own: it is spawned in the project's folder, and its row
+        // names no worktree, so nothing that walks checkouts, hooks or branches ever finds it.
+        if p.provider == Provider::Shell {
+            prepared.checkout = Some((String::new(), String::new()));
+            return Ok(prepared);
+        }
         // A refused pairing is refused here, before anything touches the partner's checkout.
         let pair_worktree = match p.pair_with.as_deref() {
             Some(name) => Some(ctx.read(|conn| validate_pair(conn, p, prepared.project.id, name))?.session.worktree),
@@ -1663,7 +1767,10 @@ pub fn register(e: &mut Engine) {
 
     e.register_unlocked::<Brief>(|ctx, p| {
         // Metadata is project-visible; a peer's brief and scrollback are not.
-        read_own_or_pair(ctx, &p.session)?;
+        let row = read_own_or_pair(ctx, &p.session)?;
+        if is_shell(&row.session) {
+            return Err(BusError::conflict("session.shell", format!("{} is a shell: it has no brief", row.session.name)));
+        }
         let git = brief_git(ctx, &p.session)?;
         ctx.read(|conn| crate::awareness::brief(conn, &p.session, Some(ctx.engine()), &git))
     });
@@ -2169,6 +2276,10 @@ pub fn register(e: &mut Engine) {
                 return Err(BusError::conflict("session.state", format!("session {} is not restorable or exited", row.session.name)));
             }
             let project = crate::handlers::workspace::get_project(conn, row.session.project_id)?;
+            // A shell installed no hooks and has no checkout: there is nothing to undo or hand over.
+            if is_shell(&row.session) {
+                return Ok((row, PathBuf::from(project.path), Hooks { teardown: None, survivor: None }));
+            }
             let survivor = survivor_on(conn, row.session.id, &row.session.worktree)?;
             let teardown = if survivor.is_none() { Some(read_teardown(conn, &row.session.worktree)?) } else { None };
             Ok((row, PathBuf::from(project.path), Hooks { teardown, survivor }))
@@ -2185,7 +2296,9 @@ pub fn register(e: &mut Engine) {
                 worktree::remove(&repo, wt, true).map_err(|error| BusError::conflict("worktree.remove_failed", error.to_string()))?;
             }
         }
-        retire_hook_dir(ctx.instance(), &repo, wt, &row.session.name, survivor.as_deref());
+        if !is_shell(&row.session) {
+            retire_hook_dir(ctx.instance(), &repo, wt, &row.session.name, survivor.as_deref());
+        }
         Ok(row.session.id)
     }, |ctx: &mut Ctx, p, id: Id| {
         let row = sessions::by_id(ctx.tx(), id)?
@@ -2208,6 +2321,10 @@ pub fn register(e: &mut Engine) {
             let row = sessions::by_name(conn, &p.session)?;
             let s = &row.session;
             let project = crate::handlers::workspace::get_project(conn, s.project_id)?;
+            // A shell installed no hooks and has no checkout: there is nothing to undo or hand over.
+            if is_shell(s) {
+                return Ok((row, PathBuf::from(project.path), Hooks { teardown: None, survivor: None }));
+            }
             let survivor = survivor_on(conn, s.id, &s.worktree)?;
             // Only a pooled checkout is ever removed, so only there does a partner still on it
             // stand in the way; an independent agent sharing the primary does not.
@@ -2275,7 +2392,9 @@ pub fn register(e: &mut Engine) {
         // The generated hook directory outlives nothing: leaving one per dead session behind
         // makes `.relay/hooks` read like a fleet that never shut down. On a shared checkout it
         // may be the one the checkout's hooksPath points at, so it is handed over first.
-        retire_hook_dir(ctx.instance(), &repo, wt, &s.name, survivor.as_deref());
+        if !is_shell(s) {
+            retire_hook_dir(ctx.instance(), &repo, wt, &s.name, survivor.as_deref());
+        }
         Ok((s.id, freed))
     }, |ctx: &mut Ctx, p, (id, freed): (Id, u64)| {
         let row = sessions::by_id(ctx.tx(), id)?
@@ -2287,6 +2406,7 @@ pub fn register(e: &mut Engine) {
     e.register::<Attach>(|ctx, p| {
         let row = sessions::by_name(ctx.tx(), &p.session)?;
         assert_own(ctx, &row, true)?;
+        refuse_shell_to_thread(ctx.thread(), &row.session)?;
         if ctx.engine().pty(row.session.id).is_none() {
             return Err(BusError::conflict(
                 "session.not_spawned",
@@ -2328,6 +2448,7 @@ pub fn register(e: &mut Engine) {
     // resolve the row and, for a session with no PTY, to load its saved copy (RA-406).
     e.register_unlocked::<Scrollback>(|ctx, p| {
         let row = read_own_or_pair(ctx, &p.session)?;
+        refuse_shell_to_thread(ctx.thread(), &row.session)?;
         let pty = ctx.engine().pty(row.session.id);
         let size = pty.as_ref().map(|pty| pty.size());
         let (text, epoch, seq) = match pty {
@@ -2358,6 +2479,7 @@ pub fn register(e: &mut Engine) {
     // A file read of up to 8 MiB, and for Codex a walk to find the file: never under the lock.
     e.register_unlocked::<Transcript>(|ctx, p| {
         let row = read_own_or_pair(ctx, &p.session)?;
+        refuse_shell_to_thread(ctx.thread(), &row.session)?;
         let s = &row.session;
         let worktree = Path::new(&s.worktree);
         let path = s.provider_ref.as_deref().filter(|reference| crate::providers::is_provider_ref(reference))
@@ -2429,6 +2551,9 @@ pub fn register(e: &mut Engine) {
     });
     e.register_unlocked::<RepoList>(|ctx, p| {
         let row = read_own_or_pair(ctx, &p.session)?;
+        if row.session.worktree.is_empty() {
+            return Ok(RepoListOut { repos: Vec::new() });
+        }
         let repos = crate::linked::list(Path::new(&row.session.worktree)).into_iter().map(|(name, path)| {
             let found = crate::linked::unpushed(&path);
             let mut repo = crate::linked::describe(&name, &path);

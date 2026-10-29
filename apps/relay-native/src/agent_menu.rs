@@ -805,7 +805,7 @@ impl Ui {
         chip.add_css_class(lamp);
         top.append(&chip);
         head.append(&top);
-        let meta = label(&format!("{} · {}", text(session, "provider"), text(session, "role")), "agent-menu-meta");
+        let meta = label(&crate::terminal::kind_words(session), "agent-menu-meta");
         meta.set_xalign(0.0);
         head.append(&meta);
         body.append(&head);

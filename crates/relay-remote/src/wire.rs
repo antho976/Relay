@@ -628,4 +628,25 @@ mod tests {
         assert_eq!(proof.device.as_deref(), Some("abc"));
         assert!(proof.pair.is_none());
     }
+    /// A shell (`provider: "shell"`) is the owner's own login shell on the PC: a paired phone, the
+    /// owner, opens and types into one; a cloud copy, which holds no terminals, and an agent never do.
+    #[test]
+    fn a_shell_opens_from_a_phone_but_never_from_the_cloud_or_an_agent() {
+        let line = |actor: &str, op: &str, payload: &str| {
+            format!(r#"{{"v":1,"id":"7f2b5d2e-2f1a-4b7c-9a6c-1c9d1e6a0009","actor":"{actor}","op":"{op}","payload":{payload}}}"#)
+        };
+        let create = r#"{"project_id":1,"provider":"shell"}"#;
+        let typed = r#"{"session":"calm-otter","data":"sudo sysctl kernel.perf_event_paranoid=1\r"}"#;
+        for (op, payload) in [("session.create", create), ("session.spawn", r#"{"session":"calm-otter"}"#), ("session.input", typed)] {
+            assert!(matches!(gate(&line("user", op, payload), Instance::Stable), Gate::Forward), "{op}");
+            match gate_for(&line("user", op, payload), Instance::Stable, OpProfile::Cloud) {
+                Gate::Reject(resp) => assert_eq!(resp.error.unwrap().code, "remote.op", "{op}"),
+                Gate::Forward => panic!("{op} forwarded on a cloud door"),
+            }
+            match gate(&line("agent:brisk-otter", op, payload), Instance::Stable) {
+                Gate::Reject(resp) => assert_eq!(resp.error.unwrap().code, "bus.actor", "{op}"),
+                Gate::Forward => panic!("an agent's {op} was forwarded"),
+            }
+        }
+    }
 }

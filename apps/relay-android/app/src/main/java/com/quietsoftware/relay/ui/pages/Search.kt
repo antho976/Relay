@@ -62,6 +62,7 @@ fun SearchScreen(nav: Nav) {
         Triple("Inbox", "inbox") { nav.inbox() },
         Triple("Outbox", "outbox") { nav.outbox() },
         Triple("New agent", "plus") { nav.launch(project) },
+        Triple("New shell", "terminal") { nav.launch(project, provider = "shell") },
         Triple("New task", "plus") { nav.newTask(project) },
         Triple("New note", "plus") { nav.newNote(project) },
         Triple("New thread", "threads") { nav.space("threads") },

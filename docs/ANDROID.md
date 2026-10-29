@@ -181,6 +181,30 @@ inherited (`guardrail.config.layers`). A plugin or a skill opens to a read-only 
 run first); Files moves a file, lists what was trashed with **Restore**, and finds in a file; and
 Design lists a project's canvases and draws their pages as the PC does, read only (next section).
 
+## A shell on the PC
+
+**Shell** under "Who works on it" on New agent (or **New shell** in search) opens the owner's own
+login shell on the PC (their passwd entry's: fish here), in a real PTY in the project's folder, on
+its terminal: `session.create {project_id, provider: "shell"}` then `session.spawn`. `sudo` asks for
+its password there, since the PTY is real. A shell is not an agent: no checkout, branch, hooks,
+brief, MCP servers, task or pair, and none of an agent's `RELAY_*` variables. It is never counted as
+working and never shown to agents as a peer.
+
+- **Only the person opens one**, from the desktop or a paired phone. Agents, a thread's agent (the
+  assistant, Aide) and the assistant's asks are refused, even for kinds of ask let through without
+  asking, and none of them reads a shell's screen. The cloud door has no sessions at all.
+- **The `relay` CLI is not available inside a Relay shell.** A process in a shell's tree may not
+  claim `user` (D165), exactly as one in an agent's may not, and the refusal says so; use the app,
+  the phone or a terminal outside Relay.
+- **Nothing it shows is kept.** Keystrokes never reach the store or the audit log (D148), and a
+  shell's screen is never written to the store: parked, or after Relay restarts, it comes back blank.
+- **A shell is only as private as D165.** Another process of the same user outside the engine's
+  tree (a `systemd-run --user` unit, a tmux server started elsewhere) can claim `user` on the socket
+  like any terminal of yours, and so type into a shell or read it.
+- **A shell opened while the PC is away** waits in the outbox for two minutes at most; after that
+  it is dropped ("The PC was away; open the shell again"), rather than opening long after it was
+  wanted.
+
 ## Threads on the phone
 
 A thread's message box takes pictures as the agent chat's does (`ui/dev/Attach.kt` serves both):

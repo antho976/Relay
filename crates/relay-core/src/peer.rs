@@ -30,6 +30,10 @@ pub enum Peer {
     Engine,
     /// Inside this agent session's process tree.
     Session(String),
+    /// Inside this shell session's process tree (`Provider::Shell`): the person's own login
+    /// shell. Refused as a session's tree is, so nothing it runs claims `user`; the refusal
+    /// says so in a shell's words.
+    Shell(String),
     /// Inside the process tree of this thread's agent.
     Thread(relay_bus::types::Id),
     /// Inside the process tree of this assistant thread's agent (the Dev space's assistant).
@@ -67,6 +71,16 @@ impl Peer {
                 format!("from inside agent session {name:?}'s process tree"),
                 serde_json::json!({"peer": "session", "session": name}),
             ),
+            Peer::Shell(name) => {
+                return relay_bus::BusError::refused(
+                    "actor.peer",
+                    format!(
+                        "this connection comes from inside the Relay shell {name:?}: the relay CLI is not available inside a Relay shell, \
+                         so nothing run there acts as `{actor}`. Use the Relay app, the phone, or a terminal outside Relay"
+                    ),
+                )
+                .with_details(serde_json::json!({"peer": "shell", "session": name}));
+            }
             Peer::Thread(id) => (
                 format!("from thread {id}'s agent, which acts for you only through that thread's tools"),
                 serde_json::json!({"peer": "thread", "thread": id}),
@@ -112,7 +126,12 @@ pub fn identify(stream: &tokio::net::UnixStream, engine: &Engine) -> Peer {
     // Taken before the walk, so the walk can be shown to have read the process that connected
     // and not a stranger that inherited its number (kernels before 6.5 have no SO_PEERPIDFD).
     let pidfd = peer_pidfd(stream.as_raw_fd());
-    let peer = classify_with(pid, std::process::id(), &engine.session_pids(), &crate::threads::agent_pids(engine), proc_ppid);
+    let peer = match classify_with(pid, std::process::id(), &engine.session_pids(), &crate::threads::agent_pids(engine), proc_ppid) {
+        Peer::Session(name) if crate::sessions::by_name(&engine.store.lock(), &name).is_ok_and(|row| crate::handlers::session::is_shell(&row.session)) => {
+            Peer::Shell(name)
+        }
+        peer => peer,
+    };
     match pidfd {
         Some(fd) if !still_running(&fd) => Peer::Unknown("the process has exited"),
         _ => peer,
@@ -470,6 +489,15 @@ mod tests {
             assert!(!peer.may_act_as_user_for(op), "{op}");
         }
         assert!(peer.refusal("user").message.contains("assistant"));
+    }
+
+    #[test]
+    fn a_shell_is_refused_as_a_session_is_and_says_why() {
+        let shell = Peer::Shell("calm-otter".into());
+        assert!(!shell.may_act_as_user() && !shell.may_act_as_user_for("session.list"));
+        let error = shell.refusal("user");
+        assert_eq!(error.code, "actor.peer");
+        assert!(error.message.contains("relay CLI is not available inside a Relay shell"), "{}", error.message);
     }
 
     #[test]

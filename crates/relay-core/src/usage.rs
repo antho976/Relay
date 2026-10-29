@@ -19,6 +19,7 @@ pub fn read(provider: Provider) -> Option<Usage> {
     match provider {
         Provider::Claude => read_claude(),
         Provider::Codex => read_codex(),
+        Provider::Shell => None,
     }
 }
 

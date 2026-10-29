@@ -42,6 +42,8 @@ pub fn locate(provider: Provider, reference: &str, worktree: &Path) -> Option<Pa
     match provider {
         Provider::Claude => locate_claude(reference, worktree),
         Provider::Codex => locate_codex(reference),
+        // A shell keeps no conversation log.
+        Provider::Shell => None,
     }
 }
 
@@ -143,6 +145,7 @@ pub fn read(provider: Provider, path: &Path, worktree: &Path, after: Option<u64>
         match provider {
             Provider::Claude => claude_record(&record, at, worktree, &mut messages),
             Provider::Codex => codex_record(&record, at, &mut messages),
+            Provider::Shell => {}
         }
     }
     if messages.len() > limit && resumed.is_none() { messages.drain(..messages.len() - limit); }

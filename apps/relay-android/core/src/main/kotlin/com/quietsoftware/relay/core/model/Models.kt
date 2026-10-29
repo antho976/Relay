@@ -70,12 +70,13 @@ data class Session(
     @SerialName("created_at") val createdAt: String = "",
     @SerialName("updated_at") val updatedAt: String = "",
 ) {
-    /** The lamp a session shows (DESIGN.md "Lamps"). */
+    /** The lamp a session shows (DESIGN.md "Lamps"). An open shell is not at work, so it is unlit. */
     val lamp: Lamp
-        get() = when (state) {
-            "running", "spawning" -> Lamp.Live
-            "blocked" -> Lamp.Held
-            "restorable", "created" -> Lamp.Waiting
+        get() = when {
+            shell && state in setOf("running", "spawning", "idle") -> Lamp.Off
+            state == "running" || state == "spawning" -> Lamp.Live
+            state == "blocked" -> Lamp.Held
+            state == "restorable" || state == "created" -> Lamp.Waiting
             else -> Lamp.Off
         }
 
@@ -91,12 +92,12 @@ data class Session(
     /** Stopped on a question or a menu, waiting for the person. */
     val blocked: Boolean get() = state == "blocked"
 
-    /** The word the plate's strip shows. */
+    /** The word the plate's strip shows; a shell that is up is simply open. */
     val stateLabel: String
         get() = when (state) {
-            "running" -> "LIVE"
+            "running" -> if (shell) "OPEN" else "LIVE"
             "spawning" -> "STARTING"
-            "idle" -> "IDLE"
+            "idle" -> if (shell) "OPEN" else "IDLE"
             "blocked" -> "NEEDS YOU"
             "parked" -> "PARKED"
             "restorable" -> "STOPPED"

@@ -83,7 +83,7 @@ internal fun plateMeta(s: Session): String {
         !s.pairWith.isNullOrBlank() -> " · pair ${s.pairWith}"
         else -> ""
     }
-    return "${s.provider} · ${s.role}$tail".uppercase()
+    return "${kindWords(s)}$tail".uppercase()
 }
 
 /** A session the phone made and the PC has not yet: shown, not yet openable. */
@@ -133,7 +133,7 @@ internal fun PlateStrip(s: Session, modifier: Modifier = Modifier, trailing: @Co
                 LampDot(s.lamp, 6.dp)
                 T(s.shownName(), Modifier.widthIn(max = 150.dp), Relay.type.plateName, if (held) c.waiting else c.ink, maxLines = 1)
                 if (narrow) {
-                    T("${s.provider} · ${s.role}".uppercase(), Modifier.weight(1f), Relay.type.plateMeta, c.ink3, maxLines = 1)
+                    T(kindWords(s).uppercase(), Modifier.weight(1f), Relay.type.plateMeta, c.ink3, maxLines = 1)
                 } else {
                     T(plateMeta(s), Modifier.weight(1f), Relay.type.plateMeta, c.ink3, maxLines = 1)
                     if (s.branch.isNotBlank()) Branch(s, Modifier.widthIn(max = 120.dp))

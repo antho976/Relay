@@ -96,6 +96,8 @@ class ShellModel @Inject constructor(val relay: Relay, private val settings: Set
         viewModelScope.launch {
             relay.parked.collect { e -> toast("${e.label}: ${e.error?.message ?: "not applied"}. It waits in the outbox.", "Open") { it.outbox() } }
         }
+        // Only a shell expires: wanted now, and dropped when the PC stayed away too long.
+        viewModelScope.launch { relay.expired.collect { toast("The PC was away; open the shell again.") } }
     }
 
     fun pickProject(id: Long?) = viewModelScope.launch { settings.update { it.copy(lastProject = id ?: 0) } }

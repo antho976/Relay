@@ -34,7 +34,7 @@ pub fn is_provider_ref(value: &str) -> bool {
 /// Where a provider keeps its own files: `CLAUDE_CONFIG_DIR` (which is the `.claude` folder
 /// itself) or `CODEX_HOME` when set and not empty, else `~/.claude` or `~/.codex`. An empty
 /// variable is unset, as the provider's own shell reads `VAR= relay …`: taken as `""`, every path
-/// under it was relative and matched nothing. `None` with no home either.
+/// under it was relative and matched nothing. `None` with no home either, and for a shell.
 pub fn config_dir(provider: Provider) -> Option<PathBuf> {
     config_dir_in(provider, |variable| std::env::var_os(variable))
 }
@@ -43,6 +43,8 @@ fn config_dir_in(provider: Provider, var: impl Fn(&str) -> Option<std::ffi::OsSt
     let (variable, fallback) = match provider {
         Provider::Claude => ("CLAUDE_CONFIG_DIR", ".claude"),
         Provider::Codex => ("CODEX_HOME", ".codex"),
+        // The person's own shell keeps no provider files.
+        Provider::Shell => return None,
     };
     let set = |name: &str| var(name).filter(|value| !value.is_empty()).map(PathBuf::from);
     set(variable).or_else(|| set("HOME").or_else(account_home).map(|home| home.join(fallback)))
@@ -257,14 +259,17 @@ pub trait Driver: Sync {
 
 struct Claude;
 struct Codex;
+struct Shell;
 
 static CLAUDE: Claude = Claude;
 static CODEX: Codex = Codex;
+static SHELL: Shell = Shell;
 
 pub fn driver(provider: Provider) -> &'static dyn Driver {
     match provider {
         Provider::Claude => &CLAUDE,
         Provider::Codex => &CODEX,
+        Provider::Shell => &SHELL,
     }
 }
 
@@ -274,7 +279,11 @@ pub fn driver(provider: Provider) -> &'static dyn Driver {
 fn spawn_profile_of(provider: Provider) -> Value {
     static PROFILES: std::sync::LazyLock<[Value; 2]> =
         std::sync::LazyLock::new(|| [spawn_profile(driver(Provider::Claude)), spawn_profile(driver(Provider::Codex))]);
-    PROFILES[match provider { Provider::Claude => 0, Provider::Codex => 1 }].clone()
+    match provider {
+        Provider::Claude => PROFILES[0].clone(),
+        Provider::Codex => PROFILES[1].clone(),
+        Provider::Shell => Value::Null,
+    }
 }
 
 /// `provider.list`'s `spawn_profile`: the command lines [`Driver::args`] builds, for a
@@ -354,6 +363,33 @@ impl Driver for Claude {
     }
 }
 
+/// The person's login shell (`Provider::Shell`). No agent runs, so there are no hooks, brief,
+/// model or resume handle: `-l` reads their login profile, as a terminal they opened would.
+impl Driver for Shell {
+    fn binary(&self) -> &'static str { "shell" }
+    fn guarded(&self) -> bool { false }
+    fn args(&self, _session: &Session, _launch: Launch<'_>, _brief: Option<&str>, _reads: &[&Path]) -> Vec<String> {
+        vec!["-l".into()]
+    }
+    fn auth(&self, _path: &Path) -> Option<Option<String>> { None }
+}
+
+/// The login shell in the person's passwd entry, else `$SHELL`, else `/bin/sh`. The passwd entry
+/// comes first: `$SHELL` is whatever the process that started the engine had, which need not be
+/// the shell the person logs in with.
+fn login_shell() -> PathBuf {
+    let usable = |path: &PathBuf| path.is_absolute() && path.is_file();
+    let uid = unsafe { libc::getuid() }.to_string();
+    let passwd = std::fs::read_to_string("/etc/passwd").ok().and_then(|passwd| {
+        passwd.lines().map(|line| line.split(':').collect::<Vec<_>>())
+            .find(|fields| fields.len() >= 7 && fields[2] == uid)
+            .map(|fields| PathBuf::from(fields[6]))
+    });
+    passwd.filter(usable)
+        .or_else(|| std::env::var_os("SHELL").map(PathBuf::from).filter(usable))
+        .unwrap_or_else(|| PathBuf::from("/bin/sh"))
+}
+
 impl Driver for Codex {
     fn binary(&self) -> &'static str { "codex" }
     fn guarded(&self) -> bool { true }
@@ -396,6 +432,10 @@ pub fn validate_options(provider: Provider, model: Option<&str>, effort: Option<
     let allowed: &[&str] = match provider {
         Provider::Claude => &["low", "medium", "high", "xhigh", "max"],
         Provider::Codex => &["minimal", "low", "medium", "high", "xhigh"],
+        Provider::Shell if model.is_some() || effort.is_some() => {
+            return Err(BusError::invalid("session.shell", "a shell runs no model: leave model and effort out"));
+        }
+        Provider::Shell => &[],
     };
     if let Some(effort) = effort {
         if !allowed.contains(&effort) {
@@ -423,6 +463,9 @@ pub fn executable(conn: &Connection, provider: Provider) -> Result<PathBuf, BusE
             "provider.not_installed",
             format!("providers.{}.path = {:?} does not exist", drv.binary(), path.display().to_string()),
         ));
+    }
+    if provider == Provider::Shell {
+        return Ok(login_shell());
     }
     which::which(drv.binary()).map_err(|_| {
         BusError::unavailable("provider.not_installed", format!("{} is not on PATH", drv.binary()))

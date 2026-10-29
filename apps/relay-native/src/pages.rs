@@ -559,7 +559,7 @@ fn mail_composer(ui: &Rc<Ui>, page: &gtk::Box, project: i64) {
                 .borrow()
                 .iter()
                 .filter(|s| s["project_id"].as_i64() == Some(project) && text(s, "state") != "closed")
-                .map(|s| (text(s, "name").to_string(), format!("{} · {} {}", text(s, "name"), text(s, "provider"), text(s, "role")))),
+                .map(|s| (text(s, "name").to_string(), format!("{} · {}", text(s, "name"), crate::terminal::kind_words(s).replace(" · ", " ")))),
         );
         for (name, caption) in names {
             let choice = button(&caption, "nav");

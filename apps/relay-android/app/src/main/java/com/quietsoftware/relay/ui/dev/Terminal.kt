@@ -184,7 +184,8 @@ fun TerminalScreen(name: String, nav: Nav) {
     Page {
         Column(Modifier.fillMaxSize()) {
             Header(session, name, onBack = nav::back, onDetails = { nav.session(name) }, onMenu = { menu = true }) {
-                IconKey("notes", { nav.chat(name) }, size = 18.dp, tint = c.ink2, label = "Conversation")
+                // A shell has no conversation: its terminal is all there is.
+                if (session?.shell != true) IconKey("notes", { nav.chat(name) }, size = 18.dp, tint = c.ink2, label = "Conversation")
             }
             Banner(status, session, s.online, life)
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(c.screen)) {
@@ -272,7 +273,7 @@ fun TerminalScreen(name: String, nav: Nav) {
     LifecycleSheets(life)
     if (menu) {
         val cols = synchronized(feed.lock) { feed.terminal.cols }
-        val sub = session?.let { "${it.provider} · ${it.role} · $cols columns" + if (fit && hold.borrowed) ", fitted to this phone" else "" }
+        val sub = session?.let { "${kindWords(it)} · $cols columns" + if (fit && hold.borrowed) ", fitted to this phone" else "" }
         DevSheet({ menu = false }, name, sub) { close ->
             session?.let { ss ->
                 SheetRow("Changes", "commit", { close { nav.git(ss.projectId, ss.worktree.ifBlank { null }, name) } })
@@ -354,7 +355,7 @@ internal fun Header(session: Session?, name: String, onBack: () -> Unit, onDetai
                 }
                 if (session != null) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        T("${session.provider} · ${session.role}".uppercase(), style = Relay.type.plateMeta, color = c.ink3, maxLines = 1)
+                        T(kindWords(session).uppercase(), style = Relay.type.plateMeta, color = c.ink3, maxLines = 1)
                         if (session.branch.isNotBlank()) Branch(session, Modifier.weight(1f, fill = false))
                     }
                 }
