@@ -512,6 +512,14 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
     if !offsets.is_empty() {
         let _ = writeln!(o, "- money.tx.list's period_offset: {}.", offsets.join(", "));
     }
+    // "Since my last paycheque" needs the day it came in, which the bills (the next one) do not give.
+    let pay = pages.iter().flatten().flat_map(|p| list(p, "transactions"))
+        .filter(|t| s(t, "type") == "INCOME" && s(t, "category").eq_ignore_ascii_case("Salary"))
+        .max_by(|a, b| s(a, "date").cmp(s(b, "date")).then(int(a, "id").cmp(&int(b, "id"))));
+    if let Some(t) = pay {
+        let _ = writeln!(o, "- Last pay (Salary) came in on {}: {}, {}. Since then: money.tx.list with from {}.",
+            day_of(s(t, "date"), today), entry_name(t), m.fmt(int(t, "amount")), s(t, "date"));
+    }
     if this_month.is_some() {
         // Days and weeks cross into last month: both months' entries count.
         let rows = || pages.iter().take(2).flatten().flat_map(|p| list(p, "transactions"));
@@ -897,8 +905,16 @@ const CATEGORY_EXAMPLES: &[(&str, &str)] = &[
     ("Other income", "only income that fits no other category"),
 ];
 
-fn category_examples(name: &str) -> Option<&'static str> {
-    CATEGORY_EXAMPLES.iter().find(|(n, _)| n.eq_ignore_ascii_case(name.trim())).map(|(_, e)| *e)
+/// What goes in default category `name`, without an example another of `names` is named for:
+/// beside the person's own Freelance, Side income no longer claims "freelance work" (a model
+/// filed every invoice there).
+fn category_examples(name: &str, names: &[&str]) -> Option<String> {
+    let examples = CATEGORY_EXAMPLES.iter().find(|(n, _)| n.eq_ignore_ascii_case(name.trim())).map(|(_, e)| *e)?;
+    let others: Vec<String> = names.iter().filter(|n| !n.trim().eq_ignore_ascii_case(name.trim())).map(|n| n.trim().to_lowercase()).collect();
+    let kept: Vec<&str> = examples.split(", ")
+        .filter(|e| !e.to_lowercase().split(|c: char| !c.is_alphanumeric()).any(|word| others.iter().any(|o| o == word)))
+        .collect();
+    (!kept.is_empty()).then(|| kept.join(", "))
 }
 
 /// An account Wealthsimple's files fill: its activity comes with the next export, and the engine
@@ -914,19 +930,32 @@ fn money_lists(r: &Value, ctx: &Ctx) -> String {
     let mut o = String::new();
     let _ = writeln!(o, "TALLY ACCOUNTS AND CATEGORIES (as set up in their Tally app) for money.tx.add and money.tx.update: each name, with its id beside it. Amounts are in {}.", m.code);
     let _ = writeln!(o, "{} {}", today_line(ctx.today), calendar(ctx.today));
-    let _ = writeln!(o, "\nACCOUNTS (name (account_id): type, balance now). Use the one they name: cash is the cash account; a card or Visa is the credit card; chequing or debit is chequing:");
-    for a in list(r, "accounts").iter().filter(|a| a["archived"] != true) {
+    let _ = writeln!(o, "\nACCOUNTS (name (account_id): type, balance now). Use the one they name: cash is the cash account; a card or Visa is a credit card; chequing or debit is chequing:");
+    let open: Vec<&Value> = list(r, "accounts").iter().filter(|a| a["archived"] != true).collect();
+    for a in &open {
         let filled = if import_filled(a) { format!("; {FILLED}") } else { String::new() };
         let _ = writeln!(o, "- {} (account_id {}): {}, balance {}{filled}", s(a, "name"), int(a, "id"), word(s(a, "type")), m.fmt(int(a, "balance")));
+    }
+    // "My card" with two cards, or "my savings" with two savings accounts, names none of them.
+    let line_of_credit = |a: &&&Value| { let n = s(a, "name").to_lowercase(); n.contains("line of credit") || n.contains("marge") };
+    for (kind, said) in [("CREDIT", "\"my card\" or \"the card\""), ("SAVINGS", "\"my savings\"")] {
+        let these: Vec<&str> = open.iter().filter(|a| s(a, "type") == kind && !line_of_credit(a)).map(|a| s(a, "name")).collect();
+        if these.len() > 1 {
+            let _ = writeln!(o, "{} accounts of this kind: {}. When they say only {said}, it could be any of them: ask which before adding or changing anything.", these.len(), these.join(", "));
+        }
     }
     if let Some(n) = r["net_worth"].as_i64() {
         let _ = writeln!(o, "NET WORTH, all accounts together: {}", m.fmt(n));
     }
+    let names: Vec<&str> = list(r, "categories").iter().filter(|c| c["archived"] != true).map(|c| s(c, "name")).collect();
     for (kind, title) in [("EXPENSE", "EXPENSE CATEGORIES"), ("INCOME", "INCOME CATEGORIES")] {
         let rows: Vec<String> = list(r, "categories").iter()
             .filter(|c| s(c, "kind") == kind && c["archived"] != true)
-            .map(|c| match category_examples(s(c, "name")) {
+            .map(|c| match category_examples(s(c, "name"), &names) {
                 Some(e) => format!("- {} (category_id {}): {e}", s(c, "name"), int(c, "id")),
+                // Not one of Tally's own: the person made it, for what its name says.
+                None if CATEGORY_EXAMPLES.iter().all(|(n, _)| !n.eq_ignore_ascii_case(s(c, "name").trim())) =>
+                    format!("- {} (category_id {}): a category the person made, for what its name says", s(c, "name"), int(c, "id")),
                 None => format!("- {} (category_id {})", s(c, "name"), int(c, "id")),
             })
             .collect();
@@ -1951,6 +1980,7 @@ mod tests {
         for want in [
             "TALLY (budget app). Today is Thursday, October 15, 2026 (2026-10-15). Amounts are in CAD. Only what the person has logged in their Tally app: not their bank, not everything they did.\n",
             "THIS MONTH: October 2026 (Oct 1 to Oct 31), day 15 of 31, 17 days left counting today.",
+            "- Last pay (Salary) came in on Wed Oct 14: Salary, $2,150.00. Since then: money.tx.list with from 2026-10-14.",
             "- Budgets last month, against each budget as it is set now: all spending $90.00 of $2,900.00, $2,810.00 left; Dining $90.00 of $320.00, $230.00 left; Groceries $0.00 of $500.00, $500.00 left; Entertainment $0.00 of $80.00, $80.00 left.",
             "- Spent so far (all expenses): $2,425.26",
             "- Monthly budget: $2,900.00. Left to spend: $474.74 (83.6% of the budget used).",
@@ -1997,27 +2027,34 @@ mod tests {
     fn lists_give_the_names_and_ids_writes_take() {
         let lists = json!({"currency": "CAD", "net_worth": 100,
                            "accounts": [{"id": 1, "name": "Chequing", "type": "CHEQUING", "balance": 100, "archived": false, "institution": ""},
+                                        {"id": 4, "name": "Visa", "type": "CREDIT", "balance": 0, "archived": false, "institution": ""},
+                                        {"id": 5, "name": "Mastercard", "type": "CREDIT", "balance": 0, "archived": false, "institution": ""},
+                                        {"id": 7, "name": "Line of credit", "type": "CREDIT", "balance": 0, "archived": false, "institution": ""},
                                         {"id": 6, "name": "WS TFSA", "type": "INVESTMENT", "balance": 0, "archived": false, "registration": "TFSA", "institution": "wealthsimple "}],
                            "categories": [{"id": 2, "name": "Dining", "kind": "EXPENSE", "archived": false}, {"id": 3, "name": "Transport", "kind": "EXPENSE", "archived": false},
                                           {"id": 10, "name": "Subscriptions", "kind": "EXPENSE", "archived": false}, {"id": 11, "name": "Travel", "kind": "EXPENSE", "archived": false},
-                                          {"id": 20, "name": "Climbing", "kind": "EXPENSE", "archived": false}, {"id": 14, "name": "Salary", "kind": "INCOME", "archived": false}]});
+                                          {"id": 20, "name": "Climbing", "kind": "EXPENSE", "archived": false}, {"id": 14, "name": "Salary", "kind": "INCOME", "archived": false},
+                                          {"id": 15, "name": "Side income", "kind": "INCOME", "archived": false}, {"id": 19, "name": "Freelance", "kind": "INCOME", "archived": false}]});
         let text = render("money.lists", &json!({}), &lists, &[], &ctx()).unwrap();
         for want in [
             "TALLY ACCOUNTS AND CATEGORIES (as set up in their Tally app) for money.tx.add and money.tx.update: each name, with its id beside it.",
             "- Chequing (account_id 1): chequing, balance $1.00\n",
             "- WS TFSA (account_id 6): investment, balance $0.00; filled from Wealthsimple's files: don't record activity here, the next export brings it",
+            "2 accounts of this kind: Visa, Mastercard. When they say only \"my card\" or \"the card\", it could be any of them: ask which before adding or changing anything.",
             "EXPENSE CATEGORIES (name (category_id): what goes there):\n- Dining (category_id 2): restaurants, cafés, coffee, lunch, takeout, bars\n",
             "- Transport (category_id 3): transit, bus, metro, Bixi, taxi, Uber, gas, parking",
             "- Subscriptions (category_id 10): streaming and app plans, memberships billed every month",
             "- Travel (category_id 11): flights, hotels, trips away from home",
-            "- Climbing (category_id 20)\n",
+            "- Climbing (category_id 20): a category the person made, for what its name says\n",
             "INCOME CATEGORIES (name (category_id): what goes there):\n- Salary (category_id 14): pay from an employer",
+            "- Side income (category_id 15): selling things\n",
+            "- Freelance (category_id 19): a category the person made, for what its name says",
         ] {
             assert!(text.contains(want), "missing {want:?} in\n{text}");
         }
         // Every default category has its examples, and nothing else does.
         for c in &relay_money::model::DEFAULT_CATEGORIES {
-            assert!(category_examples(c.name).is_some(), "{}", c.name);
+            assert!(category_examples(c.name, &[]).is_some(), "{}", c.name);
         }
         assert_eq!(CATEGORY_EXAMPLES.len(), relay_money::model::DEFAULT_CATEGORIES.len());
     }
