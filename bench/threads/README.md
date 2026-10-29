@@ -73,6 +73,21 @@ and stale data; v2 was not run. Its own template renders Claude Code's environme
 after the person's, as the last turn, which it then answers ("ready to help"):
 `templates/nemotron-3-nano.jinja` folds later system messages into the system prompt.
 
+### LFM3 1.7B (2026-10-28, relay `0e5caa7`, thinking ≤512, Q8_0, 3 runs, 3 slots)
+
+| Model | v1 | Δ vs Qwen3.5 4B | v2 | Δ vs Qwen3.5 4B |
+|---|---|---|---|---|
+| LFM3 1.7B (`LiquidAI/LFM3-1.7B-GGUF`, 1.85 GB; 3 slots ≈ 5.5 GB) | 90.1% [86.4, 92.9] | −8.1 [−12.3, −4.2] | 57.9% [51.8, 63.9] | −8.3 [−16.7, −0.4] |
+
+Liquid's own card puts it ahead of Qwen3.5 4B on instruction following and tool calling; here it is
+not. It needs llama.cpp b11960 or newer (this ran on 0.8.0-dev `c3df4b7`; the Qwen rows on 0.6.0-dev
+`23b0202`). Its own template takes the later system message and answers the person. Lookups, ranks,
+times and units hold at 100% on v1; charts fall to 38.9% (no chart block, a bar for a cumulative
+line, sets charted for volume), asking first to 61.9%, and on v2 writes to 53.3% (86.7%). It is also
+slower: median 11.5 s (7.0) on v1 and 36.6 s (15.6) on v2, because it repeats calls it has already
+made (an identical call in 51 of 333 v1 runs, Qwen3.5 4B in 3) and wanders into the other app's
+tools (19 calls on "how much do I weigh"); 5 v1 runs ran out of their 32k context (Qwen 0).
+
 ## Quick start
 
 ```fish
