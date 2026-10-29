@@ -145,7 +145,7 @@
    "followups": ["actually no, it was meds too, put it back how it was"],
    "truth": "v2_pharmaprix",
    "checks": [
-     {"type": "tool", "ops": ["money.tx.update"], "ok_only": true, "turn": 0, "args": {"id": {"$truth": "id"}, "category_id": {"$truth": "shopping"}}},
+     {"type": "tool", "ops": ["money.tx.update"], "ok_only": true, "turn": 0, "args": [{"id": {"$truth": "id"}, "category_id": {"$truth": "shopping"}}, {"id": {"$truth": "id"}, "category": "Shopping"}]},
      {"type": "effect", "truth": "v2_eff_unchanged"},
      {"type": "no_error"}
    ],

@@ -57,6 +57,15 @@ v1 is saturated (98.2%) and stays as the regression guard; v2 is where a change 
 shows. Weakest for the 4B: dates and periods from the 15th (36%), questions on both apps (20%),
 refusals around the note that gives orders (44%), totals (57%).
 
+**Two grading fixes (2026-10-29).** The grader read a French decimal comma as two numbers ("109,15 $"
+as 109 and 15), so `v2.tally.period.dining_fr` failed correct answers; and
+`v2.tally.multi.recat_then_undo` wanted `category_id` where `money.tx.update` takes the category by
+name too (it has since `0e5caa7`). Graded again with `bench.py regrade`, which changes only
+fail → pass, every v2 row above gains: Qwen3.5 4B thinking ≤512 66.3% → **68.7%**, no thinking 57.9% →
+59.1%, Qwen3.5 9B 72.2% → 73.4%, Gemma 4 E4B 62.7% → 63.9%, Qwen3.8-4B-Distill 54.4% → 56.7%, LFM3
+1.7B 57.9% → 58.7%. The tables keep the numbers as first measured; compare a new run with a baseline
+graded by the same checks (`regrade --out`).
+
 ### Other 4B models (2026-10-19, relay `0e5caa7`, thinking ≤512, Q8_0, 3 runs)
 
 | Model | v1 | Δ vs Qwen3.5 4B | v2 | Δ vs Qwen3.5 4B |
@@ -103,6 +112,9 @@ python3 bench/threads/bench.py run --check
 # read a result again, or compare two
 python3 bench/threads/bench.py report bench/threads/results/<file>.json
 python3 bench/threads/bench.py compare A.json B.json
+
+# grade a result's saved replies again with the checks as they are now (effects keep their verdict)
+python3 bench/threads/bench.py regrade bench/threads/results/<file>.json --out /tmp/regraded.json
 
 # the unit tests (grader, statistics, wrapper, fixtures, every task file's shape)
 python3 -m unittest discover bench/threads

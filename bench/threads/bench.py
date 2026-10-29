@@ -289,6 +289,35 @@ def append_results_md(result, path):
     log(f"appended to {RESULTS_MD}")
 
 
+def cmd_regrade(args):
+    """Grade a result's replies again with the checks as they are now: for a fixed grader, or a
+    task whose check was wrong. An effect check keeps the verdict it had (it needs the engine)."""
+    result = json.loads(Path(args.result).read_text())
+    tasks = {t["id"]: t for suite in ("all", "v2") for t in runner.load_tasks(suite)}
+    flipped = []
+    for rec in result["records"]:
+        task = tasks.get(rec["id"])
+        if task is None:
+            continue
+        old = rec.get("checks") or []
+        effects = {i: {"ok": old[i]["pass"], "why": old[i].get("why", "")}
+                   for i, c in enumerate(task.get("checks") or []) if c.get("type") == "effect" and i < len(old)}
+        thread = {"turns": rec.get("turns") or [], "error": rec.get("error"), "timeout": rec.get("timeout")}
+        was = rec["pass"]
+        rec["pass"], rec["checks"] = grade.grade(task, rec.get("expected"), thread, effects)
+        if rec["pass"] != was:
+            flipped.append((rec["id"], rec.get("run"), was, rec["pass"]))
+    result["regraded"] = dt.datetime.now().isoformat(timespec="seconds")
+    result["summary"] = report.summarize(result["records"])
+    for id_, run, was, now in flipped:
+        log(f"{id_} #{run}: {'pass' if was else 'fail'} -> {'PASS' if now else 'fail'}")
+    log(f"{len(flipped)} task-runs changed")
+    print(report.format_summary(result))
+    if args.out:
+        Path(args.out).write_text(json.dumps(result, indent=1, ensure_ascii=False))
+        log(f"written to {args.out}")
+
+
 def cmd_report(args):
     result = json.loads(Path(args.result).read_text())
     result["summary"] = report.summarize(result["records"])
@@ -362,6 +391,10 @@ def main(argv=None):
     rp.add_argument("--append", action="store_true")
     rp.add_argument("--json", action="store_true")
     rp.set_defaults(fn=cmd_report)
+    g = sub.add_parser("regrade", help="grade a result's replies again with today's checks (effects keep their verdict)")
+    g.add_argument("result")
+    g.add_argument("--out", help="write the regraded result here (default: only print it)")
+    g.set_defaults(fn=cmd_regrade)
     c = sub.add_parser("compare", help="B against A: deltas with intervals, flipped tasks")
     c.add_argument("a")
     c.add_argument("b")

@@ -33,7 +33,9 @@ _NUMBER = re.compile(
     rf"(?P<sign1>(?<![\w.])[{_MINUS}])?"
     r"(?:(?P<cur>(?:CA|C|US|A|CAD\s?|USD\s?)?\$\s?)"
     rf"(?P<sign2>[{_MINUS}])?)?"
-    r"(?<![\w.,])(?P<int>\d{1,3}(?:,\d{3})+|\d+)(?P<dec>\.\d+)?(?![\d])"
+    # "1,234.56" in English; "1 234,56" and "109,15" in French: a comma before one or two digits
+    # (and nothing more) is a decimal comma, before three a thousands separator.
+    r"(?<![\w.,])(?P<int>\d{1,3}(?:,\d{3})+|\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?=,\d{1,2}(?![\d,]))|\d+)(?P<dec>\.\d+|,\d{1,2}(?![\d,]))?(?![\d])"
     r"(?P<suffix>\s?(?:k|K|M|mn)\b)?"
     r"(?P<close>\))?"
 )
@@ -41,14 +43,15 @@ _NUMBER = re.compile(
 
 def numbers(text):
     """Every number in `text` as a float: "$1,234.56", "1234.56", "1,234.56 CAD", "-$12.30",
-    "−12.30", "($12.30)" (negative), "$1.2k", "12.50%". Dates and clock times are left out, and so
+    "−12.30", "($12.30)" (negative), "$1.2k", "12.50%", and French "109,15 $" and "1 234,56 $". Dates and clock times are left out, and so
     are the JSON of ```chart and ```import blocks."""
     text = _FENCE.sub(" ", text or "")
     text = _DATE.sub(" ", text)
     text = _TIME.sub(" ", text)
     out = []
     for m in _NUMBER.finditer(text):
-        value = float(m.group("int").replace(",", "") + (m.group("dec") or ""))
+        whole = re.sub(r"[,\s\u00a0\u202f]", "", m.group("int"))
+        value = float(whole + (m.group("dec") or "").replace(",", "."))
         suffix = (m.group("suffix") or "").strip()
         if suffix in ("k", "K"):
             value *= 1_000
