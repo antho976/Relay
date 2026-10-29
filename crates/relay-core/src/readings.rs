@@ -849,7 +849,23 @@ fn tx_list(payload: &Value, r: &Value, lists: Option<&Value>, ctx: &Ctx) -> Stri
             let first = jiff::civil::date(*y, *mo, 1);
             format!("{} {} ({n})", if *y == today.year() { first.strftime("%B").to_string() } else { first.strftime("%B %Y").to_string() }, m.fmt(*sum))
         }).collect();
-        let _ = writeln!(o, "- Spent by calendar month, oldest first (cut to the days asked for): {}.", shown.join("; "));
+        if !shown.is_empty() {
+            let _ = writeln!(o, "- Spent by calendar month, oldest first (cut to the days asked for): {}.", shown.join("; "));
+        }
+        let mut income: BTreeMap<(i16, i8), (i64, i64)> = BTreeMap::new();
+        for t in e.rows.iter().filter(|t| s(t, "type") == "INCOME") {
+            let Some(d) = date(s(t, "date")) else { continue };
+            let row = income.entry((d.year(), d.month())).or_default();
+            row.0 += int(t, "amount");
+            row.1 += 1;
+        }
+        let shown: Vec<String> = income.iter().map(|((y, mo), (sum, n))| {
+            let first = jiff::civil::date(*y, *mo, 1);
+            format!("{} {} ({n})", if *y == today.year() { first.strftime("%B").to_string() } else { first.strftime("%B %Y").to_string() }, m.fmt(*sum))
+        }).collect();
+        if !shown.is_empty() {
+            let _ = writeln!(o, "- Income by calendar month, oldest first (entries in brackets): {}.", shown.join("; "));
+        }
         weeks.clear();
         days.clear();
     }
@@ -1924,12 +1940,16 @@ mod tests {
             let day = jiff::civil::date(2026, 1, 1).checked_add(jiff::Span::new().days(i * 2)).unwrap();
             tx(1000 + i, "EXPENSE", 1000, &day.to_string(), Some("Dining"), "Lunch")
         }).rev().collect();
+        let mut rows = rows;
+        rows.push(tx(2000, "INCOME", 241250, "2026-01-29", Some("Salary"), "Salaire"));
+        rows.push(tx(2001, "INCOME", 241250, "2026-01-15", Some("Salary"), "Salaire"));
         let r = json!({"period": {"start": "2026-01-01", "end_exclusive": "2026-07-20", "days": 200, "days_left": 0}, "income": 0, "spent": 100000, "transactions": rows});
         let text = render("money.tx.list", &json!({"from": "2026-01-01"}), &r, &[], &ctx()).unwrap();
         assert!(text.contains("- Spent (all expenses added up): $1,000.00"), "{text}");
         assert!(text.contains("- Spent by calendar month, oldest first (cut to the days asked for): January $160.00 (16); February $140.00 (14);"), "{text}");
         assert!(!text.contains("Spent by week") && !text.contains("Spent by day"), "{text}");
-        assert!(text.contains("ENTRIES, the newest 80 of 100"), "{text}");
+        assert!(text.contains("- Income by calendar month, oldest first (entries in brackets): January $4,825.00 (2)."), "{text}");
+        assert!(text.contains("ENTRIES, the newest 80 of 102"), "{text}");
         assert!(text.contains("- #1099 ") && !text.contains("- #1019 "), "the newest are listed: {text}");
     }
 
