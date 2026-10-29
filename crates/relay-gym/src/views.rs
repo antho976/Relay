@@ -72,6 +72,8 @@ pub struct Totals {
     pub sessions: u32,
     /// Workouts the person excluded in Avex: listed, and counted in nothing here.
     pub untracked: u32,
+    /// The days of the newest of them (`YYYY-MM-DD`, oldest first), at most [`UNTRACKED_DAYS`].
+    pub untracked_days: Vec<String>,
     pub sets: i64,
     pub volume: f64,
     pub cardio: u32,
@@ -179,6 +181,9 @@ pub struct LiftRow {
     pub last_day: String,
     /// The best set ever, by estimated one-rep max.
     pub best: Option<Record>,
+    /// The heaviest weight ever lifted in a working set (the most reps on a tie, then the
+    /// earliest): a heavy single that is not the `best` set. Absent for a lift done without weight.
+    pub heaviest: Option<Record>,
     /// For a lift done without weight (pull-ups, dips), the most reps in one set; absent when it
     /// has a `best`.
     pub best_reps: Option<i64>,
@@ -427,6 +432,9 @@ fn unit(h: &History) -> &'static str {
     }
 }
 
+/// How many untracked workouts the summary names by day.
+pub const UNTRACKED_DAYS: usize = 12;
+
 fn tracked(h: &History) -> impl DoubleEndedIterator<Item = &Session> {
     h.sessions.iter().filter(|s| !s.untracked)
 }
@@ -576,6 +584,11 @@ pub fn summary(h: &History, clock: &Clock, imported: bool) -> Summary {
     let totals = Totals {
         sessions: rows.len() as u32,
         untracked: h.sessions.iter().filter(|s| s.untracked).count() as u32,
+        untracked_days: {
+            let mut days: Vec<String> = h.sessions.iter().rev().filter(|s| s.untracked).take(UNTRACKED_DAYS).map(|s| date_of(s.started_at, &clock.tz).to_string()).collect();
+            days.reverse();
+            days
+        },
         sets: rows.iter().fold(0, |sum: i64, r| sum.saturating_add(r.sets)),
         volume: volume(tracked(h).map(|s| s.volume_lb).sum(), kg),
         cardio: h.cardio.len() as u32,
@@ -630,16 +643,22 @@ pub fn summary(h: &History, clock: &Clock, imported: bool) -> Summary {
 
 /// Sessions newest first, from `offset`, at most `limit`; only those with `lift` when given.
 /// Returns the page and how many match in all.
-pub fn sessions(h: &History, clock: &Clock, offset: usize, limit: usize, lift: Option<&str>) -> Result<(Vec<SessionRow>, usize), String> {
+/// Workouts newest first, from `offset`, at most `limit`: with `lift` only those with it, with
+/// `days` only those from its first day to its last. With them, how many match in all and how
+/// many of those are untracked.
+pub fn sessions(
+    h: &History, clock: &Clock, offset: usize, limit: usize, lift: Option<&str>, days: Option<(Date, Date)>,
+) -> Result<(Vec<SessionRow>, usize, usize), String> {
     let key = lift.map(|l| find_lift(h, l)).transpose()?.map(|n| lift_key(&n));
     let matching: Vec<&Session> = h
         .sessions
         .iter()
         .rev()
         .filter(|s| key.as_ref().is_none_or(|k| s.exercises.iter().any(|e| !e.skipped && lift_key(&e.name) == *k)))
+        .filter(|s| days.is_none_or(|(first, last)| (first..=last).contains(&date_of(s.started_at, &clock.tz))))
         .collect();
-    let total = matching.len();
-    Ok((matching.into_iter().skip(offset).take(limit).map(|s| row(h, s, clock)).collect(), total))
+    let (total, untracked) = (matching.len(), matching.iter().filter(|s| s.untracked).count());
+    Ok((matching.into_iter().skip(offset).take(limit).map(|s| row(h, s, clock)).collect(), total, untracked))
 }
 
 pub fn session(h: &History, clock: &Clock, id: i64) -> Option<SessionDetail> {
@@ -739,6 +758,7 @@ fn lift_row(h: &History, clock: &Clock, name: &str) -> Option<LiftRow> {
     let (mut sessions, mut sets, mut last_day) = (0u32, 0i64, None);
     let mut best: Option<Record> = None;
     let mut best_key = (0.0, 0.0);
+    let mut heaviest: Option<(f64, i64, Record)> = None;
     let (mut recent, mut before): (Option<f64>, Option<f64>) = (None, None);
     let mut most_reps: Option<i64> = None;
     let mut shown = name.to_string();
@@ -755,6 +775,12 @@ fn lift_row(h: &History, clock: &Clock, name: &str) -> Option<LiftRow> {
             last_day = Some(day);
             if let Some(r) = working(e).filter(|s| s.weight_lb.is_none()).map(|s| s.reps).max() {
                 most_reps = Some(most_reps.map_or(r, |m| m.max(r)));
+            }
+            for set in working(e) {
+                let Some(w) = set.weight_lb else { continue };
+                if heaviest.as_ref().is_none_or(|(hw, hr, _)| (w, set.reps) > (*hw, *hr)) {
+                    heaviest = Some((w, set.reps, record(h, s, e, set, clock)));
+                }
             }
             if let Some(b) = best_set(e) {
                 let k = (e1rm_lb(b).unwrap_or(0.0), b.weight_lb.unwrap_or(0.0));
@@ -784,6 +810,7 @@ fn lift_row(h: &History, clock: &Clock, name: &str) -> Option<LiftRow> {
         last_day: last_day?.to_string(),
         best_reps: if best.is_none() { most_reps } else { None },
         best,
+        heaviest: heaviest.map(|(_, _, r)| r),
         recent_e1rm: recent.map(|v| weight(v, kg)),
         change_pct: match (recent, before) {
             (Some(r), Some(b)) if b > 0.0 => Some(round1((r / b - 1.0) * 100.0)),
@@ -1102,6 +1129,7 @@ mod tests {
         let early = Clock { tz: TimeZone::UTC, today: "2026-10-06".parse().unwrap() };
         assert_eq!(summary(&h, &early, true).days_since_last, Some(0));
         assert_eq!((s.totals.sessions, s.totals.untracked), (3, 1));
+        assert_eq!(s.totals.untracked_days, ["2026-10-06"]);
     }
 
     #[test]
@@ -1185,6 +1213,8 @@ mod tests {
         assert_eq!(rows.len(), 1);
         let best = rows[0].best.as_ref().unwrap();
         assert_eq!((best.weight, best.reps), (245.0, 3));
+        let heaviest = rows[0].heaviest.as_ref().unwrap();
+        assert_eq!((heaviest.weight, heaviest.reps), (245.0, 3), "the untracked 315 x 1 is not counted");
         let d = lift(&h, &clock(), "bench", 50).unwrap();
         assert_eq!(d.history.len(), 2);
         assert_eq!(d.history[0].session_id, 2);
@@ -1192,9 +1222,12 @@ mod tests {
         assert_eq!(d.history[1].top_weight, Some(225.0));
         assert!(find_lift(&h, "row").is_ok());
         assert!(find_lift(&h, "deadlift").is_err());
-        let (page, total) = sessions(&h, &clock(), 0, 10, Some("Bench press")).unwrap();
+        let (page, total, untracked) = sessions(&h, &clock(), 0, 10, Some("Bench press"), None).unwrap();
         // Session 3 is untracked but still a session with bench in it.
-        assert_eq!((page.len(), total), (3, 3));
+        assert_eq!((page.len(), total, untracked), (3, 3, 1));
+        let week = Some((Date::constant(2026, 10, 5), Date::constant(2026, 10, 11)));
+        let (page, total, untracked) = sessions(&h, &clock(), 0, 10, None, week).unwrap();
+        assert_eq!((page.iter().map(|r| r.id).collect::<Vec<_>>(), total, untracked), (vec![4, 3], 2, 1), "both ends taken in");
     }
 
     #[test]

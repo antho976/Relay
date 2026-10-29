@@ -4673,7 +4673,7 @@
       }
     },
     "money.tx.list": {
-      "summary": "One budget period's entries, newest first",
+      "summary": "One budget period's entries, or a range of days', newest first",
       "kind": "query",
       "audit": "never",
       "undo": "none",
@@ -19957,6 +19957,20 @@
           "format": "int64",
           "description": "0 is the current budget period, -1 the one before."
         },
+        "from": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The first day (`YYYY-MM-DD`) of a range of days in place of the budget period; with no\n`to`, the range runs to today."
+        },
+        "to": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The last day (`YYYY-MM-DD`) the range takes in; with no `from`, it starts with the budget\nperiod."
+        },
         "query": {
           "type": [
             "string",
@@ -25568,6 +25582,13 @@
           "minimum": 0,
           "description": "Workouts the person excluded in Avex: listed, and counted in nothing here."
         },
+        "untracked_days": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The days of the newest of them (`YYYY-MM-DD`, oldest first), at most [`UNTRACKED_DAYS`]."
+        },
         "sets": {
           "type": "integer",
           "format": "int64"
@@ -25601,6 +25622,7 @@
       "required": [
         "sessions",
         "untracked",
+        "untracked_days",
         "sets",
         "volume",
         "cardio",
@@ -25788,6 +25810,17 @@
           ],
           "description": "The best set ever, by estimated one-rep max."
         },
+        "heaviest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GymRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The heaviest weight ever lifted in a working set (the most reps on a tie, then the\nearliest): a heavy single that is not the `best` set. Absent for a lift done without weight."
+        },
         "best_reps": {
           "type": [
             "integer",
@@ -25902,6 +25935,20 @@
             "null"
           ],
           "description": "Only workouts with this lift (a unique part of its name is enough)."
+        },
+        "from": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only workouts from this day (`YYYY-MM-DD`); with no `to`, up to today."
+        },
+        "to": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only workouts up to this day (`YYYY-MM-DD`), taken in."
         }
       }
     },
@@ -25919,11 +25966,18 @@
           "format": "uint32",
           "minimum": 0,
           "description": "How many match in all."
+        },
+        "untracked": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How many of `total` the person excluded in Avex (untracked)."
         }
       },
       "required": [
         "sessions",
-        "total"
+        "total",
+        "untracked"
       ]
     },
     "GymIdIn": {

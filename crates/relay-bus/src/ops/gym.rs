@@ -24,11 +24,17 @@ payload!(#[schemars(rename = "GymSessionsIn")] SessionsIn {
     pub limit: Option<u32>,
     /// Only workouts with this lift (a unique part of its name is enough).
     pub lift: Option<String>,
+    /// Only workouts from this day (`YYYY-MM-DD`); with no `to`, up to today.
+    pub from: Option<String>,
+    /// Only workouts up to this day (`YYYY-MM-DD`), taken in.
+    pub to: Option<String>,
 });
 result!(#[schemars(rename = "GymSessionsOut")] SessionsOut {
     pub sessions: Vec<SessionRow>,
     /// How many match in all.
     pub total: u32,
+    /// How many of `total` the person excluded in Avex (untracked).
+    pub untracked: u32,
 });
 op!(Sessions, "gym.sessions", SessionsIn => SessionsOut, OpMeta::query(Scope::Global, 12, "Workouts, newest first, each with its lifts, sets, volume and records"));
 

@@ -289,8 +289,8 @@ before adding an entry. A budget's `left` is what is still to spend (below zero 
 budget and over pace are different figures, and each budget's `line` says in words where it stands: \
 quote it. \"Last month\" is the \
 previous budget period: for one category's total in a period, call money.tx.list with its \
-`category_id` and `period_offset` (-1 is last month) and read its `spent`; never add entries up \
-yourself. The bills in money.summary include income (`type` INCOME) and transfers: only EXPENSE ones \
+`category_id` and `period_offset` (-1 is last month) and read its `spent`, or with `from` and `to` \
+(YYYY-MM-DD) for any other days, such as a calendar month; never add entries up yourself. The bills in money.summary include income (`type` INCOME) and transfers: only EXPENSE ones \
 are bills to pay. Entries are in money.tx.list, not money.summary: read it for the largest or smallest \
 entry, or anything else across a period. Never add up, subtract or compare figures \
 yourself when a tool gives the result (`net_worth` for all accounts together, `spent`, a budget's `left`): quote it. \
@@ -450,8 +450,9 @@ Which tool:
 yesterday, this week and last week; spending by category and month by month; the biggest expenses; \
 last month; accounts and net worth; bills and goals.
 - money.tx.list: the entries of one month with their totals. period_offset 0 is this month, -1 last \
-month, -2 the month before; it adds them up by category, week and day. query finds entries by note, \
-category or account.
+month, -2 the month before; from and to (YYYY-MM-DD) in place of it for any other days (a calendar \
+month, since a payday, one day). It adds them up by category, week and day. query finds entries by \
+note, category or account.
 - money.lists: the names of accounts and categories, and what goes in each category.
 - money.invest.summary: investments (value, gain, holdings, contribution room). money.invest.list: \
 their buys, sells and dividends.

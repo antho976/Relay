@@ -535,6 +535,17 @@ impl Ledger {
     /// category and the account in any case and alphabet ([`text_match`]).
     pub fn tx_list(&self, q: &TxQuery, today: Date) -> Result<TxPage> {
         let period = self.period(today)?.shift(q.period_offset.unwrap_or(0).clamp(-MAX_PERIOD_OFFSET, MAX_PERIOD_OFFSET));
+        let period = match (q.from, q.to) {
+            (None, None) => period,
+            (from, to) => {
+                let start = from.unwrap_or(period.start);
+                let last = to.unwrap_or(if from.is_some() { today } else { period.end_exclusive.yesterday().unwrap_or(period.start) });
+                if last < start {
+                    return invalid(format!("The range ends ({last}) before it starts ({start})"));
+                }
+                BudgetPeriod { start, end_exclusive: last.tomorrow().unwrap_or(last) }
+            }
+        };
         let pattern = q.query.as_deref().map(text_match::contains_pattern).unwrap_or_default();
         let mut st = self.conn.prepare_cached(&format!(
             "{} WHERE t.deleted = 0 AND t.date >= ?1 AND t.date < ?2
@@ -1544,6 +1555,28 @@ mod tests {
         assert_eq!((page.transactions.len(), page.spent), (2, 50_00));
         let found = l.tx_list(&TxQuery { query: Some("dining".into()), limit: Some(1), ..Default::default() }, date(2026, 10, 6)).unwrap();
         assert_eq!(found.spent, 50_00, "the filters count, the limit does not");
+    }
+
+    /// A range of days crosses budget periods: a calendar month in a ledger whose month starts on
+    /// the 15th, both ends taken in.
+    #[test]
+    fn a_range_of_days_lists_and_totals_across_periods() {
+        let (mut l, acct) = with_account();
+        l.set_month_start_day(15).unwrap();
+        let dining = category(&l, "Dining");
+        for (day, cents) in [("2026-08-31", 1_00), ("2026-09-01", 10_00), ("2026-09-14", 20_00), ("2026-09-15", 30_00), ("2026-09-18", 40_00)] {
+            spend(&mut l, acct, dining, cents, day);
+        }
+        let today = date(2026, 9, 18);
+        let range = |from: Option<Date>, to: Option<Date>| l.tx_list(&TxQuery { from, to, ..Default::default() }, today);
+        let calendar = range(Some(date(2026, 9, 1)), Some(date(2026, 9, 30))).unwrap();
+        assert_eq!((calendar.transactions.len(), calendar.spent), (4, 100_00));
+        assert_eq!((calendar.period.start.as_str(), calendar.period.end_exclusive.as_str()), ("2026-09-01", "2026-10-01"));
+        assert_eq!(range(Some(date(2026, 9, 14)), None).unwrap().spent, 90_00, "from alone runs to today");
+        assert_eq!(range(None, Some(date(2026, 9, 16))).unwrap().spent, 30_00, "to alone starts with this period");
+        assert_eq!(range(Some(date(2026, 9, 1)), Some(date(2026, 9, 1))).unwrap().spent, 10_00, "one day");
+        assert!(matches!(range(Some(date(2026, 9, 2)), Some(date(2026, 9, 1))), Err(LedgerError::Invalid(_))));
+        assert_eq!(l.tx_list(&TxQuery::default(), today).unwrap().spent, 70_00, "no range: the budget period");
     }
 
     #[test]

@@ -94,9 +94,10 @@ pub fn description(op: &str, today: Date) -> Option<String> {
         "money.summary" => "Start here for any money question. This month's budget worked out in words: spent, income, left, pace, \
 today, yesterday, this week and last week, every category this month and month by month, the biggest expenses, last month, \
 accounts and net worth, bills to pay, goals and investments. Example: {}".into(),
-        "money.tx.list" => "The entries of one budget month, each with its id, added up by category, by week and by day. \
-period_offset: 0 this month, -1 last month, -2 the month before. query: a word to find in the note, category or account. \
-Example: {\"period_offset\": -1, \"query\": \"Provigo\"}".into(),
+        "money.tx.list" => format!("The entries of one budget month, each with its id, added up by category, by week and by day. \
+period_offset: 0 this month, -1 last month, -2 the month before. from and to (YYYY-MM-DD, both days counted) in place of it, \
+for any other days: a calendar month, since a payday, one day; from alone runs to today. query: a word to find in the note, \
+category or account. Example: {{\"period_offset\": -1, \"query\": \"Provigo\"}}, or {{\"from\": \"{}-01-01\", \"to\": \"{today}\"}}", today.year()),
         "money.lists" => "The accounts and categories (each name with its id) that money.tx.add and money.tx.update need, what \
 goes in each category, and the dates of the last two weeks. Example: {}".into(),
         "money.tx.add" => format!("Add an expense, income or transfer. amount is a decimal string; date is the day it happened as \
@@ -116,8 +117,9 @@ fill. Example: {{\"account_id\": 5, \"type\": \"BUY\", \"date\": \"{today}\", \"
         "gym.summary" => "Start here for any training question. Avex's history worked out in words: how old the copy is, totals, \
 this week and last week, week by week and month by month, recent workouts and the last one in detail, every lift's best \
 set (in lb and kg) and how it improved, cardio and goals. Example: {}".into(),
-        "gym.sessions" => "Workouts, newest first, one line each with its id. lift: only workouts with that lift. Example: \
-{\"lift\": \"Deadlift\", \"limit\": 5}".into(),
+        "gym.sessions" => "Workouts, newest first, one line each with its id, and how many in all. lift: only workouts with \
+that lift. from and to (YYYY-MM-DD, both days counted): only those days' workouts. Example: {\"lift\": \"Deadlift\", \"limit\": 5}, \
+or {\"from\": \"2026-08-15\", \"to\": \"2026-09-14\"}".into(),
         "gym.session.get" => "Every set of one workout, by its id from gym.sessions or gym.summary. Example: {\"id\": 149}".into(),
         "gym.lifts" => "Every lift's best set, how often it was done, and how it improved. query: part of a lift's name. \
 Example: {\"query\": \"squat\"}".into(),
@@ -553,7 +555,14 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
         let e = Entries::of(page);
         let _ = writeln!(o, "\nSPENDING BY CATEGORY THIS MONTH (every category, largest first; entries in brackets):");
         for (name, amount, n) in &e.by_category {
-            let _ = writeln!(o, "- {name}: {} ({n})", m.fmt(*amount));
+            let _ = write!(o, "- {name}: {} ({n})", m.fmt(*amount));
+            // A total with no names leaves nothing to say about which entries are not filed.
+            if name == "No category" && *n <= 5 {
+                let named: Vec<String> = e.expenses.iter().filter(|t| s(t, "category").is_empty())
+                    .map(|t| format!("#{} {}, {}, {}", int(t, "id"), m.fmt(int(t, "amount")), entry_name(t), day_of(s(t, "date"), today))).collect();
+                let _ = write!(o, ": {}", named.join("; "));
+            }
+            o.push('\n');
         }
         if e.by_category.is_empty() {
             let _ = writeln!(o, "- {NONE_LOGGED} this month");
@@ -684,7 +693,9 @@ fn tx_list(payload: &Value, r: &Value, ctx: &Ctx) -> String {
     let today = ctx.today;
     let m = Money::of(&ctx.currency);
     let offset = payload["period_offset"].as_i64().unwrap_or(0);
+    let ranged = ["from", "to"].iter().any(|k| payload[*k].is_string());
     let which = match offset {
+        _ if ranged => "the days asked for, not a budget month".to_string(),
         0 => "this month".to_string(),
         -1 => "last month".to_string(),
         n if n < 0 => format!("{} months ago", -n),
@@ -1152,6 +1163,11 @@ fn lift_line(l: &Value, unit: &str, today: Date) -> String {
                     let _ = write!(line, ", {NO_E1RM}");
                 }
             }
+            // The best set is ranked by estimate: a heavier set with fewer reps is not it.
+            if let Some(h) = l.get("heaviest").filter(|h| h["weight"].as_f64() > b["weight"].as_f64()) {
+                let w = h["weight"].as_f64().unwrap_or(0.0);
+                let _ = write!(line, "; heaviest weight ever lifted {}{} on {}", set(&h["weight"], &h["reps"], unit), other_unit(w, unit), day_of(s(h, "day"), today));
+            }
         }
         None => match l["best_reps"].as_i64() {
             Some(reps) => {
@@ -1201,7 +1217,15 @@ fn gym_summary(r: &Value, lifts: Option<&Value>, cardio: Option<&Value>, months:
     let t = &r["totals"];
     let untracked = match int(t, "untracked") {
         0 => String::new(),
-        n => format!(" {} the person excluded in Avex (untracked) {} not counted.", plural(n, "workout", "workouts"), if n == 1 { "is" } else { "are" }),
+        n => {
+            let days: Vec<String> = list(t, "untracked_days").iter().filter_map(|d| d.as_str()).map(|d| day_of(d, today)).collect();
+            let named = match days.len() as i64 {
+                0 => String::new(),
+                k if k == n => format!(": {}", days.join(", ")),
+                k => format!("; the newest {k}: {}", days.join(", ")),
+            };
+            format!(" {} the person excluded in Avex (untracked) {} not counted{named}.", plural(n, "workout", "workouts"), if n == 1 { "is" } else { "are" })
+        }
     };
     let _ = writeln!(
         o, "\nALL TIME ({} to {}): {}, {}, {} {unit} lifted, {}.{untracked}",
@@ -1355,12 +1379,27 @@ fn gym_sessions(payload: &Value, r: &Value, unit: &str, ctx: &Ctx) -> String {
     if let Some(lift) = payload["lift"].as_str().filter(|l| !l.trim().is_empty()) {
         let _ = writeln!(o, "Only workouts with {}.", lift.trim());
     }
+    let (first, last) = (payload["from"].as_str().and_then(date), payload["to"].as_str().and_then(date));
+    if first.is_some() || last.is_some() {
+        let _ = writeln!(o, "Only workouts {}.", match (first, last) {
+            (Some(a), Some(b)) => format!("from {} to {}", day(a, today), day(b, today)),
+            (Some(a), None) => format!("from {} to today", day(a, today)),
+            (None, Some(b)) => format!("up to {}", day(b, today)),
+            (None, None) => unreachable!(),
+        });
+    }
     let total = int(r, "total");
+    let untracked = int(r, "untracked");
     let from = payload["offset"].as_i64().unwrap_or(0);
     if total == 0 {
-        let _ = writeln!(o, "No workouts in this Avex copy.");
+        let _ = writeln!(o, "No workouts in this Avex copy{}.", if first.is_some() || last.is_some() { " on those days" } else { "" });
     } else {
-        let _ = writeln!(o, "{} in all; showing {} to {}.", plural(total, "workout", "workouts"), if rows.is_empty() { 0 } else { from + 1 }, from + rows.len() as i64);
+        let counted = if untracked > 0 {
+            format!(" ({} counted, {} the person excluded in Avex: untracked, marked below, not counted)", total - untracked, untracked)
+        } else {
+            String::new()
+        };
+        let _ = writeln!(o, "{} in all{counted}; showing {} to {}.", plural(total, "workout", "workouts"), if rows.is_empty() { 0 } else { from + 1 }, from + rows.len() as i64);
     }
     for x in rows {
         let _ = writeln!(o, "{}", session_line(x, unit, today));
@@ -1438,7 +1477,7 @@ fn lift_lines(o: &mut String, rows: &[Value], unit: &str, today: Date) {
     for l in rows {
         let _ = writeln!(o, "{}", lift_line(l, unit, today));
     }
-    let heaviest = rows.iter().filter_map(|l| l.get("best").filter(|b| b.is_object()).map(|b| (l, b))).max_by(|a, b| num(a.1, "weight").total_cmp(&num(b.1, "weight")));
+    let heaviest = rows.iter().filter_map(|l| l.get("heaviest").or(l.get("best")).filter(|b| b.is_object()).map(|b| (l, b))).max_by(|a, b| num(a.1, "weight").total_cmp(&num(b.1, "weight")));
     if let Some((l, b)) = heaviest {
         let _ = writeln!(o, "Heaviest set of any lift: {} {} on {}.", s(l, "name"), set(&b["weight"], &b["reps"], unit), day_of(s(b, "day"), today));
     }
@@ -1684,6 +1723,10 @@ mod tests {
         let last = render("money.tx.list", &json!({"period_offset": -1, "category_id": 1}), &page(), &[], &ctx()).unwrap();
         assert!(last.contains(", last month.") && last.contains("Only entries category Dining"), "{last}");
         assert!(!text.contains("\"icon\"") && !text.contains("color"), "{text}");
+        let mut days = page();
+        days["period"] = json!({"start": "2026-10-02", "end_exclusive": "2026-10-09", "days": 7, "days_left": 0});
+        let ranged = render("money.tx.list", &json!({"from": "2026-10-02", "to": "2026-10-08"}), &days, &[], &ctx()).unwrap();
+        assert!(ranged.starts_with("TALLY ENTRIES for Oct 2 to Oct 8, the days asked for, not a budget month."), "{ranged}");
     }
 
     fn summary() -> Value {
@@ -1708,6 +1751,14 @@ mod tests {
                       {"id": 1, "name": "Rent", "amount": 135000, "type": "EXPENSE", "next_date": "2026-11-01", "days_until": 17}],
             "goals": [{"id": 2, "name": "Lisbon trip", "kind": "SAVINGS", "target": 240000, "saved": 70000, "line": "$283 a month for 6 months"}],
         })
+    }
+
+    #[test]
+    fn the_money_summary_names_the_entries_with_no_category() {
+        let mut month = page();
+        month["transactions"].as_array_mut().unwrap().push(tx(140, "EXPENSE", 985, "2026-10-13", None, "Dépanneur Chez Ben"));
+        let text = render("money.summary", &json!({}), &summary(), &[Some(month)], &ctx()).unwrap();
+        assert!(text.contains("- No category: $9.85 (1): #140 $9.85, Dépanneur Chez Ben, Tue Oct 13\n"), "{text}");
     }
 
     #[test]
@@ -1900,7 +1951,9 @@ mod tests {
                        "goals": [{"kind": "lift_target", "target_key": "bench", "target_value": 225.0, "created_day": "2026-07-13", "note": "Two plates"}]});
         let mut pull_up = lift("Pull-up", None);
         pull_up["best_reps"] = json!(12);
-        let lifts = json!({"unit": "lb", "lifts": [lift("Bench Press", Some(215.0)), lift("Deadlift", Some(335.0)), lift("Dips", None), pull_up]});
+        let mut deadlift = lift("Deadlift", Some(335.0));
+        deadlift["heaviest"] = json!({"lift": "Deadlift", "day": "2026-09-26", "session_id": 140, "weight": 365.0, "reps": 1, "e1rm": 377.2});
+        let lifts = json!({"unit": "lb", "lifts": [lift("Bench Press", Some(215.0)), deadlift, lift("Dips", None), pull_up]});
         let cardio = json!({"entries": [{"day": "2026-10-03", "time": "08:00", "kind": "run", "minutes": 36, "distance_km": 5.65, "effort": "easy", "note": ""},
                                         {"day": "2026-08-30", "time": "08:00", "kind": "rest", "minutes": 0, "distance_km": null, "effort": "", "note": ""},
                                         {"day": "2026-08-20", "time": "08:00", "kind": "run", "minutes": 35, "distance_km": 5.5, "effort": "", "note": ""},
@@ -1925,7 +1978,7 @@ mod tests {
             "Last workout: Thu Oct 8 (7 days ago).",
             "Streak: 13 weeks in a row",
             "- Thu Oct 8 18:32 (7 days ago): Legs A, 44 min, 12 sets, 26,185 lb lifted, 4 records; lifts: Back Squat, Leg Press; felt good [id 149]",
-            "- Deadlift: best set 335 lb x 5 (152 kg) on Mon Oct 5, estimated 1-rep max 250.8 lb (113.8 kg)",
+            "- Deadlift: best set 335 lb x 5 (152 kg) on Mon Oct 5, estimated 1-rep max 250.8 lb (113.8 kg); heaviest weight ever lifted 365 lb x 1 (165.6 kg) on Sat Sep 26;",
             "- Dips: bodyweight or timed only",
             "- Pull-up: bodyweight, no weighted best set, so no estimated max; most reps in one set: 12;",
             "Most improved first (estimated max, last 4 weeks vs the 4 before): Bench Press +4.9%",
@@ -1937,7 +1990,7 @@ mod tests {
             "- Leg Press: 3 working sets, volume 3,990 lb; 285 lb x 5, 285 lb x 5, 285 lb x 4\n",
             "- Dips: 1 working set; bodyweight x 14\n",
             "CARDIO BY MONTH (calendar months, oldest first; each run counted; a month not listed has no cardio in this Avex copy):\n- August: 2 runs, 1 h 5 min, 10.5 km; 1 bike ride, 40 min, 15 km\n- October so far: 1 run, 36 min, 5.65 km\n",
-            "Heaviest set of any lift: Deadlift 335 lb x 5 on Mon Oct 5.",
+            "Heaviest set of any lift: Deadlift 365 lb x 1 on Sat Sep 26.",
             "- lift target bench 225 lb, set Mon Jul 13 \"Two plates\"",
         ] {
             assert!(text.contains(want), "missing {want:?} in\n{text}");
@@ -1954,6 +2007,11 @@ mod tests {
                                   "best": {"lift": "Bench Press", "day": "2026-10-05", "weight": 215.0, "reps": 5, "e1rm": 250.8}}]});
         let text = render("gym.summary", &json!({}), &r, &[], &ctx()).unwrap();
         assert!(text.contains("1 workout the person excluded in Avex (untracked) is not counted."), "{text}");
+        let mut named = r.clone();
+        named["totals"]["untracked"] = json!(3);
+        named["totals"]["untracked_days"] = json!(["2026-08-08", "2026-10-03"]);
+        let text = render("gym.summary", &json!({}), &named, &[], &ctx()).unwrap();
+        assert!(text.contains("3 workouts the person excluded in Avex (untracked) are not counted; the newest 2: Sat Aug 8, Sat Oct 3."), "{text}");
         assert!(text.contains("- lift target bench 225 lb, set Mon Jul 13; best so far 215 lb x 5 on Mon Oct 5, estimated 1-rep max 250.8 lb"), "{text}");
         let detail = json!({"row": session(149, "2026-10-08"), "unit": "lb", "older_id": 148, "newer_id": null,
                             "exercises": [{"name": "Bench Press", "volume": 3010.0, "sets": [{"weight": 215.0, "reps": 7, "kind": "work"}, {"weight": 215.0, "reps": 7, "kind": "work"}],
@@ -1967,6 +2025,9 @@ mod tests {
         let r = json!({"sessions": [session(149, "2026-10-08")], "total": 48});
         let text = render("gym.sessions", &json!({"limit": 1}), &r, &[], &ctx()).unwrap();
         assert!(text.contains("48 workouts in all; showing 1 to 1."), "{text}");
+        let r = json!({"sessions": [session(149, "2026-10-08")], "total": 5, "untracked": 1});
+        let text = render("gym.sessions", &json!({"from": "2026-10-01", "to": "2026-10-14"}), &r, &[], &ctx()).unwrap();
+        assert!(text.contains("Only workouts from Thu Oct 1 to Wed Oct 14.\n5 workouts in all (4 counted, 1 the person excluded in Avex: untracked, marked below, not counted)"), "{text}");
         let detail = json!({"row": session(149, "2026-10-08"), "unit": "lb", "journal": "Gym was packed",
                             "exercises": [{"name": "Back Squat", "skipped": false, "was_pr": true, "difficulty": "EASY", "volume": 3990.0, "best_e1rm": 332.5,
                                            "sets": [{"weight": 142.0, "reps": 8, "rpe": null, "kind": "warmup", "best": false}, {"weight": 285.0, "reps": 5, "rpe": 8.0, "kind": "work", "best": true}]},
