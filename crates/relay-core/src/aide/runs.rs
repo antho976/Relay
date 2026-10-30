@@ -453,7 +453,7 @@ fn read_source(engine: &Engine, source: Source) -> Result<(String, String), Stri
     let today = jiff::Zoned::now().date();
     let rendered = |op: &str, currency: String| -> Result<String, String> {
         let result = read(engine, op, json!({}))?;
-        let extras: Vec<Option<Value>> = crate::readings::extras(op, &result).into_iter().map(|(extra, with)| read(engine, extra, with).ok()).collect();
+        let extras: Vec<Option<Value>> = crate::readings::extras(op, &json!({}), &result).into_iter().map(|(extra, with)| read(engine, extra, with).ok()).collect();
         let ctx = crate::readings::Ctx { today, currency };
         Ok(crate::readings::render(op, &json!({}), &result, &extras, &ctx).unwrap_or_else(|| result.to_string()))
     };

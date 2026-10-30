@@ -474,6 +474,9 @@ gone. They are different figures: say the one the reading gives.
 not bills.
 - An entry's amount is what was paid or received. A figure written in its note (\"-15,99 $ already \
 taken off\") is part of the note: it does not change the amount.
+- What each workout cost: what they paid the gym in those days (a membership or a pass, whatever day \
+it was charged), divided by the workouts counted in those days. Show the division: $60.00 / 12 \
+workouts = $5.00 a workout.
 - An e1rm is an estimated one-rep max: call it estimated. Avex's copy is only as new as its last \
 export: when asked about today or recent training, say when the copy was exported, since anything \
 logged after that is not in it.
@@ -483,7 +486,8 @@ estimated exchange rate is an estimate: say so.
 Changes:
 - You may add an entry with money.tx.add (type, amount like \"42.18\", date as YYYY-MM-DD from the \
 dates list, the account by name as the person said it, and for an expense or income always a \
-category by its name in money.lists) and change one with money.tx.update (its id from money.tx.list). \
+category by its name in money.lists) and change one with money.tx.update (its id from money.tx.list; it only changes an entry: to look \
+at one, read it with money.tx.list). \
 In French a comma before the last two digits is the decimal point: \"45,20 $\" is 45.20. \
 Say plainly what you changed. When the amount or the account is unclear, ask first. \
 money.tx.restore brings back a deleted entry. money.invest.add records an investment activity, but \
@@ -1484,19 +1488,37 @@ fn prefetched(engine: &Engine, text: &str) -> String {
     };
     let currency = read("money.lists", json!({})).and_then(|l| l["currency"].as_str().map(str::to_string)).unwrap_or_else(|| "CAD".into());
     let ctx = crate::readings::Ctx { today: jiff::Zoned::now().date(), currency };
-    let briefs: Vec<String> = ["money.summary", "gym.summary"].into_iter().filter_map(|op| {
+    let mut briefs: Vec<String> = ["money.summary", "gym.summary"].into_iter().filter_map(|op| {
         let result = read(op, json!({}))?;
-        let extras: Vec<Option<Value>> = crate::readings::extras(op, &result).into_iter().map(|(extra, with)| read(extra, with)).collect();
+        let extras: Vec<Option<Value>> = crate::readings::extras(op, &json!({}), &result).into_iter().map(|(extra, with)| read(extra, with)).collect();
         crate::readings::render(op, &json!({}), &result, &extras, &ctx)
     }).collect();
     if briefs.is_empty() {
         return text.to_string();
     }
+    // Tally's budget months, which the entries above cover, and Avex's workouts over the same days.
+    let periods: Vec<(&str, Value)> = [("this month", 0), ("last month", -1)].into_iter()
+        .filter_map(|(name, offset)| read("money.tx.list", json!({"period_offset": offset, "limit": 1})).map(|page| (name, page["period"].clone())))
+        .collect();
+    if briefs.len() == 2 {
+        let sessions: Vec<(&str, &Value, Value)> = periods.iter().filter_map(|(name, period)| {
+            let last = period["end_exclusive"].as_str().and_then(|d| d.parse::<jiff::civil::Date>().ok())?.yesterday().ok()?;
+            Some((*name, period, read("gym.sessions", json!({"from": period["start"], "to": last.to_string(), "limit": 1}))?))
+        }).collect();
+        let months: Vec<(&str, &Value, &Value)> = sessions.iter().map(|(name, period, s)| (*name, *period, s)).collect();
+        briefs.extend(crate::readings::workouts_by_budget_month(&months, ctx.today));
+    }
+    // A month the person names whose entries are not attached: said where they will read it.
+    let held_from = periods.last().and_then(|(_, p)| p["start"].as_str()).and_then(|d| d.parse::<jiff::civil::Date>().ok()).unwrap_or(ctx.today);
+    let named: Vec<String> = crate::readings::months_named(text, ctx.today, held_from).into_iter()
+        .map(|(name, first, last)| format!("{name} is not in it (its entries start {}): read those days with money.tx.list or gym.sessions, from {first} to {last}", held_from.strftime("%b %-d")))
+        .collect();
+    let end = if named.is_empty() { "[End of the data. My message:]".to_string() } else { format!("[End of the data. {}. My message:]", named.join("; ")) };
     format!(
         "[Relay attached my data as it is now, read as this conversation started. Answer from it when it has the answer; \
          call a tool for anything it does not give, or after a change. It holds this budget month, last month and recent \
          training: for other days (a trip, a month by name, since a date, between two days), call money.tx.list or \
-         gym.sessions with from and to.]\n\n{}\n\n[End of the data. My message:]\n{text}",
+         gym.sessions with from and to.]\n\n{}\n\n{end}\n{text}",
         briefs.join("\n\n")
     )
 }
@@ -2242,6 +2264,10 @@ mod tests {
             assert!(text.contains(part), "{part} in\n{text}");
         }
         assert!(!text.contains("\"amount\""), "readings, not JSON");
+        assert!(!text.contains("BOTH APPS"), "no workouts imported: {text}");
+        // A month whose entries are not attached is named, with the days to read.
+        let text = prefetched(&engine, "what did I spend in june 2020?");
+        assert!(text.contains(": read those days with money.tx.list or gym.sessions, from 2020-06-01 to 2020-06-30. My message:]\nwhat did I spend in june 2020?"), "{text}");
     }
 
     #[test]

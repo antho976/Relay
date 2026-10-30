@@ -541,7 +541,7 @@ async fn tools(instance: Instance, actor: &Actor, token: Option<&str>) -> Result
         };
         admitted.then(|| {
             let tool = if style.docs { small_model_tool(entry) } else { op_tool(entry) };
-            if style.readings { never_into(by_names(tool), &filled) } else { tool }
+            if style.readings { never_into(by_names(without_hidden(tool)), &filled) } else { tool }
         })
     }).collect::<Vec<_>>();
 
@@ -613,10 +613,15 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
     let (in_units, out_units) = (units::has_units(&schema["payload"]), units::has_units(&schema["result"]));
     let ledger = if in_units || out_units { ledger_digits(&mut client, actor, token).await } else { 2 };
     let style = Style::from_env();
-    if style.docs {
+    if style.docs || style.readings {
         // A field a small model is not shown is not its to set: a `limit` it guesses anyway cuts a
         // long range's entries, and every total its reading works out from them.
         strip_hidden(name, &mut arguments);
+    }
+    if style.readings && name == "money.tx.update" && arguments.as_object().is_some_and(|args| args.keys().all(|k| k == "id")) {
+        // A small model "opens" an entry this way, and the person sees a change that is none.
+        let text = "Not done: money.tx.update with only an id changes nothing. To read an entry, call money.tx.list (a query with a word of its note finds it).";
+        return Ok(json!({"content":[{"type":"text","text":text}],"isError":true}));
     }
     if style.readings && names_in(name, &arguments) {
         // A small model names the account and category as the person did; the door finds their
@@ -1063,7 +1068,7 @@ async fn read(client: &mut Client, actor: &Actor, token: Option<&str>, op: &str,
 /// `result` of `op` as its reading, the reads it folds in read first.
 async fn reading(client: &mut Client, actor: &Actor, token: Option<&str>, op: &str, payload: &Value, result: &Value) -> Option<String> {
     let mut extras = Vec::new();
-    for (extra, with) in relay_core::readings::extras(op, result) {
+    for (extra, with) in relay_core::readings::extras(op, payload, result) {
         extras.push(read(client, actor, token, extra, with).await);
     }
     let currency = read(client, actor, token, "money.lists", json!({})).await
@@ -1125,11 +1130,16 @@ fn small_model_tool(entry: &OpEntry) -> Value {
     if let Some(about) = relay_core::readings::description(entry.name, jiff::Zoned::now().date()) {
         tool["description"] = Value::String(about);
     }
-    for (op, field) in relay_core::readings::HIDDEN_FIELDS {
-        if *op == entry.name {
-            if let Some(props) = tool["inputSchema"]["properties"].as_object_mut() {
-                props.remove(*field);
-            }
+    without_hidden(tool)
+}
+
+/// `tool` without the fields a reading makes a small model better without
+/// (`relay_core::readings::HIDDEN_FIELDS`).
+fn without_hidden(mut tool: Value) -> Value {
+    let name = tool["name"].as_str().unwrap_or("").to_string();
+    if let Some(props) = tool["inputSchema"]["properties"].as_object_mut() {
+        for (_, field) in relay_core::readings::HIDDEN_FIELDS.iter().filter(|(op, _)| *op == name) {
+            props.remove(*field);
         }
     }
     tool
@@ -1397,6 +1407,9 @@ mod tests {
         let mut arguments = json!({"limit": 5});
         strip_hidden("gym.sessions", &mut arguments);
         assert_eq!(arguments, json!({"limit": 5}), "a field it is shown stays");
+        // Readings alone, without the plain descriptions, leave the fields out too.
+        let tool = without_hidden(op_tool(Registry::global().get("money.tx.list").unwrap()));
+        assert!(!tool["inputSchema"]["properties"].as_object().unwrap().contains_key("limit"));
         let tool = small_model_tool(Registry::global().get("money.tx.add").unwrap());
         assert_eq!(tool["inputSchema"]["properties"]["amount"]["type"], "string", "still decimals");
         for op in relay_core::threads::local_ops().into_iter().filter(|op| op.starts_with("money.") || op.starts_with("gym.")) {

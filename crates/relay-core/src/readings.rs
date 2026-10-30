@@ -30,8 +30,9 @@ pub const OPS: &[&str] = &[
     "gym.summary", "gym.sessions", "gym.session.get", "gym.lifts", "gym.lift.get", "gym.cardio", "gym.series",
 ];
 
-/// The reads a reading of `op` folds in, given its `result`, in the order [`render`] takes them.
-pub fn extras(op: &str, result: &Value) -> Vec<(&'static str, Value)> {
+/// The reads a reading of `op` (asked with `payload`) folds in, given its `result`, in the order
+/// [`render`] takes them.
+pub fn extras(op: &str, payload: &Value, result: &Value) -> Vec<(&'static str, Value)> {
     use serde_json::json;
     let by_month = |measure: &str| ("gym.series", json!({"measure": measure, "by": "month", "periods": 6}));
     match op {
@@ -58,8 +59,18 @@ pub fn extras(op: &str, result: &Value) -> Vec<(&'static str, Value)> {
         "money.invest.summary" => vec![("money.lists", json!({}))],
         // Which accounts Wealthsimple's files fill, which an activity does not say.
         "money.invest.list" => vec![("money.lists", json!({}))],
-        // Which categories are for spending, so money back filed under one is told apart.
-        "money.tx.list" => vec![("money.lists", json!({}))],
+        // Which categories are for spending, so money back filed under one is told apart; and
+        // for a search for money back, the same days unsearched: a return noted in French or by
+        // the shop's name is not found by "refund".
+        "money.tx.list" => {
+            let mut reads = vec![("money.lists", json!({}))];
+            let period = &result["period"];
+            let last = date(s(period, "end_exclusive")).and_then(|d| d.yesterday().ok());
+            if let (true, Some(last)) = (money_back_search(payload, result), last) {
+                reads.push(("money.tx.list", json!({"from": s(period, "start"), "to": last.to_string()})));
+            }
+            reads
+        }
         // What went in each category lately: a second invoice from a client goes where the first did.
         "money.lists" => vec![("money.tx.list", json!({})), ("money.tx.list", json!({"period_offset": -1})), ("money.tx.list", json!({"period_offset": -2}))],
         // A workout list does not say its unit; a week's volume does.
@@ -74,7 +85,7 @@ pub fn render(op: &str, payload: &Value, result: &Value, extras: &[Option<Value>
     let extra = |i: usize| extras.get(i).and_then(Option::as_ref);
     let text = match op {
         "money.summary" => money_summary(result, [extra(0), extra(1), extra(2)], [extra(3), extra(4)], extra(5), extra(6), ctx),
-        "money.tx.list" => tx_list(payload, result, extra(0), ctx),
+        "money.tx.list" => tx_list(payload, result, extra(0), extra(1), ctx),
         "money.lists" => money_lists(result, [extra(0), extra(1), extra(2)], ctx),
         "money.series" => money_series(payload, result, ctx),
         "money.invest.summary" => invest_summary(result, extra(0), ctx),
@@ -89,6 +100,65 @@ pub fn render(op: &str, payload: &Value, result: &Value, extras: &[Option<Value>
         _ => return None,
     };
     Some(text.trim_end().to_string())
+}
+
+/// The prefetch's line on both apps: each budget month's workouts, counted over the same days
+/// as Tally's month, for a question that asks for both ("last month, how much on health and how
+/// many workouts"). Each of `months` is its name, its `period` and `gym.sessions` over those days.
+pub fn workouts_by_budget_month(months: &[(&str, &Value, &Value)], today: Date) -> Option<String> {
+    // No workouts in either: nothing imported, or a line that only says zero.
+    if months.iter().all(|(_, _, sessions)| int(sessions, "total") == 0) {
+        return None;
+    }
+    let cells: Vec<String> = months.iter().filter_map(|(name, period, sessions)| {
+        let (start, last) = (date(s(period, "start"))?, date(s(period, "end_exclusive"))?.yesterday().ok()?);
+        let untracked = int(sessions, "untracked");
+        let excluded = if untracked > 0 { format!(", and {untracked} the person excluded in Avex (untracked, not counted)") } else { String::new() };
+        Some(format!("{name} ({} to {}{}) {}{excluded}", start.strftime("%b %-d"), last.strftime("%b %-d"), if last >= today { ", so far" } else { "" },
+            plural(int(sessions, "total") - untracked, "workout", "workouts")))
+    }).collect();
+    (!cells.is_empty()).then(|| format!("BOTH APPS, EACH BUDGET MONTH (Avex's workouts counted over the days of Tally's month): {}.", cells.join("; ")))
+}
+
+/// Month names in English and French, short and long. Not "may" (an English verb too, so it
+/// needs "in" or "since" before it), "mar" or "sept" (French for seven).
+const MONTH_WORDS: &[(&str, i8)] = &[
+    ("january", 1), ("jan", 1), ("janvier", 1), ("janv", 1), ("february", 2), ("feb", 2), ("février", 2), ("fevrier", 2), ("févr", 2),
+    ("march", 3), ("mars", 3), ("april", 4), ("apr", 4), ("avril", 4), ("avr", 4), ("mai", 5), ("june", 6), ("jun", 6), ("juin", 6),
+    ("july", 7), ("jul", 7), ("juillet", 7), ("juil", 7), ("august", 8), ("aug", 8), ("août", 8), ("aout", 8),
+    ("september", 9), ("sep", 9), ("septembre", 9), ("october", 10), ("oct", 10), ("octobre", 10),
+    ("november", 11), ("nov", 11), ("novembre", 11), ("december", 12), ("dec", 12), ("décembre", 12), ("decembre", 12), ("déc", 12),
+];
+
+/// The calendar months `text` names with no day beside them ("in June", "since January"), as
+/// (name, first day, last day) to read: the most recent such month, through today after "since".
+/// Months that start on or after `held_from`, which the prefetch already holds, are left out.
+pub fn months_named(text: &str, today: Date, held_from: Date) -> Vec<(String, Date, Date)> {
+    let lower = text.to_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let is_day = |w: Option<&&str>| w.is_some_and(|w| w.len() <= 4 && w.starts_with(|c: char| c.is_ascii_digit()) && !(w.len() == 4 && w.chars().all(|c| c.is_ascii_digit())));
+    let mut out: Vec<(String, Date, Date)> = Vec::new();
+    for (i, w) in words.iter().enumerate() {
+        let before = i.checked_sub(1).and_then(|j| words.get(j));
+        let month = match MONTH_WORDS.iter().find(|(name, _)| name == w) {
+            Some((_, n)) => *n,
+            None if *w == "may" && before.is_some_and(|b| ["in", "since", "during", "of", "early", "late", "mid", "until"].contains(b)) => 5,
+            None => continue,
+        };
+        if is_day(before) || is_day(words.get(i + 1)) {
+            continue;
+        }
+        let year = words.get(i + 1).and_then(|y| y.parse::<i16>().ok()).filter(|y| (1990..=2100).contains(y))
+            .unwrap_or(if month > today.month() { today.year() - 1 } else { today.year() });
+        let Ok(first) = Date::new(year, month, 1) else { continue };
+        let since = before.is_some_and(|b| ["since", "depuis"].contains(b));
+        let last = if since { today } else { first.last_of_month().min(today) };
+        if first >= held_from || out.iter().any(|(_, a, _)| *a == first) {
+            continue;
+        }
+        out.push((first.strftime("%B").to_string(), first, last));
+    }
+    out
 }
 
 /// A tool's description for a small model, with an example call, in place of the bus's summary;
@@ -608,10 +678,15 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
             Some(format!("{} {}, {} {}, {}, {} ({})", ids.join(" and "), entry_name(t), m.fmt(int(t, "amount")), s(t, "type").to_ascii_lowercase(), s(t, "account"),
                 day_of(s(t, "date"), today), month_of(s(t, "date"))))
         }).collect();
-        let _ = writeln!(o, "Possible duplicates in the whole ledger (same day, amount, account and note: maybe logged twice): {}.",
-            if named.is_empty() { "none".to_string() } else { named.join("; ") });
-        if !named.is_empty() {
-            let _ = writeln!(o, "When they ask to remove the extra one of a pair: thread.propose deleting its newer id (money.tx.delete), never adding or restoring.");
+        if named.is_empty() {
+            let _ = writeln!(o, "Possible duplicates in the whole ledger (same day, amount, account and note: maybe logged twice): none.");
+        } else {
+            // Every entry is already compared: a model that looks them up again day by day drops
+            // the pair from a month it did not look at.
+            let numbered: Vec<String> = named.iter().enumerate().map(|(i, pair)| format!("{}) {pair}", i + 1)).collect();
+            let _ = writeln!(o, "Possible duplicates in the whole ledger, every entry compared (same day, amount, account and note: maybe logged twice): {}: {}.",
+                plural(named.len() as i64, "pair", "pairs"), numbered.join("; "));
+            let _ = writeln!(o, "Asked about duplicates, name every pair here. When they ask to remove the extra one of a pair: thread.propose deleting its newer id (money.tx.delete), never adding or restoring.");
         }
     }
     if let Some(page) = last_month {
@@ -702,9 +777,17 @@ fn month_by_month(o: &mut String, pages: [Option<&Value>; 3], series: [Option<&V
         }).collect();
         let _ = writeln!(o, "\nMONTH BY MONTH (budget periods, oldest first): {}.", months.join("; "));
     }
-    // Oldest first, as a person reads months.
-    let months: Vec<(String, Entries)> = pages.iter().rev().flatten()
-        .map(|p| (date(s(&p["period"], "start")).map_or_else(String::new, |d| d.strftime("%B").to_string()), Entries::of(p)))
+    // Oldest first, as a person reads months; each a budget month, named as one ("July" was read
+    // as July 1 to 31).
+    let months: Vec<(String, Entries)> = pages.iter().enumerate().rev().filter_map(|(i, p)| p.map(|p| (i, p)))
+        .map(|(i, p)| {
+            let name = ["this month", "last month", "the month before last"][i];
+            let span = match (date(s(&p["period"], "start")), date(s(&p["period"], "end_exclusive")).and_then(|d| d.yesterday().ok())) {
+                (Some(a), Some(b)) => format!(" ({} to {})", a.strftime("%b %-d"), b.strftime("%b %-d")),
+                _ => String::new(),
+            };
+            (format!("{name}{span}"), Entries::of(p))
+        })
         .collect();
     let mut names: Vec<&str> = months.iter().flat_map(|(_, e)| e.by_category.iter().map(|(n, _, _)| n.as_str())).collect();
     names.sort_unstable();
@@ -712,7 +795,8 @@ fn month_by_month(o: &mut String, pages: [Option<&Value>; 3], series: [Option<&V
     if names.is_empty() {
         return;
     }
-    let _ = writeln!(o, "SPENT BY CATEGORY, MONTH BY MONTH:");
+    let _ = writeln!(o, "SPENT BY CATEGORY, BUDGET MONTH BY BUDGET MONTH (oldest first):");
+    let n = months.len() as i64;
     for name in names {
         let cells: Vec<String> = months.iter().enumerate().map(|(i, (month, e))| {
             let now = if i + 1 == months.len() { " so far" } else { "" };
@@ -722,7 +806,8 @@ fn month_by_month(o: &mut String, pages: [Option<&Value>; 3], series: [Option<&V
             }
         }).collect();
         let total: i64 = months.iter().filter_map(|(_, e)| e.by_category.iter().find(|(n, _, _)| n == name).map(|(_, a, _)| *a)).sum();
-        let _ = writeln!(o, "- {name}: {}; these {} months together {}", cells.join("; "), months.len(), m.fmt(total));
+        let average = if n > 1 { format!(", {} a month on average", m.fmt((2 * total + n) / (2 * n))) } else { String::new() };
+        let _ = writeln!(o, "- {name}: {}; these {n} months together {}{average}", cells.join("; "), m.fmt(total));
     }
 }
 
@@ -803,7 +888,30 @@ fn put_aside(rows: &[Value], lists: Option<&Value>, m: &Money) -> Option<String>
         m.fmt(saved.iter().map(|t| int(t, "amount")).sum()), saved.len(), named.join("; ")))
 }
 
-fn tx_list(payload: &Value, r: &Value, lists: Option<&Value>, ctx: &Ctx) -> String {
+/// Words a search for money back is written with, in English and French.
+const MONEY_BACK_WORDS: &[&str] = &["refund", "return", "rembours", "retour", "money back", "reimburs", "cashback", "remise"];
+
+/// A list searched for money back: by one of [`MONEY_BACK_WORDS`], or the Refunds category.
+fn money_back_search(payload: &Value, result: &Value) -> bool {
+    let query = payload["query"].as_str().unwrap_or("").to_lowercase();
+    MONEY_BACK_WORDS.iter().any(|w| query.contains(w))
+        || (payload["category_id"].is_i64() && list(result, "transactions").iter().any(|t| s(t, "category").eq_ignore_ascii_case("Refunds")))
+}
+
+/// Money back among `rows`: income in Tally's Refunds category, or filed under a spending one
+/// (a return filed where it was bought does not lower that category's spending).
+fn money_back<'a>(rows: &'a [Value], lists: Option<&Value>) -> Vec<&'a Value> {
+    let spending: Vec<&str> = lists.map_or_else(Vec::new, |l| list(l, "categories").iter().filter(|c| s(c, "kind") == "EXPENSE").map(|c| s(c, "name")).collect());
+    rows.iter().filter(|t| s(t, "type") == "INCOME" && (spending.contains(&s(t, "category")) || s(t, "category").eq_ignore_ascii_case("Refunds"))).collect()
+}
+
+/// "$190.40 in all, 3 entries: #674 Remboursement Simons, $59.00 (Shopping), Wed Sep 16; …".
+fn money_back_entries(back: &[&Value], m: &Money, today: Date) -> String {
+    let named: Vec<String> = back.iter().map(|t| format!("#{} {}, {} ({}), {}", int(t, "id"), entry_name(t), m.fmt(int(t, "amount")), category_of(t), day_of(s(t, "date"), today))).collect();
+    format!("{} in all, {}: {}", m.fmt(back.iter().map(|t| int(t, "amount")).sum()), plural(back.len() as i64, "entry", "entries"), named.join("; "))
+}
+
+fn tx_list(payload: &Value, r: &Value, lists: Option<&Value>, unsearched: Option<&Value>, ctx: &Ctx) -> String {
     let today = ctx.today;
     let m = Money::of(&ctx.currency);
     let offset = payload["period_offset"].as_i64().unwrap_or(0);
@@ -836,6 +944,12 @@ fn tx_list(payload: &Value, r: &Value, lists: Option<&Value>, ctx: &Ctx) -> Stri
     if !filters.is_empty() {
         let _ = writeln!(o, "Only entries {}.", filters.join(", "));
     }
+    if let Some(all) = unsearched.filter(|_| money_back_search(payload, r)) {
+        // What a search for "refund" misses: "Retour IKEA", a return filed under Shopping.
+        let back = money_back(list(all, "transactions"), lists);
+        let _ = writeln!(o, "- Money back over these days, whatever the search matched (refunds and returns: income in Refunds, or filed under a spending category, noted in any language): {}.",
+            if back.is_empty() { format!("none: {NONE_LOGGED}") } else { money_back_entries(&back, &m, today) });
+    }
     let e = Entries::of(r);
     if e.rows.is_empty() {
         let _ = writeln!(o, "No entries: {NONE_LOGGED} in {}{}.", period_name(&r["period"], today), if filters.is_empty() { "" } else { " that matches" });
@@ -850,6 +964,22 @@ fn tx_list(payload: &Value, r: &Value, lists: Option<&Value>, ctx: &Ctx) -> Stri
     }
     if !e.by_category.is_empty() {
         let _ = writeln!(o, "- Spent by category, largest first: {}.", e.categories(&m));
+    }
+    // "What did I pay cash for", "how much went on the Visa": added up, not left to the model.
+    let mut by_account: Vec<(&str, i64, i64)> = Vec::new();
+    for t in &e.expenses {
+        match by_account.iter_mut().find(|a| a.0 == s(t, "account")) {
+            Some(a) => {
+                a.1 += int(t, "amount");
+                a.2 += 1;
+            }
+            None => by_account.push((s(t, "account"), int(t, "amount"), 1)),
+        }
+    }
+    if by_account.len() > 1 {
+        by_account.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        let cells: Vec<String> = by_account.iter().map(|(name, amount, n)| format!("{name} {} ({n})", m.fmt(*amount))).collect();
+        let _ = writeln!(o, "- Spent by the account it was paid from, largest first: {}.", cells.join("; "));
     }
     let incomes: Vec<&Value> = e.rows.iter().filter(|t| s(t, "type") == "INCOME").collect();
     if !incomes.is_empty() {
@@ -867,15 +997,11 @@ fn tx_list(payload: &Value, r: &Value, lists: Option<&Value>, ctx: &Ctx) -> Stri
         let cells: Vec<String> = sums.iter().map(|(name, amount, n)| format!("{name} {} ({n})", m.fmt(*amount))).collect();
         let _ = writeln!(o, "- Income by category, largest first: {}.", cells.join("; "));
         // A return filed under the category it was bought in is income there: it does not lower
-        // that category's spending, and a model asked for refunds never looked for it.
-        let spending: Vec<&str> = lists.map_or_else(Vec::new, |l| list(l, "categories").iter().filter(|c| s(c, "kind") == "EXPENSE").map(|c| s(c, "name")).collect());
-        let filed = |t: &&&Value| spending.contains(&s(t, "category"));
-        if incomes.iter().any(|t| filed(&t)) {
-            // Tally's own Refunds category is money back too: together, what came back.
-            let back: Vec<&&Value> = incomes.iter().filter(|t| filed(t) || s(t, "category").eq_ignore_ascii_case("Refunds")).collect();
-            let named: Vec<String> = back.iter().map(|t| format!("#{} {}, {} ({}), {}", int(t, "id"), entry_name(t), m.fmt(int(t, "amount")), category_of(t), day_of(s(t, "date"), today))).collect();
-            let _ = writeln!(o, "- Money back (refunds and returns: income in Refunds, or filed under a spending category, which does not lower its spending): {} in all, {}: {}.",
-                m.fmt(back.iter().map(|t| int(t, "amount")).sum()), plural(back.len() as i64, "entry", "entries"), named.join("; "));
+        // that category's spending, and a model asked for refunds never looked for it. Tally's own
+        // Refunds category is money back too: together, what came back.
+        let back = money_back(e.rows, lists);
+        if back.iter().any(|t| !s(t, "category").eq_ignore_ascii_case("Refunds")) {
+            let _ = writeln!(o, "- Money back (refunds and returns: income in Refunds, or filed under a spending category, which does not lower its spending): {}.", money_back_entries(&back, &m, today));
         }
     }
     if !e.expenses.is_empty() {
@@ -2115,6 +2241,62 @@ mod tests {
         assert!(ranged.starts_with("TALLY ENTRIES for Oct 2 to Oct 8, the days asked for, not a budget month."), "{ranged}");
     }
 
+    /// A search for "refund" misses "Retour IKEA" filed under Shopping: the reading reads the same
+    /// days unsearched and adds up all the money back in them.
+    #[test]
+    fn a_search_for_money_back_adds_up_all_of_it_over_its_days() {
+        let mut all = page();
+        all["transactions"].as_array_mut().unwrap().extend([tx(131, "INCOME", 5900, "2026-10-09", Some("Shopping"), "Retour IKEA"),
+                                                             tx(132, "INCOME", 8640, "2026-10-03", Some("Refunds"), "Air Transat")]);
+        let mut found = all.clone();
+        found["transactions"] = json!([tx(132, "INCOME", 8640, "2026-10-03", Some("Refunds"), "Air Transat")]);
+        let asked = json!({"from": "2026-10-01", "query": "refund"});
+        assert_eq!(extras("money.tx.list", &asked, &found)[1], ("money.tx.list", json!({"from": "2026-10-01", "to": "2026-10-31"})));
+        assert_eq!(extras("money.tx.list", &json!({"query": "metro"}), &found).len(), 1, "only a search for money back");
+        let lists = json!({"categories": [{"id": 7, "name": "Shopping", "kind": "EXPENSE"}, {"id": 9, "name": "Refunds", "kind": "INCOME"}]});
+        let text = render("money.tx.list", &asked, &found, &[Some(lists), Some(all)], &ctx()).unwrap();
+        let line = "- Money back over these days, whatever the search matched (refunds and returns: income in Refunds, or filed under a spending category, noted in any language): \
+                    $145.40 in all, 2 entries: #131 Retour IKEA, $59.00 (Shopping), Fri Oct 9; #132 Air Transat, $86.40 (Refunds), Sat Oct 3.";
+        assert!(text.contains(line), "{text}");
+    }
+
+    #[test]
+    fn spending_is_added_up_by_the_account_it_was_paid_from() {
+        let mut cash = page();
+        let rows = cash["transactions"].as_array_mut().unwrap();
+        for (id, amount) in [(140, 1500), (141, 7265)] {
+            let mut t = tx(id, "EXPENSE", amount, "2026-10-03", Some("Groceries"), "Marché");
+            t["account"] = json!("Cash");
+            rows.push(t);
+        }
+        let text = render("money.tx.list", &json!({}), &cash, &[], &ctx()).unwrap();
+        assert!(text.contains("- Spent by the account it was paid from, largest first: Visa $1,549.11 (4); Cash $87.65 (2).\n"), "{text}");
+        assert!(!render("money.tx.list", &json!({}), &page(), &[], &ctx()).unwrap().contains("paid from"), "one account: its total is the month's");
+    }
+
+    #[test]
+    fn workouts_are_counted_over_each_budget_month() {
+        let (this, last) = (json!({"start": "2026-10-15", "end_exclusive": "2026-11-15"}), json!({"start": "2026-09-15", "end_exclusive": "2026-10-15"}));
+        let line = workouts_by_budget_month(&[("this month", &this, &json!({"total": 1})), ("last month", &last, &json!({"total": 17, "untracked": 1}))], ctx().today).unwrap();
+        assert_eq!(line, "BOTH APPS, EACH BUDGET MONTH (Avex's workouts counted over the days of Tally's month): this month (Oct 15 to Nov 14, so far) 1 workout; \
+                          last month (Sep 15 to Oct 14) 16 workouts, and 1 the person excluded in Avex (untracked, not counted).");
+        assert_eq!(workouts_by_budget_month(&[], ctx().today), None);
+        assert_eq!(workouts_by_budget_month(&[("this month", &this, &json!({"total": 0}))], ctx().today), None, "nothing imported");
+    }
+
+    #[test]
+    fn a_month_named_with_no_day_is_read_by_its_days() {
+        let (today, held) = (ctx().today, "2026-09-15".parse::<Date>().unwrap());
+        let d = |s: &str| s.parse::<Date>().unwrap();
+        assert_eq!(months_named("while i was in portugal in june, did i work out?", today, held), vec![("June".into(), d("2026-06-01"), d("2026-06-30"))]);
+        assert_eq!(months_named("refunds since january?", today, held), vec![("January".into(), d("2026-01-01"), today)]);
+        assert_eq!(months_named("en décembre", today, held), vec![("December".into(), d("2025-12-01"), d("2025-12-31"))]);
+        assert_eq!(months_named("what about in may 2025", today, held), vec![("May".into(), d("2025-05-01"), d("2025-05-31"))]);
+        for none in ["from aug 15 to sep 14, how much?", "may I add 20 for lunch", "le 3 juin", "in october", "sept jours", "last month"] {
+            assert_eq!(months_named(none, today, held), vec![], "{none}");
+        }
+    }
+
     /// A long range is added up by month, and lists only its newest entries, its figures whole.
     #[test]
     fn a_long_range_of_entries_reads_by_month_and_lists_the_newest() {
@@ -2175,7 +2357,7 @@ mod tests {
         let mut r = summary();
         r["duplicates"] = json!([[tx(141, "EXPENSE", 3240, "2026-10-12", Some("Dining"), "Uber Eats"), tx(142, "EXPENSE", 3240, "2026-10-12", Some("Dining"), "Uber Eats")]]);
         let text = render("money.summary", &json!({}), &r, &[Some(month)], &ctx()).unwrap();
-        assert!(text.contains("Possible duplicates in the whole ledger (same day, amount, account and note: maybe logged twice): #141 and #142 Uber Eats, $32.40 expense, Visa, Mon Oct 12 (this month).\nWhen they ask to remove the extra one of a pair: thread.propose deleting its newer id (money.tx.delete), never adding or restoring."), "{text}");
+        assert!(text.contains("Possible duplicates in the whole ledger, every entry compared (same day, amount, account and note: maybe logged twice): 1 pair: 1) #141 and #142 Uber Eats, $32.40 expense, Visa, Mon Oct 12 (this month).\nAsked about duplicates, name every pair here. When they ask to remove the extra one of a pair: thread.propose deleting its newer id (money.tx.delete), never adding or restoring."), "{text}");
         assert!(text.contains("- No category: $9.85 (1): #140 $9.85, Dépanneur Chez Ben, Tue Oct 13\n"), "{text}");
     }
 
@@ -2215,8 +2397,8 @@ mod tests {
             "LAST MONTH: September 2026 (Sep 1 to Sep 30).",
             "- Spent: $90.00. Income: none logged in Tally.",
             "MONTH BY MONTH (budget periods, oldest first): August: none logged in Tally; September: spent $3,643.52, income $6,450.00; October so far: spent $2,425.26, income $2,150.00.",
-            "- Dining: September $90.00; October so far $41.12; these 2 months together $131.12",
-            "- Housing: September none logged in Tally; October so far $1,350.00",
+            "- Dining: last month (Sep 1 to Sep 30) $90.00; this month (Oct 1 to Oct 31) so far $41.12; these 2 months together $131.12, $65.56 a month on average",
+            "- Housing: last month (Sep 1 to Sep 30) none logged in Tally; this month (Oct 1 to Oct 31) so far $1,350.00",
             "- Visa (credit card): -$3,078.67 owed",
             "- NET WORTH, all accounts together: $22,264.30",
             "- Hydro: $78.40 on Sun Oct 18 (in 3 days)",
@@ -2294,7 +2476,7 @@ mod tests {
         let lists = json!({"accounts": [{"id": 7, "name": "WS TFSA", "type": "INVESTMENT", "archived": false, "institution": "Wealthsimple"},
                                         {"id": 8, "name": "Desjardins RRSP", "type": "INVESTMENT", "archived": false, "institution": "Desjardins"}]});
         let activity = json!({"activities": [{"id": 3, "account_id": 7, "account": "WS TFSA", "type": "BUY", "date": "2026-10-01", "symbol": "XEQT", "quantity": 200_000_000, "amount": 7624, "fee": 0, "currency": "CAD", "note": ""}]});
-        assert_eq!(extras("money.invest.list", &activity).len(), 1);
+        assert_eq!(extras("money.invest.list", &json!({}), &activity).len(), 1);
         let text = render("money.invest.list", &json!({}), &activity, &[Some(lists)], &ctx()).unwrap();
         assert!(text.contains("- WS TFSA: filled from Wealthsimple's files: don't record activity here, the next export brings it."), "{text}");
         assert!(!text.contains("Desjardins"), "{text}");
