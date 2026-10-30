@@ -49,36 +49,43 @@ def split_of(task_id):
 NOT_IN_ALL = {"smoke"}
 #: The second suite, in its own world (worlds/v2): tasks/v2/*.json.
 V2 = "v2"
+#: The third, harder suite, asked in the v2 world: tasks/v3/*.json.
+V3 = "v3"
+#: The coverage suite, generated (`coverage.py`) and asked in the v2 world: `cov[:seed[:count]]`.
+COV = "cov"
+#: Each suite with a folder of its own (or generated), and the world its tasks are asked in.
+WORLD_OF_SUITE = {V2: V2, V3: V2, COV: V2}
 
 
 def suite_files(suite, ids=None):
     """`all` (every tasks/*.json but the smoke starter), a suite name (tasks/<name>.json), a comma
     list of names, or paths. `v2` is every tasks/v2/*.json but its smoke starter, which joins it when
-    `ids` name a `v2.smoke.` task; `v2/<name>` is one of them."""
+    `ids` name a `v2.smoke.` task; `v2/<name>` is one of them; `v3` likewise for tasks/v3/."""
     if suite in (None, "", "all"):
         return sorted(Path(p) for p in glob.glob(str(TASKS_DIR / "*.json")) if Path(p).stem not in NOT_IN_ALL)
     out = []
     for part in suite.split(","):
         part = part.strip()
         p = Path(part)
-        if part == V2:
-            smoke = any(i.strip().startswith(f"{V2}.smoke") for chunk in (ids or []) for i in chunk.split(","))
-            out += sorted(Path(f) for f in glob.glob(str(TASKS_DIR / V2 / "*.json")) if smoke or Path(f).stem not in NOT_IN_ALL)
+        if part in WORLD_OF_SUITE:
+            smoke = any(i.strip().startswith(f"{part}.smoke") for chunk in (ids or []) for i in chunk.split(","))
+            out += sorted(Path(f) for f in glob.glob(str(TASKS_DIR / part / "*.json")) if smoke or Path(f).stem not in NOT_IN_ALL)
         else:
             out.append(p if p.suffix == ".json" and p.exists() else TASKS_DIR / f"{part}.json")
     return out
 
 
 def suite_name(path):
-    """`tally` for tasks/tally.json, `v2/tally` for tasks/v2/tally.json."""
+    """`tally` for tasks/tally.json, `v2/tally` for tasks/v2/tally.json (and v3's the same way)."""
     path = Path(path).resolve()
-    return f"{path.parent.name}/{path.stem}" if path.parent == (TASKS_DIR / V2).resolve() else path.stem
+    own = any(path.parent == (TASKS_DIR / suite).resolve() for suite in WORLD_OF_SUITE)
+    return f"{path.parent.name}/{path.stem}" if own else path.stem
 
 
 def world_of(tasks):
-    """The world the tasks are asked in: `v2` for tasks/v2/, `v1` (the sample household) otherwise.
-    Raises when they are from both."""
-    worlds = {V2 if (t.get("suite") or "").startswith(V2 + "/") else "v1" for t in tasks}
+    """The world the tasks are asked in: `v2` for tasks/v2/ and tasks/v3/, `v1` (the sample household)
+    otherwise. Raises when they are from both."""
+    worlds = {WORLD_OF_SUITE.get((t.get("suite") or "").split("/")[0], "v1") if "/" in (t.get("suite") or "") else "v1" for t in tasks}
     if len(worlds) > 1:
         raise ValueError("these tasks are from two worlds (v1 and v2): run them as separate suites")
     return worlds.pop() if worlds else "v1"
@@ -86,7 +93,10 @@ def world_of(tasks):
 
 def load_tasks(suite="all", ids=None, split="all"):
     tasks, seen = [], {}
-    for path in suite_files(suite, ids):
+    if (suite or "").split(":")[0] == COV:
+        from . import coverage
+        tasks = [dict(t, suite=f"{COV}/{t['category']}", split=split_of(t["id"])) for t in coverage.generate(*coverage.parse(suite))]
+    for path in ([] if tasks else suite_files(suite, ids)):
         for task in json.loads(Path(path).read_text()):
             if task["id"] in seen:
                 raise ValueError(f"task {task['id']} is in both {seen[task['id']]} and {path.name}")
@@ -141,10 +151,10 @@ def turns_of(messages, ops):
     for m in messages:
         role, body = m["role"], m.get("body") or {}
         if role == "user":
-            turns.append({"prompt": body.get("text", ""), "texts": [], "tool_calls": [], "error": None})
+            turns.append({"prompt": body.get("text", ""), "texts": [], "tool_calls": [], "error": None, "checks": []})
             continue
         if not turns:
-            turns.append({"prompt": None, "texts": [], "tool_calls": [], "error": None})
+            turns.append({"prompt": None, "texts": [], "tool_calls": [], "error": None, "checks": []})
         turn = turns[-1]
         if role == "assistant":
             for b in body.get("blocks") or []:
@@ -164,6 +174,12 @@ def turns_of(messages, ops):
                 call["is_error"] = bool(body.get("is_error"))
         elif role == "error":
             turn["error"] = body.get("text", "")
+        elif role == "check":
+            # Relay found figures that do not match what the model read and asked it again: the
+            # answer graded is the one after (threads.rs, `figures.rs`).
+            turn["checks"].append(body)
+            if body.get("asked_again"):
+                turn["texts"] = [x for x in turn["texts"] if x is None]
     for t in turns:
         texts = t.pop("texts")
         t["text"] = "\n\n".join(x for x in texts if x)
@@ -332,9 +348,10 @@ class Runner:
             time.sleep(self.poll)
 
     def run_task(self, task, run):
-        rec = {k: task.get(k) for k in ("id", "suite", "source", "category", "difficulty", "split", "mutates")}
+        rec = {k: task.get(k) for k in ("id", "suite", "source", "category", "difficulty", "split", "mutates", "prompt", "params")}
         rec.update({"run": run, "pass": False, "checks": [], "turns": [], "error": None, "timeout": False})
-        ctx = dict(self.ctx)
+        # A generated question's own days, category, shop... (`coverage.py`).
+        ctx = dict(self.ctx, params=task.get("params") or {})
         try:
             expected = self._truth(task["truth"], ctx) if task.get("truth") else {}
         except Exception as e:
@@ -398,7 +415,7 @@ class Runner:
                 effects[i] = {"error": f"{type(e).__name__}: {e}"}
         rec["pass"], rec["checks"] = grading.grade(task, expected, thread, effects)
         rec["final_text"] = turns[-1]["text"] if turns else ""
-        rec["turns"] = [{"prompt": t["prompt"], "text": t["text"], "seconds": t.get("seconds"), "error": t["error"],
+        rec["turns"] = [{"prompt": t["prompt"], "text": t["text"], "seconds": t.get("seconds"), "error": t["error"], "checks": t.get("checks", []),
                          "tool_calls": [{"op": c["op"], "input": c["input"], "is_error": c["is_error"],
                                          "result": (c["result"] or "")[:RESULT_TEXT]} for c in t["tool_calls"]]}
                         for t in turns]

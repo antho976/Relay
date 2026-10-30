@@ -200,15 +200,18 @@ pub struct LocalStyle {
     /// The model thinks before it answers (`think`), within this many tokens (`think:512`); -1 is
     /// no limit. Off, the server answers at once (`local_models`).
     pub think: Option<i32>,
+    /// Its answer's figures checked against what it read (`figures.rs`): ones given for the wrong
+    /// days, or totals its list does not add up to, handed back once to put right.
+    pub check: bool,
 }
 
 impl LocalStyle {
-    pub const CLASSIC: LocalStyle = LocalStyle { lean: false, readings: false, prefetch: false, docs: false, think: None };
+    pub const CLASSIC: LocalStyle = LocalStyle { lean: false, readings: false, prefetch: false, docs: false, think: None, check: false };
     /// What a local thread runs with when nothing overrides it: on the bench, Qwen3.5 4B answered
     /// 74.5% with none of it, 95.2% with these three parts, and 98.2% thinking within 512 tokens
     /// (a median answer 7 s against 3 s; with no limit 98.5%, and slower at the tail). `docs`
-    /// moved nothing.
-    pub const DEFAULT: LocalStyle = LocalStyle { lean: true, readings: true, prefetch: true, docs: false, think: Some(512) };
+    /// moved nothing. `check` added 3.3 points on v3 (the dev split 6.1) and left v1 where it was.
+    pub const DEFAULT: LocalStyle = LocalStyle { lean: true, readings: true, prefetch: true, docs: false, think: Some(512), check: true };
 
     /// `lean,readings` and the like; `classic` (or nothing known) is none of them. `think` or
     /// `think:<tokens>` turns thinking on.
@@ -218,7 +221,7 @@ impl LocalStyle {
             let lower = p.to_ascii_lowercase();
             if lower == "think" { Some(-1) } else { lower.strip_prefix("think:").and_then(|n| n.parse::<i32>().ok()).filter(|n| *n >= 0) }
         });
-        LocalStyle { lean: has("lean"), readings: has("readings"), prefetch: has("prefetch"), docs: has("docs"), think }
+        LocalStyle { lean: has("lean"), readings: has("readings"), prefetch: has("prefetch"), docs: has("docs"), think, check: has("check") }
     }
 
     /// `RELAY_THREADS_LOCAL`, else (unset or empty) [`LocalStyle::DEFAULT`].
@@ -289,8 +292,8 @@ before adding an entry. A budget's `left` is what is still to spend (below zero 
 budget and over pace are different figures, and each budget's `line` says in words where it stands: \
 quote it. \"Last month\" is the \
 previous budget period: for one category's total in a period, call money.tx.list with its \
-`category_id` and `period_offset` (-1 is last month) and read its `spent`; never add entries up \
-yourself. The bills in money.summary include income (`type` INCOME) and transfers: only EXPENSE ones \
+`category_id` and `period_offset` (-1 is last month) and read its `spent`, or with `from` and `to` \
+(YYYY-MM-DD) for any other days, such as a calendar month; never add entries up yourself. The bills in money.summary include income (`type` INCOME) and transfers: only EXPENSE ones \
 are bills to pay. Entries are in money.tx.list, not money.summary: read it for the largest or smallest \
 entry, or anything else across a period. Never add up, subtract or compare figures \
 yourself when a tool gives the result (`net_worth` for all accounts together, `spent`, a budget's `left`): quote it. \
@@ -440,25 +443,30 @@ How to answer:
 invent a figure. If the data does not have the answer, say so.
 2. The tools' answers already hold every total, difference and count, worked out and named in words. \
 Find the line that answers the question and give its figure exactly as written. Do not add, subtract \
-or count yourself. Only a projection or a plan they ask for is yours to work out, from figures a tool \
-gave: say how you worked it out, and that it is a projection.
+or count yourself what a line already gives. Only what no tool gives is yours to work out, from figures \
+the tools gave, when they ask for it (a cost per workout, an average, a projection or a plan): show the \
+sum you did, and call a projection a projection.
 3. Lead with the answer in one or two short sentences, speaking to the person as \"you\". Write money \
 like $1,234.56.
+4. A question about money and training together (a cost per workout, spending on a trip and the \
+workouts then) needs a figure from each: read both, for the same days.
 
 Which tool:
 - money.summary: start here for money. This month's spending, income, budgets and pace; today, \
 yesterday, this week and last week; spending by category and month by month; the biggest expenses; \
 last month; accounts and net worth; bills and goals.
 - money.tx.list: the entries of one month with their totals. period_offset 0 is this month, -1 last \
-month, -2 the month before; it adds them up by category, week and day. query finds entries by note, \
-category or account.
+month, -2 the month before (\"last month\" and \"the month before\" are always these, never from and to); \
+from and to (YYYY-MM-DD) in place of it only for other days (a calendar month they name, since a \
+payday, one day). It adds them up by category, week and day. query finds entries by \
+note, category or account.
 - money.lists: the names of accounts and categories, and what goes in each category.
 - money.invest.summary: investments (value, gain, holdings, contribution room). money.invest.list: \
 their buys, sells and dividends.
 - gym.summary: start here for training. Totals, this week and last week, week by week and month by \
 month, recent workouts and the last one in detail, every lift's best set and how it improved, cardio \
 and goals.
-- gym.sessions: workouts, newest first. gym.session.get: one workout's sets, by its id. gym.lifts and \
+- gym.sessions: workouts, newest first; from and to (YYYY-MM-DD) count the workouts between two days. gym.session.get: one workout's sets, by its id. gym.lifts and \
 gym.lift.get: each lift's best set and history. gym.cardio: runs and other cardio.
 - money.series and gym.series: the numbers behind a chart.
 
@@ -467,6 +475,11 @@ What words mean:
 gone. They are different figures: say the one the reading gives.
 - Last month is the previous budget period. Bills to pay are expenses only: income and transfers are \
 not bills.
+- An entry's amount is what was paid or received. A figure written in its note (\"-15,99 $ already \
+taken off\") is part of the note: it does not change the amount.
+- What each workout cost: what they paid the gym in those days (a membership or a pass, whatever day \
+it was charged), divided by the workouts counted in those days. Show the division: $60.00 / 12 \
+workouts = $5.00 a workout.
 - An e1rm is an estimated one-rep max: call it estimated. Avex's copy is only as new as its last \
 export: when asked about today or recent training, say when the copy was exported, since anything \
 logged after that is not in it.
@@ -476,15 +489,23 @@ estimated exchange rate is an estimate: say so.
 Changes:
 - You may add an entry with money.tx.add (type, amount like \"42.18\", date as YYYY-MM-DD from the \
 dates list, the account by name as the person said it, and for an expense or income always a \
-category by its name in money.lists) and change one with money.tx.update (its id from money.tx.list). \
+category by its name in money.lists) and change one with money.tx.update (its id from money.tx.list; it only changes an entry: to look \
+at one, read it with money.tx.list). \
 In French a comma before the last two digits is the decimal point: \"45,20 $\" is 45.20. \
-Say plainly what you changed. When the amount or the account is unclear, ask first. \
+Say plainly what you changed. When the amount or the account is unclear, ask first: a bank's name \
+alone (\"desjardins\") when they have more than one account there, or a kind alone (\"my card\", \
+\"mon épargne\") when they have more than one of it, is unclear. Asked to record an entry \
+with both clear, record it: do not ask whether to. \
 money.tx.restore brings back a deleted entry. money.invest.add records an investment activity, but \
 not in an account Wealthsimple's files fill.
 - To delete entries or investment activities, change more than 3 entries, set budgets, or add, \
 rename or archive accounts, call thread.propose with one action and why; the person approves it on a \
-card. Say what you proposed: it is not done until Relay tells you it was approved. Settings, such as \
+card. Say what you proposed: it is not done until Relay tells you it was approved. Asked to delete or \
+remove an entry, propose only that: never add one first. Settings, such as \
 the day the budget month starts, are theirs.
+- Undo: to take back an entry you added, propose deleting it (thread.propose, money.tx.delete with its \
+id); never clear its category or change it instead. To take back a change, money.tx.update it back to \
+what it was.
 - Avex's data is read only: changes happen in Avex on the phone.
 
 Charts: when they ask to show, chart, plot, draw or graph something, or where their money went, \
@@ -966,6 +987,49 @@ struct Agent {
     assistant: bool,
     /// Aide's, which the socket door admits for Aide's ops (`relay_aide::policy::all_ops`).
     aide: bool,
+    /// What it read and wrote, for checking its figures ([`LocalStyle::check`]).
+    watch: Option<Watch>,
+}
+
+/// A local agent's conversation as the figure check reads it (`figures.rs`).
+#[derive(Default)]
+struct Watch {
+    /// The data it was handed and every tool result since it started, newest last.
+    read: Vec<Arc<str>>,
+    /// The person's message this turn.
+    asked: String,
+    /// What it wrote since its last tool call this turn: its answer.
+    answer: String,
+    /// The figures of this turn's answer were handed back already.
+    asked_again: bool,
+}
+
+/// The most a [`Watch`] keeps of what its agent read; the oldest goes first.
+const WATCH_READ: usize = 2_000_000;
+
+impl Watch {
+    /// A conversation that begins with `content`, the agent's first message.
+    fn of(content: &str) -> Watch {
+        Watch { read: vec![Arc::from(content)], asked: asked_in(content).to_string(), ..Watch::default() }
+    }
+
+    fn turn(&mut self, content: &str) {
+        (self.asked, self.answer, self.asked_again) = (asked_in(content).to_string(), String::new(), false);
+    }
+
+    fn read(&mut self, text: &str) {
+        self.read.push(Arc::from(text));
+        let mut kept: usize = self.read.iter().map(|t| t.len()).sum();
+        while kept > WATCH_READ && self.read.len() > 1 {
+            kept -= self.read.remove(0).len();
+        }
+    }
+}
+
+/// The person's own words in a message the agent was given: after the data [`prefetched`] put
+/// before them.
+fn asked_in(content: &str) -> &str {
+    content.rfind("My message:]").map_or(content, |i| content[i + "My message:]".len()..].trim_start())
 }
 
 /// A thread's turn: the person's message until Claude's `result`.
@@ -1365,6 +1429,9 @@ fn hand_on(engine: &Arc<Engine>, id: Id, token: u64, text: &str, pictures: &[(St
         let running = live.agents.get_mut(&id).map(|agent| {
             agent.last_used = Instant::now();
             agent.turn = token;
+            if let Some(watch) = agent.watch.as_mut() {
+                watch.turn(&content);
+            }
             (agent.stdin.clone(), agent.serial, agent.local)
         });
         drop(live);
@@ -1474,17 +1541,46 @@ fn prefetched(engine: &Engine, text: &str) -> String {
     };
     let currency = read("money.lists", json!({})).and_then(|l| l["currency"].as_str().map(str::to_string)).unwrap_or_else(|| "CAD".into());
     let ctx = crate::readings::Ctx { today: jiff::Zoned::now().date(), currency };
-    let briefs: Vec<String> = ["money.summary", "gym.summary"].into_iter().filter_map(|op| {
+    let mut briefs: Vec<String> = ["money.summary", "gym.summary"].into_iter().filter_map(|op| {
         let result = read(op, json!({}))?;
-        let extras: Vec<Option<Value>> = crate::readings::extras(op, &result).into_iter().map(|(extra, with)| read(extra, with)).collect();
+        let extras: Vec<Option<Value>> = crate::readings::extras(op, &json!({}), &result, ctx.today).into_iter().map(|(extra, with)| read(extra, with)).collect();
         crate::readings::render(op, &json!({}), &result, &extras, &ctx)
     }).collect();
     if briefs.is_empty() {
         return text.to_string();
     }
+    // Tally's budget months, which the entries above cover, and Avex's workouts over the same days
+    // and since the last pay.
+    // The month before last too: "last month against the month before" took Avex's calendar
+    // month for the one not here (bench v3, 2026-10-30).
+    let pages: Vec<(&str, Value)> = [("this month", 0), ("last month", -1), ("the month before last", -2)].into_iter()
+        .filter_map(|(name, offset)| read("money.tx.list", json!({"period_offset": offset})).map(|page| (name, page)))
+        .collect();
+    let mut periods: Vec<(&str, Value)> = pages.iter().map(|(name, page)| (*name, page["period"].clone())).collect();
+    let pay = crate::readings::last_pay(pages.iter().take(2).map(|(_, page)| page)).and_then(|t| t["date"].as_str()).map(str::to_string);
+    let held = periods[..periods.len().min(2)].last().map(|(_, p)| p["start"].clone());
+    if let (Some(pay), Ok(tomorrow)) = (pay, ctx.today.tomorrow()) {
+        periods.push(("since the last pay", json!({"start": pay, "end_exclusive": tomorrow.to_string()})));
+    }
+    if briefs.len() == 2 {
+        let sessions: Vec<(&str, &Value, Value)> = periods.iter().filter_map(|(name, period)| {
+            let last = period["end_exclusive"].as_str().and_then(|d| d.parse::<jiff::civil::Date>().ok())?.yesterday().ok()?;
+            Some((*name, period, read("gym.sessions", json!({"from": period["start"], "to": last.to_string(), "limit": 1}))?))
+        }).collect();
+        let months: Vec<(&str, &Value, &Value)> = sessions.iter().map(|(name, period, s)| (*name, *period, s)).collect();
+        briefs.extend(crate::readings::workouts_by_budget_month(&months, ctx.today));
+    }
+    // A month the person names whose entries are not attached: said where they will read it.
+    let held_from = held.as_ref().and_then(Value::as_str).and_then(|d| d.parse::<jiff::civil::Date>().ok()).unwrap_or(ctx.today);
+    let named: Vec<String> = crate::readings::months_named(text, ctx.today, held_from).into_iter()
+        .map(|(name, first, last)| format!("{name} is not in it (its entries start {}): read those days with money.tx.list or gym.sessions, from {first} to {last}", held_from.strftime("%b %-d")))
+        .collect();
+    let end = if named.is_empty() { "[End of the data. My message:]".to_string() } else { format!("[End of the data. {}. My message:]", named.join("; ")) };
     format!(
         "[Relay attached my data as it is now, read as this conversation started. Answer from it when it has the answer; \
-         call a tool for anything it does not give, or after a change.]\n\n{}\n\n[End of the data. My message:]\n{text}",
+         call a tool for anything it does not give, or after a change. It holds this budget month, last month and recent \
+         training: for other days (a trip, a month by name, since a date, between two days), call money.tx.list or \
+         gym.sessions with from and to.]\n\n{}\n\n{end}\n{text}",
         briefs.join("\n\n")
     )
 }
@@ -1726,7 +1822,12 @@ fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Opti
                 }
             }
         }
-        let agent = Agent { stdin: stdin.clone(), pid, serial, turn: token, last_used: Instant::now(), local: local.is_some(), assistant, aide };
+        // Tally's and Avex's threads, whose readings it was measured on: not Aide's or the Dev
+        // assistant's.
+        let watch = (local.is_some() && style.check && !aide && !assistant).then(|| {
+            Watch::of(serde_json::from_str::<Value>(first_line).ok().as_ref().and_then(|l| l["message"]["content"].as_str()).unwrap_or(""))
+        });
+        let agent = Agent { stdin: stdin.clone(), pid, serial, turn: token, last_used: Instant::now(), local: local.is_some(), assistant, aide, watch };
         // One agent per thread: one it replaces is closed, not left answering beside it.
         if let Some(replaced) = live.agents.insert(id, agent) {
             kill(replaced.pid);
@@ -1848,6 +1949,17 @@ fn handle(engine: &Engine, id: Id, serial: u64, event: &Value) {
                 _ => None,
             }).collect();
             if !blocks.is_empty() {
+                if let Some(watch) = lock(&engine.threads.live).agents.get_mut(&id).and_then(|a| a.watch.as_mut()) {
+                    for b in &blocks {
+                        match b["type"].as_str() {
+                            Some("tool_use") => watch.answer.clear(),
+                            _ => {
+                                watch.answer.push_str(b["text"].as_str().unwrap_or(""));
+                                watch.answer.push_str("\n\n");
+                            }
+                        }
+                    }
+                }
                 record(engine, id, "assistant", json!({"blocks": blocks}));
             }
         }
@@ -1858,6 +1970,9 @@ fn handle(engine: &Engine, id: Id, serial: u64, event: &Value) {
                     Value::Array(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
                     _ => String::new(),
                 };
+                if let Some(watch) = lock(&engine.threads.live).agents.get_mut(&id).and_then(|a| a.watch.as_mut()) {
+                    watch.read(&text);
+                }
                 record(engine, id, "tool", json!({
                     "tool_use_id": b["tool_use_id"], "is_error": b["is_error"].as_bool().unwrap_or(false), "text": cut(&crate::redact::text(&text), MAX_TOOL_TEXT),
                 }));
@@ -1870,6 +1985,10 @@ fn handle(engine: &Engine, id: Id, serial: u64, event: &Value) {
                 });
                 fail(engine, id, turn, &why.filter(|w| !w.is_empty()).unwrap_or_else(|| "The agent could not answer".into()));
             } else {
+                // Figures that do not match what it read go back to it once, and the turn goes on.
+                if check_figures(engine, id, serial, turn) {
+                    return;
+                }
                 // A turn that wrote the person nothing (a small model that only called tools, or
                 // spent its last words thinking) says so, rather than leave them reading a tool
                 // line; said before the turn ends, so a thread read as done already holds it.
@@ -1891,6 +2010,47 @@ fn handle(engine: &Engine, id: Id, serial: u64, event: &Value) {
         }
         _ => {}
     }
+}
+
+/// The figures of the answer that ended `turn`, checked against what the agent read
+/// (`figures.rs`). The first time they do not match, the person is told so and the agent is
+/// asked to put them right, and this is true: the turn goes on. The second time, the person is
+/// told what still does not match.
+fn check_figures(engine: &Engine, id: Id, serial: u64, turn: u64) -> bool {
+    // What it read, taken out of the lock: the check reads a few hundred kilobytes.
+    let taken = {
+        let mut live = lock(&engine.threads.live);
+        let current = live.current(id, turn);
+        let agent = live.agents.get_mut(&id).filter(|a| a.serial == serial && current);
+        agent.and_then(|a| {
+            let stdin = a.stdin.clone();
+            a.watch.as_mut().map(|w| (w.read.clone(), w.asked.clone(), std::mem::take(&mut w.answer), w.asked_again, stdin))
+        })
+    };
+    let Some((read, asked, answer, asked_again, stdin)) = taken else { return false };
+    let read: Vec<&str> = read.iter().map(|t| t.as_ref()).collect();
+    let flags = crate::figures::check(&answer, &read, &asked, jiff::Zoned::now().date());
+    if flags.is_empty() {
+        return false;
+    }
+    let body = |again: bool| json!({"text": crate::figures::note(&flags, again), "asked_again": again, "flags": flags.iter().map(crate::figures::Flag::to_json).collect::<Vec<_>>()});
+    if asked_again {
+        record(engine, id, "check", body(false));
+        return false;
+    }
+    let written = {
+        let mut stdin = lock(&stdin);
+        stdin.write_all(user_line(&crate::figures::correction(&flags)).as_bytes()).and_then(|()| stdin.flush())
+    };
+    if written.is_err() {
+        return false;
+    }
+    if let Some(watch) = lock(&engine.threads.live).agents.get_mut(&id).filter(|a| a.serial == serial).and_then(|a| a.watch.as_mut()) {
+        watch.asked_again = true;
+    }
+    record(engine, id, "check", body(true));
+    emit_changed(engine, id);
+    true
 }
 
 /// Close agents idle for [`IDLE`]; one watcher per engine, gone with it.
@@ -1954,6 +2114,49 @@ mod tests {
         fail(&engine, id, second, "The model did not load");
         assert_eq!(token(&engine), None);
         assert_eq!(page(&engine, id, None, None).unwrap().messages.len(), 3);
+    }
+
+    /// A local agent's answer with a figure for the wrong days goes back to it once, the person is
+    /// told, and its second answer ends the turn (bench v3, 2026-10-30).
+    #[test]
+    fn figures_that_do_not_match_go_back_to_the_agent_once() {
+        use std::io::BufRead;
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        let now = crate::time::now();
+        let id = create(&engine, MONEY, "Spending", None, None, &now).unwrap().id;
+        let (_, token) = post(&engine, id, "how much did I spend last week?", &[], &now).unwrap();
+        // `cat` for an agent: what it is given comes back out.
+        let mut cat = Command::new("cat").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut heard = std::io::BufReader::new(cat.stdout.take().unwrap());
+        let read = "RECENT DAYS:\n- This week so far: $1,084.68 on 14 expenses\n- Last week: $477.30 on 7 expenses\n";
+        let serial = {
+            let mut live = lock(&engine.threads.live);
+            let serial = live.mint();
+            let watch = Watch::of(&format!("[Relay attached my data]\n\n{read}\n\n[End of the data. My message:]\nhow much did I spend last week?"));
+            let stdin = Arc::new(Mutex::new(cat.stdin.take().unwrap()));
+            live.agents.insert(id, Agent { stdin, pid: cat.id(), serial, turn: token, last_used: Instant::now(), local: true, assistant: false, aide: false, watch: Some(watch) });
+            serial
+        };
+        let say = |words: &str| json!({"type": "assistant", "message": {"content": [{"type": "text", "text": words}]}});
+        let done = json!({"type": "result", "subtype": "success", "is_error": false});
+        let roles = |engine: &Engine| page(engine, id, None, None).unwrap().messages.iter().map(|m| m.role.clone()).collect::<Vec<_>>();
+
+        handle(&engine, id, serial, &say("Last week you spent $1,084.68."));
+        handle(&engine, id, serial, &done);
+        assert!(turn_is_on(&engine, id, token), "asked again, the turn goes on");
+        let mut line = String::new();
+        heard.read_line(&mut line).unwrap();
+        let told: Value = serde_json::from_str(&line).unwrap();
+        let told = told["message"]["content"].as_str().unwrap();
+        assert!(told.contains("- 1,084.68: you gave it for ") && told.contains("For ") && told.contains(" the data has 477.30."), "{told}");
+        assert_eq!(roles(&engine), ["user", "assistant", "check"]);
+
+        handle(&engine, id, serial, &say("Sorry: last week you spent $477.30."));
+        handle(&engine, id, serial, &done);
+        assert!(!turn_is_on(&engine, id, token), "put right, the turn ends");
+        assert_eq!(roles(&engine), ["user", "assistant", "check", "assistant"]);
+        lock(&engine.threads.live).agents.remove(&id);
+        let _ = cat.wait();
     }
 
     #[test]
@@ -2209,14 +2412,15 @@ mod tests {
         assert!(!args.iter().any(|a| a == "--append-system-prompt" || a == PROMPT));
         let args = agent_args("{}", None, None, None, false);
         assert!(args.windows(2).any(|w| w[0] == "--append-system-prompt" && w[1] == PROMPT));
-        assert_eq!(LocalStyle::parse(" lean, Readings"), LocalStyle { lean: true, readings: true, prefetch: false, docs: false, think: None });
+        assert_eq!(LocalStyle::parse(" lean, Readings"), LocalStyle { lean: true, readings: true, prefetch: false, docs: false, think: None, check: false });
+        assert!(LocalStyle::parse("lean,readings,prefetch,think:512,check").check);
         assert_eq!(LocalStyle::parse("lean,think").think, Some(-1));
         assert_eq!(LocalStyle::parse("lean,think:512").think, Some(512));
         assert_eq!(LocalStyle::parse("lean,think:x").think, None);
         assert_eq!(LocalStyle::parse("classic"), LocalStyle::CLASSIC);
         assert_eq!(LocalStyle::parse("lean,readings,prefetch").door(), "lean,readings");
         assert_eq!(LocalStyle::CLASSIC.door(), "");
-        assert_eq!(LocalStyle::DEFAULT, LocalStyle::parse("lean,readings,prefetch,think:512"));
+        assert_eq!(LocalStyle::DEFAULT, LocalStyle::parse("lean,readings,prefetch,think:512,check"));
     }
 
     #[test]
@@ -2230,6 +2434,10 @@ mod tests {
             assert!(text.contains(part), "{part} in\n{text}");
         }
         assert!(!text.contains("\"amount\""), "readings, not JSON");
+        assert!(!text.contains("BOTH APPS"), "no workouts imported: {text}");
+        // A month whose entries are not attached is named, with the days to read.
+        let text = prefetched(&engine, "what did I spend in june 2020?");
+        assert!(text.contains(": read those days with money.tx.list or gym.sessions, from 2020-06-01 to 2020-06-30. My message:]\nwhat did I spend in june 2020?"), "{text}");
     }
 
     #[test]

@@ -43,6 +43,11 @@ class Numbers(unittest.TestCase):
         self.assertEqual(numbers("up 12.50%"), [12.5])
         self.assertEqual(numbers("5 km"), [5.0])
 
+    def test_a_french_decimal_comma_is_a_decimal(self):
+        self.assertEqual(numbers("Tu as dépensé 109,15 $ en restos"), [109.15])
+        self.assertEqual(numbers("1 234,56 $ et 3,5 km"), [1234.56, 3.5])
+        self.assertEqual(numbers("1,234 and 12,345.60"), [1234.0, 12345.6], "three digits: thousands")
+
     def test_dates_times_and_chart_json_are_not_numbers(self):
         self.assertEqual(numbers("On 2026-09-18 at 12:00 you had 3 entries"), [3.0])
         self.assertEqual(numbers('```chart\n{"periods": 2}\n```\nSpent $5'), [5.0])

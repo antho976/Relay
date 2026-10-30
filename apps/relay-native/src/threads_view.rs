@@ -2632,6 +2632,24 @@ fn draw_message(v: &View, m: &Value) {
             turn.append(&row);
             retry_key(&turn);
         }
+        // Relay checked a local model's figures against what it read: which did not match, and
+        // whether it asked again (relay-core `figures.rs`).
+        "check" => {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            row.add_css_class("threads-check-row");
+            let mark = crate::icons::image("check", 13);
+            mark.set_valign(gtk::Align::Start);
+            mark.set_margin_top(2);
+            row.append(&mark);
+            let text = label(body["text"].as_str().unwrap_or(""), "threads-check");
+            text.set_wrap(true);
+            text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            text.set_hexpand(true);
+            text.set_selectable(true);
+            text.set_focusable(false);
+            row.append(&text);
+            turn(v).append(&row);
+        }
         _ => {}
     }
     // The working row stays last while the turn runs.

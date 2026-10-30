@@ -85,6 +85,8 @@ button.threads-tools-key { min-height: 22px; padding: 0 6px; margin-left: -6px; 
 button.threads-tools-key image { color: @ink_dim; }
 .threads-error-row image { color: @held_text; }
 .threads-error { font-size: 13px; line-height: 19px; color: @held_text; }
+.threads-check-row image { color: @ink_dim; }
+.threads-check { font-size: 12px; line-height: 17px; color: @faint; }
 .threads-working { color: @faint; }
 .threads-working-text { font-size: 12px; color: @faint; }
 

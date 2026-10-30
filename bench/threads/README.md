@@ -57,6 +57,50 @@ v1 is saturated (98.2%) and stays as the regression guard; v2 is where a change 
 shows. Weakest for the 4B: dates and periods from the 15th (36%), questions on both apps (20%),
 refusals around the note that gives orders (44%), totals (57%).
 
+**Two grading fixes (2026-10-29).** The grader read a French decimal comma as two numbers ("109,15 $"
+as 109 and 15), so `v2.tally.period.dining_fr` failed correct answers; and
+`v2.tally.multi.recat_then_undo` wanted `category_id` where `money.tx.update` takes the category by
+name too (it has since `0e5caa7`). Graded again with `bench.py regrade`, which changes only
+fail → pass, every v2 row above gains: Qwen3.5 4B thinking ≤512 66.3% → **68.7%**, no thinking 57.9% →
+59.1%, Qwen3.5 9B 72.2% → 73.4%, Gemma 4 E4B 62.7% → 63.9%, Qwen3.8-4B-Distill 54.4% → 56.7%, LFM3
+1.7B 57.9% → 58.7%. The tables keep the numbers as first measured; compare a new run with a baseline
+graded by the same checks (`regrade --out`).
+
+### Relay tuned on the 4B's transcripts (2026-10-29/30, relay/lucky-jackal, thinking ≤512, 3 runs)
+
+Each round changed Relay only (readings, the lean prompt, the MCP door) from the dev split's
+failures of the run before; the holdout is reported beside it, not tuned on. The base is relay
+`b413157` measured the same day. Round four's run was void (the door dropped every tool) and was
+measured with round five.
+
+| Round | Relay | v2 | Dev | Holdout | Median s | v1 (the guard) |
+|---|---|---|---|---|---|---|
+| Base | `b413157` | 69.4% | 67.2% | 76.2% | 15.1 | 98.5% |
+| 1 | `141a627` | 80.6% | 77.8% | 88.9% | 14.6 | |
+| 2 | `b6b8ffb` | 88.1% | 87.8% | 88.9% | 16.1 | |
+| 3 | `f7c2aab` | 89.7% | 89.4% | 90.5% | 16.6 | 97.6% |
+| 5 | `52e5777` | 91.7% | 92.6% | 88.9% | 16.1 | 95.8% |
+| 6 | `f7b8228` | 95.6% | 96.3% | 93.7% | 15.6 | 96.1% |
+| 7 | `a86e6cf` | 94.4% | 94.2% | 95.2% | 16.1 | 98.2% |
+
+v2 base → round six: +26.2 points, bootstrap 95% over tasks [+17.5, +34.9]. v1 fell at round five
+(−2.7 [−5.1, −0.6]: a proposal reported as done, an entry added before one was deleted) and is back
+at round seven (−0.3 [−1.5, +0.9] against base). Median input tokens per task-run on v2: 30,645 at
+base, 18,279 at round six (the prefetch answers most questions without a tool call).
+
+**v3** (written after round six, see "v3"):
+
+| Relay | v3 | Dev | Holdout | Median s |
+|---|---|---|---|---|
+| Base `b413157` | 47.7% | 53.5% | 30.8% | 26.1 |
+| Round 6 `f7b8228` | 62.7% | 65.8% | 53.8% | 30.6 |
+| Round 7 `a86e6cf` | 83.0% | 87.7% | 69.2% | 20.6 |
+
+Base → round six +15.0 [+7.8, +22.9], the holdout +23.1: round six's readings carried to questions
+it was not tuned on. Round six → seven +20.3 [+7.8, +32.7] (the whole ledger in a search with no
+days and in the summary, this year, pay changes, workouts capped at 50 with counts by month);
+Avex fell 89.6 → 75.0% where the cap hid workouts, which round eight counts by kind instead.
+
 ### Other 4B models (2026-10-19, relay `0e5caa7`, thinking ≤512, Q8_0, 3 runs)
 
 | Model | v1 | Δ vs Qwen3.5 4B | v2 | Δ vs Qwen3.5 4B |
@@ -73,6 +117,21 @@ and stale data; v2 was not run. Its own template renders Claude Code's environme
 after the person's, as the last turn, which it then answers ("ready to help"):
 `templates/nemotron-3-nano.jinja` folds later system messages into the system prompt.
 
+### LFM3 1.7B (2026-10-28, relay `0e5caa7`, thinking ≤512, Q8_0, 3 runs, 3 slots)
+
+| Model | v1 | Δ vs Qwen3.5 4B | v2 | Δ vs Qwen3.5 4B |
+|---|---|---|---|---|
+| LFM3 1.7B (`LiquidAI/LFM3-1.7B-GGUF`, 1.85 GB; 3 slots ≈ 5.5 GB) | 90.1% [86.4, 92.9] | −8.1 [−12.3, −4.2] | 57.9% [51.8, 63.9] | −8.3 [−16.7, −0.4] |
+
+Liquid's own card puts it ahead of Qwen3.5 4B on instruction following and tool calling; here it is
+not. It needs llama.cpp b11960 or newer (this ran on 0.8.0-dev `c3df4b7`; the Qwen rows on 0.6.0-dev
+`23b0202`). Its own template takes the later system message and answers the person. Lookups, ranks,
+times and units hold at 100% on v1; charts fall to 38.9% (no chart block, a bar for a cumulative
+line, sets charted for volume), asking first to 61.9%, and on v2 writes to 53.3% (86.7%). It is also
+slower: median 11.5 s (7.0) on v1 and 36.6 s (15.6) on v2, because it repeats calls it has already
+made (an identical call in 51 of 333 v1 runs, Qwen3.5 4B in 3) and wanders into the other app's
+tools (19 calls on "how much do I weigh"); 5 v1 runs ran out of their 32k context (Qwen 0).
+
 ## Quick start
 
 ```fish
@@ -88,6 +147,9 @@ python3 bench/threads/bench.py run --check
 # read a result again, or compare two
 python3 bench/threads/bench.py report bench/threads/results/<file>.json
 python3 bench/threads/bench.py compare A.json B.json
+
+# grade a result's saved replies again with the checks as they are now (effects keep their verdict)
+python3 bench/threads/bench.py regrade bench/threads/results/<file>.json --out /tmp/regraded.json
 
 # the unit tests (grader, statistics, wrapper, fixtures, every task file's shape)
 python3 -m unittest discover bench/threads
@@ -264,6 +326,11 @@ not load, Claude Code missing), and the result says why.
 server it starts), `settings` set with `settings.set`, optionally `relay_bin`. `baseline` changes
 nothing. `--variant NAME` picks one; the result records it.
 
+`think-512-check` adds Relay's figure check (relay-core `figures.rs`): an answer with a figure given
+for days the data holds it only for others, or a total its list does not add up to, is handed back
+to the model once, and the person sees a `check` message saying which figures did not match. The
+runner grades the answer after a check, not the one it replaced; each turn's `checks` are saved.
+
 ## What the model sees
 
 Measured 2026-10-15 on the baseline (relay `ff599ba7`, Claude Code 2.1.301, Qwen3.5 4B's own
@@ -383,6 +450,66 @@ The two failures are the model's: it looked for the Sep 3 note in this period on
 month's), and it answered the overhead-press question with pounds beside kilograms and a claim that
 nothing was logged since March.
 
+## v3: harder questions in the v2 world
+
+v2 stopped leaving room on the 4B once Relay's readings were tuned on it (69.4% → 91.7% over five
+rounds, 2026-10-29/30). v3 is a third suite of questions **no single reading answers**, asked in the
+v2 world (`--suite v3` loads `worlds/v2`; v2 and v3 tasks may share a run):
+
+- **Sums across months or the whole ledger**: interest on the line of credit this year, freelance
+  this year against last, GST credits in all, tax refunds, Costco this year and its trips, all
+  spending this year, everything ever left without a category, Miso since the vet bill.
+- **Ranking and grouping**: the weekday most spent eating out, the priciest budget month and why,
+  the biggest category this year besides rent, the week with the most volume lifted.
+- **What-ifs and ratios**: a year without Netflix and Spotify, months to the Japan goal at 300.00 a
+  month, a 1,200.00 laptop against what is left after the bills, rent as a share of income.
+- **Days named the way people name them**: since Labour Day, Q2 against Q1, last weekend, the four
+  weeks before the trip, the budget month of the 10 km race.
+- **False premises and missing data**: a rent that "went up" (it never did), Starbucks (none), training
+  "stopped in August" (16 workouts), steps (Avex has none).
+- **Both apps over the same days**: the gym's cost per workout this year, the Portugal trip's Visa and
+  training, last month against the one before, last weekend.
+- **Writes**: two entries in one message, cash from the ATM, three entries recategorized at once (or
+  proposed), and an amount or a card corrected in a second turn.
+
+Truths are in `relaybench/truths_v3.py` (`v3_` names; an effect check may use v2's
+`v2_eff_unchanged`) and read only what relay `b413157` already served, so a run on that build and one
+on a newer build grade against the same keys (`--check` on both prints the same answers).
+
+The tasks were written after the readings' six rounds of tuning and none of them shaped those
+rounds: for that build, the whole of v3 is new. Tuning on v3 follows the v2 rule: look at the dev
+split's failures only, and report the holdout's number beside it.
+
+```fish
+python3 bench/threads/bench.py run --check --suite v3
+python3 bench/threads/bench.py run --suite v3 --runs 3
+```
+
+## Coverage: many plain questions, generated
+
+v3's dev split reached 93% on round eight while its holdout stayed at 61.5%: a suite Relay is tuned
+on stops showing what a new question does. The coverage suite is drawn instead of written
+(`relaybench/coverage.py`, truths in `truths_cov.py`): a kind of question (spent in all, on a
+category, at a shop, how often at a shop, the biggest expense, income, the top category, an
+account's balance, workouts, km and times run or cycled, volume lifted, a lift's best and when it
+was last done, spending and workouts together) crossed with the days people name (today, last week,
+last weekend, this month and last month as Tally's budget months, a month by name, this year, the
+last 30 days, Q1, since August 1, since my last paycheque) and the v2 world's categories, shops,
+accounts and lifts, in English and French, about one in eight typed carelessly. An Avex question
+never says "last month" (a calendar month to most people, a budget month to Tally). A zero may be
+said in words ("you didn't spend anything there").
+
+A seed picks the sample: `--suite cov` is seed 1 with 300 questions, `cov:<seed>` and
+`cov:<seed>:<count>` others. Compare two builds on one seed; take a new seed for questions no change
+was made for. One run each is enough at this size; `bench.py coverage` breaks a result down by kind,
+by days and by language, and lists what failed.
+
+```fish
+python3 bench/threads/bench.py run --check --suite cov
+python3 bench/threads/bench.py run --suite cov --variant think-512-check
+python3 bench/threads/bench.py coverage bench/threads/results/<time>-<name>.json
+```
+
 ## Files
 
 - `bench.py`: the CLI.
@@ -390,8 +517,9 @@ nothing was logged since March.
   fingerprint, snapshot and restore. `model.py`: the GGUF, the wrapper, the GPU lock and the
   free-memory check, the capture proxy. `runner.py`: tasks × runs, threads, scheduling, token usage.
   `grade.py`: the checks. `report.py`: statistics, `compare`, `RESULTS.md`. `seen.py`: what the
-  model sees, in its tokens. `truths.py`: the answer key; `truths_v2.py`: v2's.
-- `worlds/v2/`: the v2 world (`generate.py`, its output, `facts.json`, `WORLD.md`). `tasks/v2/`: its tasks.
+  model sees, in its tokens. `truths.py`: the answer key; `truths_v2.py`: v2's; `truths_v3.py`: v3's.
+- `worlds/v2/`: the v2 world (`generate.py`, its output, `facts.json`, `WORLD.md`). `tasks/v2/`: its tasks;
+  `tasks/v3/`: the harder suite's, in the same world.
 - `tasks/*.json`: the suite. `--suite all` (the default) is every file but `smoke.json`, a 10-task
   starter that exercises every kind of check and runs only when named (`--suite smoke`).
 - `variants.json`, `results/`, `tests/`, `templates/` (chat templates fixed for a model, `--template`).

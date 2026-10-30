@@ -23,3 +23,5 @@ median per task-run.
 | 2026-10-19 | qwen38-4b-distill-think512 | Qwen3.8-4B-Distill-Q8_0.gguf | profile + thinking ≤512 | 0e5caa7 | 3 | 111 | 92.5% [89.2, 94.9] | 92.3% | 93.1% | 5.5 | 2026-10-19-qwen38-4b-distill-think512.json |
 | 2026-10-19 | v2world-qwen38-4b-distill-think512 | Qwen3.8-4B-Distill-Q8_0.gguf | v2 suite · thinking ≤512 | 0e5caa7 | 3 | 84 | 54.4% [48.2, 60.4] | 54.0% | 55.6% | 9.3 | 2026-10-19-v2-qwen38-4b-distill-think512.json |
 | 2026-10-19 | v2world-gemma4-e4b-think512 | gemma-4-E4B-it-Q8_0.gguf | v2 suite · thinking ≤512 | 0e5caa7 | 3 | 84 | 62.7% [56.6, 68.4] | 60.3% | 69.8% | 8.5 | 2026-10-19-v2-gemma4-e4b-think512.json |
+| 2026-10-28 | lfm3-1.7b-think512 | LFM3-1.7B-Q8_0.gguf | think-512 | 0e5caa7 | 3 | 111 | 90.1% [86.4, 92.9] | 91.1% | 87.4% | 11.5 | 20261028-162358-lfm3-1.7b-think512.json |
+| 2026-10-28 | v2world-lfm3-1.7b-think512 | LFM3-1.7B-Q8_0.gguf | think-512 | 0e5caa7 | 3 | 84 | 57.9% [51.8, 63.9] | 56.6% | 61.9% | 36.6 | 20261028-181232-v2world-lfm3-1.7b-think512.json |
