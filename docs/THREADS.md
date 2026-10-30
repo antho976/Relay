@@ -566,6 +566,19 @@ naming the accounts Wealthsimple fills, the 4B over the whole bench:
 tail. Timings are with three questions at once; a thread alone answers faster. `no-think` in
 `bench/threads/variants.json` is the profile before this.
 
+**The figure check (`check`, 2026-10-30).** A small model gives real figures for the wrong days
+more often than made-up ones: a three-month total for "this year", the month before's spending for
+last month. `relay-core/src/figures.rs` reads every place a figure stands, in what the model read
+and in its answer, for the days it is about, and flags a figure the answer gives for days the data
+holds it only for others (with what the data has for those days) and a total its list does not add
+up to. A flagged answer on a Tally or Avex thread goes back to the model once ("Relay checked the
+figures in your answer against the data you read...") and the turn goes on; the person sees a
+`check` message, drawn as a quiet line on the desktop and the phone, saying which figures did not
+match, and a second one if the answer still does not. On 891 saved bench answers it flagged 3 of
+784 graded right (each a real error no check read) and 11 of 72 that gave a wrong figure. On v3,
+round eight with it against without: +3.3 points [−2.6, +9.2], the dev split +6.1 [+0.9, +11.4];
+v1 with it 97.6% (base 98.5%, noise). On by default since then.
+
 `RELAY_THREADS_LOCAL` in the engine's environment, a comma list of those parts or `classic` for
 none, overrides the default, to measure a new model or a change (`bench/threads/variants.json`).
 A thread on Claude is unchanged.

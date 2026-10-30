@@ -210,8 +210,8 @@ impl LocalStyle {
     /// What a local thread runs with when nothing overrides it: on the bench, Qwen3.5 4B answered
     /// 74.5% with none of it, 95.2% with these three parts, and 98.2% thinking within 512 tokens
     /// (a median answer 7 s against 3 s; with no limit 98.5%, and slower at the tail). `docs`
-    /// moved nothing.
-    pub const DEFAULT: LocalStyle = LocalStyle { lean: true, readings: true, prefetch: true, docs: false, think: Some(512), check: false };
+    /// moved nothing. `check` added 3.3 points on v3 (the dev split 6.1) and left v1 where it was.
+    pub const DEFAULT: LocalStyle = LocalStyle { lean: true, readings: true, prefetch: true, docs: false, think: Some(512), check: true };
 
     /// `lean,readings` and the like; `classic` (or nothing known) is none of them. `think` or
     /// `think:<tokens>` turns thinking on.
@@ -2420,7 +2420,7 @@ mod tests {
         assert_eq!(LocalStyle::parse("classic"), LocalStyle::CLASSIC);
         assert_eq!(LocalStyle::parse("lean,readings,prefetch").door(), "lean,readings");
         assert_eq!(LocalStyle::CLASSIC.door(), "");
-        assert_eq!(LocalStyle::DEFAULT, LocalStyle::parse("lean,readings,prefetch,think:512"));
+        assert_eq!(LocalStyle::DEFAULT, LocalStyle::parse("lean,readings,prefetch,think:512,check"));
     }
 
     #[test]
