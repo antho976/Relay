@@ -51,8 +51,10 @@ NOT_IN_ALL = {"smoke"}
 V2 = "v2"
 #: The third, harder suite, asked in the v2 world: tasks/v3/*.json.
 V3 = "v3"
-#: Each suite with a folder of its own, and the world its tasks are asked in.
-WORLD_OF_SUITE = {V2: V2, V3: V2}
+#: The coverage suite, generated (`coverage.py`) and asked in the v2 world: `cov[:seed[:count]]`.
+COV = "cov"
+#: Each suite with a folder of its own (or generated), and the world its tasks are asked in.
+WORLD_OF_SUITE = {V2: V2, V3: V2, COV: V2}
 
 
 def suite_files(suite, ids=None):
@@ -91,7 +93,10 @@ def world_of(tasks):
 
 def load_tasks(suite="all", ids=None, split="all"):
     tasks, seen = [], {}
-    for path in suite_files(suite, ids):
+    if (suite or "").split(":")[0] == COV:
+        from . import coverage
+        tasks = [dict(t, suite=f"{COV}/{t['category']}", split=split_of(t["id"])) for t in coverage.generate(*coverage.parse(suite))]
+    for path in ([] if tasks else suite_files(suite, ids)):
         for task in json.loads(Path(path).read_text()):
             if task["id"] in seen:
                 raise ValueError(f"task {task['id']} is in both {seen[task['id']]} and {path.name}")
@@ -343,9 +348,10 @@ class Runner:
             time.sleep(self.poll)
 
     def run_task(self, task, run):
-        rec = {k: task.get(k) for k in ("id", "suite", "source", "category", "difficulty", "split", "mutates")}
+        rec = {k: task.get(k) for k in ("id", "suite", "source", "category", "difficulty", "split", "mutates", "prompt", "params")}
         rec.update({"run": run, "pass": False, "checks": [], "turns": [], "error": None, "timeout": False})
-        ctx = dict(self.ctx)
+        # A generated question's own days, category, shop... (`coverage.py`).
+        ctx = dict(self.ctx, params=task.get("params") or {})
         try:
             expected = self._truth(task["truth"], ctx) if task.get("truth") else {}
         except Exception as e:

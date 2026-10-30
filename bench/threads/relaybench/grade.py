@@ -175,18 +175,28 @@ def _expected_values(check, expected):
     return [v for v in vals if _num(v) is not None]
 
 
+#: An answer of nothing said in words: "you didn't spend anything", "aucun".
+_NONE = re.compile(r"\b(no|none|nothing|not any|haven'?t|hasn'?t|didn'?t|did not|zero|aucun\w*|rien|pas de|pas d'|jamais)\b", re.I)
+
+
 def check_number(check, expected, thread):
+    """A figure in the reply within `tol` of an expected one (or `tol_pct` percent of it). With
+    `zero_words`, an expected zero is also met by saying there was none."""
     want = _expected_values(check, expected)
     if not want:
         return False, f"no expected value for {check.get('of') or check.get('any_of')}"
     tol = float(check.get("tol", 0.01))
     signed = bool(check.get("signed", False))
-    seen = numbers(reply_text(thread, check.get("turn", "last")))
+    text = reply_text(thread, check.get("turn", "last"))
+    seen = numbers(text)
     for w in want:
         w = _num(w)
+        within = max(tol, abs(w) * float(check.get("tol_pct", 0)) / 100)
         for n in seen:
-            if (abs(n - w) if signed else abs(abs(n) - abs(w))) <= tol + 1e-9:
+            if (abs(n - w) if signed else abs(abs(n) - abs(w))) <= within + 1e-9:
                 return True, f"found {n:g} (want {w:g})"
+    if check.get("zero_words") and all(abs(_num(w)) <= tol for w in want) and _NONE.search(text):
+        return True, "says there was none (want 0)"
     shown = ", ".join(f"{n:g}" for n in seen[:12]) + ("…" if len(seen) > 12 else "")
     return False, f"want {' or '.join(f'{_num(w):g}' for w in want)} ±{tol:g}; the reply has [{shown}]"
 

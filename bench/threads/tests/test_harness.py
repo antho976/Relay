@@ -242,6 +242,32 @@ class V2(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner.world_of(runner.load_tasks("smoke") + tasks)
 
+    def test_the_coverage_suite_is_drawn_the_same_from_a_seed(self):
+        from relaybench import coverage, truths_cov  # noqa: F401  (registers the cov_ truths)
+        tasks = runner.load_tasks("cov")
+        self.assertEqual(len(tasks), 300)
+        self.assertEqual([t["prompt"] for t in tasks], [t["prompt"] for t in runner.load_tasks("cov:1:300")])
+        self.assertNotEqual([t["prompt"] for t in tasks[:20]], [t["prompt"] for t in runner.load_tasks("cov:2")[:20]])
+        self.assertEqual(len({t["id"] for t in tasks}), 300)
+        self.assertEqual(len({t["prompt"] for t in tasks}), 300)
+        self.assertEqual(runner.world_of(tasks), "v2")
+        self.assertEqual(len(runner.load_tasks("cov:5:40")), 40)
+        for t in tasks:
+            self.assertIn(t["truth"], truths.TRUTHS, t["id"])
+            self.assertFalse(t["mutates"])
+            for c in t["checks"]:
+                self.assertIn(c["type"], grade.CHECK_TYPES, t["id"])
+            if t["params"].get("days") in coverage.BUDGET_DAYS:
+                self.assertEqual(t["source"] != "avex", True, f"an Avex question on Tally's months: {t['prompt']}")
+
+    def test_a_zero_may_be_said_in_words(self):
+        thread = lambda text: {"turns": [{"text": text}]}
+        check = {"type": "number", "of": "value", "tol": 0.01, "zero_words": True}
+        self.assertTrue(grade.check_number(check, {"value": 0}, thread("You didn't spend anything at Costco this week."))[0])
+        self.assertTrue(grade.check_number(check, {"value": 0}, thread("Aucune dépense chez Costco cette semaine."))[0])
+        self.assertFalse(grade.check_number(check, {"value": 12.5}, thread("You didn't spend anything at Costco."))[0])
+        self.assertTrue(grade.check_number({"type": "number", "of": "value", "tol": 1, "tol_pct": 0.3}, {"value": 98047}, thread("about 98,100 kg"))[0])
+
     def test_v3_tasks_are_valid_and_asked_in_the_v2_world(self):
         tasks = runner.load_tasks("v3")
         self.assertGreaterEqual(len(tasks), 40)

@@ -485,6 +485,31 @@ python3 bench/threads/bench.py run --check --suite v3
 python3 bench/threads/bench.py run --suite v3 --runs 3
 ```
 
+## Coverage: many plain questions, generated
+
+v3's dev split reached 93% on round eight while its holdout stayed at 61.5%: a suite Relay is tuned
+on stops showing what a new question does. The coverage suite is drawn instead of written
+(`relaybench/coverage.py`, truths in `truths_cov.py`): a kind of question (spent in all, on a
+category, at a shop, how often at a shop, the biggest expense, income, the top category, an
+account's balance, workouts, km and times run or cycled, volume lifted, a lift's best and when it
+was last done, spending and workouts together) crossed with the days people name (today, last week,
+last weekend, this month and last month as Tally's budget months, a month by name, this year, the
+last 30 days, Q1, since August 1, since my last paycheque) and the v2 world's categories, shops,
+accounts and lifts, in English and French, about one in eight typed carelessly. An Avex question
+never says "last month" (a calendar month to most people, a budget month to Tally). A zero may be
+said in words ("you didn't spend anything there").
+
+A seed picks the sample: `--suite cov` is seed 1 with 300 questions, `cov:<seed>` and
+`cov:<seed>:<count>` others. Compare two builds on one seed; take a new seed for questions no change
+was made for. One run each is enough at this size; `bench.py coverage` breaks a result down by kind,
+by days and by language, and lists what failed.
+
+```fish
+python3 bench/threads/bench.py run --check --suite cov
+python3 bench/threads/bench.py run --suite cov --variant think-512-check
+python3 bench/threads/bench.py coverage bench/threads/results/<time>-<name>.json
+```
+
 ## Files
 
 - `bench.py`: the CLI.
