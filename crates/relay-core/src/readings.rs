@@ -32,7 +32,7 @@ pub const OPS: &[&str] = &[
 
 /// The reads a reading of `op` (asked with `payload`) folds in, given its `result`, in the order
 /// [`render`] takes them.
-pub fn extras(op: &str, payload: &Value, result: &Value) -> Vec<(&'static str, Value)> {
+pub fn extras(op: &str, payload: &Value, result: &Value, today: Date) -> Vec<(&'static str, Value)> {
     use serde_json::json;
     let by_month = |measure: &str| ("gym.series", json!({"measure": measure, "by": "month", "periods": 6}));
     match op {
@@ -52,6 +52,8 @@ pub fn extras(op: &str, payload: &Value, result: &Value) -> Vec<(&'static str, V
             let mut reads = vec![
                 ("gym.lifts", json!({})), ("gym.cardio", json!({"limit": SUMMARY_CARDIO})), by_month("sessions"), by_month("volume"), by_month("cardio_minutes"), by_month("distance"),
                 ("gym.sessions", json!({"limit": 14})),
+                // "This year": the months above are the last six (bench v3, 2026-10-30).
+                ("gym.sessions", json!({"from": jiff::civil::date(today.year(), 1, 1).to_string(), "to": today.to_string(), "limit": 1})),
             ];
             if let Some(id) = result["recent"].get(0).and_then(|x| x["id"].as_i64()) {
                 reads.push(("gym.session.get", json!({"id": id})));
@@ -109,7 +111,7 @@ pub fn render(op: &str, payload: &Value, result: &Value, extras: &[Option<Value>
         "money.series" => money_series(payload, result, ctx),
         "money.invest.summary" => invest_summary(result, extra(0), ctx),
         "money.invest.list" => invest_list(result, extra(0), ctx),
-        "gym.summary" => gym_summary(result, extra(0), extra(1), [extra(2), extra(3), extra(4), extra(5)], extra(6), extra(7), ctx),
+        "gym.summary" => gym_summary(result, extra(0), extra(1), [extra(2), extra(3), extra(4), extra(5)], [extra(6), extra(7)], extra(8), ctx),
         "gym.sessions" => gym_sessions(payload, result, extra(0).map_or("", |series| s(series, "unit")), ctx),
         "gym.session.get" => gym_session(result, ctx),
         "gym.lifts" => gym_lifts(payload, result, ctx),
@@ -1941,7 +1943,9 @@ fn gym_header(o: &mut String, imported: &Value, unit: &str, today: Date) -> bool
     true
 }
 
-fn gym_summary(r: &Value, lifts: Option<&Value>, cardio: Option<&Value>, months: [Option<&Value>; 4], sessions: Option<&Value>, last_workout: Option<&Value>, ctx: &Ctx) -> String {
+fn gym_summary(r: &Value, lifts: Option<&Value>, cardio: Option<&Value>, months: [Option<&Value>; 4], pages: [Option<&Value>; 2], last_workout: Option<&Value>, ctx: &Ctx) -> String {
+    // The newest workouts, and this year's count.
+    let [sessions, year] = pages;
     let today = ctx.today;
     let unit = s(r, "unit");
     let mut o = String::new();
@@ -1967,6 +1971,10 @@ fn gym_summary(r: &Value, lifts: Option<&Value>, cardio: Option<&Value>, months:
         plural(int(t, "sets"), "set", "sets"), weight(num(t, "volume")),
         match int(t, "cardio") { 0 => "no cardio in this Avex copy".to_string(), n => format!("{} ({} minutes)", plural(n, "cardio session", "cardio sessions"), int(t, "cardio_minutes")) }
     );
+    if let Some(y) = year.filter(|y| y["total"].is_i64()) {
+        let excluded = match int(y, "untracked") { 0 => String::new(), n => format!(", and {n} the person excluded (untracked, not counted)") };
+        let _ = writeln!(o, "THIS YEAR ({}, Jan 1 to today): {}{excluded}.", today.year(), plural(int(y, "total") - int(y, "untracked"), "counted workout", "counted workouts"));
+    }
     let week = |w: &Value| {
         let cardio = match int(w, "cardio_minutes") { 0 => "no cardio".to_string(), c => format!("{c} cardio minutes") };
         match int(w, "sessions") {
@@ -2665,8 +2673,8 @@ mod tests {
         let mut found = all.clone();
         found["transactions"] = json!([tx(132, "INCOME", 8640, "2026-10-03", Some("Refunds"), "Air Transat")]);
         let asked = json!({"from": "2026-10-01", "query": "refund"});
-        assert_eq!(extras("money.tx.list", &asked, &found)[1], ("money.tx.list", json!({"from": "2026-10-01", "to": "2026-10-31"})));
-        assert_eq!(extras("money.tx.list", &json!({"query": "metro", "from": "2026-10-01"}), &found).len(), 1, "only a search for money back");
+        assert_eq!(extras("money.tx.list", &asked, &found, ctx().today)[1], ("money.tx.list", json!({"from": "2026-10-01", "to": "2026-10-31"})));
+        assert_eq!(extras("money.tx.list", &json!({"query": "metro", "from": "2026-10-01"}), &found, ctx().today).len(), 1, "only a search for money back");
         let lists = json!({"categories": [{"id": 7, "name": "Shopping", "kind": "EXPENSE"}, {"id": 9, "name": "Refunds", "kind": "INCOME"}]});
         let text = render("money.tx.list", &asked, &found, &[Some(lists), Some(all)], &ctx()).unwrap();
         let line = "- Money back over these days, whatever the search matched (refunds and returns: income in Refunds, or filed under a spending category, noted in any language): \
@@ -2839,7 +2847,7 @@ mod tests {
     #[test]
     fn a_search_with_no_days_also_reads_the_whole_ledger() {
         let asked = json!({"query": "costco"});
-        assert_eq!(extras("money.tx.list", &asked, &page())[1], ("money.tx.list", json!({"from": "1970-01-01", "query": "costco"})));
+        assert_eq!(extras("money.tx.list", &asked, &page(), ctx().today)[1], ("money.tx.list", json!({"from": "1970-01-01", "query": "costco"})));
         let none = json!({"period": page()["period"], "transactions": []});
         let all = json!({"transactions": [tx(150, "EXPENSE", 17168, "2026-09-06", Some("Groceries"), "Costco"), tx(120, "EXPENSE", 23019, "2026-01-04", Some("Groceries"), "Costco"),
                                           tx(40, "EXPENSE", 19000, "2025-12-07", Some("Groceries"), "Costco")]});
@@ -3005,7 +3013,7 @@ mod tests {
         let lists = json!({"accounts": [{"id": 7, "name": "WS TFSA", "type": "INVESTMENT", "archived": false, "institution": "Wealthsimple"},
                                         {"id": 8, "name": "Desjardins RRSP", "type": "INVESTMENT", "archived": false, "institution": "Desjardins"}]});
         let activity = json!({"activities": [{"id": 3, "account_id": 7, "account": "WS TFSA", "type": "BUY", "date": "2026-10-01", "symbol": "XEQT", "quantity": 200_000_000, "amount": 7624, "fee": 0, "currency": "CAD", "note": ""}]});
-        assert_eq!(extras("money.invest.list", &json!({}), &activity).len(), 1);
+        assert_eq!(extras("money.invest.list", &json!({}), &activity, ctx().today).len(), 1);
         let text = render("money.invest.list", &json!({}), &activity, &[Some(lists)], &ctx()).unwrap();
         assert!(text.contains("- WS TFSA: filled from Wealthsimple's files: don't record activity here, the next export brings it."), "{text}");
         assert!(!text.contains("Desjardins"), "{text}");
@@ -3131,7 +3139,7 @@ mod tests {
             {"name": "Leg Press", "volume": 3990.0, "sets": [{"weight": 285.0, "reps": 5, "kind": "work"}, {"weight": 285.0, "reps": 5, "kind": "work"}, {"weight": 285.0, "reps": 4, "kind": "work"}]},
             {"name": "Dips", "volume": 0.0, "sets": [{"weight": null, "reps": 14, "kind": "work"}]}]});
         let sessions = json!({"sessions": [session(149, "2026-10-08"), session(147, "2026-10-05"), session(146, "2026-10-02")], "total": 3});
-        let extras = [Some(lifts), Some(cardio), Some(month([15.0, 5.0])), Some(month([180000.0, 60000.0])), Some(month([0.0, 36.0])), Some(month([0.0, 5.65])), Some(sessions), Some(detail)];
+        let extras = [Some(lifts), Some(cardio), Some(month([15.0, 5.0])), Some(month([180000.0, 60000.0])), Some(month([0.0, 36.0])), Some(month([0.0, 5.65])), Some(sessions), None, Some(detail)];
         let text = render("gym.summary", &json!({}), &r, &extras, &ctx()).unwrap();
         for want in [
             "AVEX (gym app; weights in lb). Today is Thursday, October 15, 2026 (2026-10-15). Only what their Avex export holds: not everything they did.\n",
@@ -3178,6 +3186,9 @@ mod tests {
                                   "best": {"lift": "Bench Press", "day": "2026-10-05", "weight": 215.0, "reps": 5, "e1rm": 250.8}}]});
         let text = render("gym.summary", &json!({}), &r, &[], &ctx()).unwrap();
         assert!(text.contains("1 workout the person excluded in Avex (untracked) is not counted."), "{text}");
+        let year = [None, None, None, None, None, None, None, Some(json!({"sessions": [], "total": 120, "untracked": 2}))];
+        let text = render("gym.summary", &json!({}), &r, &year, &ctx()).unwrap();
+        assert!(text.contains("\nTHIS YEAR (2026, Jan 1 to today): 118 counted workouts, and 2 the person excluded (untracked, not counted).\n"), "{text}");
         let mut named = r.clone();
         named["totals"]["untracked"] = json!(3);
         named["totals"]["untracked_days"] = json!(["2026-08-08", "2026-10-03"]);

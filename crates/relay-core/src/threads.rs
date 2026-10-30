@@ -1494,7 +1494,7 @@ fn prefetched(engine: &Engine, text: &str) -> String {
     let ctx = crate::readings::Ctx { today: jiff::Zoned::now().date(), currency };
     let mut briefs: Vec<String> = ["money.summary", "gym.summary"].into_iter().filter_map(|op| {
         let result = read(op, json!({}))?;
-        let extras: Vec<Option<Value>> = crate::readings::extras(op, &json!({}), &result).into_iter().map(|(extra, with)| read(extra, with)).collect();
+        let extras: Vec<Option<Value>> = crate::readings::extras(op, &json!({}), &result, ctx.today).into_iter().map(|(extra, with)| read(extra, with)).collect();
         crate::readings::render(op, &json!({}), &result, &extras, &ctx)
     }).collect();
     if briefs.is_empty() {

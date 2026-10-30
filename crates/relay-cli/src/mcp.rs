@@ -1074,14 +1074,15 @@ async fn read(client: &mut Client, actor: &Actor, token: Option<&str>, op: &str,
 
 /// `result` of `op` as its reading, the reads it folds in read first.
 async fn reading(client: &mut Client, actor: &Actor, token: Option<&str>, op: &str, payload: &Value, result: &Value) -> Option<String> {
+    let today = jiff::Zoned::now().date();
     let mut extras = Vec::new();
-    for (extra, with) in relay_core::readings::extras(op, payload, result) {
+    for (extra, with) in relay_core::readings::extras(op, payload, result, today) {
         extras.push(read(client, actor, token, extra, with).await);
     }
     let currency = read(client, actor, token, "money.lists", json!({})).await
         .and_then(|lists| lists["currency"].as_str().map(str::to_string))
         .unwrap_or_else(|| "CAD".into());
-    let ctx = relay_core::readings::Ctx { today: jiff::Zoned::now().date(), currency };
+    let ctx = relay_core::readings::Ctx { today, currency };
     relay_core::readings::render(op, payload, result, &extras, &ctx)
 }
 
