@@ -66,6 +66,41 @@ fail → pass, every v2 row above gains: Qwen3.5 4B thinking ≤512 66.3% → **
 1.7B 57.9% → 58.7%. The tables keep the numbers as first measured; compare a new run with a baseline
 graded by the same checks (`regrade --out`).
 
+### Relay tuned on the 4B's transcripts (2026-10-29/30, relay/lucky-jackal, thinking ≤512, 3 runs)
+
+Each round changed Relay only (readings, the lean prompt, the MCP door) from the dev split's
+failures of the run before; the holdout is reported beside it, not tuned on. The base is relay
+`b413157` measured the same day. Round four's run was void (the door dropped every tool) and was
+measured with round five.
+
+| Round | Relay | v2 | Dev | Holdout | Median s | v1 (the guard) |
+|---|---|---|---|---|---|---|
+| Base | `b413157` | 69.4% | 67.2% | 76.2% | 15.1 | 98.5% |
+| 1 | `141a627` | 80.6% | 77.8% | 88.9% | 14.6 | |
+| 2 | `b6b8ffb` | 88.1% | 87.8% | 88.9% | 16.1 | |
+| 3 | `f7c2aab` | 89.7% | 89.4% | 90.5% | 16.6 | 97.6% |
+| 5 | `52e5777` | 91.7% | 92.6% | 88.9% | 16.1 | 95.8% |
+| 6 | `f7b8228` | 95.6% | 96.3% | 93.7% | 15.6 | 96.1% |
+| 7 | `a86e6cf` | 94.4% | 94.2% | 95.2% | 16.1 | 98.2% |
+
+v2 base → round six: +26.2 points, bootstrap 95% over tasks [+17.5, +34.9]. v1 fell at round five
+(−2.7 [−5.1, −0.6]: a proposal reported as done, an entry added before one was deleted) and is back
+at round seven (−0.3 [−1.5, +0.9] against base). Median input tokens per task-run on v2: 30,645 at
+base, 18,279 at round six (the prefetch answers most questions without a tool call).
+
+**v3** (written after round six, see "v3"):
+
+| Relay | v3 | Dev | Holdout | Median s |
+|---|---|---|---|---|
+| Base `b413157` | 47.7% | 53.5% | 30.8% | 26.1 |
+| Round 6 `f7b8228` | 62.7% | 65.8% | 53.8% | 30.6 |
+| Round 7 `a86e6cf` | 83.0% | 87.7% | 69.2% | 20.6 |
+
+Base → round six +15.0 [+7.8, +22.9], the holdout +23.1: round six's readings carried to questions
+it was not tuned on. Round six → seven +20.3 [+7.8, +32.7] (the whole ledger in a search with no
+days and in the summary, this year, pay changes, workouts capped at 50 with counts by month);
+Avex fell 89.6 → 75.0% where the cap hid workouts, which round eight counts by kind instead.
+
 ### Other 4B models (2026-10-19, relay `0e5caa7`, thinking ≤512, Q8_0, 3 runs)
 
 | Model | v1 | Δ vs Qwen3.5 4B | v2 | Δ vs Qwen3.5 4B |
@@ -290,6 +325,11 @@ not load, Claude Code missing), and the result says why.
 `variants.json` names product variants: `env` for the engine (and so for Claude Code and the MCP
 server it starts), `settings` set with `settings.set`, optionally `relay_bin`. `baseline` changes
 nothing. `--variant NAME` picks one; the result records it.
+
+`think-512-check` adds Relay's figure check (relay-core `figures.rs`): an answer with a figure given
+for days the data holds it only for others, or a total its list does not add up to, is handed back
+to the model once, and the person sees a `check` message saying which figures did not match. The
+runner grades the answer after a check, not the one it replaced; each turn's `checks` are saved.
 
 ## What the model sees
 
