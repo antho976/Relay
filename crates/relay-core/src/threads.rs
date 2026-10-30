@@ -444,14 +444,17 @@ or count yourself. Only a projection or a plan they ask for is yours to work out
 gave: say how you worked it out, and that it is a projection.
 3. Lead with the answer in one or two short sentences, speaking to the person as \"you\". Write money \
 like $1,234.56.
+4. A question about money and training together (a cost per workout, spending on a trip and the \
+workouts then) needs a figure from each: read both, for the same days.
 
 Which tool:
 - money.summary: start here for money. This month's spending, income, budgets and pace; today, \
 yesterday, this week and last week; spending by category and month by month; the biggest expenses; \
 last month; accounts and net worth; bills and goals.
 - money.tx.list: the entries of one month with their totals. period_offset 0 is this month, -1 last \
-month, -2 the month before; from and to (YYYY-MM-DD) in place of it for any other days (a calendar \
-month, since a payday, one day). It adds them up by category, week and day. query finds entries by \
+month, -2 the month before (\"last month\" and \"the month before\" are always these, never from and to); \
+from and to (YYYY-MM-DD) in place of it only for other days (a calendar month they name, since a \
+payday, one day). It adds them up by category, week and day. query finds entries by \
 note, category or account.
 - money.lists: the names of accounts and categories, and what goes in each category.
 - money.invest.summary: investments (value, gain, holdings, contribution room). money.invest.list: \
@@ -459,7 +462,7 @@ their buys, sells and dividends.
 - gym.summary: start here for training. Totals, this week and last week, week by week and month by \
 month, recent workouts and the last one in detail, every lift's best set and how it improved, cardio \
 and goals.
-- gym.sessions: workouts, newest first. gym.session.get: one workout's sets, by its id. gym.lifts and \
+- gym.sessions: workouts, newest first; from and to (YYYY-MM-DD) count the workouts between two days. gym.session.get: one workout's sets, by its id. gym.lifts and \
 gym.lift.get: each lift's best set and history. gym.cardio: runs and other cardio.
 - money.series and gym.series: the numbers behind a chart.
 
@@ -468,6 +471,8 @@ What words mean:
 gone. They are different figures: say the one the reading gives.
 - Last month is the previous budget period. Bills to pay are expenses only: income and transfers are \
 not bills.
+- An entry's amount is what was paid or received. A figure written in its note (\"-15,99 $ already \
+taken off\") is part of the note: it does not change the amount.
 - An e1rm is an estimated one-rep max: call it estimated. Avex's copy is only as new as its last \
 export: when asked about today or recent training, say when the copy was exported, since anything \
 logged after that is not in it.
@@ -486,6 +491,9 @@ not in an account Wealthsimple's files fill.
 rename or archive accounts, call thread.propose with one action and why; the person approves it on a \
 card. Say what you proposed: it is not done until Relay tells you it was approved. Settings, such as \
 the day the budget month starts, are theirs.
+- Undo: to take back an entry you added, propose deleting it (thread.propose, money.tx.delete with its \
+id); never clear its category or change it instead. To take back a change, money.tx.update it back to \
+what it was.
 - Avex's data is read only: changes happen in Avex on the phone.
 
 Charts: when they ask to show, chart, plot, draw or graph something, or where their money went, \
@@ -1485,7 +1493,9 @@ fn prefetched(engine: &Engine, text: &str) -> String {
     }
     format!(
         "[Relay attached my data as it is now, read as this conversation started. Answer from it when it has the answer; \
-         call a tool for anything it does not give, or after a change.]\n\n{}\n\n[End of the data. My message:]\n{text}",
+         call a tool for anything it does not give, or after a change. It holds this budget month, last month and recent \
+         training: for other days (a trip, a month by name, since a date, between two days), call money.tx.list or \
+         gym.sessions with from and to.]\n\n{}\n\n[End of the data. My message:]\n{text}",
         briefs.join("\n\n")
     )
 }

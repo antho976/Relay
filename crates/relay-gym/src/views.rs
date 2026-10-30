@@ -287,7 +287,27 @@ pub struct Summary {
     pub breaks: Vec<Break>,
     /// Counted workouts Avex gave a type other than `normal` (a deload, a test day…), by type.
     pub marked: Vec<Marked>,
+    /// What the person wrote: workout journals and lift notes, untracked workouts' too, newest
+    /// first, the same words once. The newest [`NOTES`]: the why behind a switch or a gap.
+    #[serde(default)]
+    pub notes: Vec<Note>,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename = "GymNote")]
+pub struct Note {
+    pub text: String,
+    /// The lift it was written on; none for a workout's journal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lift: Option<String>,
+    /// The newest day it was written, and on how many workouts in all.
+    pub day: String,
+    pub times: u32,
+    /// Written on an untracked workout.
+    pub untracked: bool,
+}
+
+pub const NOTES: usize = 10;
 
 /// A gap between two counted workouts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -689,7 +709,25 @@ pub fn summary(h: &History, clock: &Clock, imported: bool) -> Summary {
         goals: h.goals.iter().filter(|g| g.completed_at.is_none() && g.archived_at.is_none()).map(|g| goal_row(h, g, clock)).collect(),
         breaks: breaks(h, clock, &trained),
         marked: marked(h, clock),
+        notes: notes(h, clock),
     }
+}
+
+fn notes(h: &History, clock: &Clock) -> Vec<Note> {
+    let mut out: Vec<Note> = Vec::new();
+    for s in h.sessions.iter().rev() {
+        let day = date_of(s.started_at, &clock.tz).to_string();
+        let written = std::iter::once((None, s.journal.trim()))
+            .chain(s.exercises.iter().filter(|e| !e.skipped).map(|e| (Some(e.name.as_str()), e.note.trim())));
+        for (lift, text) in written.filter(|w| !w.1.is_empty()) {
+            if let Some(n) = out.iter_mut().find(|n| n.text == text && n.lift.as_deref() == lift) {
+                n.times += 1;
+            } else if out.len() < NOTES {
+                out.push(Note { text: text.into(), lift: lift.map(Into::into), day: day.clone(), times: 1, untracked: s.untracked });
+            }
+        }
+    }
+    out
 }
 
 /// Weeks in a row in `trained` counting back from the one that starts on `at`.
@@ -1271,6 +1309,20 @@ mod tests {
             days: vec!["2026-09-29".into(), "2026-10-07".into()],
             weeks: vec![week("2026-09-28", 1, 1395.0, 0, 0.0), week("2026-10-05", 1, 1000.0, 1, 1395.0)],
         }], "the untracked test day is not counted");
+        assert!(s.notes.is_empty());
+        h.sessions[0].journal = "Shoulder sore".into();
+        h.sessions[1].exercises[0].note = "Paused reps".into();
+        h.sessions[2].journal = "Hotel gym".into();
+        h.sessions[3].exercises[0].note = "Paused reps".into();
+        h.sessions[3].exercises[0].name = "Bench Press".into();
+        let s = summary(&h, &clock(), true);
+        let notes: Vec<(&str, Option<&str>, &str, u32, bool)> = s.notes.iter()
+            .map(|n| (n.text.as_str(), n.lift.as_deref(), n.day.as_str(), n.times, n.untracked)).collect();
+        assert_eq!(notes, [
+            ("Paused reps", Some("Bench Press"), "2026-10-07", 2, false),
+            ("Hotel gym", None, "2026-10-06", 1, true),
+            ("Shoulder sore", None, "2026-09-15", 1, false),
+        ], "newest first, the same words on the same lift once");
     }
 
     #[test]
