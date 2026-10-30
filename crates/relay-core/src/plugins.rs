@@ -437,6 +437,31 @@ mod tests {
     }
 
     #[test]
+    fn the_house_style_plugin_is_bundled_and_complete() {
+        let plugin = get("house-style").expect("house-style is bundled");
+        assert!(!plugin.instructions().is_empty());
+        for doc in &plugin.manifest.docs {
+            assert!(plugin.file(doc).is_some(), "manifest names a missing doc {doc}");
+        }
+        assert!(plugin.manifest.mcp_servers.is_empty(), "the house style runs no server");
+        assert!(plugin.manifest.detect.is_empty(), "it is for any project with an interface");
+        let skills: Vec<&str> = plugin.skills.iter().map(|skill| skill.dir.as_str()).collect();
+        assert_eq!(skills, ["house-style", "house-style-native", "house-style-review"]);
+        for skill in &plugin.skills {
+            assert_eq!(frontmatter(&skill.body, "name").as_deref(), Some(skill.dir.as_str()));
+            assert!(!skill.description.is_empty(), "{} has no description", skill.dir);
+            assert_eq!(crate::skills::folder_name(&skill.dir), skill.dir, "{} is not provider-safe", skill.dir);
+            assert!(plugin.instructions().contains(&format!("`{}`", skill.dir)), "instructions do not name {}", skill.dir);
+        }
+        // The core skill points at its references; each one must ship with it.
+        let core = &plugin.skills[0];
+        for reference in ["reference/fundamentals.md", "reference/failures.md", "reference/evidence.md"] {
+            assert!(core.body.contains(reference.trim_start_matches("reference/")), "SKILL.md does not point at {reference}");
+            assert!(core.files.iter().any(|(path, _)| *path == reference), "{reference} is missing");
+        }
+    }
+
+    #[test]
     fn the_pictures_plugin_is_bundled_and_complete() {
         let plugin = get(relay_bus::ops::picture::PLUGIN).expect("pictures is bundled");
         assert_eq!(plugin.manifest.name, "Pictures");

@@ -1,0 +1,12 @@
+{
+  "id": "house-style",
+  "name": "House style",
+  "version": "1.0.0",
+  "category": "Design",
+  "summary": "Makes every agent in the project design the way you want: your taste, learned from what you chose and rejected in Relay, Avex and Tally, on top of the fundamentals of good interface design, with platform rules for GTK, Android, web and game UI and a review checklist to run before calling UI work done.",
+  "description": "Turn it on for any project with an interface. Every agent launched there gets three skills and the plugin's rules in its brief. house-style is your taste: clean and professional, near-black with one accent, nothing crowded, too round, too big, boxed, dated or AI-looking, one look across all your apps, and how you like to work (two or three real variations beside the before, one screen at a time, keep what you like, look at the render before reporting). It also holds the fundamentals (hierarchy, type, spacing, colour, measured contrast, controls, the seven states, copy, motion, data, icons), a ledger of named failures with fixes, and your own words with dates behind each rule. house-style-native carries it onto GTK 4 desktop, Android with Compose, web pages, design-canvas mockups and game UI. house-style-review is the checklist and report format for a critique or a pass before done. A project's own design doc still wins for its exact tokens and settled decisions, and this plugin wins over generic design skills where they disagree.",
+  "instructions": "instructions.md",
+  "docs": [
+    "README.md"
+  ]
+}
