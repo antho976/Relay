@@ -102,6 +102,13 @@ pub fn render(op: &str, payload: &Value, result: &Value, extras: &[Option<Value>
     Some(text.trim_end().to_string())
 }
 
+/// The newest pay (Salary income) among `pages`' entries.
+pub fn last_pay<'a>(pages: impl IntoIterator<Item = &'a Value>) -> Option<&'a Value> {
+    pages.into_iter().flat_map(|p| list(p, "transactions"))
+        .filter(|t| s(t, "type") == "INCOME" && s(t, "category").eq_ignore_ascii_case("Salary"))
+        .max_by(|a, b| s(a, "date").cmp(s(b, "date")).then(int(a, "id").cmp(&int(b, "id"))))
+}
+
 /// The prefetch's line on both apps: each budget month's workouts, counted over the same days
 /// as Tally's month, for a question that asks for both ("last month, how much on health and how
 /// many workouts"). Each of `months` is its name, its `period` and `gym.sessions` over those days.
@@ -592,12 +599,12 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
         let _ = writeln!(o, "- money.tx.list's period_offset: {}.", offsets.join(", "));
     }
     // "Since my last paycheque" needs the day it came in, which the bills (the next one) do not give.
-    let pay = pages.iter().flatten().flat_map(|p| list(p, "transactions"))
-        .filter(|t| s(t, "type") == "INCOME" && s(t, "category").eq_ignore_ascii_case("Salary"))
-        .max_by(|a, b| s(a, "date").cmp(s(b, "date")).then(int(a, "id").cmp(&int(b, "id"))));
-    if let Some(t) = pay {
-        let _ = writeln!(o, "- Last pay (Salary) came in on {}: {}, {}. Since then: money.tx.list with from {}.",
-            day_of(s(t, "date"), today), entry_name(t), m.fmt(int(t, "amount")), s(t, "date"));
+    if let Some(t) = last_pay(pages.iter().flatten().copied()) {
+        let since: Vec<&Value> = pages.iter().flatten().flat_map(|p| list(p, "transactions"))
+            .filter(|x| s(x, "type") == "EXPENSE" && s(x, "date") >= s(t, "date")).collect();
+        let _ = writeln!(o, "- Last pay (Salary) came in on {}: {}, {}. Spent since then (that day to today): {} on {}. Its entries: money.tx.list with from {}.",
+            day_of(s(t, "date"), today), entry_name(t), m.fmt(int(t, "amount")), m.fmt(since.iter().map(|x| int(x, "amount")).sum()),
+            plural(since.len() as i64, "expense", "expenses"), s(t, "date"));
     }
     if this_month.is_some() {
         // Days and weeks cross into last month: both months' entries count.
@@ -741,6 +748,21 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
             let _ = writeln!(o, "- {}: {} on {} ({})", s(b, "name"), m.fmt(int(b, "amount")), day_of(s(b, "next_date"), today), ago_of(s(b, "next_date"), today));
         }
         let _ = writeln!(o, "Total of these bills: {}.", m.fmt(to_pay.iter().map(|b| int(b, "amount")).sum()));
+        // "If I pay the bills still coming this month": the budget month ends on its own day, not
+        // the calendar month's (a rent due on the 1st was left out).
+        let ends = date(s(&r["period"], "end_exclusive"));
+        let due: Vec<&&Value> = to_pay.iter().filter(|b| ends.zip(date(s(b, "next_date"))).is_some_and(|(end, d)| d < end)).collect();
+        if let (Some(last), false) = (ends.and_then(|e| e.yesterday().ok()), due.is_empty()) {
+            let total: i64 = due.iter().map(|b| int(b, "amount")).sum();
+            let pace = &r["pace"];
+            let after = if pace.is_object() && s(pace, "status") != "NO_BUDGET" {
+                let left = int(pace, "remaining");
+                format!(" Left to spend after them: {} − {} = {}.", m.fmt(left), m.fmt(total), m.fmt(left - total))
+            } else {
+                String::new()
+            };
+            let _ = writeln!(o, "Still to pay before this budget month ends ({}), each at its next date: {} ({}).{after}", day(last, today), m.fmt(total), plural(due.len() as i64, "bill", "bills"));
+        }
     }
     let others: Vec<String> = bills.iter().filter(|b| s(b, "type") != "EXPENSE")
         .map(|b| format!("{} {} {} on {} ({})", s(b, "name"), m.fmt(int(b, "amount")), word(s(b, "type")), day_of(s(b, "next_date"), today), ago_of(s(b, "next_date"), today)))
@@ -2373,7 +2395,7 @@ mod tests {
         for want in [
             "TALLY (budget app). Today is Thursday, October 15, 2026 (2026-10-15). Amounts are in CAD. Only what the person has logged in their Tally app: not their bank, not everything they did.\n",
             "THIS MONTH: October 2026 (Oct 1 to Oct 31), day 15 of 31, 17 days left counting today.",
-            "- Last pay (Salary) came in on Wed Oct 14: Salary, $2,150.00. Since then: money.tx.list with from 2026-10-14.",
+            "- Last pay (Salary) came in on Wed Oct 14: Salary, $2,150.00. Spent since then (that day to today): $26.14 on 1 expense. Its entries: money.tx.list with from 2026-10-14.",
             "- Budgets last month, against each budget as it is set now: all spending $90.00 of $2,900.00, $2,810.00 left; Dining $90.00 of $320.00, $230.00 left; Groceries $0.00 of $500.00, $500.00 left; Entertainment $0.00 of $80.00, $80.00 left.",
             "- Spent so far (all expenses): $2,425.26",
             "- Monthly budget: $2,900.00. Left to spend: $474.74 (83.6% of the budget used).",
@@ -2403,6 +2425,7 @@ mod tests {
             "- NET WORTH, all accounts together: $22,264.30",
             "- Hydro: $78.40 on Sun Oct 18 (in 3 days)",
             "Total of these bills: $1,428.40.",
+            "Still to pay before this budget month ends (Sat Oct 31), each at its next date: $78.40 (1 bill). Left to spend after them: $474.74 − $78.40 = $396.34.",
             "Scheduled but not bills (income and transfers): Salary $2,150.00 income on Wed Oct 28 (in 13 days).",
             "- Lisbon trip (savings goal): $700.00 of $2,400.00. $283 a month for 6 months",
         ] {

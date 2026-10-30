@@ -489,7 +489,9 @@ dates list, the account by name as the person said it, and for an expense or inc
 category by its name in money.lists) and change one with money.tx.update (its id from money.tx.list; it only changes an entry: to look \
 at one, read it with money.tx.list). \
 In French a comma before the last two digits is the decimal point: \"45,20 $\" is 45.20. \
-Say plainly what you changed. When the amount or the account is unclear, ask first. \
+Say plainly what you changed. When the amount or the account is unclear, ask first: a bank's name \
+alone (\"desjardins\") when they have more than one account there is unclear. When both are clear, \
+record it: do not ask whether to. \
 money.tx.restore brings back a deleted entry. money.invest.add records an investment activity, but \
 not in an account Wealthsimple's files fill.
 - To delete entries or investment activities, change more than 3 entries, set budgets, or add, \
@@ -1496,10 +1498,17 @@ fn prefetched(engine: &Engine, text: &str) -> String {
     if briefs.is_empty() {
         return text.to_string();
     }
-    // Tally's budget months, which the entries above cover, and Avex's workouts over the same days.
-    let periods: Vec<(&str, Value)> = [("this month", 0), ("last month", -1)].into_iter()
-        .filter_map(|(name, offset)| read("money.tx.list", json!({"period_offset": offset, "limit": 1})).map(|page| (name, page["period"].clone())))
+    // Tally's budget months, which the entries above cover, and Avex's workouts over the same days
+    // and since the last pay.
+    let pages: Vec<(&str, Value)> = [("this month", 0), ("last month", -1)].into_iter()
+        .filter_map(|(name, offset)| read("money.tx.list", json!({"period_offset": offset})).map(|page| (name, page)))
         .collect();
+    let mut periods: Vec<(&str, Value)> = pages.iter().map(|(name, page)| (*name, page["period"].clone())).collect();
+    let pay = crate::readings::last_pay(pages.iter().map(|(_, page)| page)).and_then(|t| t["date"].as_str()).map(str::to_string);
+    let held = periods.last().map(|(_, p)| p["start"].clone());
+    if let (Some(pay), Ok(tomorrow)) = (pay, ctx.today.tomorrow()) {
+        periods.push(("since the last pay", json!({"start": pay, "end_exclusive": tomorrow.to_string()})));
+    }
     if briefs.len() == 2 {
         let sessions: Vec<(&str, &Value, Value)> = periods.iter().filter_map(|(name, period)| {
             let last = period["end_exclusive"].as_str().and_then(|d| d.parse::<jiff::civil::Date>().ok())?.yesterday().ok()?;
@@ -1509,7 +1518,7 @@ fn prefetched(engine: &Engine, text: &str) -> String {
         briefs.extend(crate::readings::workouts_by_budget_month(&months, ctx.today));
     }
     // A month the person names whose entries are not attached: said where they will read it.
-    let held_from = periods.last().and_then(|(_, p)| p["start"].as_str()).and_then(|d| d.parse::<jiff::civil::Date>().ok()).unwrap_or(ctx.today);
+    let held_from = held.as_ref().and_then(Value::as_str).and_then(|d| d.parse::<jiff::civil::Date>().ok()).unwrap_or(ctx.today);
     let named: Vec<String> = crate::readings::months_named(text, ctx.today, held_from).into_iter()
         .map(|(name, first, last)| format!("{name} is not in it (its entries start {}): read those days with money.tx.list or gym.sessions, from {first} to {last}", held_from.strftime("%b %-d")))
         .collect();
