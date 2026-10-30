@@ -52,8 +52,9 @@ pub fn extras(op: &str, payload: &Value, result: &Value, today: Date) -> Vec<(&'
             let mut reads = vec![
                 ("gym.lifts", json!({})), ("gym.cardio", json!({"limit": SUMMARY_CARDIO})), by_month("sessions"), by_month("volume"), by_month("cardio_minutes"), by_month("distance"),
                 ("gym.sessions", json!({"limit": 14})),
-                // "This year": the months above are the last six (bench v3, 2026-10-30).
-                ("gym.sessions", json!({"from": jiff::civil::date(today.year(), 1, 1).to_string(), "to": today.to_string(), "limit": 1})),
+                // Every workout: this year (the months above are the last six), each kind, and
+                // the weeks since the first (bench v3, 2026-10-30).
+                ("gym.sessions", json!({"to": today.to_string(), "limit": 1000})),
             ];
             if let Some(id) = result["recent"].get(0).and_then(|x| x["id"].as_i64()) {
                 reads.push(("gym.session.get", json!({"id": id})));
@@ -1980,9 +1981,23 @@ fn gym_summary(r: &Value, lifts: Option<&Value>, cardio: Option<&Value>, months:
         plural(int(t, "sets"), "set", "sets"), weight(num(t, "volume")),
         match int(t, "cardio") { 0 => "no cardio in this Avex copy".to_string(), n => format!("{} ({} minutes)", plural(n, "cardio session", "cardio sessions"), int(t, "cardio_minutes")) }
     );
-    if let Some(y) = year.filter(|y| y["total"].is_i64()) {
-        let excluded = match int(y, "untracked") { 0 => String::new(), n => format!(", and {n} the person excluded (untracked, not counted)") };
-        let _ = writeln!(o, "THIS YEAR ({}, Jan 1 to today): {}{excluded}.", today.year(), plural(int(y, "total") - int(y, "untracked"), "counted workout", "counted workouts"));
+    // Every workout, when the page holds them all: a page cut short would count too few.
+    if let Some(all) = year.filter(|y| list(y, "sessions").len() as i64 == int(y, "total") && int(y, "total") > 0) {
+        let rows = list(all, "sessions");
+        let first_day = jiff::civil::date(today.year(), 1, 1);
+        let in_year = |x: &Value| date(s(x, "day")).is_some_and(|d| d >= first_day);
+        let excluded = match rows.iter().filter(|x| in_year(x) && x["untracked"] == true).count() {
+            0 => String::new(),
+            n => format!(", and {n} the person excluded (untracked, not counted)"),
+        };
+        let counted: Vec<&Value> = rows.iter().filter(|x| x["untracked"] != true).collect();
+        let _ = writeln!(o, "THIS YEAR ({}, Jan 1 to today): {}{excluded}.", today.year(), plural(counted.iter().filter(|x| in_year(x)).count() as i64, "counted workout", "counted workouts"));
+        if let Some(line) = weeks_line(&counted, "the first workout", today) {
+            let _ = writeln!(o, "{line}");
+        }
+        if counted.len() >= 6 {
+            let _ = writeln!(o, "Counted workouts by kind, all of them: {}.", kinds(&counted));
+        }
     }
     let week = |w: &Value| {
         let cardio = match int(w, "cardio_minutes") { 0 => "no cardio".to_string(), c => format!("{c} cardio minutes") };
@@ -2202,24 +2217,12 @@ fn gym_sessions(payload: &Value, r: &Value, unit: &str, ctx: &Ctx) -> String {
     if counted.len() >= 6 {
         // "How long does Upper A usually take": each kind added up over every one read, not left
         // to a model averaging the ones it could see (bench v3, 2026-10-30).
-        let mut titles: Vec<(&str, i64, i64)> = Vec::new();
-        for x in &counted {
-            match titles.iter_mut().find(|t| t.0 == s(x, "title")) {
-                Some(t) => {
-                    t.1 += 1;
-                    t.2 += int(x, "minutes");
-                }
-                None => titles.push((s(x, "title"), 1, int(x, "minutes"))),
-            }
-        }
-        titles.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-        let cells: Vec<String> = titles.iter().map(|(title, n, minutes)| format!("{title} {n}, {:.1} min on average", *minutes as f64 / *n as f64)).collect();
-        let _ = writeln!(o, "Counted workouts by kind, every one of these {} read: {}.", rows.len(), cells.join("; "));
+        let _ = writeln!(o, "Counted workouts by kind, every one of these {} read: {}.", rows.len(), kinds(&counted));
         // "I planned 4 a week since I started": the weeks since the first one read.
-        if let (true, Some(first)) = (from == 0 && rows.len() as i64 == total, counted.iter().filter_map(|x| date(s(x, "day"))).min()) {
-            let days = days_since(first, today) + 1;
-            let _ = writeln!(o, "From the first of these, {}, to today: {} days ({:.1} weeks), {}, {:.1} a week.", day(first, today), days, days as f64 / 7.0,
-                plural(counted.len() as i64, "counted workout", "counted workouts"), counted.len() as f64 * 7.0 / days as f64);
+        if from == 0 && rows.len() as i64 == total {
+            if let Some(line) = weeks_line(&counted, "the first of these", today) {
+                let _ = writeln!(o, "{line}");
+            }
         }
     }
     // A year of workouts one per line filled a small model's context before it could answer
@@ -2244,6 +2247,31 @@ fn gym_sessions(payload: &Value, r: &Value, unit: &str, ctx: &Ctx) -> String {
     }
     let _ = writeln!(o, "\ngym.session.get with an id gives every set of a workout.");
     o
+}
+
+/// Each kind of workout among `counted`, the most done first: "Upper A 24, 37.9 min on average".
+fn kinds(counted: &[&Value]) -> String {
+    let mut titles: Vec<(&str, i64, i64)> = Vec::new();
+    for x in counted {
+        match titles.iter_mut().find(|t| t.0 == s(x, "title")) {
+            Some(t) => {
+                t.1 += 1;
+                t.2 += int(x, "minutes");
+            }
+            None => titles.push((s(x, "title"), 1, int(x, "minutes"))),
+        }
+    }
+    titles.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    titles.iter().map(|(title, n, minutes)| format!("{title} {n}, {:.1} min on average", *minutes as f64 / *n as f64)).collect::<Vec<_>>().join("; ")
+}
+
+/// "From the first of these, Mon Dec 15 2025, to today: 279 days (39.9 weeks), 139 counted
+/// workouts, 3.5 a week": for "I planned 4 a week since I started".
+fn weeks_line(counted: &[&Value], first_is: &str, today: Date) -> Option<String> {
+    let first = counted.iter().filter_map(|x| date(s(x, "day"))).min()?;
+    let days = days_since(first, today) + 1;
+    Some(format!("From {first_is}, {}, to today: {days} days ({:.1} weeks), {}, {:.1} a week.", day(first, today), days as f64 / 7.0,
+        plural(counted.len() as i64, "counted workout", "counted workouts"), counted.len() as f64 * 7.0 / days as f64))
 }
 
 fn gym_session(r: &Value, ctx: &Ctx) -> String {
@@ -3223,9 +3251,18 @@ mod tests {
                                   "best": {"lift": "Bench Press", "day": "2026-10-05", "weight": 215.0, "reps": 5, "e1rm": 250.8}}]});
         let text = render("gym.summary", &json!({}), &r, &[], &ctx()).unwrap();
         assert!(text.contains("1 workout the person excluded in Avex (untracked) is not counted."), "{text}");
-        let year = [None, None, None, None, None, None, None, Some(json!({"sessions": [], "total": 120, "untracked": 2}))];
+        let mut all: Vec<Value> = (0..8).map(|i| session(300 + i, &format!("2026-0{}-10", i + 1))).collect();
+        all.push(session(299, "2025-12-15"));
+        all[7]["untracked"] = json!(true);
+        let year = [None, None, None, None, None, None, None, Some(json!({"sessions": all, "total": 9, "untracked": 1}))];
         let text = render("gym.summary", &json!({}), &r, &year, &ctx()).unwrap();
-        assert!(text.contains("\nTHIS YEAR (2026, Jan 1 to today): 118 counted workouts, and 2 the person excluded (untracked, not counted).\n"), "{text}");
+        for want in [
+            "\nTHIS YEAR (2026, Jan 1 to today): 7 counted workouts, and 1 the person excluded (untracked, not counted).\n",
+            "From the first workout, Mon Dec 15 2025, to today: 305 days (43.6 weeks), 8 counted workouts, 0.2 a week.\n",
+            "Counted workouts by kind, all of them: Legs A 8, 44.0 min on average.\n",
+        ] {
+            assert!(text.contains(want), "missing {want:?} in\n{text}");
+        }
         let mut named = r.clone();
         named["totals"]["untracked"] = json!(3);
         named["totals"]["untracked_days"] = json!(["2026-08-08", "2026-10-03"]);
