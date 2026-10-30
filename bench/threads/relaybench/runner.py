@@ -146,10 +146,10 @@ def turns_of(messages, ops):
     for m in messages:
         role, body = m["role"], m.get("body") or {}
         if role == "user":
-            turns.append({"prompt": body.get("text", ""), "texts": [], "tool_calls": [], "error": None})
+            turns.append({"prompt": body.get("text", ""), "texts": [], "tool_calls": [], "error": None, "checks": []})
             continue
         if not turns:
-            turns.append({"prompt": None, "texts": [], "tool_calls": [], "error": None})
+            turns.append({"prompt": None, "texts": [], "tool_calls": [], "error": None, "checks": []})
         turn = turns[-1]
         if role == "assistant":
             for b in body.get("blocks") or []:
@@ -169,6 +169,12 @@ def turns_of(messages, ops):
                 call["is_error"] = bool(body.get("is_error"))
         elif role == "error":
             turn["error"] = body.get("text", "")
+        elif role == "check":
+            # Relay found figures that do not match what the model read and asked it again: the
+            # answer graded is the one after (threads.rs, `figures.rs`).
+            turn["checks"].append(body)
+            if body.get("asked_again"):
+                turn["texts"] = [x for x in turn["texts"] if x is None]
     for t in turns:
         texts = t.pop("texts")
         t["text"] = "\n\n".join(x for x in texts if x)
@@ -403,7 +409,7 @@ class Runner:
                 effects[i] = {"error": f"{type(e).__name__}: {e}"}
         rec["pass"], rec["checks"] = grading.grade(task, expected, thread, effects)
         rec["final_text"] = turns[-1]["text"] if turns else ""
-        rec["turns"] = [{"prompt": t["prompt"], "text": t["text"], "seconds": t.get("seconds"), "error": t["error"],
+        rec["turns"] = [{"prompt": t["prompt"], "text": t["text"], "seconds": t.get("seconds"), "error": t["error"], "checks": t.get("checks", []),
                          "tool_calls": [{"op": c["op"], "input": c["input"], "is_error": c["is_error"],
                                          "result": (c["result"] or "")[:RESULT_TEXT]} for c in t["tool_calls"]]}
                         for t in turns]

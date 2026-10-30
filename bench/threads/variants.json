@@ -73,5 +73,12 @@
       "RELAY_THREADS_LOCAL": "lean,readings,prefetch"
     },
     "settings": {}
+  },
+  "think-512-check": {
+    "description": "think-512, and the answer's figures checked against what the model read: ones given for the wrong days, or totals its list does not add up to, handed back once to put right (relay-core figures.rs).",
+    "env": {
+      "RELAY_THREADS_LOCAL": "lean,readings,prefetch,think:512,check"
+    },
+    "settings": {}
   }
 }

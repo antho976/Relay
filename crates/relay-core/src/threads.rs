@@ -200,15 +200,18 @@ pub struct LocalStyle {
     /// The model thinks before it answers (`think`), within this many tokens (`think:512`); -1 is
     /// no limit. Off, the server answers at once (`local_models`).
     pub think: Option<i32>,
+    /// Its answer's figures checked against what it read (`figures.rs`): ones given for the wrong
+    /// days, or totals its list does not add up to, handed back once to put right.
+    pub check: bool,
 }
 
 impl LocalStyle {
-    pub const CLASSIC: LocalStyle = LocalStyle { lean: false, readings: false, prefetch: false, docs: false, think: None };
+    pub const CLASSIC: LocalStyle = LocalStyle { lean: false, readings: false, prefetch: false, docs: false, think: None, check: false };
     /// What a local thread runs with when nothing overrides it: on the bench, Qwen3.5 4B answered
     /// 74.5% with none of it, 95.2% with these three parts, and 98.2% thinking within 512 tokens
     /// (a median answer 7 s against 3 s; with no limit 98.5%, and slower at the tail). `docs`
     /// moved nothing.
-    pub const DEFAULT: LocalStyle = LocalStyle { lean: true, readings: true, prefetch: true, docs: false, think: Some(512) };
+    pub const DEFAULT: LocalStyle = LocalStyle { lean: true, readings: true, prefetch: true, docs: false, think: Some(512), check: false };
 
     /// `lean,readings` and the like; `classic` (or nothing known) is none of them. `think` or
     /// `think:<tokens>` turns thinking on.
@@ -218,7 +221,7 @@ impl LocalStyle {
             let lower = p.to_ascii_lowercase();
             if lower == "think" { Some(-1) } else { lower.strip_prefix("think:").and_then(|n| n.parse::<i32>().ok()).filter(|n| *n >= 0) }
         });
-        LocalStyle { lean: has("lean"), readings: has("readings"), prefetch: has("prefetch"), docs: has("docs"), think }
+        LocalStyle { lean: has("lean"), readings: has("readings"), prefetch: has("prefetch"), docs: has("docs"), think, check: has("check") }
     }
 
     /// `RELAY_THREADS_LOCAL`, else (unset or empty) [`LocalStyle::DEFAULT`].
@@ -984,6 +987,49 @@ struct Agent {
     assistant: bool,
     /// Aide's, which the socket door admits for Aide's ops (`relay_aide::policy::all_ops`).
     aide: bool,
+    /// What it read and wrote, for checking its figures ([`LocalStyle::check`]).
+    watch: Option<Watch>,
+}
+
+/// A local agent's conversation as the figure check reads it (`figures.rs`).
+#[derive(Default)]
+struct Watch {
+    /// The data it was handed and every tool result since it started, newest last.
+    read: Vec<Arc<str>>,
+    /// The person's message this turn.
+    asked: String,
+    /// What it wrote since its last tool call this turn: its answer.
+    answer: String,
+    /// The figures of this turn's answer were handed back already.
+    asked_again: bool,
+}
+
+/// The most a [`Watch`] keeps of what its agent read; the oldest goes first.
+const WATCH_READ: usize = 2_000_000;
+
+impl Watch {
+    /// A conversation that begins with `content`, the agent's first message.
+    fn of(content: &str) -> Watch {
+        Watch { read: vec![Arc::from(content)], asked: asked_in(content).to_string(), ..Watch::default() }
+    }
+
+    fn turn(&mut self, content: &str) {
+        (self.asked, self.answer, self.asked_again) = (asked_in(content).to_string(), String::new(), false);
+    }
+
+    fn read(&mut self, text: &str) {
+        self.read.push(Arc::from(text));
+        let mut kept: usize = self.read.iter().map(|t| t.len()).sum();
+        while kept > WATCH_READ && self.read.len() > 1 {
+            kept -= self.read.remove(0).len();
+        }
+    }
+}
+
+/// The person's own words in a message the agent was given: after the data [`prefetched`] put
+/// before them.
+fn asked_in(content: &str) -> &str {
+    content.rfind("My message:]").map_or(content, |i| content[i + "My message:]".len()..].trim_start())
 }
 
 /// A thread's turn: the person's message until Claude's `result`.
@@ -1383,6 +1429,9 @@ fn hand_on(engine: &Arc<Engine>, id: Id, token: u64, text: &str, pictures: &[(St
         let running = live.agents.get_mut(&id).map(|agent| {
             agent.last_used = Instant::now();
             agent.turn = token;
+            if let Some(watch) = agent.watch.as_mut() {
+                watch.turn(&content);
+            }
             (agent.stdin.clone(), agent.serial, agent.local)
         });
         drop(live);
@@ -1773,7 +1822,10 @@ fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Opti
                 }
             }
         }
-        let agent = Agent { stdin: stdin.clone(), pid, serial, turn: token, last_used: Instant::now(), local: local.is_some(), assistant, aide };
+        let watch = (local.is_some() && style.check).then(|| {
+            Watch::of(serde_json::from_str::<Value>(first_line).ok().as_ref().and_then(|l| l["message"]["content"].as_str()).unwrap_or(""))
+        });
+        let agent = Agent { stdin: stdin.clone(), pid, serial, turn: token, last_used: Instant::now(), local: local.is_some(), assistant, aide, watch };
         // One agent per thread: one it replaces is closed, not left answering beside it.
         if let Some(replaced) = live.agents.insert(id, agent) {
             kill(replaced.pid);
@@ -1895,6 +1947,17 @@ fn handle(engine: &Engine, id: Id, serial: u64, event: &Value) {
                 _ => None,
             }).collect();
             if !blocks.is_empty() {
+                if let Some(watch) = lock(&engine.threads.live).agents.get_mut(&id).and_then(|a| a.watch.as_mut()) {
+                    for b in &blocks {
+                        match b["type"].as_str() {
+                            Some("tool_use") => watch.answer.clear(),
+                            _ => {
+                                watch.answer.push_str(b["text"].as_str().unwrap_or(""));
+                                watch.answer.push_str("\n\n");
+                            }
+                        }
+                    }
+                }
                 record(engine, id, "assistant", json!({"blocks": blocks}));
             }
         }
@@ -1905,6 +1968,9 @@ fn handle(engine: &Engine, id: Id, serial: u64, event: &Value) {
                     Value::Array(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
                     _ => String::new(),
                 };
+                if let Some(watch) = lock(&engine.threads.live).agents.get_mut(&id).and_then(|a| a.watch.as_mut()) {
+                    watch.read(&text);
+                }
                 record(engine, id, "tool", json!({
                     "tool_use_id": b["tool_use_id"], "is_error": b["is_error"].as_bool().unwrap_or(false), "text": cut(&crate::redact::text(&text), MAX_TOOL_TEXT),
                 }));
@@ -1917,6 +1983,10 @@ fn handle(engine: &Engine, id: Id, serial: u64, event: &Value) {
                 });
                 fail(engine, id, turn, &why.filter(|w| !w.is_empty()).unwrap_or_else(|| "The agent could not answer".into()));
             } else {
+                // Figures that do not match what it read go back to it once, and the turn goes on.
+                if check_figures(engine, id, serial, turn) {
+                    return;
+                }
                 // A turn that wrote the person nothing (a small model that only called tools, or
                 // spent its last words thinking) says so, rather than leave them reading a tool
                 // line; said before the turn ends, so a thread read as done already holds it.
@@ -1938,6 +2008,47 @@ fn handle(engine: &Engine, id: Id, serial: u64, event: &Value) {
         }
         _ => {}
     }
+}
+
+/// The figures of the answer that ended `turn`, checked against what the agent read
+/// (`figures.rs`). The first time they do not match, the person is told so and the agent is
+/// asked to put them right, and this is true: the turn goes on. The second time, the person is
+/// told what still does not match.
+fn check_figures(engine: &Engine, id: Id, serial: u64, turn: u64) -> bool {
+    // What it read, taken out of the lock: the check reads a few hundred kilobytes.
+    let taken = {
+        let mut live = lock(&engine.threads.live);
+        let current = live.current(id, turn);
+        let agent = live.agents.get_mut(&id).filter(|a| a.serial == serial && current);
+        agent.and_then(|a| {
+            let stdin = a.stdin.clone();
+            a.watch.as_mut().map(|w| (w.read.clone(), w.asked.clone(), std::mem::take(&mut w.answer), w.asked_again, stdin))
+        })
+    };
+    let Some((read, asked, answer, asked_again, stdin)) = taken else { return false };
+    let read: Vec<&str> = read.iter().map(|t| t.as_ref()).collect();
+    let flags = crate::figures::check(&answer, &read, &asked, jiff::Zoned::now().date());
+    if flags.is_empty() {
+        return false;
+    }
+    let body = |again: bool| json!({"text": crate::figures::note(&flags, again), "asked_again": again, "flags": flags.iter().map(crate::figures::Flag::to_json).collect::<Vec<_>>()});
+    if asked_again {
+        record(engine, id, "check", body(false));
+        return false;
+    }
+    let written = {
+        let mut stdin = lock(&stdin);
+        stdin.write_all(user_line(&crate::figures::correction(&flags)).as_bytes()).and_then(|()| stdin.flush())
+    };
+    if written.is_err() {
+        return false;
+    }
+    if let Some(watch) = lock(&engine.threads.live).agents.get_mut(&id).filter(|a| a.serial == serial).and_then(|a| a.watch.as_mut()) {
+        watch.asked_again = true;
+    }
+    record(engine, id, "check", body(true));
+    emit_changed(engine, id);
+    true
 }
 
 /// Close agents idle for [`IDLE`]; one watcher per engine, gone with it.
@@ -2001,6 +2112,49 @@ mod tests {
         fail(&engine, id, second, "The model did not load");
         assert_eq!(token(&engine), None);
         assert_eq!(page(&engine, id, None, None).unwrap().messages.len(), 3);
+    }
+
+    /// A local agent's answer with a figure for the wrong days goes back to it once, the person is
+    /// told, and its second answer ends the turn (bench v3, 2026-10-30).
+    #[test]
+    fn figures_that_do_not_match_go_back_to_the_agent_once() {
+        use std::io::BufRead;
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        let now = crate::time::now();
+        let id = create(&engine, MONEY, "Spending", None, None, &now).unwrap().id;
+        let (_, token) = post(&engine, id, "how much did I spend last week?", &[], &now).unwrap();
+        // `cat` for an agent: what it is given comes back out.
+        let mut cat = Command::new("cat").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut heard = std::io::BufReader::new(cat.stdout.take().unwrap());
+        let read = "RECENT DAYS:\n- This week so far: $1,084.68 on 14 expenses\n- Last week: $477.30 on 7 expenses\n";
+        let serial = {
+            let mut live = lock(&engine.threads.live);
+            let serial = live.mint();
+            let watch = Watch::of(&format!("[Relay attached my data]\n\n{read}\n\n[End of the data. My message:]\nhow much did I spend last week?"));
+            let stdin = Arc::new(Mutex::new(cat.stdin.take().unwrap()));
+            live.agents.insert(id, Agent { stdin, pid: cat.id(), serial, turn: token, last_used: Instant::now(), local: true, assistant: false, aide: false, watch: Some(watch) });
+            serial
+        };
+        let say = |words: &str| json!({"type": "assistant", "message": {"content": [{"type": "text", "text": words}]}});
+        let done = json!({"type": "result", "subtype": "success", "is_error": false});
+        let roles = |engine: &Engine| page(engine, id, None, None).unwrap().messages.iter().map(|m| m.role.clone()).collect::<Vec<_>>();
+
+        handle(&engine, id, serial, &say("Last week you spent $1,084.68."));
+        handle(&engine, id, serial, &done);
+        assert!(turn_is_on(&engine, id, token), "asked again, the turn goes on");
+        let mut line = String::new();
+        heard.read_line(&mut line).unwrap();
+        let told: Value = serde_json::from_str(&line).unwrap();
+        let told = told["message"]["content"].as_str().unwrap();
+        assert!(told.contains("- 1,084.68: you gave it for ") && told.contains("For ") && told.contains(" the data has 477.30."), "{told}");
+        assert_eq!(roles(&engine), ["user", "assistant", "check"]);
+
+        handle(&engine, id, serial, &say("Sorry: last week you spent $477.30."));
+        handle(&engine, id, serial, &done);
+        assert!(!turn_is_on(&engine, id, token), "put right, the turn ends");
+        assert_eq!(roles(&engine), ["user", "assistant", "check", "assistant"]);
+        lock(&engine.threads.live).agents.remove(&id);
+        let _ = cat.wait();
     }
 
     #[test]
@@ -2256,7 +2410,8 @@ mod tests {
         assert!(!args.iter().any(|a| a == "--append-system-prompt" || a == PROMPT));
         let args = agent_args("{}", None, None, None, false);
         assert!(args.windows(2).any(|w| w[0] == "--append-system-prompt" && w[1] == PROMPT));
-        assert_eq!(LocalStyle::parse(" lean, Readings"), LocalStyle { lean: true, readings: true, prefetch: false, docs: false, think: None });
+        assert_eq!(LocalStyle::parse(" lean, Readings"), LocalStyle { lean: true, readings: true, prefetch: false, docs: false, think: None, check: false });
+        assert!(LocalStyle::parse("lean,readings,prefetch,think:512,check").check);
         assert_eq!(LocalStyle::parse("lean,think").think, Some(-1));
         assert_eq!(LocalStyle::parse("lean,think:512").think, Some(512));
         assert_eq!(LocalStyle::parse("lean,think:x").think, None);
