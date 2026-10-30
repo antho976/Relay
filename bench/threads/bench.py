@@ -25,6 +25,7 @@ from relaybench import (ANCHOR, BENCH_DIR, MODEL_ID, REPO, RESULTS_DIR, TODAY, Z
 from relaybench import engine as eng  # noqa: E402
 from relaybench import fixtures, grade, model, report, runner, seen, truths  # noqa: E402
 from relaybench import truths_v2  # noqa: E402,F401  (registers the v2 truths in truths.TRUTHS)
+from relaybench import truths_v3  # noqa: E402,F401  (and v3's)
 
 DEFAULT_GGUF = Path.home() / "models" / "Qwen3.5-4B-Q8_0.gguf"
 VARIANTS = BENCH_DIR / "variants.json"
@@ -293,7 +294,7 @@ def cmd_regrade(args):
     """Grade a result's replies again with the checks as they are now: for a fixed grader, or a
     task whose check was wrong. An effect check keeps the verdict it had (it needs the engine)."""
     result = json.loads(Path(args.result).read_text())
-    tasks = {t["id"]: t for suite in ("all", "v2") for t in runner.load_tasks(suite)}
+    tasks = {t["id"]: t for suite in ("all", "v2", "v3") for t in runner.load_tasks(suite)}
     flipped = []
     for rec in result["records"]:
         task = tasks.get(rec["id"])
@@ -373,7 +374,7 @@ def main(argv=None):
     r.add_argument("--server", help="llama-server (default: on PATH, else ~/.local/bin/llama-server)")
     r.add_argument("--name", help="a name for this run (default: <gguf>-<variant>)")
     r.add_argument("--runs", type=int, default=1, help="runs of each task (default 1)")
-    r.add_argument("--suite", default="all", help="tasks/<suite>.json, a comma list, or all (default); v2 for tasks/v2/ in the v2 world")
+    r.add_argument("--suite", default="all", help="tasks/<suite>.json, a comma list, or all (default); v2 for tasks/v2/ in the v2 world; v3 for tasks/v3/, the harder suite, in the v2 world")
     r.add_argument("--tasks", action="append", help="task ids or globs, comma separated (repeatable)")
     r.add_argument("--split", choices=["dev", "holdout", "all"], default="all")
     r.add_argument("--variant", default="baseline", help="a product variant from variants.json")

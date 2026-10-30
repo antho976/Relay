@@ -10,7 +10,7 @@ import time
 import unittest
 from pathlib import Path
 
-from relaybench import fixtures, grade, model, report, runner, truths, truths_v2  # noqa: F401 (registers the v2 truths)
+from relaybench import fixtures, grade, model, report, runner, truths, truths_v2, truths_v3  # noqa: F401 (registers the v2 and v3 truths)
 from relaybench.engine import clean_env
 
 
@@ -241,6 +241,24 @@ class V2(unittest.TestCase):
         self.assertEqual(runner.world_of(runner.load_tasks("all")), "v1")
         with self.assertRaises(ValueError):
             runner.world_of(runner.load_tasks("smoke") + tasks)
+
+    def test_v3_tasks_are_valid_and_asked_in_the_v2_world(self):
+        tasks = runner.load_tasks("v3")
+        self.assertGreaterEqual(len(tasks), 40)
+        for t in tasks:
+            self.assertTrue(t["id"].startswith("v3."), t["id"])
+            self.assertTrue(t["suite"].startswith("v3/"), t["suite"])
+            self.assertEqual(grade.validate_task(t, truths.TRUTHS), [], t["id"])
+            # A v3 task may lean on a v2 judge (the ledger unchanged), never on v1's.
+            self.assertTrue(t["truth"].startswith("v3_"), t["id"])
+            self.assertTrue(all(c.get("truth", "v3_").startswith(("v2_", "v3_")) for c in t["checks"]), t["id"])
+        self.assertEqual(runner.world_of(tasks), "v2")
+        self.assertEqual(runner.world_of(tasks + runner.load_tasks("v2")), "v2", "v2 and v3 share a world")
+        self.assertFalse({t["id"] for t in tasks} & {t["id"] for t in runner.load_tasks("v2")})
+        with self.assertRaises(ValueError):
+            runner.world_of(runner.load_tasks("smoke") + tasks)
+        holdout = sum(t["split"] == "holdout" for t in tasks) / len(tasks)
+        self.assertTrue(0.15 < holdout < 0.45, holdout)
 
     def test_the_v2_smoke_starter_joins_only_when_named(self):
         named = runner.load_tasks("v2", ["v2.smoke.*"])

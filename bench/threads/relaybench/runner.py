@@ -49,36 +49,41 @@ def split_of(task_id):
 NOT_IN_ALL = {"smoke"}
 #: The second suite, in its own world (worlds/v2): tasks/v2/*.json.
 V2 = "v2"
+#: The third, harder suite, asked in the v2 world: tasks/v3/*.json.
+V3 = "v3"
+#: Each suite with a folder of its own, and the world its tasks are asked in.
+WORLD_OF_SUITE = {V2: V2, V3: V2}
 
 
 def suite_files(suite, ids=None):
     """`all` (every tasks/*.json but the smoke starter), a suite name (tasks/<name>.json), a comma
     list of names, or paths. `v2` is every tasks/v2/*.json but its smoke starter, which joins it when
-    `ids` name a `v2.smoke.` task; `v2/<name>` is one of them."""
+    `ids` name a `v2.smoke.` task; `v2/<name>` is one of them; `v3` likewise for tasks/v3/."""
     if suite in (None, "", "all"):
         return sorted(Path(p) for p in glob.glob(str(TASKS_DIR / "*.json")) if Path(p).stem not in NOT_IN_ALL)
     out = []
     for part in suite.split(","):
         part = part.strip()
         p = Path(part)
-        if part == V2:
-            smoke = any(i.strip().startswith(f"{V2}.smoke") for chunk in (ids or []) for i in chunk.split(","))
-            out += sorted(Path(f) for f in glob.glob(str(TASKS_DIR / V2 / "*.json")) if smoke or Path(f).stem not in NOT_IN_ALL)
+        if part in WORLD_OF_SUITE:
+            smoke = any(i.strip().startswith(f"{part}.smoke") for chunk in (ids or []) for i in chunk.split(","))
+            out += sorted(Path(f) for f in glob.glob(str(TASKS_DIR / part / "*.json")) if smoke or Path(f).stem not in NOT_IN_ALL)
         else:
             out.append(p if p.suffix == ".json" and p.exists() else TASKS_DIR / f"{part}.json")
     return out
 
 
 def suite_name(path):
-    """`tally` for tasks/tally.json, `v2/tally` for tasks/v2/tally.json."""
+    """`tally` for tasks/tally.json, `v2/tally` for tasks/v2/tally.json (and v3's the same way)."""
     path = Path(path).resolve()
-    return f"{path.parent.name}/{path.stem}" if path.parent == (TASKS_DIR / V2).resolve() else path.stem
+    own = any(path.parent == (TASKS_DIR / suite).resolve() for suite in WORLD_OF_SUITE)
+    return f"{path.parent.name}/{path.stem}" if own else path.stem
 
 
 def world_of(tasks):
-    """The world the tasks are asked in: `v2` for tasks/v2/, `v1` (the sample household) otherwise.
-    Raises when they are from both."""
-    worlds = {V2 if (t.get("suite") or "").startswith(V2 + "/") else "v1" for t in tasks}
+    """The world the tasks are asked in: `v2` for tasks/v2/ and tasks/v3/, `v1` (the sample household)
+    otherwise. Raises when they are from both."""
+    worlds = {WORLD_OF_SUITE.get((t.get("suite") or "").split("/")[0], "v1") if "/" in (t.get("suite") or "") else "v1" for t in tasks}
     if len(worlds) > 1:
         raise ValueError("these tasks are from two worlds (v1 and v2): run them as separate suites")
     return worlds.pop() if worlds else "v1"

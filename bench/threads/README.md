@@ -410,6 +410,41 @@ The two failures are the model's: it looked for the Sep 3 note in this period on
 month's), and it answered the overhead-press question with pounds beside kilograms and a claim that
 nothing was logged since March.
 
+## v3: harder questions in the v2 world
+
+v2 stopped leaving room on the 4B once Relay's readings were tuned on it (69.4% → 91.7% over five
+rounds, 2026-10-29/30). v3 is a third suite of questions **no single reading answers**, asked in the
+v2 world (`--suite v3` loads `worlds/v2`; v2 and v3 tasks may share a run):
+
+- **Sums across months or the whole ledger**: interest on the line of credit this year, freelance
+  this year against last, GST credits in all, tax refunds, Costco this year and its trips, all
+  spending this year, everything ever left without a category, Miso since the vet bill.
+- **Ranking and grouping**: the weekday most spent eating out, the priciest budget month and why,
+  the biggest category this year besides rent, the week with the most volume lifted.
+- **What-ifs and ratios**: a year without Netflix and Spotify, months to the Japan goal at 300.00 a
+  month, a 1,200.00 laptop against what is left after the bills, rent as a share of income.
+- **Days named the way people name them**: since Labour Day, Q2 against Q1, last weekend, the four
+  weeks before the trip, the budget month of the 10 km race.
+- **False premises and missing data**: a rent that "went up" (it never did), Starbucks (none), training
+  "stopped in August" (16 workouts), steps (Avex has none).
+- **Both apps over the same days**: the gym's cost per workout this year, the Portugal trip's Visa and
+  training, last month against the one before, last weekend.
+- **Writes**: two entries in one message, cash from the ATM, three entries recategorized at once (or
+  proposed), and an amount or a card corrected in a second turn.
+
+Truths are in `relaybench/truths_v3.py` (`v3_` names; an effect check may use v2's
+`v2_eff_unchanged`) and read only what relay `b413157` already served, so a run on that build and one
+on a newer build grade against the same keys (`--check` on both prints the same answers).
+
+The tasks were written after the readings' six rounds of tuning and none of them shaped those
+rounds: for that build, the whole of v3 is new. Tuning on v3 follows the v2 rule: look at the dev
+split's failures only, and report the holdout's number beside it.
+
+```fish
+python3 bench/threads/bench.py run --check --suite v3
+python3 bench/threads/bench.py run --suite v3 --runs 3
+```
+
 ## Files
 
 - `bench.py`: the CLI.
@@ -417,8 +452,9 @@ nothing was logged since March.
   fingerprint, snapshot and restore. `model.py`: the GGUF, the wrapper, the GPU lock and the
   free-memory check, the capture proxy. `runner.py`: tasks × runs, threads, scheduling, token usage.
   `grade.py`: the checks. `report.py`: statistics, `compare`, `RESULTS.md`. `seen.py`: what the
-  model sees, in its tokens. `truths.py`: the answer key; `truths_v2.py`: v2's.
-- `worlds/v2/`: the v2 world (`generate.py`, its output, `facts.json`, `WORLD.md`). `tasks/v2/`: its tasks.
+  model sees, in its tokens. `truths.py`: the answer key; `truths_v2.py`: v2's; `truths_v3.py`: v3's.
+- `worlds/v2/`: the v2 world (`generate.py`, its output, `facts.json`, `WORLD.md`). `tasks/v2/`: its tasks;
+  `tasks/v3/`: the harder suite's, in the same world.
 - `tasks/*.json`: the suite. `--suite all` (the default) is every file but `smoke.json`, a 10-task
   starter that exercises every kind of check and runs only when named (`--suite smoke`).
 - `variants.json`, `results/`, `tests/`, `templates/` (chat templates fixed for a model, `--template`).
