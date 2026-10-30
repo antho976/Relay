@@ -1137,7 +1137,10 @@ fn small_model_tool(entry: &OpEntry) -> Value {
 /// (`relay_core::readings::HIDDEN_FIELDS`).
 fn without_hidden(mut tool: Value) -> Value {
     let name = tool["name"].as_str().unwrap_or("").to_string();
-    if let Some(props) = tool["inputSchema"]["properties"].as_object_mut() {
+    // `get_mut`, not indexing: `tool["inputSchema"]["properties"]` would add `"properties": null`
+    // to an op with no payload (money.lists), and Claude Code drops every tool of a server with
+    // one schema it cannot read.
+    if let Some(props) = tool.get_mut("inputSchema").and_then(|s| s.get_mut("properties")).and_then(Value::as_object_mut) {
         for (_, field) in relay_core::readings::HIDDEN_FIELDS.iter().filter(|(op, _)| *op == name) {
             props.remove(*field);
         }
@@ -1410,6 +1413,15 @@ mod tests {
         // Readings alone, without the plain descriptions, leave the fields out too.
         let tool = without_hidden(op_tool(Registry::global().get("money.tx.list").unwrap()));
         assert!(!tool["inputSchema"]["properties"].as_object().unwrap().contains_key("limit"));
+        // And no schema gains a field it did not have: a `"properties": null` on money.lists, which
+        // takes nothing, made Claude Code drop every Relay tool (bench, 2026-10-30).
+        for op in relay_core::threads::local_ops() {
+            let entry = Registry::global().get(op).unwrap();
+            for tool in [without_hidden(op_tool(entry)), small_model_tool(entry)] {
+                let schema = tool["inputSchema"].as_object().unwrap();
+                assert!(schema.get("properties").is_none_or(Value::is_object), "{op}: {tool}");
+            }
+        }
         let tool = small_model_tool(Registry::global().get("money.tx.add").unwrap());
         assert_eq!(tool["inputSchema"]["properties"]["amount"]["type"], "string", "still decimals");
         for op in relay_core::threads::local_ops().into_iter().filter(|op| op.starts_with("money.") || op.starts_with("gym.")) {
