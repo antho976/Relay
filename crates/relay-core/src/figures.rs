@@ -569,6 +569,10 @@ static RULE_ROW: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*\|[\s:|-]+\
 static PERIOD_HEAD: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(r"(?i)^(?:the |this |last |previous |month|week|year|today|yesterday|ce |cette |le |la |mois|semaine|{}|q[1-4]|\d)", MONTH.as_str())).expect("period heading")
 });
+/// Where the words after a figure stop being its label.
+static AFTER_STOP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)[,.;:\n]| — | – |\b(?:than|compared|vs|versus|over|under|while|but|and|que|par rapport)\b|\$|\d").expect("after stop"));
+/// A question that compares names the days it compares with, not the ones it asks about.
+static COMPARES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(?:than|compared?|vs\.?|versus|que le|que la|par rapport)\b").expect("compares"));
 static TOTAL_BEFORE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(?:total|totaling|in all|altogether|combined|sum|overall|en tout|au total|=)[^\n\d]{0,40}$").expect("total"));
 static TOTAL_AFTER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^\s*(?:\w+\s+){0,2}(?:in all|in total|altogether|en tout|au total)\b").expect("total after"));
 
@@ -583,7 +587,7 @@ fn sentence_ends(text: &str, from: usize, to: usize) -> Vec<(usize, usize)> {
 /// The span the reply gives the figure at `start` for: the words since the figure before it in
 /// its sentence; else its sentence's, when that names only one; for a line's first figure, its
 /// line's words or the heading above it; in a table, its row's first cell and its column's head.
-fn reply_spans(text: &str, start: usize, clock: &Clock) -> Vec<Span> {
+fn reply_spans(text: &str, start: usize, end: usize, clock: &Clock) -> Vec<Span> {
     let line_start = text[..start].rfind('\n').map_or(0, |i| i + 1);
     let line_end = text[start..].find('\n').map_or(text.len(), |i| start + i);
     let line = &text[line_start..line_end];
@@ -596,6 +600,14 @@ fn reply_spans(text: &str, start: usize, clock: &Clock) -> Vec<Span> {
             out.extend(spans(cell, clock));
         }
         return out;
+    }
+    // The few words right after it, when they name days: "$2,382.00 this month, compared to
+    // $3,500.29 last month (August)".
+    let after = text[end.min(line_end)..line_end].trim_start_matches(['*', '%']);
+    let stop = AFTER_STOP.find(after).map_or(after.len(), |m| m.start()).min(floor(after, 36));
+    let own_after = spans(&after[..stop], clock);
+    if !own_after.is_empty() {
+        return own_after;
     }
     let sentence_start = sentence_ends(text, line_start, start).last().map_or(line_start, |e| e.1);
     // Its clause: "faster than last month's pace — you're $579.02 over" is this month's.
@@ -706,7 +718,7 @@ pub fn check(reply: &str, read: &[&str], asked: &str, today: Date) -> Vec<Flag> 
     let clock = Clock::of(read, today);
     let data = Data::of(read, &clock);
     let said: Vec<i64> = figures(asked).iter().map(Figure::cents).collect();
-    let asked_spans = spans(asked, &clock);
+    let asked_spans = if COMPARES.is_match(asked) { Vec::new() } else { spans(asked, &clock) };
     let figs = figures(reply);
     let nouns: Vec<String> = figs.iter().map(|f| noun(reply, f)).collect();
     let blanked = blank(reply);
@@ -718,7 +730,7 @@ pub fn check(reply: &str, read: &[&str], asked: &str, today: Date) -> Vec<Flag> 
             continue;
         }
         if let Some(places) = data.at(f) {
-            let mut mine = reply_spans(reply, f.start, &clock);
+            let mut mine = reply_spans(reply, f.start, f.end, &clock);
             let mut by_question = false;
             if mine.is_empty() && asked_spans.len() == 1 && bold.iter().any(|(a, b)| *a <= f.start && f.end <= *b) {
                 (mine, by_question) = (asked_spans.clone(), true);
@@ -838,6 +850,14 @@ mod tests {
         assert_eq!(flags, [Flag::Total { figure: "527.80".into(), listed: Some((3, "527.87".into())) }]);
         assert!(check("- Vet: $412.35\n- Food: $60.86\n- Toys: $54.66\n\n**Total: $527.87**", &[SUMMARY], "how much has Miso cost me?", today()).is_empty());
         assert!(check("You spent **$406.95**: $113.46 at Jean-Talon, $91.88 at Provigo, and 3 others totaling $201.61.", &[SUMMARY], "groceries?", today()).is_empty(), "what is left of a total");
+    }
+
+    #[test]
+    fn a_comparison_lends_no_days_and_the_words_after_a_figure_label_it() {
+        let reply = "Yes, you are spending less than last month.\n\nAs of today you've spent **$1,059.02** this month, compared to **$3,787.75** last month.";
+        assert!(check(reply, &[SUMMARY], "am i spending less than last month?", today()).is_empty(), "{:?}", check(reply, &[SUMMARY], "am i spending less than last month?", today()));
+        let swapped = "You've spent **$3,787.75** this month, compared to **$1,059.02** last month.";
+        assert_eq!(check(swapped, &[SUMMARY], "am i spending less than last month?", today()).len(), 2);
     }
 
     #[test]
