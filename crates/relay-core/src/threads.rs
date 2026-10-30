@@ -490,8 +490,9 @@ category by its name in money.lists) and change one with money.tx.update (its id
 at one, read it with money.tx.list). \
 In French a comma before the last two digits is the decimal point: \"45,20 $\" is 45.20. \
 Say plainly what you changed. When the amount or the account is unclear, ask first: a bank's name \
-alone (\"desjardins\") when they have more than one account there is unclear. When both are clear, \
-record it: do not ask whether to. \
+alone (\"desjardins\") when they have more than one account there, or a kind alone (\"my card\", \
+\"mon épargne\") when they have more than one of it, is unclear. Asked to record an entry \
+with both clear, record it: do not ask whether to. \
 money.tx.restore brings back a deleted entry. money.invest.add records an investment activity, but \
 not in an account Wealthsimple's files fill.
 - To delete entries or investment activities, change more than 3 entries, set budgets, or add, \

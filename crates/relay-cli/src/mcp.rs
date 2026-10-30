@@ -672,6 +672,13 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
             return Ok(reading_success(text, mail.as_ref()));
         }
     }
+    if response.ok && style.readings && name == "thread.propose" {
+        // Read as JSON, a pending proposal came back as "I've added a new account proposal":
+        // the person heard it was done (bench, 2026-10-30).
+        if let Some(text) = response.result.as_ref().and_then(proposed) {
+            return Ok(reading_success(text, mail.as_ref()));
+        }
+    }
     if response.ok {
         let mut value = response.result.unwrap_or_else(|| json!({}));
         if out_units {
@@ -1078,6 +1085,14 @@ async fn reading(client: &mut Client, actor: &Actor, token: Option<&str>, op: &s
     relay_core::readings::render(op, payload, result, &extras, &ctx)
 }
 
+/// A proposal still waiting for the person, in words: what it does, and that it is not done.
+fn proposed(result: &Value) -> Option<String> {
+    (result["status"] == "pending").then(|| format!(
+        "PROPOSED, NOT DONE: {} (proposal {}). It waits for the person to approve it on a card here; nothing has changed yet. \
+         Tell them what you proposed (\"I proposed …\"), never that it is added, deleted or changed.",
+        result["summary"].as_str().unwrap_or("a change"), result["id"]))
+}
+
 /// A reading as a tool's answer: plain text, with no JSON beside it for a client to prefer.
 fn reading_success(text: String, mail: Option<&MailHint>) -> Value {
     let mut content = vec![json!({"type":"text","text":text})];
@@ -1424,6 +1439,11 @@ mod tests {
         }
         let tool = small_model_tool(Registry::global().get("money.tx.add").unwrap());
         assert_eq!(tool["inputSchema"]["properties"]["amount"]["type"], "string", "still decimals");
+        // A pending proposal reads as one, not as a change made.
+        let pending = json!({"id": 1, "status": "pending", "summary": "Add 1 account: “Tangerine savings” (savings, at Tangerine)"});
+        assert_eq!(proposed(&pending).unwrap(), "PROPOSED, NOT DONE: Add 1 account: “Tangerine savings” (savings, at Tangerine) (proposal 1). It waits for the person to approve it \
+            on a card here; nothing has changed yet. Tell them what you proposed (\"I proposed …\"), never that it is added, deleted or changed.");
+        assert_eq!(proposed(&json!({"id": 1, "status": "applied"})), None);
         for op in relay_core::threads::local_ops().into_iter().filter(|op| op.starts_with("money.") || op.starts_with("gym.")) {
             assert!(relay_core::readings::description(op, jiff::Zoned::now().date()).is_some(), "{op}");
         }
