@@ -2189,6 +2189,30 @@ fn gym_sessions(payload: &Value, r: &Value, unit: &str, ctx: &Ctx) -> String {
         };
         let _ = writeln!(o, "{} in all{counted}; showing {} to {}.", plural(total, "workout", "workouts"), if rows.is_empty() { 0 } else { from + 1 }, from + rows.len() as i64);
     }
+    let counted: Vec<&Value> = rows.iter().filter(|x| x["untracked"] != true).collect();
+    if counted.len() >= 6 {
+        // "How long does Upper A usually take": each kind added up over every one read, not left
+        // to a model averaging the ones it could see (bench v3, 2026-10-30).
+        let mut titles: Vec<(&str, i64, i64)> = Vec::new();
+        for x in &counted {
+            match titles.iter_mut().find(|t| t.0 == s(x, "title")) {
+                Some(t) => {
+                    t.1 += 1;
+                    t.2 += int(x, "minutes");
+                }
+                None => titles.push((s(x, "title"), 1, int(x, "minutes"))),
+            }
+        }
+        titles.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        let cells: Vec<String> = titles.iter().map(|(title, n, minutes)| format!("{title} {n}, {:.1} min on average", *minutes as f64 / *n as f64)).collect();
+        let _ = writeln!(o, "Counted workouts by kind, every one of these {} read: {}.", rows.len(), cells.join("; "));
+        // "I planned 4 a week since I started": the weeks since the first one read.
+        if let (true, Some(first)) = (from == 0 && rows.len() as i64 == total, counted.iter().filter_map(|x| date(s(x, "day"))).min()) {
+            let days = days_since(first, today) + 1;
+            let _ = writeln!(o, "From the first of these, {}, to today: {} days ({:.1} weeks), {}, {:.1} a week.", day(first, today), days, days as f64 / 7.0,
+                plural(counted.len() as i64, "counted workout", "counted workouts"), counted.len() as f64 * 7.0 / days as f64);
+        }
+    }
     // A year of workouts one per line filled a small model's context before it could answer
     // (bench v3, 2026-10-30): the counts by month, and the newest ones.
     let shown = rows.len().min(LISTED_WORKOUTS);
@@ -3216,6 +3240,8 @@ mod tests {
         let text = render("gym.sessions", &json!({"from": "2026-01-01", "limit": 500}), &json!({"sessions": year, "total": 60, "untracked": 1}), &[], &ctx()).unwrap();
         assert!(text.contains("Counted workouts by calendar month, these 60 read: April 4; May 10; June 10; July 11; August 10; September 10; October 4.\nThe newest 50 of them"), "{text}");
         assert_eq!(text.matches("[id ").count(), 50, "{text}");
+        assert!(text.contains("Counted workouts by kind, every one of these 60 read: Legs A 59, 44.0 min on average.\n"), "{text}");
+        assert!(text.contains("From the first of these, Mon Apr 20, to today: 179 days (25.6 weeks), 59 counted workouts, 2.3 a week.\n"), "{text}");
         let detail = json!({"row": session(149, "2026-10-08"), "unit": "lb", "journal": "Gym was packed",
                             "exercises": [{"name": "Back Squat", "skipped": false, "was_pr": true, "difficulty": "EASY", "volume": 3990.0, "best_e1rm": 332.5,
                                            "sets": [{"weight": 142.0, "reps": 8, "rpe": null, "kind": "warmup", "best": false}, {"weight": 285.0, "reps": 5, "rpe": 8.0, "kind": "work", "best": true}]},
