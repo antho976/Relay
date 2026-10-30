@@ -322,6 +322,10 @@ static MONTHS_RANGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r"(?
 static ALONE: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r"(?i)\b(?P<m>{})\b", MONTH.as_str())).expect("alone"));
 static DAY_AFTER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\.?\s*\d{1,2}\b").expect("day after"));
 static QUARTER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bQ([1-4])\b").expect("quarter"));
+/// "Since January", "since August 1", "depuis le 1er août": from then to today.
+static SINCE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"(?i)\b(?:since|depuis(?: le)?)\s+(?:(?P<d1>\d{{1,2}})(?:er)?\s+)?(?P<m>{m})\b\.?(?:\s+(?P<d2>\d{{1,2}})\b)?(?:,?\s+\d{{4}})?", m = MONTH.as_str())).expect("since")
+});
 
 /// Days named by words, each with what may not stand right before or after it.
 static WORDS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
@@ -350,6 +354,8 @@ fn word_found(name: &str, re: &Regex, text: &str) -> bool {
         match name {
             // "the month before last" is not last month.
             "last month" => !before.ends_with("before "),
+            // "after it to today": until today, from a day it does not say.
+            "today" => !before.ends_with("to ") && !before.ends_with("until "),
             // "the heaviest ever lifted" is no span.
             "ever" if m.as_str().eq_ignore_ascii_case("ever") => {
                 !["heaviest ", "best ", "longest ", "most "].iter().any(|w| before.ends_with(w)) && !after.starts_with(" lifted")
@@ -368,6 +374,17 @@ fn spans(text: &str, clock: &Clock) -> Vec<Span> {
             out.push(s);
         }
     };
+    let mut text = text.to_string();
+    for c in SINCE.captures_iter(&text.clone()) {
+        let Some(month) = month_of(&c["m"]) else { continue };
+        let day = c.name("d1").or(c.name("d2")).and_then(|d| d.as_str().parse().ok()).unwrap_or(1);
+        if let Some(first) = clock.day(month, day) {
+            add((first, t));
+        }
+        let whole = c.get(0).expect("the match");
+        text = text[..whole.start()].to_string() + &" ".repeat(whole.len()) + &text[whole.end()..];
+    }
+    let text = text.as_str();
     for c in RANGE.captures_iter(text) {
         let (Some(m1), Ok(d1)) = (month_of(&c["m1"]), c["d1"].parse::<i8>()) else { continue };
         let m2 = c.name("m2").and_then(|m| month_of(m.as_str())).unwrap_or(m1);
@@ -791,6 +808,10 @@ mod tests {
         assert_eq!(spans("in August", &clock), [(d(8, 1), d(8, 31))]);
         assert_eq!(spans("Q2", &clock), [(d(4, 1), d(6, 30))]);
         assert_eq!(spans("May-June 2026", &clock), [(d(5, 1), d(6, 30))]);
+        assert_eq!(spans("since January 2026", &clock), [(d(1, 1), d(9, 18))]);
+        assert_eq!(spans("since August 1", &clock), [(d(8, 1), d(9, 18))]);
+        assert_eq!(spans("depuis le 1er août", &clock), [(d(8, 1), d(9, 18))]);
+        assert!(spans("then after it to today 12 runs", &clock).is_empty());
         assert!(spans("you may want to", &clock).is_empty() && spans("the heaviest ever lifted", &clock).is_empty());
     }
 
