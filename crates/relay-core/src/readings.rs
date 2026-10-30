@@ -44,8 +44,9 @@ pub fn extras(op: &str, payload: &Value, result: &Value) -> Vec<(&'static str, V
             ("money.series", json!({"by": "period", "periods": 6, "measure": "income"})),
             ("money.invest.summary", json!({})),
             ("money.lists", json!({})),
-            // Every pay in the ledger, for "which months had 3 paycheques".
-            ("money.tx.list", json!({"from": "1970-01-01", "query": "salary"})),
+            // The whole ledger: every pay ("which months had 3 paycheques", "when did my pay go
+            // up"), this calendar year, and what made a past budget month cost what it did.
+            ("money.tx.list", json!({"from": "1970-01-01"})),
         ],
         "gym.summary" => {
             let mut reads = vec![
@@ -71,6 +72,15 @@ pub fn extras(op: &str, payload: &Value, result: &Value) -> Vec<(&'static str, V
             if let (true, Some(last)) = (money_back_search(payload, result), last) {
                 reads.push(("money.tx.list", json!({"from": s(period, "start"), "to": last.to_string()})));
             }
+            // A search with no days reads this budget month alone: "Costco this year" and an entry
+            // from months ago were not found there (bench v3, 2026-10-30).
+            if ledger_search(payload) {
+                let mut all = json!({"from": "1970-01-01", "query": payload["query"]});
+                if payload["category_id"].is_i64() {
+                    all["category_id"] = payload["category_id"].clone();
+                }
+                reads.push(("money.tx.list", all));
+            }
             reads
         }
         // What went in each category lately: a second invoice from a client goes where the first did.
@@ -89,7 +99,12 @@ pub fn render(op: &str, payload: &Value, result: &Value, extras: &[Option<Value>
     let extra = |i: usize| extras.get(i).and_then(Option::as_ref);
     let text = match op {
         "money.summary" => money_summary(result, [extra(0), extra(1), extra(2)], [extra(3), extra(4)], extra(5), extra(6), extra(7), ctx),
-        "money.tx.list" => tx_list(payload, result, extra(0), extra(1), ctx),
+        "money.tx.list" => {
+            // In the order `extras` read them: money back only when the period has an end.
+            let back = money_back_search(payload, result) && date(s(&result["period"], "end_exclusive")).is_some();
+            let ledger = if ledger_search(payload) { extra(if back { 2 } else { 1 }) } else { None };
+            tx_list(payload, result, extra(0), extra(1).filter(|_| back), ledger, ctx)
+        }
         "money.lists" => money_lists(result, [extra(0), extra(1), extra(2)], ctx),
         "money.series" => money_series(payload, result, ctx),
         "money.invest.summary" => invest_summary(result, extra(0), ctx),
@@ -156,9 +171,144 @@ fn pays_by_month(page: &Value, start: Option<Date>, today: Date) -> Option<Strin
     });
     let last = |m: Date| m.checked_add(jiff::Span::new().months(1)).ok().and_then(|n| n.yesterday().ok()).unwrap_or(m);
     let name = |m: Date| format!("{} to {}", m.strftime("%b %-d"), last(m).strftime("%b %-d %Y"));
-    let cells: Vec<String> = budget.iter().map(|(m, n)| format!("{}: {n}{}", name(*m), if last(*m) >= today { " so far" } else { "" })).collect();
-    Some(format!("- Pays (Salary) in each budget month, the whole ledger: {}. Budget months with 3 or more: {}. Calendar months with 3 or more: {in_calendar}.",
-        cells.join("; "), three(&budget, &name)))
+    // Most months hold the usual count: name it once and the months that differ, not every month.
+    let mut counts: Vec<i64> = budget.iter().map(|(_, n)| *n).collect();
+    counts.sort_unstable();
+    let usual = counts[counts.len() / 2];
+    let other: Vec<String> = budget.iter().filter(|(m, n)| *n != usual && *n < 3 && last(*m) < today).map(|(m, n)| format!("{} ({n})", name(*m))).collect();
+    let other = if other.is_empty() { String::new() } else { format!(", fewer in {}", other.join(", ")) };
+    Some(format!("- Pays (Salary), the whole ledger: {usual} in most budget months{other}. Budget months with 3 or more: {}. Calendar months with 3 or more: {in_calendar}.",
+        three(&budget, &name)))
+}
+
+/// When the pay (Salary income) changed, by how much a pay and over a year of pays: "when did my
+/// pay go up" was read off the budget months holding three pays (bench v3, 2026-10-30). A lone
+/// pay of another amount (a bonus, a short week) is not a change.
+fn pay_changes(page: &Value, m: &Money, today: Date) -> Option<String> {
+    let mut pays: Vec<(Date, i64)> = list(page, "transactions").iter()
+        .filter(|t| s(t, "type") == "INCOME" && s(t, "category").eq_ignore_ascii_case("Salary"))
+        .filter_map(|t| Some((date(s(t, "date"))?, int(t, "amount")))).collect();
+    if pays.len() < 4 {
+        return None;
+    }
+    pays.sort_unstable();
+    let mut gaps: Vec<i64> = pays.windows(2).map(|w| i64::from((w[1].0 - w[0].0).get_days())).filter(|g| *g > 0).collect();
+    gaps.sort_unstable();
+    let gap = *gaps.get(gaps.len() / 2)?;
+    let per_year = (365.25 / gap as f64).round() as i64;
+    let cadence = match gap {
+        7 => "every week".to_string(),
+        14 => "every 2 weeks".to_string(),
+        13..=17 => "twice a month".to_string(),
+        28..=31 => "every month".to_string(),
+        g => format!("every {g} days"),
+    };
+    // Runs of one amount, oldest first: (amount, first day, last day, pays).
+    let mut runs: Vec<(i64, Date, Date, usize)> = Vec::new();
+    for (d, a) in &pays {
+        match runs.last_mut() {
+            Some(r) if r.0 == *a => {
+                r.2 = *d;
+                r.3 += 1;
+            }
+            _ => runs.push((*a, *d, *d, 1)),
+        }
+    }
+    let steady: Vec<&(i64, Date, Date, usize)> = runs.iter().filter(|r| r.3 >= 2).collect();
+    let changes: Vec<String> = steady.windows(2).filter(|w| w[0].0 != w[1].0).map(|w| {
+        let (was, now) = (w[0], w[1]);
+        let diff = now.0 - was.0;
+        let sign = if diff > 0 { "+" } else { "−" };
+        format!("from {} to {} a pay ({sign}{} a pay, {sign}{} over a year of {per_year} pays) with the pay of {}; the last at {} was {}",
+            m.fmt(was.0), m.fmt(now.0), m.fmt(diff.abs()), m.fmt(diff.abs() * per_year), day(now.1, today), m.fmt(was.0), day(was.2, today))
+    }).collect();
+    let (first, last) = (pays[0].0, pays[pays.len() - 1]);
+    Some(if changes.is_empty() {
+        format!("- Pay (Salary) per pay, the whole ledger: {} since {} ({cadence}, {per_year} a year): no raise or cut logged.", m.fmt(last.1), day(first, today))
+    } else {
+        format!("- Pay (Salary) per pay, the whole ledger ({cadence}, {per_year} pays a year): it went {}. Now {} a pay.", changes.join("; then "), m.fmt(last.1))
+    })
+}
+
+/// The calendar year so far from the whole ledger, and the ledger itself: "this year" and
+/// "ever" were answered from the three budget months above (bench v3, 2026-10-30).
+fn this_year(o: &mut String, ledger: &Value, cash_ids: &[i64], m: &Money, today: Date) {
+    let year = jiff::civil::date(today.year(), 1, 1);
+    let rows: Vec<Value> = list(ledger, "transactions").iter().filter(|t| date(s(t, "date")).is_some_and(|d| d >= year && d <= today)).cloned().collect();
+    let page = serde_json::json!({ "transactions": rows });
+    let e = Entries::of(&page);
+    if !e.rows.is_empty() {
+        let _ = writeln!(o, "\nTHIS YEAR (calendar year {}, Jan 1 to today; the budget months above are other days):", today.year());
+        let _ = writeln!(o, "- Spent: {} on {}. Income: {} ({}).", m.fmt(e.spent), plural(e.count("EXPENSE"), "expense", "expenses"), m.fmt(e.income), e.count("INCOME"));
+        let mut months: BTreeMap<i8, i64> = BTreeMap::new();
+        for t in &e.expenses {
+            if let Some(d) = date(s(t, "date")) {
+                *months.entry(d.month()).or_default() += int(t, "amount");
+            }
+        }
+        let cells: Vec<String> = months.iter().map(|(mo, sum)| {
+            let now = if *mo == today.month() { " so far" } else { "" };
+            format!("{}{now} {}", jiff::civil::date(today.year(), *mo, 1).strftime("%B"), m.fmt(*sum))
+        }).collect();
+        if !cells.is_empty() {
+            let _ = writeln!(o, "- Spent by calendar month: {}.", cells.join("; "));
+        }
+        if !e.by_category.is_empty() {
+            let _ = writeln!(o, "- Spent by category, largest first: {}.", e.categories(m));
+        }
+        if let Some(line) = by_account(&e.expenses, m) {
+            let _ = writeln!(o, "- {line}");
+        }
+        let cash: Vec<&Value> = e.rows.iter().filter(|t| s(t, "type") == "TRANSFER" && t["to_account_id"].as_i64().is_some_and(|id| cash_ids.contains(&id))).collect();
+        if !cash.is_empty() {
+            let _ = writeln!(o, "- Taken out as cash (transfers into Cash: an ATM, a \"retrait\"): {} ({}).", m.fmt(cash.iter().map(|t| int(t, "amount")).sum()), cash.len());
+        }
+        let _ = writeln!(o, "- One shop or one kind of thing this year: money.tx.list with its query and from {year}.");
+    }
+    let all = Entries::of(ledger);
+    let Some(first) = all.rows.iter().filter_map(|t| date(s(t, "date"))).min() else { return };
+    let loose: Vec<&&Value> = all.expenses.iter().filter(|t| s(t, "category").is_empty()).collect();
+    let _ = writeln!(o, "THE WHOLE LEDGER (every entry, since {}): {}; spent {}; spent with no category: {} ({}).", day(first, today), all.counts(), m.fmt(all.spent),
+        m.fmt(loose.iter().map(|t| int(t, "amount")).sum()), plural(loose.len() as i64, "expense", "expenses"));
+}
+
+/// Canada's and Québec's holidays this year, for "since Labour Day": a model put Labour Day in
+/// October (bench v3, 2026-10-30).
+fn holidays_line(today: Date) -> String {
+    let y = today.year();
+    let d = |mo: i8, day: i8| jiff::civil::date(y, mo, day);
+    // The `n`th Monday of a month, from 1.
+    let monday = |mo: i8, n: i16| {
+        let first = d(mo, 1);
+        let to_monday = (7 - i16::from(first.weekday().to_monday_zero_offset())) % 7;
+        first.checked_add(jiff::Span::new().days(to_monday + 7 * (n - 1))).unwrap_or(first)
+    };
+    let easter = easter(y);
+    let shift = |n: i64| easter.checked_add(jiff::Span::new().days(n)).unwrap_or(easter);
+    // The Monday before May 25.
+    let victoria = d(5, 24).checked_sub(jiff::Span::new().days(i64::from(d(5, 24).weekday().to_monday_zero_offset()))).unwrap_or(d(5, 24));
+    let days = [
+        ("New Year's Day", d(1, 1)), ("Good Friday", shift(-2)), ("Easter Monday", shift(1)), ("Victoria Day (Journée des patriotes)", victoria),
+        ("Fête nationale (Saint-Jean)", d(6, 24)), ("Canada Day", d(7, 1)), ("Labour Day", monday(9, 1)), ("Thanksgiving", monday(10, 2)),
+        ("Remembrance Day", d(11, 11)), ("Christmas", d(12, 25)), ("Boxing Day", d(12, 26)),
+    ];
+    let cells: Vec<String> = days.iter().map(|(name, at)| format!("{name} {}", at.strftime("%a %b %-d"))).collect();
+    format!("HOLIDAYS {y} (Canada, Québec): {}.", cells.join("; "))
+}
+
+/// Easter Sunday of `year` (the Gregorian computus).
+fn easter(year: i16) -> Date {
+    let y = i32::from(year);
+    let (a, b, c) = (y % 19, y / 100, y % 100);
+    let (d, e) = (b / 4, b % 4);
+    let g = (8 * b + 13) / 25;
+    let h = (19 * a + b - d - g + 15) % 30;
+    let (i, k) = (c / 4, c % 4);
+    let l = (32 + 2 * e + 2 * i - h - k) % 7;
+    let m = (a + 11 * h + 22 * l) / 451;
+    let month = (h + l - 7 * m + 114) / 31;
+    let day = (h + l - 7 * m + 114) % 31 + 1;
+    jiff::civil::date(year, month as i8, day as i8)
 }
 
 /// The prefetch's line on both apps: each budget month's workouts, counted over the same days
@@ -588,13 +738,16 @@ fn category_of(t: &Value) -> &str {
     if s(t, "category").is_empty() { "no category" } else { s(t, "category") }
 }
 
-fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>; 2], invest: Option<&Value>, lists: Option<&Value>, pays: Option<&Value>, ctx: &Ctx) -> String {
+fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>; 2], invest: Option<&Value>, lists: Option<&Value>, ledger: Option<&Value>, ctx: &Ctx) -> String {
     let today = ctx.today;
     let m = Money::of(if s(r, "currency").is_empty() { &ctx.currency } else { s(r, "currency") });
     let [this_month, last_month, _] = pages;
+    // A ledger cut short would leave its oldest entries out of every whole-ledger figure.
+    let ledger = ledger.filter(|l| l["more"] != true);
     let mut o = String::new();
     let _ = writeln!(o, "TALLY (budget app). {} Amounts are in {}. {TALLY_IS}", today_line(today), m.code);
     let _ = writeln!(o, "{}", calendar(today));
+    let _ = writeln!(o, "{}", holidays_line(today));
     if r["empty"] == true {
         let _ = writeln!(o, "The ledger is empty: nothing has been logged in Tally yet.");
         return o;
@@ -661,7 +814,10 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
             day_of(s(t, "date"), today), entry_name(t), m.fmt(int(t, "amount")), m.fmt(since.iter().map(|x| int(x, "amount")).sum()),
             plural(since.len() as i64, "expense", "expenses"), s(t, "date"));
     }
-    if let Some(line) = pays.and_then(|p| pays_by_month(p, date(s(period, "start")), today)) {
+    if let Some(line) = ledger.and_then(|p| pays_by_month(p, date(s(period, "start")), today)) {
+        let _ = writeln!(o, "{line}");
+    }
+    if let Some(line) = ledger.and_then(|p| pay_changes(p, &m, today)) {
         let _ = writeln!(o, "{line}");
     }
     if this_month.is_some() {
@@ -784,7 +940,11 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
             let _ = writeln!(o, "- Budgets last month, against each budget as it is set now: {}.", cells.join("; "));
         }
     }
-    month_by_month(&mut o, pages, series, &m);
+    month_by_month(&mut o, pages, series, date(s(period, "start")), ledger, &m, today);
+    if let Some(all) = ledger {
+        let cash: Vec<i64> = list(r, "accounts").iter().filter(|a| is_cash(a)).filter_map(|a| a["id"].as_i64()).collect();
+        this_year(&mut o, all, &cash, &m, today);
+    }
 
     accounts(&mut o, list(r, "accounts"), r.get("net_worth"), &m);
     // No ids here: a model that has them adds an entry without money.lists, whose reading says
@@ -842,20 +1002,47 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
     o
 }
 
-/// The last months' spending and income, and each category over the last three months.
-fn month_by_month(o: &mut String, pages: [Option<&Value>; 3], series: [Option<&Value>; 2], m: &Money) {
+/// The last months' spending and income, and each category over the last three months. `start`
+/// is this budget month's first day, `ledger` every entry.
+fn month_by_month(o: &mut String, pages: [Option<&Value>; 3], series: [Option<&Value>; 2], start: Option<Date>, ledger: Option<&Value>, m: &Money, today: Date) {
     let [spending, income] = series;
     if let Some(spending) = spending {
         let labels = list(spending, "labels");
         let values = |s: Option<&Value>| s.and_then(|s| list(s, "series").first()).map(|x| list(x, "values").to_vec()).unwrap_or_default();
         let (out, inn) = (values(Some(spending)), values(income));
+        // Each budget month's days, year and period_offset: "Apr 15" alone was read as 2025, and
+        // a month past the three below had no offset to read it by (bench v3, 2026-10-30).
+        let back = |i: usize| (labels.len() - 1 - i) as i64;
+        let days = |i: usize| -> Option<(Date, Date)> {
+            let first = start?.checked_sub(jiff::Span::new().months(back(i))).ok()?;
+            let next = start?.checked_sub(jiff::Span::new().months(back(i) - 1)).ok()?;
+            // A month from the 1st is labelled by its name ("August"), any other by its first day.
+            let label = labels[i].as_str()?;
+            (label == first.strftime("%b %-d").to_string() || label == first.strftime("%B").to_string()).then_some((first, next.yesterday().ok()?))
+        };
         let months: Vec<String> = labels.iter().enumerate().map(|(i, label)| {
-            let label = label.as_str().unwrap_or("");
+            let label = match days(i) {
+                Some((a, b)) => format!("{} to {} (period_offset {})", a.strftime("%b %-d"), b.strftime("%b %-d %Y"), -back(i)),
+                None => label.as_str().unwrap_or("").to_string(),
+            };
             let (spent, earned) = (out.get(i).and_then(Value::as_i64).unwrap_or(0), inn.get(i).and_then(Value::as_i64).unwrap_or(0));
             let now = if i + 1 == labels.len() { " so far" } else { "" };
             if spent == 0 && earned == 0 { format!("{label}{now}: {NONE_LOGGED}") } else { format!("{label}{now}: spent {}, income {}", logged(spent, m), logged(earned, m)) }
         }).collect();
         let _ = writeln!(o, "\nMONTH BY MONTH (budget periods, oldest first): {}.", months.join("; "));
+        // "What made it so expensive": the costliest month past, by its biggest expenses.
+        let costliest = (0..labels.len().saturating_sub(1)).filter(|i| out.get(*i).and_then(Value::as_i64).unwrap_or(0) > 0)
+            .max_by_key(|i| out.get(*i).and_then(Value::as_i64).unwrap_or(0));
+        if let (Some(i), Some(all)) = (costliest, ledger) {
+            if let Some((a, b)) = days(i) {
+                let rows: Vec<Value> = list(all, "transactions").iter().filter(|t| date(s(t, "date")).is_some_and(|d| d >= a && d <= b)).cloned().collect();
+                let page = serde_json::json!({ "transactions": rows });
+                let e = Entries::of(&page);
+                if !e.expenses.is_empty() {
+                    let _ = writeln!(o, "The costliest of these: {} to {}, {}; its biggest expenses: {}.", a.strftime("%b %-d"), b.strftime("%b %-d %Y"), m.fmt(e.spent), e.largest(3, m, today));
+                }
+            }
+        }
     }
     // Oldest first, as a person reads months; each a budget month, named as one ("July" was read
     // as July 1 to 31).
@@ -918,7 +1105,8 @@ fn accounts(o: &mut String, rows: &[Value], net_worth: Option<&Value>, m: &Money
     same_kind(o, &open);
 }
 
-/// "My card" with two cards, or "my savings" with two savings accounts, names none of them.
+/// "My card" with two cards, or "my savings" with two savings accounts, names none of them; and
+/// cash taken out is money moved, not spent.
 fn same_kind(o: &mut String, open: &[&Value]) {
     let line_of_credit = |a: &&&Value| { let n = s(a, "name").to_lowercase(); n.contains("line of credit") || n.contains("marge") };
     for (kind, said) in [("CREDIT", "\"my card\", \"the card\" or \"ma carte\""), ("SAVINGS", "\"my savings\" or \"mon épargne\"")] {
@@ -927,6 +1115,16 @@ fn same_kind(o: &mut String, open: &[&Value]) {
             let _ = writeln!(o, "{} accounts of this kind: {}. When they say only {said}, it could be any of them: ask which before adding or changing anything.", these.len(), these.join(", "));
         }
     }
+    // "I took 100 out at the ATM" was recorded as an expense, under Other (bench v3, 2026-10-30).
+    if let Some(cash) = open.iter().find(|a| is_cash(a)) {
+        let _ = writeln!(o, "Cash taken out (an ATM, a \"retrait\") is a TRANSFER from the account it came out of to {}, not an expense: what they buy with it later is.", s(cash, "name"));
+    }
+}
+
+/// An account that holds cash: Tally's cash type, or one named for it that is no card.
+fn is_cash(account: &Value) -> bool {
+    let n = s(account, "name").to_lowercase();
+    s(account, "type") == "CASH" || (s(account, "type") != "CREDIT" && (n == "cash" || n.contains("comptant")))
 }
 
 /// A range of days longer than this is added up by month, not by week and day.
@@ -1005,7 +1203,89 @@ fn money_back_entries(back: &[&Value], m: &Money, today: Date) -> String {
     format!("{} in all, {}: {}", m.fmt(back.iter().map(|t| int(t, "amount")).sum()), plural(back.len() as i64, "entry", "entries"), named.join("; "))
 }
 
-fn tx_list(payload: &Value, r: &Value, lists: Option<&Value>, unsearched: Option<&Value>, ctx: &Ctx) -> String {
+/// "What did I pay cash for", "how much went on the Visa": added up, not left to the model.
+fn by_account(expenses: &[&Value], m: &Money) -> Option<String> {
+    let mut sums: Vec<(&str, i64, i64)> = Vec::new();
+    for t in expenses {
+        match sums.iter_mut().find(|a| a.0 == s(t, "account")) {
+            Some(a) => {
+                a.1 += int(t, "amount");
+                a.2 += 1;
+            }
+            None => sums.push((s(t, "account"), int(t, "amount"), 1)),
+        }
+    }
+    if sums.len() < 2 {
+        return None;
+    }
+    sums.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    let cells: Vec<String> = sums.iter().map(|(name, amount, n)| format!("{name} {} ({n})", m.fmt(*amount))).collect();
+    Some(format!("Spent by the account it was paid from, largest first: {}.", cells.join("; ")))
+}
+
+/// A search asked with no days, which Tally reads over this budget month alone.
+fn ledger_search(payload: &Value) -> bool {
+    payload["query"].as_str().is_some_and(|q| !q.trim().is_empty()) && ["from", "to", "period_offset"].iter().all(|k| payload[*k].is_null())
+}
+
+/// What a search matches over the whole ledger, added up by type for all of it and for this
+/// calendar year, with the newest entries: the budget month searched may hold none of them.
+fn ledger_matches(o: &mut String, query: &str, page: &Value, m: &Money, today: Date) {
+    let rows = list(page, "transactions");
+    if rows.is_empty() {
+        let _ = writeln!(o, "\nIN THE WHOLE LEDGER (every entry ever, not only this budget month): no entry matches \"{query}\" either. Notes are as the person typed them, often in French \
+            (\"intérêts\", \"retrait\", \"loyer\", \"épicerie\") or a shop's name: search again with another word, or read the entries with no query.");
+        return;
+    }
+    let year = jiff::civil::date(today.year(), 1, 1);
+    let e = Entries::of(page);
+    let _ = writeln!(o, "\nIN THE WHOLE LEDGER (every entry ever, not only this budget month), matching \"{query}\": {}.", e.counts());
+    for (kind, name) in [("EXPENSE", "Spent"), ("INCOME", "Income"), ("TRANSFER", "Moved between accounts (transfers, not spending)")] {
+        let these: Vec<&Value> = rows.iter().filter(|t| s(t, "type") == kind).collect();
+        if these.is_empty() {
+            continue;
+        }
+        let now: Vec<&&Value> = these.iter().filter(|t| date(s(t, "date")).is_some_and(|d| d >= year)).collect();
+        let _ = writeln!(o, "- {name}: {} ({}); this calendar year ({}, Jan 1 to today): {} ({}).", m.fmt(these.iter().map(|t| int(t, "amount")).sum()), these.len(),
+            today.year(), m.fmt(now.iter().map(|t| int(t, "amount")).sum()), now.len());
+    }
+    let mut years: BTreeMap<i16, (i64, i64)> = BTreeMap::new();
+    for t in &e.expenses {
+        if let Some(d) = date(s(t, "date")) {
+            let y = years.entry(d.year()).or_default();
+            y.0 += int(t, "amount");
+            y.1 += 1;
+        }
+    }
+    if years.len() > 1 {
+        let cells: Vec<String> = years.iter().map(|(y, (sum, n))| format!("{y} {} ({n})", m.fmt(*sum))).collect();
+        let _ = writeln!(o, "- Spent by calendar year: {}.", cells.join("; "));
+    }
+    let shown = rows.len().min(LEDGER_MATCHES);
+    let _ = writeln!(o, "{} (#id, day, note, amount, category, account):", if shown < rows.len() { format!("The newest {shown} of them") } else { "Each of them, newest first".into() });
+    for t in &rows[..shown] {
+        let _ = writeln!(o, "{}", entry_line(t, m, today));
+    }
+}
+
+/// The most workouts a list of them writes out one by one.
+const LISTED_WORKOUTS: usize = 50;
+
+/// The most entries of a whole-ledger search listed one by one.
+const LEDGER_MATCHES: usize = 12;
+
+/// "- #685 Fri Sep 18: Café Olimpico, $5.75 expense, Dining, Cash".
+fn entry_line(t: &Value, m: &Money, today: Date) -> String {
+    let amount = m.fmt(int(t, "amount"));
+    let what = match s(t, "type") {
+        "TRANSFER" => format!("{amount} transfer, {} to {}", s(t, "account"), s(t, "to_account")),
+        "INCOME" => format!("{amount} income, {}, {}", category_of(t), s(t, "account")),
+        _ => format!("{amount} expense, {}, {}", category_of(t), s(t, "account")),
+    };
+    format!("- #{} {}: {}, {what}", int(t, "id"), day_of(s(t, "date"), today), entry_name(t))
+}
+
+fn tx_list(payload: &Value, r: &Value, lists: Option<&Value>, unsearched: Option<&Value>, ledger: Option<&Value>, ctx: &Ctx) -> String {
     let today = ctx.today;
     let m = Money::of(&ctx.currency);
     let offset = payload["period_offset"].as_i64().unwrap_or(0);
@@ -1045,8 +1325,12 @@ fn tx_list(payload: &Value, r: &Value, lists: Option<&Value>, unsearched: Option
             if back.is_empty() { format!("none: {NONE_LOGGED}") } else { money_back_entries(&back, &m, today) });
     }
     let e = Entries::of(r);
+    let query = payload["query"].as_str().unwrap_or("").trim();
     if e.rows.is_empty() {
         let _ = writeln!(o, "No entries: {NONE_LOGGED} in {}{}.", period_name(&r["period"], today), if filters.is_empty() { "" } else { " that matches" });
+        if let Some(all) = ledger {
+            ledger_matches(&mut o, query, all, &m, today);
+        }
         return o;
     }
     let _ = writeln!(o, "{}.", e.counts());
@@ -1059,21 +1343,8 @@ fn tx_list(payload: &Value, r: &Value, lists: Option<&Value>, unsearched: Option
     if !e.by_category.is_empty() {
         let _ = writeln!(o, "- Spent by category, largest first: {}.", e.categories(&m));
     }
-    // "What did I pay cash for", "how much went on the Visa": added up, not left to the model.
-    let mut by_account: Vec<(&str, i64, i64)> = Vec::new();
-    for t in &e.expenses {
-        match by_account.iter_mut().find(|a| a.0 == s(t, "account")) {
-            Some(a) => {
-                a.1 += int(t, "amount");
-                a.2 += 1;
-            }
-            None => by_account.push((s(t, "account"), int(t, "amount"), 1)),
-        }
-    }
-    if by_account.len() > 1 {
-        by_account.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-        let cells: Vec<String> = by_account.iter().map(|(name, amount, n)| format!("{name} {} ({n})", m.fmt(*amount))).collect();
-        let _ = writeln!(o, "- Spent by the account it was paid from, largest first: {}.", cells.join("; "));
+    if let Some(line) = by_account(&e.expenses, &m) {
+        let _ = writeln!(o, "- {line}");
     }
     let incomes: Vec<&Value> = e.rows.iter().filter(|t| s(t, "type") == "INCOME").collect();
     if !incomes.is_empty() {
@@ -1189,13 +1460,10 @@ fn tx_list(payload: &Value, r: &Value, lists: Option<&Value>, unsearched: Option
         let _ = writeln!(o, "\nENTRIES, newest first (#id, day, note, amount, category, account):");
     }
     for t in &e.rows[..shown] {
-        let amount = m.fmt(int(t, "amount"));
-        let what = match s(t, "type") {
-            "TRANSFER" => format!("{amount} transfer, {} to {}", s(t, "account"), s(t, "to_account")),
-            "INCOME" => format!("{amount} income, {}, {}", category_of(t), s(t, "account")),
-            _ => format!("{amount} expense, {}, {}", category_of(t), s(t, "account")),
-        };
-        let _ = writeln!(o, "- #{} {}: {}, {what}", int(t, "id"), day_of(s(t, "date"), today), entry_name(t));
+        let _ = writeln!(o, "{}", entry_line(t, &m, today));
+    }
+    if let Some(all) = ledger {
+        ledger_matches(&mut o, query, all, &m, today);
     }
     o
 }
@@ -1913,7 +2181,24 @@ fn gym_sessions(payload: &Value, r: &Value, unit: &str, ctx: &Ctx) -> String {
         };
         let _ = writeln!(o, "{} in all{counted}; showing {} to {}.", plural(total, "workout", "workouts"), if rows.is_empty() { 0 } else { from + 1 }, from + rows.len() as i64);
     }
-    for x in rows {
+    // A year of workouts one per line filled a small model's context before it could answer
+    // (bench v3, 2026-10-30): the counts by month, and the newest ones.
+    let shown = rows.len().min(LISTED_WORKOUTS);
+    if shown < rows.len() {
+        let mut months: BTreeMap<(i16, i8), i64> = BTreeMap::new();
+        for x in rows.iter().filter(|x| x["untracked"] != true) {
+            if let Some(d) = date(s(x, "day").get(..10).unwrap_or("")) {
+                *months.entry((d.year(), d.month())).or_default() += 1;
+            }
+        }
+        let cells: Vec<String> = months.iter().map(|((y, mo), n)| {
+            let first = jiff::civil::date(*y, *mo, 1);
+            format!("{} {n}", if *y == today.year() { first.strftime("%B").to_string() } else { first.strftime("%B %Y").to_string() })
+        }).collect();
+        let _ = writeln!(o, "Counted workouts by calendar month, these {} read: {}.", rows.len(), cells.join("; "));
+        let _ = writeln!(o, "The newest {shown} of them (fewer days, from and to, list the others):");
+    }
+    for x in &rows[..shown] {
         let _ = writeln!(o, "{}", session_line(x, unit, today));
     }
     let _ = writeln!(o, "\ngym.session.get with an id gives every set of a workout.");
@@ -2140,8 +2425,18 @@ fn cardio_kinds(o: &mut String, rows: &[Value], today: Date) {
             let each: Vec<String> = xs.iter().map(|x| one(x)).collect();
             let _ = write!(cell, " ({})", each.join("; "));
         } else {
-            // Too many to list: the ones a question names (a race, a trail) and the longest.
-            let noted: Vec<String> = xs.iter().filter(|x| !s(x, "note").trim().is_empty()).take(3).map(|x| one(x)).collect();
+            // Too many to list: the ones a question names (a race, a trail) and the longest. "Since
+            // my race" is what came after it, added up: a model summed runs from either side.
+            let after = |x: &Value| {
+                let later: Vec<&&Value> = xs.iter().filter(|y| s(y, "day") > s(x, "day")).collect();
+                if later.is_empty() {
+                    return String::new();
+                }
+                let km: f64 = later.iter().map(|y| num(y, "distance_km")).sum();
+                let km = if km > 0.0 { format!(", {} km", (km * 100.0).round() / 100.0) } else { String::new() };
+                format!(", then after it to today {}{km}", cardio_count(kind, later.len() as i64))
+            };
+            let noted: Vec<String> = xs.iter().filter(|x| !s(x, "note").trim().is_empty()).take(3).map(|x| format!("{}{}", one(x), after(x))).collect();
             let longest = xs.iter().filter(|x| num(x, "distance_km") > 0.0).max_by(|a, b| num(a, "distance_km").total_cmp(&num(b, "distance_km")));
             let mut extra = Vec::new();
             if !noted.is_empty() {
@@ -2371,7 +2666,7 @@ mod tests {
         found["transactions"] = json!([tx(132, "INCOME", 8640, "2026-10-03", Some("Refunds"), "Air Transat")]);
         let asked = json!({"from": "2026-10-01", "query": "refund"});
         assert_eq!(extras("money.tx.list", &asked, &found)[1], ("money.tx.list", json!({"from": "2026-10-01", "to": "2026-10-31"})));
-        assert_eq!(extras("money.tx.list", &json!({"query": "metro"}), &found).len(), 1, "only a search for money back");
+        assert_eq!(extras("money.tx.list", &json!({"query": "metro", "from": "2026-10-01"}), &found).len(), 1, "only a search for money back");
         let lists = json!({"categories": [{"id": 7, "name": "Shopping", "kind": "EXPENSE"}, {"id": 9, "name": "Refunds", "kind": "INCOME"}]});
         let text = render("money.tx.list", &asked, &found, &[Some(lists), Some(all)], &ctx()).unwrap();
         let line = "- Money back over these days, whatever the search matched (refunds and returns: income in Refunds, or filed under a spending category, noted in any language): \
@@ -2498,10 +2793,76 @@ mod tests {
         mid["period"]["start"] = json!("2026-10-15");
         mid["period"]["end_exclusive"] = json!("2026-11-15");
         let text = render("money.summary", &json!({}), &mid, &extras, &ctx()).unwrap();
-        assert!(text.contains("- Pays (Salary) in each budget month, the whole ledger: Jun 15 to Jul 14 2026: 1; Jul 15 to Aug 14 2026: 3; Aug 15 to Sep 14 2026: 2; \
-            Sep 15 to Oct 14 2026: 2. Budget months with 3 or more: Jul 15 to Aug 14 2026. Calendar months with 3 or more: July 2026.\n"), "{text}");
+        assert!(text.contains("- Pays (Salary), the whole ledger: 2 in most budget months, fewer in Jun 15 to Jul 14 2026 (1). Budget months with 3 or more: \
+            Jul 15 to Aug 14 2026. Calendar months with 3 or more: July 2026.\n"), "{text}");
         let cut = [None, None, None, None, None, None, None, Some(json!({"transactions": [], "more": true}))];
         assert!(!render("money.summary", &json!({}), &summary(), &cut, &ctx()).unwrap().contains("Pays (Salary)"));
+    }
+
+    /// "This year", "ever", "when did my pay go up" and "what made that month so expensive" were
+    /// answered from the three budget months a summary held: the whole ledger answers them.
+    #[test]
+    fn the_money_summary_reads_the_year_the_whole_ledger_and_the_pay() {
+        let mut rows: Vec<Value> = (0..8).map(|i| {
+            let d = jiff::civil::date(2026, 1, 8).checked_add(jiff::Span::new().days(14 * i)).unwrap();
+            tx(200 + i, "INCOME", if i < 4 { 234000 } else { 241250 }, &d.to_string(), Some("Salary"), "Salaire")
+        }).collect();
+        rows.extend([tx(300, "EXPENSE", 52000, "2026-08-20", Some("Health"), "Couronne dentaire"), tx(301, "EXPENSE", 4500, "2026-03-02", None, "Virement"),
+                     tx(302, "EXPENSE", 9000, "2025-11-02", None, "Dépanneur")]);
+        let mut cash = tx(303, "TRANSFER", 14000, "2026-07-17", None, "Retrait guichet");
+        (cash["to_account_id"], cash["to_account"]) = (json!(4), json!("Cash"));
+        rows.push(cash);
+        let spending = json!({"labels": ["August", "September", "October"], "series": [{"name": "Spending", "values": [52000, 36435, 242526]}]});
+        let mut r = summary();
+        r["accounts"].as_array_mut().unwrap().push(json!({"id": 4, "name": "Cash", "type": "CASH", "balance": 1000}));
+        let extras = [None, None, None, Some(spending), None, None, None, Some(json!({"transactions": rows}))];
+        let text = render("money.summary", &json!({}), &r, &extras, &ctx()).unwrap();
+        for want in [
+            "- Pay (Salary) per pay, the whole ledger (every 2 weeks, 26 pays a year): it went from $2,340.00 to $2,412.50 a pay (+$72.50 a pay, +$1,885.00 over a year of 26 pays) \
+             with the pay of Thu Mar 5; the last at $2,340.00 was Thu Feb 19. Now $2,412.50 a pay.\n",
+            "The costliest of these: Aug 1 to Aug 31 2026, $520.00; its biggest expenses: 1. $520.00, Couronne dentaire (Health), Thu Aug 20, on Visa.\n",
+            "THIS YEAR (calendar year 2026, Jan 1 to today; the budget months above are other days):\n- Spent: $565.00 on 2 expenses. Income: $19,010.00 (8).\n\
+             - Spent by calendar month: March $45.00; August $520.00.\n- Spent by category, largest first: Health $520.00 (1); No category $45.00 (1).\n",
+            "- Taken out as cash (transfers into Cash: an ATM, a \"retrait\"): $140.00 (1).\n",
+            "THE WHOLE LEDGER (every entry, since Sun Nov 2 2025): 12 entries: 3 expenses, 8 incomes, 1 transfer; spent $655.00; spent with no category: $135.00 (2 expenses).\n",
+            "Cash taken out (an ATM, a \"retrait\") is a TRANSFER from the account it came out of to Cash, not an expense: what they buy with it later is.\n",
+        ] {
+            assert!(text.contains(want), "missing {want:?} in\n{text}");
+        }
+        let same: Vec<Value> = (0..6).map(|i| tx(200 + i, "INCOME", 241250, &format!("2026-0{}-10", i + 3), Some("Salary"), "Salaire")).collect();
+        let text = render("money.summary", &json!({}), &summary(), &[None, None, None, None, None, None, None, Some(json!({"transactions": same}))], &ctx()).unwrap();
+        assert!(text.contains("- Pay (Salary) per pay, the whole ledger: $2,412.50 since Tue Mar 10 (every month, 12 a year): no raise or cut logged.\n"), "{text}");
+    }
+
+    /// "Costco this year" and an entry from months ago: a search with no days reads this budget
+    /// month, and the same search over the whole ledger beside it.
+    #[test]
+    fn a_search_with_no_days_also_reads_the_whole_ledger() {
+        let asked = json!({"query": "costco"});
+        assert_eq!(extras("money.tx.list", &asked, &page())[1], ("money.tx.list", json!({"from": "1970-01-01", "query": "costco"})));
+        let none = json!({"period": page()["period"], "transactions": []});
+        let all = json!({"transactions": [tx(150, "EXPENSE", 17168, "2026-09-06", Some("Groceries"), "Costco"), tx(120, "EXPENSE", 23019, "2026-01-04", Some("Groceries"), "Costco"),
+                                          tx(40, "EXPENSE", 19000, "2025-12-07", Some("Groceries"), "Costco")]});
+        let text = render("money.tx.list", &asked, &none, &[None, Some(all)], &ctx()).unwrap();
+        for want in [
+            "No entries: none logged in Tally in October 2026 (Oct 1 to Oct 31) that matches.\n",
+            "IN THE WHOLE LEDGER (every entry ever, not only this budget month), matching \"costco\": 3 entries: 3 expenses, 0 incomes, 0 transfers.\n",
+            "- Spent: $591.87 (3); this calendar year (2026, Jan 1 to today): $401.87 (2).\n",
+            "- Spent by calendar year: 2025 $190.00 (1); 2026 $401.87 (2).\n",
+            "Each of them, newest first (#id, day, note, amount, category, account):\n- #150 Sun Sep 6: Costco, $171.68 expense, Groceries, Visa\n",
+            "- #40 Sun Dec 7 2025: Costco, $190.00 expense, Groceries, Visa",
+        ] {
+            assert!(text.contains(want), "missing {want:?} in\n{text}");
+        }
+        let nothing = render("money.tx.list", &asked, &none, &[None, Some(json!({"transactions": []}))], &ctx()).unwrap();
+        assert!(nothing.contains("no entry matches \"costco\" either. Notes are as the person typed them, often in French"), "{nothing}");
+    }
+
+    #[test]
+    fn holidays_fall_on_their_days() {
+        assert_eq!([easter(2024), easter(2025), easter(2026)], [jiff::civil::date(2024, 3, 31), jiff::civil::date(2025, 4, 20), jiff::civil::date(2026, 4, 5)]);
+        let line = holidays_line(jiff::civil::date(2025, 6, 1));
+        assert!(line.contains("Victoria Day (Journée des patriotes) Mon May 19; ") && line.contains("Labour Day Mon Sep 1; Thanksgiving Mon Oct 13;"), "{line}");
     }
 
     #[test]
@@ -2560,7 +2921,10 @@ mod tests {
             "- Last week (Mon Oct 5 to Sun Oct 11): $157.99 on 1 expense",
             "LAST MONTH: September 2026 (Sep 1 to Sep 30).",
             "- Spent: $90.00. Income: none logged in Tally.",
-            "MONTH BY MONTH (budget periods, oldest first): August: none logged in Tally; September: spent $3,643.52, income $6,450.00; October so far: spent $2,425.26, income $2,150.00.",
+            "MONTH BY MONTH (budget periods, oldest first): Aug 1 to Aug 31 2026 (period_offset -2): none logged in Tally; Sep 1 to Sep 30 2026 (period_offset -1): spent $3,643.52, income $6,450.00; \
+             Oct 1 to Oct 31 2026 (period_offset 0) so far: spent $2,425.26, income $2,150.00.",
+            "HOLIDAYS 2026 (Canada, Québec): New Year's Day Thu Jan 1; Good Friday Fri Apr 3; Easter Monday Mon Apr 6; Victoria Day (Journée des patriotes) Mon May 18; \
+             Fête nationale (Saint-Jean) Wed Jun 24; Canada Day Wed Jul 1; Labour Day Mon Sep 7; Thanksgiving Mon Oct 12; Remembrance Day Wed Nov 11; Christmas Fri Dec 25; Boxing Day Sat Dec 26.",
             "- Dining: last month (Sep 1 to Sep 30) $90.00; this month (Oct 1 to Oct 31) so far $41.12; these 2 months together $131.12, $65.56 a month on average",
             "- Housing: last month (Sep 1 to Sep 30) none logged in Tally; this month (Oct 1 to Oct 31) so far $1,350.00",
             "- Visa (credit card): -$3,078.67 owed",
@@ -2731,7 +3095,7 @@ mod tests {
         let mut o = String::new();
         cardio_kinds(&mut o, &rows, ctx().today);
         assert_eq!(o, "Cardio by kind, every entry read (each kind its own; a treadmill run is not a run): 4 runs, 3 h 15 min, 35.1 km \
-                       (with a note: Sun May 24 10 km in 52 min \"Course 10 km\"; longest Sun May 17 12 km in 1 h 10 min).\n");
+                       (with a note: Sun May 24 10 km in 52 min \"Course 10 km\", then after it to today 2 runs, 13.1 km; longest Sun May 17 12 km in 1 h 10 min).\n");
     }
 
     #[test]
@@ -2835,6 +3199,12 @@ mod tests {
         let r = json!({"sessions": [session(149, "2026-10-08")], "total": 5, "untracked": 1});
         let text = render("gym.sessions", &json!({"from": "2026-10-01", "to": "2026-10-14"}), &r, &[], &ctx()).unwrap();
         assert!(text.contains("Only workouts from Thu Oct 1 to Wed Oct 14.\n5 workouts in all (4 counted, 1 the person excluded in Avex: untracked, marked below, not counted)"), "{text}");
+        // A year of them is counted by month and the newest listed.
+        let mut year: Vec<Value> = (0..60).map(|i| session(100 + i, &jiff::civil::date(2026, 10, 14).checked_sub(jiff::Span::new().days(3 * i)).unwrap().to_string())).collect();
+        year[0]["untracked"] = json!(true);
+        let text = render("gym.sessions", &json!({"from": "2026-01-01", "limit": 500}), &json!({"sessions": year, "total": 60, "untracked": 1}), &[], &ctx()).unwrap();
+        assert!(text.contains("Counted workouts by calendar month, these 60 read: April 4; May 10; June 10; July 11; August 10; September 10; October 4.\nThe newest 50 of them"), "{text}");
+        assert_eq!(text.matches("[id ").count(), 50, "{text}");
         let detail = json!({"row": session(149, "2026-10-08"), "unit": "lb", "journal": "Gym was packed",
                             "exercises": [{"name": "Back Squat", "skipped": false, "was_pr": true, "difficulty": "EASY", "volume": 3990.0, "best_e1rm": 332.5,
                                            "sets": [{"weight": 142.0, "reps": 8, "rpe": null, "kind": "warmup", "best": false}, {"weight": 285.0, "reps": 5, "rpe": 8.0, "kind": "work", "best": true}]},

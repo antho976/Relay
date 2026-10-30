@@ -497,7 +497,8 @@ money.tx.restore brings back a deleted entry. money.invest.add records an invest
 not in an account Wealthsimple's files fill.
 - To delete entries or investment activities, change more than 3 entries, set budgets, or add, \
 rename or archive accounts, call thread.propose with one action and why; the person approves it on a \
-card. Say what you proposed: it is not done until Relay tells you it was approved. Settings, such as \
+card. Say what you proposed: it is not done until Relay tells you it was approved. Asked to delete or \
+remove an entry, propose only that: never add one first. Settings, such as \
 the day the budget month starts, are theirs.
 - Undo: to take back an entry you added, propose deleting it (thread.propose, money.tx.delete with its \
 id); never clear its category or change it instead. To take back a change, money.tx.update it back to \
@@ -1501,12 +1502,14 @@ fn prefetched(engine: &Engine, text: &str) -> String {
     }
     // Tally's budget months, which the entries above cover, and Avex's workouts over the same days
     // and since the last pay.
-    let pages: Vec<(&str, Value)> = [("this month", 0), ("last month", -1)].into_iter()
+    // The month before last too: "last month against the month before" took Avex's calendar
+    // month for the one not here (bench v3, 2026-10-30).
+    let pages: Vec<(&str, Value)> = [("this month", 0), ("last month", -1), ("the month before last", -2)].into_iter()
         .filter_map(|(name, offset)| read("money.tx.list", json!({"period_offset": offset})).map(|page| (name, page)))
         .collect();
     let mut periods: Vec<(&str, Value)> = pages.iter().map(|(name, page)| (*name, page["period"].clone())).collect();
-    let pay = crate::readings::last_pay(pages.iter().map(|(_, page)| page)).and_then(|t| t["date"].as_str()).map(str::to_string);
-    let held = periods.last().map(|(_, p)| p["start"].clone());
+    let pay = crate::readings::last_pay(pages.iter().take(2).map(|(_, page)| page)).and_then(|t| t["date"].as_str()).map(str::to_string);
+    let held = periods[..periods.len().min(2)].last().map(|(_, p)| p["start"].clone());
     if let (Some(pay), Ok(tomorrow)) = (pay, ctx.today.tomorrow()) {
         periods.push(("since the last pay", json!({"start": pay, "end_exclusive": tomorrow.to_string()})));
     }
