@@ -954,6 +954,15 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
     if let Some(p) = invest.filter(|p| p["empty"] != true) {
         let _ = writeln!(o, "\nINVESTMENTS (money.invest.summary has the holdings, returns and room):");
         let _ = writeln!(o, "- {}", invest_headline(p, &m, today));
+        // "How much TFSA room is left" was answered from the holdings below, with no room in them
+        // (bench v2, round seven).
+        let room: Vec<String> = list(p, "room").iter().map(|x| match x["left"].as_i64() {
+            Some(left) => format!("{} {} {}", s(x, "registration"), int(x, "year"), m.fmt(left)),
+            None => format!("{} {} unknown (Tally has no CRA room figure yet)", s(x, "registration"), int(x, "year")),
+        }).collect();
+        if !room.is_empty() {
+            let _ = writeln!(o, "- Contribution room left: {}.", room.join("; "));
+        }
         by_hand(&mut o, p, lists, &m);
         holdings(&mut o, p, &m, 5);
     }
@@ -3105,6 +3114,10 @@ mod tests {
         ] {
             assert!(text.contains(want), "missing {want:?} in\n{text}");
         }
+        let mut known = r.clone();
+        known["room"] = json!([{"registration": "TFSA", "year": 2026, "room": 1450000, "contributed": 350000, "withdrawn": 0, "left": 1100000, "over": 0, "deadline": "2026-12-31"}]);
+        let text = render("money.summary", &json!({}), &summary(), &[None, None, None, None, None, Some(known)], &ctx()).unwrap();
+        assert!(text.contains("- Contribution room left: TFSA 2026 $11,000.00.\n"), "{text}");
     }
 
     fn session(id: i64, day: &str) -> Value {
