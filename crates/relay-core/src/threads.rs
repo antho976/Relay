@@ -1822,7 +1822,9 @@ fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Opti
                 }
             }
         }
-        let watch = (local.is_some() && style.check).then(|| {
+        // Tally's and Avex's threads, whose readings it was measured on: not Aide's or the Dev
+        // assistant's.
+        let watch = (local.is_some() && style.check && !aide && !assistant).then(|| {
             Watch::of(serde_json::from_str::<Value>(first_line).ok().as_ref().and_then(|l| l["message"]["content"].as_str()).unwrap_or(""))
         });
         let agent = Agent { stdin: stdin.clone(), pid, serial, turn: token, last_used: Instant::now(), local: local.is_some(), assistant, aide, watch };
