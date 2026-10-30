@@ -25848,6 +25848,19 @@
           ],
           "description": "The heaviest weight ever lifted in a working set (the most reps on a tie, then the\nearliest): a heavy single that is not the `best` set. Absent for a lift done without weight."
         },
+        "heaviest_sessions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The workouts that reached the heaviest weight (any reps) and the newest of them: a weight\nfirst lifted long ago may still be lifted now.",
+          "default": 0
+        },
+        "heaviest_last_day": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "best_reps": {
           "type": [
             "integer",
@@ -25983,14 +25996,57 @@
             "type": "string"
           },
           "description": "Their days, oldest first: the newest [`MARKED_DAYS`]."
+        },
+        "weeks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GymMarkedWeek"
+          },
+          "description": "The weeks they fall in, oldest first (the newest [`MARKED_WEEKS`]), each beside the week\nbefore it: what a deload or a week back is measured against."
         }
       },
       "required": [
         "kind",
         "sessions",
-        "days"
+        "days",
+        "weeks"
       ],
       "description": "The counted workouts of one Avex session type."
+    },
+    "GymMarkedWeek": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "string",
+          "description": "The week's first day."
+        },
+        "sessions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "That whole week's counted workouts and volume, marked or not."
+        },
+        "volume": {
+          "type": "number",
+          "format": "double"
+        },
+        "week_before_sessions": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "week_before_volume": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "start",
+        "sessions",
+        "volume",
+        "week_before_sessions",
+        "week_before_volume"
+      ]
     },
     "GymSessionsIn": {
       "type": "object",

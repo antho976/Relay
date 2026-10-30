@@ -1301,6 +1301,10 @@ fn lift_line(l: &Value, unit: &str, today: Date) -> String {
             if let Some(h) = l.get("heaviest").filter(|h| h["weight"].as_f64() > b["weight"].as_f64()) {
                 let w = h["weight"].as_f64().unwrap_or(0.0);
                 let _ = write!(line, "; heaviest weight ever lifted {}{} on {}", set(&h["weight"], &h["reps"], unit), other_unit(w, unit), day_of(s(h, "day"), today));
+                let again = int(l, "heaviest_sessions");
+                if let Some(last) = l["heaviest_last_day"].as_str().filter(|d| again > 1 && *d != s(h, "day")) {
+                    let _ = write!(line, " ({} {unit} reached in {}, the last on {})", weight(w), plural(again, "workout", "workouts"), day_of(last, today));
+                }
                 if let (Some(he), Some(be)) = (h["e1rm"].as_f64().filter(|he| Some(*he) <= b["e1rm"].as_f64()), b["e1rm"].as_f64()) {
                     let _ = write!(line, ", heavier but not a better set: its estimated 1-rep max is {} {unit}, the best set's {} {unit}", weight(he), weight(be));
                 }
@@ -1420,7 +1424,21 @@ fn gym_summary(r: &Value, lifts: Option<&Value>, cardio: Option<&Value>, months:
     let marked: Vec<String> = list(r, "marked").iter().map(|m| {
         let days: Vec<String> = list(m, "days").iter().filter_map(|d| d.as_str()).map(|d| day_of(d, today)).collect();
         let shown = if days.len() as i64 == int(m, "sessions") { days.join(", ") } else { format!("the newest {}", days.join(", ")) };
-        format!("{} {} ({shown})", s(m, "kind").replace('_', " "), int(m, "sessions"))
+        let weeks: Vec<String> = list(m, "weeks").iter().map(|w| {
+            let (now, before) = (num(w, "volume"), num(w, "week_before_volume"));
+            let less = if before > 0.0 && now < before {
+                format!(", so {} {unit} less ({}% less)", weight(before - now), weight(100.0 * (before - now) / before))
+            } else {
+                String::new()
+            };
+            format!(
+                "the week of {} had {}, {} {unit} lifted; the week before {}, {} {unit}{less}",
+                day_of(s(w, "start"), today), plural(int(w, "sessions"), "workout", "workouts"), weight(now),
+                plural(int(w, "week_before_sessions"), "workout", "workouts"), weight(before),
+            )
+        }).collect();
+        let weeks = if weeks.is_empty() { String::new() } else { format!("; {}", weeks.join("; ")) };
+        format!("{} {} ({shown}{weeks})", s(m, "kind").replace('_', " "), int(m, "sessions"))
     }).collect();
     if !marked.is_empty() {
         let _ = writeln!(o, "Workouts Avex marks with a type (a deload, a test day…), how many and when: {}.", marked.join("; "));
@@ -2186,11 +2204,15 @@ mod tests {
                        "streak_weeks": 13, "days_since_last": 7, "recent": [session(149, "2026-10-08")], "records": [], "lifts": [lift("Bench Press", Some(215.0))],
                        "goals": [{"kind": "lift_target", "target_key": "bench", "target_value": 225.0, "created_day": "2026-07-13", "note": "Two plates"}],
                        "breaks": [{"last_before": "2026-08-20", "first_after": "2026-09-05", "days": 16, "streak_before_weeks": 6}],
-                       "marked": [{"kind": "deload", "sessions": 2, "days": ["2026-09-28", "2026-09-29"]}, {"kind": "first_back", "sessions": 1, "days": ["2026-09-05"]}]});
+                       "marked": [{"kind": "deload", "sessions": 2, "days": ["2026-09-28", "2026-09-29"],
+                                    "weeks": [{"start": "2026-09-28", "sessions": 2, "volume": 9000.0, "week_before_sessions": 3, "week_before_volume": 25344.0}]},
+                                   {"kind": "first_back", "sessions": 1, "days": ["2026-09-05"]}]});
         let mut pull_up = lift("Pull-up", None);
         pull_up["best_reps"] = json!(12);
         let mut deadlift = lift("Deadlift", Some(335.0));
         deadlift["heaviest"] = json!({"lift": "Deadlift", "day": "2026-09-26", "session_id": 140, "weight": 365.0, "reps": 1, "e1rm": 240.0});
+        deadlift["heaviest_sessions"] = json!(3);
+        deadlift["heaviest_last_day"] = json!("2026-10-03");
         let lifts = json!({"unit": "lb", "lifts": [lift("Bench Press", Some(215.0)), deadlift, lift("Dips", None), pull_up]});
         let cardio = json!({"entries": [{"day": "2026-10-03", "time": "08:00", "kind": "run", "minutes": 36, "distance_km": 5.65, "effort": "easy", "note": ""},
                                         {"day": "2026-08-30", "time": "08:00", "kind": "rest", "minutes": 0, "distance_km": null, "effort": "", "note": ""},
@@ -2216,9 +2238,9 @@ mod tests {
             "Last workout: Thu Oct 8 (7 days ago).",
             "Streak: 13 weeks in a row",
             "Longest breaks (last workout before, first one back): Thu Aug 20 to Sat Sep 5, 16 days, after 6 weeks in a row with a workout.",
-            "Workouts Avex marks with a type (a deload, a test day…), how many and when: deload 2 (Mon Sep 28, Tue Sep 29); first back 1 (Sat Sep 5).",
+            "Workouts Avex marks with a type (a deload, a test day…), how many and when: deload 2 (Mon Sep 28, Tue Sep 29; the week of Mon Sep 28 had 2 workouts, 9,000 lb lifted; the week before 3 workouts, 25,344 lb, so 16,344 lb less (64.5% less)); first back 1 (Sat Sep 5).",
             "- Thu Oct 8 18:32 (7 days ago): Legs A, 44 min, 12 sets, 26,185 lb lifted, 4 records; lifts: Back Squat, Leg Press; felt good [id 149]",
-            "- Deadlift: best set 335 lb x 5 (152 kg) on Mon Oct 5, estimated 1-rep max 250.8 lb (113.8 kg); heaviest weight ever lifted 365 lb x 1 (165.6 kg) on Sat Sep 26, heavier but not a better set: its estimated 1-rep max is 240 lb, the best set's 250.8 lb;",
+            "- Deadlift: best set 335 lb x 5 (152 kg) on Mon Oct 5, estimated 1-rep max 250.8 lb (113.8 kg); heaviest weight ever lifted 365 lb x 1 (165.6 kg) on Sat Sep 26 (365 lb reached in 3 workouts, the last on Sat Oct 3), heavier but not a better set: its estimated 1-rep max is 240 lb, the best set's 250.8 lb;",
             "- Dips: bodyweight or timed only",
             "- Pull-up: bodyweight, no weighted best set, so no estimated max; most reps in one set: 12;",
             "Most improved first (estimated max, last 4 weeks vs the 4 before): Bench Press +4.9%",

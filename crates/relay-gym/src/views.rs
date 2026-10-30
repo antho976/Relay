@@ -184,6 +184,12 @@ pub struct LiftRow {
     /// The heaviest weight ever lifted in a working set (the most reps on a tie, then the
     /// earliest): a heavy single that is not the `best` set. Absent for a lift done without weight.
     pub heaviest: Option<Record>,
+    /// The workouts that reached the heaviest weight (any reps) and the newest of them: a weight
+    /// first lifted long ago may still be lifted now.
+    #[serde(default)]
+    pub heaviest_sessions: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heaviest_last_day: Option<String>,
     /// For a lift done without weight (pull-ups, dips), the most reps in one set; absent when it
     /// has a `best`.
     pub best_reps: Option<i64>,
@@ -306,11 +312,27 @@ pub struct Marked {
     pub sessions: u32,
     /// Their days, oldest first: the newest [`MARKED_DAYS`].
     pub days: Vec<String>,
+    /// The weeks they fall in, oldest first (the newest [`MARKED_WEEKS`]), each beside the week
+    /// before it: what a deload or a week back is measured against.
+    pub weeks: Vec<MarkedWeek>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename = "GymMarkedWeek")]
+pub struct MarkedWeek {
+    /// The week's first day.
+    pub start: String,
+    /// That whole week's counted workouts and volume, marked or not.
+    pub sessions: u32,
+    pub volume: f64,
+    pub week_before_sessions: u32,
+    pub week_before_volume: f64,
 }
 
 pub const BREAKS: usize = 3;
 pub const MIN_BREAK_DAYS: i64 = 8;
 pub const MARKED_DAYS: usize = 8;
+pub const MARKED_WEEKS: usize = 3;
 
 /// What [`series`] reads. Every field is optional.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -709,10 +731,22 @@ fn marked(h: &History, clock: &Clock) -> Vec<Marked> {
                 m.sessions += 1;
                 m.days.push(day);
             }
-            None => by.push(Marked { kind: s.session_type.clone(), sessions: 1, days: vec![day] }),
+            None => by.push(Marked { kind: s.session_type.clone(), sessions: 1, days: vec![day], weeks: Vec::new() }),
         }
     }
+    let monday = h.meta.first_day_monday;
     for m in &mut by {
+        let mut starts: Vec<Date> = m.days.iter().filter_map(|d| d.parse::<Date>().ok()).map(|d| week_start(d, monday)).collect();
+        starts.dedup();
+        let cut = starts.len().saturating_sub(MARKED_WEEKS);
+        m.weeks = starts[cut..]
+            .iter()
+            .filter_map(|&start| {
+                let before = start.checked_sub(7.days()).ok()?;
+                let [b, w] = <[Week; 2]>::try_from(buckets(h, clock, &[before, start], |d| week_start(d, monday))).ok()?;
+                Some(MarkedWeek { start: w.start, sessions: w.sessions, volume: w.volume, week_before_sessions: b.sessions, week_before_volume: b.volume })
+            })
+            .collect();
         let cut = m.days.len().saturating_sub(MARKED_DAYS);
         m.days.drain(..cut);
     }
@@ -835,6 +869,7 @@ fn lift_row(h: &History, clock: &Clock, name: &str) -> Option<LiftRow> {
     let mut best: Option<Record> = None;
     let mut best_key = (0.0, 0.0);
     let mut heaviest: Option<(f64, i64, Record)> = None;
+    let mut top: Option<(f64, Date, u32)> = None;
     let (mut recent, mut before): (Option<f64>, Option<f64>) = (None, None);
     let mut most_reps: Option<i64> = None;
     let mut shown = name.to_string();
@@ -851,6 +886,13 @@ fn lift_row(h: &History, clock: &Clock, name: &str) -> Option<LiftRow> {
             last_day = Some(day);
             if let Some(r) = working(e).filter(|s| s.weight_lb.is_none()).map(|s| s.reps).max() {
                 most_reps = Some(most_reps.map_or(r, |m| m.max(r)));
+            }
+            if let Some(m) = working(e).filter_map(|s| s.weight_lb).max_by(f64::total_cmp) {
+                top = match top {
+                    Some((w, _, n)) if m == w => Some((w, day, n + 1)),
+                    Some(t) if m < t.0 => Some(t),
+                    _ => Some((m, day, 1)),
+                };
             }
             for set in working(e) {
                 let Some(w) = set.weight_lb else { continue };
@@ -887,6 +929,8 @@ fn lift_row(h: &History, clock: &Clock, name: &str) -> Option<LiftRow> {
         best_reps: if best.is_none() { most_reps } else { None },
         best,
         heaviest: heaviest.map(|(_, _, r)| r),
+        heaviest_sessions: top.map_or(0, |t| t.2),
+        heaviest_last_day: top.map(|t| t.1.to_string()),
         recent_e1rm: recent.map(|v| weight(v, kg)),
         change_pct: match (recent, before) {
             (Some(r), Some(b)) if b > 0.0 => Some(round1((r / b - 1.0) * 100.0)),
@@ -1215,10 +1259,18 @@ mod tests {
         let mut h = history(false);
         h.sessions[1].session_type = "deload".into();
         h.sessions[2].session_type = "test".into();
+        h.sessions[3].session_type = "deload".into();
         let s = summary(&h, &clock(), true);
         let breaks: Vec<(&str, &str, i64, u32)> = s.breaks.iter().map(|b| (b.last_before.as_str(), b.first_after.as_str(), b.days, b.streak_before_weeks)).collect();
         assert_eq!(breaks, [("2026-09-15", "2026-09-29", 14, 1), ("2026-09-29", "2026-10-07", 8, 1)]);
-        assert_eq!(s.marked, [Marked { kind: "deload".into(), sessions: 1, days: vec!["2026-09-29".into()] }], "the untracked test day is not counted");
+        // Each week beside the one before it, all of its counted workouts: not the untracked one.
+        let week = |start: &str, sessions, volume, week_before_sessions, week_before_volume| MarkedWeek { start: start.into(), sessions, volume, week_before_sessions, week_before_volume };
+        assert_eq!(s.marked, [Marked {
+            kind: "deload".into(),
+            sessions: 2,
+            days: vec!["2026-09-29".into(), "2026-10-07".into()],
+            weeks: vec![week("2026-09-28", 1, 1395.0, 0, 0.0), week("2026-10-05", 1, 1000.0, 1, 1395.0)],
+        }], "the untracked test day is not counted");
     }
 
     #[test]
@@ -1304,6 +1356,12 @@ mod tests {
         assert_eq!((best.weight, best.reps), (245.0, 3));
         let heaviest = rows[0].heaviest.as_ref().unwrap();
         assert_eq!((heaviest.weight, heaviest.reps), (245.0, 3), "the untracked 315 x 1 is not counted");
+        assert_eq!((rows[0].heaviest_sessions, rows[0].heaviest_last_day.as_deref()), (1, Some("2026-09-29")));
+        // The same weight again later, for fewer reps: still the first one's set, now lifted twice.
+        let mut again = history(false);
+        again.sessions[3].exercises.push(bench(vec![set(245.0, 2)], false));
+        let row = &lifts(&again, &clock(), Some("bench"))[0];
+        assert_eq!((row.heaviest.as_ref().unwrap().day.as_str(), row.heaviest_sessions, row.heaviest_last_day.as_deref()), ("2026-09-29", 2, Some("2026-10-07")));
         let d = lift(&h, &clock(), "bench", 50).unwrap();
         assert_eq!(d.history.len(), 2);
         assert_eq!(d.history[0].session_id, 2);
