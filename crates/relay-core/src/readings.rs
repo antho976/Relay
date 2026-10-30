@@ -409,9 +409,14 @@ impl<'a> Entries<'a> {
     }
 }
 
-/// An expense as a phrase: "$1,350.00, Rent (Housing), Thu Oct 1".
+/// An expense as a phrase: "$1,350.00, Rent (Housing), Thu Oct 1, on Chequing". "Which card was
+/// that on?" follows a biggest expense.
 fn expense(t: &Value, m: &Money, today: Date) -> String {
-    format!("{}, {} ({}), {}", m.fmt(int(t, "amount")), entry_name(t), category_of(t), day_of(s(t, "date"), today))
+    let mut phrase = format!("{}, {} ({}), {}", m.fmt(int(t, "amount")), entry_name(t), category_of(t), day_of(s(t, "date"), today));
+    if !s(t, "account").is_empty() {
+        let _ = write!(phrase, ", on {}", s(t, "account"));
+    }
+    phrase
 }
 
 /// What the expenses among `rows` from `from` to `to` (both included) add up to, and how many.
@@ -588,6 +593,9 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
             let _ = writeln!(o, "Smallest expense this month: {small}.");
         }
         let _ = writeln!(o, "Entries this month: {}.", if e.rows.is_empty() { format!("{NONE_LOGGED} yet") } else { e.counts() });
+        if let Some(line) = put_aside(e.rows, lists, &m) {
+            let _ = writeln!(o, "{line}");
+        }
     }
     if let Some(groups) = r["duplicates"].as_array() {
         // Which budget month each is in: "the ones from this month" is a budget month too.
@@ -603,7 +611,7 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
         let _ = writeln!(o, "Possible duplicates in the whole ledger (same day, amount, account and note: maybe logged twice): {}.",
             if named.is_empty() { "none".to_string() } else { named.join("; ") });
         if !named.is_empty() {
-            let _ = writeln!(o, "To remove the extra one of a pair: thread.propose deleting its newer id (money.tx.delete), never adding or restoring.");
+            let _ = writeln!(o, "When they ask to remove the extra one of a pair: thread.propose deleting its newer id (money.tx.delete), never adding or restoring.");
         }
     }
     if let Some(page) = last_month {
@@ -612,6 +620,9 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
         let _ = writeln!(o, "- Spent: {}. Income: {}.", logged(e.spent, &m), logged(e.income, &m));
         if !e.expenses.is_empty() {
             let _ = writeln!(o, "- Biggest expenses: {}.", e.largest(3, &m, today));
+        }
+        if let Some(line) = put_aside(e.rows, lists, &m) {
+            let _ = writeln!(o, "- {line}");
         }
         // Tally keeps one amount per budget, so a past month is read against it as it is now;
         // no tool said where last month stood, and a model did the subtraction itself, wrongly.
@@ -762,15 +773,34 @@ fn transfers_into(o: &mut String, rows: &[Value], lists: Option<&Value>, m: &Mon
     into.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(b.0)));
     let cells: Vec<String> = into.iter().map(|(name, _, amount, n)| format!("{name} {} ({n})", m.fmt(*amount))).collect();
     let _ = writeln!(o, "- Transfers by the account they went into, largest first: {}.", cells.join("; "));
-    let Some(lists) = lists else { return };
-    let kind = |id: Option<i64>| list(lists, "accounts").iter().find(|a| id.is_some() && a["id"].as_i64() == id).map(|a| s(a, "type"));
-    let put_aside = |id: Option<i64>| matches!(kind(id), Some("SAVINGS" | "INVESTMENT"));
-    let saved: Vec<&Value> = rows.iter().filter(|t| s(t, "type") == "TRANSFER" && put_aside(t["to_account_id"].as_i64()) && !put_aside(t["account_id"].as_i64())).collect();
-    if !saved.is_empty() {
-        let named: Vec<String> = saved.iter().map(|t| format!("{} {}", s(t, "to_account"), m.fmt(int(t, "amount")))).collect();
-        let _ = writeln!(o, "- Put into savings and investment accounts (from the other accounts): {} in all ({}): {}.",
-            m.fmt(saved.iter().map(|t| int(t, "amount")).sum()), saved.len(), named.join(", "));
+    if let Some(line) = put_aside(rows, lists, m) {
+        let _ = writeln!(o, "- {line}");
     }
+}
+
+/// What `rows` moved into savings and investment accounts from the other accounts, in words.
+fn put_aside(rows: &[Value], lists: Option<&Value>, m: &Money) -> Option<String> {
+    let lists = lists?;
+    let kind = |id: Option<i64>| list(lists, "accounts").iter().find(|a| id.is_some() && a["id"].as_i64() == id).map(|a| s(a, "type"));
+    let aside = |id: Option<i64>| matches!(kind(id), Some("SAVINGS" | "INVESTMENT"));
+    let saved: Vec<&Value> = rows.iter().filter(|t| s(t, "type") == "TRANSFER" && aside(t["to_account_id"].as_i64()) && !aside(t["account_id"].as_i64())).collect();
+    if saved.is_empty() {
+        return None;
+    }
+    let mut by: Vec<(&str, i64, i64)> = Vec::new();
+    for t in &saved {
+        match by.iter_mut().find(|b| b.0 == s(t, "to_account")) {
+            Some(b) => {
+                b.1 += int(t, "amount");
+                b.2 += 1;
+            }
+            None => by.push((s(t, "to_account"), int(t, "amount"), 1)),
+        }
+    }
+    by.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    let named: Vec<String> = by.iter().map(|(name, amount, n)| format!("{name} {} ({n})", m.fmt(*amount))).collect();
+    Some(format!("Put into savings and investment accounts (from the other accounts): {} in all ({}): {}.",
+        m.fmt(saved.iter().map(|t| int(t, "amount")).sum()), saved.len(), named.join("; ")))
 }
 
 fn tx_list(payload: &Value, r: &Value, lists: Option<&Value>, ctx: &Ctx) -> String {
@@ -1258,7 +1288,7 @@ fn invest_list(r: &Value, lists: Option<&Value>, ctx: &Ctx) -> String {
         let _ = writeln!(o, "- {}: {FILLED}.", s(a, "name"));
     }
     if rows.is_empty() {
-        let _ = writeln!(o, "No activities: {NONE_LOGGED}.");
+        let _ = writeln!(o, "No activities: {NONE_LOGGED}. Money moved into an investment or savings account from the bank is a transfer: money.tx.list adds those up.");
         return o;
     }
     let _ = writeln!(o, "{}.", plural(rows.len() as i64, "activity", "activities"));
@@ -1637,7 +1667,7 @@ fn gym_months(o: &mut String, months: [Option<&Value>; 4], unit: &str) {
             n => format!("{label}{now}: {}, {} {unit} lifted, {cardio}", plural(n, "workout", "workouts"), weight(at(&v))),
         }
     }).collect();
-    let _ = writeln!(o, "\nMONTH BY MONTH (calendar months, oldest first): {}.", shown.join("; "));
+    let _ = writeln!(o, "\nMONTH BY MONTH (calendar months, oldest first; for a budget month or any other days, gym.sessions with from and to counts them): {}.", shown.join("; "));
 }
 
 fn gym_sessions(payload: &Value, r: &Value, unit: &str, ctx: &Ctx) -> String {
@@ -2038,8 +2068,8 @@ mod tests {
             "- Income: $2,150.00",
             "- Moved between accounts (transfers, not spending): $300.00",
             "- Spent by category, largest first: Housing $1,350.00 (1); Shopping $157.99 (1); Dining $41.12 (2).",
-            "- Biggest expenses: 1. $1,350.00, Rent (Housing), Thu Oct 1; 2. $157.99, Phone case (Shopping), Thu Oct 8; 3. $26.14, Pho Lien (Dining), Thu Oct 15.",
-            "- Smallest expense: $14.98, no note (Dining), Fri Oct 2.",
+            "- Biggest expenses: 1. $1,350.00, Rent (Housing), Thu Oct 1, on Visa; 2. $157.99, Phone case (Shopping), Thu Oct 8, on Visa; 3. $26.14, Pho Lien (Dining), Thu Oct 15, on Visa.",
+            "- Smallest expense: $14.98, no note (Dining), Fri Oct 2, on Visa.",
             "- Spent by week (Monday to Sunday): Mon Sep 28 to Sun Oct 4: $1,364.98 (2); Mon Oct 5 to Sun Oct 11: $157.99 (1); Mon Oct 12 to Sun Oct 18: $26.14 (1).",
             "- Spent by day, newest first (days with no expense left out): Thu Oct 15 $26.14 (1); Thu Oct 8 $157.99 (1); Fri Oct 2 $14.98 (1); Thu Oct 1 $1,350.00 (1).",
             "- #100 Thu Oct 15: Pho Lien, $26.14 expense, Dining, Visa",
@@ -2062,7 +2092,7 @@ mod tests {
         let text = render("money.tx.list", &json!({}), &moves, &[Some(lists)], &ctx()).unwrap();
         for want in [
             "- Transfers by the account they went into, largest first: Visa $500.00 (1); RRSP $350.00 (2); Savings $300.00 (1).",
-            "- Put into savings and investment accounts (from the other accounts): $550.00 in all (2): Savings $300.00, RRSP $250.00.",
+            "- Put into savings and investment accounts (from the other accounts): $550.00 in all (2): Savings $300.00 (1); RRSP $250.00 (1).",
         ] {
             assert!(text.contains(want), "missing {want:?} in\n{text}");
         }
@@ -2129,6 +2159,15 @@ mod tests {
         })
     }
 
+    /// "How much did I put aside last month" is answered by the summary itself.
+    #[test]
+    fn the_money_summary_adds_up_what_went_into_savings() {
+        let lists = json!({"accounts": [{"id": 2, "name": "Visa", "type": "CREDIT"}, {"id": 3, "name": "Savings", "type": "SAVINGS"}], "categories": []});
+        let text = render("money.summary", &json!({}), &summary(), &[Some(page()), Some(page()), None, None, None, None, Some(lists)], &ctx()).unwrap();
+        let line = "Put into savings and investment accounts (from the other accounts): $300.00 in all (1): Savings $300.00 (1).";
+        assert_eq!(text.matches(line).count(), 2, "this month and last: {text}");
+    }
+
     #[test]
     fn the_money_summary_names_the_entries_with_no_category() {
         let mut month = page();
@@ -2136,7 +2175,7 @@ mod tests {
         let mut r = summary();
         r["duplicates"] = json!([[tx(141, "EXPENSE", 3240, "2026-10-12", Some("Dining"), "Uber Eats"), tx(142, "EXPENSE", 3240, "2026-10-12", Some("Dining"), "Uber Eats")]]);
         let text = render("money.summary", &json!({}), &r, &[Some(month)], &ctx()).unwrap();
-        assert!(text.contains("Possible duplicates in the whole ledger (same day, amount, account and note: maybe logged twice): #141 and #142 Uber Eats, $32.40 expense, Visa, Mon Oct 12 (this month).\nTo remove the extra one of a pair: thread.propose deleting its newer id (money.tx.delete), never adding or restoring."), "{text}");
+        assert!(text.contains("Possible duplicates in the whole ledger (same day, amount, account and note: maybe logged twice): #141 and #142 Uber Eats, $32.40 expense, Visa, Mon Oct 12 (this month).\nWhen they ask to remove the extra one of a pair: thread.propose deleting its newer id (money.tx.delete), never adding or restoring."), "{text}");
         assert!(text.contains("- No category: $9.85 (1): #140 $9.85, Dépanneur Chez Ben, Tue Oct 13\n"), "{text}");
     }
 
@@ -2166,8 +2205,8 @@ mod tests {
             "- money.tx.list's period_offset: 0 = October 2026, -1 = September 2026.",
             "- Weeks before (Monday to Sunday): Mon Sep 28 to Sun Oct 4: $1,364.98; Mon Sep 21 to Sun Sep 27: none logged in Tally;",
             "- Housing: $1,350.00 (1)",
-            "Biggest expenses this month: 1. $1,350.00, Rent (Housing), Thu Oct 1; 2. $157.99",
-            "Smallest expense this month: $14.98, no note (Dining), Fri Oct 2.",
+            "Biggest expenses this month: 1. $1,350.00, Rent (Housing), Thu Oct 1, on Visa; 2. $157.99",
+            "Smallest expense this month: $14.98, no note (Dining), Fri Oct 2, on Visa.",
             "DATES (\"Wednesday\" or \"last Saturday\" is the most recent one): today Thursday Oct 15 = 2026-10-15; yesterday Wednesday Oct 14 = 2026-10-14; Tuesday Oct 13 = 2026-10-13; Monday Oct 12 = 2026-10-12; last Sunday Oct 11 = 2026-10-11; last Saturday Oct 10 = 2026-10-10; last Friday Oct 9 = 2026-10-09.",
             "- Spent today, Thursday Oct 15: $26.14 on 1 expense",
             "- Spent yesterday, Wednesday Oct 14: none logged in Tally",
@@ -2280,7 +2319,7 @@ mod tests {
         let text = render("money.tx.list", &json!({"query": "Provigo"}), &empty, &[], &ctx()).unwrap();
         assert!(text.contains("No entries: none logged in Tally in October 2026 (Oct 1 to Oct 31) that matches."), "{text}");
         let text = render("money.invest.list", &json!({}), &json!({"activities": []}), &[], &ctx()).unwrap();
-        assert!(text.contains("No activities: none logged in Tally."), "{text}");
+        assert!(text.contains("No activities: none logged in Tally. Money moved into an investment or savings account from the bank is a transfer"), "{text}");
         let series = json!({"measure": "income", "by": "period", "labels": ["September", "October"], "series": [{"name": "Income", "values": [0, 0]}]});
         let text = render("money.series", &json!({"measure": "income"}), &series, &[], &ctx()).unwrap();
         assert!(text.contains("- Income: September none logged in Tally; October none logged in Tally. Total none logged in Tally."), "{text}");
@@ -2404,7 +2443,7 @@ mod tests {
             "Cardio in all: 4 sessions, 141 minutes, 31.15 km.",
             "Cardio by kind, every entry read (each kind its own; a treadmill run is not a run): 3 runs, 1 h 41 min, 16.15 km (Sat Oct 3 5.65 km in 36 min; Thu Aug 20 5.5 km in 35 min; ",
             "1 bike ride, 40 min, 15 km (Wed Aug 12 15 km in 40 min).",
-            "MONTH BY MONTH (calendar months, oldest first): Aug: nothing in this Avex copy; Sep: 15 workouts, 180,000 lb lifted, no cardio; Oct so far: 5 workouts, 60,000 lb lifted, 36 cardio minutes, 5.65 km.",
+            "MONTH BY MONTH (calendar months, oldest first; for a budget month or any other days, gym.sessions with from and to counts them): Aug: nothing in this Avex copy; Sep: 15 workouts, 180,000 lb lifted, no cardio; Oct so far: 5 workouts, 60,000 lb lifted, 36 cardio minutes, 5.65 km.",
             "OPEN GOALS:\n- lift target bench",
             "LAST WORKOUT IN DETAIL (Thu Oct 8, Legs A: 12 sets in all, 26,185 lb lifted in all). A lift's volume is weight x reps added up over its working sets; warm-ups are not counted:",
             "- Back Squat: 2 working sets, volume 2,565 lb; 285 lb x 5, 285 lb x 4; plus 1 warm-up set not counted\n",

@@ -613,6 +613,11 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
     let (in_units, out_units) = (units::has_units(&schema["payload"]), units::has_units(&schema["result"]));
     let ledger = if in_units || out_units { ledger_digits(&mut client, actor, token).await } else { 2 };
     let style = Style::from_env();
+    if style.docs {
+        // A field a small model is not shown is not its to set: a `limit` it guesses anyway cuts a
+        // long range's entries, and every total its reading works out from them.
+        strip_hidden(name, &mut arguments);
+    }
     if style.readings && names_in(name, &arguments) {
         // A small model names the account and category as the person did; the door finds their
         // ids, or sends the write back with the names it may use. A proposed batch of edits
@@ -1130,6 +1135,15 @@ fn small_model_tool(entry: &OpEntry) -> Value {
     tool
 }
 
+/// `arguments` without the fields [`small_model_tool`] leaves out of `name`'s schema.
+fn strip_hidden(name: &str, arguments: &mut Value) {
+    if let Some(args) = arguments.as_object_mut() {
+        for (_, field) in relay_core::readings::HIDDEN_FIELDS.iter().filter(|(op, _)| *op == name) {
+            args.remove(*field);
+        }
+    }
+}
+
 fn mail_notice(mail: Option<&MailHint>) -> Option<Value> {
     mail.map(|mail| {
         json!({
@@ -1376,6 +1390,13 @@ mod tests {
         assert!(tool["description"].as_str().unwrap().contains("period_offset: 0 this month, -1 last month"));
         let props = tool["inputSchema"]["properties"].as_object().unwrap();
         assert!(props.contains_key("period_offset") && !props.contains_key("today") && !props.contains_key("limit"));
+        // And what it sets anyway is left out: a guessed limit would cut a range's totals.
+        let mut arguments = json!({"from": "2026-01-01", "limit": 200, "today": "2026-09-18"});
+        strip_hidden("money.tx.list", &mut arguments);
+        assert_eq!(arguments, json!({"from": "2026-01-01"}));
+        let mut arguments = json!({"limit": 5});
+        strip_hidden("gym.sessions", &mut arguments);
+        assert_eq!(arguments, json!({"limit": 5}), "a field it is shown stays");
         let tool = small_model_tool(Registry::global().get("money.tx.add").unwrap());
         assert_eq!(tool["inputSchema"]["properties"]["amount"]["type"], "string", "still decimals");
         for op in relay_core::threads::local_ops().into_iter().filter(|op| op.starts_with("money.") || op.starts_with("gym.")) {
