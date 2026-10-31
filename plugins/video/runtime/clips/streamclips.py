@@ -359,7 +359,8 @@ def cmd_candidates(args):
         for s in range(int(w["startMs"] / 1000), min(n, int(w["endMs"] / 1000) + 1)):
             talk[s] = 1.0
     talk = smooth(talk, 8)
-    weights = (0.45, 0.35, 0.2) if has_chat else (1.0, 0.0, 0.0)
+    # (chat, loud, hype). Without a chat replay (a VOD re-uploaded to YouTube) loudness is all there is.
+    weights = (0.45, 0.35, 0.2) if has_chat else (0.0, 1.0, 0.0)
     score = [max(0.0, weights[0] * cz[i] + weights[1] * lz[i] + weights[2] * hz[i]) * (0.4 + 0.6 * talk[i]) for i in range(n)]
     score = smooth(score, 3)
     # Peaks, at least `spacing` seconds apart, best first.

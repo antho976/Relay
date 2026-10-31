@@ -107,6 +107,15 @@ class Candidates(unittest.TestCase):
             self.assertEqual(len(peaks), 3)
             for want, got in zip([122, 300, 401], peaks):
                 self.assertLess(abs(want - got), 8, peaks)
+            # No chat replay (a VOD from YouTube): the loud moments alone are still found.
+            run("signals", str(d / "a.wav"), "--out", str(d / "s2.json"))
+            out = json.loads(run("candidates", "--transcript", str(d / "words.json"), "--signals", str(d / "s2.json"),
+                                 "--out", str(d / "c2.json"), "--top", "2").stdout)
+            self.assertFalse(out["with_chat"])
+            peaks = sorted(c["peak_s"] for c in out["candidates"])
+            self.assertEqual(len(peaks), 2, out)
+            for want, got in zip([122, 401], peaks):
+                self.assertLess(abs(want - got), 8, peaks)
 
 
 if __name__ == "__main__":
