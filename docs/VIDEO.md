@@ -164,8 +164,14 @@ rings, arrow and steps were checked in stills. The render took 16.4 s for 10.2 s
 and 60 fps, through the dev instance's engine, at −14.0 LUFS. Across two renders each, the split
 layout took 15.8 s and the game alone 11.5 s (+37%). Each segment has two `OffthreadVideo`s of the
 same file, one for each panel. An open lead: crop both panels with ffmpeg once, then compare that
-pass's cost against the 4.3 s saved. Not yet run on a real VOD: yt-dlp
-and whisper.cpp were not installed.
+pass's cost against the 4.3 s saved.
+
+whisper.cpp (built from master, CUDA, RTX 4070) turns flash attention on by default, and that
+silently turns DTW off: every word's `timestampMs` came back empty. `transcribe` passes `-nfa`
+with `--dtw`. On 5.5 min of speech, two runs each: 3.4–3.6 s with flash attention and no DTW,
+5.7–5.9 s with `-nfa` and DTW, about 3 min for a 3-hour VOD. The build itself needs a bounded
+`-j`: a bare `-j` compiled every CUDA kernel at once and ran the 32 GB machine out of memory.
+Not yet run on a real VOD.
 
 ## ElevenLabs
 

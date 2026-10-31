@@ -218,7 +218,9 @@ def cmd_transcribe(args):
     base = out / "whisper"
     cmd = [whisper, "-m", model, "-f", str(wav), "-ojf", "-of", str(base), "-l", args.language, "-t", str(args.threads), "-np"]
     if "turbo" in Path(model).name:
-        cmd += ["--dtw", "large.v3.turbo"]
+        # Flash attention (whisper.cpp's default) silently turns DTW off; without it the words keep
+        # only the decoder's coarse times. 5.5 min of audio: 3.4 s with it, 5.8 s with -nfa and DTW (RTX 4070).
+        cmd += ["-nfa", "--dtw", "large.v3.turbo"]
     if args.prompt:
         cmd += ["--prompt", args.prompt]
     run(cmd)
