@@ -41,6 +41,14 @@ class Words(unittest.TestCase):
         data = {"transcription": [{"tokens": [tok(" go", 0, 200)]}, {"tokens": [tok("od", 1000, 1200)]}]}
         self.assertEqual([w["text"] for w in sc.whisper_words(data)], [" go", "od"])
 
+    def test_words_follow_dtw_when_the_decoder_drifts(self):
+        # As on a real stream: the decoder put "Chat," 16 s before it was said.
+        data = {"transcription": [{"tokens": [tok(" Chat,", 12_700, 18_300, dtw=2920), tok(" I", 18_300, 19_300, dtw=2940),
+                                              tok(" go", 29_500, 29_800, dtw=2970)]}]}
+        words = sc.whisper_words(data)
+        self.assertEqual([w["startMs"] for w in words], [29_050, 29_250, 29_500])
+        self.assertTrue(all(w["endMs"] <= 29_700 + 1200 for w in words), words)
+
     def test_a_line_whisper_repeats_is_kept_once(self):
         seg = lambda text, a: {"text": text, "tokens": [tok(" " + text.split()[0], a, a + 300)]}
         data = {"transcription": [seg("Don't add oil to cold pan.", 0), seg("Don't add oil to cold pan.", 1000),

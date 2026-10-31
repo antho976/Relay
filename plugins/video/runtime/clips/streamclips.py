@@ -187,12 +187,16 @@ def whisper_words(data):
         if not w["text"].strip():
             continue
         conf = round(min(w["_p"]), 3) if w["_p"] else None
-        start = w["startMs"]
-        # whisper.cpp's offsets run late and its DTW time is where the word is heard: start the word
-        # no later than that.
-        if w["timestampMs"] is not None:
-            start = min(start, w["timestampMs"])
-        out.append({"text": w["text"], "startMs": start, "endMs": max(w["endMs"], start + 40), "timestampMs": w["timestampMs"], "confidence": conf})
+        start, end, dtw = w["startMs"], w["endMs"], w["timestampMs"]
+        # The decoder's offsets drift across silence and music: on a real stream "Chat, I think we have
+        # an issue" started 16 s before anyone spoke. DTW is where the word is heard, so anchor on it,
+        # keeping the decoder's onset and end only when they sit close to it.
+        if dtw is not None:
+            if not dtw - 400 <= start <= dtw:
+                start = max(0, dtw - 150)
+            if not dtw < end <= dtw + 1200:
+                end = dtw + max(200, 70 * len(w["text"].strip()))
+        out.append({"text": w["text"], "startMs": start, "endMs": max(end, start + 40), "timestampMs": dtw, "confidence": conf})
     for prev, cur in zip(out, out[1:]):
         if prev["endMs"] > cur["startMs"]:
             prev["endMs"] = max(prev["startMs"] + 40, cur["startMs"])
@@ -221,6 +225,8 @@ def cmd_transcribe(args):
     model = need("whisper_model")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    if args.reuse and (out / "whisper.json").exists():
+        return write_transcript(out, out / "whisper")
     wav = out / "audio-16k.wav"
     run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-i", args.audio, "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(wav)])
     base = out / "whisper"
@@ -236,11 +242,15 @@ def cmd_transcribe(args):
     if args.prompt:
         cmd += ["--prompt", args.prompt, "--carry-initial-prompt"]
     run(cmd)
+    wav.unlink(missing_ok=True)
+    write_transcript(out, base)
+
+
+def write_transcript(out, base):
     words = whisper_words(json.loads(Path(f"{base}.json").read_text()))
     (out / "words.json").write_text(json.dumps(words, ensure_ascii=False) + "\n")
     lines = sentences(words)
     (out / "transcript.txt").write_text("".join(f"[{clock(l['startMs'] / 1000)}] {l['text']}\n" for l in lines))
-    wav.unlink(missing_ok=True)
     emit({"words": len(words), "lines": len(lines), "files": ["words.json", "transcript.txt", "whisper.json"]})
 
 
@@ -480,6 +490,7 @@ def main():
     t.add_argument("--language", default="en")
     t.add_argument("--threads", type=int, default=8)
     t.add_argument("--prompt", help="names and words to spell right: the streamer, the game, its terms")
+    t.add_argument("--reuse", action="store_true", help="rebuild words.json and transcript.txt from an existing whisper.json")
     s = sub.add_parser("signals")
     s.add_argument("audio")
     s.add_argument("--out", required=True)
