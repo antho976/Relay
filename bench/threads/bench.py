@@ -25,6 +25,8 @@ from relaybench import (ANCHOR, BENCH_DIR, MODEL_ID, REPO, RESULTS_DIR, TODAY, Z
 from relaybench import engine as eng  # noqa: E402
 from relaybench import fixtures, grade, model, report, runner, seen, truths  # noqa: E402
 from relaybench import truths_v2  # noqa: E402,F401  (registers the v2 truths in truths.TRUTHS)
+from relaybench import truths_v3  # noqa: E402,F401  (and v3's)
+from relaybench import truths_cov  # noqa: E402,F401  (and the coverage suite's)
 
 DEFAULT_GGUF = Path.home() / "models" / "Qwen3.5-4B-Q8_0.gguf"
 VARIANTS = BENCH_DIR / "variants.json"
@@ -125,7 +127,7 @@ def cmd_check(args, variant, tasks, world="v1"):
         for t in tasks:
             line = {"id": t["id"], "split": t["split"]}
             try:
-                exp = truths.TRUTHS[t["truth"]](e.q, dict(ctx)) if t.get("truth") else {}
+                exp = truths.TRUTHS[t["truth"]](e.q, dict(ctx, params=t.get("params") or {})) if t.get("truth") else {}
                 line["expected"] = exp
                 missing = []
                 for c in t.get("checks") or []:
@@ -289,6 +291,35 @@ def append_results_md(result, path):
     log(f"appended to {RESULTS_MD}")
 
 
+def cmd_regrade(args):
+    """Grade a result's replies again with the checks as they are now: for a fixed grader, or a
+    task whose check was wrong. An effect check keeps the verdict it had (it needs the engine)."""
+    result = json.loads(Path(args.result).read_text())
+    tasks = {t["id"]: t for suite in ("all", "v2", "v3") for t in runner.load_tasks(suite)}
+    flipped = []
+    for rec in result["records"]:
+        task = tasks.get(rec["id"])
+        if task is None:
+            continue
+        old = rec.get("checks") or []
+        effects = {i: {"ok": old[i]["pass"], "why": old[i].get("why", "")}
+                   for i, c in enumerate(task.get("checks") or []) if c.get("type") == "effect" and i < len(old)}
+        thread = {"turns": rec.get("turns") or [], "error": rec.get("error"), "timeout": rec.get("timeout")}
+        was = rec["pass"]
+        rec["pass"], rec["checks"] = grade.grade(task, rec.get("expected"), thread, effects)
+        if rec["pass"] != was:
+            flipped.append((rec["id"], rec.get("run"), was, rec["pass"]))
+    result["regraded"] = dt.datetime.now().isoformat(timespec="seconds")
+    result["summary"] = report.summarize(result["records"])
+    for id_, run, was, now in flipped:
+        log(f"{id_} #{run}: {'pass' if was else 'fail'} -> {'PASS' if now else 'fail'}")
+    log(f"{len(flipped)} task-runs changed")
+    print(report.format_summary(result))
+    if args.out:
+        Path(args.out).write_text(json.dumps(result, indent=1, ensure_ascii=False))
+        log(f"written to {args.out}")
+
+
 def cmd_report(args):
     result = json.loads(Path(args.result).read_text())
     result["summary"] = report.summarize(result["records"])
@@ -299,6 +330,32 @@ def cmd_report(args):
     if args.append:
         append_results_md(result, args.result)
     return 0
+
+
+def cmd_coverage(args):
+    """A coverage run (`--suite cov`) by kind of question, by the days asked about, by language
+    and typing, then each question that failed and why."""
+    r = json.loads(Path(args.result).read_text())
+    recs = [x for x in r["records"] if (x.get("params") or {}).get("kind")]
+    if not recs:
+        sys.exit("no coverage questions in this result (run it with --suite cov)")
+    print(f"{r['name']}: {sum(x['pass'] for x in recs)}/{len(recs)} ({100 * sum(x['pass'] for x in recs) / len(recs):.1f}%), suite {r.get('suite')}, relay {r['relay'].get('commit', '?')[:8]}")
+    groups = [("kind", lambda p: p["kind"]), ("days", lambda p: p.get("days")), ("language", lambda p: p["lang"] + (" typed carelessly" if p.get("typo") else ""))]
+    for title, key in groups:
+        table = {}
+        for x in recs:
+            k = key(x["params"])
+            if k is not None:
+                table.setdefault(k, []).append(x["pass"])
+        print(f"\nby {title}:")
+        for k, v in sorted(table.items(), key=lambda kv: sum(kv[1]) / len(kv[1])):
+            print(f"  {k:30} {100 * sum(v) / len(v):5.1f}%  ({sum(v)}/{len(v)})")
+    failed = [x for x in recs if not x["pass"]]
+    if failed and not args.quiet:
+        print("\nfailed:")
+        for x in failed:
+            why = "; ".join(c.get("why", "")[:110] for c in x["checks"] if not c["pass"])
+            print(f"  {x['id']:22} {x.get('prompt') or ''!r:60} {why}")
 
 
 def cmd_compare(args):
@@ -344,7 +401,7 @@ def main(argv=None):
     r.add_argument("--server", help="llama-server (default: on PATH, else ~/.local/bin/llama-server)")
     r.add_argument("--name", help="a name for this run (default: <gguf>-<variant>)")
     r.add_argument("--runs", type=int, default=1, help="runs of each task (default 1)")
-    r.add_argument("--suite", default="all", help="tasks/<suite>.json, a comma list, or all (default); v2 for tasks/v2/ in the v2 world")
+    r.add_argument("--suite", default="all", help="tasks/<suite>.json, a comma list, or all (default); v2 for tasks/v2/ in the v2 world; v3 for tasks/v3/, the harder suite, in the v2 world; cov[:seed[:count]] for the generated coverage questions (300, seed 1)")
     r.add_argument("--tasks", action="append", help="task ids or globs, comma separated (repeatable)")
     r.add_argument("--split", choices=["dev", "holdout", "all"], default="all")
     r.add_argument("--variant", default="baseline", help="a product variant from variants.json")
@@ -362,11 +419,19 @@ def main(argv=None):
     rp.add_argument("--append", action="store_true")
     rp.add_argument("--json", action="store_true")
     rp.set_defaults(fn=cmd_report)
+    g = sub.add_parser("regrade", help="grade a result's replies again with today's checks (effects keep their verdict)")
+    g.add_argument("result")
+    g.add_argument("--out", help="write the regraded result here (default: only print it)")
+    g.set_defaults(fn=cmd_regrade)
     c = sub.add_parser("compare", help="B against A: deltas with intervals, flipped tasks")
     c.add_argument("a")
     c.add_argument("b")
     c.add_argument("--json", action="store_true")
     c.set_defaults(fn=cmd_compare)
+    cv = sub.add_parser("coverage", help="a coverage run by kind of question, days and language, and what failed")
+    cv.add_argument("result")
+    cv.add_argument("--quiet", action="store_true", help="the tables only")
+    cv.set_defaults(fn=cmd_coverage)
     s = sub.add_parser("seen", help="what the model sees, from a capture run (README)")
     s.add_argument("capture", help="the --capture folder of a run")
     s.add_argument("--measure", action="store_true", help="count again on a CPU-only llama-server")

@@ -35,6 +35,7 @@ pub mod providers;
 mod provider_updates;
 pub mod pty;
 pub mod purge;
+pub mod figures;
 pub mod readings;
 pub mod arbiter;
 pub mod gym;

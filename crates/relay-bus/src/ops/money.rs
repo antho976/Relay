@@ -28,6 +28,12 @@ op!(ListsOp, "money.lists", Empty => Lists, OpMeta::query(Scope::Global, 12, "Th
 payload!(#[schemars(rename = "MoneyTxListIn")] TxListIn {
     /// 0 is the current budget period, -1 the one before.
     pub period_offset: Option<i64>,
+    /// The first day (`YYYY-MM-DD`) of a range of days in place of the budget period; with no
+    /// `to`, the range runs to today.
+    pub from: Option<String>,
+    /// The last day (`YYYY-MM-DD`) the range takes in; with no `from`, it starts with the budget
+    /// period.
+    pub to: Option<String>,
     /// Matches the note, category or account in any case and alphabet.
     pub query: Option<String>,
     pub account_id: Option<i64>,
@@ -35,7 +41,7 @@ payload!(#[schemars(rename = "MoneyTxListIn")] TxListIn {
     pub limit: Option<u32>,
     pub today: Option<String>,
 });
-op!(TxList, "money.tx.list", TxListIn => TxPage, OpMeta::query(Scope::Global, 12, "One budget period's entries, newest first"));
+op!(TxList, "money.tx.list", TxListIn => TxPage, OpMeta::query(Scope::Global, 12, "One budget period's entries, or a range of days', newest first"));
 op!(SeriesOp, "money.series", SeriesQuery => Series,
     OpMeta::query(Scope::Global, 12, "A chart's numbers: spending, income or net by category, week, day or budget period, over one or more periods"));
 payload!(#[schemars(rename = "MoneyTxAddIn")] TxAddIn {

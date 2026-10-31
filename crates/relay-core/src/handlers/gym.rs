@@ -94,9 +94,20 @@ pub fn register(e: &mut Engine) {
     e.register_unlocked::<SummaryOp>(|ctx, p| read_on(ctx.engine(), clock_on(p.today.as_deref())?, views::summary));
     e.register_unlocked::<Sessions>(|ctx, p| {
         let limit = p.limit.unwrap_or(50).clamp(1, 500) as usize;
-        let (sessions, total) =
-            read(ctx.engine(), |h, c, _| views::sessions(h, c, p.offset.unwrap_or(0) as usize, limit, p.lift.as_deref()))?.map_err(invalid)?;
-        Ok(SessionsOut { sessions, total: total as u32 })
+        let day = |d: &str| d.trim().parse::<jiff::civil::Date>().map_err(|_| invalid(format!("Not a date: {d} (YYYY-MM-DD)")));
+        let days = match (p.from.as_deref().map(day).transpose()?, p.to.as_deref().map(day).transpose()?) {
+            (None, None) => None,
+            (from, to) => {
+                let (first, last) = (from.unwrap_or(jiff::civil::Date::MIN), to.unwrap_or_else(|| jiff::Zoned::now().date()));
+                if last < first {
+                    return Err(invalid(format!("The range ends ({last}) before it starts ({first})")));
+                }
+                Some((first, last))
+            }
+        };
+        let (sessions, total, untracked) =
+            read(ctx.engine(), |h, c, _| views::sessions(h, c, p.offset.unwrap_or(0) as usize, limit, p.lift.as_deref(), days))?.map_err(invalid)?;
+        Ok(SessionsOut { sessions, total: total as u32, untracked: untracked as u32 })
     });
     e.register_unlocked::<SessionGet>(|ctx, p| {
         read(ctx.engine(), |h, c, _| views::session(h, c, p.id))?.ok_or_else(|| BusError::not_found("gym.not_found", format!("No workout {} in Avex's history", p.id)))

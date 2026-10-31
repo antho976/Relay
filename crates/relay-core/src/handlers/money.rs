@@ -207,7 +207,8 @@ pub fn register(e: &mut Engine) {
     e.register_unlocked::<ListsOp>(|ctx, _: Empty| ledger(ctx.engine(), |l| l.lists()));
     e.register_unlocked::<TxList>(|ctx, p| {
         let day = today(p.today.as_deref())?;
-        let q = TxQuery { period_offset: p.period_offset, query: p.query, account_id: p.account_id, category_id: p.category_id, limit: p.limit };
+        let (from, to) = (p.from.as_deref().map(|d| today(Some(d))).transpose()?, p.to.as_deref().map(|d| today(Some(d))).transpose()?);
+        let q = TxQuery { period_offset: p.period_offset, from, to, query: p.query, account_id: p.account_id, category_id: p.category_id, limit: p.limit };
         ledger(ctx.engine(), |l| l.tx_list(&q, day))
     });
     e.register_unlocked::<SeriesOp>(|ctx, p| {

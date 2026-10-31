@@ -541,7 +541,7 @@ async fn tools(instance: Instance, actor: &Actor, token: Option<&str>) -> Result
         };
         admitted.then(|| {
             let tool = if style.docs { small_model_tool(entry) } else { op_tool(entry) };
-            if style.readings { never_into(by_names(tool), &filled) } else { tool }
+            if style.readings { never_into(by_names(without_hidden(tool)), &filled) } else { tool }
         })
     }).collect::<Vec<_>>();
 
@@ -613,6 +613,16 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
     let (in_units, out_units) = (units::has_units(&schema["payload"]), units::has_units(&schema["result"]));
     let ledger = if in_units || out_units { ledger_digits(&mut client, actor, token).await } else { 2 };
     let style = Style::from_env();
+    if style.docs || style.readings {
+        // A field a small model is not shown is not its to set: a `limit` it guesses anyway cuts a
+        // long range's entries, and every total its reading works out from them.
+        strip_hidden(name, &mut arguments);
+    }
+    if style.readings && name == "money.tx.update" && arguments.as_object().is_some_and(|args| args.keys().all(|k| k == "id")) {
+        // A small model "opens" an entry this way, and the person sees a change that is none.
+        let text = "Not done: money.tx.update with only an id changes nothing. To read an entry, call money.tx.list (a query with a word of its note finds it).";
+        return Ok(json!({"content":[{"type":"text","text":text}],"isError":true}));
+    }
     if style.readings && names_in(name, &arguments) {
         // A small model names the account and category as the person did; the door finds their
         // ids, or sends the write back with the names it may use. A proposed batch of edits
@@ -659,6 +669,13 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
         let result = response.result.clone().unwrap_or_else(|| json!({}));
         let payload = request.payload.clone();
         if let Some(text) = reading(&mut client, actor, token, name, &payload, &result).await {
+            return Ok(reading_success(text, mail.as_ref()));
+        }
+    }
+    if response.ok && style.readings && name == "thread.propose" {
+        // Read as JSON, a pending proposal came back as "I've added a new account proposal":
+        // the person heard it was done (bench, 2026-10-30).
+        if let Some(text) = response.result.as_ref().and_then(proposed) {
             return Ok(reading_success(text, mail.as_ref()));
         }
     }
@@ -1057,15 +1074,24 @@ async fn read(client: &mut Client, actor: &Actor, token: Option<&str>, op: &str,
 
 /// `result` of `op` as its reading, the reads it folds in read first.
 async fn reading(client: &mut Client, actor: &Actor, token: Option<&str>, op: &str, payload: &Value, result: &Value) -> Option<String> {
+    let today = jiff::Zoned::now().date();
     let mut extras = Vec::new();
-    for (extra, with) in relay_core::readings::extras(op, result) {
+    for (extra, with) in relay_core::readings::extras(op, payload, result, today) {
         extras.push(read(client, actor, token, extra, with).await);
     }
     let currency = read(client, actor, token, "money.lists", json!({})).await
         .and_then(|lists| lists["currency"].as_str().map(str::to_string))
         .unwrap_or_else(|| "CAD".into());
-    let ctx = relay_core::readings::Ctx { today: jiff::Zoned::now().date(), currency };
+    let ctx = relay_core::readings::Ctx { today, currency };
     relay_core::readings::render(op, payload, result, &extras, &ctx)
+}
+
+/// A proposal still waiting for the person, in words: what it does, and that it is not done.
+fn proposed(result: &Value) -> Option<String> {
+    (result["status"] == "pending").then(|| format!(
+        "PROPOSED, NOT DONE: {} (proposal {}). It waits for the person to approve it on a card here; nothing has changed yet. \
+         Tell them what you proposed (\"I proposed …\"), never that it is added, deleted or changed.",
+        result["summary"].as_str().unwrap_or("a change"), result["id"]))
 }
 
 /// A reading as a tool's answer: plain text, with no JSON beside it for a client to prefer.
@@ -1120,14 +1146,31 @@ fn small_model_tool(entry: &OpEntry) -> Value {
     if let Some(about) = relay_core::readings::description(entry.name, jiff::Zoned::now().date()) {
         tool["description"] = Value::String(about);
     }
-    for (op, field) in relay_core::readings::HIDDEN_FIELDS {
-        if *op == entry.name {
-            if let Some(props) = tool["inputSchema"]["properties"].as_object_mut() {
-                props.remove(*field);
-            }
+    without_hidden(tool)
+}
+
+/// `tool` without the fields a reading makes a small model better without
+/// (`relay_core::readings::HIDDEN_FIELDS`).
+fn without_hidden(mut tool: Value) -> Value {
+    let name = tool["name"].as_str().unwrap_or("").to_string();
+    // `get_mut`, not indexing: `tool["inputSchema"]["properties"]` would add `"properties": null`
+    // to an op with no payload (money.lists), and Claude Code drops every tool of a server with
+    // one schema it cannot read.
+    if let Some(props) = tool.get_mut("inputSchema").and_then(|s| s.get_mut("properties")).and_then(Value::as_object_mut) {
+        for (_, field) in relay_core::readings::HIDDEN_FIELDS.iter().filter(|(op, _)| *op == name) {
+            props.remove(*field);
         }
     }
     tool
+}
+
+/// `arguments` without the fields [`small_model_tool`] leaves out of `name`'s schema.
+fn strip_hidden(name: &str, arguments: &mut Value) {
+    if let Some(args) = arguments.as_object_mut() {
+        for (_, field) in relay_core::readings::HIDDEN_FIELDS.iter().filter(|(op, _)| *op == name) {
+            args.remove(*field);
+        }
+    }
 }
 
 fn mail_notice(mail: Option<&MailHint>) -> Option<Value> {
@@ -1376,8 +1419,32 @@ mod tests {
         assert!(tool["description"].as_str().unwrap().contains("period_offset: 0 this month, -1 last month"));
         let props = tool["inputSchema"]["properties"].as_object().unwrap();
         assert!(props.contains_key("period_offset") && !props.contains_key("today") && !props.contains_key("limit"));
+        // And what it sets anyway is left out: a guessed limit would cut a range's totals.
+        let mut arguments = json!({"from": "2026-01-01", "limit": 200, "today": "2026-09-18"});
+        strip_hidden("money.tx.list", &mut arguments);
+        assert_eq!(arguments, json!({"from": "2026-01-01"}));
+        let mut arguments = json!({"limit": 5});
+        strip_hidden("gym.sessions", &mut arguments);
+        assert_eq!(arguments, json!({"limit": 5}), "a field it is shown stays");
+        // Readings alone, without the plain descriptions, leave the fields out too.
+        let tool = without_hidden(op_tool(Registry::global().get("money.tx.list").unwrap()));
+        assert!(!tool["inputSchema"]["properties"].as_object().unwrap().contains_key("limit"));
+        // And no schema gains a field it did not have: a `"properties": null` on money.lists, which
+        // takes nothing, made Claude Code drop every Relay tool (bench, 2026-10-30).
+        for op in relay_core::threads::local_ops() {
+            let entry = Registry::global().get(op).unwrap();
+            for tool in [without_hidden(op_tool(entry)), small_model_tool(entry)] {
+                let schema = tool["inputSchema"].as_object().unwrap();
+                assert!(schema.get("properties").is_none_or(Value::is_object), "{op}: {tool}");
+            }
+        }
         let tool = small_model_tool(Registry::global().get("money.tx.add").unwrap());
         assert_eq!(tool["inputSchema"]["properties"]["amount"]["type"], "string", "still decimals");
+        // A pending proposal reads as one, not as a change made.
+        let pending = json!({"id": 1, "status": "pending", "summary": "Add 1 account: “Tangerine savings” (savings, at Tangerine)"});
+        assert_eq!(proposed(&pending).unwrap(), "PROPOSED, NOT DONE: Add 1 account: “Tangerine savings” (savings, at Tangerine) (proposal 1). It waits for the person to approve it \
+            on a card here; nothing has changed yet. Tell them what you proposed (\"I proposed …\"), never that it is added, deleted or changed.");
+        assert_eq!(proposed(&json!({"id": 1, "status": "applied"})), None);
         for op in relay_core::threads::local_ops().into_iter().filter(|op| op.starts_with("money.") || op.starts_with("gym.")) {
             assert!(relay_core::readings::description(op, jiff::Zoned::now().date()).is_some(), "{op}");
         }

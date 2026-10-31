@@ -170,7 +170,12 @@ pub struct Summary {
     /// from these few instead of the period's entries.
     #[schemars(extend("x-unit" = "omit"))]
     pub recent: Vec<Tx>,
+    /// Entries that may be one logged twice, over the whole ledger: each group shares its day,
+    /// amount, type, account and note (a note is needed). Newest first, at most [`DUPLICATE_GROUPS`].
+    pub duplicates: Vec<Vec<Tx>>,
 }
+
+pub const DUPLICATE_GROUPS: usize = 10;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "MoneyLists")]
@@ -201,6 +206,14 @@ pub struct DeviceView {
 pub struct TxQuery {
     /// 0 is the current budget period, -1 the one before.
     pub period_offset: Option<i64>,
+    /// A range of days in place of the period: its first day, and its last (taken in). A `from`
+    /// alone runs to today; a `to` alone starts with the period.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub from: Option<Date>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub to: Option<Date>,
     pub query: Option<String>,
     pub account_id: Option<i64>,
     pub category_id: Option<i64>,

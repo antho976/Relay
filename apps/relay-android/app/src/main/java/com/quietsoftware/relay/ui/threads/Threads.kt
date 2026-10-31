@@ -517,6 +517,8 @@ private sealed interface Piece {
     /** Three or more reads in a row, folded under the first: "Read the budget and 2 more". */
     data class Reads(override val key: String, val calls: List<ToolCall>) : Piece
     data class Error(override val key: String, val text: String) : Piece
+    /** Relay checked a local model's figures against what it read (relay-core `figures.rs`): which did not match. */
+    data class Check(override val key: String, val text: String) : Piece
     /** The end of a finished turn: a quiet Copy key for its words. */
     data class Copy(override val key: String, val text: String) : Piece
     /** What an Aide bot said, in its chat and the Chief of Staff's (a `note`). */
@@ -704,6 +706,10 @@ private fun pieces(messages: List<ThreadMessage>, working: Boolean, today: Local
             "error" -> {
                 flushReads()
                 out += Piece.Error("m:${m.id}", m.text.ifBlank { "Something went wrong" })
+            }
+            "check" -> {
+                flushReads()
+                if (m.text.isNotBlank()) out += Piece.Check("m:${m.id}", m.text)
             }
             "note" -> {
                 endTurn(true)
@@ -1213,6 +1219,10 @@ private fun PieceView(
                 SelectionContainer { T(p.text, style = Relay.type.ui.copy(fontSize = 13.5.sp, lineHeight = 20.sp), color = c.heldText) }
             }
             retry?.let { RetryKey(idle, it) }
+        }
+        is Piece.Check -> Row(cell.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Glyph("check", 13.dp, c.inkDim, Modifier.padding(top = 3.dp))
+            SelectionContainer { T(p.text, style = Relay.type.ui.copy(fontSize = 12.5.sp, lineHeight = 18.sp), color = c.ink3) }
         }
         is Piece.Copy -> ReplyKeys(p.text, cell)
         is Piece.Note -> AideNote(p.body, cell.padding(top = 12.dp))
