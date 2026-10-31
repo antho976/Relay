@@ -142,11 +142,13 @@ says what it should teach. You do not find the moments.
 - **Use `Camera` with `keys`** to start wide, then glide into the panel each step is about
   (`frames` 20–30 for a glide, `move: "cut"` to jump). Times come from `video.asset.inspect`'s
   `motion` and from Reading frames.
-- **Draw marks inside the `Camera`, in the recording's pixels.** They follow the zoom:
+- **Draw `Callout` and `Arrow` inside the `Camera`, in the recording's pixels.** They follow the zoom
+  and keep their size on screen:
   - `Callout {rect, at, until, label}` rings what to press;
-  - `Arrow {from, to, at}` shows where to look next;
-  - `Step {n, text, at, until}` names the step across the top.
+  - `Arrow {from, to, at}` shows where to look next.
   One ring at a time, and each label two to four words.
+- **Put `Step {n, text, at, until}` beside the `Camera`, not in it.** It names the step across the
+  top in the composition's pixels, like `Hook` and `Captions`.
 - **Words:** the person's own voice if they record one (`video.asset.add`, then `video.transcribe`
   for its captions). Otherwise captions alone, from the script with `captionsFromText`. ElevenLabs
   voices cost the person's credits: ask before making one.

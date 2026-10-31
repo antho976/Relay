@@ -148,8 +148,10 @@ approves each clip; Relay does not post them.
   each side, and `remapCaptions` moves the words to match. Punch-ins zoom a panel on a reaction.
   The `Captions` variants (`lit`, `box`, `pop`, `plain`, with `maxWords`, `y`, `uppercase` and
   `stroke`) let clips differ instead of sharing one template.
-- **Guides:** `Camera` glides and zooms over footage between `keys`. `Callout`, `Arrow` and `Step`
-  are drawn in the footage's pixels, so they follow the zoom at a constant size on screen.
+- **Guides:** `Camera` glides and zooms over footage between `keys`. A glide starts from wherever
+  the camera is when its key arrives, even mid-way through the glide before it. `Callout` and
+  `Arrow` are drawn inside the `Camera` in the footage's pixels, so they follow the zoom at a
+  constant size on screen. `Step` and `Hook` sit beside it in the composition's pixels.
 - **A reference channel's style:** `streamclips.py style` measures a channel's Shorts (length,
   cuts a minute, median shot, loudness) and draws a contact sheet of each. The agent writes the
   captions' look and the pacing into the channel's profile.
@@ -159,7 +161,10 @@ and a synthetic chat replay). Candidates found the three planted moments: loud a
 chat alone, and loud alone. A 20 s section with three pauses was cut to 10.2 s with no silence of
 0.3 s or more left. The split layout, a punch-in, the hook on frame 0, and a guide's two glides,
 rings, arrow and steps were checked in stills. The render took 16.4 s for 10.2 s at 1080×1920
-and 60 fps, through the dev instance's engine, at −14.0 LUFS. Not yet run on a real VOD: yt-dlp
+and 60 fps, through the dev instance's engine, at −14.0 LUFS. Across two renders each, the split
+layout took 15.8 s and the game alone 11.5 s (+37%). Each segment has two `OffthreadVideo`s of the
+same file, one for each panel. An open lead: crop both panels with ffmpeg once, then compare that
+pass's cost against the 4.3 s saved. Not yet run on a real VOD: yt-dlp
 and whisper.cpp were not installed.
 
 ## ElevenLabs

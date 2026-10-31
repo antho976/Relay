@@ -7,7 +7,7 @@
 import type { Caption } from '@remotion/captions';
 import React, { createContext, useContext } from 'react';
 import { AbsoluteFill, interpolate, OffthreadVideo, Sequence, useCurrentFrame, useVideoConfig } from 'remotion';
-import { easeIn, easeInOut, easeOut, pop, useProgress, useSpring } from './motion';
+import { easeIn, easeInOut, easeOut, pop, useExit, useProgress, useSpring } from './motion';
 import { useSafeArea } from './safe';
 import { theme } from './theme';
 
@@ -15,7 +15,8 @@ import { theme } from './theme';
 export type Rect = { x: number; y: number; w: number; h: number };
 export type Size = { width: number; height: number };
 /** Where the camera looks from frame `at` on. `move` is how it gets there from the key before:
- * `ease` glides there (the default), `cut` jumps. `frames` is how long the glide takes (default 18). */
+ * `ease` glides there (the default), `cut` jumps. `frames` is how long the glide takes (default 18;
+ * 0 is a cut). */
 export type ViewKey = { at: number; view: Rect; move?: 'ease' | 'cut'; frames?: number };
 /** Spans of the source to keep, in order: `[startMs, endMs]`. Everything between them is cut. */
 export type Keep = [number, number][];
@@ -46,9 +47,12 @@ export const viewAt = (keys: ViewKey[], frame: number, fallback: Rect): Rect => 
   if (i === -1) i = sorted.length;
   if (i === 0) return sorted[0].view;
   const to = sorted[i - 1];
-  const from = i >= 2 ? sorted[i - 2].view : to.view;
-  if (to.move === 'cut' || i < 2) return to.view;
-  const t = interpolate(frame, [to.at, to.at + (to.frames ?? 18)], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: easeInOut });
+  const frames = to.frames ?? 18;
+  if (to.move === 'cut' || frames <= 0 || i < 2) return to.view;
+  // A glide starts from where the camera is when its key arrives: mid-way through the glide
+  // before, when that one has not finished.
+  const from = viewAt(sorted.slice(0, i - 1), to.at, fallback);
+  const t = interpolate(frame, [to.at, to.at + frames], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: easeInOut });
   const geo = (a: number, b: number) => a * Math.pow(b / a, t);
   const lin = (a: number, b: number) => a + (b - a) * t;
   const w = geo(from.w, to.view.w);
@@ -104,11 +108,11 @@ export const Camera: React.FC<{
 
 // ---- Cutting out dead air ----
 
-export type Segment = { from: number; frames: number; trimBefore: number; startMs: number; endMs: number };
+export type ClipSegment = { from: number; frames: number; trimBefore: number; startMs: number; endMs: number };
 
 /** The kept spans as segments of the composition: where each starts (`from`), how long it runs
  * and where in the source it plays from. Built from the running total, so rounding never drifts. */
-export const cutSegments = (keep: Keep, fps: number): Segment[] => {
+export const cutSegments = (keep: Keep, fps: number): ClipSegment[] => {
   let total = 0;
   return keep.map(([startMs, endMs]) => {
     const from = Math.round((total / 1000) * fps);
@@ -264,7 +268,7 @@ export const Callout: React.FC<{
   const s = useCameraScale();
   const draw = useProgress({ delay: at, duration: 14 });
   const tag = useSpring(at + 8);
-  const leave = until == null ? 1 : interpolate(frame, [until - 8, until], [1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+  const leave = useExit(until ?? Number.MAX_SAFE_INTEGER, 8);
   if (frame < at || leave <= 0) return null;
   const lw = line / s;
   const pad = 10 / s;
@@ -310,36 +314,35 @@ export const Arrow: React.FC<{
   const frame = useCurrentFrame();
   const s = useCameraScale();
   const draw = useProgress({ delay: at, duration: 16 });
-  const leave = until == null ? 1 : interpolate(frame, [until - 8, until], [1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+  const leave = useExit(until ?? Number.MAX_SAFE_INTEGER, 8);
   if (frame < at || leave <= 0) return null;
   const lw = line / s;
   const dx = to.x - from.x;
   const dy = to.y - from.y;
-  const length = Math.hypot(dx, dy) || 1;
   const cx = (from.x + to.x) / 2 - dy * bend;
   const cy = (from.y + to.y) / 2 + dx * bend;
   // The head points along the curve's last tangent, from the control point to the tip.
   const angle = Math.atan2(to.y - cy, to.x - cx);
   const head = 28 / s;
   const wing = (turn: number) => `${to.x - head * Math.cos(angle + turn)},${to.y - head * Math.sin(angle + turn)}`;
-  const curve = length * 1.15;
   return (
     <svg data-id={id} style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible', opacity: leave }} width={1} height={1}>
       <path d={`M ${from.x} ${from.y} Q ${cx} ${cy} ${to.x} ${to.y}`} fill="none" stroke={color} strokeWidth={lw} strokeLinecap="round"
-        strokeDasharray={curve} strokeDashoffset={curve * (1 - draw)} />
+        pathLength={1} strokeDasharray={1} strokeDashoffset={1 - draw} />
       {draw > 0.85 ? <polyline points={`${wing(0.5)} ${to.x},${to.y} ${wing(-0.5)}`} fill="none" stroke={color} strokeWidth={lw} strokeLinecap="round" strokeLinejoin="round" /> : null}
     </svg>
   );
 };
 
-/** A numbered step across the top of the safe area: "2  Open the Anvil". */
+/** A numbered step across the top of the safe area: "2  Open the Anvil". It is placed in the
+ * composition's pixels: put it beside a Camera, not inside one. */
 export const Step: React.FC<{ n: number | string; text: string; at?: number; until?: number; color?: string; size?: number; id?: string }> = ({
   n, text, at = 0, until, color = theme.colors.accent, size = 52, id,
 }) => {
   const frame = useCurrentFrame();
   const safe = useSafeArea();
   const p = useSpring(at);
-  const leave = until == null ? 1 : interpolate(frame, [until - 8, until], [1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+  const leave = useExit(until ?? Number.MAX_SAFE_INTEGER, 8);
   if (frame < at || leave <= 0) return null;
   return (
     <div style={{ position: 'absolute', top: safe.top, left: safe.left, right: safe.right, display: 'flex', justifyContent: 'center', opacity: leave }}>
@@ -366,7 +369,7 @@ export const Hook: React.FC<{ text: string; at?: number; frames?: number; varian
   // Already in at its first frame: that frame is the thumbnail.
   const spring = useSpring(at, 16);
   const p = at === 0 ? 1 : spring;
-  const leave = interpolate(frame, [end - 8, end], [1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+  const leave = useExit(end, 8);
   if (frame < at || leave <= 0) return null;
   const card = variant === 'card';
   return (

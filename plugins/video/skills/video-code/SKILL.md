@@ -223,7 +223,7 @@ Footage, streams and guides (the `stream-clips` skill has the whole workflow):
 | `<Camera src source view? keys? zoom? width? height? trimBefore?>` | A recording seen through a camera filling the box: a fixed `view` (a rect in the recording's px) or `keys` `[{at, view, frames?, move?}]` it glides between. Children are drawn in the recording's px and follow the zoom. |
 | `<StreamClip src source cam game layout? camShare? keep? punches?>` | A stream made vertical: the facecam over the gameplay (`split`), or `cam` or `game` alone; `keep` plays only those spans of the source (dead air cut); `punches` zoom in on a reaction. |
 | `keepSpeech(words, startMs, endMs)`, `remapCaptions(words, keep)`, `keptFrames(keep, fps)`, `editedMs(ms, keep)` | Cut the pauses out of a clip, and move its captions, its length and its moments to the edited timing. |
-| `<Callout rect at until label side>`, `<Arrow from to at>`, `<Step n text at until>`, `<Hook text>` | A guide's marks: a ring with a label, an arrow drawn in, a numbered step across the top, the opening line (on screen from frame 0). |
+| `<Callout rect at until label side>`, `<Arrow from to at>`, `<Step n text at until>`, `<Hook text>` | A guide's marks: a ring with a label and an arrow drawn in (both inside a `Camera`, following its zoom), a numbered step across the top and the opening line, on screen from frame 0 (both beside the `Camera`). |
 
 ## Look at it — and read what it tells you
 
