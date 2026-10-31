@@ -124,6 +124,15 @@ Each of these marks a clip as auto-made. Avoid every one:
 - **A face cut off by the crop**, or the cam rect left over a changed overlay.
 - **Effects for their own sake:** shakes, glitches, emoji rain. One sound effect on the payoff at
   most, and only when the channel's style has them.
+- **Hard cuts.** Every cut dissolves over about 5 frames, picture and sound (`StreamClip`'s
+  `crossfade`, or `crossSegments` + `CutFade` + `cutLevel` for your own layers). A hard jump in the
+  picture or a pop in the sound reads as auto-cut.
+- **Zooms and reframes nobody needed.** One crop per clip; reframe a span only where he would
+  otherwise leave the frame. At most one punch-in, on the line the clip is for, eased in and out.
+- **A thin or system font.** Match the reference's caption face: for chunky pixel captions,
+  Pixelify Sans Bold (Google Fonts, OFL) with a thick black outline and a hard shadow under it.
+- **A small or missing end.** Leave 1.5 s of picture after the last word (its sound fading out) and
+  end on a big card over the dimmed frame: LIKE & SUBSCRIBE, then where he streams.
 
 ## A reference channel's style
 

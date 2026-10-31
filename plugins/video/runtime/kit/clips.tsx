@@ -82,7 +82,8 @@ export const Camera: React.FC<{
   /** Frames of the source to skip (Remotion's trimBefore). */
   trimBefore?: number;
   muted?: boolean;
-  volume?: number;
+  /** A level, or a level for each frame of the clip (from 0 where it starts playing). */
+  volume?: number | ((frame: number) => number);
   id?: string;
   style?: React.CSSProperties;
   children?: React.ReactNode;
@@ -120,6 +121,35 @@ export const cutSegments = (keep: Keep, fps: number): ClipSegment[] => {
     const frames = Math.round((total / 1000) * fps) - from;
     return { from, frames, trimBefore: Math.round((startMs / 1000) * fps), startMs, endMs };
   }).filter((s) => s.frames > 0);
+};
+
+/** A kept span that overlaps the cut before it. */
+export type CrossSegment = ClipSegment & { fadeIn: number; fadeOut: number };
+
+/** `cutSegments`, overlapped so no cut is hard: each span after the first starts `fade` frames
+ * early (the source just before it) and dissolves in over the span before, whose sound fades out
+ * under it. The clip's length is unchanged. */
+export const crossSegments = (keep: Keep, fps: number, fade = 5): CrossSegment[] => {
+  const segs = cutSegments(keep, fps);
+  const pre = segs.map((s, i) => (i === 0 ? 0 : Math.max(0, Math.min(fade, s.trimBefore, segs[i - 1].frames - 1))));
+  return segs.map((s, i) => ({
+    ...s, from: s.from - pre[i], frames: s.frames + pre[i], trimBefore: s.trimBefore - pre[i],
+    fadeIn: pre[i], fadeOut: i + 1 < segs.length ? pre[i + 1] : 0,
+  }));
+};
+
+/** A span's sound level at frame `f` of its own sequence: up over its fade in, down over its fade out. */
+export const cutLevel = (seg: CrossSegment, f: number): number => {
+  const up = seg.fadeIn > 0 ? Math.min(1, (f + 1) / (seg.fadeIn + 1)) : 1;
+  const down = seg.fadeOut > 0 ? Math.min(1, (seg.frames - f) / (seg.fadeOut + 1)) : 1;
+  return Math.max(0, Math.min(up, down));
+};
+
+/** A span's picture, dissolving in over the span before it. */
+export const CutFade: React.FC<{ seg: CrossSegment; children: React.ReactNode }> = ({ seg, children }) => {
+  const f = useCurrentFrame();
+  const opacity = seg.fadeIn > 0 ? Math.min(1, (f + 1) / (seg.fadeIn + 1)) : 1;
+  return <AbsoluteFill style={{ opacity }}>{children}</AbsoluteFill>;
 };
 
 /** Frames the kept spans last: the composition's `durationInFrames`. */
@@ -211,26 +241,31 @@ export const StreamClip: React.FC<{
   keep?: Keep;
   punches?: (Punch & { panel?: 'cam' | 'game' })[];
   volume?: number;
+  /** Frames each cut dissolves over, picture and sound (default 5; 0 for hard cuts). */
+  crossfade?: number;
   id?: string;
   children?: React.ReactNode;
-}> = ({ src, source, cam, game, layout, camShare = 0.36, keep, punches = [], volume, id, children }) => {
+}> = ({ src, source, cam, game, layout, camShare = 0.36, keep, punches = [], volume, crossfade = 5, id, children }) => {
   const { width, height, fps, durationInFrames } = useVideoConfig();
   const mode = layout ?? (cam ? 'split' : 'game');
   const camPunch = usePunch(punches.filter((p) => (p.panel ?? 'cam') === 'cam'));
   const gamePunch = usePunch(punches.filter((p) => p.panel === 'game'));
-  const segments = keep ? cutSegments(keep, fps) : [{ from: 0, frames: durationInFrames, trimBefore: 0, startMs: 0, endMs: 0 }];
+  const segments: CrossSegment[] = keep ? crossSegments(keep, fps, crossfade)
+    : [{ from: 0, frames: durationInFrames, trimBefore: 0, startMs: 0, endMs: 0, fadeIn: 0, fadeOut: 0 }];
   const camH = Math.round(height * camShare);
-  const panels = (trimBefore: number) => {
+  const panels = (seg: CrossSegment) => {
+    const { trimBefore } = seg;
+    const level = (f: number) => cutLevel(seg, f) * (volume ?? 1);
     if (mode === 'cam' && cam) {
-      return <Camera src={src} source={source} view={cam} zoom={camPunch} trimBefore={trimBefore} volume={volume} id="cam" />;
+      return <Camera src={src} source={source} view={cam} zoom={camPunch} trimBefore={trimBefore} volume={level} id="cam" />;
     }
     if (mode === 'game' || !cam) {
-      return <Camera src={src} source={source} view={game ?? whole(source)} zoom={gamePunch} trimBefore={trimBefore} volume={volume} id="game" />;
+      return <Camera src={src} source={source} view={game ?? whole(source)} zoom={gamePunch} trimBefore={trimBefore} volume={level} id="game" />;
     }
     return (
       <div style={{ display: 'flex', flexDirection: 'column', width, height }}>
         <Camera src={src} source={source} view={cam} zoom={camPunch} width={width} height={camH} trimBefore={trimBefore} muted id="cam" />
-        <Camera src={src} source={source} view={game ?? whole(source)} zoom={gamePunch} width={width} height={height - camH} trimBefore={trimBefore} volume={volume} id="game" />
+        <Camera src={src} source={source} view={game ?? whole(source)} zoom={gamePunch} width={width} height={height - camH} trimBefore={trimBefore} volume={level} id="game" />
       </div>
     );
   };
@@ -238,7 +273,7 @@ export const StreamClip: React.FC<{
     <AbsoluteFill data-id={id} style={{ background: '#000' }}>
       {segments.map((s, i) => (
         <Sequence key={i} from={s.from} durationInFrames={s.frames} premountFor={Math.round(fps / 2)}>
-          {panels(s.trimBefore)}
+          <CutFade seg={s}>{panels(s)}</CutFade>
         </Sequence>
       ))}
       <AbsoluteFill>{children}</AbsoluteFill>
