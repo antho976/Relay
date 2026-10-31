@@ -48,6 +48,8 @@ audio once its clips are made.
    - ends on the payoff (the punchline, the death, the reaction), not after it;
    - makes sense without the hour before it. Cut a moment that needs a backstory.
    Never start or end in the middle of a sentence: the start and end come from `words.json` times.
+   A VOD re-uploaded to YouTube has no chat replay: `candidates` then ranks on loudness alone, so
+   read the transcript closely, and look for what chat's TTS or a guest said too.
 4. **Fetch only those parts** (`--section`), each with 3 s of handles each side.
    `video.asset.add {link: true}` them into one video for the VOD, titled with the streamer and
    the date. Each clip is a composition of that video, so the person reviews them side by side as
@@ -89,6 +91,14 @@ export const Clip3: React.FC = () => {
 ```
 
 ## The layout
+
+**One camera (IRL, cooking, just chatting):** there is no cam rect, so crop the stream itself. Draw
+each clip from its own `Camera`s, one `Sequence` per kept span (`cutSegments`), and give each span
+its own 9:16 crop (608×1080 of a 1080p stream) where he stands in it: a hand editor reframes at
+every cut. Find where he stands by Reading frames with a grid drawn on them
+(`drawgrid=w=240:h=1080`). When two people share the shot, take a wider crop and lay it on a
+blurred, darkened copy of itself. Keep spans may be in any order: open on the payoff, then show
+what led to it.
 
 - `StreamClip` with a `cam` is `split`: the facecam over the gameplay, the cam taking `camShare` of
   the height (default 0.36). `layout: "cam"` fills the frame with the cam, for just chatting.

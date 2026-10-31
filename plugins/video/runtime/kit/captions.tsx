@@ -2,6 +2,7 @@
 // said lit. From timed words (a transcript with word timings, or an .srt through
 // @remotion/captions' parseSrt), or from plain text paced at a speaking rate.
 import { createTikTokStyleCaptions, type Caption, type TikTokPage } from '@remotion/captions';
+import { fitText } from '@remotion/layout-utils';
 import React, { useMemo } from 'react';
 import { interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
 import { easeOut } from './motion';
@@ -75,33 +76,42 @@ export const Captions: React.FC<{
   outline?: string;
   /** Words always drawn in `highlight` (case and punctuation ignored): the few that carry the line. */
   emphasis?: string[];
+  /** Shrink a page whose longest word would run wider than the safe area; default true. Load the
+   * font first (loadFonts) so it is measured in its own shapes. */
+  fit?: boolean;
   style?: React.CSSProperties;
 }> = ({
   captions, id, combineWithinMs = 1200, maxWords = 0, variant = 'lit', position = 'bottom', y, uppercase = false, size = 64, color = '#FFFFFF',
-  highlight = theme.colors.accent, font = theme.fonts.display, weight = 800, stroke = 0.03, outline = 'rgba(0,0,0,0.6)', emphasis, style,
+  highlight = theme.colors.accent, font = theme.fonts.display, weight = 800, stroke = 0.03, outline = 'rgba(0,0,0,0.6)', emphasis, fit = true, style,
 }) => {
   const frame = useCurrentFrame();
-  const { fps, height } = useVideoConfig();
+  const { fps, width, height } = useVideoConfig();
   const safe = useSafeArea();
   const pages = useMemo(
     () => splitPages(createTikTokStyleCaptions({ captions, combineTokensWithinMilliseconds: combineWithinMs }).pages, maxWords),
     [captions, combineWithinMs, maxWords],
   );
+  const key = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
+  const strong = useMemo(() => new Set((emphasis ?? []).map(key)), [emphasis]);
   const ms = (frame / fps) * 1000;
   const page = pages.find((p) => ms >= p.startMs && ms < p.startMs + p.durationMs);
   if (!page) return null;
+  // A word cannot wrap: when the page's longest one is wider than the safe area, the page shrinks.
+  const longest = page.tokens.map((t) => t.text.trim()).reduce((a, b) => (b.length > a.length ? b : a), '');
+  const room = width - safe.left - safe.right - size * stroke * 2;
+  const fitted = fit && longest
+    ? Math.min(size, fitText({ text: longest, withinWidth: room, fontFamily: font, fontWeight: weight, textTransform: uppercase ? 'uppercase' : undefined, validateFontIsLoaded: false }).fontSize)
+    : size;
   const place: React.CSSProperties = y != null
     ? { top: y * height, transform: 'translateY(-50%)' }
     : position === 'bottom'
       ? { bottom: safe.bottom, justifyContent: 'flex-end' }
       : position === 'top' ? { top: safe.top } : { top: 0, bottom: 0, justifyContent: 'center' };
-  const edge = stroke > 0 ? { WebkitTextStroke: `${Math.max(1, size * stroke)}px ${outline}`, paintOrder: 'stroke fill' } : {};
-  const key = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
-  const strong = useMemo(() => new Set((emphasis ?? []).map(key)), [emphasis]);
+  const edge = stroke > 0 ? { WebkitTextStroke: `${Math.max(1, fitted * stroke)}px ${outline}`, paintOrder: 'stroke fill' } : {};
   return (
     <div style={{ position: 'absolute', left: safe.left, right: safe.right, display: 'flex', flexDirection: 'column', alignItems: 'center', ...place }}>
       <div data-id={id} style={{
-        fontFamily: font, fontSize: size, fontWeight: weight, color, textAlign: 'center', lineHeight: 1.15,
+        fontFamily: font, fontSize: fitted, fontWeight: weight, color, textAlign: 'center', lineHeight: 1.15,
         textShadow: '0 4px 18px rgba(0,0,0,0.55)', whiteSpace: 'pre-wrap', textTransform: uppercase ? 'uppercase' : undefined,
         ...edge, ...style,
       }}>
@@ -123,7 +133,7 @@ export const Captions: React.FC<{
                 {lead}
                 <span style={{
                   display: 'inline-block', color: live ? '#0B0D12' : base, background: live ? highlight : 'transparent',
-                  borderRadius: size * 0.18, padding: `0 ${size * 0.12}px`, margin: `0 ${-size * 0.12}px`,
+                  borderRadius: fitted * 0.18, padding: `0 ${fitted * 0.12}px`, margin: `0 ${-fitted * 0.12}px`,
                   WebkitTextStroke: live ? '0px transparent' : undefined, textShadow: live ? 'none' : undefined,
                 }}>{t.text.slice(lead.length)}</span>
               </span>

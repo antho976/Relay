@@ -18,7 +18,7 @@ export type Size = { width: number; height: number };
  * `ease` glides there (the default), `cut` jumps. `frames` is how long the glide takes (default 18;
  * 0 is a cut). */
 export type ViewKey = { at: number; view: Rect; move?: 'ease' | 'cut'; frames?: number };
-/** Spans of the source to keep, in order: `[startMs, endMs]`. Everything between them is cut. */
+/** Spans of the source to keep, played one after another: `[startMs, endMs]`. Everything else is cut. */
 export type Keep = [number, number][];
 
 const whole = (s: Size): Rect => ({ x: 0, y: 0, w: s.width, h: s.height });
@@ -139,7 +139,8 @@ export const editedMs = (ms: number, keep: Keep): number | null => {
 };
 
 /** The words of a source transcript as the edited clip says them. A word in a cut is dropped. A
- * word that runs over a cut's edge is trimmed to it. */
+ * word that runs over a cut's edge is trimmed to it. The spans may be in any order (a hand edit
+ * often opens on the payoff and then shows what led to it); the words come back in the clip's. */
 export const remapCaptions = (captions: Caption[], keep: Keep): Caption[] => {
   const out: Caption[] = [];
   for (const c of captions) {
@@ -152,7 +153,7 @@ export const remapCaptions = (captions: Caption[], keep: Keep): Caption[] => {
       break;
     }
   }
-  return out;
+  return out.sort((x, y) => x.startMs - y.startMs);
 };
 
 /** Kept spans from a transcript's words: the speech from `startMs` to `endMs`, with every pause
