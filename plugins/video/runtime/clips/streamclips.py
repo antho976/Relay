@@ -99,8 +99,10 @@ def find_tools():
 INSTALL = {
     "yt_dlp": "curl -L -o ~/.local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp && chmod +x ~/.local/bin/yt-dlp",
     "whisper": "git clone --depth 1 https://github.com/ggml-org/whisper.cpp ~/.local/share/whisper.cpp && cd ~/.local/share/whisper.cpp && "
-               "cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=native -DCMAKE_BUILD_TYPE=Release && cmake --build build -j --config Release",
-    "whisper_model": "curl -L -o ~/models/ggml-large-v3-turbo.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+               # A bounded -j: a bare -j starts every CUDA kernel at once and runs a 32 GB machine out of memory.
+               "cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=native -DCMAKE_BUILD_TYPE=Release && "
+               "cmake --build build -j 4 --config Release --target whisper-cli",
+    "whisper_model": "mkdir -p ~/models && curl -L -o ~/models/ggml-large-v3-turbo.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
 }
 
 
