@@ -1,9 +1,10 @@
 // Captions a word at a time, as short-video viewers expect: a few words on screen, the one being
 // said lit. From timed words (a transcript with word timings, or an .srt through
 // @remotion/captions' parseSrt), or from plain text paced at a speaking rate.
-import { createTikTokStyleCaptions, type Caption } from '@remotion/captions';
+import { createTikTokStyleCaptions, type Caption, type TikTokPage } from '@remotion/captions';
 import React, { useMemo } from 'react';
-import { useCurrentFrame, useVideoConfig } from 'remotion';
+import { interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
+import { easeOut } from './motion';
 import { useSafeArea } from './safe';
 import { theme } from './theme';
 
@@ -22,46 +23,108 @@ export const captionsFromText = (text: string, startMs = 0, wordsPerMinute = 160
   }));
 };
 
-/** Caption pages along the bottom of the safe area (or its middle or top), the word being said
- * in `highlight`. */
+/** Pages of at most `maxWords` words: a page longer than that is split, each part starting on its
+ * first word. */
+export const splitPages = (pages: TikTokPage[], maxWords: number): TikTokPage[] => {
+  if (maxWords <= 0) return pages;
+  const out: TikTokPage[] = [];
+  for (const page of pages) {
+    const end = page.startMs + page.durationMs;
+    for (let i = 0; i < page.tokens.length; i += maxWords) {
+      const tokens = page.tokens.slice(i, i + maxWords);
+      const next = page.tokens[i + maxWords];
+      const startMs = i === 0 ? page.startMs : tokens[0].fromMs;
+      const until = next ? next.fromMs : end;
+      out.push({ ...page, text: tokens.map((t) => t.text).join(''), tokens: i === 0 ? tokens : [{ ...tokens[0], text: tokens[0].text.trimStart() }, ...tokens.slice(1)], startMs, durationMs: until - startMs });
+    }
+  }
+  return out;
+};
+
+/** How the words look:
+ * - `lit`: the page in `color`, the word being said in `highlight`.
+ * - `box`: the word being said on a `highlight` box, in dark type.
+ * - `pop`: words appear as they are said, each popping in.
+ * - `plain`: the page in one colour, nothing lit. */
+export type CaptionVariant = 'lit' | 'box' | 'pop' | 'plain';
+
+/** Caption pages along the bottom of the safe area (or its middle or top, or centred on `y`, a
+ * fraction of the frame's height), the word being said marked by the `variant`. */
 export const Captions: React.FC<{
   captions: Caption[];
   /** Its data-id. */
   id?: string;
   /** Words this close together share a page; default 1200 ms. */
   combineWithinMs?: number;
+  /** At most this many words on screen at once; default no limit. */
+  maxWords?: number;
+  variant?: CaptionVariant;
   position?: 'bottom' | 'center' | 'top';
+  /** Centre the captions on this fraction of the frame's height (0.36 sits on a split stream's
+ * seam); overrides `position`. */
+  y?: number;
+  uppercase?: boolean;
   size?: number;
   color?: string;
   highlight?: string;
   font?: string;
   weight?: number;
+  /** Outline width as a fraction of the size; default 0.03 (0 for none). */
+  stroke?: number;
   style?: React.CSSProperties;
 }> = ({
-  captions, id, combineWithinMs = 1200, position = 'bottom', size = 64, color = '#FFFFFF', highlight = theme.colors.accent,
-  font = theme.fonts.display, weight = 800, style,
+  captions, id, combineWithinMs = 1200, maxWords = 0, variant = 'lit', position = 'bottom', y, uppercase = false, size = 64, color = '#FFFFFF',
+  highlight = theme.colors.accent, font = theme.fonts.display, weight = 800, stroke = 0.03, style,
 }) => {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
+  const { fps, height } = useVideoConfig();
   const safe = useSafeArea();
-  const { pages } = useMemo(() => createTikTokStyleCaptions({ captions, combineTokensWithinMilliseconds: combineWithinMs }), [captions, combineWithinMs]);
+  const pages = useMemo(
+    () => splitPages(createTikTokStyleCaptions({ captions, combineTokensWithinMilliseconds: combineWithinMs }).pages, maxWords),
+    [captions, combineWithinMs, maxWords],
+  );
   const ms = (frame / fps) * 1000;
   const page = pages.find((p) => ms >= p.startMs && ms < p.startMs + p.durationMs);
   if (!page) return null;
-  const place: React.CSSProperties = position === 'bottom'
-    ? { bottom: safe.bottom, justifyContent: 'flex-end' }
-    : position === 'top' ? { top: safe.top } : { top: 0, bottom: 0, justifyContent: 'center' };
+  const place: React.CSSProperties = y != null
+    ? { top: y * height, transform: 'translateY(-50%)' }
+    : position === 'bottom'
+      ? { bottom: safe.bottom, justifyContent: 'flex-end' }
+      : position === 'top' ? { top: safe.top } : { top: 0, bottom: 0, justifyContent: 'center' };
+  const outline = stroke > 0 ? { WebkitTextStroke: `${Math.max(1, size * stroke)}px rgba(0,0,0,0.6)`, paintOrder: 'stroke fill' } : {};
   return (
     <div style={{ position: 'absolute', left: safe.left, right: safe.right, display: 'flex', flexDirection: 'column', alignItems: 'center', ...place }}>
       <div data-id={id} style={{
         fontFamily: font, fontSize: size, fontWeight: weight, color, textAlign: 'center', lineHeight: 1.15,
-        textShadow: '0 4px 18px rgba(0,0,0,0.55)', WebkitTextStroke: `${Math.max(1, size * 0.03)}px rgba(0,0,0,0.6)`,
-        paintOrder: 'stroke fill', whiteSpace: 'pre-wrap', ...style,
+        textShadow: '0 4px 18px rgba(0,0,0,0.55)', whiteSpace: 'pre-wrap', textTransform: uppercase ? 'uppercase' : undefined,
+        ...outline, ...style,
       }}>
         {page.tokens.map((t, i) => {
           const live = ms >= t.fromMs && ms < t.toMs;
+          if (variant === 'pop') {
+            const p = interpolate(ms, [t.fromMs, t.fromMs + 140], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: easeOut });
+            return (
+              <span key={i} style={{ display: 'inline-block', whiteSpace: 'pre', opacity: p > 0 ? 1 : 0, transform: `scale(${0.6 + 0.4 * p})`, color: live ? highlight : color }}>
+                {t.text}
+              </span>
+            );
+          }
+          if (variant === 'box') {
+            const lead = t.text.match(/^\s*/)?.[0] ?? '';
+            return (
+              <span key={i} style={{ whiteSpace: 'pre' }}>
+                {lead}
+                <span style={{
+                  display: 'inline-block', color: live ? '#0B0D12' : color, background: live ? highlight : 'transparent',
+                  borderRadius: size * 0.18, padding: `0 ${size * 0.12}px`, margin: `0 ${-size * 0.12}px`,
+                  WebkitTextStroke: live ? '0px transparent' : undefined, textShadow: live ? 'none' : undefined,
+                }}>{t.text.slice(lead.length)}</span>
+              </span>
+            );
+          }
+          const lit = variant === 'lit' && live;
           return (
-            <span key={i} style={{ color: live ? highlight : color, display: 'inline-block', transform: live ? 'scale(1.06)' : undefined }}>
+            <span key={i} style={{ color: lit ? highlight : color, display: 'inline-block', transform: lit ? 'scale(1.06)' : undefined }}>
               {t.text}
             </span>
           );

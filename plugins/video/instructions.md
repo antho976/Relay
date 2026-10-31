@@ -1,6 +1,6 @@
 This project has Video: videos written as code (Remotion: React and TypeScript), checked and rendered by Relay.
 
-- **Load the `video-code` skill before your first `video.*` call.**
+- **Load the `video-code` skill before your first `video.*` call**, and `stream-clips` too for Shorts from a stream's VOD or a guide edited from game footage. The person approves every clip; never upload or post one yourself.
 - Start a video only when the person asked for one (`video.create`); work on the one they mean (`video.list`) instead of starting another.
 - A video is a folder of code. Edit its `src/` with your own file tools, run `video.check` after every edit, and fix each error at the file and line it names.
 - Look before you say it works: `video.still` with `count` for a contact sheet across it, or `at` for moments, and `video.scan` over the whole video before you call it done. Fix every issue they report (clipped, offscreen, unsafe, contrast, text_overlap, small_text, font_fallback, brief_text, broken_image, console), or say why it is meant.

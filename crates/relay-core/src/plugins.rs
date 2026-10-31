@@ -505,11 +505,12 @@ mod tests {
         assert!(plugin.manifest.mcp_servers.is_empty());
         assert_eq!(plugin.manifest.default_checkout, None);
         let skills: Vec<&str> = plugin.skills.iter().map(|skill| skill.dir.as_str()).collect();
-        assert_eq!(skills, ["video-code"]);
-        let skill = &plugin.skills[0];
-        assert_eq!(frontmatter(&skill.body, "name").as_deref(), Some(skill.dir.as_str()));
-        assert_eq!(crate::skills::folder_name(&skill.dir), skill.dir, "not provider-safe");
-        assert!(plugin.instructions().contains("`video-code`"), "the rules name the skill");
+        assert_eq!(skills, ["stream-clips", "video-code"]);
+        for skill in &plugin.skills {
+            assert_eq!(frontmatter(&skill.body, "name").as_deref(), Some(skill.dir.as_str()));
+            assert_eq!(crate::skills::folder_name(&skill.dir), skill.dir, "not provider-safe");
+            assert!(plugin.instructions().contains(&format!("`{}`", skill.dir)), "the rules name {}", skill.dir);
+        }
         // The runtime the engine writes beside the store comes with it, and is no skill's.
         assert!(plugin.file("runtime/worker.mjs").is_some() && plugin.file("runtime/kit/index.ts").is_some());
         let brought: Vec<&str> = relay_bus::registry::Registry::global().entries().iter()
@@ -517,6 +518,7 @@ mod tests {
             .map(|entry| entry.name)
             .collect();
         assert_eq!(brought.len(), 31, "{brought:?}");
+        let skill = plugin.skills.iter().find(|skill| skill.dir == "video-code").unwrap();
         for op in brought {
             assert!(skill.body.contains(&format!("`{op} ")), "the skill does not show {op}");
         }

@@ -128,6 +128,40 @@ the engine (`video/timeline.rs`) in the sheets' pixel font.
   status bar, `screenrecord` stopped with SIGINT so its file is finished, pulled, written at a
   constant frame rate, added, and answered with where each step fell and the motion events.
 
+## Clips from streams
+
+An agent with the `stream-clips` skill turns a stream's VOD into vertical Shorts. The person
+approves each clip; Relay does not post them.
+
+- **Finding moments:** `.relay/clips/streamclips.py`, which the kit syncs from
+  `plugins/video/runtime/clips/`. It is standard-library Python over ffmpeg, and over yt-dlp and
+  whisper.cpp where the person installed them (`tools` prints the commands; agents never install
+  them). It fetches a Twitch VOD's audio and chat replay, never its whole picture. It transcribes
+  on the GPU with word timings (large-v3-turbo with DTW), measures each second's loudness
+  (`ebur128`) and chat (messages, and hype words and emotes, moved back 6 s for chat's lag), and
+  ranks the moments. A moment's score adds robust z-scores of chat against its own two-minute
+  pace, of loudness above its one-minute level, and of hype, weighted by whether anyone is
+  talking. Candidates are at least 75 s apart. The agent reads them with the transcript, picks
+  the clips, and then fetches only those parts in full.
+- **Editing:** the kit's `StreamClip` puts the facecam over the gameplay (both are rects in the
+  stream's pixels, found once per channel). `keepSpeech` cuts pauses over 650 ms down to 120 ms
+  each side, and `remapCaptions` moves the words to match. Punch-ins zoom a panel on a reaction.
+  The `Captions` variants (`lit`, `box`, `pop`, `plain`, with `maxWords`, `y`, `uppercase` and
+  `stroke`) let clips differ instead of sharing one template.
+- **Guides:** `Camera` glides and zooms over footage between `keys`. `Callout`, `Arrow` and `Step`
+  are drawn in the footage's pixels, so they follow the zoom at a constant size on screen.
+- **A reference channel's style:** `streamclips.py style` measures a channel's Shorts (length,
+  cuts a minute, median shot, loudness) and draws a contact sheet of each. The agent writes the
+  captions' look and the pacing into the channel's profile.
+
+Checked on generated footage (a 1080p60 "stream" with a facecam box, tone with planted pauses,
+and a synthetic chat replay). Candidates found the three planted moments: loud and chat together,
+chat alone, and loud alone. A 20 s section with three pauses was cut to 10.2 s with no silence of
+0.3 s or more left. The split layout, a punch-in, the hook on frame 0, and a guide's two glides,
+rings, arrow and steps were checked in stills. The render took 16.4 s for 10.2 s at 1080×1920
+and 60 fps, through the dev instance's engine, at −14.0 LUFS. Not yet run on a real VOD: yt-dlp
+and whisper.cpp were not installed.
+
 ## ElevenLabs
 
 `video.voice`, `video.sfx`, `video.music` and `video.transcribe` (`video/eleven.rs`) use the key the
@@ -272,6 +306,7 @@ A video has several versions in two senses, and Relay keeps both:
 | The timeline, the sound's issues, its pictures | `crates/relay-core/src/video/timeline.rs` |
 | Assets: add, link, fonts, list | `crates/relay-core/src/video/assets.rs` |
 | Clips: frame rates and motion | `crates/relay-core/src/video/inspect.rs` |
+| Stream clips: moments, words, cuts, a channel's style | `plugins/video/runtime/clips/streamclips.py`, the `stream-clips` skill, the kit's `clips.tsx` |
 | ElevenLabs | `crates/relay-core/src/video/eleven.rs` |
 | Android capture | `crates/relay-core/src/video/capture.rs` |
 | The live preview | `crates/relay-core/src/video/preview.rs`, `plugins/video/runtime/loopback.cjs` |
