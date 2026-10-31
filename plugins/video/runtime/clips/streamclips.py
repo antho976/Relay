@@ -453,6 +453,94 @@ def cmd_cut(args):
     emit({"out": args.out, **probe(args.out), "source": src})
 
 
+# ---- Cut edges ----
+# A cut in the middle of a word or on a loud sound is the harsh, auto-made cut ("A fail!" cut off
+# at its "f"). Every edge of a clip's kept spans is checked against the sound and the words, and
+# moved to the nearest quiet point between words.
+
+FRAME_S = 0.01
+
+
+def speech_levels(media):
+    """The speech band's level (dBFS) every 10 ms of a file's sound."""
+    import array
+    proc = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-i", media, "-map", "0:a:0", "-ac", "1", "-ar", "16000",
+                           "-af", "highpass=f=200,lowpass=f=4000", "-f", "s16le", "-"], capture_output=True, timeout=600)
+    if proc.returncode != 0:
+        sys.exit(f"ffmpeg could not read the sound of {media}")
+    pcm = array.array("h")
+    pcm.frombytes(proc.stdout[: len(proc.stdout) // 2 * 2])
+    if sys.byteorder == "big":
+        pcm.byteswap()
+    step = int(16000 * FRAME_S)
+    out = []
+    for i in range(0, len(pcm) - step + 1, step):
+        chunk = pcm[i:i + step]
+        rms = math.sqrt(sum(v * v for v in chunk) / step)
+        out.append(20 * math.log10(rms / 32768) if rms > 0 else -100.0)
+    return out
+
+
+def level_at(levels, t, half=0.02):
+    """The loudest 10 ms frame within `half` seconds of `t`."""
+    a = max(0, int((t - half) / FRAME_S))
+    b = min(len(levels), int((t + half) / FRAME_S) + 1)
+    return max(levels[a:b]) if a < b else -100.0
+
+
+def in_word(words, t, margin_ms=30):
+    ms = t * 1000
+    return any(w["startMs"] - margin_ms < ms < w["endMs"] + margin_ms for w in words)
+
+
+def check_edge(levels, words, t, kind, reach=1.0, inward=0.15):
+    """One edge of a kept span: how loud the sound is there, whether a word is under it, and the
+    quiet point to move it to. A start may move earlier by `reach` (later by `inward`), an end
+    later by `reach` (earlier by `inward`), so a cut never drops a word to find silence."""
+    lo, hi = (t - reach, t + inward) if kind == "start" else (t - inward, t + reach)
+    lo, hi = max(0.0, lo), min(len(levels) * FRAME_S, hi)
+    peak = max(levels[int(lo / FRAME_S):int(hi / FRAME_S) + 1] or [-100.0])
+    floor = max(-55.0, peak - 25.0)
+    here = level_at(levels, t)
+    inside = in_word(words, t)
+    best, best_score = t, None
+    for between in (True, False):  # between words if anywhere can be; else the quietest point
+        c = lo
+        while c <= hi + 1e-9:
+            if not between or not in_word(words, c):
+                score = level_at(levels, c) + 20 * abs(c - t)
+                if best_score is None or score < best_score:
+                    best, best_score = c, score
+            c += FRAME_S
+        if best_score is not None:
+            break
+    there = level_at(levels, best)
+    return {"at": round(t, 2), "kind": kind, "level_db": round(here, 1), "in_word": inside,
+            # A word's times are estimates: one over a silent edge is not a cut through it.
+            "harsh": here > floor or (inside and here > -60), "move_to": round(best, 2), "level_there_db": round(there, 1),
+            "fixable": there <= floor and not (in_word(words, best) and there > -60)}
+
+
+def cmd_cuts(args):
+    keep = json.loads(args.keep)
+    words = json.loads(Path(args.words).read_text()) if args.words else []
+    levels = speech_levels(args.media)
+    edges, fixed = [], []
+    for i, (a, b) in enumerate(keep):
+        s = check_edge(levels, words, float(a), "start")
+        e = check_edge(levels, words, float(b), "end")
+        if args.runs_on and i == len(keep) - 1:
+            e.update(kind="end (runs on)", harsh=False)  # the clip plays on past it, fading out
+        edges += [s, e]
+        fixed.append([s["move_to"] if s["harsh"] else a, e["move_to"] if e["harsh"] else b])
+    harsh = [x for x in edges if x["harsh"]]
+    stuck = [x for x in harsh if not x["fixable"]]
+    emit({"ok": not harsh, "harsh": len(harsh), "stuck": len(stuck), "edges": edges, "keep": fixed,
+          "next": "Use `keep`. A `stuck` edge has no quiet point near it: end that span at another sentence." if harsh else None})
+    if args.strict and harsh:
+        sys.exit(1)
+
+
 def cmd_style(args):
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -518,9 +606,15 @@ def main():
     y = sub.add_parser("style")
     y.add_argument("videos", nargs="+")
     y.add_argument("--out", required=True)
+    e = sub.add_parser("cuts", help="check a clip's cut edges against the sound and the words")
+    e.add_argument("media", help="the section the clip is cut from")
+    e.add_argument("--keep", required=True, help='the kept spans in seconds of the section, as JSON: [[a, b], ...]')
+    e.add_argument("--words", help="the section's words (from `words`)")
+    e.add_argument("--runs-on", action="store_true", help="the clip plays on past its last span (an end card): that end is not a cut")
+    e.add_argument("--strict", action="store_true", help="exit 1 when an edge is harsh")
     args = p.parse_args()
     {"tools": cmd_tools, "fetch": cmd_fetch, "transcribe": cmd_transcribe, "signals": cmd_signals, "candidates": cmd_candidates,
-     "words": cmd_words, "cut": cmd_cut, "style": cmd_style}[args.cmd](args)
+     "words": cmd_words, "cut": cmd_cut, "style": cmd_style, "cuts": cmd_cuts}[args.cmd](args)
 
 
 if __name__ == "__main__":

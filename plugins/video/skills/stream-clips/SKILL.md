@@ -28,6 +28,7 @@ stop: **never install, download or build tools yourself.**
 | `candidates --transcript words.json --signals signals.json --out candidates.json` | The 25 strongest moments, at least 75 s apart. Each has its peak, a window, why it scored (`chat`, `loud`, `hype`, `talk`) and the transcript around it. Chat is moved back 6 s for its lag. |
 | `words --transcript words.json --start S --end E --out FILE` | One clip's words, timed from 0. |
 | `cut VIDEO --start S --end E --out FILE` | A part of a local recording, re-encoded from the exact frame at a constant rate. |
+| `cuts SECTION --words W --keep '[[a,b],…]' --runs-on --strict` | Every edge of a clip's kept spans against the sound and the words: a cut inside a word or on a loud sound is `harsh`, with the quiet point to `move_to`. Answers the fixed `keep`. |
 | `style VIDEO… --out DIR` | For a reference channel's Shorts: length, cuts a minute, median shot, loudness, and a contact sheet of each to look at. |
 
 Keep a VOD's files in `videos/p<project>/vods/<vod id>/`, where you may write. Delete that VOD's
@@ -58,11 +59,16 @@ audio once its clips are made.
 5. **Edit each clip** (the example below). Cut the dead air with `keepSpeech`, keep the captions on
    the edited timing with `remapCaptions`, punch in on the one or two biggest reactions, and open
    with a `Hook` on frame 0: it is the thumbnail.
-6. **Check** each composition: `video.check`, `video.still {composition, count: 8}`, `video.scan`.
+6. **Check the cuts** of each clip, before anything else: `cuts <section> --words <words> --keep
+   '<its keep>' --runs-on --strict` (`--runs-on` when the clip plays on under an end card). Put its
+   `keep` in the clip. A `stuck` edge has no quiet point near it: end that span at another
+   sentence. **Never render a clip that fails it**: a word cut off is the clearest sign of an
+   auto-made clip.
+7. **Check** each composition: `video.check`, `video.still {composition, count: 8}`, `video.scan`.
    Fix captions under the buttons, faint words and a face out of frame.
-7. **Render** each clip with `video.render.batch` and `preset: "shorts"`, named
+8. **Render** each clip with `video.render.batch` and `preset: "shorts"`, named
    `<streamer>-<date>-<n>`.
-8. **The review list:** write `vods/<vod id>/clips.json`, one entry per clip: `file`, `title`
+9. **The review list:** write `vods/<vod id>/clips.json`, one entry per clip: `file`, `title`
    (under 60 characters, in the channel's voice), `description` (one line, with the streamer
    credited: "From <name>'s stream: twitch.tv/<name>"), `tags`, `vod_at` (where in the VOD it is),
    `why` and `score`. Tell the person where it is.

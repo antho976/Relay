@@ -96,6 +96,34 @@ class Chat(unittest.TestCase):
         self.assertFalse(sc.HYPE.search("hello chat"))
 
 
+class CutEdges(unittest.TestCase):
+    # 10 ms frames: quiet, a word from 1.0 s to 1.5 s, quiet, a word from 2.0 s on.
+    levels = [-90.0] * 100 + [-15.0] * 50 + [-90.0] * 50 + [-15.0] * 100
+    words = [{"startMs": 1000, "endMs": 1500}, {"startMs": 2000, "endMs": 3000}]
+
+    def test_an_end_inside_a_word_moves_to_the_quiet_after_it(self):
+        e = sc.check_edge(self.levels, self.words, 1.3, "end")
+        self.assertTrue(e["harsh"] and e["in_word"] and e["fixable"])
+        self.assertTrue(1.53 <= e["move_to"] < 1.97, e)
+
+    def test_a_start_inside_a_word_moves_before_it(self):
+        e = sc.check_edge(self.levels, self.words, 2.1, "start")
+        self.assertTrue(e["harsh"])
+        self.assertTrue(1.53 <= e["move_to"] < 1.97, e)
+
+    def test_a_quiet_edge_between_words_is_fine(self):
+        self.assertFalse(sc.check_edge(self.levels, self.words, 1.75, "end")["harsh"])
+
+    def test_a_word_estimate_over_silence_is_not_a_cut(self):
+        words = [{"startMs": 1000, "endMs": 1800}]
+        self.assertFalse(sc.check_edge(self.levels, words, 1.7, "end")["harsh"])
+
+    def test_continuous_speech_is_stuck(self):
+        levels = [-15.0] * 300
+        e = sc.check_edge(levels, [{"startMs": 0, "endMs": 3000}], 1.5, "end")
+        self.assertTrue(e["harsh"] and not e["fixable"])
+
+
 @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
 class Candidates(unittest.TestCase):
     def test_the_planted_moments_are_found(self):
