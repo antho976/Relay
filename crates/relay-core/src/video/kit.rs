@@ -107,7 +107,7 @@ fn target(rel: &str) -> Option<String> {
     if rel == "tsconfig.base.json" {
         return Some(rel.into());
     }
-    if rel == "worker.mjs" || rel == "loopback.cjs" {
+    if rel == "worker.mjs" || rel == "loopback.cjs" || rel.starts_with("clips/") {
         return Some(format!(".relay/{rel}"));
     }
     rel.strip_prefix("kit/").map(|kit| format!(".relay/kit/{kit}"))
@@ -405,6 +405,8 @@ mod tests {
         }
         assert_eq!(target("worker.mjs").as_deref(), Some(".relay/worker.mjs"));
         assert_eq!(target("kit/text.tsx").as_deref(), Some(".relay/kit/text.tsx"));
+        assert_eq!(target("clips/streamclips.py").as_deref(), Some(".relay/clips/streamclips.py"));
+        assert!(files.contains(&"kit/clips.tsx") && files.contains(&"clips/streamclips.py"));
         assert_eq!(target("starter/src/Video.tsx"), None);
         assert_eq!(target("package.json"), None);
         let package: serde_json::Value = serde_json::from_slice(runtime_files().find(|(r, _)| *r == "package.json").unwrap().1).unwrap();

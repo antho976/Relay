@@ -210,11 +210,21 @@ Captions, grounds, layout, look:
 
 | Export | Use |
 | --- | --- |
-| `<Captions captions position highlight size>` | A few words at a time, the spoken one lit. `captionsFromText(text, startMs, wpm)` times plain text; `parseSrt` from `@remotion/captions` reads an `.srt`. |
+| `<Captions captions variant maxWords position y uppercase highlight size stroke outline emphasis>` | A few words at a time, the spoken one marked: `variant` `lit` (default), `box` (the word on a highlight box), `pop` (words appear as said) or `plain`. `maxWords` caps the words on screen, `y` centres them on a fraction of the height. `emphasis` lists the words always drawn in `highlight`; `outline` is the outline's colour. A page whose longest word would run past the safe area shrinks to fit (`fit`, on by default). `captionsFromText(text, startMs, wpm)` times plain text; `parseSrt` from `@remotion/captions` reads an `.srt`. |
 | `<Gradient from to angle turn>`, `<Grid>`, `<Glow x y color>`, `<Grain>` | Grounds that move a little. Put them first in an `AbsoluteFill`. |
 | `useSafeArea()`, `useSafePadding()`, `safeArea(w, h)` | The area text should stay in (the same numbers `unsafe` checks). `useSafePadding()` is even left and right (the larger side), so centred content stays centred; `useSafePadding({symmetric: false})` gives each side its own. |
 | `theme`, `defineTheme({colors, fonts, type, radius})`, `scaleType(size, width)` | A starting look. `theme.colors`: `background` #0B0D12, `surface` #161A23, `text` #F5F7FA, `muted` #9AA3B2, `accent` #7DD3FC, `accentText` #06202B. `theme.type` (px for 1080 wide): `display` 128, `title` 88, `subtitle` 52, `body` 40, `caption` 34. `theme.fonts`: `display` and `body` Inter, `mono` JetBrains Mono. `theme.radius` 28. |
 | `fonts`, `loadFonts({family, file, weight})` | Bundled families: `Inter` (100–900, italic), `"Space Grotesk"` (300–700), `Fraunces` (serif, 100–900), `"JetBrains Mono"` (100–800). Other font files: `video.asset.add`, then `loadFonts` at module level. |
+
+Footage, streams and guides (the `stream-clips` skill has the whole workflow):
+
+| Export | Use |
+| --- | --- |
+| `<Camera src source view? keys? zoom? width? height? trimBefore?>` | A recording seen through a camera filling the box: a fixed `view` (a rect in the recording's px) or `keys` `[{at, view, frames?, move?}]` it glides between. Children are drawn in the recording's px and follow the zoom. |
+| `<StreamClip src source cam game layout? camShare? keep? punches? crossfade?>` | A stream made vertical: the facecam over the gameplay (`split`), or `cam` or `game` alone; `keep` plays only those spans of the source (dead air cut), each cut dissolving over `crossfade` frames (default 5) in picture and sound; `punches` zoom in on a reaction. |
+| `crossSegments(keep, fps, fade)`, `<CutFade seg>`, `cutLevel(seg, f)` | The same crossfaded cuts for a layout of your own: a `Sequence` per segment, its picture in `CutFade`, its `Camera`'s `volume={(f) => cutLevel(seg, f)}`. `Camera`'s `volume` takes a level per frame. |
+| `keepSpeech(words, startMs, endMs)`, `remapCaptions(words, keep)`, `keptFrames(keep, fps)`, `editedMs(ms, keep)` | Cut the pauses out of a clip, and move its captions, its length and its moments to the edited timing. |
+| `<Callout rect at until label side>`, `<Arrow from to at>`, `<Step n text at until>`, `<Hook text>` | A guide's marks: a ring with a label and an arrow drawn in (both inside a `Camera`, following its zoom), a numbered step across the top and the opening line, on screen from frame 0 (both beside the `Camera`). |
 
 ## Look at it — and read what it tells you
 

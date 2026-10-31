@@ -6,6 +6,7 @@ export * from './beats';
 export * from './captions';
 export * from './charts';
 export * from './checklist';
+export * from './clips';
 export * from './compare';
 export * from './devices';
 export * from './fonts';

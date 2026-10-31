@@ -44,7 +44,8 @@ fn collect(base: &Path, dir: &Path, files: &mut Vec<(String, PathBuf)>) {
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
+        // Hidden files, and Python's byte-code cache beside a plugin's script, are not the plugin's.
+        if name.starts_with('.') || name == "__pycache__" {
             continue;
         }
         if path.is_dir() {

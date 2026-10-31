@@ -128,6 +128,58 @@ the engine (`video/timeline.rs`) in the sheets' pixel font.
   status bar, `screenrecord` stopped with SIGINT so its file is finished, pulled, written at a
   constant frame rate, added, and answered with where each step fell and the motion events.
 
+## Clips from streams
+
+An agent with the `stream-clips` skill turns a stream's VOD into vertical Shorts. The person
+approves each clip; Relay does not post them.
+
+- **Finding moments:** `.relay/clips/streamclips.py`, which the kit syncs from
+  `plugins/video/runtime/clips/`. It is standard-library Python over ffmpeg, and over yt-dlp and
+  whisper.cpp where the person installed them (`tools` prints the commands; agents never install
+  them). It fetches a Twitch VOD's audio and chat replay, never its whole picture. It transcribes
+  on the GPU with word timings (large-v3-turbo with DTW), measures each second's loudness
+  (`ebur128`) and chat (messages, and hype words and emotes, moved back 6 s for chat's lag), and
+  ranks the moments. A moment's score adds robust z-scores of chat against its own two-minute
+  pace, of loudness above its one-minute level, and of hype, weighted by whether anyone is
+  talking. Candidates are at least 75 s apart. The agent reads them with the transcript, picks
+  the clips, and then fetches only those parts in full.
+- **Editing:** the kit's `StreamClip` puts the facecam over the gameplay (both are rects in the
+  stream's pixels, found once per channel). `keepSpeech` cuts pauses over 650 ms down to 120 ms
+  each side, and `remapCaptions` moves the words to match. Punch-ins zoom a panel on a reaction.
+  The `Captions` variants (`lit`, `box`, `pop`, `plain`, with `maxWords`, `y`, `uppercase` and
+  `stroke`) let clips differ instead of sharing one template.
+- **Guides:** `Camera` glides and zooms over footage between `keys`. A glide starts from wherever
+  the camera is when its key arrives, even mid-way through the glide before it. `Callout` and
+  `Arrow` are drawn inside the `Camera` in the footage's pixels, so they follow the zoom at a
+  constant size on screen. `Step` and `Hook` sit beside it in the composition's pixels.
+- **A reference channel's style:** `streamclips.py style` measures a channel's Shorts (length,
+  cuts a minute, median shot, loudness) and draws a contact sheet of each. The agent writes the
+  captions' look and the pacing into the channel's profile.
+
+Checked on generated footage (a 1080p60 "stream" with a facecam box, tone with planted pauses,
+and a synthetic chat replay). Candidates found the three planted moments: loud and chat together,
+chat alone, and loud alone. A 20 s section with three pauses was cut to 10.2 s with no silence of
+0.3 s or more left. The split layout, a punch-in, the hook on frame 0, and a guide's two glides,
+rings, arrow and steps were checked in stills. The render took 16.4 s for 10.2 s at 1080×1920
+and 60 fps, through the dev instance's engine, at −14.0 LUFS. Across two renders each, the split
+layout took 15.8 s and the game alone 11.5 s (+37%). Each segment has two `OffthreadVideo`s of the
+same file, one for each panel. An open lead: crop both panels with ffmpeg once, then compare that
+pass's cost against the 4.3 s saved.
+
+whisper.cpp (built from master, CUDA, RTX 4070) turns flash attention on by default, and that
+silently turns DTW off: every word's `timestampMs` came back empty. `transcribe` passes `-nfa`
+with `--dtw`. On 5.5 min of speech, two runs each: 3.4–3.6 s with flash attention and no DTW,
+5.7–5.9 s with `-nfa` and DTW, about 3 min for a 3-hour VOD. The build itself needs a bounded
+`-j`: a bare `-j` compiled every CUDA kernel at once and ran the 32 GB machine out of memory.
+First real VOD (3 h 50 min, 1080p60, re-uploaded to YouTube so no chat replay): audio pulled in 2 s,
+transcribed in about 2.5 min, loudness in under a minute. Two fixes came from it. With the whole
+stream as text context (whisper.cpp's default), whisper looped: one line ("Don't add oil to cold
+pan.") filled 1,544 of 4,550 lines and hid half an hour of speech. `-mc 64` with
+`--carry-initial-prompt` keeps the prompt's spelling and punctuation in every window: 2,637
+lines, that line once, "IdleOn" spelled right 22 times against 2 misses (it was 0 against
+dozens). `whisper_words` also drops a line repeated among the last four, as a net. And
+`candidates` gave nothing without chat (its weights pointed at chat); loudness carries it now.
+
 ## ElevenLabs
 
 `video.voice`, `video.sfx`, `video.music` and `video.transcribe` (`video/eleven.rs`) use the key the
@@ -272,6 +324,7 @@ A video has several versions in two senses, and Relay keeps both:
 | The timeline, the sound's issues, its pictures | `crates/relay-core/src/video/timeline.rs` |
 | Assets: add, link, fonts, list | `crates/relay-core/src/video/assets.rs` |
 | Clips: frame rates and motion | `crates/relay-core/src/video/inspect.rs` |
+| Stream clips: moments, words, cuts, a channel's style | `plugins/video/runtime/clips/streamclips.py`, the `stream-clips` skill, the kit's `clips.tsx` |
 | ElevenLabs | `crates/relay-core/src/video/eleven.rs` |
 | Android capture | `crates/relay-core/src/video/capture.rs` |
 | The live preview | `crates/relay-core/src/video/preview.rs`, `plugins/video/runtime/loopback.cjs` |
