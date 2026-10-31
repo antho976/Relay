@@ -83,6 +83,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 scripts/test-launcher.py
 
+      # streamclips.py (plugins/video/runtime/clips): stdlib only; the loudness test skips without ffmpeg.
+      - name: Stream clips
+        if: ${{ !cancelled() }}
+        run: python3 scripts/test-streamclips.py
+
   native:
     name: native client (GTK)
     runs-on: ubuntu-24.04
