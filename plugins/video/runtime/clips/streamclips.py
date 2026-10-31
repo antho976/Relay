@@ -155,7 +155,15 @@ def whisper_words(data):
     """Words with timings from whisper.cpp's full JSON (-ojf): tokens that start with a space
     start a word, the rest join the word before; bracketed tokens are whisper's own markers."""
     words = []
+    recent = []
     for seg in data.get("transcription", []):
+        # A line whisper repeats over music or noise ("Don't add oil to cold pan." every second for
+        # minutes): keep the first, drop the copies among the last few lines.
+        said = re.sub(r"[^a-z0-9 ]", "", seg.get("text", "").lower()).strip()
+        if said and said in recent:
+            continue
+        if said:
+            recent = (recent + [said])[-4:]
         first = len(words)
         for tok in seg.get("tokens", []):
             text = tok.get("text", "")
@@ -216,13 +224,17 @@ def cmd_transcribe(args):
     wav = out / "audio-16k.wav"
     run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-i", args.audio, "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(wav)])
     base = out / "whisper"
-    cmd = [whisper, "-m", model, "-f", str(wav), "-ojf", "-of", str(base), "-l", args.language, "-t", str(args.threads), "-np"]
+    # A short text context: the whole stream's (the default) loops on one line for minutes. With -mc 0
+    # the prompt is cut too, losing the names' spelling and the punctuation; --carry-initial-prompt
+    # keeps the prompt in every window.
+    cmd = [whisper, "-m", model, "-f", str(wav), "-ojf", "-of", str(base), "-l", args.language, "-t", str(args.threads), "-np",
+           "-mc", "64"]
     if "turbo" in Path(model).name:
         # Flash attention (whisper.cpp's default) silently turns DTW off; without it the words keep
         # only the decoder's coarse times. 5.5 min of audio: 3.4 s with it, 5.8 s with -nfa and DTW (RTX 4070).
         cmd += ["-nfa", "--dtw", "large.v3.turbo"]
     if args.prompt:
-        cmd += ["--prompt", args.prompt]
+        cmd += ["--prompt", args.prompt, "--carry-initial-prompt"]
     run(cmd)
     words = whisper_words(json.loads(Path(f"{base}.json").read_text()))
     (out / "words.json").write_text(json.dumps(words, ensure_ascii=False) + "\n")

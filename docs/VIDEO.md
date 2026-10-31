@@ -171,7 +171,14 @@ silently turns DTW off: every word's `timestampMs` came back empty. `transcribe`
 with `--dtw`. On 5.5 min of speech, two runs each: 3.4–3.6 s with flash attention and no DTW,
 5.7–5.9 s with `-nfa` and DTW, about 3 min for a 3-hour VOD. The build itself needs a bounded
 `-j`: a bare `-j` compiled every CUDA kernel at once and ran the 32 GB machine out of memory.
-Not yet run on a real VOD.
+First real VOD (3 h 50 min, 1080p60, re-uploaded to YouTube so no chat replay): audio pulled in 2 s,
+transcribed in about 2.5 min, loudness in under a minute. Two fixes came from it. With the whole
+stream as text context (whisper.cpp's default), whisper looped: one line ("Don't add oil to cold
+pan.") filled 1,544 of 4,550 lines and hid half an hour of speech. `-mc 64` with
+`--carry-initial-prompt` keeps the prompt's spelling and punctuation in every window: 2,637
+lines, that line once, "IdleOn" spelled right 22 times against 2 misses (it was 0 against
+dozens). `whisper_words` also drops a line repeated among the last four, as a net. And
+`candidates` gave nothing without chat (its weights pointed at chat); loudness carries it now.
 
 ## ElevenLabs
 

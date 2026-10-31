@@ -71,10 +71,14 @@ export const Captions: React.FC<{
   weight?: number;
   /** Outline width as a fraction of the size; default 0.03 (0 for none). */
   stroke?: number;
+  /** The outline's colour; default a 60% black. */
+  outline?: string;
+  /** Words always drawn in `highlight` (case and punctuation ignored): the few that carry the line. */
+  emphasis?: string[];
   style?: React.CSSProperties;
 }> = ({
   captions, id, combineWithinMs = 1200, maxWords = 0, variant = 'lit', position = 'bottom', y, uppercase = false, size = 64, color = '#FFFFFF',
-  highlight = theme.colors.accent, font = theme.fonts.display, weight = 800, stroke = 0.03, style,
+  highlight = theme.colors.accent, font = theme.fonts.display, weight = 800, stroke = 0.03, outline = 'rgba(0,0,0,0.6)', emphasis, style,
 }) => {
   const frame = useCurrentFrame();
   const { fps, height } = useVideoConfig();
@@ -91,20 +95,23 @@ export const Captions: React.FC<{
     : position === 'bottom'
       ? { bottom: safe.bottom, justifyContent: 'flex-end' }
       : position === 'top' ? { top: safe.top } : { top: 0, bottom: 0, justifyContent: 'center' };
-  const outline = stroke > 0 ? { WebkitTextStroke: `${Math.max(1, size * stroke)}px rgba(0,0,0,0.6)`, paintOrder: 'stroke fill' } : {};
+  const edge = stroke > 0 ? { WebkitTextStroke: `${Math.max(1, size * stroke)}px ${outline}`, paintOrder: 'stroke fill' } : {};
+  const key = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
+  const strong = useMemo(() => new Set((emphasis ?? []).map(key)), [emphasis]);
   return (
     <div style={{ position: 'absolute', left: safe.left, right: safe.right, display: 'flex', flexDirection: 'column', alignItems: 'center', ...place }}>
       <div data-id={id} style={{
         fontFamily: font, fontSize: size, fontWeight: weight, color, textAlign: 'center', lineHeight: 1.15,
         textShadow: '0 4px 18px rgba(0,0,0,0.55)', whiteSpace: 'pre-wrap', textTransform: uppercase ? 'uppercase' : undefined,
-        ...outline, ...style,
+        ...edge, ...style,
       }}>
         {page.tokens.map((t, i) => {
           const live = ms >= t.fromMs && ms < t.toMs;
+          const base = strong.has(key(t.text)) ? highlight : color;
           if (variant === 'pop') {
             const p = interpolate(ms, [t.fromMs, t.fromMs + 140], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: easeOut });
             return (
-              <span key={i} style={{ display: 'inline-block', whiteSpace: 'pre', opacity: p > 0 ? 1 : 0, transform: `scale(${0.6 + 0.4 * p})`, color: live ? highlight : color }}>
+              <span key={i} style={{ display: 'inline-block', whiteSpace: 'pre', opacity: p > 0 ? 1 : 0, transform: `scale(${0.6 + 0.4 * p})`, color: live ? highlight : base }}>
                 {t.text}
               </span>
             );
@@ -115,7 +122,7 @@ export const Captions: React.FC<{
               <span key={i} style={{ whiteSpace: 'pre' }}>
                 {lead}
                 <span style={{
-                  display: 'inline-block', color: live ? '#0B0D12' : color, background: live ? highlight : 'transparent',
+                  display: 'inline-block', color: live ? '#0B0D12' : base, background: live ? highlight : 'transparent',
                   borderRadius: size * 0.18, padding: `0 ${size * 0.12}px`, margin: `0 ${-size * 0.12}px`,
                   WebkitTextStroke: live ? '0px transparent' : undefined, textShadow: live ? 'none' : undefined,
                 }}>{t.text.slice(lead.length)}</span>
@@ -124,7 +131,7 @@ export const Captions: React.FC<{
           }
           const lit = variant === 'lit' && live;
           return (
-            <span key={i} style={{ color: lit ? highlight : color, display: 'inline-block', transform: lit ? 'scale(1.06)' : undefined }}>
+            <span key={i} style={{ color: lit ? highlight : base, display: 'inline-block', transform: lit ? 'scale(1.06)' : undefined }}>
               {t.text}
             </span>
           );

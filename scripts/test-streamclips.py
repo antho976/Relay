@@ -41,6 +41,13 @@ class Words(unittest.TestCase):
         data = {"transcription": [{"tokens": [tok(" go", 0, 200)]}, {"tokens": [tok("od", 1000, 1200)]}]}
         self.assertEqual([w["text"] for w in sc.whisper_words(data)], [" go", "od"])
 
+    def test_a_line_whisper_repeats_is_kept_once(self):
+        seg = lambda text, a: {"text": text, "tokens": [tok(" " + text.split()[0], a, a + 300)]}
+        data = {"transcription": [seg("Don't add oil to cold pan.", 0), seg("Don't add oil to cold pan.", 1000),
+                                  seg("don't add oil to cold pan", 2000), seg("Okay.", 3000), seg("Don't add oil to cold pan.", 4000),
+                                  seg("Okay.", 9000)]}
+        self.assertEqual([w["startMs"] for w in sc.whisper_words(data)], [0, 3000])
+
     def test_lines_break_at_sentences_and_pauses(self):
         words = [{"text": t, "startMs": a, "endMs": a + 200} for t, a in [(" Hi.", 0), (" so", 300), (" anyway", 600), (" later", 3000)]]
         self.assertEqual([l["text"] for l in sc.sentences(words)], ["Hi.", "so anyway", "later"])
