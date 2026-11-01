@@ -1221,6 +1221,11 @@ pub fn install(ui: &Rc<Ui>) {
                 crate::money::aide_smoke_open(&navigate, page == "aide-bot");
                 return;
             }
+            // Clips: a VOD's page or a clip's editor by id, the import sheet (scripts/clips-smoke.py).
+            if page.starts_with("clips-vod-") || page.starts_with("clips-clip-") || page == "clips-import" {
+                crate::money::clips_smoke_open(&navigate, &page);
+                return;
+            }
             navigate.navigate(if page == "launch" { "agents" } else { &page });
             if fixture && matches!(page.as_str(), "board" | "notes" | "launch") {
                 track("fixture edit", edit_fixture(navigate.clone(), page.clone()));

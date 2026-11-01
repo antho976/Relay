@@ -1208,7 +1208,7 @@ impl Ui {
                 _ if caption.starts_with("Avex") => ("history", None),
                 _ => ("dashboard", None),
             };
-            let group = if key.starts_with("aide-") { "Aide" } else { "Threads" };
+            let group = if key.starts_with("aide-") { "Aide" } else if key.starts_with("clips-") || key == "space-clips" { "Clips" } else { "Threads" };
             palette.add(group, icon, &caption, hint, false, Box::new(move |ui| crate::money::run_palette(ui, key)));
         }
         for s in self.sessions.borrow().iter() {

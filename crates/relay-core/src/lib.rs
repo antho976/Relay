@@ -40,6 +40,7 @@ pub mod readings;
 pub mod arbiter;
 pub mod gym;
 pub mod aide;
+pub mod clips;
 pub mod recovery;
 pub mod redact;
 pub mod serve;

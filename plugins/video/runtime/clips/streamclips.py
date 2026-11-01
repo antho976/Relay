@@ -75,6 +75,22 @@ def run(cmd, timeout=None):
     return proc
 
 
+def run_progress(cmd):
+    """`run` for whisper.cpp with -pp: each "progress = N%" it prints goes out as `@progress N` on
+    stdout (what Relay's Clips space reads for its bar); the rest is kept for an error."""
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    tail = []
+    for line in proc.stdout:
+        m = re.search(r"progress\s*=\s*(\d+)%", line)
+        if m:
+            print(f"@progress {m.group(1)}", flush=True)
+        else:
+            tail = (tail + [line.rstrip()])[-12:]
+    code = proc.wait()
+    if code != 0:
+        sys.exit(f"{Path(cmd[0]).name} failed ({code}):\n" + "\n".join(tail))
+
+
 # ---- Tools ----
 
 def find_tools():
@@ -241,7 +257,10 @@ def cmd_transcribe(args):
         cmd += ["-nfa", "--dtw", "large.v3.turbo"]
     if args.prompt:
         cmd += ["--prompt", args.prompt, "--carry-initial-prompt"]
-    run(cmd)
+    if args.progress:
+        run_progress(cmd + ["-pp"])
+    else:
+        run(cmd)
     wav.unlink(missing_ok=True)
     write_transcript(out, base)
 
@@ -579,6 +598,7 @@ def main():
     t.add_argument("--threads", type=int, default=8)
     t.add_argument("--prompt", help="names and words to spell right: the streamer, the game, its terms")
     t.add_argument("--reuse", action="store_true", help="rebuild words.json and transcript.txt from an existing whisper.json")
+    t.add_argument("--progress", action="store_true", help="print `@progress N` lines as whisper goes (for Relay's Clips space)")
     s = sub.add_parser("signals")
     s.add_argument("audio")
     s.add_argument("--out", required=True)

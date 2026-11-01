@@ -26,6 +26,8 @@ mod audit_low_g;
 mod awareness;
 #[path = "board.rs"]
 mod board;
+#[path = "clips.rs"]
+mod clips;
 #[path = "bounded_payloads.rs"]
 mod bounded_payloads;
 #[path = "branch_cleanup.rs"]

@@ -1,0 +1,97 @@
+/* Clips (clips_pages.rs), the fourth space beside Dev, Threads and Aide, in the dev space's tokens:
+   the same page column, sheets, keys and fields as the other spaces (money.css, aide.css). The
+   clips themselves are the picture: tall frames with nothing boxed around them. Colour only where
+   it means state: green for what is out or going out, amber for what is drawing, red for what
+   failed (DESIGN.md, The Glass Rule). */
+
+/* A page's sections: a caption over what they hold, air between them, no cards. */
+.clips-section { margin-top: 6px; }
+.clips-section-title { font-size: 13px; font-weight: 600; color: @secondary; }
+
+/* State, on a clip's frame or in a row. */
+.clips-pill { padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; color: @secondary; background: alpha(@wall_solid, 0.72); }
+.clips-pill-working { color: @waiting; }
+.clips-pill-live { color: @live; }
+.clips-pill-posted { color: @ink; }
+.clips-pill-faint { color: @faint; }
+.clips-pill-failed { color: @held_text; }
+
+/* A clip: its first frame, tall, its title and what it is under it. */
+button.clips-card { padding: 0; border: 0; background: transparent; box-shadow: none; border-radius: 12px; }
+button.clips-card:hover { background: transparent; }
+button.clips-card:hover .clips-poster { opacity: 0.86; }
+button.clips-card:focus-visible { outline: 2px solid alpha(@ink, 0.35); outline-offset: 3px; }
+.clips-poster { border-radius: 10px; background: @glass_well; }
+.clips-player .clips-poster { border-radius: 0; }
+.clips-card-length { padding: 1px 6px; border-radius: 6px; font-family: "Geist Mono", monospace; font-size: 11px; color: @ink; background: alpha(@wall_solid, 0.72); }
+.clips-card-title { font-size: 13px; font-weight: 500; color: @ink; }
+.clips-card-meta { font-size: 12px; color: @faint; font-feature-settings: "tnum"; }
+flowbox.clips-grid > flowboxchild { padding: 0; }
+
+/* A VOD's stages: one line of steps, the one running lit, its bar under it. */
+.clips-stages { padding: 4px 0 2px; }
+.clips-stage-dot { min-width: 7px; min-height: 7px; border-radius: 4px; background: @track; }
+.clips-stage-name { font-size: 12px; color: @faint; }
+.clips-stage.done .clips-stage-dot { background: @secondary; }
+.clips-stage.done .clips-stage-name { color: @secondary; }
+.clips-stage.now .clips-stage-dot { background: @live; }
+.clips-stage.now .clips-stage-name { color: @ink; font-weight: 500; }
+.clips-stage.failed .clips-stage-dot { background: @held; }
+.clips-stage.failed .clips-stage-name { color: @held_text; }
+progressbar.clips-bar > trough { min-height: 4px; border-radius: 2px; background: @glass_well; }
+progressbar.clips-bar > trough > progress { min-height: 4px; border-radius: 2px; background: @live; }
+
+/* A VOD as a row: its frame, its title and line. The whole row opens it. */
+button.clips-vod-row { padding: 6px 8px; border: 0; border-radius: 12px; background: transparent; box-shadow: none; }
+button.clips-vod-row:hover { background: @glass_hover; }
+.clips-vod-thumb { border-radius: 7px; background: @glass_well; }
+
+/* The empty Overview: where a VOD goes in. */
+.clips-drop { margin-top: 24px; padding: 56px 32px; border: 1px dashed @glass_line; border-radius: 16px; }
+.clips-drop-mark { color: @secondary; }
+.clips-drop-title { font-size: 18px; font-weight: 600; color: @ink; }
+
+/* What to look for: small toggles. */
+.clips-chips { margin-top: 2px; }
+togglebutton.clips-chip, button.clips-chip { min-height: 26px; padding: 0 11px; border-radius: 999px; border: 1px solid @glass_line; background: transparent; color: @secondary; font-size: 12.5px; box-shadow: none; }
+togglebutton.clips-chip:hover, button.clips-chip:hover { background: @glass_hover; color: @ink; }
+togglebutton.clips-chip:checked, button.clips-chip:checked { background: @glass_selected; border-color: @glass_line_hover; color: @ink; }
+.clips-sheet togglebutton.clips-chip { border-color: @strong; }
+.clips-chosen { font-size: 13px; color: @secondary; }
+
+/* The editor: the clip playing on the left, its edit on the right. */
+.clips-player { border-radius: 14px; background: #000000; }
+.clips-player-note { padding: 6px 12px; border-radius: 8px; font-size: 13px; color: @ink; background: alpha(@wall_solid, 0.72); }
+.money-root entry.clips-title-field { font-size: 15px; font-weight: 500; min-height: 38px; }
+textview.clips-text, textview.clips-text text { background: transparent; color: @ink; font-size: 13.5px; }
+textview.clips-text { padding: 8px 10px; border: 1px solid @glass_line; border-radius: 10px; background: @glass_card; }
+.clips-span-line { font-family: "Geist Mono", monospace; font-size: 12px; color: @secondary; font-feature-settings: "tnum"; }
+button.clips-nudge { min-height: 26px; padding: 0 9px; font-size: 12px; font-family: "Geist Mono", monospace; border-radius: 8px; background: @glass_control; border: 1px solid @glass_line; box-shadow: none; color: @secondary; }
+button.clips-nudge:hover { background: @glass_hover; color: @ink; }
+.clips-nudges .money-label { margin-right: 2px; }
+.clips-words-well { border-radius: 10px; background: @glass_well; padding: 10px 12px; }
+label.clips-words { font-size: 14px; color: @ink; line-height: 1.45; }
+label.clips-words link, label.clips-words link:visited { color: @ink; text-decoration: none; }
+label.clips-words link:hover { color: @ink; text-decoration: underline; }
+.clips-segments { padding: 3px; border: 1px solid @glass_edge; border-radius: 10px; background: @glass_well; }
+.clips-segments togglebutton { min-height: 26px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; box-shadow: none; color: @faint; font-size: 13px; }
+.clips-segments togglebutton:hover { color: @ink; }
+.clips-segments togglebutton:checked { background: @glass_selected; color: @ink; }
+.clips-segments togglebutton:disabled { opacity: 0.35; }
+.clips-editor-foot { margin-top: 4px; }
+.clips-path { font-family: "Geist Mono", monospace; font-size: 11px; color: @faint; }
+
+/* The queue: what goes out, what failed, what went out. */
+.clips-queue-row { padding: 2px 0; }
+button.clips-queue-open { padding: 4px 8px; border: 0; border-radius: 10px; background: transparent; box-shadow: none; }
+button.clips-queue-open:hover { background: @glass_hover; }
+.clips-queue-thumb { border-radius: 6px; background: @glass_well; }
+
+/* Settings: the tools, each with its lamp. */
+.clips-tool { padding: 4px 0; }
+.clips-lamp-ok, .clips-lamp-missing { min-width: 7px; min-height: 7px; border-radius: 4px; }
+.clips-lamp-ok { background: @live; }
+.clips-lamp-missing { background: @held; }
+
+/* The sidebar's counts: what waits for review, what goes out. */
+.clips-count { min-width: 18px; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 600; color: @ink; background: @glass_selected; font-feature-settings: "tnum"; }

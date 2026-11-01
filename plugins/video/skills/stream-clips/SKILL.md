@@ -7,6 +7,29 @@ description: Turn a stream's VOD (Twitch, or any long recording) into vertical S
 
 Load `video-code` first: this skill adds to it. The kit pieces named here come from `@relay/video`.
 
+**When the person uses the Clips space** (docs/CLIPS.md), work through it instead of by hand:
+`clips.vod.import {source, request, kinds}` runs the whole pipeline (transcript, moments, framing,
+captions, render) and the person reviews the clips there; `clips.vod.find` looks again,
+`clips.clip.update {id, edit}` changes a clip's spans, framing, captions or hook and draws it again.
+Never post: `clips.clip.post`, approving and the YouTube account are the person's. The rest of
+this skill is for clips made by hand, and for guides edited from footage the person gives.
+
+| Op | What |
+| --- | --- |
+| `clips.summary` | What is being worked on, what waits for review, the next post, missing tools |
+| `clips.tools` | What Clips needs on this PC, and how to install what is missing |
+| `clips.settings.get` | The streamer, the look, finding, posting (`clips.settings.set` is the person's) |
+| `clips.vod.import` | `{source, request?, kinds?, title?}`: a file's path or a link; starts the pipeline |
+| `clips.vod.list` / `clips.vod.get` | The VODs; one with its clips |
+| `clips.vod.find` | `{id, request, kinds?, max?}`: look again in a transcribed VOD |
+| `clips.vod.stop` / `clips.vod.retry` | Stop; go on from the stage it stopped at |
+| `clips.vod.layout` | Correct where the facecam and game are, and redraw |
+| `clips.clip.get` / `clips.clip.list` | A clip with the words around it; clips by VOD and state |
+| `clips.clip.update` | `{id, title?, description?, tags?, kind?, edit?}`: a changed edit is drawn again |
+| `clips.clip.render` | Draw a clip again |
+| `clips.clip.set` / `clips.clip.post` / `clips.clip.delete` / `clips.vod.delete` | The person's: approve or reject, post, remove |
+| `clips.youtube.setup` / `clips.youtube.status` / `clips.youtube.connect` / `clips.youtube.disconnect` | The person's YouTube channel |
+
 **The person approves every clip.** You make the files and a review list. Nothing is uploaded or
 posted unless the person turned that on and says so. The streamer is credited in every
 description.

@@ -1,6 +1,7 @@
 //! The Threads space, beside the dev workspace: conversations with an agent about the person's
 //! own data, and Tally's ledger beside them (docs/THREADS.md). And the Aide space, the third:
 //! the person's own bots, each a chat, under a Chief of Staff (`aide_pages.rs`, docs/AIDE.md).
+//! And Clips, the fourth: a stream's VODs in, Shorts out (`clips_pages.rs`, docs/CLIPS.md).
 //!
 //! The space is a mode of the one window, in the dev space's own look: only the sidebar's keys
 //! and the middle change. Its pages live in the main content stack: `threads` (`threads_view.rs`)
@@ -36,6 +37,8 @@ mod arbiter;
 mod avex;
 #[path = "aide_pages.rs"]
 mod aide;
+#[path = "clips_pages.rs"]
+mod clips;
 #[path = "space_kit.rs"]
 mod kit;
 
@@ -48,23 +51,25 @@ pub const PAGES: [(&str, &str, &str); 5] = [
     ("money-data", "Data", "data"),
 ];
 
-/// The window's three spaces, as the title bar's switch shows them.
+/// The window's four spaces, as the title bar's switch shows them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Space {
     #[default]
     Dev,
     Threads,
     Aide,
+    Clips,
 }
 
 impl Space {
-    pub const ALL: [Space; 3] = [Space::Dev, Space::Threads, Space::Aide];
+    pub const ALL: [Space; 4] = [Space::Dev, Space::Threads, Space::Aide, Space::Clips];
 
     pub fn caption(self) -> &'static str {
         match self {
             Space::Dev => "Dev",
             Space::Threads => "Threads",
             Space::Aide => "Aide",
+            Space::Clips => "Clips",
         }
     }
 
@@ -74,6 +79,7 @@ impl Space {
             Space::Dev => "dev",
             Space::Threads => "money",
             Space::Aide => "aide",
+            Space::Clips => "clips",
         }
     }
 
@@ -123,6 +129,7 @@ struct State {
     dev_only: RefCell<Vec<gtk::Widget>>,
     money_only: RefCell<Vec<gtk::Widget>>,
     aide_only: RefCell<Vec<gtk::Widget>>,
+    clips_only: RefCell<Vec<gtk::Widget>>,
     /// The title bar's + Entry: Tally's, so it shows on the threads and Tally's pages only.
     add_key: RefCell<Option<gtk::Button>>,
     pages: RefCell<BTreeMap<&'static str, Rc<Page>>>,
@@ -143,6 +150,7 @@ thread_local! {
 
 pub fn is_page(page: &str) -> bool {
     page == threads::PAGE || page.starts_with("money-") || page.starts_with("arbiter-") || page.starts_with("avex-") || page.starts_with("aide-")
+        || page.starts_with("clips-")
 }
 
 /// The space showing.
@@ -157,6 +165,8 @@ pub fn space_of(page: &str) -> Option<Space> {
         None
     } else if page.starts_with("aide-") || (page == threads::PAGE && threads::aide().is_some()) {
         Some(Space::Aide)
+    } else if page.starts_with("clips-") {
+        Some(Space::Clips)
     } else if is_page(page) {
         Some(Space::Threads)
     } else {
@@ -222,6 +232,7 @@ pub fn switcher() -> gtk::Box {
         (Space::Dev, "space-dev", "Dev: agents, tasks and code · Ctrl `"),
         (Space::Threads, "space-money", "Threads: ask about your data, with Tally beside you · Ctrl `"),
         (Space::Aide, "space-aide", "Aide: your bots, working while you are away · Ctrl `"),
+        (Space::Clips, "space-clips", "Clips: Shorts from a stream's VODs · Ctrl `"),
     ] {
         let key = gtk::ToggleButton::with_label(space.caption());
         key.set_widget_name(name);
@@ -274,6 +285,15 @@ pub fn aide_sidebar() -> gtk::Box {
     nav
 }
 
+/// The Clips space's sidebar: Import, the Overview, the Queue, the VODs and Settings, hidden
+/// until the space shows.
+pub fn clips_sidebar() -> gtk::Box {
+    let nav = clips::sidebar();
+    nav.set_visible(false);
+    STATE.with(|s| s.clips_only.borrow_mut().push(nav.clone().upcast()));
+    nav
+}
+
 /// Money's pages, added to the window's content stack: the threads, Tally's, Arbiter's, Avex's
 /// and Aide's. Aide's need no tabs: its sidebar holds its pages.
 pub fn add_pages(content: &gtk::Stack) {
@@ -282,7 +302,8 @@ pub fn add_pages(content: &gtk::Stack) {
     let arbiter = arbiter::ALL.iter().map(|name| (*name, arbiter::tabs(name)));
     let avex = avex::ALL.iter().map(|name| (*name, avex::tabs(name)));
     let aide = aide::ALL.iter().map(|name| (*name, gtk::Box::new(gtk::Orientation::Horizontal, 0)));
-    for (name, tabs) in tally.chain(arbiter).chain(avex).chain(aide) {
+    let clips = clips::ALL.iter().map(|name| (*name, gtk::Box::new(gtk::Orientation::Horizontal, 0)));
+    for (name, tabs) in tally.chain(arbiter).chain(avex).chain(aide).chain(clips) {
         let head = gtk::Box::new(gtk::Orientation::Vertical, 4);
         head.add_css_class("money-head");
         let body = gtk::Box::new(gtk::Orientation::Vertical, 16);
@@ -565,6 +586,7 @@ pub fn install(ui: &Rc<Ui>, nav: &gtk::Box, add: &gtk::Button, dev_only: Vec<gtk
     arbiter::install();
     avex::install();
     aide::install(ui);
+    clips::install(ui);
 }
 
 /// Shows `space`'s keys and look. Navigation calls it through [`follow`].
@@ -580,6 +602,9 @@ fn apply(ui: &Ui, space: Space) {
         for w in s.aide_only.borrow().iter() {
             w.set_visible(space == Space::Aide);
         }
+        for w in s.clips_only.borrow().iter() {
+            w.set_visible(space == Space::Clips);
+        }
     });
     // Both spaces past Dev hide what is Dev's alone (`space-money`); Aide adds its own class.
     if space == Space::Dev {
@@ -591,6 +616,11 @@ fn apply(ui: &Ui, space: Space) {
         ui.window.add_css_class("space-aide");
     } else {
         ui.window.remove_css_class("space-aide");
+    }
+    if space == Space::Clips {
+        ui.window.add_css_class("space-clips");
+    } else {
+        ui.window.remove_css_class("space-clips");
     }
     sync_toggles();
 }
@@ -614,6 +644,9 @@ pub fn follow(ui: &Rc<Ui>, page: &str, restoring: bool) {
     }
     if to == Space::Aide {
         aide::mark_sidebar(ui);
+    }
+    if to == Space::Clips {
+        clips::mark_sidebar(ui);
     }
     // Avex and Arbiter have no entries to add: no Tally key over them.
     let entries = to == Space::Threads && !["avex-", "arbiter-"].iter().any(|p| page.starts_with(p));
@@ -648,6 +681,7 @@ pub fn set_space(ui: &Rc<Ui>, to: Space) {
             Space::Threads if threads::aide().is_some() => threads::new_thread(ui),
             Space::Threads => ui.navigate(threads::PAGE),
             Space::Aide => aide::open_chief(ui, None),
+            Space::Clips => ui.navigate(clips::HOME),
         }
     }
     // A refused navigation (unsaved work in a panel) leaves the pill where the window is.
@@ -662,6 +696,8 @@ pub fn toggle_space(ui: &Rc<Ui>) {
 pub fn new_in_space(ui: &Rc<Ui>) {
     if space() == Space::Aide {
         aide::new_bot(ui);
+    } else if space() == Space::Clips {
+        clips::import(ui, None);
     } else {
         threads::new_thread(ui);
     }
@@ -725,6 +761,8 @@ pub async fn refresh(ui: &Rc<Ui>, page: &str) {
             avex::refresh(ui, page).await;
         } else if page.starts_with("aide-") {
             aide::refresh(ui, page).await;
+        } else if page.starts_with("clips-") {
+            clips::refresh(ui, page).await;
         } else {
             pages::refresh(ui, page).await;
         }
@@ -786,6 +824,31 @@ pub fn aide_changed(ui: &Rc<Ui>) {
     aide::changed(ui);
 }
 
+/// `clips.changed`: a VOD's stage moved, a clip was drawn, approved or posted, or the settings
+/// changed. The Clips page showing and its sidebar read again, once for several in a moment.
+pub fn clips_changed(ui: &Rc<Ui>) {
+    clips::changed(ui);
+}
+
+/// The capture harness's way into Clips (smoke.rs): `clips-vod-<id>`, `clips-clip-<id>` or
+/// `clips-import`.
+pub fn clips_smoke_open(ui: &Rc<Ui>, page: &str) {
+    if let Some(id) = page.strip_prefix("clips-vod-").and_then(|i| i.parse().ok()) {
+        clips::open_vod(ui, id);
+    } else if let Some(id) = page.strip_prefix("clips-clip-").and_then(|i| i.parse().ok()) {
+        clips::open_clip(ui, id);
+    } else {
+        ui.navigate(clips::HOME);
+        clips::import(ui, None);
+    }
+}
+
+/// Clips' Overview: a notification from Clips opens it.
+pub fn open_clips(ui: &Rc<Ui>) {
+    dismiss_start(ui, None);
+    ui.navigate(clips::HOME);
+}
+
 /// A Tally glyph, for the Threads page's own marks.
 pub(crate) fn pages_glyph(key: &str, size: i32) -> gtk::Image {
     pages::glyph_image(key, size)
@@ -799,7 +862,7 @@ pub fn thread_event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
 /// Entries for the command palette: (key, caption).
 pub fn palette_entries() -> Vec<(&'static str, String)> {
     let showing = space();
-    let mut entries: Vec<(&'static str, String)> = [("space-dev", Space::Dev), ("space-money", Space::Threads), ("space-aide", Space::Aide)]
+    let mut entries: Vec<(&'static str, String)> = [("space-dev", Space::Dev), ("space-money", Space::Threads), ("space-aide", Space::Aide), ("space-clips", Space::Clips)]
         .into_iter()
         .filter(|(_, s)| *s != showing)
         .map(|(key, s)| (key, format!("Switch to {}", s.caption())))
@@ -821,6 +884,10 @@ pub fn palette_entries() -> Vec<(&'static str, String)> {
     for (name, caption) in aide::PAGES {
         entries.push((name, format!("Aide {}", caption.to_lowercase())));
     }
+    for (name, caption) in clips::PAGES {
+        entries.push((name, format!("Clips {}", caption.to_lowercase())));
+    }
+    entries.push(("clips-import", String::from("Clips: import a VOD")));
     entries.push(("aide-chief", String::from("Aide: Chief of Staff")));
     entries.push(("aide-new-bot", String::from("Aide: new bot")));
     entries.push(("aide-new-job", String::from("Aide: new bot from a form")));
@@ -835,6 +902,8 @@ pub fn run_palette(ui: &Rc<Ui>, key: &str) {
         "space-dev" => set_space(ui, Space::Dev),
         "space-money" => set_space(ui, Space::Threads),
         "space-aide" => set_space(ui, Space::Aide),
+        "space-clips" => set_space(ui, Space::Clips),
+        "clips-import" => clips::import(ui, None),
         "start" => show_start(ui),
         "thread" => threads::new_thread(ui),
         "add" => add_entry(ui),
@@ -905,7 +974,7 @@ pub fn show_start(ui: &Rc<Ui>) {
         }
     });
     let crate::start::Built { screen, lines, rows, keys } = crate::start::build(&greeting(), remembered.caption(), pick);
-    // Escape opens the space used last; 1, 2 and 3 pick Dev, Threads and Aide, as the cards say.
+    // Escape opens the space used last; 1 to 4 pick Dev, Threads, Aide and Clips, as the cards say.
     let escape = gtk::EventControllerKey::new();
     escape.set_propagation_phase(gtk::PropagationPhase::Capture);
     let weak = Rc::downgrade(ui);
@@ -916,6 +985,7 @@ pub fn show_start(ui: &Rc<Ui>) {
             Key::_1 | Key::KP_1 => Space::Dev,
             Key::_2 | Key::KP_2 => Space::Threads,
             Key::_3 | Key::KP_3 => Space::Aide,
+            Key::_4 | Key::KP_4 => Space::Clips,
             _ => return glib::Propagation::Proceed,
         };
         if let Some(ui) = weak.upgrade() {
@@ -936,18 +1006,29 @@ pub fn show_start(ui: &Rc<Ui>) {
     ui.overlay.add_overlay(&screen);
     STATE.with(|s| *s.start.borrow_mut() = Some(screen.clone().upcast()));
     keys[remembered.index()].grab_focus();
-    let [dev_line, money_line, aide_line] = lines;
-    let [dev_rows, thread_rows, aide_rows] = rows;
+    let [dev_line, money_line, aide_line, clips_line] = lines;
+    let [dev_rows, thread_rows, aide_rows, clips_rows] = rows;
     let reader = ui.clone();
     glib::spawn_future_local(async move {
         use crate::start::Lamp;
-        let (dashboard, summary, threads, aide_summary, bots) = tokio::join!(
+        let (dashboard, summary, threads, aide_summary, bots, clips_summary, vods) = tokio::join!(
             reader.call("dashboard.get", json!({})),
             reader.call("money.summary", json!({})),
             reader.call("thread.list", json!({})),
             reader.call("aide.summary", json!({})),
-            reader.call("aide.job.list", json!({}))
+            reader.call("aide.job.list", json!({})),
+            reader.call("clips.summary", json!({})),
+            reader.call("clips.vod.list", json!({}))
         );
+        match clips_summary {
+            Ok(c) => {
+                let (reading, lamp) = clips::start_reading(&c);
+                crate::start::reading(&clips_line, &reading, lamp);
+            }
+            Err(e) => crate::start::reading(&clips_line, &pages::unavailable(&e), Lamp::Idle),
+        }
+        let vods = vods.map(|v| clips::start_rows(&v)).unwrap_or_default();
+        crate::start::recent(&clips_rows, &vods, "No VODs yet");
         match aide_summary {
             Ok(a) => {
                 let (reading, lamp) = aide::start_reading(&a);

@@ -54,6 +54,7 @@ pub mod design;
 pub mod picture;
 pub mod video;
 pub mod aide;
+pub mod clips;
 
 /// Every op, in catalogue order.
 pub fn all() -> Vec<crate::registry::OpEntry> {
@@ -82,5 +83,6 @@ pub fn all() -> Vec<crate::registry::OpEntry> {
     v.extend(picture::entries());
     v.extend(video::entries());
     v.extend(aide::entries());
+    v.extend(clips::entries());
     v
 }

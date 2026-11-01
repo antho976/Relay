@@ -53,7 +53,8 @@ const GREETING: (f64, f64) = (0.50, 0.78);
 const QUESTION: (f64, f64) = (0.56, 0.84);
 const CARD_DEV: (f64, f64) = (0.62, 0.92);
 const CARD_THREADS: (f64, f64) = (0.70, 1.0);
-const CARD_AIDE: (f64, f64) = (0.78, 1.0);
+const CARD_AIDE: (f64, f64) = (0.76, 1.0);
+const CARD_CLIPS: (f64, f64) = (0.82, 1.0);
 const HINT: (f64, f64) = (0.84, 1.0);
 
 /// The mark on its 120 grid: each lane (y, from x, to x), back to front, and the stroke.
@@ -71,12 +72,12 @@ const DOT_STEP: f64 = 26.0;
 const BASE_DOT: f64 = 0.11;
 
 /// What `build` hands back: the screen, each card's live line, the box for its recent rows, and
-/// the cards (Dev, Threads, Aide).
+/// the cards (Dev, Threads, Aide, Clips).
 pub struct Built {
     pub screen: gtk::Box,
-    pub lines: [gtk::Label; 3],
-    pub rows: [gtk::Box; 3],
-    pub keys: [gtk::Button; 3],
+    pub lines: [gtk::Label; 4],
+    pub rows: [gtk::Box; 4],
+    pub keys: [gtk::Button; 4],
 }
 
 /// Which card's glyph to draw.
@@ -85,6 +86,7 @@ enum Glyph {
     Dev,
     Threads,
     Aide,
+    Clips,
 }
 
 /// The lamp beside a card's live line: grey, signal-lit, or amber when something waits on you.
@@ -469,7 +471,7 @@ fn fixed_point() -> Option<f64> {
 }
 
 /// The small line drawing on each card: a prompt for Dev, two speech bubbles for Threads, a bot's
-/// face for Aide.
+/// face for Aide, a tall frame with a play mark for Clips.
 fn draw_glyph(cr: &gtk::cairo::Context, size: f64, glyph: Glyph) {
     let s = size / 24.0;
     cr.scale(s, s);
@@ -478,6 +480,25 @@ fn draw_glyph(cr: &gtk::cairo::Context, size: f64, glyph: Glyph) {
     cr.set_line_join(gtk::cairo::LineJoin::Round);
     let (ir, ig, ib) = INK;
     let (dr, dg, db) = DIM;
+    if glyph == Glyph::Clips {
+        // A Short's tall frame, and the play mark in it.
+        let (x, y, w, h, r) = (6.5, 3.0, 11.0, 18.0, 2.5);
+        cr.new_sub_path();
+        cr.arc(x + w - r, y + r, r, -PI / 2.0, 0.0);
+        cr.arc(x + w - r, y + h - r, r, 0.0, PI / 2.0);
+        cr.arc(x + r, y + h - r, r, PI / 2.0, PI);
+        cr.arc(x + r, y + r, r, PI, 1.5 * PI);
+        cr.close_path();
+        cr.set_source_rgb(ir, ig, ib);
+        let _ = cr.stroke();
+        cr.move_to(10.5, 9.0);
+        cr.line_to(15.0, 12.0);
+        cr.line_to(10.5, 15.0);
+        cr.close_path();
+        cr.set_source_rgb(dr, dg, db);
+        let _ = cr.fill();
+        return;
+    }
     if glyph == Glyph::Aide {
         // A rounded head with its aerial, and two eyes.
         let (x, y, w, h, r) = (4.0, 8.0, 16.0, 12.0, 3.5);
@@ -621,6 +642,7 @@ pub fn build(greeting: &str, remembered: &str, pick: Rc<dyn Fn(usize)>) -> Built
         (Glyph::Dev, "Dev", "Agents, tasks and code across your projects"),
         (Glyph::Threads, "Threads", "Talk it through with agents that know your data"),
         (Glyph::Aide, "Aide", "Your bots, working while you are away"),
+        (Glyph::Clips, "Clips", "Shorts from a stream's VODs, cut and posted"),
     ]
     .into_iter()
     .enumerate()
@@ -630,6 +652,7 @@ pub fn build(greeting: &str, remembered: &str, pick: Rc<dyn Fn(usize)>) -> Built
             Glyph::Dev => ("dev", "start-dev"),
             Glyph::Threads => ("threads", "start-money"),
             Glyph::Aide => ("aide", "start-aide"),
+            Glyph::Clips => ("clips", "start-clips"),
         };
         card.add_css_class(class);
         card.set_widget_name(name);
@@ -719,6 +742,7 @@ pub fn build(greeting: &str, remembered: &str, pick: Rc<dyn Fn(usize)>) -> Built
             reveal(&cards[0], t, CARD_DEV, 22);
             reveal(&cards[1], t, CARD_THREADS, 22);
             reveal(&cards[2], t, CARD_AIDE, 22);
+            reveal(&cards[3], t, CARD_CLIPS, 22);
             reveal(&hint, t, HINT, 0);
         }
     };
@@ -902,9 +926,9 @@ pub fn build(greeting: &str, remembered: &str, pick: Rc<dyn Fn(usize)>) -> Built
         });
         arm(&ticker);
     }
-    let lines: [gtk::Label; 3] = lines.try_into().expect("three cards");
-    let rows: [gtk::Box; 3] = recents.try_into().expect("three cards");
-    let keys: [gtk::Button; 3] = keys.try_into().expect("three cards");
+    let lines: [gtk::Label; 4] = lines.try_into().expect("four cards");
+    let rows: [gtk::Box; 4] = recents.try_into().expect("four cards");
+    let keys: [gtk::Button; 4] = keys.try_into().expect("four cards");
     Built { screen, lines, rows, keys }
 }
 
@@ -1000,7 +1024,7 @@ mod tests {
 
     #[test]
     fn every_part_starts_hidden_and_ends_in_place() {
-        for span in [WAVE, PING, WORDMARK, GREETING, QUESTION, CARD_DEV, CARD_THREADS, CARD_AIDE, HINT] {
+        for span in [WAVE, PING, WORDMARK, GREETING, QUESTION, CARD_DEV, CARD_THREADS, CARD_AIDE, CARD_CLIPS, HINT] {
             assert_eq!(phase(0.0, span), 0.0);
             assert!((phase(1.0, span) - 1.0).abs() < 1e-9);
         }
@@ -1047,7 +1071,7 @@ mod tests {
     #[test]
     fn the_words_follow_the_mark_and_the_cards_come_one_after_the_other() {
         assert!(WORDMARK.0 >= LANES[0].0 && GREETING.0 > WORDMARK.0 && QUESTION.0 > GREETING.0);
-        assert!(CARD_DEV.0 > QUESTION.0 - 0.1 && CARD_THREADS.0 > CARD_DEV.0 && CARD_AIDE.0 > CARD_THREADS.0);
+        assert!(CARD_DEV.0 > QUESTION.0 - 0.1 && CARD_THREADS.0 > CARD_DEV.0 && CARD_AIDE.0 > CARD_THREADS.0 && CARD_CLIPS.0 > CARD_AIDE.0);
         assert!(CARD_THREADS.1 <= 1.0 && CARD_AIDE.1 <= 1.0 && HINT.1 <= 1.0 && PING.0 < SIGNAL_IN.1);
         assert!(RECOIL.0 >= PING.0 - 0.05 && RECOIL.1 + RECOIL_STEP * 2.0 <= 1.0);
     }

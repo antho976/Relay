@@ -1424,6 +1424,38 @@ running when the engine starts are failed (`video::jobs::reconcile`).
 
 ---
 
+### 10.20 clips
+
+The Clips space (docs/CLIPS.md): a stream's VODs in, vertical Shorts out. `clips.db` beside the
+store is its own file with its own mutex (as Aide's `aide.db`), so reads are unlocked and changes
+staged: nothing waits on a stage or a render inside a handler. A VOD's stages run on the `clips`
+thread, renders through `video.render` (§10.19, composition `short`), uploads on `clips-post`.
+Every op comes with the Video plugin (`plugin video`); posting, approving, the YouTube account,
+the settings and deleting are the person's (`UserOnly`). `clips.changed` `{what, vod_id?, clip_id?}`
+announces every change, a stage's progress included.
+
+| op | attrs | payload → result |
+|---|---|---|
+| `clips.summary` | query · unlocked · plugin `video` | `{}` → `{ vods, working?, queued, to_review, approved, scheduled, posted, next_post?, youtube, missing: Tool[] }` |
+| `clips.tools` | query · unlocked · plugin `video` | `{}` → `{ tools: Tool[] }` — ffmpeg, python3, whisper.cpp, its model, Claude, the video kit, yt-dlp: found, or the command that installs it |
+| `clips.settings.get` / `clips.settings.set` | query / mutation · person · plugin `video` | `{}` / `ClipSettings` → `ClipSettings` — the streamer (`streamer`, `platform`, `handle`, `terms`, `notes`), the look (`captions`, `highlight`, `end_card`), finding (`min_s`, `max_s`, `max_clips`, `model`, `fps`) and `posting` (`mode` ask \| auto, `privacy`, `slots` HH:MM, `min_score`, `footer`); `clips.invalid` |
+| `clips.vod.import` | mutation · staged · plugin `video` | `{ source, title?, request?, kinds?: ClipKind[], project_id? }` → `ClipVod` — a file's absolute path (or `file://` URL) or an http(s) link; `clips.file`, `clips.tools`, `clips.project` |
+| `clips.vod.list` / `clips.vod.get` | query · unlocked · plugin `video` | `{}` / `{ id }` → `{ vods }` / `{ vod, clips }` |
+| `clips.vod.find` | mutation · staged · plugin `video` | `{ id, request, kinds?, max? }` → `ClipVod` — looks again from the find stage; `clips.busy` while it is worked on |
+| `clips.vod.stop` / `clips.vod.retry` | mutation · staged · plugin `video` | `{ id }` → `ClipVod` — retry goes on from the stage it stopped at (`clips.state`) |
+| `clips.vod.delete` | mutation · person · staged · plugin `video` | `{ id }` → `{}` — its working folder and clips' files; never the file it came from |
+| `clips.vod.layout` | mutation · staged · plugin `video` | `{ id, layout: ClipSourceLayout, rerender? }` → `ClipVod` |
+| `clips.clip.get` / `clips.clip.list` | query · unlocked · plugin `video` | `{ id }` / `{ vod_id?, states? }` → `{ clip, vod, words }` (the words from 20 s before to 20 s after) / `{ clips }` |
+| `clips.clip.update` | mutation · staged · plugin `video` | `{ id, title?, description?, tags?, kind?, edit?: ClipEdit, render? }` → `Clip` — the edit checked (spans inside the VOD, ≤ 180 s, rects inside the picture); a changed edit is drawn again; `clips.invalid`, `clips.posted` |
+| `clips.clip.render` | mutation · staged · plugin `video` | `{ id }` → `Clip` |
+| `clips.clip.set` | mutation · person · staged · plugin `video` | `{ id, state: approved \| rejected \| ready }` → `Clip` — `clips.unrendered` before it is drawn |
+| `clips.clip.post` | mutation · person · staged · plugin `video` | `{ id, at?, privacy? }` → `Clip` (`scheduled`) — `clips.youtube.signed_out`, `clips.unrendered` |
+| `clips.clip.delete` | mutation · person · staged · plugin `video` | `{ id }` → `{}` |
+| `clips.youtube.setup` | mutation · person · never audited · staged · plugin `video` | `{ client_id, client_secret }` → `ClipYoutube` — kept in the desktop keyring; `clips.youtube.client` |
+| `clips.youtube.status` | query · unlocked · plugin `video` | `{}` → `ClipYoutube` |
+| `clips.youtube.connect` | mutation · person · staged · plugin `video` | `{}` → `{ url }` — Google's consent page (PKCE, a one-shot listener on 127.0.0.1); `clips.changed` once the browser comes back |
+| `clips.youtube.disconnect` | mutation · person · staged · plugin `video` | `{}` → `ClipYoutube` |
+
 ## 11. Entity shapes (results)
 
 Common: every row has `id: Id`, `created_at`, `updated_at` (RFC 3339 UTC); soft-deletable rows

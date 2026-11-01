@@ -130,6 +130,10 @@ the engine (`video/timeline.rs`) in the sheets' pixel font.
 
 ## Clips from streams
 
+The Clips space (docs/CLIPS.md) does this for the person end to end: it imports a VOD, runs these
+steps, draws each clip as the `short` composition of a video of its own, and posts what the person
+approves. What follows is the part an agent drives by hand.
+
 An agent with the `stream-clips` skill turns a stream's VOD into vertical Shorts. The person
 approves each clip; Relay does not post them.
 
