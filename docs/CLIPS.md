@@ -19,8 +19,8 @@ client for posting. It costs nothing past the Claude plan the person already has
 | Page | What it holds |
 | --- | --- |
 | **Overview** | What is being worked on (each stage, the one running lit with its bar), the clips waiting for your yes or no, and the VODs. Empty, it is a drop zone for a VOD. |
-| **A VOD** | Its stages while it is worked on, then its clips as a grid of tall frames, filtered by kind; **Look again** asks for other moments in your words. |
-| **A clip** (the editor) | The clip playing beside its edit: title, description, tags and kind; the moment's edges (±1 s keys) and its words, each one clickable (cut it, keep it, start or end there, fix how it is spelled); cut dead air and the end card; the opening line, the framing and the captions. **Save and draw again** redraws it; Approve, Reject, Post now. |
+| **A VOD** | Its stages while it is worked on, with about how long its work has left, then its clips as a grid of tall frames, filtered by kind; **Look again** asks for other moments in your words; **Show in folder** opens the folder of its drawn clips. |
+| **A clip** (the editor) | The clip playing beside its edit (it starts when the page opens, a click on it pauses or plays, its first frame shows until then): title, description, tags and kind; the moment's edges (±1 s keys) and its words, each one clickable (cut it, keep it, start or end there, fix how it is spelled); cut dead air and the end card; the opening line, the framing and the captions. **Save and draw again** redraws it; Approve and Reject at the page's head, Post now and **Show in folder** (the file picked out in the file manager) under the player. While it is drawn: how far, and about how long is left. |
 | **Queue** | What goes out next and when, what failed (with Try again), and what went out (with its YouTube link). |
 | **Settings** | The streamer (name, where they stream, the words the transcript should know, what their viewers like), how clips look, finding (lengths, how many, the model, the frame rate), posting (ask or on their own, who sees them, the day's posting times, a description footer), YouTube, and the tools on this PC. |
 
@@ -65,10 +65,14 @@ with the kit, and written into the video's `src/` when it differs).
 
 `clips::find`. The transcript is read in parts of 40 minutes that overlap by 2.5, three at a time,
 each by Claude (`claude -p`, no tools, a JSON schema for the answer, the model from Settings: Opus
-by default). Each read is told the stream, what the person asked for and the kinds, the clip
-lengths, the words that matter, what the channel's viewers like, what is already clipped, and the
-part of the transcript as `[h:mm:ss.s] line`, with the loud seconds (and chat's spikes) marked at
-the end of their line. The prompt (`find::PROMPT`) is the editing taste learned from the first
+by default, Claude Code's prompt cache off: each part is read once, and a cache write bills twice
+what a plain read does). Each read is told the stream, what the person asked for and the kinds, the
+clip lengths, the words that matter, what the channel's viewers like, what is already clipped, and
+the part of the transcript as `[6081] line` (the whole second in the VOD; a short interjection
+after a sentence joins its line), with the loud seconds (and chat's spikes) marked at the end of
+their line. Times come back as seconds too, so a moment's length is a subtraction the finder can
+check: it is told the length counts once its cuts are out, and to cut a long moment's middle rather
+than end it before the payoff. Every read's tokens and cost go to the log (`clips: a Claude read`). The prompt (`find::PROMPT`) is the editing taste learned from the first
 hand-reviewed clips: open on the hook, one thing, end on the payoff, whole sentences, no chat or
 TTS reading, honest scores, titles in a fan editor's voice.
 
@@ -80,7 +84,11 @@ kind takes a place from another kind scoring at most one less.
 
 Each moment's edges are then moved onto the words (`edit::snap`): the start just before a word that
 opens a sentence, the end just after one that closes one, looking a few seconds either way, never
-inside a word. A moment that runs past the longest clip ends at a sentence before it.
+inside a word. A moment that still runs past the longest clip once its cuts are out (and its teaser
+counted) loses the start of its setup, from a sentence that opens later: never its end, the payoff.
+(The first build measured the length before the cuts and ended long moments early: "He Hates
+Breaking the Sushi CHAIN... Then DOUBLE-CLICKS" lost its double-click, and a Minehead fail came out
+8 s long.)
 
 ### Framing
 
@@ -175,11 +183,11 @@ poster off the disk.
 | `clips.tools` | ffmpeg, python3, whisper.cpp and its model, Claude, the video kit, yt-dlp: found, or how to install |
 | `clips.settings.get` / `.set` | The streamer, the look, finding, posting |
 | `clips.vod.import` | A file or a link, what to look for; starts the pipeline |
-| `clips.vod.list` / `.get` | The VODs; one with its clips |
+| `clips.vod.list` / `.get` | The VODs (one worked on says about how long it has left, `eta_s`); one with its clips |
 | `clips.vod.find` | Look through a transcribed VOD again ("more IdleOn tips") |
 | `clips.vod.stop` / `.retry` / `.delete` | Stop; start again where it stopped; remove (never the file it came from) |
 | `clips.vod.layout` | Correct where the facecam and game are, and redraw |
-| `clips.clip.get` / `.list` | A clip with the words around it; clips by VOD and state |
+| `clips.clip.get` / `.list` | A clip with the transcript around it as lines (`words: true` for each word's times, about six times the size), and how its drawing is going; clips by VOD and state |
 | `clips.clip.update` | Title, description, tags, kind, the edit (spans, framing, captions, hook, fixes); a changed edit is drawn again |
 | `clips.clip.render` | Draw again |
 | `clips.clip.set` | Approve, reject, or back to undecided |
@@ -226,6 +234,18 @@ $300 in Easter eggs, a leaderboard cheater, Minehead hitting a mine on the first
 Spelunking and Sushi Station guides; marshmallows that became an "alien egg", the wife finding out
 they burned, the dog that eats pig poop, saying please to Alexa before the "clanker uprising".
 Every clip came out of the pipeline drawn, framed and captioned; none was touched by hand.
+
+What a find costs, read on the IdleOn VOD's third part (1:15:51 to 1:57:31, the same moments
+found both times: the leaderboard cheater, nitrogen tires, gold bars, obols), Opus, `total_cost_usd`
+as `claude -p` reports it:
+
+| Transcript and cache | Input tokens | Output | Cost | Time |
+| --- | --- | --- | --- | --- |
+| `[h:mm:ss.s]` a sentence, the 1 h cache written (before) | 15,693, written at 2× | 2,543 | $0.176 | 27 s |
+| `[second]`, interjections joined, no cache (now) | 12,650 | 1,710 | $0.085 | 18 s |
+
+Half the cost and a third less time a part: for an eight-part VOD about $0.73 less at API prices.
+How a subscription's limits weigh cache writes is not published; this was not measured there.
 
 What the runs taught, each fixed before these numbers:
 

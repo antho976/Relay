@@ -299,14 +299,35 @@ pub fn register(e: &mut Engine) {
         clips::vod(ctx.engine(), vod.id)
     }, |_, _, s| Ok(s));
 
+    /// Where a clip being drawn is: its render's progress, and the time left by its pace.
+    fn drawing(engine: &Engine, clip: &Clip) -> Drawing {
+        use relay_bus::ops::video::RenderState;
+        let expected = clips::eta::stage_s(Stage::Render, 0.0, 1, false);
+        let render = clip.render_id.and_then(|id| engine.read_store("clips.render", |conn| crate::video::get_render(conn, id)).ok());
+        match render {
+            Some(r) if r.state == RenderState::Rendering => {
+                let elapsed = r.started_at.as_deref().and_then(|t| t.parse::<jiff::Timestamp>().ok())
+                    .map_or(0.0, |t| (jiff::Timestamp::now() - t).total(jiff::Unit::Second).unwrap_or(0.0).max(0.0));
+                Drawing { phase: "drawing".into(), progress: r.progress, eta_s: Some(clips::eta::blend(expected, elapsed, r.progress).round()) }
+            }
+            Some(r) if r.state == RenderState::Queued => Drawing { phase: "queued".into(), progress: 0.0, eta_s: None },
+            _ => Drawing { phase: "cutting".into(), progress: 0.0, eta_s: Some(expected + 10.0) },
+        }
+    }
+
     e.register_unlocked::<ClipGet>(|ctx, p| {
         let clip = clips::clip(ctx.engine(), p.id)?;
         let vod = clips::vod(ctx.engine(), clip.vod_id)?;
         let words = edit::load_words(&Path::new(&vod.dir).join("words.json")).unwrap_or_default();
-        let around = edit::between(&words, (clip.start_s - 20.0).max(0.0), clip.end_s + 20.0).iter().map(|w| Word {
-            text: w.text.trim().to_string(), start_ms: w.start_ms.max(0.0) as u64, end_ms: w.end_ms.max(0.0) as u64,
-        }).collect();
-        Ok(ClipOut { clip, vod, words: around })
+        let around = edit::between(&words, (clip.start_s - 20.0).max(0.0), clip.end_s + 20.0);
+        let transcript = clips::find::lines(around).iter().map(|l| format!("[{:.1}] {}\n", l.start, l.text)).collect();
+        let words = if p.words == Some(true) {
+            around.iter().map(|w| Word { text: w.text.trim().to_string(), start_ms: w.start_ms.max(0.0) as u64, end_ms: w.end_ms.max(0.0) as u64 }).collect()
+        } else {
+            Vec::new()
+        };
+        let drawing = (clip.state == ClipState::Rendering).then(|| drawing(ctx.engine(), &clip));
+        Ok(ClipOut { clip, vod, transcript, words, drawing })
     });
 
     e.register_unlocked::<ClipList>(|ctx, p| {

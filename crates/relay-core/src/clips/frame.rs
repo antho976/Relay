@@ -37,6 +37,7 @@ fn look_at(engine: &Engine, vod: i64, dir: &Path, images: &[(String, PathBuf)], 
     cmd.args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--model", "sonnet", "--system-prompt", system,
         "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence", "--json-schema", &schema.to_string()])
         .current_dir(dir);
+    super::find::no_cache(&mut cmd);
     let input = dir.join(format!(".look-{}.jsonl", uuid::Uuid::new_v4()));
     std::fs::write(&input, format!("{message}\n")).map_err(|e| Halt::Failed(format!("{}: {e}", input.display())))?;
     let file = std::fs::File::open(&input).map_err(|e| Halt::Failed(e.to_string()));
@@ -143,7 +144,7 @@ pub fn detect(engine: &Engine, vod: &Vod, media: &Path, dir: &Path) -> Step<Sour
     }
     let images: Vec<(String, PathBuf)> = (1..=3).map(|i| (format!("f{i}.jpg"), look.join(format!("f{i}.jpg")))).collect();
     let answer = match look_at(engine, vod.id, &look, &images, ASK, PROMPT, &schema(), Duration::from_secs(4 * 60)) {
-        Ok(out) => super::last_json(&out),
+        Ok(out) => super::last_json(&out).inspect(|a| super::find::spent(vod.id, "layout", a)),
         Err(Halt::Stopped) => return Err(Halt::Stopped),
         Err(Halt::Failed(why)) => {
             tracing::warn!(vod = vod.id, %why, "clips: the layout could not be read; one camera assumed");
@@ -227,7 +228,7 @@ Answer one entry per file, with its file name.",
     );
     let images: Vec<(String, PathBuf)> = files.iter().map(|(_, n)| (n.clone(), look.join(n))).collect();
     let answer = match look_at(engine, vod.id, &look, &images, &ask, SCENES_PROMPT, &scenes_schema(), Duration::from_secs(6 * 60)) {
-        Ok(text) => super::last_json(&text),
+        Ok(text) => super::last_json(&text).inspect(|a| super::find::spent(vod.id, "scenes", a)),
         Err(Halt::Stopped) => return Err(Halt::Stopped),
         Err(Halt::Failed(why)) => {
             tracing::warn!(vod = vod.id, %why, "clips: the clips' scenes could not be read; the VOD's layout is used");

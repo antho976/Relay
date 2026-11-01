@@ -17,6 +17,7 @@
 //! VOD stopped, failed or cut off by a restart starts again at the stage it was in.
 
 pub mod edit;
+pub mod eta;
 pub mod find;
 pub mod frame;
 pub mod pipeline;

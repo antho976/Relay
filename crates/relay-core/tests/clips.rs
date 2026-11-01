@@ -98,6 +98,19 @@ fn a_clip_edit_is_checked_and_saved() {
     let (_, clip) = vod_with_clip(&engine, &file);
     let got = ok(&engine, "clips.clip.get", json!({"id": clip}));
     assert_eq!(got["clip"]["title"], "He burned the marshmallow");
+    // The words around it: as lines by default (an agent's read), one by one when asked.
+    let dir = got["vod"]["dir"].as_str().unwrap().to_string();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(Path::new(&dir).join("words.json"), serde_json::to_vec(&json!([
+        {"text": " It", "startMs": 101000, "endMs": 101200}, {"text": " burned.", "startMs": 101200, "endMs": 101700},
+    ])).unwrap()).unwrap();
+    let lines = ok(&engine, "clips.clip.get", json!({"id": clip}));
+    assert_eq!(lines["transcript"], "[101.0] It burned.\n");
+    assert_eq!(lines["words"], json!([]));
+    assert!(lines["drawing"].is_null(), "not being drawn");
+    let each = ok(&engine, "clips.clip.get", json!({"id": clip, "words": true}));
+    assert_eq!(each["words"][1], json!({"text": "burned.", "start_ms": 101200, "end_ms": 101700}));
+    assert!(got["vod"]["eta_s"].is_number(), "a VOD waiting its turn says about how long it takes: {}", got["vod"]);
     // A span past the VOD's end, or a title too long, is refused.
     let mut far = serde_json::to_value(edit([3590.0, 3700.0])).unwrap();
     assert_eq!(code(common::call(&engine, "clips.clip.update", json!({"id": clip, "edit": far.take(), "render": false}))), "clips.invalid");

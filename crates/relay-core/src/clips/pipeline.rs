@@ -491,12 +491,6 @@ fn bar_set_sync(engine: &Engine, vod: i64, p: f64, detail: &str) {
 /// first; its framing from the VOD's layout and what the finder suggested.
 pub fn edit_for(m: &Moment, words: &[W], layout: &SourceLayout, s: &Settings, vod: &Vod) -> ClipEdit {
     let (mut a, mut b) = edit::snap(words, m.start, m.end, 3.0);
-    // Held to the longest clip: ended at a sentence before it when the moment ran long.
-    let probe = |a: f64, b: f64| edit::length(words, &ClipEdit { keep: vec![[a, b]], ..base(s) });
-    if probe(a, b) > s.max_s as f64 + 4.0 {
-        let (_, e) = edit::snap(words, a, a + s.max_s as f64 - 2.0, 0.0);
-        b = e.max(a + s.min_s as f64);
-    }
     if b - a < 1.0 {
         (a, b) = (m.start, m.end);
     }
@@ -515,11 +509,13 @@ pub fn edit_for(m: &Moment, words: &[W], layout: &SourceLayout, s: &Settings, vo
             }
         }).collect();
     }
-    if let Some([ta, tb]) = m.teaser {
+    let teaser = m.teaser.and_then(|[ta, tb]| {
         let inner = edit::between(words, ta, tb);
-        if let (Some(f), Some(l)) = (inner.first(), inner.last()) {
-            keep.insert(0, [(f.start_ms / 1000.0 - 0.08).max(0.0), l.end_ms / 1000.0 + 0.15]);
-        }
+        Some([(inner.first()?.start_ms / 1000.0 - 0.08).max(0.0), inner.last()?.end_ms / 1000.0 + 0.15])
+    });
+    hold_to_length(&mut keep, words, s, teaser.map_or(0.0, |[x, y]| y - x));
+    if let Some(t) = teaser {
+        keep.insert(0, t);
     }
     // A facecam fills the frame only when it is big enough not to blur: most are a corner box.
     let big_cam = layout.cam.is_some_and(|c| c.w >= vod.width as f64 * 0.35);
@@ -551,6 +547,33 @@ pub fn edit_for(m: &Moment, words: &[W], layout: &SourceLayout, s: &Settings, vo
         ..base(s)
     };
     edit::checked(e.clone(), vod.duration_s, vod.width, vod.height).unwrap_or(e)
+}
+
+/// Hold a moment's spans to the longest clip, its cuts taken out and `reserved` seconds (a
+/// teaser) kept aside: the setup gives way, from a sentence that opens later, never the payoff
+/// at its end. (Ending it at a sentence before the limit, as the first build did, cut the
+/// double-click off "He Hates Breaking the Sushi CHAIN... Then DOUBLE-CLICKS".)
+pub fn hold_to_length(keep: &mut Vec<[f64; 2]>, words: &[W], s: &Settings, reserved: f64) {
+    let budget = s.max_s as f64 - reserved;
+    let length = |keep: &[[f64; 2]]| edit::length(words, &ClipEdit { keep: keep.to_vec(), ..base(s) });
+    for _ in 0..8 {
+        let over = length(keep) - budget;
+        if over <= 4.0 || keep.is_empty() {
+            return;
+        }
+        let [x, y] = keep[0];
+        if keep.len() > 1 && y - x <= over + 1.0 {
+            keep.remove(0);
+            continue;
+        }
+        // Past the excess, from where a sentence opens; at the excess when none does in time.
+        let target = x + over;
+        let start = edit::open_after(words, target, y - s.min_s.min(10) as f64).unwrap_or(target);
+        if y - start < 1.0 {
+            return;
+        }
+        keep[0][0] = start;
+    }
 }
 
 fn base(s: &Settings) -> ClipEdit {
@@ -1011,6 +1034,31 @@ mod tests {
         engine.request_quit();
         super::super::poke_render(&engine);
         drawer.join().unwrap();
+    }
+
+    /// A moment longer than the longest clip loses the start of its setup, from a sentence that
+    /// opens later; its end (the payoff) stays.
+    #[test]
+    fn a_long_moment_keeps_its_payoff() {
+        let s = Settings { max_s: 20, min_s: 10, end_card: false, ..super::super::default_settings() };
+        // A sentence every 4 s, from 0 to 40 s, each word 0.5 s with no pauses to tighten.
+        let words: Vec<W> = (0..80).map(|i| {
+            let t = i as f64 * 0.5;
+            W { text: if i % 8 == 7 { " end.".into() } else { " word".into() }, start_ms: t * 1000.0, end_ms: (t + 0.5) * 1000.0, timestamp_ms: None, confidence: None }
+        }).collect();
+        let mut keep = vec![[0.0, 40.0]];
+        hold_to_length(&mut keep, &words, &s, 0.0);
+        assert_eq!(keep.len(), 1);
+        assert_eq!(keep[0][1], 40.0, "the end stays");
+        let len = edit::length(&words, &ClipEdit { keep: keep.clone(), ..base(&s) });
+        assert!(len <= s.max_s as f64 + 4.0, "{len} {keep:?}");
+        // It starts where a sentence opens: just before a word after "end.".
+        let start_word = words.iter().position(|w| w.end_ms > keep[0][0] * 1000.0 + 100.0).unwrap();
+        assert_eq!(start_word % 8, 0, "{keep:?}");
+        // A teaser's seconds come out of the same budget.
+        let mut teased = vec![[0.0, 40.0]];
+        hold_to_length(&mut teased, &words, &s, 4.0);
+        assert!(teased[0][0] > keep[0][0], "{teased:?} {keep:?}");
     }
 
     /// A stage's file cut off by a kill in the middle of its write is not taken as the stage done.

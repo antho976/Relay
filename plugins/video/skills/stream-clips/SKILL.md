@@ -24,7 +24,7 @@ this skill is for clips made by hand, and for guides edited from footage the per
 | `clips.vod.find` | `{id, request, kinds?, max?}`: look again in a transcribed VOD |
 | `clips.vod.stop` / `clips.vod.retry` | Stop; go on from the stage it stopped at |
 | `clips.vod.layout` | Correct where the facecam and game are, and redraw |
-| `clips.clip.get` / `clips.clip.list` | A clip with the words around it; clips by VOD and state |
+| `clips.clip.get` / `clips.clip.list` | A clip with the transcript around it as lines in VOD seconds (`words: true` for each word, six times the size: only to place a cut on a word); clips by VOD and state |
 | `clips.clip.update` | `{id, title?, description?, tags?, kind?, edit?}`: a changed edit is drawn again |
 | `clips.clip.render` | Draw a clip again |
 | `clips.clip.set` / `clips.clip.post` / `clips.clip.delete` / `clips.vod.delete` | The person's: approve or reject, post, remove |

@@ -127,6 +127,43 @@ fn clock_tenths(s: f64) -> String {
     format!("{}.{}", clock(whole), ((s.max(0.0) - whole) * 10.0).floor() as u32)
 }
 
+/// "about 25 s left", "about 4 min left", "about 1 h 10 min left".
+fn left(eta_s: f64) -> String {
+    let s = eta_s.max(1.0);
+    if s < 55.0 {
+        format!("about {} s left", ((s / 5.0).ceil() * 5.0) as u64)
+    } else if s < 3600.0 {
+        format!("about {} min left", (s / 60.0).ceil() as u64)
+    } else {
+        let m = (s / 60.0).ceil() as u64;
+        format!("about {} h {} min left", m / 60, m % 60)
+    }
+}
+
+/// How long a VOD's work has left, when the engine said.
+fn vod_left(v: &Value) -> Option<String> {
+    v["eta_s"].as_f64().map(left)
+}
+
+/// Open the file manager on `path`: the file picked out in its folder, or the folder itself.
+fn show_in_folder(ui: &Rc<Ui>, path: &str) {
+    let file = gtk::gio::File::for_path(path);
+    let launcher = gtk::FileLauncher::new(Some(&file));
+    let weak = Rc::downgrade(ui);
+    let done = move |r: Result<(), glib::Error>| {
+        if let (Err(e), Some(ui)) = (r, weak.upgrade()) {
+            if !e.matches(gtk::DialogError::Dismissed) {
+                ui.show_error(&format!("Could not open the folder: {e}"));
+            }
+        }
+    };
+    if std::path::Path::new(path).is_dir() {
+        launcher.launch(Some(&ui.window), None::<&gtk::gio::Cancellable>, done);
+    } else {
+        launcher.open_containing_folder(Some(&ui.window), None::<&gtk::gio::Cancellable>, done);
+    }
+}
+
 fn plural(n: u64, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
@@ -368,8 +405,10 @@ pub(super) fn open_clip(ui: &Rc<Ui>, id: i64) {
 }
 
 /// `clips.changed`: a VOD's stage moved, a clip was drawn or posted, the settings changed. Several
-/// in a moment are read once: the sidebar, and the page showing. The editor keeps what is typed:
-/// with changes not saved, only its status line reads again.
+/// in a moment are read once: the sidebar, and the page showing. The editor reads only its status
+/// again, and is built again only when its own clip was drawn anew or moved to another state:
+/// another VOD's progress (an event every half second while one is worked on) used to rebuild it,
+/// and its player with it, so a clip never played through while anything else was being made.
 pub(super) fn changed(ui: &Rc<Ui>) {
     if STATE.with(|s| s.pending.replace(true)) {
         return;
@@ -385,10 +424,8 @@ pub(super) fn changed(ui: &Rc<Ui>) {
         }
         if showing == CLIP {
             if let Some(ed) = STATE.with(|s| s.editor.borrow().clone()) {
-                if ed.dirty.get() || typing(&ui) {
-                    refresh_status(&ui, &ed);
-                    return;
-                }
+                refresh_status(&ui, &ed);
+                return;
             }
         }
         if typing(&ui) {
@@ -438,7 +475,7 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str) {
                 ui.navigate(HOME);
                 return;
             };
-            let (read, yt) = tokio::join!(ui.call("clips.clip.get", json!({"id": id})), ui.call("clips.youtube.status", json!({})));
+            let (read, yt) = tokio::join!(ui.call("clips.clip.get", json!({"id": id, "words": true})), ui.call("clips.youtube.status", json!({})));
             if *ui.page.borrow() != name || STATE.with(|s| s.clip.get()) != Some(id) {
                 return;
             }
@@ -578,11 +615,16 @@ fn stages(v: &Value) -> gtk::Box {
         bar.add_css_class("clips-bar");
         bar.set_fraction(v["progress"].as_f64().unwrap_or(0.0));
         wrap.append(&bar);
-        let detail = match (state, v["detail"].as_str()) {
+        let mut detail = match (state, v["detail"].as_str()) {
             ("queued", _) => "Waiting for the VOD before it".to_string(),
             (_, Some(d)) if !d.is_empty() => d.to_string(),
             _ => STAGES.get(at.unwrap_or(0)).map_or("Starting", |(_, c)| c).to_string(),
         };
+        match (state, v["eta_s"].as_f64()) {
+            ("queued", Some(eta)) => detail.push_str(&format!(" · takes {}", left(eta).trim_end_matches(" left"))),
+            (_, Some(eta)) => detail.push_str(&format!(" · {} in all", left(eta))),
+            _ => {}
+        }
         let d = label(&detail, "money-row-detail");
         d.set_xalign(0.0);
         wrap.append(&d);
@@ -595,7 +637,10 @@ fn vod_line(v: &Value) -> String {
     let mut parts = vec![clock(v["duration_s"].as_f64().unwrap_or(0.0))];
     let n = v["clips"].as_u64().unwrap_or(0);
     match text(v, "state") {
-        "working" => parts.push(format!("{}…", STAGES.iter().find(|(s, _)| *s == text(v, "stage")).map_or("Working", |(_, c)| c))),
+        "working" => {
+            parts.push(format!("{}…", STAGES.iter().find(|(s, _)| *s == text(v, "stage")).map_or("Working", |(_, c)| c)));
+            parts.extend(vod_left(v));
+        }
         "queued" => parts.push("Waiting its turn".into()),
         "failed" => parts.push("Stopped on a problem".into()),
         "stopped" => parts.push("Stopped".into()),
@@ -1004,6 +1049,23 @@ fn vod_page(ui: &Rc<Ui>, page: &Page, d: &Value) {
         "failed" | "stopped" => keys.push(op_key(ui, "Try again", "money-secondary", "clips.vod.retry", json!({"id": id}), "Started again where it stopped.", None).upcast()),
         _ => {}
     }
+    // Where its drawn clips are; before any is drawn, the file it came from.
+    let drawn = rows(d, "clips").iter().find_map(|c| c["file"].as_str().map(|f| std::path::Path::new(f).parent().map(|p| p.display().to_string())))
+        .flatten();
+    let source = (!text(v, "source").starts_with("http")).then(|| text(v, "source").trim_start_matches("file://").to_string())
+        .filter(|f| std::path::Path::new(f).exists());
+    if let Some(path) = drawn.clone().or(source) {
+        let show = button("Show in folder", "money-secondary");
+        show.set_widget_name("clips-show-vod");
+        show.set_tooltip_text(Some(if drawn.is_some() { "Open the folder its drawn clips are in" } else { "Open the folder the VOD is in" }));
+        let weak = Rc::downgrade(ui);
+        show.connect_clicked(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                show_in_folder(&ui, &path);
+            }
+        });
+        keys.push(show.upcast());
+    }
     let delete = button("Delete", "money-destructive");
     {
         let weak = Rc::downgrade(ui);
@@ -1134,7 +1196,6 @@ fn look_again(ui: &Rc<Ui>, page: &Page, v: &Value) {
 struct Editor {
     id: i64,
     clip: RefCell<Value>,
-    vod: Value,
     words: Vec<Value>,
     edit: RefCell<Value>,
     dirty: Cell<bool>,
@@ -1146,11 +1207,16 @@ struct Editor {
     /// Where the transcript was last clicked, for the word's menu to point at.
     clicked: Cell<(f64, f64)>,
     status: gtk::Box,
+    /// The keys that decide the clip (Approve, Reject, Take back…), at the page's head, where
+    /// they are seen without scrolling past the player.
+    actions: gtk::Box,
     title: gtk::Entry,
     description: gtk::TextView,
     tags: gtk::Entry,
     hook: gtk::Entry,
     kind: gtk::DropDown,
+    /// A read of the drawing's progress is due: one at a time while it is drawn.
+    ticking: Cell<bool>,
 }
 
 impl Editor {
@@ -1264,8 +1330,10 @@ fn clip_page(ui: &Rc<Ui>, page: &Page, d: &Value, yt: &Value) {
     let v = &d["vod"];
     let id = c["id"].as_i64().unwrap_or(0);
     let vod_id = v["id"].as_i64().unwrap_or(0);
-    // Keys at the head: back to the VOD, and between the VOD's clips.
-    heading(&page.head, text(c, "title"), &format!("{} · {}", kind_caption(text(c, "kind")), text(v, "title")), &[]);
+    // Keys at the head: back to the VOD, and what decides the clip.
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    actions.add_css_class("clips-decide");
+    heading(&page.head, text(c, "title"), &format!("{} · {}", kind_caption(text(c, "kind")), text(v, "title")), &[actions.upcast_ref()]);
     back_key(ui, &page.head, "VOD", move |ui| open_vod(ui, vod_id));
     clear(&page.body);
 
@@ -1281,9 +1349,9 @@ fn clip_page(ui: &Rc<Ui>, page: &Page, d: &Value, yt: &Value) {
     // A fixed 9:16 frame: the video's own size (1080 × 1920) never sets it.
     let stage = gtk::Overlay::new();
     stage.add_css_class("clips-player");
-    let size = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    size.set_size_request(320, 568);
-    stage.set_child(Some(&size));
+    // Under the player, its first frame: what shows before it plays, not a black box.
+    let under = framed(ui, c["poster"].as_str(), "clips-poster", 320, 568);
+    stage.set_child(Some(&under));
     stage.set_halign(gtk::Align::Start);
     stage.set_valign(gtk::Align::Start);
     stage.set_overflow(gtk::Overflow::Hidden);
@@ -1295,9 +1363,35 @@ fn clip_page(ui: &Rc<Ui>, page: &Page, d: &Value, yt: &Value) {
                 file.set_muted(true);
             }
             let player = gtk::Video::for_media_stream(Some(&file));
-            player.set_autoplay(false);
+            // It plays when opened, as a Short does: approving one opens the next, playing.
+            player.set_autoplay(std::env::var_os("RELAY_NATIVE_SCREENSHOT").is_none());
             player.set_loop(true);
             player.set_vexpand(true);
+            stage.set_tooltip_text(Some("Click to pause or play"));
+            {
+                // A click on the picture pauses or plays; the controls along its foot take their own.
+                let click = gtk::GestureClick::new();
+                click.set_button(gtk::gdk::BUTTON_PRIMARY);
+                let file = file.clone();
+                click.connect_released(move |g, n, _, _| {
+                    if n == 1 {
+                        file.set_playing(!file.is_playing());
+                        g.set_state(gtk::EventSequenceState::Claimed);
+                    }
+                });
+                stage.add_controller(click);
+            }
+            // GtkVideo paints black until its first frame (its offload's black background): the
+            // poster under it shows until then.
+            player.set_opacity(0.0);
+            {
+                let player = player.clone();
+                file.connect_playing_notify(move |f| {
+                    if f.is_playing() {
+                        player.set_opacity(1.0);
+                    }
+                });
+            }
             player.connect_unmap(|v| {
                 if let Some(stream) = v.media_stream() {
                     stream.pause();
@@ -1306,12 +1400,10 @@ fn clip_page(ui: &Rc<Ui>, page: &Page, d: &Value, yt: &Value) {
             stage.add_overlay(&player);
         }
         None => {
-            let over = framed(ui, c["poster"].as_str(), "clips-poster", 320, 568);
             let note = label(if text(c, "state") == "rendering" { "Drawing…" } else { "Not drawn yet" }, "clips-player-note");
             note.set_valign(gtk::Align::Center);
             note.set_halign(gtk::Align::Center);
-            over.add_overlay(&note);
-            stage.add_overlay(&over);
+            stage.add_overlay(&note);
         }
     }
     left.append(&stage);
@@ -1373,7 +1465,6 @@ fn clip_page(ui: &Rc<Ui>, page: &Page, d: &Value, yt: &Value) {
     let ed = Rc::new(Editor {
         id,
         clip: RefCell::new(c.clone()),
-        vod: v.clone(),
         words: {
             let (a, b) = (c["start_s"].as_f64().unwrap_or(0.0) - 10.0, c["end_s"].as_f64().unwrap_or(0.0) + 10.0);
             rows(d, "words").into_iter().filter(|w| {
@@ -1389,11 +1480,13 @@ fn clip_page(ui: &Rc<Ui>, page: &Page, d: &Value, yt: &Value) {
         transcript: transcript.clone(),
         clicked: Cell::new((0.0, 0.0)),
         status: status.clone(),
+        actions: actions.clone(),
         title: title.clone(),
         description: description.clone(),
         tags: tags.clone(),
         hook: hook.clone(),
         kind: kind.clone(),
+        ticking: Cell::new(false),
     });
     STATE.with(|s| *s.editor.borrow_mut() = Some(ed.clone()));
     for w in [title.upcast_ref::<gtk::Editable>(), tags.upcast_ref(), hook.upcast_ref()] {
@@ -1582,7 +1675,9 @@ fn clip_page(ui: &Rc<Ui>, page: &Page, d: &Value, yt: &Value) {
     ed.dirty.set(false);
     ed.save.set_sensitive(false);
     ed.revert.set_visible(false);
-    status_into(ui, &ed, c, yt);
+    let mut with_drawing = c.clone();
+    with_drawing["drawing"] = d["drawing"].clone();
+    status_into(ui, &ed, &with_drawing, yt);
 }
 
 /// A word's menu: cut or keep it, start or end there, fix how it is spelled.
@@ -1694,15 +1789,49 @@ fn word_menu(at: &gtk::Label, ed: &Rc<Editor>, w: &Value) {
     pop.popup();
 }
 
+/// What a clip being drawn is doing, from `clips.clip.get`'s `drawing`.
+fn drawing_line(d: &Value) -> String {
+    let eta = d["eta_s"].as_f64().map(left);
+    match (text(d, "phase"), eta) {
+        ("queued", _) => "Waiting for the clips before it to be drawn. It plays here when done.".to_string(),
+        ("drawing", Some(eta)) => format!("Drawing it: {:.0}%, {eta}.", d["progress"].as_f64().unwrap_or(0.0) * 100.0),
+        ("drawing", None) => "Drawing it… it plays here when done.".to_string(),
+        (_, Some(eta)) => format!("Cutting its footage, then drawing it: {eta}."),
+        _ => "Drawing it… it plays here when done.".to_string(),
+    }
+}
+
 /// The editor's status: where the clip stands, and the keys that move it on.
 fn status_into(ui: &Rc<Ui>, ed: &Rc<Editor>, c: &Value, yt: &Value) {
     let status = &ed.status;
     clear(status);
     let id = ed.id;
     let state = text(c, "state");
+    if let Some(file) = c["file"].as_str() {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        row.add_css_class("clips-file-row");
+        let f = label(std::path::Path::new(file).file_name().map_or(file.into(), |n| n.to_string_lossy()).as_ref(), "clips-path");
+        f.set_xalign(0.0);
+        f.set_hexpand(true);
+        f.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        f.set_selectable(true);
+        f.set_tooltip_text(Some(file));
+        row.append(&f);
+        let show = button("Show in folder", "money-secondary");
+        show.set_widget_name("clips-show-file");
+        show.set_tooltip_text(Some("Open the folder this clip's video is in, with it picked out"));
+        let (weak, path) = (Rc::downgrade(ui), file.to_string());
+        show.connect_clicked(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                show_in_folder(&ui, &path);
+            }
+        });
+        row.append(&show);
+        status.append(&row);
+    }
     let line = match state {
         "draft" => "Not drawn yet.".to_string(),
-        "rendering" => "Drawing it… it plays here when done.".to_string(),
+        "rendering" => drawing_line(&c["drawing"]),
         // A note on a clip back for review (an agent changed it after it was approved) comes first.
         "ready" if !text(c, "error").is_empty() => text(c, "error").to_string(),
         "ready" => format!("{} long. Approve it, and it goes out at the next posting time.", clock(c["length_s"].as_f64().unwrap_or(0.0))),
@@ -1718,18 +1847,36 @@ fn status_into(ui: &Rc<Ui>, ed: &Rc<Editor>, c: &Value, yt: &Value) {
     l.set_wrap(true);
     l.set_xalign(0.0);
     status.append(&l);
-    let keys = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    if state == "rendering" {
+        let bar = gtk::ProgressBar::new();
+        bar.add_css_class("clips-bar");
+        bar.set_fraction(c["drawing"]["progress"].as_f64().unwrap_or(0.0));
+        status.append(&bar);
+        // Read again in a moment: a render's progress is not a `clips.changed`.
+        if !ed.ticking.replace(true) {
+            let (weak, ed) = (Rc::downgrade(ui), ed.clone());
+            glib::timeout_add_local_once(Duration::from_secs(2), move || {
+                ed.ticking.set(false);
+                let Some(ui) = weak.upgrade() else { return };
+                let current = STATE.with(|s| s.editor.borrow().as_ref().is_some_and(|e| Rc::ptr_eq(e, &ed)));
+                if current && *ui.page.borrow() == CLIP {
+                    refresh_status(&ui, &ed);
+                }
+            });
+        }
+    }
+    let keys = &ed.actions;
+    clear(keys);
     match state {
         "ready" => {
             let vod = c["vod_id"].as_i64().unwrap_or(0);
-            let approve = decide_key(ui, "Approve", "primary", id, vod, "approved", "Approved. It goes out at the next posting time.");
-            approve.set_widget_name("clips-approve");
-            approve.set_hexpand(true);
-            approve.set_tooltip_text(Some("Approve, and open the next clip waiting for you"));
-            keys.append(&approve);
             let reject = decide_key(ui, "Reject", "money-secondary", id, vod, "rejected", "Rejected.");
             reject.set_tooltip_text(Some("Reject, and open the next clip waiting for you"));
             keys.append(&reject);
+            let approve = decide_key(ui, "Approve", "primary", id, vod, "approved", "Approved. It goes out at the next posting time.");
+            approve.set_widget_name("clips-approve");
+            approve.set_tooltip_text(Some("Approve, and open the next clip waiting for you"));
+            keys.append(&approve);
         }
         "approved" | "scheduled" => {
             keys.append(&op_key(ui, "Take back", "money-secondary", "clips.clip.set", json!({"id": id, "state": "ready"}), "Taken off the schedule.", None));
@@ -1754,7 +1901,6 @@ fn status_into(ui: &Rc<Ui>, ed: &Rc<Editor>, c: &Value, yt: &Value) {
         }
         _ => {}
     }
-    status.append(&keys);
     // Posting now, past the schedule, when the channel is connected.
     if matches!(state, "ready" | "approved" | "scheduled" | "failed") && c["file"].is_string() {
         if yt["connected"] == true {
@@ -1767,14 +1913,6 @@ fn status_into(ui: &Rc<Ui>, ed: &Rc<Editor>, c: &Value, yt: &Value) {
             l.set_xalign(0.0);
             status.append(&l);
         }
-    }
-    if let Some(file) = c["file"].as_str() {
-        let f = label(file, "clips-path");
-        f.set_xalign(0.0);
-        f.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-        f.set_selectable(true);
-        f.set_tooltip_text(Some(file));
-        status.append(&f);
     }
 }
 
@@ -1812,11 +1950,23 @@ fn refresh_status(ui: &Rc<Ui>, ed: &Rc<Editor>) {
     let (ui, ed) = (ui.clone(), ed.clone());
     glib::spawn_future_local(async move {
         let (read, yt) = tokio::join!(ui.call("clips.clip.get", json!({"id": ed.id})), ui.call("clips.youtube.status", json!({})));
-        if let Ok(d) = read {
-            *ed.clip.borrow_mut() = d["clip"].clone();
-            status_into(&ui, &ed, &d["clip"], &yt.unwrap_or(Value::Null));
+        let Ok(d) = read else { return };
+        let still = *ui.page.borrow() == CLIP && STATE.with(|s| s.clip.get()) == Some(ed.id);
+        if !still {
+            return;
         }
-        let _ = &ed.vod;
+        // Drawn anew, or moved on (approved elsewhere, failed): the page again, player and all,
+        // unless something is being typed into it.
+        let was = ed.clip.borrow().clone();
+        let moved = d["clip"]["state"] != was["state"] || d["clip"]["file"] != was["file"];
+        if moved && !ed.dirty.get() && !typing(&ui) {
+            ui.refresh_page();
+            return;
+        }
+        *ed.clip.borrow_mut() = d["clip"].clone();
+        let mut c = d["clip"].clone();
+        c["drawing"] = d["drawing"].clone();
+        status_into(&ui, &ed, &c, &yt.unwrap_or(Value::Null));
     });
 }
 
@@ -2432,6 +2582,15 @@ mod tests {
         assert_eq!(clock(34.4), "0:34");
         assert_eq!(clock(3723.0), "1:02:03");
         assert_eq!(clock_tenths(61.37), "1:01.3");
+    }
+
+    #[test]
+    fn time_left_reads_plainly() {
+        assert_eq!(left(12.0), "about 15 s left");
+        assert_eq!(left(240.0), "about 4 min left");
+        assert_eq!(left(4210.0), "about 1 h 11 min left");
+        assert_eq!(drawing_line(&json!({"phase": "drawing", "progress": 0.42, "eta_s": 20.0})), "Drawing it: 42%, about 20 s left.");
+        assert!(drawing_line(&json!({"phase": "queued"})).starts_with("Waiting for the clips before it"));
     }
 
     #[test]

@@ -61,6 +61,7 @@ togglebutton.clips-chip:checked, button.clips-chip:checked { background: @glass_
 
 /* The editor: the clip playing on the left, its edit on the right. */
 .clips-player { border-radius: 14px; background: #000000; }
+.clips-file-row { margin-top: 2px; }
 .clips-player-note { padding: 6px 12px; border-radius: 8px; font-size: 13px; color: @ink; background: alpha(@wall_solid, 0.72); }
 .money-root entry.clips-title-field { font-size: 15px; font-weight: 500; min-height: 38px; }
 textview.clips-text, textview.clips-text text { background: transparent; color: @ink; font-size: 13.5px; }
