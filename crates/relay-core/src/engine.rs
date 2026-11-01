@@ -866,11 +866,12 @@ impl Engine {
         self.shell_ptys.lock().unwrap_or_else(PoisonError::into_inner).contains(&id)
     }
     pub fn take_pty(&self, session_id: Id) -> Option<Arc<Pty>> {
-        self.shell_ptys.lock().unwrap_or_else(PoisonError::into_inner).remove(&session_id);
+        // The name first: a shell is never found by name without its mark (`is_shell_pty`).
         self.pty_ids
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .retain(|_, id| *id != session_id);
+        self.shell_ptys.lock().unwrap_or_else(PoisonError::into_inner).remove(&session_id);
         self.ptys.lock().unwrap_or_else(PoisonError::into_inner).remove(&session_id)
     }
     pub fn live_pty_count(&self) -> usize {
@@ -922,6 +923,7 @@ impl Engine {
             );
         }
         self.pty_ids.lock().unwrap_or_else(PoisonError::into_inner).clear();
+        self.shell_ptys.lock().unwrap_or_else(PoisonError::into_inner).clear();
         let ptys: Vec<(Id, Arc<Pty>)> = std::mem::take(&mut *self.ptys.lock().unwrap_or_else(PoisonError::into_inner)).into_iter().collect();
         if ptys.is_empty() {
             return;
@@ -1054,8 +1056,8 @@ impl Engine {
         self.dispatch_with_watch_state(req, door, None, thread)
     }
 
-    pub(crate) fn dispatch_socket_watch(&self, req: Request, already_watching: bool) -> Response {
-        self.dispatch_with_watch_state(req, Door::Socket, Some(already_watching), None)
+    pub(crate) fn dispatch_socket_watch(&self, req: Request, already_watching: bool, thread: Option<Id>) -> Response {
+        self.dispatch_with_watch_state(req, Door::Socket, Some(already_watching), thread)
     }
 
     fn dispatch_with_watch_state(&self, req: Request, door: Door, watching: Option<bool>, thread: Option<Id>) -> Response {

@@ -899,7 +899,7 @@ async fn serve_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStream
                 // A flag: a panic that poisoned it left it as true as it was.
                 let mut active = lease.active.lock().unwrap_or_else(|poison| poison.into_inner());
                 let on = req.payload["on"].as_bool();
-                let response = lease.engine.dispatch_socket_watch(req, *active);
+                let response = lease.engine.dispatch_socket_watch(req, *active, thread);
                 if response.ok {
                     *active = on.expect("successful Watch validated its boolean payload");
                 }
@@ -2250,6 +2250,17 @@ mod thread_tests {
 
     fn ok(engine: &Engine, op: &str, payload: serde_json::Value) -> serde_json::Value {
         engine.dispatch(Request::new(Actor::User, op, payload), Door::InProcess).into_result().unwrap()
+    }
+
+    /// The door's own code dispatches only through calls that take the connection's thread:
+    /// a bare `Engine::dispatch` there is the path that let the assistant read a shell.
+    #[test]
+    fn the_door_never_dispatches_without_the_connections_thread() {
+        let door = include_str!("socket.rs").split("#[cfg(test)]").next().unwrap();
+        for (n, line) in door.lines().enumerate() {
+            let code = line.split("//").next().unwrap();
+            assert!(!code.contains(".dispatch(") && !code.contains(".dispatch_from_thread("), "socket.rs:{}: dispatch with the thread (`dispatch_as`): {line}", n + 1);
+        }
     }
 
     /// Every path through the door hands a thread's request to its handler as that thread's:

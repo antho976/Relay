@@ -687,8 +687,8 @@ impl Pty {
         (text, self.shared.epoch, self.seq())
     }
 
-    /// Kill the child (SIGTERM to its process group, then SIGKILL after `grace`), then drop
-    /// the master so the reader ends. Idempotent. [`kill_all`] does the same for many at once.
+    /// Kill the child (SIGTERM to its process group, then SIGKILL after `grace`; a shell is hung
+    /// up first, [`Pty::hang_up_first`]), then drop the master so the reader ends. Idempotent. [`kill_all`] does the same for many at once.
     pub fn kill(&self, grace: Duration) {
         kill_all(&[self], grace);
     }
@@ -762,13 +762,15 @@ pub fn paste_bytes(data: &str, bracketed: bool) -> Vec<u8> {
 
 /// [`Pty::kill`] for many PTYs against one shared deadline: SIGTERM to every group, one wait
 /// of at most `grace` for all of them, SIGKILL to whatever remains, then at most 2 s more.
+/// Shells are hung up first, with SIGHUP and a wait of at most `min(grace, 500 ms)` for them
+/// alone, while every other group already has its SIGTERM.
 /// Killing one at a time cost up to `grace` per stubborn session, which at shutdown summed to
 /// more than a desktop logout or a service stop allows (RA-311).
 pub fn kill_all(ptys: &[&Pty], grace: Duration) {
     // Each look scans all of /proc once per group still running. A shell that takes SIGTERM is
     // gone within a few ms, so the looks back off from 1 ms to every 50 ms: a fixed 50 ms first
     // wait made every park and close cost at least 50 ms.
-    let wait = |deadline: Instant| {
+    let wait = |ptys: &[&&Pty], deadline: Instant| {
         let mut pause = Duration::from_millis(1);
         while !ptys.iter().all(|pty| pty.settled()) {
             let now = Instant::now();
@@ -782,14 +784,15 @@ pub fn kill_all(ptys: &[&Pty], grace: Duration) {
     let pending: Vec<&&Pty> = ptys.iter().filter(|pty| !pty.settled()).collect();
     // A shell hangs up its jobs and exits on SIGHUP, at once; the SIGTERM after it is for
     // whatever ignored the hangup.
-    let shells: Vec<&&&Pty> = pending.iter().filter(|pty| pty.shared.hang_up.load(Ordering::SeqCst)).collect();
+    let (shells, others): (Vec<&&Pty>, Vec<&&Pty>) = pending.iter().partition(|pty| pty.shared.hang_up.load(Ordering::SeqCst));
+    for pty in &others { pty.signal(libc::SIGTERM); }
     for pty in &shells { pty.signal(libc::SIGHUP); }
-    if !shells.is_empty() { wait(Instant::now() + grace.min(Duration::from_millis(500))); }
-    for pty in &pending { pty.signal(libc::SIGTERM); }
-    if !pending.is_empty() { wait(Instant::now() + grace); }
+    if !shells.is_empty() { wait(&shells, Instant::now() + grace.min(Duration::from_millis(500))); }
+    for pty in &shells { pty.signal(libc::SIGTERM); }
+    if !pending.is_empty() { wait(&pending, Instant::now() + grace); }
     let stubborn: Vec<&&Pty> = pending.into_iter().filter(|pty| !pty.settled()).collect();
     for pty in &stubborn { pty.signal(libc::SIGKILL); }
-    if !stubborn.is_empty() { wait(Instant::now() + Duration::from_secs(2)); }
+    if !stubborn.is_empty() { wait(&stubborn, Instant::now() + Duration::from_secs(2)); }
     for pty in ptys { pty.close(); }
 }
 
