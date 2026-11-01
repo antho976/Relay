@@ -64,6 +64,20 @@ fn run(engine: &Engine, id: &Value) -> Value {
     ok(engine, "aide.run.get", json!({"id": id}))
 }
 
+/// The newest run of `job` once the scheduler has queued one past the `before` it had: the
+/// scheduler started by `aide::spawn` is woken to look, never raced. A `runs::tick` of the test's
+/// own beside it could look in the moment between the scheduler moving the job's next wake on and
+/// queueing its run, find nothing due, and leave the test reading a run that was not there yet.
+fn woken(engine: &Engine, job: &Value, before: usize) -> Value {
+    relay_core::aide::poke(engine);
+    let mut runs = Vec::new();
+    wait_until("the scheduler to queue the run", || {
+        runs = ok(engine, "aide.run.list", json!({"job_id": job["id"]}))["runs"].as_array().unwrap().clone();
+        runs.len() > before
+    });
+    runs[0].clone()
+}
+
 fn ended(engine: &Engine, id: &Value) -> Value {
     let mut last = Value::Null;
     wait_until("the run to end", || {
@@ -487,8 +501,7 @@ fn what_your_own_model_wrote_from_private_data_never_reaches_claude() {
         "schedule": {"every": "day", "hour": 7}}));
     let half_a_minute_ago = relay_core::time::stamp(jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_secs(30)).unwrap());
     relay_core::aide::with_db(&engine, |db| db.set_job_due(brief["id"].as_i64().unwrap(), Some(&half_a_minute_ago))).unwrap();
-    relay_core::aide::runs::tick(&engine);
-    let run = ok(&engine, "aide.run.list", json!({"job_id": brief["id"]}))["runs"][0].clone();
+    let run = woken(&engine, &brief, 0);
     let done = ended(&engine, &run["id"]);
     assert_eq!((done["state"].as_str(), done["host"].as_str()), (Some("done"), Some("claude")), "{done}");
     let theirs = done["thread_id"].clone();
@@ -553,8 +566,7 @@ fn a_brief_waits_while_you_talk_in_its_chat_and_keeps_what_was_held() {
 
     let half_a_minute_ago = relay_core::time::stamp(jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_secs(30)).unwrap());
     relay_core::aide::with_db(&engine, |db| db.set_job_due(j["id"].as_i64().unwrap(), Some(&half_a_minute_ago))).unwrap();
-    relay_core::aide::runs::tick(&engine);
-    let r = ok(&engine, "aide.run.list", json!({"job_id": j["id"]}))["runs"][0].clone();
+    let r = woken(&engine, &j, 0);
     assert_eq!(run(&engine, &r["id"])["state"], "queued", "it waits for the person's turn");
     assert_eq!(ok(&engine, "aide.summary", json!({}))["held"], 1, "and what it would say is still held");
 
@@ -628,8 +640,7 @@ fn a_follow_up_set_from_private_data_does_not_say_why_on_claude() {
         db.drop_follow_up(f.id)?;
         db.add_follow_up(f.job_id, &past, &f.note, f.private)
     }).unwrap();
-    relay_core::aide::runs::tick(&engine);
-    let woke = ok(&engine, "aide.run.list", json!({"job_id": j["id"]}))["runs"][0].clone();
+    let woke = woken(&engine, &j, 1);
     assert_eq!(woke["reason"], "follow_up");
     let done = ended(&engine, &woke["id"]);
     assert_eq!(done["host"], "claude");
@@ -645,8 +656,7 @@ fn a_follow_up_set_from_private_data_does_not_say_why_on_claude() {
         db.drop_follow_up(f.id)?;
         db.add_follow_up(f.job_id, &past, &f.note, f.private)
     }).unwrap();
-    relay_core::aide::runs::tick(&engine);
-    let woke = ok(&engine, "aide.run.list", json!({"job_id": j["id"]}))["runs"][0].clone();
+    let woke = woken(&engine, &j, 2);
     ended(&engine, &woke["id"]);
     let messages = ok(&engine, "thread.get", json!({"id": channel}))["messages"].clone();
     let wake = messages.as_array().unwrap().iter().rev().find(|m| m["role"] == "wake").unwrap()["body"]["text"].as_str().unwrap().to_string();
