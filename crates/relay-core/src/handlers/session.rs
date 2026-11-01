@@ -1210,6 +1210,10 @@ fn finish_launch(ctx: &mut Ctx, prepared: PreparedLaunch) -> Result<Session, Bus
     if !is_shell(&current.session) {
         crate::gaming::adopt(pty.pid(), &name);
     }
+    ctx.engine().mark_shell_pty(sid, is_shell(&current.session));
+    if is_shell(&current.session) {
+        pty.hang_up_first();
+    }
     if let Some(old) = ctx.engine().set_pty(sid, &name, pty) {
         kill_detached(old, Duration::from_millis(500));
     }
@@ -1571,7 +1575,13 @@ pub fn register(e: &mut Engine) {
                     },
                 ),
             )),
-        }, |row| {
+        }.and_then(|()| match &p.prompt {
+            // It would be typed in and run (`launch_nudge`): a shell has no agent to read it.
+            Some(prompt) if is_shell(&row.session) && !prompt.trim().is_empty() => Err(BusError::invalid(
+                "session.shell", format!("{} is a shell: it takes no opening message", row.session.name),
+            )),
+            _ => Ok(()),
+        }), |row| {
             if let Some(prompt) = &p.prompt {
                 row.launch_prompt = (!prompt.trim().is_empty()).then(|| prompt.clone());
             }

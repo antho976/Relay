@@ -561,6 +561,9 @@ pub struct Engine {
     /// Session name → id for the live PTYs above, so `session.input` can resolve a keystroke's
     /// target without a `SELECT` (D148).
     pty_ids: std::sync::Mutex<BTreeMap<String, Id>>,
+    /// The live PTYs above that are the person's shells (`Provider::Shell`), so the socket door
+    /// can tell a shell's process tree from an agent's without the store (`peer::identify`).
+    shell_ptys: std::sync::Mutex<HashSet<Id>>,
     pub(crate) mirrors: std::sync::Mutex<HashMap<Id, Arc<MirrorRuntime>>>,
     pub(crate) device_runs: std::sync::Mutex<HashMap<Id, Arc<RunRuntime>>>,
     pub(crate) device_watch: std::sync::Mutex<DeviceWatchState>,
@@ -627,6 +630,7 @@ impl Engine {
                 in_flight_done: std::sync::Condvar::new(),
                 ptys: std::sync::Mutex::new(BTreeMap::new()),
                 pty_ids: std::sync::Mutex::new(BTreeMap::new()),
+                shell_ptys: std::sync::Mutex::new(HashSet::new()),
                 mirrors: std::sync::Mutex::new(HashMap::new()),
                 device_runs: std::sync::Mutex::new(HashMap::new()),
                 device_watch: std::sync::Mutex::new(DeviceWatchState::default()),
@@ -846,7 +850,23 @@ impl Engine {
             .insert(name.to_string(), session_id);
         self.ptys.lock().unwrap_or_else(PoisonError::into_inner).insert(session_id, pty)
     }
+    /// Mark session `session_id`'s live PTY as the person's shell, or not.
+    pub(crate) fn mark_shell_pty(&self, session_id: Id, shell: bool) {
+        let mut shells = self.shell_ptys.lock().unwrap_or_else(PoisonError::into_inner);
+        if shell {
+            shells.insert(session_id);
+        } else {
+            shells.remove(&session_id);
+        }
+    }
+    /// Whether the live PTY named `name` is the person's shell. Memory only: the socket door asks
+    /// on a runtime thread, for every connection from a session's tree.
+    pub(crate) fn is_shell_pty(&self, name: &str) -> bool {
+        let Some(id) = self.pty_ids.lock().unwrap_or_else(PoisonError::into_inner).get(name).copied() else { return false };
+        self.shell_ptys.lock().unwrap_or_else(PoisonError::into_inner).contains(&id)
+    }
     pub fn take_pty(&self, session_id: Id) -> Option<Arc<Pty>> {
+        self.shell_ptys.lock().unwrap_or_else(PoisonError::into_inner).remove(&session_id);
         self.pty_ids
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

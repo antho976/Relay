@@ -2271,7 +2271,12 @@ mod thread_tests {
         ok(&engine, "project.add", json!({"workspace_id": 1, "path": repo}));
         ok(&engine, "settings.set", json!({"path": "providers.shell.path", "value": "/bin/sh"}));
         let shell = ok(&engine, "session.create", json!({"project_id": 1, "provider": "shell"}))["name"].clone();
+        // An opening message would be typed into the shell and run.
+        let typed = engine.dispatch(Request::new(Actor::User, "session.spawn", json!({"session": shell, "prompt": "touch typed"})), Door::InProcess);
+        assert_eq!(typed.error.map(|e| e.code), Some("session.shell".to_string()));
         ok(&engine, "session.spawn", json!({"session": shell}));
+        // Known as a shell from memory, so `peer::identify` never takes the store to ask.
+        assert!(engine.is_shell_pty(shell.as_str().unwrap()));
         assert!(engine.runs_unlocked("session.scrollback"), "the case this guards is the unlocked path");
 
         let read = Request::new(Actor::User, "session.scrollback", json!({"session": shell}));
@@ -2285,5 +2290,6 @@ mod thread_tests {
         let resp = assistant.call(&Request::new(Actor::User, "session.transcript", json!({"session": shell})), |_| {}).await.unwrap();
         assert_eq!(resp.error.map(|e| e.code), Some("session.shell".to_string()), "nor its transcript");
         ok(&engine, "session.close", json!({"session": shell}));
+        assert!(!engine.is_shell_pty(shell.as_str().unwrap()), "forgotten with its PTY");
     }
 }
