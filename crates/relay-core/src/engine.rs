@@ -1027,6 +1027,13 @@ impl Engine {
         self.dispatch_with_watch_state(req, door, None, Some(thread))
     }
 
+    /// [`Engine::dispatch`] or [`Engine::dispatch_from_thread`], by who sent it: the socket door
+    /// passes every request from a connection through this, so no path it takes drops the
+    /// thread a handler's checks depend on.
+    pub fn dispatch_as(&self, req: Request, door: Door, thread: Option<Id>) -> Response {
+        self.dispatch_with_watch_state(req, door, None, thread)
+    }
+
     pub(crate) fn dispatch_socket_watch(&self, req: Request, already_watching: bool) -> Response {
         self.dispatch_with_watch_state(req, Door::Socket, Some(already_watching), None)
     }
