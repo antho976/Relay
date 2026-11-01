@@ -138,19 +138,32 @@ Two limits are Google's, not Relay's:
 
 Approved clips take the day's posting times (Settings, local time; none posts at once), best
 first, one clip a time; **Post now** skips the queue. With posting set to **on their own**, clips
-scoring the threshold or more are approved as you would, once a channel is connected. The
+scoring the threshold or more are approved as you would, once a channel is connected: only clips
+the pipeline drew that nobody has decided on, never one you took back, restored or rejected, one
+an agent changed, or one whose upload failed. The
 `clips-post` thread uploads what is due, resumably, with the title, the description (its line,
 the credit "From <streamer>'s stream: twitch.tv/<handle>", the footer and #shorts), the tags and
 the Gaming category. Relay must be running for a post to go out at its time; one missed while it
 was off goes out when it next runs. An upload's address is kept the moment Google gives it: a
-Relay stopped in the middle asks Google, when it next starts, how that upload ended, and posts the
-clip (it arrived), sends it again (YouTube kept none of it), or fails it with a word to look on the
-channel first (Google could not say): never twice on a guess. What the keyring says of the
-sign-in is read once and kept until Relay next writes it.
+slow line, a lost answer or Google's own error goes on from what Google has; a Relay stopped in
+the middle asks Google, when it next starts, how that upload ended, and posts the clip (it
+arrived), goes on with it at its slot (it did not), or fails it with a word to look on the channel
+first (Google could not say); and a try after a failure asks about the upload it opened before
+opening another: never twice on a guess. Each drawing is a file of its own whose hash is checked
+before it goes out, so nothing written to its path since is what YouTube gets. What the keyring
+says of the sign-in is read once and kept until Relay next writes it; disconnecting revokes the
+sign-in at Google too.
 
 Posting is the person's alone: `clips.clip.post`, `clips.clip.set` (approve), the YouTube ops and
 deleting are `Actors::UserOnly`. An agent may import, find, edit and draw clips (with the Video
-plugin on), never post one.
+plugin on), never post one: an approved or scheduled clip an agent changes or draws again goes back
+to the person for review, with a note saying so. An agent's links are the internet's only (not
+this PC's or the local network's, which yt-dlp would fetch), and a download stops at 20 GB.
+
+When Relay quits, every tool Clips started (whisper, yt-dlp, `claude -p`, ffmpeg) is stopped with
+it, its whole process group, and dies with Relay if Relay is killed; the VOD stays `working`, and
+the next start goes on from its stage. Deleting a clip or a VOD takes its cut footage, drawing and
+poster off the disk.
 
 ## The ops
 

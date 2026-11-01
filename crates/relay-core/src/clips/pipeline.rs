@@ -277,7 +277,8 @@ fn probe(engine: &Engine, vod: &Vod) -> Step<()> {
         let bar = Bar::new(engine, vod.id);
         bar.set(0.0, Some("Downloading"));
         let mut cmd = Command::new(ytdlp);
-        cmd.args(["--no-playlist", "--newline", "-f", "bv*[height<=1080]+ba/b[height<=1080]/b", "--merge-output-format", "mp4",
+        // At most 1080p and 20 GB: a link is not a way to fill the disk.
+        cmd.args(["--no-playlist", "--newline", "--max-filesize", "20G", "-f", "bv*[height<=1080]+ba/b[height<=1080]/b", "--merge-output-format", "mp4",
             "--write-info-json", "--write-subs", "--sub-langs", "rechat,live_chat", "-o"])
             .arg(dir.join("vod.%(ext)s")).arg(vod.source.trim());
         super::run(engine, vod.id, &mut cmd, Duration::from_secs(6 * 3600), |p| bar.set(p, Some("Downloading")))?;
@@ -357,9 +358,16 @@ fn whisper_prompt(s: &Settings) -> String {
     parts.join(", ")
 }
 
+/// Whether a stage's file is there whole: JSON that reads to its end. A file cut off by a kill in
+/// the middle of its write (from a script before it wrote through a temporary file) is not
+/// taken as the stage done.
+pub fn whole_json(path: &Path) -> bool {
+    std::fs::read(path).ok().is_some_and(|b| serde_json::from_slice::<serde::de::IgnoredAny>(&b).is_ok())
+}
+
 fn transcribe(engine: &Engine, vod: &Vod) -> Step<()> {
     let dir = Path::new(&vod.dir);
-    if dir.join("words.json").is_file() {
+    if whole_json(&dir.join("words.json")) {
         return Ok(());
     }
     if super::whisper().is_none() || super::whisper_model().is_none() {
@@ -384,7 +392,7 @@ fn transcribe(engine: &Engine, vod: &Vod) -> Step<()> {
     let detail = format!("{minutes:.0} min of speech, on the GPU");
     bar.set(0.0, Some(&detail));
     super::run(engine, vod.id, &mut cmd, Duration::from_secs(4 * 3600), |p| bar.set(p, None))?;
-    if !dir.join("words.json").is_file() {
+    if !whole_json(&dir.join("words.json")) {
         return Err(Halt::Failed("whisper finished but wrote no words".into()));
     }
     Ok(())
@@ -393,7 +401,7 @@ fn transcribe(engine: &Engine, vod: &Vod) -> Step<()> {
 fn signals(engine: &Engine, vod: &Vod) -> Step<()> {
     let dir = Path::new(&vod.dir);
     let script = super::script(engine)?;
-    if !dir.join("signals.json").is_file() {
+    if !whole_json(&dir.join("signals.json")) {
         let mut cmd = Command::new(python());
         cmd.arg(&script).arg("signals").arg(dir.join("audio.m4a")).arg("--out").arg(dir.join(".signals.json"));
         if let Some(chat) = chat_file(dir) {
@@ -402,7 +410,7 @@ fn signals(engine: &Engine, vod: &Vod) -> Step<()> {
         super::run(engine, vod.id, &mut cmd, Duration::from_secs(60 * 60), |_| {})?;
         std::fs::rename(dir.join(".signals.json"), dir.join("signals.json")).map_err(|e| Halt::Failed(e.to_string()))?;
     }
-    if !dir.join("candidates.json").is_file() {
+    if !whole_json(&dir.join("candidates.json")) {
         let mut cmd = Command::new(python());
         cmd.arg(&script).arg("candidates").arg("--transcript").arg(dir.join("words.json")).arg("--signals").arg(dir.join("signals.json"))
             .arg("--out").arg(dir.join("candidates.json")).args(["--top", "90", "--spacing", "35"]);
@@ -635,7 +643,11 @@ fn settle(engine: &Engine, vod: &Vod, clip_id: i64, words: &[W], section: &Secti
     let e = edit::checked(e, vod.duration_s, vod.width, vod.height).map_err(Halt::Failed)?;
     let (start, end) = edit::bounds(&e);
     let length = edit::length(words, &e);
-    with_db(engine, |db| db.update_clip(clip_id, &c.title, &c.description, &c.tags, c.kind, &e, start, end, length, &now()))?;
+    // Only the framing, and only onto the draft it read: the person (or an agent) may have
+    // changed its words or its edit in the minutes this took, and theirs stand.
+    if !with_db(engine, |db| db.settle_clip(clip_id, &c.updated_at, &e, start, end, length, &now()))? {
+        tracing::info!(clip = clip_id, "clips: a clip changed while it was framed; its framing is left as it was changed");
+    }
     Ok(())
 }
 
@@ -771,6 +783,17 @@ fn video_dir(engine: &Engine, vod: &Vod) -> Step<PathBuf> {
     Ok(PathBuf::from(v.dir))
 }
 
+/// Where clip `clip_id`'s cut footage is, when it was cut and its video is still there: what
+/// deleting the clip or its VOD removes.
+pub fn footage(engine: &Engine, vod_id: i64, clip_id: i64) -> Option<PathBuf> {
+    let section = with_db(engine, |db| db.section(clip_id)).ok().flatten()?;
+    let video_id = super::vod(engine, vod_id).ok()?.video_id?;
+    let v = engine.read_store("clips.video", |conn| crate::video::get_video(conn, video_id)).ok()?;
+    let path = Path::new(&v.dir).join("public").join(&section.file);
+    // Only a clip's own footage, never anything a section's name could point elsewhere.
+    (section.file.starts_with("assets/clip-") && !section.file.contains("..")).then_some(path)
+}
+
 /// The video VOD `vod`'s clips are compositions of: made with `video.create` the first time,
 /// again if it was deleted, and its template brought up to this build's.
 pub fn ensure_video(engine: &Engine, vod: &Vod) -> Step<i64> {
@@ -826,8 +849,12 @@ pub fn queue_render(engine: &Engine, clip_id: i64) -> Result<i64, BusError> {
     let s = super::settings(engine)?;
     let c = super::clip(engine, clip_id)?;
     let props = edit::props(&c.edit, &section, &words, &vod, vod.layout.as_ref(), &s);
+    // A file of its own each time (`out/clip-<id>-<random>.mp4`): another render of the video,
+    // named as a clip's would be, does not write over a clip waiting to go out. Its hash, kept
+    // when it is taken, is checked again before the upload.
+    let name = format!("clip-{clip_id}-{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
     let out = engine.dispatch(Request::new(Actor::User, "video.render", json!({
-        "video_id": video_id, "composition": "short", "props": props, "name": format!("clip-{clip_id}"), "preset": "shorts",
+        "video_id": video_id, "composition": "short", "props": props, "name": name, "preset": "shorts",
     })), Door::InProcess).into_result()?;
     let render_id = out["id"].as_i64().ok_or_else(|| BusError::internal("video.render answered no render id"))?;
     with_db(engine, |db| db.set_render_id(clip_id, render_id, &now()))?;
@@ -867,7 +894,13 @@ pub fn sync_render(engine: &Engine, c: &Clip) {
                 frame::grab(Path::new(&path), 0.6, &out, 360, "").ok().map(|_| out.display().to_string())
             });
             let length = probe_file(Path::new(&path)).ok().map(|i| (i.0 * 10.0).round() / 10.0);
-            let _ = with_db(engine, |db| db.finish_render(c.id, rid, &path, poster.as_deref(), length, &t));
+            let sha = super::sha_file(Path::new(&path));
+            let before = with_db(engine, |db| db.clip(c.id)).ok().flatten().and_then(|c| c.file);
+            let took = with_db(engine, |db| db.finish_render(c.id, rid, &path, sha.as_deref(), poster.as_deref(), length, &t)).unwrap_or(false);
+            // The drawing it replaced, a file of its own (`queue_render`), is not kept.
+            if let Some(old) = before.filter(|old| took && *old != path) {
+                let _ = std::fs::remove_file(old);
+            }
         }
         RenderState::Failed | RenderState::Cancelled => {
             let why = r.error.clone().unwrap_or_else(|| "the render was stopped".into());
@@ -879,26 +912,54 @@ pub fn sync_render(engine: &Engine, c: &Clip) {
     super::poke_poster(engine);
 }
 
-/// The watcher: every finished render of a clip brings the clip's row up to it.
+/// The watcher: every finished render of a clip brings the clip's row up to it. It only drains
+/// the engine's events; the bringing up (a poster grabbed, the file probed and hashed) is done
+/// on a thread of its own, so a busy moment does not leave the events to overflow. When they did
+/// all the same (`Lagged`: a finish may be among those lost), every clip still drawing is
+/// looked at.
 pub fn watch(weak: Weak<Engine>, mut events: tokio::sync::broadcast::Receiver<relay_bus::envelope::Event>) {
+    let (tx, rx) = std::sync::mpsc::channel::<Option<i64>>();
+    let syncer = weak.clone();
+    let started = std::thread::Builder::new().name("clips-sync".into()).spawn(move || {
+        for msg in rx {
+            let Some(engine) = syncer.upgrade() else { return };
+            if engine.is_quitting() {
+                return;
+            }
+            let clips = match msg {
+                Some(rid) => with_db(&engine, |db| db.clip_by_render(rid)).ok().flatten().into_iter().collect(),
+                None => lagged(&engine),
+            };
+            for c in clips {
+                sync_render(&engine, &c);
+            }
+        }
+    });
+    if started.is_err() {
+        return;
+    }
     loop {
-        let event = match events.blocking_recv() {
-            Ok(e) => e,
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+        let msg = match events.blocking_recv() {
+            Ok(event) if event.ev == "video.render.finished" => match event.payload["id"].as_i64() {
+                Some(rid) => Some(rid),
+                None => continue,
+            },
+            Ok(_) => continue,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                tracing::warn!(missed = n, "clips: the watcher fell behind the engine's events; every clip drawing is looked at");
+                None
+            }
             Err(_) => return,
         };
-        if event.ev != "video.render.finished" {
-            continue;
-        }
-        let Some(engine) = weak.upgrade() else { return };
-        if engine.is_quitting() {
+        if weak.upgrade().is_none_or(|e| e.is_quitting()) || tx.send(msg).is_err() {
             return;
         }
-        let Some(rid) = event.payload["id"].as_i64() else { continue };
-        if let Ok(Some(c)) = with_db(&engine, |db| db.clip_by_render(rid)) {
-            sync_render(&engine, &c);
-        }
     }
+}
+
+/// The clips drawing with a render queued: what a sweep after lost events brings up to date.
+fn lagged(engine: &Engine) -> Vec<Clip> {
+    with_db(engine, |db| db.clips_in(&[ClipState::Rendering])).unwrap_or_default().into_iter().filter(|c| c.render_id.is_some()).collect()
 }
 
 /// Stop VOD `id`'s work: at once when it is the one running, else it simply will not start.
@@ -950,6 +1011,18 @@ mod tests {
         engine.request_quit();
         super::super::poke_render(&engine);
         drawer.join().unwrap();
+    }
+
+    /// A stage's file cut off by a kill in the middle of its write is not taken as the stage done.
+    #[test]
+    fn a_half_written_stage_file_is_not_the_stage_done() {
+        let dir = tempfile::tempdir().unwrap();
+        let words = dir.path().join("words.json");
+        assert!(!whole_json(&words), "not there");
+        std::fs::write(&words, b"[{\"text\": \" So\", \"startMs\": 1000, \"endMs\": 12").unwrap();
+        assert!(!whole_json(&words), "cut off");
+        std::fs::write(&words, b"[{\"text\": \" So\", \"startMs\": 1000, \"endMs\": 1200}]\n").unwrap();
+        assert!(whole_json(&words));
     }
 
     #[test]

@@ -72,6 +72,14 @@ CREATE INDEX clip_render ON clip(render_id);
 r#"
 ALTER TABLE clip ADD COLUMN resume TEXT;
 ALTER TABLE clip ADD COLUMN upload TEXT;
+"#,
+// `auto_ok`: nobody has decided on this clip yet (the finder made it, the pipeline drew it), so
+// posting "on their own" may approve it; anything the person or an agent does to it clears it.
+// `file_sha`: the SHA-256 of the file its render drew, checked before it is uploaded, so a file
+// written over since (another render to the same path) is never what goes out.
+r#"
+ALTER TABLE clip ADD COLUMN auto_ok INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE clip ADD COLUMN file_sha TEXT;
 "#];
 
 /// The footage a clip is drawn from: a part of the VOD cut out with handles, in the video's
@@ -303,8 +311,8 @@ impl ClipsDb {
 
     pub fn add_clip(&self, vod_id: i64, c: &NewClip, now: &str) -> Result<Clip> {
         self.conn.prepare_cached(
-            "INSERT INTO clip(vod_id, kind, title, description, tags, score, why, start_s, end_s, length_s, edit, state, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'draft', ?12, ?12)",
+            "INSERT INTO clip(vod_id, kind, title, description, tags, score, why, start_s, end_s, length_s, edit, state, auto_ok, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'draft', 1, ?12, ?12)",
         )?.execute(params![vod_id, c.kind.name(), c.title, c.description, json(&c.tags), c.score, c.why, c.start_s, c.end_s, c.length_s, json(&c.edit), now])?;
         self.clip(self.conn.last_insert_rowid())?.ok_or(rusqlite::Error::QueryReturnedNoRows)
     }
@@ -348,28 +356,94 @@ impl ClipsDb {
         self.conn.prepare_cached(&format!("SELECT {CLIP_COLS} FROM clip WHERE render_id = ?1"))?.query_row([render_id], clip_row).optional()
     }
 
+    /// The person's (or an agent's) change to clip `id`'s words or edit, made from a read whose
+    /// state was `from`: refused (false) when the clip moved since, and never on a clip going
+    /// out or gone out. Someone has decided on it now: posting on its own no longer may.
     #[allow(clippy::too_many_arguments)]
-    pub fn update_clip(&self, id: i64, title: &str, description: &str, tags: &[String], kind: Kind, edit: &ClipEdit, start_s: f64, end_s: f64, length_s: f64, now: &str) -> Result<()> {
-        self.conn.prepare_cached(
-            "UPDATE clip SET title = ?2, description = ?3, tags = ?4, kind = ?5, edit = ?6, start_s = ?7, end_s = ?8, length_s = ?9, updated_at = ?10 WHERE id = ?1",
-        )?.execute(params![id, title, description, json(&tags), kind.name(), json(edit), start_s, end_s, length_s, now])?;
-        Ok(())
+    pub fn update_clip(&self, id: i64, from: ClipState, title: &str, description: &str, tags: &[String], kind: Kind, edit: &ClipEdit, start_s: f64, end_s: f64, length_s: f64, now: &str) -> Result<bool> {
+        Ok(self.conn.prepare_cached(
+            "UPDATE clip SET title = ?3, description = ?4, tags = ?5, kind = ?6, edit = ?7, start_s = ?8, end_s = ?9, length_s = ?10, updated_at = ?11, auto_ok = 0
+             WHERE id = ?1 AND state = ?2 AND state NOT IN ('posting', 'posted')",
+        )?.execute(params![id, from.name(), title, description, json(&tags), kind.name(), json(edit), start_s, end_s, length_s, now])? > 0)
     }
 
+    /// The pipeline's framing of a draft (`pipeline::settle`): only the edit and what follows
+    /// from it, and only while the clip is the draft it read at `read_at` (nobody changed it in
+    /// the minutes the framing took). Whether it was written.
+    #[allow(clippy::too_many_arguments)]
+    pub fn settle_clip(&self, id: i64, read_at: &str, edit: &ClipEdit, start_s: f64, end_s: f64, length_s: f64, now: &str) -> Result<bool> {
+        Ok(self.conn.prepare_cached(
+            "UPDATE clip SET edit = ?3, start_s = ?4, end_s = ?5, length_s = ?6, updated_at = ?7
+             WHERE id = ?1 AND updated_at = ?2 AND state = 'draft'",
+        )?.execute(params![id, read_at, json(edit), start_s, end_s, length_s, now])? > 0)
+    }
+
+    /// Clip `id`'s state, unguarded: for setting up a test's rows. Every move the engine makes is
+    /// [`move_clip`](Self::move_clip), from the state it expects.
+    #[doc(hidden)]
     pub fn set_clip_state(&self, id: i64, state: ClipState, error: Option<&str>, now: &str) -> Result<()> {
         self.conn.prepare_cached("UPDATE clip SET state = ?2, error = ?3, updated_at = ?4 WHERE id = ?1")?
             .execute(params![id, state.name(), error, now])?;
         Ok(())
     }
 
+    /// Clip `id` from one of `from` to `to`, with `error` as its note: false when it was in none
+    /// of them (it moved since it was read). Someone decided on it: never approved on its own.
+    pub fn move_clip(&self, id: i64, from: &[ClipState], to: ClipState, error: Option<&str>, now: &str) -> Result<bool> {
+        let marks: String = (0..from.len()).map(|i| format!("?{}", i + 5)).collect::<Vec<_>>().join(", ");
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(id), Box::new(to.name()), Box::new(error.map(str::to_string)), Box::new(now.to_string())];
+        args.extend(from.iter().map(|s| Box::new(s.name()) as Box<dyn rusqlite::ToSql>));
+        Ok(self.conn.prepare_cached(&format!("UPDATE clip SET state = ?2, error = ?3, updated_at = ?4, auto_ok = 0 WHERE id = ?1 AND state IN ({marks})"))?
+            .execute(rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())))? > 0)
+    }
+
+    /// The clips posting on its own may approve: drawn by the pipeline, nobody's decision yet,
+    /// scoring `min_score` or more.
+    pub fn undecided(&self, min_score: u32) -> Result<Vec<Clip>> {
+        self.conn.prepare_cached(&format!("SELECT {CLIP_COLS} FROM clip WHERE state = 'ready' AND auto_ok = 1 AND score >= ?1 ORDER BY score DESC, id"))?
+            .query_map([min_score], clip_row)?.collect()
+    }
+
+    /// Posting on its own approves clip `id`, if it is still ready and undecided.
+    pub fn auto_approve(&self, id: i64, now: &str) -> Result<bool> {
+        Ok(self.conn.prepare_cached("UPDATE clip SET state = 'approved', error = NULL, auto_ok = 0, updated_at = ?2 WHERE id = ?1 AND state = 'ready' AND auto_ok = 1")?
+            .execute(params![id, now])? > 0)
+    }
+
     /// Ask for clip `id` to be drawn again: `rendering` with no render yet, which the drawer
-    /// (`pipeline::render_loop`) takes in turn. An approved or scheduled clip remembers it was,
-    /// and goes back to it once drawn; one already waiting or failed keeps what it remembered.
-    /// Never a clip going out or gone out.
+    /// (`pipeline::render_loop`) takes in turn. An approved, scheduled or rejected clip remembers
+    /// it was, and goes back to it once drawn (a redraw never un-rejects a clip); one already
+    /// waiting or failed keeps what it remembered. Never a clip going out or gone out. Someone
+    /// asked: posting on its own no longer approves it.
     pub fn ask_render(&self, id: i64, now: &str) -> Result<bool> {
         Ok(self.conn.prepare_cached(
-            "UPDATE clip SET render_id = NULL, state = 'rendering', error = NULL, updated_at = ?2,
-                 resume = CASE WHEN state IN ('approved', 'scheduled') THEN state WHEN state IN ('rendering', 'failed') THEN resume END
+            "UPDATE clip SET render_id = NULL, state = 'rendering', error = NULL, updated_at = ?2, auto_ok = 0,
+                 resume = CASE WHEN state IN ('approved', 'scheduled', 'rejected') THEN state WHEN state IN ('rendering', 'failed') THEN resume END
+             WHERE id = ?1 AND state NOT IN ('posting', 'posted')",
+        )?.execute(params![id, now])? > 0)
+    }
+
+    /// An agent changed clip `id`: what the person approved is not what it is now, so it goes
+    /// back to them for review (`note` says why): off the schedule, and, while it is drawn
+    /// again, back to them rather than to the queue. A rejected clip stays rejected.
+    pub fn unapprove(&self, id: i64, note: &str, now: &str) -> Result<bool> {
+        Ok(self.conn.prepare_cached(
+            "UPDATE clip SET updated_at = ?3, auto_ok = 0,
+                 error = CASE WHEN state IN ('approved', 'scheduled') OR resume IN ('approved', 'scheduled') THEN ?2 ELSE error END,
+                 publish_at = CASE WHEN state IN ('approved', 'scheduled') OR resume IN ('approved', 'scheduled') THEN NULL ELSE publish_at END,
+                 resume = CASE WHEN resume IN ('approved', 'scheduled') THEN NULL ELSE resume END,
+                 state = CASE WHEN state IN ('approved', 'scheduled') THEN 'ready' ELSE state END
+             WHERE id = ?1 AND state NOT IN ('posting', 'posted')",
+        )?.execute(params![id, note, now])? > 0)
+    }
+
+    /// The person takes clip `id` back to undecided, in one step whatever it is doing: off the
+    /// schedule; while it is drawn again, it comes back to them once drawn; a rejected clip is
+    /// restored (`ready` when drawn, else a draft). Never a clip going out or gone out.
+    pub fn take_back(&self, id: i64, now: &str) -> Result<bool> {
+        Ok(self.conn.prepare_cached(
+            "UPDATE clip SET updated_at = ?2, auto_ok = 0, error = NULL, publish_at = NULL, privacy = NULL, resume = NULL,
+                 state = CASE WHEN state = 'rendering' THEN 'rendering' WHEN file IS NULL THEN 'draft' ELSE 'ready' END
              WHERE id = ?1 AND state NOT IN ('posting', 'posted')",
         )?.execute(params![id, now])? > 0)
     }
@@ -396,15 +470,21 @@ impl ClipsDb {
     /// Render `render_id` of clip `id` drew `file`: the clip takes it, unless a newer render was
     /// asked for since or it is going out. A clip still `rendering` (or a draft) goes back to
     /// what it remembered, else to the person; one they moved meanwhile stays where they put it.
-    /// Whether the row took it.
-    pub fn finish_render(&self, id: i64, render_id: i64, file: &str, poster: Option<&str>, length_s: Option<f64>, now: &str) -> Result<bool> {
+    /// Whether the row took it. `sha` is the file's SHA-256, checked again before it is uploaded.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_render(&self, id: i64, render_id: i64, file: &str, sha: Option<&str>, poster: Option<&str>, length_s: Option<f64>, now: &str) -> Result<bool> {
         Ok(self.conn.prepare_cached(
-            "UPDATE clip SET file = ?3, poster = COALESCE(?4, poster), length_s = COALESCE(?5, length_s), updated_at = ?6,
+            "UPDATE clip SET file = ?3, file_sha = ?4, poster = COALESCE(?5, poster), length_s = COALESCE(?6, length_s), updated_at = ?7, upload = NULL,
                  state = CASE WHEN state IN ('rendering', 'draft') THEN COALESCE(resume, 'ready') ELSE state END,
                  error = CASE WHEN state IN ('rendering', 'draft') THEN NULL ELSE error END,
                  resume = CASE WHEN state IN ('rendering', 'draft') THEN NULL ELSE resume END
              WHERE id = ?1 AND render_id = ?2 AND state NOT IN ('posting', 'posted')",
-        )?.execute(params![id, render_id, file, poster, length_s, now])? > 0)
+        )?.execute(params![id, render_id, file, sha, poster, length_s, now])? > 0)
+    }
+
+    /// The SHA-256 of the file clip `id`'s render drew, when it was taken.
+    pub fn file_sha(&self, id: i64) -> Result<Option<String>> {
+        Ok(self.conn.prepare_cached("SELECT file_sha FROM clip WHERE id = ?1")?.query_row([id], |r| r.get(0)).optional()?.flatten())
     }
 
     /// Clip `id`'s render (`render_id`, or none when it could not be queued) failed: the clip
@@ -414,13 +494,6 @@ impl ClipsDb {
             "UPDATE clip SET state = 'failed', error = ?3, updated_at = ?4
              WHERE id = ?1 AND render_id IS ?2 AND state IN ('rendering', 'draft')",
         )?.execute(params![id, render_id, why, now])? > 0)
-    }
-
-    /// A clip being drawn again that the person takes back: it comes back to them once drawn,
-    /// not to the schedule.
-    pub fn forget_resume(&self, id: i64, now: &str) -> Result<()> {
-        self.conn.prepare_cached("UPDATE clip SET resume = NULL, updated_at = ?2 WHERE id = ?1")?.execute(params![id, now])?;
-        Ok(())
     }
 
     /// Clip `id` starts going out, if it is still scheduled (the person may have moved it since
@@ -458,10 +531,12 @@ impl ClipsDb {
         Ok(())
     }
 
-    pub fn schedule(&self, id: i64, at: Option<&str>, privacy: Option<Privacy>, state: ClipState, now: &str) -> Result<()> {
-        self.conn.prepare_cached("UPDATE clip SET publish_at = ?2, privacy = ?3, state = ?4, error = NULL, resume = NULL, updated_at = ?5 WHERE id = ?1")?
-            .execute(params![id, at, privacy.map(Privacy::name), state.name(), now])?;
-        Ok(())
+    /// Clip `id` from `from` (the state it was read in) to `to`, at `at`: false when it moved
+    /// since (drawn again, taken back, going out). Someone decided: never approved on its own.
+    pub fn schedule(&self, id: i64, from: ClipState, at: Option<&str>, privacy: Option<Privacy>, to: ClipState, now: &str) -> Result<bool> {
+        Ok(self.conn.prepare_cached(
+            "UPDATE clip SET publish_at = ?3, privacy = ?4, state = ?5, error = NULL, resume = NULL, auto_ok = 0, updated_at = ?6 WHERE id = ?1 AND state = ?2",
+        )?.execute(params![id, from.name(), at, privacy.map(Privacy::name), to.name(), now])? > 0)
     }
 
     pub fn set_posted(&self, id: i64, youtube_id: &str, now: &str) -> Result<()> {
@@ -522,7 +597,7 @@ mod tests {
             start_s: 10.0, end_s: 30.0, length_s: 20.0, edit: edit(),
         }, "t1").unwrap();
         db.set_clip_file(c.id, "/old.mp4", None, None, "t1").unwrap();
-        db.schedule(c.id, (state == ClipState::Scheduled).then_some("2026-11-02T17:00:00Z"), None, state, "t1").unwrap();
+        db.schedule(c.id, ClipState::Draft, (state == ClipState::Scheduled).then_some("2026-11-02T17:00:00Z"), None, state, "t1").unwrap();
         c.id
     }
 
@@ -542,7 +617,7 @@ mod tests {
             assert!(db.waiting_renders().unwrap().iter().any(|c| c.id == id), "it waits for the drawer");
             db.set_render_id(id, 100 + id, "t3").unwrap();
             assert!(db.waiting_renders().unwrap().iter().all(|c| c.id != id));
-            assert!(db.finish_render(id, 100 + id, "/new.mp4", None, Some(20.0), "t4").unwrap());
+            assert!(db.finish_render(id, 100 + id, "/new.mp4", None, None, Some(20.0), "t4").unwrap());
             let c = db.clip(id).unwrap().unwrap();
             assert_eq!((c.state, c.file.as_deref()), (was, Some("/new.mp4")), "{was:?}");
             if was == ClipState::Scheduled {
@@ -553,22 +628,22 @@ mod tests {
         let id = drawn(&db, vod, ClipState::Ready);
         db.ask_render(id, "t2").unwrap();
         db.set_render_id(id, 1, "t3").unwrap();
-        db.schedule(id, None, None, ClipState::Rejected, "t3").unwrap();
-        assert!(db.finish_render(id, 1, "/new.mp4", None, None, "t4").unwrap());
+        db.schedule(id, ClipState::Rendering, None, None, ClipState::Rejected, "t3").unwrap();
+        assert!(db.finish_render(id, 1, "/new.mp4", None, None, None, "t4").unwrap());
         assert_eq!(state(&db, id), ClipState::Rejected);
         assert!(!db.fail_render(id, Some(1), "late", "t4").unwrap(), "a failure does not overwrite it either");
         // Rejected while it waited for the drawer: the cut that was under way does not take it back.
         let id = drawn(&db, vod, ClipState::Approved);
         db.ask_render(id, "t2").unwrap();
-        db.schedule(id, None, None, ClipState::Rejected, "t3").unwrap();
+        db.schedule(id, ClipState::Rendering, None, None, ClipState::Rejected, "t3").unwrap();
         db.set_render_id(id, 2, "t3").unwrap();
         assert_eq!(state(&db, id), ClipState::Rejected);
         // Taken back while drawn: to the person, not the schedule.
         let id = drawn(&db, vod, ClipState::Approved);
         db.ask_render(id, "t2").unwrap();
-        db.forget_resume(id, "t3").unwrap();
+        db.take_back(id, "t3").unwrap();
         db.set_render_id(id, 3, "t3").unwrap();
-        db.finish_render(id, 3, "/new.mp4", None, None, "t4").unwrap();
+        db.finish_render(id, 3, "/new.mp4", None, None, None, "t4").unwrap();
         assert_eq!(state(&db, id), ClipState::Ready);
         // Drawn again twice: the first render, finishing late, is not taken.
         let id = drawn(&db, vod, ClipState::Approved);
@@ -576,21 +651,21 @@ mod tests {
         db.set_render_id(id, 4, "t3").unwrap();
         db.ask_render(id, "t4").unwrap();
         db.set_render_id(id, 5, "t5").unwrap();
-        assert!(!db.finish_render(id, 4, "/stale.mp4", None, None, "t6").unwrap());
+        assert!(!db.finish_render(id, 4, "/stale.mp4", None, None, None, "t6").unwrap());
         assert_eq!(state(&db, id), ClipState::Rendering);
         // A failed draw keeps what it remembered for the next try.
         assert!(db.fail_render(id, Some(5), "ffmpeg failed", "t6").unwrap());
         assert_eq!(state(&db, id), ClipState::Failed);
         db.ask_render(id, "t7").unwrap();
         db.set_render_id(id, 6, "t7").unwrap();
-        db.finish_render(id, 6, "/new.mp4", None, None, "t8").unwrap();
+        db.finish_render(id, 6, "/new.mp4", None, None, None, "t8").unwrap();
         assert_eq!(state(&db, id), ClipState::Approved);
         // A clip going out, or gone, is never drawn again nor moved by a render.
         let id = drawn(&db, vod, ClipState::Scheduled);
         db.set_render_id(id, 7, "t2").unwrap();
         assert!(db.start_posting(id, "t3").unwrap());
         assert!(!db.ask_render(id, "t3").unwrap());
-        assert!(!db.finish_render(id, 7, "/new.mp4", None, None, "t4").unwrap());
+        assert!(!db.finish_render(id, 7, "/new.mp4", None, None, None, "t4").unwrap());
         assert!(!db.fail_render(id, Some(7), "x", "t4").unwrap());
         assert_eq!(state(&db, id), ClipState::Posting);
         assert!(!db.start_posting(id, "t5").unwrap(), "only a scheduled clip starts going out");
@@ -612,5 +687,127 @@ mod tests {
         assert_eq!(db.upload(id).unwrap(), Some(("https://www.googleapis.com/upload/x?upload_id=1".to_string(), 99)));
         db.set_posted(id, "v1", "t9").unwrap();
         assert_eq!(db.upload(id).unwrap(), None, "a posted clip's upload is over");
+    }
+
+    /// A clip the pipeline drew and nobody decided on, as `drawn` cannot make one (it decides).
+    fn fresh(db: &ClipsDb, vod: i64, score: u32) -> i64 {
+        let c = db.add_clip(vod, &NewClip {
+            kind: Kind::Fail, title: "t".into(), description: "d".into(), tags: vec![], score, why: "w".into(),
+            start_s: 10.0, end_s: 30.0, length_s: 20.0, edit: edit(),
+        }, "t1").unwrap();
+        db.set_render_id(c.id, 1000 + c.id, "t1").unwrap();
+        db.finish_render(c.id, 1000 + c.id, "/a.mp4", Some("aa"), None, None, "t2").unwrap();
+        c.id
+    }
+
+    #[test]
+    fn posting_on_its_own_approves_only_clips_nobody_decided_on() {
+        let db = ClipsDb::open_in_memory().unwrap();
+        let vod = db.add_vod(1, "A stream", "/v.mp4", "Neph", "", &[], |id| format!("/vods/{id}"), "t0").unwrap().id;
+        let untouched = fresh(&db, vod, 9);
+        let low = fresh(&db, vod, 3);
+        let taken_back = fresh(&db, vod, 9);
+        db.schedule(taken_back, ClipState::Ready, None, None, ClipState::Approved, "t3").unwrap();
+        db.take_back(taken_back, "t4").unwrap();
+        let restored = fresh(&db, vod, 9);
+        db.schedule(restored, ClipState::Ready, None, None, ClipState::Rejected, "t3").unwrap();
+        db.take_back(restored, "t4").unwrap();
+        let redrawn = fresh(&db, vod, 9);
+        db.ask_render(redrawn, "t3").unwrap();
+        db.set_render_id(redrawn, 77, "t3").unwrap();
+        db.finish_render(redrawn, 77, "/b.mp4", None, None, None, "t4").unwrap();
+        let upload_failed = fresh(&db, vod, 9);
+        db.schedule(upload_failed, ClipState::Ready, Some("t"), None, ClipState::Scheduled, "t3").unwrap();
+        db.start_posting(upload_failed, "t3").unwrap();
+        db.move_clip(upload_failed, &[ClipState::Posting], ClipState::Failed, Some("Upload failed: it may have reached YouTube"), "t4").unwrap();
+        db.take_back(upload_failed, "t5").unwrap();
+        for id in [taken_back, restored, redrawn, upload_failed] {
+            assert_eq!(state(&db, id), ClipState::Ready);
+        }
+        let undecided: Vec<i64> = db.undecided(8).unwrap().iter().map(|c| c.id).collect();
+        assert_eq!(undecided, vec![untouched], "only the untouched clip scoring enough");
+        assert!(db.auto_approve(untouched, "t6").unwrap());
+        assert!(!db.auto_approve(untouched, "t7").unwrap(), "once");
+        assert!(db.undecided(1).unwrap().iter().any(|c| c.id == low), "a low score is undecided too, only under the threshold");
+        // Rejected between the look and the approval: stays rejected.
+        let raced = fresh(&db, vod, 9);
+        assert!(db.undecided(8).unwrap().iter().any(|c| c.id == raced));
+        db.schedule(raced, ClipState::Ready, None, None, ClipState::Rejected, "t8").unwrap();
+        assert!(!db.auto_approve(raced, "t9").unwrap());
+        assert_eq!(state(&db, raced), ClipState::Rejected);
+    }
+
+    #[test]
+    fn a_redraw_never_unrejects_and_moves_are_from_the_state_read() {
+        let db = ClipsDb::open_in_memory().unwrap();
+        let vod = db.add_vod(1, "A stream", "/v.mp4", "Neph", "", &[], |id| format!("/vods/{id}"), "t0").unwrap().id;
+        let id = drawn(&db, vod, ClipState::Rejected);
+        assert!(db.ask_render(id, "t2").unwrap());
+        db.set_render_id(id, 5, "t2").unwrap();
+        db.finish_render(id, 5, "/new.mp4", None, None, None, "t3").unwrap();
+        assert_eq!(state(&db, id), ClipState::Rejected, "drawn again, still rejected");
+        // A move from a stale read is refused.
+        let id = drawn(&db, vod, ClipState::Approved);
+        db.ask_render(id, "t2").unwrap();
+        assert!(!db.schedule(id, ClipState::Approved, Some("t"), None, ClipState::Scheduled, "t3").unwrap(), "the poster's stale look");
+        assert_eq!(state(&db, id), ClipState::Rendering);
+        assert!(!db.move_clip(id, &[ClipState::Posting], ClipState::Failed, None, "t3").unwrap());
+        // Taken back after the render already finished: still taken back (one step, whatever it was doing).
+        db.set_render_id(id, 6, "t3").unwrap();
+        db.finish_render(id, 6, "/new.mp4", None, None, None, "t4").unwrap();
+        assert_eq!(state(&db, id), ClipState::Approved);
+        assert!(db.take_back(id, "t5").unwrap());
+        assert_eq!(state(&db, id), ClipState::Ready);
+        // Going out: neither taken back nor moved.
+        let id = drawn(&db, vod, ClipState::Scheduled);
+        db.start_posting(id, "t2").unwrap();
+        assert!(!db.take_back(id, "t3").unwrap());
+        assert!(!db.schedule(id, ClipState::Scheduled, None, None, ClipState::Approved, "t3").unwrap());
+        assert!(!db.unapprove(id, "x", "t3").unwrap());
+        assert_eq!(state(&db, id), ClipState::Posting);
+    }
+
+    #[test]
+    fn an_agents_change_sends_an_approved_clip_back_for_review() {
+        let db = ClipsDb::open_in_memory().unwrap();
+        let vod = db.add_vod(1, "A stream", "/v.mp4", "Neph", "", &[], |id| format!("/vods/{id}"), "t0").unwrap().id;
+        let id = drawn(&db, vod, ClipState::Scheduled);
+        assert!(db.unapprove(id, "An agent changed it", "t2").unwrap());
+        let c = db.clip(id).unwrap().unwrap();
+        assert_eq!((c.state, c.publish_at, c.error.as_deref()), (ClipState::Ready, None, Some("An agent changed it")));
+        // Drawn again at an agent's ask: back to the person once drawn, not to the queue.
+        let id = drawn(&db, vod, ClipState::Approved);
+        db.ask_render(id, "t2").unwrap();
+        db.unapprove(id, "An agent changed it", "t2").unwrap();
+        db.set_render_id(id, 9, "t3").unwrap();
+        db.finish_render(id, 9, "/new.mp4", None, None, None, "t4").unwrap();
+        assert_eq!(state(&db, id), ClipState::Ready);
+        // A rejected clip stays rejected.
+        let id = drawn(&db, vod, ClipState::Rejected);
+        db.unapprove(id, "x", "t2").unwrap();
+        let c = db.clip(id).unwrap().unwrap();
+        assert_eq!((c.state, c.error), (ClipState::Rejected, None));
+    }
+
+    #[test]
+    fn the_pipelines_framing_never_writes_over_a_change_made_meanwhile() {
+        let db = ClipsDb::open_in_memory().unwrap();
+        let vod = db.add_vod(1, "A stream", "/v.mp4", "Neph", "", &[], |id| format!("/vods/{id}"), "t0").unwrap().id;
+        let c = db.add_clip(vod, &NewClip {
+            kind: Kind::Fail, title: "t".into(), description: "d".into(), tags: vec![], score: 7, why: "w".into(),
+            start_s: 10.0, end_s: 30.0, length_s: 20.0, edit: edit(),
+        }, "t1").unwrap();
+        let mut framed = edit();
+        framed.layout = Layout::Crop;
+        // The person renamed it while it was framed: their title stands, the framing is not written.
+        assert!(db.update_clip(c.id, ClipState::Draft, "Mine", "d", &[], Kind::Fail, &edit(), 10.0, 30.0, 20.0, "t2").unwrap());
+        assert!(!db.settle_clip(c.id, &c.updated_at, &framed, 10.0, 30.0, 20.0, "t3").unwrap());
+        let now = db.clip(c.id).unwrap().unwrap();
+        assert_eq!((now.title.as_str(), now.edit.layout), ("Mine", Layout::Split));
+        // Unchanged: framed.
+        assert!(db.settle_clip(c.id, &now.updated_at, &framed, 10.0, 30.0, 20.0, "t4").unwrap());
+        assert_eq!(db.clip(c.id).unwrap().unwrap().edit.layout, Layout::Crop);
+        // An edit from a stale read is refused.
+        assert!(!db.update_clip(c.id, ClipState::Ready, "x", "d", &[], Kind::Fail, &edit(), 10.0, 30.0, 20.0, "t5").unwrap());
     }
 }

@@ -46,6 +46,11 @@ pub struct Shelf {
     /// Bumped to wake the drawer: a clip was asked to be drawn again.
     render_wake: Arc<(Mutex<u64>, Condvar)>,
     started: OnceLock<()>,
+    /// The process groups of the tools running now (whisper, yt-dlp, `claude -p`, ffmpeg): what
+    /// [`shutdown`] ends, so none outlives the engine and runs on beside the next one's.
+    children: Mutex<HashSet<u32>>,
+    /// The Clips threads, waited for (a little) at [`shutdown`].
+    threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
     /// VODs the person asked to stop: the pipeline drops them at its next look.
     stopping: Mutex<HashSet<i64>>,
     /// The YouTube sign-in waiting for the browser.
@@ -396,11 +401,24 @@ pub fn run_with(engine: &Engine, vod: i64, cmd: &mut Command, stdin: Stdio, with
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
+        // The thread that forks waits on the child to its end, so the parent-death signal (which
+        // follows that thread) reaches the tool only when Relay itself is gone: killed, or
+        // crashed, with no `shutdown` to end the group.
+        // SAFETY: prctl is async-signal-safe and touches nothing of the parent's.
+        unsafe {
+            cmd.pre_exec(|| {
+                #[cfg(target_os = "linux")]
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                Ok(())
+            });
+        }
     }
     let program = cmd.get_program().to_string_lossy().into_owned();
     let name = Path::new(&program).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(program);
     let mut child = cmd.spawn().map_err(|e| Halt::Failed(format!("{name} could not start: {e}")))?;
     let pid = child.id();
+    // Its own group (`process_group(0)`): the group's id is its pid.
+    let _running = Running::new(engine, pid);
     let stderr = child.stderr.take();
     let err_tail = std::thread::spawn(move || {
         let mut tail: Vec<String> = Vec::new();
@@ -491,6 +509,25 @@ pub fn run_with(engine: &Engine, vod: i64, cmd: &mut Command, stdin: Stdio, with
     Ok(out)
 }
 
+/// A tool's process group, known to [`shutdown`] while it runs.
+struct Running<'a> {
+    engine: &'a Engine,
+    pgid: u32,
+}
+
+impl<'a> Running<'a> {
+    fn new(engine: &'a Engine, pgid: u32) -> Running<'a> {
+        lock(&engine.clips.children).insert(pgid);
+        Running { engine, pgid }
+    }
+}
+
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        lock(&self.engine.clips.children).remove(&self.pgid);
+    }
+}
+
 /// yt-dlp's `[download]  45.3% of …` as 0.453.
 fn download_percent(line: &str) -> Option<f64> {
     let rest = line.strip_prefix("[download]")?;
@@ -516,8 +553,9 @@ pub fn spawn(engine: &Arc<Engine>) {
     if engine.clips.started.set(()).is_err() {
         return;
     }
+    let mut threads = Vec::new();
     let weak = Arc::downgrade(engine);
-    std::thread::Builder::new().name("clips".into()).spawn(move || {
+    threads.extend(std::thread::Builder::new().name("clips".into()).spawn(move || {
         if let Some(engine) = weak.upgrade() {
             if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pipeline::reconcile(&engine))) {
                 tracing::error!(why = %panic_text(&*p), "clips: putting right what the last engine left panicked");
@@ -526,14 +564,15 @@ pub fn spawn(engine: &Arc<Engine>) {
             poke_render(&engine);
         }
         pipeline::run_loop(weak)
-    }).ok();
+    }).ok());
     let weak = Arc::downgrade(engine);
-    std::thread::Builder::new().name("clips-render".into()).spawn(move || pipeline::render_loop(weak)).ok();
+    threads.extend(std::thread::Builder::new().name("clips-render".into()).spawn(move || pipeline::render_loop(weak)).ok());
     let weak = Arc::downgrade(engine);
     let events = engine.subscribe();
     std::thread::Builder::new().name("clips-watch".into()).spawn(move || pipeline::watch(weak, events)).ok();
     let weak = Arc::downgrade(engine);
-    std::thread::Builder::new().name("clips-post".into()).spawn(move || youtube::post_loop(weak)).ok();
+    threads.extend(std::thread::Builder::new().name("clips-post".into()).spawn(move || youtube::post_loop(weak)).ok());
+    *lock(&engine.clips.threads) = threads;
 }
 
 /// Wake the pipeline: there may be a VOD to work on.
@@ -571,10 +610,56 @@ pub(crate) fn sleep_on(wake: &Arc<(Mutex<u64>, Condvar)>, seen: u64, max: Durati
     let _ = c.wait_timeout_while(guard, max, |n| *n == seen);
 }
 
+/// How long [`shutdown`] waits for the Clips threads to put their tools down.
+const SHUTDOWN_WITHIN: Duration = Duration::from_secs(4);
+
+/// The engine is quitting (`request_quit` came first): every tool Clips started is asked to stop
+/// (SIGTERM to its group), the threads are woken and given a few seconds to see it, reap their
+/// tools and leave their VODs `working` for the next engine; any group still there then is
+/// killed. A VOD is never worked on twice, by this engine's leftovers and the next one.
 pub fn shutdown(engine: &Engine) {
     poke(engine);
     poke_poster(engine);
     poke_render(engine);
+    let groups: Vec<u32> = lock(&engine.clips.children).iter().copied().collect();
+    for g in &groups {
+        crate::proc::ask_group_to_stop(*g);
+    }
+    let threads = std::mem::take(&mut *lock(&engine.clips.threads));
+    let until = Instant::now() + SHUTDOWN_WITHIN;
+    while Instant::now() < until && (threads.iter().any(|t| !t.is_finished()) || !lock(&engine.clips.children).is_empty()) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    for g in lock(&engine.clips.children).iter() {
+        crate::proc::terminate_group_soon(*g, Duration::ZERO);
+    }
+    // A thread still going (an upload's last minute) is left to the process's end.
+    for t in threads.into_iter().filter(|t| t.is_finished()) {
+        let _ = t.join();
+    }
+}
+
+/// The SHA-256 of `bytes`, as hex.
+pub(crate) fn sha_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    crate::hex(&Sha256::digest(bytes))
+}
+
+/// The SHA-256 of the file at `path`, as hex: read in pieces, never whole.
+pub(crate) fn sha_file(path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Some(crate::hex(&h.finalize()))
 }
 
 /// What a panic said, as text.
@@ -694,6 +779,43 @@ mod tests {
         cmd.args(["-c", "exec >&-; sleep 30"]);
         assert!(matches!(run(&engine, 2, &mut cmd, Duration::from_secs(60), |_| {}), Err(Halt::Stopped)));
         assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+    }
+
+    /// A tool still running when the engine quits is ended with it (its whole group), not left
+    /// to work on beside the next engine's copy.
+    #[test]
+    fn shutdown_ends_the_tools_still_running() {
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        let worker = engine.clone();
+        let t = Instant::now();
+        let run = std::thread::spawn(move || {
+            let mut cmd = Command::new("sh");
+            // A grandchild too, as python runs whisper: the group goes, not only the shell.
+            cmd.args(["-c", "sleep 60 & wait"]);
+            run(&worker, 3, &mut cmd, Duration::from_secs(120), |_| {})
+        });
+        while lock(&engine.clips.children).is_empty() {
+            assert!(t.elapsed() < Duration::from_secs(10), "the tool never started");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let pgid = *lock(&engine.clips.children).iter().next().unwrap();
+        shutdown(&engine);
+        assert!(run.join().unwrap().is_err());
+        assert!(lock(&engine.clips.children).is_empty());
+        assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+        // No process of its group still runs (the orphaned grandchild may stay a zombie until
+        // whoever adopted it reaps it: dead all the same).
+        let running = || -> Vec<String> {
+            std::fs::read_dir("/proc").map(|d| d.flatten().filter_map(|e| std::fs::read_to_string(e.path().join("stat")).ok()).filter(|s| {
+                let rest: Vec<&str> = s.rsplit_once(')').map(|(_, r)| r.split_whitespace().collect()).unwrap_or_default();
+                rest.get(2) == Some(&pgid.to_string().as_str()) && rest.first() != Some(&"Z")
+            }).collect()).unwrap_or_default()
+        };
+        let until = Instant::now() + Duration::from_secs(5);
+        while !running().is_empty() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(running().is_empty(), "group {pgid} still runs: {:?}", running());
     }
 
     #[test]
