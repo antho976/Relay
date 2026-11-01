@@ -174,13 +174,18 @@ export const editedMs = (ms: number, keep: Keep): number | null => {
 export const remapCaptions = (captions: Caption[], keep: Keep): Caption[] => {
   const out: Caption[] = [];
   for (const c of captions) {
+    let before = 0;
     for (const [a, b] of keep) {
       const start = Math.max(c.startMs, a);
       const end = Math.min(c.endMs, b);
-      if (end - start < Math.min(80, (c.endMs - c.startMs) / 2)) continue;
-      const s = editedMs(start, keep)!;
-      out.push({ ...c, startMs: s, endMs: s + (end - start), timestampMs: c.timestampMs == null ? null : s + (end - start) / 2 });
-      break;
+      if (end - start >= Math.min(80, (c.endMs - c.startMs) / 2)) {
+        // Where this span plays it, not editedMs(start): that takes the first span holding the
+        // moment, and an earlier span that ends where this one starts holds it too.
+        const s = before + (start - a);
+        out.push({ ...c, startMs: s, endMs: s + (end - start), timestampMs: c.timestampMs == null ? null : s + (end - start) / 2 });
+        break;
+      }
+      before += Math.max(0, b - a);
     }
   }
   return out.sort((x, y) => x.startMs - y.startMs);
