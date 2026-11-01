@@ -11,7 +11,7 @@
 use super::{runs, with_db};
 use crate::engine::Engine;
 use jiff::Timestamp;
-use relay_aide::model::{Job, JobState, Reason, Rule};
+use relay_aide::model::{Job, JobState, Reason, Rule, Source, Tier};
 use relay_bus::Event;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -89,6 +89,7 @@ pub fn check(engine: &Arc<Engine>, events: &BTreeSet<String>) {
         note_blocked(engine);
     }
     let jobs = with_db(engine, |db| db.jobs()).unwrap_or_default();
+    let Ok(settings) = super::settings(engine) else { return };
     for job in jobs.iter().filter(|j| j.state == JobState::Active) {
         for (i, rule) in job.spec.rules.iter().enumerate() {
             if matches!(rule, Rule::Stuck { .. }) || !rule.events().iter().any(|e| events.contains(*e)) {
@@ -97,7 +98,7 @@ pub fn check(engine: &Arc<Engine>, events: &BTreeSet<String>) {
             match findings(engine, rule) {
                 Ok(found) => {
                     forget_passed(engine, job, rule, &found);
-                    fire(engine, job, i, found);
+                    fire(engine, job, i, found, settings.tiers.of(rule.source()));
                 }
                 Err(why) => tracing::debug!(job = job.id, why, "aide rule not checked"),
             }
@@ -119,16 +120,20 @@ fn forget_passed(engine: &Engine, job: &Job, rule: &Rule, found: &[Finding]) {
     }
 }
 
-/// Wakes the job for each finding not seen before; the rule's first look only takes note.
-fn fire(engine: &Arc<Engine>, job: &Job, index: usize, found: Vec<Finding>) {
+/// Wakes the job for each finding not seen before; the rule's first look only takes note. What a
+/// rule finds in a source turned off for every model (`tier`) wakes nothing: its finding would be
+/// the run's trigger, which any model reads. It is still taken as seen, so turned back on, the
+/// rule speaks of what happens next. One in a source for the person's own models only is marked
+/// so, and a run on Claude's is not told it (`runs::wake_text`).
+fn fire(engine: &Arc<Engine>, job: &Job, index: usize, found: Vec<Finding>, tier: Tier) {
     let at = crate::time::now();
     let first_look = with_db(engine, |db| db.see(job.id, &format!("baseline:{index}:{}", job.updated_at), &at)).unwrap_or(false);
     let fresh: Vec<Finding> = found.into_iter().filter(|f| with_db(engine, |db| db.see(job.id, &f.key, &at)).unwrap_or(false)).collect();
-    if first_look || fresh.is_empty() {
+    if first_look || fresh.is_empty() || tier == Tier::Off {
         return;
     }
     let summary = fresh.iter().map(|f| f.summary.as_str()).collect::<Vec<_>>().join("; ");
-    let _ = runs::queue(engine, job.id, Reason::Rule, &summary, false);
+    let _ = runs::queue(engine, job.id, Reason::Rule, &summary, tier == Tier::LocalOnly);
 }
 
 /// Takes what each of the job's rules finds now as seen: called when a job is saved or turned on,
@@ -244,6 +249,7 @@ pub fn check_stuck(engine: &Arc<Engine>, jobs: &[Job], now: Timestamp) -> Option
         return None;
     }
     let mut next: Option<Timestamp> = None;
+    let tier = super::settings(engine).map_or(Tier::Off, |s| s.tiers.of(Source::Dev));
     for job in jobs.iter().filter(|j| j.state == JobState::Active) {
         for rule in &job.spec.rules {
             let Rule::Stuck { minutes } = rule else { continue };
@@ -254,8 +260,9 @@ pub fn check_stuck(engine: &Arc<Engine>, jobs: &[Job], now: Timestamp) -> Option
                     continue;
                 }
                 let key = format!("stuck:{name}:{since}");
-                if with_db(engine, |db| db.see(job.id, &key, &crate::time::now())).unwrap_or(false) {
-                    let _ = runs::queue(engine, job.id, Reason::Rule, &format!("session {name} has waited on you since {since}"), false);
+                // As [`fire`]: Relay's dev data turned off for every model wakes nothing.
+                if with_db(engine, |db| db.see(job.id, &key, &crate::time::now())).unwrap_or(false) && tier != Tier::Off {
+                    let _ = runs::queue(engine, job.id, Reason::Rule, &format!("session {name} has waited on you since {since}"), tier == Tier::LocalOnly);
                 }
             }
         }

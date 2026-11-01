@@ -199,7 +199,7 @@ fn launch(engine: &Arc<Engine>, run: &Run) -> bool {
         return false;
     }
     let _ = threads::with_db(engine, |db| db.set_agent_ref(thread, ""));
-    let wake = wake_text(engine, &job, run, &choice);
+    let wake = wake_text(engine, &job, run, &choice, thread);
     let deadline = Timestamp::now().checked_add(SignedDuration::from_mins(i64::from(job.spec.minutes_per_run()))).unwrap_or(Timestamp::MAX);
     if !with_db(engine, |db| db.start_run(run.id, choice.model.as_deref(), choice.host.as_str(), thread, &wake.reads, &stamp(deadline))).unwrap_or(false) {
         return false;
@@ -351,8 +351,9 @@ struct Wake {
     briefed: Vec<i64>,
 }
 
-/// The message that wakes the agent, what each source read gave, and the facts it was handed.
-fn wake_text(engine: &Engine, job: &Job, run: &Run, choice: &Choice) -> Wake {
+/// The message that wakes the agent in `thread`, what each source read gave, and the facts it was
+/// handed.
+fn wake_text(engine: &Engine, job: &Job, run: &Run, choice: &Choice, thread: i64) -> Wake {
     // A run on Claude's is handed nothing a model of the person's own wrote from private data.
     let private = choice.host.is_own();
     let settings = super::settings(engine).unwrap_or_default();
@@ -364,6 +365,8 @@ fn wake_text(engine: &Engine, job: &Job, run: &Run, choice: &Choice) -> Wake {
         match run.reason {
             Reason::Schedule => format!("its schedule ({})", job.spec.schedule.as_ref().map(schedule::describe).unwrap_or_default()),
             Reason::CatchUp => "its schedule, which came round while the PC was off".into(),
+            Reason::Rule if !private && with_db(engine, |db| db.run_trigger_is_private(run.id)).unwrap_or(true) =>
+                "a rule on data for the person's own models only (what it found is not shown here)".into(),
             Reason::Rule => format!("a rule: {}", run.trigger),
             Reason::FollowUp if !private && with_db(engine, |db| db.run_trigger_is_private(run.id)).unwrap_or(true) =>
                 "a follow-up you set while working on private data (its note is not shown here)".into(),
@@ -422,7 +425,7 @@ read them, in these words, and do not guess at what they say:\n{}", lines.join("
     }
     let mut reads = Vec::new();
     for s in &choice.sources {
-        let (ok, text, detail) = match read_source(engine, *s) {
+        let (ok, text, detail) = match read_source(engine, *s, thread) {
             Ok((text, detail)) => (true, text, detail),
             Err(why) => (false, String::new(), why),
         };
@@ -441,25 +444,28 @@ read them, in these words, and do not guess at what they say:\n{}", lines.join("
     Wake { text: parts.join("\n\n"), reads, facts: facts.iter().map(|f| f.id).collect(), briefed }
 }
 
-fn read(engine: &Engine, op: &str, payload: Value) -> Result<Value, String> {
+/// `op` read as the agent of Aide thread `thread` would read it: a handler that hands a model on
+/// Claude's less than the person (`notify.list`, Aide's interrupts) hands its wake less too.
+fn read_as(engine: &Engine, op: &str, payload: Value, thread: i64) -> Result<Value, String> {
     engine
-        .dispatch(relay_bus::Request::new(relay_bus::Actor::User, op, payload), crate::engine::Door::InProcess)
+        .dispatch_from_thread(relay_bus::Request::new(relay_bus::Actor::User, op, payload), crate::engine::Door::InProcess, thread)
         .into_result()
         .map_err(|e| e.message)
 }
 
-/// A source's reading for a wake: the text, and a few words on what it held.
-fn read_source(engine: &Engine, source: Source) -> Result<(String, String), String> {
+/// A source's reading for a wake in `thread`: the text, and a few words on what it held.
+fn read_source(engine: &Engine, source: Source, thread: i64) -> Result<(String, String), String> {
     let today = jiff::Zoned::now().date();
+    let read = |op: &str, payload: Value| read_as(engine, op, payload, thread);
     let rendered = |op: &str, currency: String| -> Result<String, String> {
-        let result = read(engine, op, json!({}))?;
-        let extras: Vec<Option<Value>> = crate::readings::extras(op, &json!({}), &result, today).into_iter().map(|(extra, with)| read(engine, extra, with).ok()).collect();
+        let result = read(op, json!({}))?;
+        let extras: Vec<Option<Value>> = crate::readings::extras(op, &json!({}), &result, today).into_iter().map(|(extra, with)| read(extra, with).ok()).collect();
         let ctx = crate::readings::Ctx { today, currency };
         Ok(crate::readings::render(op, &json!({}), &result, &extras, &ctx).unwrap_or_else(|| result.to_string()))
     };
     match source {
         Source::Money => {
-            let currency = read(engine, "money.lists", json!({})).ok().and_then(|l| l["currency"].as_str().map(str::to_string)).unwrap_or_else(|| "CAD".into());
+            let currency = read("money.lists", json!({})).ok().and_then(|l| l["currency"].as_str().map(str::to_string)).unwrap_or_else(|| "CAD".into());
             let text = rendered("money.summary", currency)?;
             Ok((text, "the month's summary".into()))
         }
@@ -468,7 +474,7 @@ fn read_source(engine: &Engine, source: Source) -> Result<(String, String), Stri
             Ok((text, "the training summary".into()))
         }
         Source::Arbiter => {
-            let s = read(engine, "arbiter.summary", json!({}))?;
+            let s = read("arbiter.summary", json!({}))?;
             let mut lines = vec![format!(
                 "Exchange connection: {}{}",
                 s["connection"]["state"].as_str().unwrap_or("?"),
@@ -492,19 +498,19 @@ fn read_source(engine: &Engine, source: Source) -> Result<(String, String), Stri
         }
         Source::Dev => {
             let mut lines = Vec::new();
-            let sessions = read(engine, "session.list", json!({}))?;
+            let sessions = read("session.list", json!({}))?;
             let list = sessions["sessions"].as_array().cloned().unwrap_or_default();
             for s in list.iter().take(30) {
                 let doing = s["intent"].as_str().filter(|i| !i.is_empty()).map(|i| format!(": {}", super::cut(i, 120))).unwrap_or_default();
                 lines.push(format!("Session {} ({} {}), {}{doing}", s["name"].as_str().unwrap_or("?"), s["provider"].as_str().unwrap_or("?"),
                     s["role"].as_str().unwrap_or("?"), s["state"].as_str().unwrap_or("?")));
             }
-            if let Ok(n) = read(engine, "notify.list", json!({"unread_only": true, "limit": 15})) {
+            if let Ok(n) = read("notify.list", json!({"unread_only": true, "limit": 15})) {
                 for x in n["notifications"].as_array().into_iter().flatten() {
                     lines.push(format!("Unread notice ({}): {} — {}", x["category"].as_str().unwrap_or("?"), x["title"].as_str().unwrap_or(""), x["body"].as_str().unwrap_or("")));
                 }
             }
-            if let Ok(h) = read(engine, "guardrail.holds.list", json!({})) {
+            if let Ok(h) = read("guardrail.holds.list", json!({})) {
                 let holds = h["holds"].as_array().map_or(0, Vec::len);
                 if holds > 0 {
                     lines.push(format!("{holds} guardrail holds wait on the person"));
