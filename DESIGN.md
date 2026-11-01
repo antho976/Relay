@@ -221,6 +221,14 @@ stack. Plates request at least 280 by 280 and the wall scrolls vertically.
 Sessions can be reordered or focused within the wall. Layout selection, order
 and split position can be saved. The wall has no automatic breakpoints.
 
+Clips is the fourth space (2026-10-31, the owner asked for "a page like dev, threads and aide" for
+BridgeClip-style clipping; docs/CLIPS.md): Dev | Threads | Aide | Clips on the switch, a fourth
+start card (key 4). It wears the same shell and the Threads pages' column; the clips themselves are
+the picture, as tall frames with no box around them, their state a small pill over the frame only
+when it is not "waiting for you". Its editor puts the drawn clip (a fixed 9:16 frame) beside the
+edit, and the transcript reads as text: each word a link, cut words struck through, words outside
+the clip faint.
+
 The Threads space's pages follow their own width instead, so they never hold the window wider
 than the person made it: their scrollers keep their content's width to themselves, and the page's
 measured width places the content. On the Threads page the conversation, its message box and a new

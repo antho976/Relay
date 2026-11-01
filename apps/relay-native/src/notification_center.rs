@@ -371,6 +371,10 @@ impl Center {
             crate::money::open_aide(&ui);
             return;
         }
+        if text(item, "category") == "clips" {
+            crate::money::open_clips(&ui);
+            return;
+        }
         let project = item["project_id"].as_i64().unwrap_or(ui.project.get());
         let link = &item["link"];
         let payload = &link["payload"];
@@ -455,6 +459,7 @@ fn route(item: &Value) -> Option<&str> {
         "session.get" | "guardrail.confirm" => "agents",
         // Aide's notifications carry no link: its Overview holds the message and what waits.
         _ if text(item, "category") == "aide" => "aide-home",
+        _ if text(item, "category") == "clips" => "clips-home",
         _ => return None,
     })
 }

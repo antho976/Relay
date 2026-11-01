@@ -13,7 +13,7 @@ window.starting .topbar, window.starting .statusbar { background: #070707; borde
 /* The cards stay plain: quiet surfaces, sans text, colour only in the status lamp. */
 button.start-card {
   background: #111111; border: 1px solid #222222; border-radius: 14px; padding: 18px 20px 14px;
-  min-width: 300px; color: #EDEDED; box-shadow: none;
+  min-width: 252px; color: #EDEDED; box-shadow: none;
   transition: background 160ms ease-out, border-color 160ms ease-out;
 }
 button.start-card:hover { background: #161616; border-color: #303030; }
