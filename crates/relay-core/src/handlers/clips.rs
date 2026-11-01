@@ -43,30 +43,23 @@ fn kinds(k: Option<Vec<Kind>>) -> Vec<Kind> {
     k
 }
 
-/// Draw clip `id` again on a thread of its own: its footage may need cutting again, and the
-/// render's queue takes the store's lock.
-fn render_soon(ctx: &mut Unlocked, id: i64) {
-    let engine = ctx.engine().arc();
-    let _ = with_db(ctx.engine(), |db| db.set_clip_render(id, None, &now()));
-    if let Some(engine) = engine {
-        std::thread::Builder::new().name("clips-render".into()).spawn(move || {
-            if let Err(e) = pipeline::queue_render(&engine, id) {
-                let _ = with_db(&engine, |db| db.set_clip_state(id, ClipState::Failed, Some(&e.message), &now()));
-            }
-            if let Ok(c) = clips::clip(&engine, id) {
-                clips::changed(&engine, "clip", Some(c.vod_id), Some(id));
-            }
-        }).ok();
-    }
+/// Draw clip `id` again: it waits, `rendering` with no render yet, for the drawer
+/// (`pipeline::render_loop`), which cuts its footage again when it needs it and queues its
+/// render, one clip at a time. The drawer is woken once the request is answered.
+fn render_soon(ctx: &mut Unlocked, id: i64) -> Result<(), BusError> {
+    with_db(ctx.engine(), |db| db.ask_render(id, &now()))?;
+    ctx.after_commit(|engine| clips::poke_render(&engine));
+    Ok(())
 }
 
 pub fn register(e: &mut Engine) {
+    // Asked on every refresh of the space and its tile: counts, not every clip, and the
+    // sign-in as last read from the keyring (youtube::status).
     e.register_unlocked::<Summary>(|ctx, _: Empty| {
         let engine = ctx.engine();
         let vods = with_db(engine, |db| db.vods())?;
-        let all = with_db(engine, |db| db.clips())?;
-        let count = |s: ClipState| all.iter().filter(|c| c.state == s).count() as u32;
-        let next_post = all.iter().filter(|c| c.state == ClipState::Scheduled).min_by(|a, b| a.publish_at.cmp(&b.publish_at)).cloned();
+        let (counts, next_post) = with_db(engine, |db| Ok((db.state_counts()?, db.next_scheduled()?)))?;
+        let count = |s: ClipState| counts.iter().find(|(c, _)| *c == s).map_or(0, |(_, n)| *n);
         let link = vods.iter().any(|v| clips::is_link(&v.source));
         Ok(SummaryOut {
             vods: vods.len() as u32,
@@ -231,7 +224,7 @@ pub fn register(e: &mut Engine) {
         if p.rerender == Some(true) {
             for c in with_db(ctx.engine(), |db| db.clips_of(vod.id))? {
                 if matches!(c.state, ClipState::Ready | ClipState::Failed | ClipState::Approved) {
-                    render_soon(ctx, c.id);
+                    render_soon(ctx, c.id)?;
                 }
             }
         }
@@ -288,7 +281,7 @@ pub fn register(e: &mut Engine) {
         let length = if changed_edit { edit::length(&words, &e) } else { c.length_s };
         with_db(ctx.engine(), |db| db.update_clip(c.id, &title, &description, &tags, p.kind.unwrap_or(c.kind), &e, start, end, length, &now()))?;
         if p.render.unwrap_or(changed_edit) && !matches!(c.state, ClipState::Posting | ClipState::Posted) {
-            render_soon(ctx, c.id);
+            render_soon(ctx, c.id)?;
         }
         emit(ctx, "clip", Some(c.vod_id), Some(c.id));
         clips::clip(ctx.engine(), c.id)
@@ -299,7 +292,7 @@ pub fn register(e: &mut Engine) {
         if matches!(c.state, ClipState::Posting | ClipState::Posted) {
             return Err(BusError::conflict("clips.posted", "a posted clip is not drawn again"));
         }
-        render_soon(ctx, c.id);
+        render_soon(ctx, c.id)?;
         emit(ctx, "clip", Some(c.vod_id), Some(c.id));
         clips::clip(ctx.engine(), c.id)
     }, |_, _, s| Ok(s));
@@ -312,12 +305,15 @@ pub fn register(e: &mut Engine) {
         let t = now();
         match p.state {
             ClipState::Approved => {
-                if c.file.is_none() {
+                // Being drawn again, its file is the old picture: the poster would send that.
+                if c.file.is_none() || c.state == ClipState::Rendering {
                     return Err(BusError::conflict("clips.unrendered", "approve a clip once it is drawn"));
                 }
                 with_db(ctx.engine(), |db| db.schedule(c.id, None, c.privacy, ClipState::Approved, &t))?;
             }
             ClipState::Rejected => with_db(ctx.engine(), |db| db.schedule(c.id, None, None, ClipState::Rejected, &t))?,
+            // Taken back while it is drawn again: it comes back for review, not to the schedule.
+            ClipState::Ready if c.state == ClipState::Rendering => with_db(ctx.engine(), |db| db.forget_resume(c.id, &t))?,
             ClipState::Ready => {
                 let back = if c.file.is_some() { ClipState::Ready } else { ClipState::Draft };
                 with_db(ctx.engine(), |db| db.schedule(c.id, None, None, back, &t))?;

@@ -65,6 +65,13 @@ CREATE TABLE clip (
 CREATE INDEX clip_vod ON clip(vod_id, score DESC);
 CREATE INDEX clip_state ON clip(state);
 CREATE INDEX clip_render ON clip(render_id);
+"#,
+// `resume`: the state a clip goes back to once drawn again (an approved or scheduled clip stays
+// so). `upload`: the resumable upload under way, `{"url", "bytes"}`, so an engine stopped in the
+// middle of one asks Google how it ended instead of sending the clip again.
+r#"
+ALTER TABLE clip ADD COLUMN resume TEXT;
+ALTER TABLE clip ADD COLUMN upload TEXT;
 "#];
 
 /// The footage a clip is drawn from: a part of the VOD cut out with handles, in the video's
@@ -317,8 +324,24 @@ impl ClipsDb {
             .query_map([], clip_row)?.collect()
     }
 
+    /// The clips in `states`, in [`clips`](Self::clips)' order: read through the state's index,
+    /// not the whole table.
     pub fn clips_in(&self, states: &[ClipState]) -> Result<Vec<Clip>> {
-        Ok(self.clips()?.into_iter().filter(|c| states.contains(&c.state)).collect())
+        let marks = vec!["?"; states.len()].join(", ");
+        self.conn.prepare_cached(&format!("SELECT {CLIP_COLS} FROM clip WHERE state IN ({marks}) ORDER BY vod_id DESC, score DESC, start_s"))?
+            .query_map(rusqlite::params_from_iter(states.iter().map(|s| s.name())), clip_row)?.collect()
+    }
+
+    /// How many clips are in each state.
+    pub fn state_counts(&self) -> Result<Vec<(ClipState, u32)>> {
+        self.conn.prepare_cached("SELECT state, COUNT(*) FROM clip GROUP BY state")?
+            .query_map([], |r| Ok((ClipState::parse(&r.get::<_, String>(0)?), r.get(1)?)))?.collect()
+    }
+
+    /// The scheduled clip that goes out first.
+    pub fn next_scheduled(&self) -> Result<Option<Clip>> {
+        self.conn.prepare_cached(&format!("SELECT {CLIP_COLS} FROM clip WHERE state = 'scheduled' ORDER BY publish_at IS NOT NULL, publish_at, id LIMIT 1"))?
+            .query_row([], clip_row).optional()
     }
 
     pub fn clip_by_render(&self, render_id: i64) -> Result<Option<Clip>> {
@@ -339,9 +362,83 @@ impl ClipsDb {
         Ok(())
     }
 
-    pub fn set_clip_render(&self, id: i64, render_id: Option<i64>, now: &str) -> Result<()> {
-        self.conn.prepare_cached("UPDATE clip SET render_id = ?2, state = 'rendering', error = NULL, updated_at = ?3 WHERE id = ?1")?
-            .execute(params![id, render_id, now])?;
+    /// Ask for clip `id` to be drawn again: `rendering` with no render yet, which the drawer
+    /// (`pipeline::render_loop`) takes in turn. An approved or scheduled clip remembers it was,
+    /// and goes back to it once drawn; one already waiting or failed keeps what it remembered.
+    /// Never a clip going out or gone out.
+    pub fn ask_render(&self, id: i64, now: &str) -> Result<bool> {
+        Ok(self.conn.prepare_cached(
+            "UPDATE clip SET render_id = NULL, state = 'rendering', error = NULL, updated_at = ?2,
+                 resume = CASE WHEN state IN ('approved', 'scheduled') THEN state WHEN state IN ('rendering', 'failed') THEN resume END
+             WHERE id = ?1 AND state NOT IN ('posting', 'posted')",
+        )?.execute(params![id, now])? > 0)
+    }
+
+    /// The clips waiting to be drawn again, the longest waiting first.
+    pub fn waiting_renders(&self) -> Result<Vec<Clip>> {
+        self.conn.prepare_cached(&format!("SELECT {CLIP_COLS} FROM clip WHERE state = 'rendering' AND render_id IS NULL ORDER BY updated_at, id"))?
+            .query_map([], clip_row)?.collect()
+    }
+
+    /// Clip `id`'s render was queued: `render_id` from now on. A draft (or a clip waiting for
+    /// it) is `rendering`; one the person moved meanwhile (rejected, taken back) stays as they
+    /// left it.
+    pub fn set_render_id(&self, id: i64, render_id: i64, now: &str) -> Result<()> {
+        self.conn.prepare_cached(
+            "UPDATE clip SET render_id = ?2, updated_at = ?3,
+                 error = CASE WHEN state IN ('draft', 'rendering') THEN NULL ELSE error END,
+                 state = CASE WHEN state IN ('draft', 'rendering') THEN 'rendering' ELSE state END
+             WHERE id = ?1",
+        )?.execute(params![id, render_id, now])?;
+        Ok(())
+    }
+
+    /// Render `render_id` of clip `id` drew `file`: the clip takes it, unless a newer render was
+    /// asked for since or it is going out. A clip still `rendering` (or a draft) goes back to
+    /// what it remembered, else to the person; one they moved meanwhile stays where they put it.
+    /// Whether the row took it.
+    pub fn finish_render(&self, id: i64, render_id: i64, file: &str, poster: Option<&str>, length_s: Option<f64>, now: &str) -> Result<bool> {
+        Ok(self.conn.prepare_cached(
+            "UPDATE clip SET file = ?3, poster = COALESCE(?4, poster), length_s = COALESCE(?5, length_s), updated_at = ?6,
+                 state = CASE WHEN state IN ('rendering', 'draft') THEN COALESCE(resume, 'ready') ELSE state END,
+                 error = CASE WHEN state IN ('rendering', 'draft') THEN NULL ELSE error END,
+                 resume = CASE WHEN state IN ('rendering', 'draft') THEN NULL ELSE resume END
+             WHERE id = ?1 AND render_id = ?2 AND state NOT IN ('posting', 'posted')",
+        )?.execute(params![id, render_id, file, poster, length_s, now])? > 0)
+    }
+
+    /// Clip `id`'s render (`render_id`, or none when it could not be queued) failed: the clip
+    /// fails with it while it is still waiting for that render.
+    pub fn fail_render(&self, id: i64, render_id: Option<i64>, why: &str, now: &str) -> Result<bool> {
+        Ok(self.conn.prepare_cached(
+            "UPDATE clip SET state = 'failed', error = ?3, updated_at = ?4
+             WHERE id = ?1 AND render_id IS ?2 AND state IN ('rendering', 'draft')",
+        )?.execute(params![id, render_id, why, now])? > 0)
+    }
+
+    /// A clip being drawn again that the person takes back: it comes back to them once drawn,
+    /// not to the schedule.
+    pub fn forget_resume(&self, id: i64, now: &str) -> Result<()> {
+        self.conn.prepare_cached("UPDATE clip SET resume = NULL, updated_at = ?2 WHERE id = ?1")?.execute(params![id, now])?;
+        Ok(())
+    }
+
+    /// Clip `id` starts going out, if it is still scheduled (the person may have moved it since
+    /// the poster looked).
+    pub fn start_posting(&self, id: i64, now: &str) -> Result<bool> {
+        Ok(self.conn.prepare_cached("UPDATE clip SET state = 'posting', error = NULL, updated_at = ?2 WHERE id = ?1 AND state = 'scheduled'")?
+            .execute(params![id, now])? > 0)
+    }
+
+    /// The resumable upload under way for clip `id`: where its bytes go, and how many in all.
+    pub fn upload(&self, id: i64) -> Result<Option<(String, u64)>> {
+        let raw: Option<String> = self.conn.prepare_cached("SELECT upload FROM clip WHERE id = ?1")?.query_row([id], |r| r.get(0)).optional()?.flatten();
+        Ok(parse::<serde_json::Value>(raw).and_then(|v| Some((v["url"].as_str()?.to_string(), v["bytes"].as_u64()?))))
+    }
+
+    pub fn set_upload(&self, id: i64, upload: Option<(&str, u64)>) -> Result<()> {
+        let raw = upload.map(|(url, bytes)| serde_json::json!({"url": url, "bytes": bytes}).to_string());
+        self.conn.prepare_cached("UPDATE clip SET upload = ?2 WHERE id = ?1")?.execute(params![id, raw])?;
         Ok(())
     }
 
@@ -362,13 +459,13 @@ impl ClipsDb {
     }
 
     pub fn schedule(&self, id: i64, at: Option<&str>, privacy: Option<Privacy>, state: ClipState, now: &str) -> Result<()> {
-        self.conn.prepare_cached("UPDATE clip SET publish_at = ?2, privacy = ?3, state = ?4, error = NULL, updated_at = ?5 WHERE id = ?1")?
+        self.conn.prepare_cached("UPDATE clip SET publish_at = ?2, privacy = ?3, state = ?4, error = NULL, resume = NULL, updated_at = ?5 WHERE id = ?1")?
             .execute(params![id, at, privacy.map(Privacy::name), state.name(), now])?;
         Ok(())
     }
 
     pub fn set_posted(&self, id: i64, youtube_id: &str, now: &str) -> Result<()> {
-        self.conn.prepare_cached("UPDATE clip SET youtube_id = ?2, posted_at = ?3, state = 'posted', error = NULL, updated_at = ?3 WHERE id = ?1")?
+        self.conn.prepare_cached("UPDATE clip SET youtube_id = ?2, posted_at = ?3, state = 'posted', error = NULL, upload = NULL, updated_at = ?3 WHERE id = ?1")?
             .execute(params![id, youtube_id, now])?;
         Ok(())
     }
@@ -417,5 +514,103 @@ mod tests {
         assert_eq!(clip.youtube_url.as_deref(), Some("https://youtube.com/shorts/abc"));
         assert!(db.delete_vod(vod.id).unwrap());
         assert!(db.clip(clip.id).unwrap().is_none(), "a VOD's clips go with it");
+    }
+
+    fn drawn(db: &ClipsDb, vod: i64, state: ClipState) -> i64 {
+        let c = db.add_clip(vod, &NewClip {
+            kind: Kind::Fail, title: "t".into(), description: "d".into(), tags: vec![], score: 7, why: "w".into(),
+            start_s: 10.0, end_s: 30.0, length_s: 20.0, edit: edit(),
+        }, "t1").unwrap();
+        db.set_clip_file(c.id, "/old.mp4", None, None, "t1").unwrap();
+        db.schedule(c.id, (state == ClipState::Scheduled).then_some("2026-11-02T17:00:00Z"), None, state, "t1").unwrap();
+        c.id
+    }
+
+    fn state(db: &ClipsDb, id: i64) -> ClipState {
+        db.clip(id).unwrap().unwrap().state
+    }
+
+    #[test]
+    fn a_clip_drawn_again_goes_back_where_it_was_and_never_over_the_persons_say() {
+        let db = ClipsDb::open_in_memory().unwrap();
+        let vod = db.add_vod(1, "A stream", "/v.mp4", "Neph", "", &[], |id| format!("/vods/{id}"), "t0").unwrap().id;
+        // Approved and scheduled clips drawn again keep their place in the queue.
+        for was in [ClipState::Approved, ClipState::Scheduled, ClipState::Ready] {
+            let id = drawn(&db, vod, was);
+            assert!(db.ask_render(id, "t2").unwrap());
+            assert_eq!(state(&db, id), ClipState::Rendering);
+            assert!(db.waiting_renders().unwrap().iter().any(|c| c.id == id), "it waits for the drawer");
+            db.set_render_id(id, 100 + id, "t3").unwrap();
+            assert!(db.waiting_renders().unwrap().iter().all(|c| c.id != id));
+            assert!(db.finish_render(id, 100 + id, "/new.mp4", None, Some(20.0), "t4").unwrap());
+            let c = db.clip(id).unwrap().unwrap();
+            assert_eq!((c.state, c.file.as_deref()), (was, Some("/new.mp4")), "{was:?}");
+            if was == ClipState::Scheduled {
+                assert_eq!(c.publish_at.as_deref(), Some("2026-11-02T17:00:00Z"));
+            }
+        }
+        // Rejected while it was drawn: rejected it stays.
+        let id = drawn(&db, vod, ClipState::Ready);
+        db.ask_render(id, "t2").unwrap();
+        db.set_render_id(id, 1, "t3").unwrap();
+        db.schedule(id, None, None, ClipState::Rejected, "t3").unwrap();
+        assert!(db.finish_render(id, 1, "/new.mp4", None, None, "t4").unwrap());
+        assert_eq!(state(&db, id), ClipState::Rejected);
+        assert!(!db.fail_render(id, Some(1), "late", "t4").unwrap(), "a failure does not overwrite it either");
+        // Rejected while it waited for the drawer: the cut that was under way does not take it back.
+        let id = drawn(&db, vod, ClipState::Approved);
+        db.ask_render(id, "t2").unwrap();
+        db.schedule(id, None, None, ClipState::Rejected, "t3").unwrap();
+        db.set_render_id(id, 2, "t3").unwrap();
+        assert_eq!(state(&db, id), ClipState::Rejected);
+        // Taken back while drawn: to the person, not the schedule.
+        let id = drawn(&db, vod, ClipState::Approved);
+        db.ask_render(id, "t2").unwrap();
+        db.forget_resume(id, "t3").unwrap();
+        db.set_render_id(id, 3, "t3").unwrap();
+        db.finish_render(id, 3, "/new.mp4", None, None, "t4").unwrap();
+        assert_eq!(state(&db, id), ClipState::Ready);
+        // Drawn again twice: the first render, finishing late, is not taken.
+        let id = drawn(&db, vod, ClipState::Approved);
+        db.ask_render(id, "t2").unwrap();
+        db.set_render_id(id, 4, "t3").unwrap();
+        db.ask_render(id, "t4").unwrap();
+        db.set_render_id(id, 5, "t5").unwrap();
+        assert!(!db.finish_render(id, 4, "/stale.mp4", None, None, "t6").unwrap());
+        assert_eq!(state(&db, id), ClipState::Rendering);
+        // A failed draw keeps what it remembered for the next try.
+        assert!(db.fail_render(id, Some(5), "ffmpeg failed", "t6").unwrap());
+        assert_eq!(state(&db, id), ClipState::Failed);
+        db.ask_render(id, "t7").unwrap();
+        db.set_render_id(id, 6, "t7").unwrap();
+        db.finish_render(id, 6, "/new.mp4", None, None, "t8").unwrap();
+        assert_eq!(state(&db, id), ClipState::Approved);
+        // A clip going out, or gone, is never drawn again nor moved by a render.
+        let id = drawn(&db, vod, ClipState::Scheduled);
+        db.set_render_id(id, 7, "t2").unwrap();
+        assert!(db.start_posting(id, "t3").unwrap());
+        assert!(!db.ask_render(id, "t3").unwrap());
+        assert!(!db.finish_render(id, 7, "/new.mp4", None, None, "t4").unwrap());
+        assert!(!db.fail_render(id, Some(7), "x", "t4").unwrap());
+        assert_eq!(state(&db, id), ClipState::Posting);
+        assert!(!db.start_posting(id, "t5").unwrap(), "only a scheduled clip starts going out");
+    }
+
+    #[test]
+    fn counts_and_the_next_post_come_from_the_index() {
+        let db = ClipsDb::open_in_memory().unwrap();
+        let vod = db.add_vod(1, "A stream", "/v.mp4", "Neph", "", &[], |id| format!("/vods/{id}"), "t0").unwrap().id;
+        for s in [ClipState::Ready, ClipState::Ready, ClipState::Approved, ClipState::Scheduled] {
+            drawn(&db, vod, s);
+        }
+        let counts = db.state_counts().unwrap();
+        assert!(counts.contains(&(ClipState::Ready, 2)) && counts.contains(&(ClipState::Approved, 1)), "{counts:?}");
+        assert_eq!(db.clips_in(&[ClipState::Ready, ClipState::Approved]).unwrap().len(), 3);
+        assert_eq!(db.next_scheduled().unwrap().unwrap().publish_at.as_deref(), Some("2026-11-02T17:00:00Z"));
+        let id = drawn(&db, vod, ClipState::Ready);
+        db.set_upload(id, Some(("https://www.googleapis.com/upload/x?upload_id=1", 99))).unwrap();
+        assert_eq!(db.upload(id).unwrap(), Some(("https://www.googleapis.com/upload/x?upload_id=1".to_string(), 99)));
+        db.set_posted(id, "v1", "t9").unwrap();
+        assert_eq!(db.upload(id).unwrap(), None, "a posted clip's upload is over");
     }
 }

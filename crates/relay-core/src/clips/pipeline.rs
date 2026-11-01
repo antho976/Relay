@@ -43,6 +43,12 @@ pub fn set_ask(engine: &Engine, vod: i64, ask: &Ask) -> Result<(), BusError> {
     with_db(engine, |db| db.set_meta(&ask_key(vod), &raw))
 }
 
+/// What the person should know of a VOD's last find (parts Claude could not read), kept until
+/// the VOD is ready and then shown as its `error` beside the `ready` state.
+fn note_key(vod: i64) -> String {
+    format!("note:{vod}")
+}
+
 fn take_ask(engine: &Engine, vod: i64) -> Option<Ask> {
     with_db(engine, |db| db.meta(&ask_key(vod))).ok().flatten().and_then(|r| serde_json::from_str(&r).ok())
 }
@@ -88,17 +94,15 @@ impl<'a> Bar<'a> {
 
 // ---------------------------------------------------------------- the loop
 
-/// On start: clips an earlier engine left drawing are matched with their renders again, and those
-/// it left posting go back to waiting for their slot.
+/// On start, on the `clips` thread: clips an earlier engine left drawing are matched with their
+/// renders again (those still waiting for theirs are the drawer's), and those it left posting
+/// are asked after at Google ([`youtube::recover`](super::youtube::recover)).
 pub fn reconcile(engine: &Arc<Engine>) {
     let Ok(clips) = with_db(engine, |db| db.interrupted()) else { return };
     for c in clips {
         match c.state {
             ClipState::Rendering => sync_render(engine, &c),
-            ClipState::Posting => {
-                let back = if c.publish_at.is_some() { ClipState::Scheduled } else { ClipState::Approved };
-                let _ = with_db(engine, |db| db.set_clip_state(c.id, back, Some("Relay stopped while it was uploading; it will try again"), &now()));
-            }
+            ClipState::Posting => super::youtube::recover(engine, &c),
             _ => {}
         }
     }
@@ -111,13 +115,63 @@ pub fn run_loop(weak: Weak<Engine>) {
         if engine.is_quitting() {
             return;
         }
+        let wake = engine.clips.wake.clone();
+        let seen = super::pokes(&wake);
         let next = with_db(&engine, |db| db.next_queued()).ok().flatten();
         match next {
-            Some(vod) => work(&engine, vod),
+            Some(vod) => {
+                let id = vod.id;
+                // A bug in one VOD's work fails that VOD, not the thread every later VOD needs.
+                if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&engine, vod))) {
+                    panicked(&engine, id, &super::panic_text(&*p));
+                }
+            }
             None => {
-                let wake = engine.clips.wake.clone();
                 drop(engine);
-                super::sleep_on(&wake, Duration::from_secs(120));
+                super::sleep_on(&wake, seen, Duration::from_secs(120));
+            }
+        }
+    }
+}
+
+/// VOD `id`'s work panicked: it is failed with what the panic said, so the pipeline goes on to
+/// the next one instead of taking it up again.
+fn panicked(engine: &Engine, id: i64, why: &str) {
+    tracing::error!(vod = id, %why, "clips: a VOD's work panicked");
+    let why = super::cut(&format!("Relay hit a bug working on this VOD: {why}"), 900);
+    let _ = with_db(engine, |db| db.set_vod_state(id, VodState::Failed, Some(&why), &now()));
+    super::clear_stop(engine, id);
+    changed(engine, "vod", Some(id), None);
+}
+
+/// The drawer, on the `clips-render` thread: clips the person asked to draw again (`rendering`
+/// with no render yet), one at a time, oldest first. A footage cut and the render's queue take
+/// time and the store's lock, so no handler does them; one at a time, a VOD's clips reframed
+/// together do not cut N pieces of footage at once; and an engine stopped in the middle leaves
+/// the clip waiting, so the next one draws it.
+pub fn render_loop(weak: Weak<Engine>) {
+    crate::background_priority();
+    loop {
+        let Some(engine) = weak.upgrade() else { return };
+        if engine.is_quitting() {
+            return;
+        }
+        let wake = engine.clips.render_wake.clone();
+        let seen = super::pokes(&wake);
+        let next = with_db(&engine, |db| db.waiting_renders()).ok().and_then(|w| w.into_iter().next());
+        match next {
+            Some(c) => {
+                let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| queue_render(&engine, c.id)))
+                    .unwrap_or_else(|p| Err(BusError::internal(format!("Relay hit a bug drawing this clip: {}", super::panic_text(&*p)))));
+                if let Err(e) = drawn {
+                    // Still waiting, with nothing queued: else it would be taken again at once.
+                    let _ = with_db(&engine, |db| db.fail_render(c.id, None, &super::cut(&e.message, 900), &now()));
+                }
+                changed(&engine, "clip", Some(c.vod_id), Some(c.id));
+            }
+            None => {
+                drop(engine);
+                super::sleep_on(&wake, seen, Duration::from_secs(120));
             }
         }
     }
@@ -156,8 +210,10 @@ fn work(engine: &Arc<Engine>, vod: Vod) {
     match result {
         Ok(()) => {
             let _ = with_db(engine, |db| {
+                let note = db.meta(&note_key(id))?;
+                db.delete_meta(&note_key(id))?;
                 db.set_stage(id, None, 1.0, None, &t)?;
-                db.set_vod_state(id, VodState::Ready, None, &t)
+                db.set_vod_state(id, VodState::Ready, note.as_deref(), &t)
             });
             notify_ready(engine, id);
             super::poke_poster(engine);
@@ -384,7 +440,13 @@ fn find_stage(engine: &Engine, vod: &Vod) -> Step<()> {
     let bar = Bar::new(engine, vod.id);
     bar.set(0.0, Some("Reading the transcript"));
     let progress = |done: usize, of: usize| bar_set_sync(engine, vod.id, done as f64 / of.max(1) as f64, &format!("Read {done} of {of} parts"));
-    let moments = find::find(engine, vod, dir, &words, &candidates, &ask.request, &ask.kinds, &taken, ask.max, &progress)?;
+    let found = find::find(engine, vod, dir, &words, &candidates, &ask.request, &ask.kinds, &taken, ask.max, &progress)?;
+    // Said on the VOD once it is ready (`work`): parts of it were not read.
+    match &found.missed {
+        Some(m) => with_db(engine, |db| db.set_meta(&note_key(vod.id), m))?,
+        None => with_db(engine, |db| db.delete_meta(&note_key(vod.id)))?,
+    }
+    let moments = found.moments;
     let s = super::settings(engine)?;
     let layout = vod.layout.clone().unwrap_or_else(|| frame::fallback(vod.width, vod.height, None));
     let t = now();
@@ -637,7 +699,8 @@ fn cut_footage(engine: &Engine, vod: i64, media: &Path, a: f64, b: f64, fps: u32
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent).map_err(|e| Halt::Failed(format!("{}: {e}", parent.display())))?;
     }
-    let part = out.with_file_name(format!(".{}", out.file_name().unwrap_or_default().to_string_lossy()));
+    // A part file of its own: the VOD's cut and a clip drawn again may cut the same clip at once.
+    let part = out.with_file_name(format!(".{}.{}.part", out.file_name().unwrap_or_default().to_string_lossy(), uuid::Uuid::new_v4().simple()));
     let encode = |gpu: bool| {
         let mut cmd = Command::new(super::ffmpeg());
         cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-ss", &format!("{a:.3}"), "-i"]).arg(media)
@@ -651,7 +714,10 @@ fn cut_footage(engine: &Engine, vod: i64, media: &Path, a: f64, b: f64, fps: u32
         super::run(engine, vod, &mut cmd, Duration::from_secs(15 * 60), |_| {})
     };
     let done = if nvenc() { encode(true).or_else(|e| if matches!(e, Halt::Stopped) { Err(e) } else { encode(false) }) } else { encode(false) };
-    done?;
+    if let Err(e) = done {
+        let _ = std::fs::remove_file(&part);
+        return Err(e);
+    }
     std::fs::rename(&part, out).map_err(|e| Halt::Failed(format!("{}: {e}", out.display())))?;
     Ok(())
 }
@@ -666,7 +732,7 @@ fn render_stage(engine: &Engine, vod: &Vod) -> Step<()> {
         match queue_render(engine, c.id) {
             Ok(id) => ids.push(id),
             Err(e) => {
-                let _ = with_db(engine, |db| db.set_clip_state(c.id, ClipState::Failed, Some(&e.message), &now()));
+                let _ = with_db(engine, |db| db.fail_render(c.id, c.render_id, &e.message, &now()));
             }
         }
     }
@@ -764,7 +830,11 @@ pub fn queue_render(engine: &Engine, clip_id: i64) -> Result<i64, BusError> {
         "video_id": video_id, "composition": "short", "props": props, "name": format!("clip-{clip_id}"), "preset": "shorts",
     })), Door::InProcess).into_result()?;
     let render_id = out["id"].as_i64().ok_or_else(|| BusError::internal("video.render answered no render id"))?;
-    with_db(engine, |db| db.set_clip_render(clip_id, Some(render_id), &now()))?;
+    with_db(engine, |db| db.set_render_id(clip_id, render_id, &now()))?;
+    // A render that finished before its id was kept went by the watcher unmatched.
+    if let Ok(c) = super::clip(engine, clip_id) {
+        sync_render(engine, &c);
+    }
     changed(engine, "clip", Some(vod.id), Some(clip_id));
     Ok(render_id)
 }
@@ -776,7 +846,11 @@ fn halt_bus(h: Halt) -> BusError {
     }
 }
 
-/// Bring clip `c`'s row up to its render's: drawn (with its poster), failed, or still going.
+/// Bring clip `c`'s row up to its render's: drawn (with its poster), failed, or still going. The
+/// row moves only while it still waits for this render, and only from `rendering`: an approved or
+/// scheduled clip drawn again goes back to the schedule, a clip the person rejected or took back
+/// while it was drawn stays where they put it, and a clip going out is never touched
+/// ([`ClipsDb::finish_render`](super::store::ClipsDb::finish_render)).
 pub fn sync_render(engine: &Engine, c: &Clip) {
     let Some(rid) = c.render_id else { return };
     let Ok(r) = engine.read_store("clips.render", |conn| crate::video::get_render(conn, rid)) else { return };
@@ -793,16 +867,11 @@ pub fn sync_render(engine: &Engine, c: &Clip) {
                 frame::grab(Path::new(&path), 0.6, &out, 360, "").ok().map(|_| out.display().to_string())
             });
             let length = probe_file(Path::new(&path)).ok().map(|i| (i.0 * 10.0).round() / 10.0);
-            let _ = with_db(engine, |db| {
-                db.set_clip_file(c.id, &path, poster.as_deref(), length, &t)?;
-                // An approved clip drawn again stays approved; any other goes to the person.
-                let next = if matches!(c.state, ClipState::Approved | ClipState::Scheduled) { c.state } else { ClipState::Ready };
-                db.set_clip_state(c.id, next, None, &t)
-            });
+            let _ = with_db(engine, |db| db.finish_render(c.id, rid, &path, poster.as_deref(), length, &t));
         }
         RenderState::Failed | RenderState::Cancelled => {
             let why = r.error.clone().unwrap_or_else(|| "the render was stopped".into());
-            let _ = with_db(engine, |db| db.set_clip_state(c.id, ClipState::Failed, Some(&super::cut(&why, 900)), &t));
+            let _ = with_db(engine, |db| db.fail_render(c.id, Some(rid), &super::cut(&why, 900), &t));
         }
         _ => return,
     }
@@ -841,4 +910,57 @@ pub fn stop(engine: &Engine, id: i64) -> Result<(), BusError> {
         with_db(engine, |db| db.set_vod_state(id, VodState::Stopped, None, &now()))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clips::store::NewClip;
+
+    fn engine_with_clip() -> (Arc<Engine>, i64, i64) {
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        let vod = with_db(&engine, |db| db.add_vod(1, "v", "/nowhere/v.mp4", "", "", &[], |id| format!("/nowhere/vods/{id}"), "t0")).unwrap().id;
+        let edit = ClipEdit {
+            keep: vec![[10.0, 20.0]], tighten_ms: None, layout: Layout::Fit, view: None, reframe: Default::default(), hook: String::new(),
+            captions: CaptionStyle::Pixel, caption_y: None, emphasis: vec![], fixes: Default::default(), punch_at: vec![], end_card: true, scene: None,
+        };
+        let clip = with_db(&engine, |db| db.add_clip(vod, &NewClip {
+            kind: Kind::Funny, title: "t".into(), description: String::new(), tags: vec![], score: 8, why: String::new(), start_s: 10.0, end_s: 20.0, length_s: 10.0, edit,
+        }, "t0")).unwrap().id;
+        (engine, vod, clip)
+    }
+
+    /// A clip left waiting to be drawn again (by a restart in the middle of its cut, or simply
+    /// asked for) is taken by the drawer; one that cannot be drawn fails, and the drawer goes on.
+    #[test]
+    fn the_drawer_takes_waiting_clips_one_at_a_time() {
+        let (engine, _, clip) = engine_with_clip();
+        with_db(&engine, |db| db.ask_render(clip, "t1")).unwrap();
+        assert_eq!(with_db(&engine, |db| db.waiting_renders()).unwrap().len(), 1);
+        let weak = Arc::downgrade(&engine);
+        let drawer = std::thread::spawn(move || render_loop(weak));
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while super::super::clip(&engine, clip).unwrap().state != ClipState::Failed {
+            assert!(Instant::now() < deadline, "the drawer never took the clip");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // It has no words to draw from: failed with why, and no longer waiting.
+        assert!(super::super::clip(&engine, clip).unwrap().error.is_some());
+        assert!(with_db(&engine, |db| db.waiting_renders()).unwrap().is_empty());
+        engine.request_quit();
+        super::super::poke_render(&engine);
+        drawer.join().unwrap();
+    }
+
+    #[test]
+    fn a_vod_whose_work_panicked_is_failed_not_taken_again() {
+        let (engine, vod, _) = engine_with_clip();
+        with_db(&engine, |db| db.set_vod_state(vod, VodState::Working, None, "t1")).unwrap();
+        let p = std::panic::catch_unwind(|| panic!("range end index 3 out of range")).unwrap_err();
+        panicked(&engine, vod, &super::super::panic_text(&*p));
+        let v = super::super::vod(&engine, vod).unwrap();
+        assert_eq!(v.state, VodState::Failed);
+        assert!(v.error.unwrap().contains("range end index 3"));
+        assert!(with_db(&engine, |db| db.next_queued()).unwrap().is_none(), "the pipeline goes on to the next VOD");
+    }
 }

@@ -1036,6 +1036,12 @@ fn vod_page(ui: &Rc<Ui>, page: &Page, d: &Value) {
         why.set_wrap(true);
         why.set_xalign(0.0);
         page.body.append(&why);
+    } else if state == "ready" && !text(v, "error").is_empty() {
+        // Parts of the transcript the finder could not read: moments there may be missing.
+        let note = label(text(v, "error"), "money-muted");
+        note.set_wrap(true);
+        note.set_xalign(0.0);
+        page.body.append(&note);
     }
 
     let clips = rows(d, "clips");

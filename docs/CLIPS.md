@@ -42,10 +42,18 @@ when they are there: a VOD stopped, failed or cut off by a restart goes on from 
 | audio | Takes the sound out (a copy of its stream; AAC when it cannot be copied) | `audio.m4a` |
 | transcribe | Every word with its time, on the GPU (`streamclips.py transcribe --progress`: whisper.cpp large-v3-turbo with DTW word times), told the streamer's name and the words in Settings | `words.json`, `transcript.txt` |
 | signals | Loudness by the second, and chat's pace and hype for a VOD with its replay; the 90 strongest seconds (`streamclips.py signals`, `candidates`) | `signals.json`, `candidates.json` |
-| layout | What the picture is made of: a facecam over gameplay, one camera, or a screen alone, with the boxes, from three frames with a grid drawn on them (Claude Sonnet, reading the images) | the VOD's layout, `layout/` |
+| layout | What the picture is made of: a facecam over gameplay, one camera, or a screen alone, with the boxes, from three frames with a grid drawn on them (Claude Sonnet, the images in its message and no tools: on-screen text, a chat overlay's above all, is anyone's words) | the VOD's layout, `layout/` |
 | find | The moments asked for (below) | the clips, as drafts; `moments.json` |
 | cut | Each clip's footage cut with 2 s and 3 s handles into the video's `public/assets/` (NVENC when ffmpeg has it); one look at every clip's scene; each clip's framing; its cut edges checked against the sound and the words (`streamclips.py cuts`) | `scenes/`, each clip's section |
 | render | Each clip drawn by the Video plugin (`video.render`, composition `short`, Shorts loudness), waited on, its first frame kept as its poster | `out/clip-<id>.mp4`, `posters/` |
+
+A clip drawn again (a changed edit, **Draw again**, a VOD's framing changed for all its clips) waits,
+`rendering` with no render yet, for the `clips-render` thread, which cuts its footage again when it
+needs it and queues its render, one clip at a time; an engine stopped in the middle leaves it
+waiting, and the next one draws it. An approved or scheduled clip drawn again goes back to the
+queue once drawn, and cannot be approved or posted while it is drawn (its file is the old
+picture); rejected or taken back meanwhile, it stays as the person left it. A bug in one VOD's
+work fails that VOD, not the thread.
 
 A VOD's clips are compositions of one video of the Video plugin (made by `video.create`, titled
 *Clips · streamer · VOD*), so they also show in the Design view's Videos and any agent with the
@@ -134,7 +142,11 @@ scoring the threshold or more are approved as you would, once a channel is conne
 `clips-post` thread uploads what is due, resumably, with the title, the description (its line,
 the credit "From <streamer>'s stream: twitch.tv/<handle>", the footer and #shorts), the tags and
 the Gaming category. Relay must be running for a post to go out at its time; one missed while it
-was off goes out when it next runs.
+was off goes out when it next runs. An upload's address is kept the moment Google gives it: a
+Relay stopped in the middle asks Google, when it next starts, how that upload ended, and posts the
+clip (it arrived), sends it again (YouTube kept none of it), or fails it with a word to look on the
+channel first (Google could not say): never twice on a guess. What the keyring says of the
+sign-in is read once and kept until Relay next writes it.
 
 Posting is the person's alone: `clips.clip.post`, `clips.clip.set` (approve), the YouTube ops and
 deleting are `Actors::UserOnly`. An agent may import, find, edit and draw clips (with the Video

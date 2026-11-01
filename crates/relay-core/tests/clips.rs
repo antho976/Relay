@@ -135,6 +135,87 @@ fn a_clip_is_approved_only_once_drawn_and_posted_only_when_signed_in() {
     let back = ok(&engine, "clips.clip.set", json!({"id": clip, "state": "ready"}));
     assert_eq!(back["state"], "ready");
     assert_eq!(ok(&engine, "clips.clip.list", json!({"states": ["ready"]}))["clips"].as_array().unwrap().len(), 1);
+    assert_eq!(ok(&engine, "clips.summary", json!({}))["to_review"], 1);
+}
+
+/// Drawn again, a clip's file is the old picture until the render ends: it is not approved (the
+/// poster would send the old one), an approved one keeps its place, and taken back meanwhile it
+/// comes back to the person.
+#[test]
+fn a_clip_being_drawn_again_is_not_approved_and_keeps_its_place() {
+    use relay_bus::ops::clips::ClipState;
+    let root = tempfile::tempdir().unwrap();
+    let engine = setup(root.path());
+    let file = root.path().join("vod.mp4");
+    std::fs::write(&file, b"x").unwrap();
+    let (_, clip) = vod_with_clip(&engine, &file);
+    let drawn = root.path().join("clip-1.mp4");
+    std::fs::write(&drawn, b"drawn").unwrap();
+    clips::with_db(&engine, |db| {
+        db.set_clip_file(clip, &drawn.display().to_string(), None, Some(29.5), "t")?;
+        db.set_clip_state(clip, ClipState::Ready, None, "t")
+    }).unwrap();
+    ok(&engine, "clips.clip.set", json!({"id": clip, "state": "approved"}));
+    let summary = ok(&engine, "clips.summary", json!({}));
+    assert_eq!((summary["approved"].as_u64(), summary["to_review"].as_u64()), (Some(1), Some(0)));
+    // Drawn again: waiting for the drawer, and not approved meanwhile.
+    assert_eq!(ok(&engine, "clips.clip.render", json!({"id": clip}))["state"], "rendering");
+    assert_eq!(code(common::call(&engine, "clips.clip.set", json!({"id": clip, "state": "approved"}))), "clips.unrendered");
+    assert_eq!(code(common::call(&engine, "clips.clip.post", json!({"id": clip}))), "clips.unrendered");
+    // Its render ends: approved again, with the new file.
+    clips::with_db(&engine, |db| {
+        db.set_render_id(clip, 41, "t")?;
+        db.finish_render(clip, 41, "/new.mp4", None, None, "t")
+    }).unwrap();
+    let c = ok(&engine, "clips.clip.get", json!({"id": clip}))["clip"].clone();
+    assert_eq!((c["state"].as_str(), c["file"].as_str()), (Some("approved"), Some("/new.mp4")));
+    // Drawn again and taken back meanwhile: back for review once drawn.
+    ok(&engine, "clips.clip.render", json!({"id": clip}));
+    assert_eq!(ok(&engine, "clips.clip.set", json!({"id": clip, "state": "ready"}))["state"], "rendering");
+    clips::with_db(&engine, |db| {
+        db.set_render_id(clip, 42, "t")?;
+        db.finish_render(clip, 42, "/newer.mp4", None, None, "t")
+    }).unwrap();
+    assert_eq!(ok(&engine, "clips.clip.get", json!({"id": clip}))["clip"]["state"], "ready");
+}
+
+/// A Clips notification keeps its category across the bus: the space's click route needs it.
+#[test]
+fn clips_notifications_keep_their_category() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = setup(root.path());
+    engine.store.lock().execute(
+        "INSERT INTO notifications(project_id, category, title, body, link, read, created_at) VALUES (NULL, 'clips', 'Clips ready', '3 clips wait for you', NULL, 0, '2026-11-01T00:00:00Z')",
+        [],
+    ).unwrap();
+    let list = ok(&engine, "notify.list", json!({"category": "clips"}));
+    let n = list["notifications"].as_array().unwrap();
+    assert_eq!(n.len(), 1);
+    assert_eq!(n[0]["category"], "clips");
+    assert_eq!(list["unread"], 1);
+    assert_eq!(ok(&engine, "notify.list", json!({}))["notifications"][0]["category"], "clips");
+}
+
+/// The sign-in is read from the keyring once and kept: each refresh of the space does not start
+/// the keyring's tool. Writing the secrets forgets what was kept.
+#[test]
+fn the_sign_in_is_read_once_and_read_again_after_a_change() {
+    let root = tempfile::tempdir().unwrap();
+    let engine = setup(root.path());
+    let status = ok(&engine, "clips.youtube.setup", json!({"client_id": "123-abc.apps.googleusercontent.com", "client_secret": "sec-ret"}));
+    assert_eq!(status["connected"], false);
+    let kept = engine.store.path().with_file_name("clips-youtube.json");
+    assert!(kept.is_file(), "the test instance keeps its secrets in a file");
+    // Changed behind Relay's back: still what was read.
+    std::fs::write(&kept, json!({"client_id": "123-abc.apps.googleusercontent.com", "client_secret": "sec-ret", "refresh_token": "rt"}).to_string()).unwrap();
+    assert_eq!(ok(&engine, "clips.youtube.status", json!({}))["connected"], false);
+    assert_eq!(ok(&engine, "clips.summary", json!({}))["youtube"]["connected"], false);
+    // Written by Relay: read again.
+    let status = ok(&engine, "clips.youtube.setup", json!({"client_id": "123-abc.apps.googleusercontent.com", "client_secret": "sec-ret"}));
+    assert_eq!(status["connected"], true, "the same client keeps its sign-in");
+    assert_eq!(ok(&engine, "clips.summary", json!({}))["youtube"]["connected"], true);
+    let out = ok(&engine, "clips.youtube.disconnect", json!({}));
+    assert_eq!(out["connected"], false);
 }
 
 /// Google, as the sign-in and the upload see it: the token exchange, the channel, the resumable

@@ -110,7 +110,57 @@ fn load(engine: &Engine) -> Result<Option<Secrets>, BusError> {
     }
 }
 
+/// What the keyring holds of the sign-in, as [`status`] tells it: kept in memory
+/// (`Shelf::keyring`) until the secrets are next written, so the space's refreshes and the
+/// poster's ticks do not each start the keyring's tool.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Kept {
+    configured: bool,
+    connected: bool,
+    /// Why the keyring could not be read: asked again after [`KEYRING_RETRY`].
+    note: Option<String>,
+}
+
+/// How long a keyring that did not answer (locked, or its tool missing) is taken at its word.
+const KEYRING_RETRY: Duration = Duration::from_secs(30);
+
+fn kept(engine: &Engine) -> Kept {
+    let generation = {
+        let slot = lock(&engine.clips.keyring);
+        if let Some((k, _)) = slot.1.as_ref().filter(|(k, at)| k.note.is_none() || at.elapsed() < KEYRING_RETRY) {
+            return k.clone();
+        }
+        slot.0
+    };
+    let k = match load(engine) {
+        Ok(s) => Kept {
+            configured: s.as_ref().is_some_and(|s| !s.client_id.is_empty()),
+            connected: s.as_ref().is_some_and(|s| s.refresh_token.is_some()),
+            note: None,
+        },
+        Err(e) => Kept { note: Some(e.message), ..Default::default() },
+    };
+    let mut slot = lock(&engine.clips.keyring);
+    if slot.0 == generation {
+        slot.1 = Some((k.clone(), Instant::now()));
+    }
+    k
+}
+
+/// The secrets were written: what was kept of them is read again next time.
+fn forget_kept(engine: &Engine) {
+    let mut slot = lock(&engine.clips.keyring);
+    slot.0 += 1;
+    slot.1 = None;
+}
+
 fn save(engine: &Engine, s: &Secrets) -> Result<(), BusError> {
+    let saved = save_secrets(engine, s);
+    forget_kept(engine);
+    saved
+}
+
+fn save_secrets(engine: &Engine, s: &Secrets) -> Result<(), BusError> {
     let text = serde_json::to_string(s).map_err(|e| BusError::internal(e.to_string()))?;
     match secrets_file(engine) {
         None => Err(BusError::unavailable("clips.keyring", "this store keeps no keys")),
@@ -237,20 +287,15 @@ fn set_channel(engine: &Engine, c: &Channel) {
     }
 }
 
+/// The channel's sign-in: the keyring as last read ([`Kept`]), the channel and the sign-in
+/// under way as they are now.
 pub fn status(engine: &Engine) -> YoutubeStatus {
-    let secrets = load(engine);
+    let k = kept(engine);
     let c = channel(engine);
     let pending = lock(&engine.clips.oauth).as_ref().is_some_and(|p| p.started.elapsed() < SIGN_IN_WITHIN);
-    match secrets {
-        Ok(s) => YoutubeStatus {
-            configured: s.as_ref().is_some_and(|s| !s.client_id.is_empty()),
-            connected: s.as_ref().is_some_and(|s| s.refresh_token.is_some()),
-            channel: c.channel,
-            channel_id: c.channel_id,
-            pending,
-            note: c.note,
-        },
-        Err(e) => YoutubeStatus { pending, note: Some(e.message), ..Default::default() },
+    match k.note {
+        None => YoutubeStatus { configured: k.configured, connected: k.connected, channel: c.channel, channel_id: c.channel_id, pending, note: c.note },
+        Some(why) => YoutubeStatus { pending, note: Some(why), ..Default::default() },
     }
 }
 
@@ -323,7 +368,7 @@ fn wait_for_code(listener: &TcpListener, state: &str) -> Result<String, BusError
                 let _ = BufReader::new(&mut stream).read_line(&mut line);
                 let target = line.split_whitespace().nth(1).unwrap_or("");
                 let query = target.split_once('?').map_or("", |(_, q)| q);
-                let param = |k: &str| query.split('&').find_map(|kv| kv.split_once('=').filter(|(a, _)| *a == k).map(|(_, v)| super::percent(v)));
+                let param = |k: &str| query.split('&').find_map(|kv| kv.split_once('=').filter(|(a, _)| *a == k).map(|(_, v)| super::query_value(v)));
                 if param("state").is_none() && param("error").is_none() {
                     // A favicon or a stray request: not Google's answer.
                     let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
@@ -448,10 +493,17 @@ pub fn description(c: &Clip, s: &Settings) -> String {
     if !s.posting.footer.trim().is_empty() {
         out.push_str(&format!("\n\n{}", s.posting.footer.trim()));
     }
-    if !out.to_ascii_lowercase().contains("#shorts") {
-        out.push_str("\n\n#shorts");
+    // YouTube takes 5000 bytes: the body is cut first, so #shorts is never what is lost.
+    const MOST: usize = 4900;
+    const TAG: &str = "\n\n#shorts";
+    if out.len() <= MOST && out.to_ascii_lowercase().contains("#shorts") {
+        return out;
     }
-    out.chars().take(4900).collect()
+    let mut end = out.len().min(MOST - TAG.len());
+    while !out.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{TAG}", out[..end].trim_end())
 }
 
 /// Upload clip `c`'s file: its YouTube id.
@@ -485,13 +537,69 @@ pub fn upload(engine: &Engine, c: &Clip, s: &Settings, privacy: Privacy) -> Resu
         return Err(BusError::unavailable("clips.youtube.upload", google_error(&start)));
     }
     let place = start.location.ok_or_else(|| BusError::unavailable("clips.youtube.upload", "Google gave no upload address"))?;
-    let secs = (bytes.len() as u64 / (256 * 1024)).clamp(60, 3600);
-    let done = send(Call { method: "PUT", url: place, headers: vec![("content-type".into(), "video/mp4".into())], body: bytes }, Duration::from_secs(secs))?;
+    let total = bytes.len() as u64;
+    // Kept before a byte is sent: an engine stopped from here on asks Google how the upload
+    // ended ([`recover`]) instead of sending the clip a second time. The address is good for
+    // this one upload only; `clips.db` is the person's alone (0600).
+    with_db(engine, |db| db.set_upload(c.id, Some((&place, total))))?;
+    let secs = (total / (256 * 1024)).clamp(60, 3600);
+    let done = match send(Call { method: "PUT", url: place.clone(), headers: vec![("content-type".into(), "video/mp4".into())], body: bytes }, Duration::from_secs(secs)) {
+        Ok(a) => a,
+        // The answer was lost, not necessarily the upload: Google says which.
+        Err(e) => return match session(&place, total) {
+            Ok(Some(id)) => Ok(id),
+            Ok(None) => Err(e),
+            Err(_) => Err(BusError::unavailable("clips.youtube.upload", format!("{}; it may have reached YouTube: look on your channel before trying again", e.message))),
+        },
+    };
     if !(200..300).contains(&done.status) {
         return Err(BusError::unavailable("clips.youtube.upload", google_error(&done)));
     }
-    let v: Value = serde_json::from_slice(&done.body).unwrap_or_default();
+    video_id(&done)
+}
+
+fn video_id(a: &Answer) -> Result<String, BusError> {
+    let v: Value = serde_json::from_slice(&a.body).unwrap_or_default();
     v["id"].as_str().map(str::to_string).ok_or_else(|| BusError::unavailable("clips.youtube.upload", "YouTube answered no video id"))
+}
+
+/// Where the resumable upload at `place` (of `total` bytes) stands, asked of Google with an
+/// empty PUT: the video's id when it all arrived, `None` when it did not (YouTube keeps nothing
+/// of an unfinished upload), or an error when Google cannot say (the address ran out, no network).
+pub fn session(place: &str, total: u64) -> Result<Option<String>, BusError> {
+    let a = send(Call { method: "PUT", url: place.into(), headers: vec![("content-range".into(), format!("bytes */{total}"))], body: vec![] }, Duration::from_secs(30))?;
+    match a.status {
+        200 | 201 => video_id(&a).map(Some),
+        308 => Ok(None),
+        _ => Err(BusError::unavailable("clips.youtube.upload", google_error(&a))),
+    }
+}
+
+/// Clip `c`, left `posting` by an engine that stopped: posted when its upload arrived (Google
+/// says so), back to its slot when nothing of it can be on YouTube, else failed with a word to
+/// look on the channel first: never sent twice on a guess.
+pub fn recover(engine: &Engine, c: &Clip) {
+    let t = crate::time::now();
+    let back = if c.publish_at.is_some() { ClipState::Scheduled } else { ClipState::Approved };
+    let upload = with_db(engine, |db| db.upload(c.id)).ok().flatten();
+    let _ = match upload {
+        // No upload was opened: nothing was sent.
+        None => with_db(engine, |db| db.set_clip_state(c.id, back, Some("Relay stopped before the upload began; it will try again"), &t)),
+        Some((place, total)) => match session(&place, total) {
+            Ok(Some(id)) => with_db(engine, |db| db.set_posted(c.id, &id, &t)),
+            Ok(None) => with_db(engine, |db| {
+                db.set_upload(c.id, None)?;
+                db.set_clip_state(c.id, back, Some("Relay stopped in the middle of the upload; YouTube kept none of it, so it will send it again"), &t)
+            }),
+            Err(e) => {
+                tracing::warn!(clip = c.id, error = %e.message, "clips: an interrupted upload could not be asked after");
+                with_db(engine, |db| db.set_clip_state(c.id, ClipState::Failed, Some(&format!(
+                    "Upload interrupted: Relay stopped while it was uploading, and Google could not say whether it arrived ({}). Look on your channel before trying again.",
+                    e.message)), &t))
+            }
+        },
+    };
+    changed(engine, "clip", Some(c.vod_id), Some(c.id));
 }
 
 // ---------------------------------------------------------------- the schedule
@@ -525,12 +633,15 @@ pub fn post_loop(weak: Weak<Engine>) {
         if engine.is_quitting() {
             return;
         }
-        if let Err(e) = tick(&engine) {
-            tracing::debug!(error = %e.message, "clips: the poster could not look");
-        }
         let wake = engine.clips.post_wake.clone();
+        let seen = super::pokes(&wake);
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tick(&engine))) {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::debug!(error = %e.message, "clips: the poster could not look"),
+            Err(p) => tracing::error!(why = %super::panic_text(&*p), "clips: the poster panicked"),
+        }
         drop(engine);
-        super::sleep_on(&wake, Duration::from_secs(60));
+        super::sleep_on(&wake, seen, Duration::from_secs(60));
     }
 }
 
@@ -582,8 +693,13 @@ pub fn post_now(engine: &Engine, c: &Clip, s: &Settings) -> Result<(), BusError>
         return Ok(());
     }
     let t = crate::time::now();
-    with_db(engine, |db| db.set_clip_state(c.id, ClipState::Posting, None, &t))?;
+    // Only while it is still scheduled: drawn again or taken back since the poster looked, it
+    // stays as the person left it.
+    if !with_db(engine, |db| db.start_posting(c.id, &t))? {
+        return Ok(());
+    }
     changed(engine, "clip", Some(c.vod_id), Some(c.id));
+    let c = &super::clip(engine, c.id)?;
     let privacy = c.privacy.unwrap_or(s.posting.privacy);
     let result = upload(engine, c, s, privacy);
     let t = crate::time::now();
@@ -591,7 +707,10 @@ pub fn post_now(engine: &Engine, c: &Clip, s: &Settings) -> Result<(), BusError>
         Ok(id) => with_db(engine, |db| db.set_posted(c.id, &id, &t))?,
         Err(e) => {
             tracing::warn!(clip = c.id, error = %e.message, "clips: an upload failed");
-            with_db(engine, |db| db.set_clip_state(c.id, ClipState::Failed, Some(&format!("Upload failed: {}", e.message)), &t))?;
+            with_db(engine, |db| {
+                db.set_upload(c.id, None)?;
+                db.set_clip_state(c.id, ClipState::Failed, Some(&format!("Upload failed: {}", e.message)), &t)
+            })?;
         }
     }
     changed(engine, "clip", Some(c.vod_id), Some(c.id));
@@ -630,6 +749,78 @@ mod tests {
         let d = description(&c, &s);
         assert!(d.starts_with("He burned it.\n\nFrom Nephilheim's stream: https://twitch.tv/nephilheim"), "{d}");
         assert!(d.ends_with("#shorts"));
+        // A long footer is cut, not #shorts; and the whole stays inside YouTube's 5000 bytes.
+        s.posting.footer = "é".repeat(4000);
+        let d = description(&c, &s);
+        assert!(d.ends_with("\n\n#shorts") && d.len() <= 4900, "{} bytes", d.len());
+        assert!(d.starts_with("He burned it."));
+        // Already tagged and short: as written.
+        let mut tagged = c.clone();
+        tagged.description = "#Shorts first".into();
+        s.posting.footer.clear();
+        assert!(!description(&tagged, &s).ends_with("#shorts"));
+    }
+
+    fn sample_clip(db: &super::super::store::ClipsDb, vod: i64) -> Clip {
+        let edit = ClipEdit {
+            keep: vec![[0.0, 1.0]], tighten_ms: None, layout: Layout::Fit, view: None, reframe: Default::default(), hook: String::new(),
+            captions: CaptionStyle::Pixel, caption_y: None, emphasis: vec![], fixes: Default::default(), punch_at: vec![], end_card: true, scene: None,
+        };
+        let c = db.add_clip(vod, &super::super::store::NewClip {
+            kind: Kind::Funny, title: "t".into(), description: String::new(), tags: vec![], score: 8, why: String::new(), start_s: 0.0, end_s: 1.0, length_s: 1.0, edit,
+        }, "t0").unwrap();
+        db.set_clip_file(c.id, "/c.mp4", None, None, "t0").unwrap();
+        db.schedule(c.id, Some("2026-11-01T17:00:00Z"), None, ClipState::Scheduled, "t0").unwrap();
+        db.start_posting(c.id, "t1").unwrap();
+        db.clip(c.id).unwrap().unwrap()
+    }
+
+    /// An engine stopped mid-upload: Google is asked how the upload ended, and the clip is never
+    /// sent again on a guess.
+    #[test]
+    fn an_interrupted_upload_is_asked_after_not_sent_twice() {
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        let answer: Arc<std::sync::Mutex<(u16, &'static str)>> = Arc::new(std::sync::Mutex::new((200, "{\"id\": \"v9\"}")));
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<Call>::new()));
+        let (a, s) = (answer.clone(), seen.clone());
+        use_fake(Some(Arc::new(move |call: &Call| {
+            s.lock().unwrap().push(call.clone());
+            let (status, body) = *a.lock().unwrap();
+            Answer { status, body: body.as_bytes().to_vec(), location: None }
+        })));
+        let vod = with_db(&engine, |db| db.add_vod(1, "v", "/v.mp4", "", "", &[], |id| format!("/vods/{id}"), "t0")).unwrap().id;
+        let place = "https://www.googleapis.com/upload/youtube/v3/videos?upload_id=u1";
+        let state = |id: i64| super::super::clip(&engine, id).unwrap();
+        // It all arrived: posted, with the id Google gives.
+        let c = with_db(&engine, |db| Ok(sample_clip(db, vod))).unwrap();
+        with_db(&engine, |db| db.set_upload(c.id, Some((place, 1234)))).unwrap();
+        recover(&engine, &c);
+        assert_eq!((state(c.id).state, state(c.id).youtube_id), (ClipState::Posted, Some("v9".to_string())));
+        let ask = seen.lock().unwrap().last().cloned().unwrap();
+        assert_eq!((ask.method, ask.url.as_str()), ("PUT", place));
+        assert!(ask.headers.contains(&("content-range".into(), "bytes */1234".into())) && ask.body.is_empty());
+        // Not all of it: YouTube kept nothing, so it goes back to its slot.
+        *answer.lock().unwrap() = (308, "");
+        let c = with_db(&engine, |db| Ok(sample_clip(db, vod))).unwrap();
+        with_db(&engine, |db| db.set_upload(c.id, Some((place, 1234)))).unwrap();
+        recover(&engine, &c);
+        assert_eq!(state(c.id).state, ClipState::Scheduled);
+        assert_eq!(with_db(&engine, |db| db.upload(c.id)).unwrap(), None);
+        // Google cannot say: failed, with a word to look on the channel first.
+        *answer.lock().unwrap() = (404, "{}");
+        let c = with_db(&engine, |db| Ok(sample_clip(db, vod))).unwrap();
+        with_db(&engine, |db| db.set_upload(c.id, Some((place, 1234)))).unwrap();
+        recover(&engine, &c);
+        let got = state(c.id);
+        assert_eq!(got.state, ClipState::Failed);
+        assert!(got.error.as_deref().is_some_and(|e| e.starts_with("Upload interrupted") && e.contains("Look on your channel")), "{:?}", got.error);
+        // No upload opened: nothing reached Google, nothing is asked.
+        let before = seen.lock().unwrap().len();
+        let c = with_db(&engine, |db| Ok(sample_clip(db, vod))).unwrap();
+        recover(&engine, &c);
+        assert_eq!(state(c.id).state, ClipState::Scheduled);
+        assert_eq!(seen.lock().unwrap().len(), before);
+        use_fake(None);
     }
 
     #[test]
