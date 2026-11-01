@@ -2919,7 +2919,7 @@ mod tests {
             let d = ctx().today.checked_sub(jiff::Span::new().days(i / 2)).unwrap();
             if i % 14 == 0 { tx(10_000 + i, "INCOME", 215000, &d.to_string(), Some("Salary"), "Salaire") } else { tx(10_000 + i, "EXPENSE", 1000, &d.to_string(), None, "Café") }
         }).collect();
-        let ledger = json!({"transactions": rows.clone(), "spent": 99_999_00, "income": 88_888_00});
+        let ledger = json!({"transactions": rows.clone(), "spent": 9_999_900, "income": 8_888_800});
         let text = render("money.summary", &json!({}), &summary(), &[None, None, None, None, None, None, None, Some(ledger.clone())], &ctx()).unwrap();
         assert!(text.contains("THIS YEAR (calendar year 2026"), "this year is whole: {text}");
         for gone in ["THE WHOLE LEDGER", "Pays (Salary)", "Pay (Salary) per pay"] {
