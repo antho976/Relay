@@ -4,7 +4,9 @@
 The parts that need ffmpeg (loudness, the whole candidates run) are skipped without it.
 """
 
+import contextlib
 import importlib.util
+import io
 import json
 import shutil
 import subprocess
@@ -122,6 +124,52 @@ class CutEdges(unittest.TestCase):
         levels = [-15.0] * 300
         e = sc.check_edge(levels, [{"startMs": 0, "endMs": 3000}], 1.5, "end")
         self.assertTrue(e["harsh"] and not e["fixable"])
+
+    def cuts(self, keep):
+        """`cuts` over these levels, as the skill runs it, with what it printed."""
+        args = sc.argparse.Namespace(keep=json.dumps(keep), words=None, media="section.mp4", runs_on=False, strict=False)
+        saved, sc.speech_levels = sc.speech_levels, lambda _media: self.levels
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                args.words = str(Path(d) / "words.json")
+                Path(args.words).write_text(json.dumps(self.words))
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    sc.cmd_cuts(args)
+                return json.loads(out.getvalue())
+        finally:
+            sc.speech_levels = saved
+
+    def test_a_keep_in_the_kits_milliseconds_is_checked_not_passed_unheard(self):
+        # keepSpeech's spans are milliseconds: read as seconds, every edge lay past the sound's end,
+        # where it is silent, and the clip passed with a word cut off.
+        result = self.cuts([[0, 1300]])
+        self.assertEqual(result["keep_unit"], "ms")
+        self.assertFalse(result["ok"], result)
+        end = result["keep"][0][1]
+        self.assertTrue(1530 <= end < 1970 and isinstance(end, int), result["keep"])
+        self.assertEqual(self.cuts([[0, 1.3]])["keep_unit"], "s")
+        self.assertTrue(self.cuts([[0, 1.75]])["ok"])
+
+    def test_a_keep_past_the_end_is_refused(self):
+        with self.assertRaises(SystemExit):
+            self.cuts([[0, 9000.0 * 1000]])
+
+
+class Fetch(unittest.TestCase):
+    def test_the_url_is_never_read_as_an_option(self):
+        calls = []
+        saved = sc.need, sc.run
+        sc.need, sc.run = (lambda _name: "yt-dlp"), (lambda cmd, timeout=None: calls.append(cmd))
+        try:
+            with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()):
+                for section in (None, ["0:10-0:20"]):
+                    sc.cmd_fetch(sc.argparse.Namespace(url="--exec=touch pwned", out=d, cookies=None, section=section, format="best"))
+        finally:
+            sc.need, sc.run = saved
+        self.assertEqual(len(calls), 2)
+        for cmd in calls:
+            self.assertEqual(cmd[-2:], ["--", "--exec=touch pwned"], cmd)
 
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")

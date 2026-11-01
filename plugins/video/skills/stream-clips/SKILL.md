@@ -51,7 +51,7 @@ stop: **never install, download or build tools yourself.**
 | `candidates --transcript words.json --signals signals.json --out candidates.json` | The 25 strongest moments, at least 75 s apart. Each has its peak, a window, why it scored (`chat`, `loud`, `hype`, `talk`) and the transcript around it. Chat is moved back 6 s for its lag. |
 | `words --transcript words.json --start S --end E --out FILE` | One clip's words, timed from 0. |
 | `cut VIDEO --start S --end E --out FILE` | A part of a local recording, re-encoded from the exact frame at a constant rate. |
-| `cuts SECTION --words W --keep '[[a,b],…]' --runs-on --strict` | Every edge of a clip's kept spans against the sound and the words: a cut inside a word or on a loud sound is `harsh`, with the quiet point to `move_to`. Answers the fixed `keep`. |
+| `cuts SECTION --words W --keep '[[a,b],…]' --runs-on --strict` | Every edge of a clip's kept spans against the sound and the words: a cut inside a word or on a loud sound is `harsh`, with the quiet point to `move_to`. Answers the fixed `keep`, in the unit given: seconds of the section, or the kit's milliseconds (`keepSpeech`'s). |
 | `style VIDEO… --out DIR` | For a reference channel's Shorts: length, cuts a minute, median shot, loudness, and a contact sheet of each to look at. |
 
 Keep a VOD's files in `videos/p<project>/vods/<vod id>/`, where you may write. Delete that VOD's

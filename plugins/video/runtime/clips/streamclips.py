@@ -159,12 +159,13 @@ def cmd_fetch(args):
             a, b = (secs(x) for x in section.split("-", 1))
             name = f"%(id)s-{int(a)}-{int(b)}.%(ext)s"
             run([ytdlp, "--no-progress", "--no-playlist", "-f", args.format, "--download-sections", f"*{a}-{b}", "--force-keyframes-at-cuts",
-                 "-o", str(out / name), *(["--cookies", args.cookies] if args.cookies else []), args.url])
+                 "-o", str(out / name), *(["--cookies", args.cookies] if args.cookies else []), "--", args.url])
             files.append(section)
         emit({"sections": files, "files": sorted(p.name for p in out.iterdir())})
         return
     # The audio alone (a few hundred MB for hours) and the chat replay, never the whole picture.
-    run(common + ["-f", "Audio_Only/bestaudio/worst", "--write-info-json", "--write-subs", "--sub-langs", "rechat,live_chat", args.url])
+    # After `--`, a "URL" that starts with a dash is a URL, not an option (`--exec`).
+    run(common + ["-f", "Audio_Only/bestaudio/worst", "--write-info-json", "--write-subs", "--sub-langs", "rechat,live_chat", "--", args.url])
     files = sorted(p.name for p in out.iterdir())
     info = next((out / f for f in files if f.endswith(".info.json")), None)
     meta = {}
@@ -550,21 +551,36 @@ def check_edge(levels, words, t, kind, reach=1.0, inward=0.15):
             "fixable": there <= floor and not (in_word(words, best) and there > -60)}
 
 
+def keep_unit(keep, length_s):
+    """1 when `keep`'s edges are seconds of a sound `length_s` long, 1000 when they are the kit's
+    milliseconds (keepSpeech's `[startMs, endMs]`). An edge past the end reads as silence there,
+    so a keep in the wrong unit would pass every edge unheard: one that fits neither is refused."""
+    edges = [float(x) for span in keep for x in span]
+    if not edges or max(edges) <= length_s + 1:
+        return 1
+    if max(edges) / 1000 <= length_s + 1:
+        return 1000
+    sys.exit(f"--keep runs to {max(edges):g}, past the end of the sound ({length_s:.1f} s): give its spans in seconds (or the kit's milliseconds) of this file")
+
+
 def cmd_cuts(args):
     keep = json.loads(args.keep)
     words = json.loads(Path(args.words).read_text()) if args.words else []
     levels = speech_levels(args.media)
+    unit = keep_unit(keep, len(levels) * FRAME_S)
+    # The fixed keep comes back in the unit it was given in.
+    back = (lambda s: round(s * 1000)) if unit == 1000 else (lambda s: s)
     edges, fixed = [], []
     for i, (a, b) in enumerate(keep):
-        s = check_edge(levels, words, float(a), "start")
-        e = check_edge(levels, words, float(b), "end")
+        s = check_edge(levels, words, float(a) / unit, "start")
+        e = check_edge(levels, words, float(b) / unit, "end")
         if args.runs_on and i == len(keep) - 1:
             e.update(kind="end (runs on)", harsh=False)  # the clip plays on past it, fading out
         edges += [s, e]
-        fixed.append([s["move_to"] if s["harsh"] else a, e["move_to"] if e["harsh"] else b])
+        fixed.append([back(s["move_to"]) if s["harsh"] else a, back(e["move_to"]) if e["harsh"] else b])
     harsh = [x for x in edges if x["harsh"]]
     stuck = [x for x in harsh if not x["fixable"]]
-    emit({"ok": not harsh, "harsh": len(harsh), "stuck": len(stuck), "edges": edges, "keep": fixed,
+    emit({"ok": not harsh, "harsh": len(harsh), "stuck": len(stuck), "edges": edges, "keep": fixed, "keep_unit": "ms" if unit == 1000 else "s",
           "next": "Use `keep`. A `stuck` edge has no quiet point near it: end that span at another sentence." if harsh else None})
     if args.strict and harsh:
         sys.exit(1)
@@ -638,7 +654,7 @@ def main():
     y.add_argument("--out", required=True)
     e = sub.add_parser("cuts", help="check a clip's cut edges against the sound and the words")
     e.add_argument("media", help="the section the clip is cut from")
-    e.add_argument("--keep", required=True, help='the kept spans in seconds of the section, as JSON: [[a, b], ...]')
+    e.add_argument("--keep", required=True, help='the kept spans of the section, as JSON: [[a, b], ...], in seconds or in the kit\'s milliseconds (keepSpeech\'s); `keep` answers in the same unit')
     e.add_argument("--words", help="the section's words (from `words`)")
     e.add_argument("--runs-on", action="store_true", help="the clip plays on past its last span (an end card): that end is not a cut")
     e.add_argument("--strict", action="store_true", help="exit 1 when an edge is harsh")

@@ -280,11 +280,12 @@ impl Clock {
         Clock { today, start_day }
     }
 
-    /// `month`/`day` in the most recent year it is not well after today.
+    /// `month`/`day` in the most recent year it is not well after today (Feb 29 of a year without
+    /// one is Feb 28).
     fn day(&self, month: i8, day: i8) -> Option<Date> {
         let y = self.today.year();
         let d = Date::new(y, month, day).ok()?;
-        if d <= self.today.checked_add(60.days()).ok()? { Some(d) } else { Date::new(y - 1, month, day.min(28)).ok() }
+        if d <= self.today.checked_add(60.days()).ok()? { Some(d) } else { Date::new(y - 1, month, day).or_else(|_| Date::new(y - 1, month, 28)).ok() }
     }
 
     /// A calendar month, the most recent one that has begun, to today at most.
@@ -595,7 +596,8 @@ fn reply_spans(text: &str, start: usize, end: usize, clock: &Clock) -> Vec<Span>
         let cells: Vec<&str> = line.split('|').collect();
         let col = text[line_start..start].matches('|').count();
         let mut out = spans(cells.get(1).copied().unwrap_or(""), clock);
-        let head = text[..line_start].lines().find(|l| l.trim_start().starts_with('|') && !RULE_ROW.is_match(l));
+        // Its own table's head: the first of the rows right above it, not an earlier table's.
+        let head = text[..line_start].lines().rev().take_while(|l| l.trim_start().starts_with('|')).filter(|l| !RULE_ROW.is_match(l)).last();
         if let Some(cell) = head.and_then(|h| h.split('|').nth(col)) {
             out.extend(spans(cell, clock));
         }
@@ -825,6 +827,27 @@ mod tests {
         assert_eq!(spans("depuis le 1er août", &clock), [(d(8, 1), d(9, 18))]);
         assert!(spans("then after it to today 12 runs", &clock).is_empty());
         assert!(spans("you may want to", &clock).is_empty() && spans("the heaviest ever lifted", &clock).is_empty());
+    }
+
+    /// A day of last year keeps its day: Dec 31 is not Dec 28 (only Feb 29 has none to keep).
+    #[test]
+    fn a_day_of_last_year_is_that_day() {
+        let clock = Clock::of(&[SUMMARY], today());
+        let d = |y, m, day| Date::new(y, m, day).unwrap();
+        assert_eq!(spans("Dec 31 to Jan 5", &clock), [(d(2025, 12, 31), d(2026, 1, 5))]);
+        assert_eq!(describe(spans("Dec 31 to Jan 5", &clock)[0], today()), "Dec 31 2025 to Jan 5");
+        let leap = Clock { today: d(2028, 9, 18), start_day: 1 };
+        assert_eq!(leap.day(2, 29), Some(d(2028, 2, 29)));
+        assert_eq!(Clock { today: d(2029, 1, 10), start_day: 1 }.day(12, 31), Some(d(2028, 12, 31)));
+    }
+
+    /// A figure in a second table takes its column's days from that table's head, not the first's.
+    #[test]
+    fn a_table_s_figures_are_read_under_their_own_head() {
+        let reply = "| Category | Jun 15 to Jul 14 |\n|---|---|\n| All | $3,042.30 |\n\n| Category | Jul 15 to Aug 14 |\n|---|---|\n| All | $3,099.81 |\n";
+        assert!(check(reply, &[SUMMARY], "spending by month?", today()).is_empty(), "{:?}", check(reply, &[SUMMARY], "spending by month?", today()));
+        let swapped = "| Category | Jun 15 to Jul 14 |\n|---|---|\n| All | $3,099.81 |\n\n| Category | Jul 15 to Aug 14 |\n|---|---|\n| All | $3,042.30 |\n";
+        assert_eq!(check(swapped, &[SUMMARY], "spending by month?", today()).len(), 2);
     }
 
     #[test]
