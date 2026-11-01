@@ -237,7 +237,12 @@ pub fn register(e: &mut Engine) {
     e.register_unlocked::<RunGet>(|ctx, p| with_db(ctx.engine(), |db| db.run(p.id))?.ok_or_else(|| not_found("run", p.id)));
     e.register::<RunFinish>(|ctx, p| {
         let thread = ctx.thread().ok_or_else(|| BusError::refused("aide.agent", "aide.run.finish is Aide's agent's, for the run that woke it"))?;
-        let r = runs::finish(ctx.engine(), thread, p.outcome, p.note.as_deref())?;
+        let mut r = runs::finish(ctx.engine(), thread, p.outcome, p.note.as_deref())?;
+        // What woke it, when written from private data, was kept from its wake on Claude's: so
+        // it is from the answer.
+        if !runs::reads_private(ctx.engine(), Some(thread)) && with_db(ctx.engine(), |db| db.run_trigger_is_private(r.id))? {
+            r.trigger = String::new();
+        }
         ctx.emit("aide.changed", json!({"what": "run", "id": r.id}));
         ctx.after_commit(runs::advance_soon);
         Ok(r)

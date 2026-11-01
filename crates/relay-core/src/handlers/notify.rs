@@ -59,6 +59,9 @@ fn list(
 ) -> Result<Vec<Notification>, relay_bus::BusError> {
     let mut sql = String::from("SELECT * FROM notifications WHERE 1=1");
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if !aide_shown(ctx) {
+        sql.push_str(" AND category!='aide'");
+    }
     if let Some(project_id) = project_id {
         sql.push_str(" AND project_id=?");
         args.push(Box::new(project_id));
@@ -91,21 +94,22 @@ fn list(
 fn unread(ctx: &Ctx, project_id: Option<i64>, category_: Option<NotifyCategory>) -> Result<i64, relay_bus::BusError> {
     let category_ = category_.map(category_str);
     let sql = match (project_id.is_some(), category_.is_some()) {
-        (false, false) => "SELECT COUNT(*) FROM notifications WHERE read=0",
-        (true, false) => "SELECT COUNT(*) FROM notifications WHERE read=0 AND project_id=?1",
-        (false, true) => "SELECT COUNT(*) FROM notifications WHERE read=0 AND category=?2",
-        (true, true) => "SELECT COUNT(*) FROM notifications WHERE read=0 AND project_id=?1 AND category=?2",
+        (false, false) => "SELECT COUNT(*) FROM notifications WHERE read=0 AND (?3 OR category!='aide')",
+        (true, false) => "SELECT COUNT(*) FROM notifications WHERE read=0 AND project_id=?1 AND (?3 OR category!='aide')",
+        (false, true) => "SELECT COUNT(*) FROM notifications WHERE read=0 AND category=?2 AND (?3 OR category!='aide')",
+        (true, true) => "SELECT COUNT(*) FROM notifications WHERE read=0 AND project_id=?1 AND category=?2 AND (?3 OR category!='aide')",
     };
-    let mut stmt = ctx.tx().prepare_cached(sql).bus()?;
     // Unused numbered parameters are still bound: SQLite numbers them up to the highest used.
-    let count = if category_.is_some() {
-        stmt.query_row(rusqlite::params![project_id, category_], |row| row.get(0))
-    } else if project_id.is_some() {
-        stmt.query_row([project_id], |row| row.get(0))
-    } else {
-        stmt.query_row([], |row| row.get(0))
-    };
-    count.bus()
+    let mut stmt = ctx.tx().prepare_cached(sql).bus()?;
+    stmt.query_row(rusqlite::params![project_id, category_, aide_shown(ctx)], |row| row.get(0)).bus()
+}
+
+/// Whether the caller is handed Aide's notifications: an interrupt's title and body are what a
+/// bot said, which one on the person's own model may have written from data for their own models
+/// only (docs/AIDE.md). The person sees them, as does an agent on their own model; one on Claude's
+/// (Aide's own, the assistant) does not (`aide::runs::reads_private`).
+fn aide_shown(ctx: &Ctx) -> bool {
+    crate::aide::runs::reads_private(ctx.engine(), ctx.thread())
 }
 
 /// The one project an agent sees (D106; BUS.md §9.1 layer 2), or `None` for a person, who sees

@@ -684,3 +684,65 @@ fn a_run_ends_with_its_own_turn_when_the_person_writes_right_after() {
     let got = run(&engine, &r["id"]);
     assert_eq!(got["state"], "done", "its own turn is over, whatever the person does next: {got}");
 }
+
+#[test]
+fn an_interrupt_your_own_model_wrote_is_not_in_a_wake_on_claude() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine();
+    relay_core::aide::spawn(&engine);
+    with_fake(&engine, dir.path());
+    let listener = own_server(&engine);
+    let mut settings = ok(&engine, "aide.settings.get", json!({}));
+    (settings["quiet_start"], settings["quiet_end"]) = (json!(0), json!(0));
+    ok(&engine, "aide.settings.set", settings);
+
+    let local = job(&engine, json!({"name": "Spending", "instructions": "Look at my spending.", "sources": ["money"], "model": "farm"}));
+    let mine = ended(&engine, &ok(&engine, "aide.run.now", json!({"job_id": local["id"]}))["id"])["thread_id"].clone();
+    let said = from_agent(&engine, &mine, "aide.notify", json!({"title": "SECRET412 at Costco", "body": "SECRET413", "level": "interrupt"})).into_result().unwrap();
+    assert_eq!(said["notified"], true, "{said}");
+    assert!(ok(&engine, "notify.list", json!({}))["notifications"].to_string().contains("SECRET412"), "the person's bell rings");
+
+    // A run on Claude's reading Relay's dev data, unread notices among it, is not handed it.
+    let dev = job(&engine, json!({"name": "Dev watch", "instructions": "Look.", "sources": ["dev"], "model": "claude-haiku-5-5"}));
+    let done = ended(&engine, &ok(&engine, "aide.run.now", json!({"job_id": dev["id"]}))["id"]);
+    assert_eq!(done["host"], "claude", "{done}");
+    let wake = ok(&engine, "thread.get", json!({"id": done["thread_id"]}))["messages"][0]["body"]["text"].as_str().unwrap().to_string();
+    assert!(wake.contains("## Relay") && !wake.contains("SECRET41"), "{wake}");
+    drop(listener);
+}
+
+#[test]
+fn a_rule_on_a_source_turned_off_wakes_nothing_and_after_speaks_only_of_what_is_new() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine();
+    with_fake(&engine, dir.path());
+    let set_money = |tier: &str| {
+        let mut settings = ok(&engine, "aide.settings.get", json!({}));
+        settings["tiers"]["money"] = json!(tier);
+        ok(&engine, "aide.settings.set", settings);
+    };
+    let account = ok(&engine, "money.account.add", json!({"name": "Chequing", "type": "CHEQUING", "opening_balance": 500_000}));
+    let today = jiff::Zoned::now().date().to_string();
+    let add = |amount: i64, note: &str| ok(&engine, "money.tx.add", json!({"type": "EXPENSE", "amount": amount, "date": today, "account_id": account["id"], "note": note}));
+    let j = job(&engine, json!({"name": "Big spends", "instructions": "Tell me about it.", "rules": [{"kind": "spend", "over": 200}], "model": "claude-haiku-5-5"}));
+    relay_core::aide::rules::baseline(&engine, &relay_core::aide::with_db(&engine, |db| db.job(j["id"].as_i64().unwrap())).unwrap().unwrap());
+    let changed = std::collections::BTreeSet::from(["money.changed".to_string()]);
+    let runs = || ok(&engine, "aide.run.list", json!({"job_id": j["id"]}))["runs"].as_array().unwrap().clone();
+
+    // Tally turned off for every model: what the rule finds would be its run's trigger, which
+    // Claude's reads.
+    set_money("off");
+    add(25_000, "SECRET412 TV");
+    relay_core::aide::rules::check(&engine, &changed);
+    assert!(runs().is_empty(), "{:?}", runs());
+    // Back on, it speaks of what happens next, not of what it found while off.
+    set_money("any");
+    relay_core::aide::rules::check(&engine, &changed);
+    assert!(runs().is_empty(), "{:?}", runs());
+    add(30_000, "New couch");
+    relay_core::aide::rules::check(&engine, &changed);
+    let runs = runs();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    let trigger = runs[0]["trigger"].as_str().unwrap();
+    assert!(trigger.contains("New couch") && !trigger.contains("SECRET412"), "{trigger}");
+}
