@@ -80,6 +80,10 @@ ALTER TABLE clip ADD COLUMN upload TEXT;
 r#"
 ALTER TABLE clip ADD COLUMN auto_ok INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE clip ADD COLUMN file_sha TEXT;
+"#,
+// `stage_at`: when the VOD's stage began, for how long it has left (`eta_s`).
+r#"
+ALTER TABLE vod ADD COLUMN stage_at TEXT;
 "#];
 
 /// The footage a clip is drawn from: a part of the VOD cut out with handles, in the video's
@@ -114,7 +118,9 @@ const VOD_COLS: &str = "v.id, v.project_id, v.title, v.source, v.streamer, v.dur
     (SELECT COUNT(*) FROM clip c WHERE c.vod_id = v.id AND c.state != 'rejected'),
     (SELECT COUNT(*) FROM clip c WHERE c.vod_id = v.id AND c.state = 'ready'),
     (SELECT COUNT(*) FROM clip c WHERE c.vod_id = v.id AND c.state IN ('approved', 'scheduled', 'posting')),
-    (SELECT COUNT(*) FROM clip c WHERE c.vod_id = v.id AND c.state = 'posted')";
+    (SELECT COUNT(*) FROM clip c WHERE c.vod_id = v.id AND c.state = 'posted'),
+    v.stage_at,
+    (SELECT COUNT(*) FROM clip c WHERE c.vod_id = v.id AND c.state IN ('draft', 'rendering'))";
 
 fn vod_row(r: &Row) -> Result<Vod> {
     Ok(Vod {
@@ -144,6 +150,12 @@ fn vod_row(r: &Row) -> Result<Vod> {
         clips_ready: r.get(23)?,
         clips_approved: r.get(24)?,
         clips_posted: r.get(25)?,
+        eta_s: None,
+    }).map(|mut v| {
+        let stage_at: Option<String> = r.get(26).ok().flatten();
+        let to_draw: u32 = r.get(27).unwrap_or(0);
+        v.eta_s = super::eta::left(&v, stage_at.as_deref(), to_draw, jiff::Timestamp::now());
+        v
     })
 }
 
@@ -265,7 +277,7 @@ impl ClipsDb {
     }
 
     pub fn set_stage(&self, id: i64, stage: Option<Stage>, progress: f64, detail: Option<&str>, now: &str) -> Result<()> {
-        self.conn.prepare_cached("UPDATE vod SET stage = ?2, progress = ?3, detail = ?4, updated_at = ?5 WHERE id = ?1")?
+        self.conn.prepare_cached("UPDATE vod SET stage = ?2, progress = ?3, detail = ?4, updated_at = ?5, stage_at = ?5 WHERE id = ?1")?
             .execute(params![id, stage.map(Stage::name), progress.clamp(0.0, 1.0), detail, now])?;
         Ok(())
     }

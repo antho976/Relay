@@ -51,6 +51,18 @@ fn ends_sentence(w: &W) -> bool {
     t.ends_with(['.', '!', '?']) || t.ends_with("…")
 }
 
+/// Where the first sentence opening at or after `t` (seconds) starts, just before its first
+/// word, when one opens before `limit`.
+pub fn open_after(words: &[W], t: f64, limit: f64) -> Option<f64> {
+    let from = words.partition_point(|w| w.start_ms < t * 1000.0);
+    (from..words.len()).take_while(|&j| words[j].start_ms < limit * 1000.0)
+        .find(|&j| j == 0 || ends_sentence(&words[j - 1]) || words[j].start_ms - words[j - 1].end_ms >= 1200.0)
+        .map(|j| {
+            let floor = if j > 0 { words[j - 1].end_ms + 30.0 } else { 0.0 };
+            (words[j].start_ms - 160.0).max(floor).max(0.0) / 1000.0
+        })
+}
+
 /// `[start, end]` (seconds) moved onto the words: the start just before a word that opens a
 /// sentence (looking back at most `reach` seconds for one), the end just after a word that closes
 /// one (looking on at most `reach`), never inside a word.

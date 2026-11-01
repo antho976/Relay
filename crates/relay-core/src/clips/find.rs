@@ -5,6 +5,13 @@
 //! It runs through the person's own Claude account (`claude -p`, as Threads does), with no tools
 //! and a JSON schema for its answer. Parts of the stream are read side by side, a few at once;
 //! the moments found are put together, overlaps dropped, and the best kept.
+//!
+//! What a read costs is mostly the transcript, so it is written tight: each line stamped with its
+//! whole second in the VOD (`[6081]`, a third of the tokens `[1:41:21.5]` takes, and lengths are
+//! a subtraction), short interjections ("Yeah.", "Okay.") joined to the line before, and the
+//! prompt cache off: each part is read once, and a cache write bills twice what a read does.
+//! On the IdleOn VOD's first 40 minutes that is 9,303 input tokens billed once, from 11,631
+//! written to the one-hour cache (`docs/CLIPS.md`, Readings).
 
 use super::edit::W;
 use super::{clock, seconds, Halt, Step};
@@ -44,7 +51,8 @@ pub struct Moment {
     pub why: String,
 }
 
-/// A line of the transcript for reading: a sentence, or up to 14 s of speech.
+/// A line of the transcript for reading: a sentence (with any short interjection after it), or
+/// up to 14 s of speech.
 #[derive(Debug, Clone)]
 pub struct Line {
     pub start: f64,
@@ -77,7 +85,21 @@ pub fn lines(words: &[W]) -> Vec<Line> {
         }
     }
     flush(&mut cur, &mut out);
-    out
+    // "Yeah." on a line of its own costs a stamp for nothing a Short starts on: it joins the line
+    // before when it follows at once.
+    let mut joined: Vec<Line> = Vec::with_capacity(out.len());
+    for l in out {
+        if let Some(prev) = joined.last_mut() {
+            if l.text.split_whitespace().count() <= 2 && l.start - prev.end <= 0.9 && l.end - prev.start <= 14.0 {
+                prev.end = l.end;
+                prev.text.push(' ');
+                prev.text.push_str(&l.text);
+                continue;
+            }
+        }
+        joined.push(l);
+    }
+    joined
 }
 
 /// The seconds that stand out, from `streamclips.py candidates`: (second, what was loud).
@@ -109,12 +131,12 @@ pub fn parts(duration: f64) -> Vec<(f64, f64)> {
     (0..n).map(|i| ((i as f64 * step - OVERLAP_S).max(0.0), ((i + 1) as f64 * step).min(duration))).collect()
 }
 
-/// The transcript of `[from, to)` as the finder reads it: `[h:mm:ss] text`, with the loud
-/// seconds marked at the end of their line.
+/// The transcript of `[from, to)` as the finder reads it: `[second] text`, the second in the VOD,
+/// with the loud seconds marked at the end of their line.
 pub fn transcript(lines: &[Line], peaks: &[(f64, String)], from: f64, to: f64) -> String {
     let mut out = String::new();
     for l in lines.iter().filter(|l| l.end >= from && l.start < to) {
-        out.push_str(&format!("[{}] {}", clock_tenths(l.start), l.text));
+        out.push_str(&format!("[{}] {}", l.start.floor() as u64, l.text));
         let marks: Vec<&str> = peaks.iter().filter(|(t, _)| *t >= l.start - 1.0 && *t <= l.end + 1.0).map(|(_, m)| m.as_str()).collect();
         if !marks.is_empty() {
             out.push_str(&format!("  ⟨{}⟩", marks.join("; ")));
@@ -122,11 +144,6 @@ pub fn transcript(lines: &[Line], peaks: &[(f64, String)], from: f64, to: f64) -
         out.push('\n');
     }
     out
-}
-
-fn clock_tenths(s: f64) -> String {
-    let whole = clock(s.floor());
-    format!("{whole}.{}", ((s - s.floor()) * 10.0).floor() as u32)
 }
 
 pub const PROMPT: &str = r#"You are the editor of a YouTube Shorts channel that clips a streamer's VODs. You read a part of a stream's transcript and pick the moments that would make great vertical Shorts. You write each one's title and opening hook, and you judge each honestly.
@@ -141,9 +158,12 @@ Prefer: game talk and tips explained clearly (guides), funny reactions and bits,
 
 Kinds: funny (a joke, a bit, a funny reaction), fail (something going wrong), story (a story told), guide (a tip or how something works, complete with its reason), hype (a big win, a rare drop, a clutch), wholesome, rage (frustration, a rant), other.
 
+Every line of the transcript starts with its time in whole seconds into the VOD: [6081] is 1:41:21. Answer every time the same way, as a number of seconds into the VOD.
+
 For each moment:
-- start: the time of the first word of the hook, end: the time of the last word of the payoff, from the transcript's stamps;
+- start: the second the first word of the hook is said, end: the second just after the last word of the payoff;
 - cut: optional parts inside the moment to drop (a digression, reading chat), so what is left still flows;
+- the clip's length is end minus start minus its cuts, and it must fit the lengths asked for: when a moment runs long, cut from its middle, never end it before the payoff;
 - teaser: optional, 1 to 4 seconds of the payoff played first as a cold open, only when it makes the opening stronger;
 - title: what happens, in a fan editor's voice, under 60 characters, one or two key words in CAPITALS, no emoji, never generic ("INSANE moment", "You won't believe");
 - hook: the line written across the top for the first two seconds, 3 to 7 words, teasing the payoff without giving it away;
@@ -152,13 +172,13 @@ For each moment:
 - emphasis: 3 to 8 words actually said in the moment that carry it, to colour in the captions;
 - punch: optional, the time of the one line to zoom in on;
 - layout: "split" (facecam over gameplay: reactions), "fit" (the whole screen: when what is on screen matters, as in most guides), "cam" (only the face: pure talking or a story), "game" (only the game);
-- score: 9-10 would do very well in the game's or the streamer's niche, 7-8 solid, 5-6 filler. Leave out anything under 5;
+- score: 9-10 would do very well in the game's or the streamer's niche, 7-8 solid, 6 filler. Leave out anything under 6: a weak moment written up is wasted;
 - why: one sentence on why it works.
 
 The transcript comes from speech recognition: names and game words can be misheard. Lines marked ⟨loud …⟩ are where the stream got loud (shouting, laughing, a reaction); ⟨chat …⟩ where chat spiked. They are hints, not proof. Answer only with moments inside this part of the transcript."#;
 
 fn schema() -> Value {
-    let time = json!({"type": "string", "description": "h:mm:ss.s from the transcript"});
+    let time = json!({"type": "number", "description": "seconds into the VOD, as the transcript's stamps"});
     json!({
         "type": "object",
         "properties": {
@@ -193,20 +213,20 @@ pub fn ask(s: &Settings, vod: &Vod, request: &str, kinds: &[Kind], taken: &[(f64
     if !s.platform.is_empty() {
         out.push_str(&format!(" (live on {})", s.platform));
     }
-    out.push_str(&format!(".\nThis part: {} to {} of {}.\n", clock(part.0), clock(part.1), clock(vod.duration_s)));
+    out.push_str(&format!(".\nThis part: {} to {} of {} ({:.0} to {:.0} of {:.0} seconds).\n", clock(part.0), clock(part.1), clock(vod.duration_s), part.0.floor(), part.1.ceil(), vod.duration_s.ceil()));
     let request = request.trim();
     out.push_str(&format!("\nWhat the channel owner wants from this VOD: {}\n", if request.is_empty() { "the best moments of any kind" } else { request }));
     if !kinds.is_empty() && kinds.len() < Kind::ALL.len() {
         out.push_str(&format!("Kinds wanted: {}. Answer only these kinds.\n", kinds.iter().map(|k| k.name()).collect::<Vec<_>>().join(", ")));
     }
-    out.push_str(&format!("Length of a clip: {} to {} seconds, cuts included.\n", s.min_s, s.max_s));
+    out.push_str(&format!("Length of a clip: {} to {} seconds once its cuts are taken out.\n", s.min_s, s.max_s));
     if !s.terms.trim().is_empty() {
         out.push_str(&format!("Names and words that matter here (speech recognition may mishear them): {}\n", s.terms.trim()));
     }
     if !s.notes.trim().is_empty() {
         out.push_str(&format!("About the channel and its viewers: {}\n", s.notes.trim()));
     }
-    let near: Vec<String> = taken.iter().filter(|(a, b)| *b >= part.0 && *a <= part.1).map(|(a, b)| format!("{}–{}", clock(*a), clock(*b))).collect();
+    let near: Vec<String> = taken.iter().filter(|(a, b)| *b >= part.0 && *a <= part.1).map(|(a, b)| format!("{}–{}", a.floor(), b.ceil())).collect();
     if !near.is_empty() {
         out.push_str(&format!("Already clipped, do not answer these again: {}\n", near.join(", ")));
     }
@@ -217,7 +237,7 @@ pub fn ask(s: &Settings, vod: &Vod, request: &str, kinds: &[Kind], taken: &[(f64
 /// The moments in Claude's answer, read and checked against the part and the settings.
 pub fn read_answer(answer: &Value, part: (f64, f64), s: &Settings) -> Vec<Moment> {
     let Some(list) = answer["moments"].as_array() else { return Vec::new() };
-    let t = |v: &Value| v.as_str().and_then(seconds).or_else(|| v.as_f64());
+    let t = |v: &Value| v.as_f64().or_else(|| v.as_str().and_then(seconds));
     let pair = |v: &Value| -> Option<[f64; 2]> {
         let a = t(v.get(0)?)?;
         let b = t(v.get(1)?)?;
@@ -237,6 +257,12 @@ pub fn read_answer(answer: &Value, part: (f64, f64), s: &Settings) -> Vec<Moment
             return None;
         }
         let cut: Vec<[f64; 2]> = m["cut"].as_array().map(|c| c.iter().filter_map(pair).filter(|[a, b]| *a > start && *b < end).collect()).unwrap_or_default();
+        // What it plays, its cuts taken out: far past any clip is a misread, not a moment. One a
+        // little long is kept whole (its end is the payoff) and held to length when it is edited.
+        let played = (end - start) - cut.iter().map(|[a, b]| b - a).sum::<f64>();
+        if played > s.max_s as f64 * 2.0 + 30.0 {
+            return None;
+        }
         let teaser = pair(&m["teaser"]).filter(|[a, b]| b - a <= 6.0 && *a >= start && *b <= end + 1.0);
         let layout = match m["layout"].as_str() {
             Some("split") => Some(Layout::Split),
@@ -249,8 +275,6 @@ pub fn read_answer(answer: &Value, part: (f64, f64), s: &Settings) -> Vec<Moment
         if title.is_empty() {
             return None;
         }
-        let max = s.max_s as f64 + 20.0;
-        let end = if end - start > max { start + max } else { end };
         Some(Moment {
             kind: m["kind"].as_str().and_then(Kind::parse).unwrap_or(Kind::Other),
             start, end, cut, teaser, title,
@@ -312,6 +336,7 @@ fn read(engine: &Engine, vod_id: i64, dir: &Path, model: &str, message: &str) ->
     cmd.args(["-p", "--output-format", "json", "--model", model, "--system-prompt", PROMPT, "--tools", "", "--strict-mcp-config",
         "--setting-sources", "", "--no-session-persistence", "--json-schema", &schema().to_string()])
         .current_dir(dir);
+    no_cache(&mut cmd);
     let input = dir.join(format!(".find-{}.txt", uuid::Uuid::new_v4()));
     std::fs::write(&input, message).map_err(|e| Halt::Failed(format!("{}: {e}", input.display())))?;
     let file = std::fs::File::open(&input).map_err(|e| Halt::Failed(e.to_string()))?;
@@ -322,6 +347,7 @@ fn read(engine: &Engine, vod_id: i64, dir: &Path, model: &str, message: &str) ->
     if reply["is_error"].as_bool() == Some(true) {
         return Err(Halt::Failed(format!("Claude: {}", reply["result"].as_str().unwrap_or("it answered with an error"))));
     }
+    spent(vod_id, "find", &reply);
     if let Some(v) = reply.get("structured_output").filter(|v| v.is_object()) {
         return Ok(v.clone());
     }
@@ -329,6 +355,20 @@ fn read(engine: &Engine, vod_id: i64, dir: &Path, model: &str, message: &str) ->
     let text = reply["result"].as_str().unwrap_or("");
     let json = object_in(text).ok_or_else(|| Halt::Failed("Claude answered no moments".into()))?;
     serde_json::from_str(json).map_err(|e| Halt::Failed(format!("Claude's moments could not be read: {e}")))
+}
+
+/// A one-shot read runs with Claude Code's prompt cache off: nothing reads its prefix again, and
+/// writing it to the cache bills it twice over.
+pub fn no_cache(cmd: &mut Command) {
+    cmd.env("DISABLE_PROMPT_CACHING", "1");
+}
+
+/// What a read cost, from `claude -p`'s answer, in the log: the numbers the readings keep.
+pub fn spent(vod: i64, what: &str, reply: &Value) {
+    let u = &reply["usage"];
+    let n = |k: &str| u[k].as_u64().unwrap_or(0);
+    tracing::info!(vod, what, input = n("input_tokens"), cache_write = n("cache_creation_input_tokens"), cache_read = n("cache_read_input_tokens"),
+        output = n("output_tokens"), cost_usd = reply["total_cost_usd"].as_f64().unwrap_or(0.0), "clips: a Claude read");
 }
 
 /// The text from its first `{` to its last `}` (to its end when no `}` comes after the `{`).
@@ -487,7 +527,41 @@ mod tests {
     fn the_transcript_marks_loud_lines() {
         let lines = vec![Line { start: 61.0, end: 64.0, text: "No way!".into() }, Line { start: 70.0, end: 72.0, text: "Okay.".into() }];
         let text = transcript(&lines, &[(63.0, "loud +3.2".into())], 0.0, 100.0);
-        assert!(text.starts_with("[1:01.0] No way!  ⟨loud +3.2⟩\n"), "{text}");
-        assert!(text.contains("[1:10.0] Okay.\n"));
+        assert!(text.starts_with("[61] No way!  ⟨loud +3.2⟩\n"), "{text}");
+        assert!(text.contains("[70] Okay.\n"));
+    }
+
+    fn w(text: &str, start: f64, end: f64) -> W {
+        W { text: format!(" {text}"), start_ms: start * 1000.0, end_ms: end * 1000.0, timestamp_ms: None, confidence: None }
+    }
+
+    /// "Yeah." straight after a sentence costs a stamp for nothing: it joins the line before. One
+    /// after a pause, or a line of its own words, keeps its stamp.
+    #[test]
+    fn short_interjections_join_the_line_before() {
+        let words = vec![w("He", 10.0, 10.2), w("burned", 10.2, 10.6), w("it.", 10.6, 11.0), w("Yeah.", 11.2, 11.5),
+            w("Okay.", 15.0, 15.3), w("Then", 15.5, 15.7), w("the", 15.7, 15.8), w("dog", 15.8, 16.0), w("came.", 16.0, 16.4)];
+        let got: Vec<(u64, String)> = lines(&words).into_iter().map(|l| (l.start as u64, l.text)).collect();
+        assert_eq!(got, vec![(10, "He burned it. Yeah.".into()), (15, "Okay.".into()), (15, "Then the dog came.".into())]);
+    }
+
+    /// Times come back as seconds (the schema's numbers), still read from clock strings; a moment's
+    /// length is what it plays once its cuts are out, so a long span with a long cut is kept whole
+    /// instead of its end (the payoff) being cut off.
+    #[test]
+    fn a_long_span_with_its_middle_cut_keeps_its_end() {
+        let s = super::super::default_settings();
+        let answer = json!({"moments": [
+            {"kind": "rage", "start": 15000.8, "end": 15130.0, "cut": [[15036.8, 15125.7]], "title": "He DOUBLE-CLICKS", "hook": "h",
+             "description": "", "tags": [], "emphasis": [], "score": 7, "why": ""},
+            {"kind": "fail", "start": "0:10:05", "end": "0:10:40", "title": "Clock", "hook": "", "description": "", "tags": [], "emphasis": [], "score": 6, "why": ""},
+            {"kind": "fail", "start": 100.0, "end": 900.0, "title": "Misread", "hook": "", "description": "", "tags": [], "emphasis": [], "score": 9, "why": ""}
+        ]});
+        let got = read_answer(&answer, (14000.0, 16400.0), &s);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!((got[0].start, got[0].end), (15000.8, 15130.0));
+        assert_eq!(got[0].cut, vec![[15036.8, 15125.7]]);
+        let clock = read_answer(&answer, (0.0, 2400.0), &s);
+        assert_eq!(clock.iter().map(|m| m.start).collect::<Vec<_>>(), vec![605.0], "a span far past any clip is dropped");
     }
 }

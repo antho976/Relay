@@ -393,6 +393,10 @@ pub struct Vod {
     pub clips_ready: u32,
     pub clips_approved: u32,
     pub clips_posted: u32,
+    /// About how many seconds its work has left, while it is worked on or waits: the stage's own
+    /// pace once it has one, and each stage after it from this PC's readings (docs/CLIPS.md).
+    #[serde(default)]
+    pub eta_s: Option<f64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -620,13 +624,37 @@ pub struct Word {
     pub end_ms: u64,
 }
 
+payload!(#[schemars(rename = "ClipsClipGetIn")] ClipGetIn {
+    pub id: Id,
+    /// Every word with its own times (an editor's needs: about 60 bytes a word). Default false:
+    /// `transcript` alone says what is said, in a sixth of the size.
+    pub words: Option<bool>,
+});
 result!(#[schemars(rename = "ClipsClipOut")] ClipOut {
     pub clip: Clip,
     pub vod: Vod,
-    /// The transcript around it: from 20 s before its start to 20 s after its end.
+    /// The transcript from 20 s before its start to 20 s after its end, a line a sentence:
+    /// `[6081.5] text`, the second in the VOD (the edit's `keep` spans are in the same seconds).
+    pub transcript: String,
+    /// The same words one by one, when asked for (`words: true`); empty otherwise.
     pub words: Vec<Word>,
+    /// While it is drawn: how far, and about how long it has left.
+    pub drawing: Option<Drawing>,
 });
-op!(ClipGet, "clips.clip.get", IdIn => ClipOut, OpMeta::query(Scope::Global, 12, "One clip with its edit and the transcript around it").plugin(PLUGIN));
+
+/// A clip being drawn.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[schemars(rename = "ClipDrawing")]
+pub struct Drawing {
+    /// `cutting` (its footage is cut, or it waits for the drawer), `queued` (behind other
+    /// renders) or `drawing`.
+    pub phase: String,
+    /// 0 to 1, while drawing.
+    pub progress: f64,
+    /// About how many seconds are left.
+    pub eta_s: Option<f64>,
+}
+op!(ClipGet, "clips.clip.get", ClipGetIn => ClipOut, OpMeta::query(Scope::Global, 12, "One clip with its edit and the transcript around it (words: true for each word's times)").plugin(PLUGIN));
 
 payload!(#[schemars(rename = "ClipsClipListIn")] ClipListIn {
     /// One VOD's; every VOD's when absent.

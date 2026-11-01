@@ -8153,7 +8153,7 @@
       }
     },
     "clips.clip.get": {
-      "summary": "One clip with its edit and the transcript around it",
+      "summary": "One clip with its edit and the transcript around it (words: true for each word's times)",
       "kind": "query",
       "audit": "never",
       "undo": "none",
@@ -8164,7 +8164,7 @@
       "since": "1.0",
       "phase": 12,
       "payload": {
-        "$ref": "#/$defs/ClipsIdIn"
+        "$ref": "#/$defs/ClipsClipGetIn"
       },
       "result": {
         "$ref": "#/$defs/ClipsClipOut"
@@ -37836,6 +37836,15 @@
           "format": "uint32",
           "minimum": 0
         },
+        "eta_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "About how many seconds its work has left, while it is worked on or waits: the stage's own\npace once it has one, and each stage after it from this PC's readings (docs/CLIPS.md).",
+          "default": null
+        },
         "created_at": {
           "type": "string"
         },
@@ -38821,6 +38830,26 @@
         "layout"
       ]
     },
+    "ClipsClipGetIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "words": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Every word with its own times (an editor's needs: about 60 bytes a word). Default false:\n`transcript` alone says what is said, in a sixth of the size."
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
     "ClipsClipOut": {
       "type": "object",
       "properties": {
@@ -38830,17 +38859,33 @@
         "vod": {
           "$ref": "#/$defs/ClipVod"
         },
+        "transcript": {
+          "type": "string",
+          "description": "The transcript from 20 s before its start to 20 s after its end, a line a sentence:\n`[6081.5] text`, the second in the VOD (the edit's `keep` spans are in the same seconds)."
+        },
         "words": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/ClipWord"
           },
-          "description": "The transcript around it: from 20 s before its start to 20 s after its end."
+          "description": "The same words one by one, when asked for (`words: true`); empty otherwise."
+        },
+        "drawing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClipDrawing"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "While it is drawn: how far, and about how long it has left."
         }
       },
       "required": [
         "clip",
         "vod",
+        "transcript",
         "words"
       ]
     },
@@ -38867,6 +38912,33 @@
         "end_ms"
       ],
       "description": "A word of the transcript, in the VOD's milliseconds."
+    },
+    "ClipDrawing": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "type": "string",
+          "description": "`cutting` (its footage is cut, or it waits for the drawer), `queued` (behind other\nrenders) or `drawing`."
+        },
+        "progress": {
+          "type": "number",
+          "format": "double",
+          "description": "0 to 1, while drawing."
+        },
+        "eta_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "About how many seconds are left."
+        }
+      },
+      "required": [
+        "phase",
+        "progress"
+      ],
+      "description": "A clip being drawn."
     },
     "ClipsClipListIn": {
       "type": "object",
