@@ -602,6 +602,8 @@ pub struct Engine {
     pub(crate) gym: crate::gym::Shelf,
     /// Aide's file (`aide.db`, opened on first use) and what its scheduler and watcher share.
     pub(crate) aide: crate::aide::Shelf,
+    /// The Clips space's file (`clips.db`, opened on first use) and what its threads share.
+    pub(crate) clips: crate::clips::Shelf,
     /// Videos written as code: the Node worker, the kit's setup and the render queue (`video`).
     /// Its own locks; never the store's.
     pub video: crate::video::Hub,
@@ -653,6 +655,7 @@ impl Engine {
                 arbiter: Default::default(),
                 gym: Default::default(),
                 aide: Default::default(),
+                clips: Default::default(),
                 video: Default::default(),
             };
             crate::handlers::register_all(&mut engine);

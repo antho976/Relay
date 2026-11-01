@@ -132,7 +132,8 @@ fn bus_wait_matching_must_be_an_object() {
     assert!(validate(&serde_json::json!({"matching": [{"request_id": 7}]})).is_err());
 }
 
-/// pictures v2 §4.1: only the Pictures plugin's own ops carry it. The key is machine-wide and the
+/// pictures v2 §4.1: only the Pictures plugin's own ops carry it, and the Video plugin's (Clips'
+/// too: a VOD's clips are a video of it, docs/CLIPS.md). The key is machine-wide and the
 /// person's: its ops carry no plugin, admit no agent, and setting it writes no audit row. The
 /// Video plugin brings every `video.*` op but `video.kit.status`, which says whether the machine
 /// could render at all (D167), and the ElevenLabs key's, which are the person's as Pexels' are.
@@ -142,7 +143,8 @@ fn only_the_picture_and_video_ops_come_with_a_plugin() {
     let reg = Registry::global();
     for e in reg.entries() {
         let picture = ["design.picture.search", "design.picture.thumb", "design.picture.add"].contains(&e.name);
-        let video = e.name.starts_with("video.") && !["video.kit.status", "video.elevenlabs.key_set", "video.elevenlabs.key_remove"].contains(&e.name);
+        let video = (e.name.starts_with("video.") || e.name.starts_with("clips."))
+            && !["video.kit.status", "video.elevenlabs.key_set", "video.elevenlabs.key_remove"].contains(&e.name);
         let expected = if picture { Some("pictures") } else if video { Some("video") } else { None };
         assert_eq!(e.meta.plugin, expected, "{}", e.name);
     }
@@ -152,6 +154,10 @@ fn only_the_picture_and_video_ops_come_with_a_plugin() {
     }
     assert_eq!(reg.get("design.picture.key_set").unwrap().meta.audit, Audit::Never, "the payload is the key itself");
     assert_eq!(reg.get("video.elevenlabs.key_set").unwrap().meta.audit, Audit::Never, "the payload is the key itself");
+    assert_eq!(reg.get("clips.youtube.setup").unwrap().meta.audit, Audit::Never, "the payload holds the client's secret");
+    for op in ["clips.clip.post", "clips.clip.set", "clips.youtube.setup", "clips.youtube.connect", "clips.vod.delete", "clips.settings.set"] {
+        assert_eq!(reg.get(op).unwrap().meta.actors, Actors::UserOnly, "{op}: posting and the channel are the person's");
+    }
     assert_eq!(reg.get("design.picture.key_remove").unwrap().meta.audit, Audit::Always);
     // `{}` forgets nothing: the key is required.
     assert!((reg.get("design.picture.key_set").unwrap().validate)(&serde_json::json!({})).is_err());

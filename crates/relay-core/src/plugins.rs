@@ -517,10 +517,13 @@ mod tests {
             .filter(|entry| entry.meta.plugin == Some(plugin.id()))
             .map(|entry| entry.name)
             .collect();
-        assert_eq!(brought.len(), 31, "{brought:?}");
+        // The video.* ops, and Clips' (a VOD's clips are a video of it, docs/CLIPS.md).
+        assert_eq!(brought.len(), 54, "{brought:?}");
         let skill = plugin.skills.iter().find(|skill| skill.dir == "video-code").unwrap();
         for op in brought {
-            assert!(skill.body.contains(&format!("`{op} ")), "the skill does not show {op}");
+            let shown = |body: &str| body.contains(&format!("`{op} ")) || body.contains(&format!("`{op}`"));
+            let home = if op.starts_with("clips.") { plugin.skills.iter().find(|s| s.dir == "stream-clips").unwrap() } else { skill };
+            assert!(shown(&home.body), "the {} skill does not show {op}", home.dir);
         }
         assert!(skill.body.contains("`plugin.off`") && skill.body.contains("can_call"));
     }

@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 411,
+  "op_count": 434,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -7920,6 +7920,450 @@
       },
       "result": {
         "$ref": "#/$defs/AideChatOut"
+      }
+    },
+    "clips.summary": {
+      "summary": "Clips at a glance: the VOD being worked on, clips waiting for review, the next post, the YouTube account and any missing tool",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipsSummary"
+      }
+    },
+    "clips.tools": {
+      "summary": "What Clips needs on this PC (ffmpeg, whisper.cpp and its model, yt-dlp for links, Claude, the video kit) and how to install what is missing",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipsToolsOut"
+      }
+    },
+    "clips.settings.get": {
+      "summary": "The Clips settings: the streamer and their channel, the captions' look, clip lengths, the finder's model and posting",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipSettings"
+      }
+    },
+    "clips.settings.set": {
+      "summary": "Replace the Clips settings",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "clips.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipSettings"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipSettings"
+      }
+    },
+    "clips.vod.import": {
+      "summary": "Add a VOD (a file or a link) and start working on it: transcribe, find the moments asked for, cut, frame and render them",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "clips.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipsImportIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipVod"
+      }
+    },
+    "clips.vod.list": {
+      "summary": "Every VOD, newest first, with where its work stands and its clips counted",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipsVodsOut"
+      }
+    },
+    "clips.vod.get": {
+      "summary": "One VOD and its clips",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipsIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipsVodOut"
+      }
+    },
+    "clips.vod.find": {
+      "summary": "Look through a transcribed VOD again for other moments (\"more IdleOn tips\", \"the dog\"): new clips are added beside the ones it has",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "clips.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipsFindIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipVod"
+      }
+    },
+    "clips.vod.stop": {
+      "summary": "Stop a VOD's work; retry starts it again where it was",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "clips.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipsIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipVod"
+      }
+    },
+    "clips.vod.retry": {
+      "summary": "Start a failed or stopped VOD again from the stage it stopped at",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "clips.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipsIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipVod"
+      }
+    },
+    "clips.vod.delete": {
+      "summary": "Remove a VOD, its clips and its working files (the original file is never touched; posted clips stay on YouTube)",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "clips.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipsIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "clips.vod.layout": {
+      "summary": "Correct where a VOD's facecam and game are (or where the person stands), and optionally redraw its clips",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "clips.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipsLayoutSetIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipVod"
+      }
+    },
+    "clips.clip.get": {
+      "summary": "One clip with its edit and the transcript around it",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipsIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipsClipOut"
+      }
+    },
+    "clips.clip.list": {
+      "summary": "Clips, newest VOD first and best first in each: the review queue, what is scheduled, what was posted",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipsClipListIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipsClipsOut"
+      }
+    },
+    "clips.clip.update": {
+      "summary": "Change a clip's title, description, tags or edit (spans, framing, captions, hook); a changed edit is drawn again",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "clips.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipsClipUpdateIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Clip"
+      }
+    },
+    "clips.clip.render": {
+      "summary": "Draw a clip again from its edit",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "clips.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipsIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Clip"
+      }
+    },
+    "clips.clip.set": {
+      "summary": "Approve or reject a clip, or take it back to undecided",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "clips.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipsClipSetIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Clip"
+      }
+    },
+    "clips.clip.post": {
+      "summary": "Post a clip to the connected YouTube channel now, or schedule it",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "clips.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipsPostIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Clip"
+      }
+    },
+    "clips.clip.delete": {
+      "summary": "Remove a clip and its file (a posted clip stays on YouTube)",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "clips.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipsIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "clips.youtube.setup": {
+      "summary": "Save the Google OAuth client Relay signs in to YouTube with (kept in the desktop keyring)",
+      "kind": "mutation",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "clips.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/ClipsYoutubeSetupIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipYoutube"
+      }
+    },
+    "clips.youtube.status": {
+      "summary": "Whether a YouTube channel is connected, and which",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipYoutube"
+      }
+    },
+    "clips.youtube.connect": {
+      "summary": "Start signing in to YouTube: answers the page to open; clips.changed says when it is done",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "clips.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipsYoutubeConnectOut"
+      }
+    },
+    "clips.youtube.disconnect": {
+      "summary": "Forget the YouTube sign-in (the OAuth client stays saved)",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "clips.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/ClipYoutube"
       }
     }
   },
@@ -37176,6 +37620,1424 @@
       },
       "required": [
         "thread_id"
+      ]
+    },
+    "ClipsSummary": {
+      "type": "object",
+      "properties": {
+        "vods": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "working": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClipVod"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The VOD being worked on now."
+        },
+        "queued": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "to_review": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Clips waiting for the person's yes or no."
+        },
+        "approved": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "scheduled": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "posted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "next_post": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Clip"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The next clip to go out, and when."
+        },
+        "youtube": {
+          "$ref": "#/$defs/ClipYoutube"
+        },
+        "missing": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClipTool"
+          },
+          "description": "Missing tools: Clips cannot work until they are installed."
+        }
+      },
+      "required": [
+        "vods",
+        "queued",
+        "to_review",
+        "approved",
+        "scheduled",
+        "posted",
+        "youtube",
+        "missing"
+      ]
+    },
+    "ClipVod": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "title": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "description": "The file it came from, or its link."
+        },
+        "streamer": {
+          "type": "string"
+        },
+        "duration_s": {
+          "type": "number",
+          "format": "double"
+        },
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fps": {
+          "type": "number",
+          "format": "double"
+        },
+        "request": {
+          "type": "string",
+          "description": "What the person asked for, in their words."
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClipKind"
+          },
+          "description": "The kinds they asked for; empty is every kind."
+        },
+        "state": {
+          "$ref": "#/$defs/ClipVodState"
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClipStage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "progress": {
+          "type": "number",
+          "format": "double",
+          "description": "How far the stage is, 0 to 1."
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What the stage is doing now, in a few words."
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "layout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClipSourceLayout"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "video_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "The video its clips are compositions of."
+        },
+        "project_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "dir": {
+          "type": "string",
+          "description": "Where its files are."
+        },
+        "poster": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A frame of it, for its card."
+        },
+        "clips": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "clips_ready": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "clips_approved": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "clips_posted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "source",
+        "streamer",
+        "duration_s",
+        "width",
+        "height",
+        "fps",
+        "request",
+        "kinds",
+        "state",
+        "progress",
+        "project_id",
+        "dir",
+        "clips",
+        "clips_ready",
+        "clips_approved",
+        "clips_posted",
+        "created_at",
+        "updated_at"
+      ],
+      "description": "A VOD and where its work stands."
+    },
+    "ClipKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "funny",
+          "description": "A joke, a bit, a funny reaction."
+        },
+        {
+          "type": "string",
+          "const": "fail",
+          "description": "Something going wrong: a death, a burn, a misplay."
+        },
+        {
+          "type": "string",
+          "const": "story",
+          "description": "A story told on stream: life, family, the dog."
+        },
+        {
+          "type": "string",
+          "const": "guide",
+          "description": "A tip, an explanation, how something in the game works."
+        },
+        {
+          "type": "string",
+          "const": "hype",
+          "description": "A big win, a clutch, a rare drop: the stream's loud high."
+        },
+        {
+          "type": "string",
+          "const": "wholesome",
+          "description": "Warm, kind, a chat or family moment."
+        },
+        {
+          "type": "string",
+          "const": "rage",
+          "description": "Anger, frustration, a rant."
+        },
+        {
+          "type": "string",
+          "const": "other",
+          "description": "Anything else worth a Short."
+        }
+      ],
+      "description": "What kind of moment a clip is. The person asks for kinds; the finder labels each moment."
+    },
+    "ClipVodState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "queued",
+          "description": "Waiting for the VOD before it to finish."
+        },
+        {
+          "type": "string",
+          "const": "working",
+          "description": "A stage is running."
+        },
+        {
+          "type": "string",
+          "const": "ready",
+          "description": "Its clips are made: they wait for the person."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "A stage failed: `error` says why; `clips.vod.retry` starts again where it stopped."
+        },
+        {
+          "type": "string",
+          "const": "stopped",
+          "description": "The person stopped it."
+        }
+      ],
+      "description": "Where a VOD's work stands."
+    },
+    "ClipStage": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "probe",
+          "description": "Reading the file (or fetching a link's sound and details)."
+        },
+        {
+          "type": "string",
+          "const": "audio",
+          "description": "Taking its sound out."
+        },
+        {
+          "type": "string",
+          "const": "transcribe",
+          "description": "Every word with its time, on the GPU (whisper.cpp)."
+        },
+        {
+          "type": "string",
+          "const": "signals",
+          "description": "How loud each second is."
+        },
+        {
+          "type": "string",
+          "const": "layout",
+          "description": "Where the facecam and the game sit, or where the person stands."
+        },
+        {
+          "type": "string",
+          "const": "find",
+          "description": "Reading the transcript for the moments asked for."
+        },
+        {
+          "type": "string",
+          "const": "cut",
+          "description": "Cutting each moment's footage and setting its edit."
+        },
+        {
+          "type": "string",
+          "const": "render",
+          "description": "Drawing each clip (Remotion)."
+        }
+      ],
+      "description": "A VOD's stages, in order."
+    },
+    "ClipSourceLayout": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "`facecam`: a camera box over gameplay; `camera`: one camera fills the frame (IRL, cooking,\njust chatting); `screen`: gameplay or a screen with no camera."
+        },
+        "cam": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClipRect"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The facecam, for `facecam`."
+        },
+        "game": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClipRect"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The part of the game that matters, for `facecam` and `screen`."
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClipRect"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where the person mostly is, for `camera`: the crop a clip starts from."
+        },
+        "by": {
+          "type": "string",
+          "description": "Who or what found it: `claude`, `motion`, `person` (set by hand) or `default`."
+        },
+        "frame": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The frame it was found on, for the editor to draw the boxes over."
+        }
+      },
+      "required": [
+        "kind",
+        "by"
+      ],
+      "description": "What the stream's picture is made of, found once per VOD."
+    },
+    "ClipRect": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number",
+          "format": "double"
+        },
+        "y": {
+          "type": "number",
+          "format": "double"
+        },
+        "w": {
+          "type": "number",
+          "format": "double"
+        },
+        "h": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "description": "A rectangle in the VOD's own pixels."
+    },
+    "Clip": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "vod_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "kind": {
+          "$ref": "#/$defs/ClipKind"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "score": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How good a Short it would make, 1 to 10, as the finder judged it."
+        },
+        "why": {
+          "type": "string",
+          "description": "Why it was picked."
+        },
+        "start_s": {
+          "type": "number",
+          "format": "double",
+          "description": "Where it starts and ends in the VOD, seconds."
+        },
+        "end_s": {
+          "type": "number",
+          "format": "double"
+        },
+        "length_s": {
+          "type": "number",
+          "format": "double",
+          "description": "Its length once cut, seconds."
+        },
+        "edit": {
+          "$ref": "#/$defs/ClipEdit"
+        },
+        "state": {
+          "$ref": "#/$defs/ClipState"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The rendered file."
+        },
+        "poster": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A frame of it."
+        },
+        "render_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "publish_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "When it goes out (RFC 3339), once scheduled."
+        },
+        "privacy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClipPrivacy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "youtube_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "youtube_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "posted_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "vod_id",
+        "kind",
+        "title",
+        "description",
+        "tags",
+        "score",
+        "why",
+        "start_s",
+        "end_s",
+        "length_s",
+        "edit",
+        "state",
+        "created_at",
+        "updated_at"
+      ],
+      "description": "A clip."
+    },
+    "ClipEdit": {
+      "type": "object",
+      "properties": {
+        "keep": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "description": "The spans kept, in the order they play: `[[start, end], …]`. Usually one; more when the\nmiddle of a moment was cut, or when it opens on the payoff."
+        },
+        "tighten_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Inside each span, pauses longer than this many ms are cut down: dead air. `None` keeps\npauses as they were.",
+          "default": null
+        },
+        "layout": {
+          "$ref": "#/$defs/ClipLayout"
+        },
+        "view": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClipRect"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The crop for `crop`, `game` and `cam`, in the VOD's pixels; the VOD's layout when absent.",
+          "default": null
+        },
+        "reframe": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ClipRect"
+          },
+          "description": "A crop of its own for a span, by its index in `keep`: only where the person would leave\n`view`.",
+          "default": {}
+        },
+        "hook": {
+          "type": "string",
+          "description": "The opening line, across the top for the first two seconds: the hook."
+        },
+        "captions": {
+          "$ref": "#/$defs/ClipCaptions"
+        },
+        "caption_y": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Where the captions sit, as a fraction of the height.",
+          "default": null
+        },
+        "emphasis": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Words drawn in the highlight colour.",
+          "default": []
+        },
+        "fixes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Fixes to what was misheard: `{\"heard\": \"meant\"}`.",
+          "default": {}
+        },
+        "punch_at": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "description": "Moments to punch in on (seconds of the VOD): the one line the clip is for.",
+          "default": []
+        },
+        "end_card": {
+          "type": "boolean",
+          "description": "End on the card (like and subscribe, where the streamer is live).",
+          "default": true
+        },
+        "scene": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClipSourceLayout"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What this clip's picture is made of, when it is not the VOD's: a stream that switches\nbetween a game scene (facecam over gameplay) and a camera scene (just chatting).",
+          "default": null
+        }
+      },
+      "required": [
+        "keep",
+        "layout",
+        "hook",
+        "captions"
+      ],
+      "description": "A clip's edit: everything the template draws it from. Times are seconds of the VOD."
+    },
+    "ClipLayout": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "split",
+          "description": "The facecam over the gameplay."
+        },
+        {
+          "type": "string",
+          "const": "fit",
+          "description": "The whole picture across the middle, on a blurred copy of itself."
+        },
+        {
+          "type": "string",
+          "const": "crop",
+          "description": "A 9:16 crop that follows the person (one camera)."
+        },
+        {
+          "type": "string",
+          "const": "cam",
+          "description": "The facecam fills the frame: a reaction where the game adds nothing."
+        },
+        {
+          "type": "string",
+          "const": "game",
+          "description": "The game fills the frame."
+        }
+      ],
+      "description": "How a clip fills the 9:16 frame."
+    },
+    "ClipCaptions": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "pixel",
+          "description": "One word at a time, a chunky pixel face, a thick black outline and a hard shadow, key words\nin the highlight colour."
+        },
+        {
+          "type": "string",
+          "const": "bold",
+          "description": "Two or three words, a heavy sans, uppercase, the spoken word lit."
+        },
+        {
+          "type": "string",
+          "const": "clean",
+          "description": "A sentence at a time on a soft dark box, mixed case: for guides."
+        },
+        {
+          "type": "string",
+          "const": "none",
+          "description": "No captions."
+        }
+      ],
+      "description": "The captions' look."
+    },
+    "ClipState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "draft",
+          "description": "Its edit is set; it has not been drawn yet."
+        },
+        {
+          "type": "string",
+          "const": "rendering",
+          "description": "Queued or drawing."
+        },
+        {
+          "type": "string",
+          "const": "ready",
+          "description": "Drawn: waiting for the person's yes or no."
+        },
+        {
+          "type": "string",
+          "const": "approved",
+          "description": "The person said yes: it goes out at the next posting slot, or when they post it."
+        },
+        {
+          "type": "string",
+          "const": "scheduled",
+          "description": "It goes out at `publish_at`."
+        },
+        {
+          "type": "string",
+          "const": "posting",
+          "description": "Uploading to YouTube now."
+        },
+        {
+          "type": "string",
+          "const": "posted",
+          "description": "On YouTube: `youtube_url`."
+        },
+        {
+          "type": "string",
+          "const": "rejected",
+          "description": "The person said no."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "Its render or upload failed: `error` says why."
+        }
+      ],
+      "description": "Where a clip stands."
+    },
+    "ClipPrivacy": {
+      "type": "string",
+      "enum": [
+        "public",
+        "unlisted",
+        "private"
+      ],
+      "description": "Who may see a posted clip."
+    },
+    "ClipYoutube": {
+      "type": "object",
+      "properties": {
+        "configured": {
+          "type": "boolean",
+          "description": "The person saved their Google OAuth client (a \"Desktop app\" client of their own Google\nCloud project, with the YouTube Data API on)."
+        },
+        "connected": {
+          "type": "boolean",
+          "description": "Signed in: Relay holds a token to upload with."
+        },
+        "channel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channel_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pending": {
+          "type": "boolean",
+          "description": "A sign-in is waiting for the browser."
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What went wrong last, or what to know."
+        }
+      },
+      "required": [
+        "configured",
+        "connected",
+        "pending"
+      ],
+      "description": "The YouTube channel clips are posted to."
+    },
+    "ClipTool": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "found": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its path, when found."
+        },
+        "purpose": {
+          "type": "string",
+          "description": "What it is for."
+        },
+        "install": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "How the person installs it, when missing."
+        }
+      },
+      "required": [
+        "name",
+        "found",
+        "purpose"
+      ],
+      "description": "What Clips needs on this PC, and whether each is there."
+    },
+    "ClipsToolsOut": {
+      "type": "object",
+      "properties": {
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClipTool"
+          }
+        }
+      },
+      "required": [
+        "tools"
+      ]
+    },
+    "ClipSettings": {
+      "type": "object",
+      "properties": {
+        "streamer": {
+          "type": "string",
+          "description": "The streamer, as titles and descriptions name them."
+        },
+        "platform": {
+          "type": "string",
+          "description": "Where they stream (`Twitch`, `YouTube`, `Kick`), and their handle there, for the end card\nand the credit line."
+        },
+        "handle": {
+          "type": "string"
+        },
+        "terms": {
+          "type": "string",
+          "description": "Names and words the transcript should spell right: the streamer, the game, its terms."
+        },
+        "notes": {
+          "type": "string",
+          "description": "What the channel's viewers like, said to the finder with every VOD."
+        },
+        "captions": {
+          "$ref": "#/$defs/ClipCaptions"
+        },
+        "highlight": {
+          "type": "string",
+          "description": "The colour key words are drawn in, `#RRGGBB`."
+        },
+        "end_card": {
+          "type": "boolean"
+        },
+        "min_s": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "A clip's length, seconds."
+        },
+        "max_s": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "max_clips": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Most clips one find makes."
+        },
+        "model": {
+          "type": "string",
+          "description": "The Claude model that finds the moments: `opus` or `sonnet`."
+        },
+        "fps": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The frame rate clips are drawn at: 30 or 60."
+        },
+        "posting": {
+          "$ref": "#/$defs/ClipPosting"
+        }
+      },
+      "required": [
+        "streamer",
+        "platform",
+        "handle",
+        "terms",
+        "notes",
+        "captions",
+        "highlight",
+        "end_card",
+        "min_s",
+        "max_s",
+        "max_clips",
+        "model",
+        "fps",
+        "posting"
+      ],
+      "description": "The Clips space's settings: the channel, its look, the finder and posting."
+    },
+    "ClipPosting": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/ClipPostingMode"
+        },
+        "privacy": {
+          "$ref": "#/$defs/ClipPrivacy"
+        },
+        "slots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The day's posting times, local, `\"HH:MM\"`: one clip each. Empty posts an approved clip at once."
+        },
+        "min_score": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "In `auto`, the score a clip needs to go out without the person."
+        },
+        "footer": {
+          "type": "string",
+          "description": "Added to every description, after the clip's own line."
+        }
+      },
+      "required": [
+        "mode",
+        "privacy",
+        "slots",
+        "min_score",
+        "footer"
+      ],
+      "description": "When and how clips go out."
+    },
+    "ClipPostingMode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "ask",
+          "description": "Nothing goes out until the person approves it (the default)."
+        },
+        {
+          "type": "string",
+          "const": "auto",
+          "description": "Clips scoring `min_score` or more go out at the next free slot on their own."
+        }
+      ],
+      "description": "Whether clips wait for the person before going out."
+    },
+    "ClipsImportIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "A video file on this PC (absolute path), or a link to a VOD (Twitch, YouTube)."
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Default: the file's name or the link's title."
+        },
+        "request": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What the person wants from it, in their words: \"funny moments\", \"the IdleOn tips\", \"all\"."
+        },
+        "kinds": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ClipKind"
+          },
+          "description": "The kinds of moment to look for; empty or absent is every kind."
+        },
+        "project_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "The project whose video the clips are made in; default the first project."
+        }
+      },
+      "required": [
+        "source"
+      ]
+    },
+    "ClipsVodsOut": {
+      "type": "object",
+      "properties": {
+        "vods": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClipVod"
+          }
+        }
+      },
+      "required": [
+        "vods"
+      ]
+    },
+    "ClipsIdIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "ClipsVodOut": {
+      "type": "object",
+      "properties": {
+        "vod": {
+          "$ref": "#/$defs/ClipVod"
+        },
+        "clips": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Clip"
+          },
+          "description": "Its clips, best first."
+        }
+      },
+      "required": [
+        "vod",
+        "clips"
+      ]
+    },
+    "ClipsFindIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "request": {
+          "type": "string",
+          "description": "What to look for this time, in the person's words."
+        },
+        "kinds": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ClipKind"
+          }
+        },
+        "max": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Most new clips; default the settings'."
+        }
+      },
+      "required": [
+        "id",
+        "request"
+      ]
+    },
+    "ClipsLayoutSetIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "layout": {
+          "$ref": "#/$defs/ClipSourceLayout"
+        },
+        "rerender": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Draw its clips again with it."
+        }
+      },
+      "required": [
+        "id",
+        "layout"
+      ]
+    },
+    "ClipsClipOut": {
+      "type": "object",
+      "properties": {
+        "clip": {
+          "$ref": "#/$defs/Clip"
+        },
+        "vod": {
+          "$ref": "#/$defs/ClipVod"
+        },
+        "words": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClipWord"
+          },
+          "description": "The transcript around it: from 20 s before its start to 20 s after its end."
+        }
+      },
+      "required": [
+        "clip",
+        "vod",
+        "words"
+      ]
+    },
+    "ClipWord": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "start_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "end_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "text",
+        "start_ms",
+        "end_ms"
+      ],
+      "description": "A word of the transcript, in the VOD's milliseconds."
+    },
+    "ClipsClipListIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "vod_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "One VOD's; every VOD's when absent."
+        },
+        "states": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ClipState"
+          },
+          "description": "Only these states."
+        }
+      }
+    },
+    "ClipsClipsOut": {
+      "type": "object",
+      "properties": {
+        "clips": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Clip"
+          }
+        }
+      },
+      "required": [
+        "clips"
+      ]
+    },
+    "ClipsClipUpdateIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tags": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClipKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "edit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClipEdit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The edit, whole."
+        },
+        "render": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Draw it again once saved (default true when `edit` is given)."
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "ClipsClipSetIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "state": {
+          "$ref": "#/$defs/ClipState",
+          "description": "`approved` (it goes out at the next slot), `rejected`, or `ready` (undecided again; a\nscheduled clip is taken off the schedule)."
+        }
+      },
+      "required": [
+        "id",
+        "state"
+      ]
+    },
+    "ClipsPostIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "When it goes out (RFC 3339); now when absent."
+        },
+        "privacy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClipPrivacy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default the settings'."
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "ClipsYoutubeSetupIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "client_id": {
+          "type": "string",
+          "description": "The OAuth client's ID (`….apps.googleusercontent.com`)."
+        },
+        "client_secret": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "client_id",
+        "client_secret"
+      ]
+    },
+    "ClipsYoutubeConnectOut": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Open this in the browser: Google asks the person to let Relay upload to their channel,\nthen sends them back to Relay on this PC."
+        }
+      },
+      "required": [
+        "url"
       ]
     }
   }
