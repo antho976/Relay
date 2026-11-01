@@ -378,6 +378,8 @@ pub struct Vod {
     pub progress: f64,
     /// What the stage is doing now, in a few words.
     pub detail: Option<String>,
+    /// Why it failed; on a ready VOD, what its last find could not do (parts of the transcript
+    /// Claude could not read).
     pub error: Option<String>,
     pub layout: Option<SourceLayout>,
     /// The video its clips are compositions of.

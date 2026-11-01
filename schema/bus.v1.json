@@ -19069,6 +19069,11 @@
           "type": "string",
           "const": "aide",
           "description": "Aide, the person's own agent (docs/AIDE.md), speaking first."
+        },
+        {
+          "type": "string",
+          "const": "clips",
+          "description": "Clips (docs/CLIPS.md): a VOD's clips wait for the person's review."
         }
       ]
     },
@@ -37775,7 +37780,8 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "description": "Why it failed; on a ready VOD, what its last find could not do (parts of the transcript\nClaude could not read)."
         },
         "layout": {
           "anyOf": [

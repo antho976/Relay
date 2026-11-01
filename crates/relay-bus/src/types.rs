@@ -143,6 +143,8 @@ pub enum NotifyCategory {
     System,
     /// Aide, the person's own agent (docs/AIDE.md), speaking first.
     Aide,
+    /// Clips (docs/CLIPS.md): a VOD's clips wait for the person's review.
+    Clips,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

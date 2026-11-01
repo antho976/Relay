@@ -480,6 +480,8 @@ mod tests {
     #[test]
     fn an_aide_notice_opens_its_overview() {
         assert_eq!(route(&json!({"category": "aide", "link": null})), Some("aide-home"));
+        // `notify.list` answers a Clips notice as `clips` (NotifyCategory::Clips), not `system`.
+        assert_eq!(route(&json!({"category": "clips", "link": null})), Some("clips-home"));
         assert_eq!(route(&json!({"category": "system", "link": null})), None);
     }
 
