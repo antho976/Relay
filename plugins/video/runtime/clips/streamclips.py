@@ -59,11 +59,20 @@ def clock(s):
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 
+def write_whole(path, text):
+    """Write `text` to `path` through a temporary file beside it: a kill in the middle leaves the
+    old file or none, never half of one that Relay would take as the step done."""
+    path = Path(path)
+    part = path.with_name(f".{path.name}.{os.getpid()}.part")
+    part.write_text(text)
+    os.replace(part, path)
+
+
 def emit(result, out=None):
     text = json.dumps(result, indent=1, ensure_ascii=False)
     if out:
         Path(out).parent.mkdir(parents=True, exist_ok=True)
-        Path(out).write_text(text + "\n")
+        write_whole(out, text + "\n")
     print(text)
 
 
@@ -267,9 +276,10 @@ def cmd_transcribe(args):
 
 def write_transcript(out, base):
     words = whisper_words(json.loads(Path(f"{base}.json").read_text()))
-    (out / "words.json").write_text(json.dumps(words, ensure_ascii=False) + "\n")
     lines = sentences(words)
-    (out / "transcript.txt").write_text("".join(f"[{clock(l['startMs'] / 1000)}] {l['text']}\n" for l in lines))
+    # words.json last: Relay takes it as the transcript done.
+    write_whole(out / "transcript.txt", "".join(f"[{clock(l['startMs'] / 1000)}] {l['text']}\n" for l in lines))
+    write_whole(out / "words.json", json.dumps(words, ensure_ascii=False) + "\n")
     emit({"words": len(words), "lines": len(lines), "files": ["words.json", "transcript.txt", "whisper.json"]})
 
 
@@ -446,7 +456,7 @@ def cmd_words(args):
         print(json.dumps(clip, ensure_ascii=False, indent=1))
         return
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.out).write_text(json.dumps(clip, ensure_ascii=False, indent=1) + "\n")
+    write_whole(args.out, json.dumps(clip, ensure_ascii=False, indent=1) + "\n")
     emit({"out": args.out, "words": len(clip), "text": "".join(w["text"] for w in clip).strip()})
 
 

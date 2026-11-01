@@ -327,15 +327,37 @@ fn read(engine: &Engine, vod_id: i64, dir: &Path, model: &str, message: &str) ->
     }
     // Without the structured answer: the JSON in its text.
     let text = reply["result"].as_str().unwrap_or("");
-    let start = text.find('{').ok_or_else(|| Halt::Failed("Claude answered no moments".into()))?;
-    serde_json::from_str(&text[start..text.rfind('}').map_or(text.len(), |e| e + 1)]).map_err(|e| Halt::Failed(format!("Claude's moments could not be read: {e}")))
+    let json = object_in(text).ok_or_else(|| Halt::Failed("Claude answered no moments".into()))?;
+    serde_json::from_str(json).map_err(|e| Halt::Failed(format!("Claude's moments could not be read: {e}")))
+}
+
+/// The text from its first `{` to its last `}` (to its end when no `}` comes after the `{`).
+fn object_in(text: &str) -> Option<&str> {
+    let start = text.find('{')?;
+    let end = text.rfind('}').filter(|e| *e > start).map_or(text.len(), |e| e + 1);
+    Some(&text[start..end])
+}
+
+/// What a find came back with: the moments, and what the person should know of the parts that
+/// could not be read (moments there may be missing).
+pub struct Found {
+    pub moments: Vec<Moment>,
+    pub missed: Option<String>,
+}
+
+/// What to tell the person when `failures` of `total` parts could not be read.
+pub fn missed(failures: &[String], total: usize) -> Option<String> {
+    let first = failures.first()?;
+    let (n, parts) = (failures.len(), if total == 1 { "part" } else { "parts" });
+    Some(super::cut(&format!("Claude could not read {n} of the VOD's {total} {parts}, so moments there may be missing ({first}). Look again to read it again."), 600))
 }
 
 /// Find the moments of `vod` the person asked for: every part read (a few at once), then put
-/// together. `on_progress` hears each part done.
+/// together. `on_progress` hears each part done. A part that could not be read is a loss, not
+/// the end (unless every part failed), and is said in [`Found::missed`].
 #[allow(clippy::too_many_arguments)]
 pub fn find(engine: &Engine, vod: &Vod, dir: &Path, words: &[W], candidates: &Value, request: &str, kinds: &[Kind], taken: &[(f64, f64)], max: u32,
-    on_progress: &(dyn Fn(usize, usize) + Sync)) -> Step<Vec<Moment>> {
+    on_progress: &(dyn Fn(usize, usize) + Sync)) -> Step<Found> {
     let s = super::settings(engine)?;
     let lines = lines(words);
     if lines.is_empty() {
@@ -379,11 +401,14 @@ pub fn find(engine: &Engine, vod: &Vod, dir: &Path, words: &[W], candidates: &Va
         }
     }
     // A part that failed is a loss, not the end: unless every part failed.
-    if found.is_empty() && !failures.is_empty() {
+    if found.is_empty() && failures.len() == total {
         return Err(Halt::Failed(failures.remove(0)));
     }
+    if !failures.is_empty() {
+        tracing::warn!(vod = vod.id, failed = failures.len(), of = total, first = %failures[0], "clips: parts of the transcript could not be read");
+    }
     let _ = std::fs::write(dir.join("moments.json"), serde_json::to_vec_pretty(&found).unwrap_or_default());
-    Ok(merge(found, taken, kinds, max as usize))
+    Ok(Found { moments: merge(found, taken, kinds, max as usize), missed: missed(&failures, total) })
 }
 
 #[cfg(test)]
@@ -441,6 +466,21 @@ mod tests {
         assert_eq!(g.layout, Some(Layout::Fit));
         assert_eq!(g.cut, vec![[612.0, 615.0]]);
         assert_eq!(g.punch, Some(630.0));
+    }
+
+    #[test]
+    fn the_answer_in_text_is_found_without_slicing_backwards() {
+        assert_eq!(object_in("Here: {\"moments\": []} done"), Some("{\"moments\": []}"));
+        // A `}` only before the `{`: up to the end, not a backwards slice (a panic).
+        assert_eq!(object_in("} then {\"moments\""), Some("{\"moments\""));
+        assert_eq!(object_in("no object"), None);
+    }
+
+    #[test]
+    fn parts_that_could_not_be_read_are_said() {
+        assert_eq!(missed(&[], 6), None);
+        let m = missed(&["Claude: overloaded".into(), "timeout".into()], 6).unwrap();
+        assert!(m.starts_with("Claude could not read 2 of the VOD's 6 parts") && m.contains("Claude: overloaded"), "{m}");
     }
 
     #[test]

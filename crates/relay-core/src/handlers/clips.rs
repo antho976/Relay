@@ -43,30 +43,79 @@ fn kinds(k: Option<Vec<Kind>>) -> Vec<Kind> {
     k
 }
 
-/// Draw clip `id` again on a thread of its own: its footage may need cutting again, and the
-/// render's queue takes the store's lock.
-fn render_soon(ctx: &mut Unlocked, id: i64) {
-    let engine = ctx.engine().arc();
-    let _ = with_db(ctx.engine(), |db| db.set_clip_render(id, None, &now()));
-    if let Some(engine) = engine {
-        std::thread::Builder::new().name("clips-render".into()).spawn(move || {
-            if let Err(e) = pipeline::queue_render(&engine, id) {
-                let _ = with_db(&engine, |db| db.set_clip_state(id, ClipState::Failed, Some(&e.message), &now()));
-            }
-            if let Ok(c) = clips::clip(&engine, id) {
-                clips::changed(&engine, "clip", Some(c.vod_id), Some(id));
-            }
-        }).ok();
+/// What an approved or scheduled clip an agent changed says: it is the person's to post.
+const AGENT_CHANGED: &str = "An agent changed this clip after you approved it: look at it again before it goes out.";
+
+/// Draw clip `id` again: it waits, `rendering` with no render yet, for the drawer
+/// (`pipeline::render_loop`), which cuts its footage again when it needs it and queues its
+/// render, one clip at a time. The drawer is woken once the request is answered. Asked by an
+/// agent, an approved or scheduled clip goes back to the person instead of to the schedule: an
+/// agent may edit and draw a clip, never post one (docs/CLIPS.md).
+fn render_soon(ctx: &mut Unlocked, id: i64) -> Result<(), BusError> {
+    let agent = !ctx.actor.is_privileged();
+    with_db(ctx.engine(), |db| {
+        let t = now();
+        db.ask_render(id, &t)?;
+        if agent {
+            db.unapprove(id, AGENT_CHANGED, &t)?;
+        }
+        Ok(())
+    })?;
+    ctx.after_commit(|engine| clips::poke_render(&engine));
+    Ok(())
+}
+
+fn moved() -> BusError {
+    BusError::conflict("clips.changed", "the clip changed while this was asked").with_hint("read it again, then try again")
+}
+
+/// Whether clip `c` waits on a render that has not finished: its file may still be written over,
+/// whatever its state says (rejected while drawn, then approved again).
+fn render_unfinished(ctx: &Unlocked, c: &Clip) -> bool {
+    c.render_id.and_then(|rid| ctx.read(|conn| crate::video::get_render(conn, rid)).ok()).is_some_and(|r| !r.state.is_final())
+}
+
+/// Clip `c`'s files on disk: its drawn file and poster, and the footage cut for it.
+fn remove_files(engine: &Engine, c: &Clip) {
+    for f in [c.file.as_deref(), c.poster.as_deref()].into_iter().flatten() {
+        let _ = std::fs::remove_file(f);
+    }
+    if let Some(footage) = pipeline::footage(engine, c.vod_id, c.id) {
+        let _ = std::fs::remove_file(footage);
+    }
+}
+
+/// Whether `url`'s host is this PC, the local network or a link-local address (the cloud's
+/// metadata service among them), as written or as it resolves: what an agent's import may not
+/// have yt-dlp fetch.
+pub fn private_host(url: &str) -> bool {
+    use std::net::{IpAddr, ToSocketAddrs};
+    let Some(host) = url.parse::<ureq::http::Uri>().ok().and_then(|u| u.host().map(|h| h.trim_matches(['[', ']']).to_ascii_lowercase())) else { return true };
+    if host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local") || host.ends_with(".internal") || !host.contains(['.', ':']) {
+        return true;
+    }
+    let inner = |ip: IpAddr| match ip {
+        IpAddr::V4(v) => v.is_private() || v.is_loopback() || v.is_link_local() || v.is_unspecified() || v.is_broadcast() || v.octets()[0] == 100 && v.octets()[1] & 0xc0 == 64,
+        IpAddr::V6(v) => v.is_loopback() || v.is_unspecified() || (v.segments()[0] & 0xfe00) == 0xfc00 || (v.segments()[0] & 0xffc0) == 0xfe80
+            || v.to_ipv4_mapped().is_some_and(|m| m.is_private() || m.is_loopback() || m.is_link_local()),
+    };
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return inner(ip);
+    }
+    match (host.as_str(), 443).to_socket_addrs() {
+        Ok(addrs) => addrs.map(|a| a.ip()).any(inner),
+        Err(_) => true,
     }
 }
 
 pub fn register(e: &mut Engine) {
+    // Asked on every refresh of the space and its tile: counts, not every clip, and the
+    // sign-in as last read from the keyring (youtube::status).
     e.register_unlocked::<Summary>(|ctx, _: Empty| {
         let engine = ctx.engine();
         let vods = with_db(engine, |db| db.vods())?;
-        let all = with_db(engine, |db| db.clips())?;
-        let count = |s: ClipState| all.iter().filter(|c| c.state == s).count() as u32;
-        let next_post = all.iter().filter(|c| c.state == ClipState::Scheduled).min_by(|a, b| a.publish_at.cmp(&b.publish_at)).cloned();
+        let (counts, next_post) = with_db(engine, |db| Ok((db.state_counts()?, db.next_scheduled()?)))?;
+        let count = |s: ClipState| counts.iter().find(|(c, _)| *c == s).map_or(0, |(_, n)| *n);
         let link = vods.iter().any(|v| clips::is_link(&v.source));
         Ok(SummaryOut {
             vods: vods.len() as u32,
@@ -99,6 +148,11 @@ pub fn register(e: &mut Engine) {
             return Err(clips::invalid("give a video file or a link"));
         }
         let link = clips::is_link(source);
+        // yt-dlp's generic extractor fetches any URL: an agent's link is never this PC's or the
+        // local network's (the person may give one: a VOD on their own NAS).
+        if link && !ctx.actor.is_privileged() && private_host(source) {
+            return Err(BusError::invalid("clips.link", "an agent imports links on the internet only, not this PC's or the local network's"));
+        }
         let source = if link { source.to_string() } else { clips::file_path(source) };
         if !link {
             let path = Path::new(&source);
@@ -188,19 +242,23 @@ pub fn register(e: &mut Engine) {
 
     e.register_staged::<VodDelete, Empty>(|ctx, p| {
         let vod = clips::vod(ctx.engine(), p.id)?;
+        let clips_of = with_db(ctx.engine(), |db| db.clips_of(p.id))?;
+        // An upload under way would finish with no record of it here.
+        if clips_of.iter().any(|c| c.state == ClipState::Posting) {
+            return Err(BusError::conflict("clips.posting", "one of this VOD's clips is uploading now").with_hint("delete it once the upload is over"));
+        }
         if vod.state == VodState::Working {
             clips::ask_stop(ctx.engine(), p.id);
         }
-        // Its working folder only: never the file it came from.
+        // Its working folder, and each clip's footage, drawing and poster in the VOD's video:
+        // never the file it came from.
         let dir = Path::new(&vod.dir);
         let under = clips::vods_dir(ctx.engine(), vod.project_id);
         if dir.starts_with(&under) && dir != under && dir.is_dir() {
             let _ = std::fs::remove_dir_all(dir);
         }
-        for c in with_db(ctx.engine(), |db| db.clips_of(p.id))? {
-            if let Some(f) = c.file.as_deref() {
-                let _ = std::fs::remove_file(f);
-            }
+        for c in &clips_of {
+            remove_files(ctx.engine(), c);
         }
         with_db(ctx.engine(), |db| db.delete_vod(p.id))?;
         emit(ctx, "vod", Some(p.id), None);
@@ -229,9 +287,11 @@ pub fn register(e: &mut Engine) {
         }
         with_db(ctx.engine(), |db| db.set_vod_layout(vod.id, &l, &now()))?;
         if p.rerender == Some(true) {
+            // Every clip that may still go out: scheduled ones and those being drawn too, else
+            // they would post with the old framing.
             for c in with_db(ctx.engine(), |db| db.clips_of(vod.id))? {
-                if matches!(c.state, ClipState::Ready | ClipState::Failed | ClipState::Approved) {
-                    render_soon(ctx, c.id);
+                if matches!(c.state, ClipState::Ready | ClipState::Failed | ClipState::Approved | ClipState::Scheduled | ClipState::Rendering) {
+                    render_soon(ctx, c.id)?;
                 }
             }
         }
@@ -286,9 +346,18 @@ pub fn register(e: &mut Engine) {
         let words = edit::load_words(&Path::new(&vod.dir).join("words.json")).unwrap_or_default();
         let (start, end) = edit::bounds(&e);
         let length = if changed_edit { edit::length(&words, &e) } else { c.length_s };
-        with_db(ctx.engine(), |db| db.update_clip(c.id, &title, &description, &tags, p.kind.unwrap_or(c.kind), &e, start, end, length, &now()))?;
+        let kind = p.kind.unwrap_or(c.kind);
+        if !with_db(ctx.engine(), |db| db.update_clip(c.id, c.state, &title, &description, &tags, kind, &e, start, end, length, &now()))? {
+            return Err(moved());
+        }
         if p.render.unwrap_or(changed_edit) && !matches!(c.state, ClipState::Posting | ClipState::Posted) {
-            render_soon(ctx, c.id);
+            render_soon(ctx, c.id)?;
+        }
+        // An agent's words on an approved clip are not what the person approved.
+        let changed_any = changed_edit || title != c.title || description != c.description || tags != c.tags || kind != c.kind;
+        if changed_any && !ctx.actor.is_privileged() {
+            with_db(ctx.engine(), |db| db.unapprove(c.id, AGENT_CHANGED, &now()))?;
+            ctx.after_commit(|engine| clips::poke_poster(&engine));
         }
         emit(ctx, "clip", Some(c.vod_id), Some(c.id));
         clips::clip(ctx.engine(), c.id)
@@ -299,7 +368,7 @@ pub fn register(e: &mut Engine) {
         if matches!(c.state, ClipState::Posting | ClipState::Posted) {
             return Err(BusError::conflict("clips.posted", "a posted clip is not drawn again"));
         }
-        render_soon(ctx, c.id);
+        render_soon(ctx, c.id)?;
         emit(ctx, "clip", Some(c.vod_id), Some(c.id));
         clips::clip(ctx.engine(), c.id)
     }, |_, _, s| Ok(s));
@@ -310,19 +379,25 @@ pub fn register(e: &mut Engine) {
             return Err(BusError::conflict("clips.posted", "this clip is already on YouTube"));
         }
         let t = now();
-        match p.state {
+        // Each from the state just read: a clip that moved since (drawn again, going out) is
+        // not decided on from a stale look.
+        let done = match p.state {
             ClipState::Approved => {
-                if c.file.is_none() {
+                // Being drawn again, its file is the old picture, or will be written over: the
+                // poster would send that.
+                if c.file.is_none() || c.state == ClipState::Rendering || render_unfinished(ctx, &c) {
                     return Err(BusError::conflict("clips.unrendered", "approve a clip once it is drawn"));
                 }
-                with_db(ctx.engine(), |db| db.schedule(c.id, None, c.privacy, ClipState::Approved, &t))?;
+                with_db(ctx.engine(), |db| db.schedule(c.id, c.state, None, c.privacy, ClipState::Approved, &t))?
             }
-            ClipState::Rejected => with_db(ctx.engine(), |db| db.schedule(c.id, None, None, ClipState::Rejected, &t))?,
-            ClipState::Ready => {
-                let back = if c.file.is_some() { ClipState::Ready } else { ClipState::Draft };
-                with_db(ctx.engine(), |db| db.schedule(c.id, None, None, back, &t))?;
-            }
+            ClipState::Rejected => with_db(ctx.engine(), |db| db.schedule(c.id, c.state, None, None, ClipState::Rejected, &t))?,
+            // Taken back, or restored: undecided again, in one step whatever it is doing (while
+            // it is drawn again, it comes back for review, not to the schedule).
+            ClipState::Ready => with_db(ctx.engine(), |db| db.take_back(c.id, &t))?,
             other => return Err(clips::invalid(format!("a clip is set approved, rejected or ready, not {}", other.name()))),
+        };
+        if !done {
+            return Err(moved());
         }
         emit(ctx, "clip", Some(c.vod_id), Some(c.id));
         ctx.after_commit(|engine| clips::poke_poster(&engine));
@@ -334,7 +409,7 @@ pub fn register(e: &mut Engine) {
         if matches!(c.state, ClipState::Posting | ClipState::Posted) {
             return Err(BusError::conflict("clips.posted", "this clip is already on YouTube"));
         }
-        if c.file.is_none() || c.state == ClipState::Rendering {
+        if c.file.is_none() || c.state == ClipState::Rendering || render_unfinished(ctx, &c) {
             return Err(BusError::conflict("clips.unrendered", "post a clip once it is drawn"));
         }
         let yt = youtube::status(ctx.engine());
@@ -349,7 +424,9 @@ pub fn register(e: &mut Engine) {
             }
             None => now(),
         };
-        with_db(ctx.engine(), |db| db.schedule(c.id, Some(&at), Some(p.privacy.unwrap_or(s.posting.privacy)), ClipState::Scheduled, &now()))?;
+        if !with_db(ctx.engine(), |db| db.schedule(c.id, c.state, Some(&at), Some(p.privacy.unwrap_or(s.posting.privacy)), ClipState::Scheduled, &now()))? {
+            return Err(moved());
+        }
         emit(ctx, "clip", Some(c.vod_id), Some(c.id));
         ctx.after_commit(|engine| clips::poke_poster(&engine));
         clips::clip(ctx.engine(), c.id)
@@ -360,9 +437,7 @@ pub fn register(e: &mut Engine) {
         if c.state == ClipState::Posting {
             return Err(BusError::conflict("clips.posting", "this clip is uploading now"));
         }
-        if let Some(f) = c.file.as_deref() {
-            let _ = std::fs::remove_file(f);
-        }
+        remove_files(ctx.engine(), &c);
         with_db(ctx.engine(), |db| db.delete_clip(c.id))?;
         emit(ctx, "clip", Some(c.vod_id), Some(c.id));
         Ok(Empty {})

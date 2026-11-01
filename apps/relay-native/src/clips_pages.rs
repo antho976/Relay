@@ -1036,6 +1036,12 @@ fn vod_page(ui: &Rc<Ui>, page: &Page, d: &Value) {
         why.set_wrap(true);
         why.set_xalign(0.0);
         page.body.append(&why);
+    } else if state == "ready" && !text(v, "error").is_empty() {
+        // Parts of the transcript the finder could not read: moments there may be missing.
+        let note = label(text(v, "error"), "money-muted");
+        note.set_wrap(true);
+        note.set_xalign(0.0);
+        page.body.append(&note);
     }
 
     let clips = rows(d, "clips");
@@ -1697,6 +1703,8 @@ fn status_into(ui: &Rc<Ui>, ed: &Rc<Editor>, c: &Value, yt: &Value) {
     let line = match state {
         "draft" => "Not drawn yet.".to_string(),
         "rendering" => "Drawing it… it plays here when done.".to_string(),
+        // A note on a clip back for review (an agent changed it after it was approved) comes first.
+        "ready" if !text(c, "error").is_empty() => text(c, "error").to_string(),
         "ready" => format!("{} long. Approve it, and it goes out at the next posting time.", clock(c["length_s"].as_f64().unwrap_or(0.0))),
         "approved" => "Approved: it takes the next free posting time.".to_string(),
         "scheduled" => format!("Goes out {}.", c["publish_at"].as_str().map(when).unwrap_or_default().to_lowercase()),

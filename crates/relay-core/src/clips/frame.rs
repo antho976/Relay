@@ -15,7 +15,35 @@ use std::time::Duration;
 const LOOK_W: f64 = 960.0;
 const LOOK_H: f64 = 540.0;
 
-const PROMPT: &str = "You measure the layout of livestream video frames precisely. Use the Read tool to look at each image you are given, then answer.";
+const PROMPT: &str = "You measure the layout of livestream video frames precisely. Look at each image you are given, then answer.";
+
+/// Ask Claude about `images` (each a name and a JPEG): the images go in the message itself and
+/// Claude runs with no tools at all, as the finder does. What is on screen is the stream's (a
+/// chat overlay is anyone's words), so nothing it says can have Claude open a file. Claude's
+/// output, its last line the result.
+#[allow(clippy::too_many_arguments)]
+fn look_at(engine: &Engine, vod: i64, dir: &Path, images: &[(String, PathBuf)], ask: &str, system: &str, schema: &Value, within: Duration) -> Step<String> {
+    use base64::Engine as _;
+    let mut content = Vec::new();
+    for (name, path) in images {
+        let bytes = std::fs::read(path).map_err(|e| Halt::Failed(format!("{}: {e}", path.display())))?;
+        content.push(json!({"type": "text", "text": format!("{name}:")}));
+        content.push(json!({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64::engine::general_purpose::STANDARD.encode(bytes)}}));
+    }
+    content.push(json!({"type": "text", "text": ask}));
+    let message = json!({"type": "user", "message": {"role": "user", "content": content}});
+    let claude = super::claude(engine)?;
+    let mut cmd = Command::new(claude);
+    cmd.args(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--model", "sonnet", "--system-prompt", system,
+        "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence", "--json-schema", &schema.to_string()])
+        .current_dir(dir);
+    let input = dir.join(format!(".look-{}.jsonl", uuid::Uuid::new_v4()));
+    std::fs::write(&input, format!("{message}\n")).map_err(|e| Halt::Failed(format!("{}: {e}", input.display())))?;
+    let file = std::fs::File::open(&input).map_err(|e| Halt::Failed(e.to_string()));
+    let out = file.and_then(|f| super::run_with(engine, vod, &mut cmd, f.into(), within, |_| {}));
+    let _ = std::fs::remove_file(&input);
+    out
+}
 
 fn rect_schema() -> Value {
     json!({"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "w": {"type": "number"}, "h": {"type": "number"}}, "required": ["x", "y", "w", "h"]})
@@ -33,7 +61,7 @@ fn schema() -> Value {
     })
 }
 
-const ASK: &str = "Read f1.jpg, f2.jpg and f3.jpg in this folder: three frames of one livestream VOD, each 960x540 px, with thin grid lines every 48 px and yellow lines every 240 px across and 270 px down. \
+const ASK: &str = "f1.jpg, f2.jpg and f3.jpg above are three frames of one livestream VOD, each 960x540 px, with thin grid lines every 48 px and yellow lines every 240 px across and 270 px down. \
 Say what the picture is made of: 'facecam' (a camera box over gameplay or a screen), 'camera' (one camera fills the frame: cooking, IRL, just chatting), or 'screen' (gameplay or a screen with no camera). \
 For facecam give cam: the camera box's exact edges (x, y, w, h in these 960x540 pixels, tight to the box), and game: the game window's area without the cam, chat overlays, title bars or empty borders. \
 For camera give subject: a box around where the person mostly is. For screen give game. Ignore chat text overlays and small widgets.";
@@ -110,15 +138,11 @@ pub fn detect(engine: &Engine, vod: &Vod, media: &Path, dir: &Path) -> Step<Sour
     let frame = look.join("frame.jpg");
     grab(media, d * 0.5, &frame, 1280, "")?;
     let frame_s = Some(frame.display().to_string());
-    let claude = match super::claude(engine) {
-        Ok(c) => c,
-        Err(_) => return Ok(fallback(vod.width, vod.height, frame_s)),
-    };
-    let mut cmd = Command::new(claude);
-    cmd.args(["-p", ASK, "--output-format", "json", "--model", "sonnet", "--system-prompt", PROMPT, "--tools", "Read", "--allowedTools", "Read",
-        "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence", "--json-schema", &schema().to_string()])
-        .current_dir(&look);
-    let answer = match super::run(engine, vod.id, &mut cmd, Duration::from_secs(4 * 60), |_| {}) {
+    if super::claude(engine).is_err() {
+        return Ok(fallback(vod.width, vod.height, frame_s));
+    }
+    let images: Vec<(String, PathBuf)> = (1..=3).map(|i| (format!("f{i}.jpg"), look.join(format!("f{i}.jpg")))).collect();
+    let answer = match look_at(engine, vod.id, &look, &images, ASK, PROMPT, &schema(), Duration::from_secs(4 * 60)) {
         Ok(out) => super::last_json(&out),
         Err(Halt::Stopped) => return Err(Halt::Stopped),
         Err(Halt::Failed(why)) => {
@@ -135,7 +159,7 @@ pub fn detect(engine: &Engine, vod: &Vod, media: &Path, dir: &Path) -> Step<Sour
 
 // ---------------------------------------------------------------- each clip's scene
 
-const SCENES_PROMPT: &str = "You classify livestream video frames. Use the Read tool to look at each image you are given, then answer.";
+const SCENES_PROMPT: &str = "You classify livestream video frames. Look at each image you are given, then answer.";
 
 fn scenes_schema() -> Value {
     json!({
@@ -190,20 +214,19 @@ pub fn scenes(engine: &Engine, vod: &Vod, dir: &Path, items: &[(i64, PathBuf, f6
     if files.is_empty() {
         return Ok(out);
     }
-    let Ok(claude) = super::claude(engine) else { return Ok(out) };
+    if super::claude(engine).is_err() {
+        return Ok(out);
+    }
     let ask = format!(
-        "Read {}: each image is two frames, side by side, of one clip of a livestream VOD. For each image say what the picture is made of: \
+        "The images above ({}) are each two frames, side by side, of one clip of a livestream VOD. For each image say what the picture is made of: \
 'facecam' (gameplay or a screen with a small camera box over it), 'camera' (a camera fills the frame: just chatting, cooking, IRL; chat text or small widgets over it do not count as a screen), \
 or 'screen' (gameplay or a screen with no camera). For 'camera', also give streamer: where the streamer (the person the stream is about, \
 usually the one talking to the camera) stands across each of the two frames, 0 at that frame's left edge to 1 at its right, -1 when they are not in it. \
 Answer one entry per file, with its file name.",
         files.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>().join(", ")
     );
-    let mut cmd = Command::new(claude);
-    cmd.args(["-p", &ask, "--output-format", "json", "--model", "sonnet", "--system-prompt", SCENES_PROMPT, "--tools", "Read", "--allowedTools", "Read",
-        "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence", "--json-schema", &scenes_schema().to_string()])
-        .current_dir(&look);
-    let answer = match super::run(engine, vod.id, &mut cmd, Duration::from_secs(6 * 60), |_| {}) {
+    let images: Vec<(String, PathBuf)> = files.iter().map(|(_, n)| (n.clone(), look.join(n))).collect();
+    let answer = match look_at(engine, vod.id, &look, &images, &ask, SCENES_PROMPT, &scenes_schema(), Duration::from_secs(6 * 60)) {
         Ok(text) => super::last_json(&text),
         Err(Halt::Stopped) => return Err(Halt::Stopped),
         Err(Halt::Failed(why)) => {
@@ -358,6 +381,42 @@ pub fn poster(media: &Path, dir: &Path, duration: f64) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The frames go to Claude inside the message, and Claude has no tools: text on screen (a
+    /// viewer's chat line) cannot have it read a file.
+    #[test]
+    fn frames_are_shown_inline_to_a_claude_with_no_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("claude");
+        std::fs::write(&script, "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$PWD/args.txt\"\ncat > \"$PWD/in.jsonl\"\n\
+echo '{\"type\":\"system\"}'\necho '{\"type\":\"result\",\"is_error\":false,\"structured_output\":{\"kind\":\"screen\",\"note\":\"\"}}'\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // SAFETY: no other test in this binary reads RELAY_CLIPS_CLAUDE.
+        unsafe { std::env::set_var("RELAY_CLIPS_CLAUDE", &script) };
+        let look = dir.path().join("layout");
+        std::fs::create_dir_all(&look).unwrap();
+        std::fs::write(look.join("f1.jpg"), b"\xff\xd8not really a jpeg").unwrap();
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        let out = look_at(&engine, 1, &look, &[("f1.jpg".into(), look.join("f1.jpg"))], ASK, PROMPT, &schema(), Duration::from_secs(30));
+        unsafe { std::env::remove_var("RELAY_CLIPS_CLAUDE") };
+        let answer = super::super::last_json(&out.unwrap()).unwrap();
+        assert_eq!(answer["structured_output"]["kind"], "screen");
+        let args: Vec<String> = std::fs::read_to_string(look.join("args.txt")).unwrap().lines().map(str::to_string).collect();
+        let tools = args.iter().position(|a| a == "--tools").unwrap();
+        assert_eq!(args[tools + 1], "", "no tools: {args:?}");
+        assert!(!args.iter().any(|a| a.contains("Read") || a == "--allowedTools" || a == "--add-dir"), "{args:?}");
+        let sent: Value = serde_json::from_str(std::fs::read_to_string(look.join("in.jsonl")).unwrap().trim()).unwrap();
+        let content = sent["message"]["content"].as_array().unwrap();
+        assert_eq!(content[0]["text"], "f1.jpg:");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["source"]["media_type"], "image/jpeg");
+        assert!(content.last().unwrap()["text"].as_str().unwrap().starts_with("f1.jpg, f2.jpg and f3.jpg above"));
+        assert!(std::fs::read_dir(&look).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(".look-")), "the message file is gone");
+    }
 
     #[test]
     fn claude_layouts_are_scaled_and_checked() {
