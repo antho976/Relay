@@ -131,13 +131,30 @@ pub fn last_pay<'a>(pages: impl IntoIterator<Item = &'a Value>) -> Option<&'a Va
         .max_by(|a, b| s(a, "date").cmp(s(b, "date")).then(int(a, "id").cmp(&int(b, "id"))))
 }
 
+/// A money.tx.list page asked with `payload` that may list only the newest of its entries: as many
+/// as its limit ([`relay_money::ledger::TX_LIST_LIMIT`] when none was asked). Its `spent` and
+/// `income` still count every one; its rows do not. (A page has no `more` to say so.)
+fn cut(payload: &Value, page: &Value) -> bool {
+    let limit = payload["limit"].as_u64().unwrap_or(u64::from(relay_money::ledger::TX_LIST_LIMIT));
+    list(page, "transactions").len() as u64 >= limit
+}
+
+/// The first day from which a whole-ledger page lists every entry: `Date::MIN` when it lists them
+/// all; cut at its limit, the day after its oldest, which the limit may have cut through.
+fn whole_from(page: &Value) -> Option<Date> {
+    if !cut(&Value::Null, page) {
+        return Some(Date::MIN);
+    }
+    list(page, "transactions").iter().filter_map(|t| date(s(t, "date"))).min()?.tomorrow().ok()
+}
+
 /// How many pays (Salary income) came in each budget month of the whole ledger, and which calendar
 /// months had three: a pay every two weeks lands three times in some months, which no one
 /// month's reading shows. `start` is this budget month's first day, whose day of the month the
 /// others share.
 fn pays_by_month(page: &Value, start: Option<Date>, today: Date) -> Option<String> {
     // A page cut short would leave the oldest months out.
-    if page["more"] == true {
+    if cut(&Value::Null, page) {
         return None;
     }
     let mut days: Vec<Date> = list(page, "transactions").iter()
@@ -188,6 +205,10 @@ fn pays_by_month(page: &Value, start: Option<Date>, today: Date) -> Option<Strin
 /// pay go up" was read off the budget months holding three pays (bench v3, 2026-10-30). A lone
 /// pay of another amount (a bonus, a short week) is not a change.
 fn pay_changes(page: &Value, m: &Money, today: Date) -> Option<String> {
+    // Cut short, its oldest pays (and the first change) are not in it.
+    if cut(&Value::Null, page) {
+        return None;
+    }
     let mut pays: Vec<(Date, i64)> = list(page, "transactions").iter()
         .filter(|t| s(t, "type") == "INCOME" && s(t, "category").eq_ignore_ascii_case("Salary"))
         .filter_map(|t| Some((date(s(t, "date"))?, int(t, "amount")))).collect();
@@ -237,7 +258,11 @@ fn pay_changes(page: &Value, m: &Money, today: Date) -> Option<String> {
 /// "ever" were answered from the three budget months above (bench v3, 2026-10-30).
 fn this_year(o: &mut String, ledger: &Value, cash_ids: &[i64], m: &Money, today: Date) {
     let year = jiff::civil::date(today.year(), 1, 1);
-    let rows: Vec<Value> = list(ledger, "transactions").iter().filter(|t| date(s(t, "date")).is_some_and(|d| d >= year && d <= today)).cloned().collect();
+    // Cut at its limit, the page holds the newest entries only: a year (or a ledger) older than its
+    // oldest would be added up short.
+    let whole = whole_from(ledger);
+    let rows: Vec<Value> = list(ledger, "transactions").iter()
+        .filter(|t| whole.is_some_and(|from| from <= year) && date(s(t, "date")).is_some_and(|d| d >= year && d <= today)).cloned().collect();
     let page = serde_json::json!({ "transactions": rows });
     let e = Entries::of(&page);
     if !e.rows.is_empty() {
@@ -267,6 +292,9 @@ fn this_year(o: &mut String, ledger: &Value, cash_ids: &[i64], m: &Money, today:
             let _ = writeln!(o, "- Taken out as cash (transfers into Cash: an ATM, a \"retrait\"): {} ({}).", m.fmt(cash.iter().map(|t| int(t, "amount")).sum()), cash.len());
         }
         let _ = writeln!(o, "- One shop or one kind of thing this year: money.tx.list with its query and from {year}.");
+    }
+    if whole != Some(Date::MIN) {
+        return;
     }
     let all = Entries::of(ledger);
     let Some(first) = all.rows.iter().filter_map(|t| date(s(t, "date"))).min() else { return };
@@ -745,8 +773,8 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
     let today = ctx.today;
     let m = Money::of(if s(r, "currency").is_empty() { &ctx.currency } else { s(r, "currency") });
     let [this_month, last_month, _] = pages;
-    // A ledger cut short would leave its oldest entries out of every whole-ledger figure.
-    let ledger = ledger.filter(|l| l["more"] != true);
+    // `ledger` is every entry, or the newest money.tx.list lists: each figure made from it reads it
+    // only over days it holds whole ([`whole_from`]).
     let mut o = String::new();
     let _ = writeln!(o, "TALLY (budget app). {} Amounts are in {}. {TALLY_IS}", today_line(today), m.code);
     let _ = writeln!(o, "{}", calendar(today));
@@ -1046,7 +1074,7 @@ fn month_by_month(o: &mut String, pages: [Option<&Value>; 3], series: [Option<&V
         let costliest = (0..labels.len().saturating_sub(1)).filter(|i| out.get(*i).and_then(Value::as_i64).unwrap_or(0) > 0)
             .max_by_key(|i| out.get(*i).and_then(Value::as_i64).unwrap_or(0));
         if let (Some(i), Some(all)) = (costliest, ledger) {
-            if let Some((a, b)) = days(i) {
+            if let Some((a, b)) = days(i).filter(|(a, _)| whole_from(all).is_some_and(|from| from <= *a)) {
                 let rows: Vec<Value> = list(all, "transactions").iter().filter(|t| date(s(t, "date")).is_some_and(|d| d >= a && d <= b)).cloned().collect();
                 let page = serde_json::json!({ "transactions": rows });
                 let e = Entries::of(&page);
@@ -1251,6 +1279,12 @@ fn ledger_matches(o: &mut String, query: &str, page: &Value, m: &Money, today: D
     }
     let year = jiff::civil::date(today.year(), 1, 1);
     let e = Entries::of(page);
+    if cut(&Value::Null, page) {
+        // More match than one page lists: its own totals count them all, its rows only the newest.
+        let _ = writeln!(o, "\nIN THE WHOLE LEDGER (every entry ever, not only this budget month), matching \"{query}\": more than {} entries. Spent: {}. Income: {}. \
+            For one year or month of them, read it with from and to.", rows.len(), m.fmt(int(page, "spent")), m.fmt(int(page, "income")));
+        return;
+    }
     let _ = writeln!(o, "\nIN THE WHOLE LEDGER (every entry ever, not only this budget month), matching \"{query}\": {}.", e.counts());
     for (kind, name) in [("EXPENSE", "Spent"), ("INCOME", "Income"), ("TRANSFER", "Moved between accounts (transfers, not spending)")] {
         let these: Vec<&Value> = rows.iter().filter(|t| s(t, "type") == kind).collect();
@@ -1345,9 +1379,16 @@ fn tx_list(payload: &Value, r: &Value, lists: Option<&Value>, unsearched: Option
         }
         return o;
     }
+    // Cut at its limit, the page lists the newest entries alone: its own totals count them all.
+    let listed_only = cut(payload, r);
+    let (spent, income) = if listed_only { (int(r, "spent"), int(r, "income")) } else { (e.spent, e.income) };
+    if listed_only {
+        let _ = writeln!(o, "MORE ENTRIES THAN ARE LISTED: only the newest {} are listed. Spent and Income just below count every entry; every other count \
+            and sum here counts the listed ones alone. For the others, read fewer days (from and to), or a query or a category_id.", e.rows.len());
+    }
     let _ = writeln!(o, "{}.", e.counts());
-    let _ = writeln!(o, "- Spent (all expenses added up): {}", logged(e.spent, &m));
-    let _ = writeln!(o, "- Income: {}", logged(e.income, &m));
+    let _ = writeln!(o, "- Spent (all expenses added up): {}", logged(spent, &m));
+    let _ = writeln!(o, "- Income: {}", logged(income, &m));
     if e.moved != 0 {
         let _ = writeln!(o, "- Moved between accounts (transfers, not spending): {}", m.fmt(e.moved));
         transfers_into(&mut o, e.rows, lists, &m);
@@ -1467,7 +1508,8 @@ fn tx_list(payload: &Value, r: &Value, lists: Option<&Value>, unsearched: Option
     }
     let shown = e.rows.len().min(LISTED_ENTRIES);
     if shown < e.rows.len() {
-        let _ = writeln!(o, "\nENTRIES, the newest {shown} of {} (every figure above counts them all; a query, a category_id or fewer days lists the others) (#id, day, note, amount, category, account):", e.rows.len());
+        let counts = if listed_only { "the figures above count those listed" } else { "every figure above counts them all" };
+        let _ = writeln!(o, "\nENTRIES, the newest {shown} of {} ({counts}; a query, a category_id or fewer days lists the others) (#id, day, note, amount, category, account):", e.rows.len());
     } else {
         let _ = writeln!(o, "\nENTRIES, newest first (#id, day, note, amount, category, account):");
     }
@@ -2855,7 +2897,7 @@ mod tests {
             .iter().enumerate().map(|(i, d)| tx(200 + i as i64, "INCOME", 215000, d, Some("Salary"), "Pay")).collect();
         // The search matched a note, not a pay.
         pays.push(tx(300, "EXPENSE", 1200, "2026-08-14", Some("Dining"), "Lunch, salary day"));
-        let extras = [None, None, None, None, None, None, None, Some(json!({"transactions": pays, "more": false}))];
+        let extras = [None, None, None, None, None, None, None, Some(json!({"transactions": pays}))];
         let text = render("money.summary", &json!({}), &summary(), &extras, &ctx()).unwrap();
         assert!(text.contains("- Pays (Salary) in each month, the whole ledger: July 2026 3, August 2026 2, September 2026 2, October 2026 1 so far; months with 3 or more: July 2026.\n"), "{text}");
         let mut mid = summary();
@@ -2864,8 +2906,39 @@ mod tests {
         let text = render("money.summary", &json!({}), &mid, &extras, &ctx()).unwrap();
         assert!(text.contains("- Pays (Salary), the whole ledger: 2 in most budget months, fewer in Jun 15 to Jul 14 2026 (1). Budget months with 3 or more: \
             Jul 15 to Aug 14 2026. Calendar months with 3 or more: July 2026.\n"), "{text}");
-        let cut = [None, None, None, None, None, None, None, Some(json!({"transactions": [], "more": true}))];
-        assert!(!render("money.summary", &json!({}), &summary(), &cut, &ctx()).unwrap().contains("Pays (Salary)"));
+    }
+
+    /// A whole ledger longer than money.tx.list lists (2,000 entries) comes back with its newest
+    /// alone, and no `more` to say so: every figure over days it does not hold whole is left out,
+    /// not added up short. Its own `spent` and `income` count every entry.
+    #[test]
+    fn a_ledger_cut_at_its_limit_is_not_added_up_as_if_whole() {
+        let limit = relay_money::ledger::TX_LIST_LIMIT as i64;
+        // Two a day back from today: the oldest listed is in 2024, so this year is whole.
+        let mut rows: Vec<Value> = (0..limit).map(|i| {
+            let d = ctx().today.checked_sub(jiff::Span::new().days(i / 2)).unwrap();
+            if i % 14 == 0 { tx(10_000 + i, "INCOME", 215000, &d.to_string(), Some("Salary"), "Salaire") } else { tx(10_000 + i, "EXPENSE", 1000, &d.to_string(), None, "Café") }
+        }).collect();
+        let ledger = json!({"transactions": rows.clone(), "spent": 99_999_00, "income": 88_888_00});
+        let text = render("money.summary", &json!({}), &summary(), &[None, None, None, None, None, None, None, Some(ledger.clone())], &ctx()).unwrap();
+        assert!(text.contains("THIS YEAR (calendar year 2026"), "this year is whole: {text}");
+        for gone in ["THE WHOLE LEDGER", "Pays (Salary)", "Pay (Salary) per pay"] {
+            assert!(!text.contains(gone), "{gone} from a cut ledger: {text}");
+        }
+        // One a day from Jan 1: cut inside this year, so not even the year is whole.
+        rows = (0..limit).map(|i| tx(i, "EXPENSE", 1000, &format!("2026-{:02}-{:02}", 1 + (i / 28) % 9, 1 + i % 28), None, "Café")).collect();
+        let text = render("money.summary", &json!({}), &summary(), &[None, None, None, None, None, None, None, Some(json!({"transactions": rows}))], &ctx()).unwrap();
+        assert!(!text.contains("THIS YEAR (calendar year"), "{text}");
+        // Read by the model over a range: the totals are the page's, the rest says it is partial.
+        let asked = json!({"from": "1970-01-01"});
+        let mut all = ledger;
+        all["period"] = json!({"start": "1970-01-01", "end_exclusive": "2026-10-16"});
+        let text = render("money.tx.list", &asked, &all, &[None], &ctx()).unwrap();
+        assert!(text.contains("MORE ENTRIES THAN ARE LISTED: only the newest 2000 are listed.") && text.contains("- Spent (all expenses added up): $99,999.00\n- Income: $88,888.00\n"), "{text}");
+        assert!(!render("money.tx.list", &asked, &page(), &[None], &ctx()).unwrap().contains("MORE ENTRIES"), "a page under its limit is whole");
+        // And a whole-ledger search that matches more than it lists.
+        let text = render("money.tx.list", &json!({"query": "café"}), &json!({"period": page()["period"], "transactions": []}), &[None, Some(all)], &ctx()).unwrap();
+        assert!(text.contains("matching \"café\": more than 2000 entries. Spent: $99,999.00. Income: $88,888.00."), "{text}");
     }
 
     /// "This year", "ever", "when did my pay go up" and "what made that month so expensive" were

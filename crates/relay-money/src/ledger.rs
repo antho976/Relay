@@ -303,6 +303,9 @@ type ReminderRow = (i64, String, i64, String, Option<String>);
 /// The most dates one bill posts in one pass, as Tally's `RecurringPoster.CATCH_UP_LIMIT`: a weekly
 /// bill a year overdue. A longer backlog is paid over the passes that follow, never dropped.
 pub const CATCH_UP_LIMIT: usize = 60;
+/// The most entries [`Ledger::tx_list`] lists when its query asks for no `limit`: a page that
+/// holds this many may have been cut, its oldest matching entries left out.
+pub const TX_LIST_LIMIT: u32 = 2000;
 
 /// The largest amount an entry may have, in minor units: ten integer digits with up to three
 /// decimals, as far as the keypad goes. A thousand of them still sum far inside an `i64`.
@@ -532,7 +535,8 @@ impl Ledger {
     }
 
     /// One budget period's entries, newest first, narrowed by a search over the note, the
-    /// category and the account in any case and alphabet ([`text_match`]).
+    /// category and the account in any case and alphabet ([`text_match`]). At most `limit`
+    /// ([`TX_LIST_LIMIT`] when none is asked) are listed; `income` and `spent` count every one.
     pub fn tx_list(&self, q: &TxQuery, today: Date) -> Result<TxPage> {
         let period = self.period(today)?.shift(q.period_offset.unwrap_or(0).clamp(-MAX_PERIOD_OFFSET, MAX_PERIOD_OFFSET));
         let period = match (q.from, q.to) {
@@ -556,7 +560,7 @@ impl Ledger {
             Self::TX_SELECT
         ))?;
         let rows = st.query_map(
-            params![period.start.to_string(), period.end_exclusive.to_string(), pattern, q.account_id, q.category_id, q.limit.unwrap_or(2000)],
+            params![period.start.to_string(), period.end_exclusive.to_string(), pattern, q.account_id, q.category_id, q.limit.unwrap_or(TX_LIST_LIMIT)],
             Self::tx_row,
         )?;
         let transactions: Vec<Tx> = rows.collect::<std::result::Result<_, _>>()?;
