@@ -169,7 +169,9 @@ pub fn checked(mut edit: ClipEdit, duration: f64, width: u32, height: u32) -> Re
     if edit.tighten_ms.is_some_and(|g| !(200..=5000).contains(&g)) {
         return Err("cut pauses of 200 to 5000 ms".into());
     }
-    let (w, h) = (width.max(1) as f64, height.max(1) as f64);
+    // At least the smallest rect: a VOD under 16 px (or not yet probed, 0) would make the clamps
+    // below run from 16 to less, which panics.
+    let (w, h) = (width.max(16) as f64, height.max(16) as f64);
     let fit = |r: &mut Rect| {
         r.w = r.w.clamp(16.0, w);
         r.h = r.h.clamp(16.0, h);
@@ -314,9 +316,14 @@ mod tests {
         assert_eq!(e.hook, "Hi");
         assert_eq!(e.emphasis, vec!["a"]);
         assert_eq!(e.punch_at, vec![15.0]);
-        let mut far = edit;
+        let mut far = edit.clone();
         far.keep = vec![[90.0, 120.0]];
         assert!(checked(far, 100.0, 1920, 1080).is_err());
+        // A VOD under 16 px, or not yet probed (0 × 0): checked, not a panic.
+        for (w, h) in [(0, 0), (10, 8), (1920, 4)] {
+            let e = checked(edit.clone(), 100.0, w, h).unwrap();
+            assert!(e.view.unwrap().w >= 16.0 && e.view.unwrap().x >= 0.0, "{w}×{h}");
+        }
     }
 
     #[test]
