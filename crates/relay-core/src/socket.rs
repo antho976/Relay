@@ -606,8 +606,8 @@ impl LineReader {
 /// project and those of none; of the mail, only what is addressed to it, broadcast to its
 /// project, or its own. Devices are the one thing every project shares, so their events pass
 /// whichever project's run or claim raised them — a lease held from another project is still
-/// the one an agent waits on. This is consistency with the per-op checks, not confidentiality:
-/// an agent can read the store file.
+/// the one an agent waits on. No thread's events: `thread.get` hands an agent no Aide chat. This
+/// is consistency with the per-op checks, not confidentiality: an agent can read the store file.
 struct AgentScope {
     project_id: relay_bus::types::Id,
     session: String,
@@ -617,6 +617,13 @@ impl AgentScope {
     fn admits(&self, ev: &Event) -> bool {
         if ev.ev.starts_with("device.") {
             return true;
+        }
+        // A thread's events carry its messages (`thread.message`, the reply as it is written in
+        // `thread.delta`, the last one's start in `thread.changed`): an Aide chat's hold what the
+        // person's own models read from data for them only (docs/AIDE.md), and a session's agent
+        // is Claude. No session is a party to a thread, so none is handed one's events.
+        if ev.ev.starts_with("thread.") {
+            return false;
         }
         let project = ev.project_id.or_else(|| ev.payload.get("project_id").and_then(serde_json::Value::as_i64));
         if project.is_some_and(|project| project != self.project_id) {
@@ -857,6 +864,22 @@ async fn serve_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStream
             let refused = Response::err(req.id, peer.refusal(&req.actor.to_string()));
             let _ = out_tx.send(serde_json::to_string(&refused)?).await;
             continue;
+        }
+        // Aide's agent, for what its thread may read now (`aide::runs::ops_for_thread`): its MCP
+        // server's list was fixed when it started, and it lives on between the person's messages,
+        // so a source made theirs only since, or a thread moved to Claude's, would still be read.
+        if let (crate::peer::Peer::Aide(id), relay_bus::Actor::User) = (&peer, &req.actor) {
+            if req.op != "bus.ops" {
+                let (e, id, op) = (engine.clone(), *id, req.op.clone());
+                let may = tokio::task::spawn_blocking(move || crate::aide::runs::ops_for_thread(&e, id).contains(&op.as_str())).await.unwrap_or(false);
+                if !may {
+                    let refused = BusError::refused("aide.source", format!("{} is not one of this Aide chat's ops now", req.op))
+                        .with_hint("a source for the person's own models only, or turned off, is not read on Claude's")
+                        .with_details(serde_json::json!({"peer": "aide", "thread": id}));
+                    let _ = out_tx.send(serde_json::to_string(&Response::err(req.id, refused))?).await;
+                    continue;
+                }
+            }
         }
         // A keystroke is never refused into a wait, and must not queue on the replay lock.
         let arrival = if req.op == relay_bus::ops::bus::Wait::NAME || engine.answers_from_memory(&req) {
@@ -2302,5 +2325,139 @@ mod thread_tests {
         assert_eq!(resp.error.map(|e| e.code), Some("session.shell".to_string()), "nor its transcript");
         ok(&engine, "session.close", json!({"session": shell}));
         assert!(!engine.is_shell_pty(shell.as_str().unwrap()), "forgotten with its PTY");
+    }
+    /// Aide with a server of the person's own (`farm`), and its default model none: Claude's.
+    fn aide_engine() -> Arc<Engine> {
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        let mut settings = ok(&engine, "aide.settings.get", json!({}));
+        settings["endpoints"] = json!([{"id": "farm", "name": "Farm", "url": "http://127.0.0.1:9"}]);
+        ok(&engine, "aide.settings.set", settings);
+        engine
+    }
+
+    fn tier(engine: &Engine, source: &str, tier: &str) {
+        let mut settings = ok(engine, "aide.settings.get", json!({}));
+        settings["tiers"][source] = json!(tier);
+        ok(engine, "aide.settings.set", settings);
+    }
+
+    async fn ask(client: &mut Client, op: &str, payload: serde_json::Value) -> Response {
+        client.call(&Request::new(Actor::User, op, payload), |_| {}).await.unwrap()
+    }
+
+    /// Aide's agent outlives the person's message: it reads what its thread may read when it asks,
+    /// not what it might when it started. Tally made the person's own models' only, the Chief of
+    /// Staff on Claude's no longer reads it, though its MCP server still lists `money.*`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn aides_agent_reads_what_its_thread_may_read_now_not_when_it_started() {
+        let engine = aide_engine();
+        let chief = ok(&engine, "aide.chat", json!({}))["thread_id"].as_i64().unwrap();
+        let mut aide = connect_as(&engine, crate::peer::Peer::Aide(chief));
+        let read = ask(&mut aide, "money.summary", json!({})).await;
+        assert!(read.ok, "Tally is any model's: {:?}", read.error);
+        tier(&engine, "money", "local_only");
+        let read = ask(&mut aide, "money.summary", json!({})).await;
+        assert_eq!(read.error.map(|e| e.code).as_deref(), Some("aide.source"), "Claude's no longer reads Tally");
+        assert!(ask(&mut aide, "aide.fact.list", json!({})).await.ok, "its own ops are its own still");
+        assert!(ask(&mut aide, "bus.ops", json!({})).await.ok, "and its tools are listed");
+        let mut person = connect_as(&engine, crate::peer::Peer::Outside);
+        assert!(ask(&mut person, "money.summary", json!({})).await.ok, "the person reads their ledger");
+        // On the person's own server, the same chat reads it again.
+        ok(&engine, "thread.set", json!({"id": chief, "model": "farm"}));
+        assert!(ask(&mut aide, "money.summary", json!({})).await.ok);
+    }
+
+    /// What a bot on the person's own model said as an interrupt is a notification too: the
+    /// person and their own models read it; Aide on Claude's and the assistant do not, in
+    /// `notify.list` or the dashboard.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_interrupt_your_own_model_wrote_is_no_notification_for_claude() {
+        let engine = aide_engine();
+        tier(&engine, "money", "local_only");
+        let mut settings = ok(&engine, "aide.settings.get", json!({}));
+        (settings["quiet_start"], settings["quiet_end"]) = (json!(0), json!(0));
+        ok(&engine, "aide.settings.set", settings);
+        let bot = ok(&engine, "aide.job.save", json!({"spec": {"name": "Spending", "instructions": "Watch it.", "sources": ["money", "dev"], "model": "farm"}}));
+        let mine = ok(&engine, "aide.chat", json!({"job_id": bot["id"]}))["thread_id"].as_i64().unwrap();
+        let mut own = connect_as(&engine, crate::peer::Peer::Aide(mine));
+        let said = ask(&mut own, "aide.notify", json!({"title": "SECRET412 at the shop", "body": "SECRET413", "level": "interrupt"})).await;
+        assert_eq!(said.result.as_ref().map(|r| r["notified"].clone()), Some(json!(true)), "{said:?}");
+
+        let chief = ok(&engine, "aide.chat", json!({}))["thread_id"].as_i64().unwrap();
+        let assistant = crate::threads::create(&engine, crate::threads::ASSISTANT, "Help", None, None, &crate::time::now()).unwrap().id;
+        for (who, peer, reads) in [
+            ("the person", crate::peer::Peer::Outside, true),
+            ("the bot on their server", crate::peer::Peer::Aide(mine), true),
+            ("the Chief of Staff on Claude's", crate::peer::Peer::Aide(chief), false),
+            ("the assistant on Claude's", crate::peer::Peer::Assistant(assistant), false),
+        ] {
+            let mut client = connect_as(&engine, peer);
+            let listed = ask(&mut client, "notify.list", json!({})).await;
+            let listed = listed.result.unwrap_or_else(|| panic!("{who}: {:?}", listed.error));
+            assert_eq!(listed.to_string().contains("SECRET41"), reads, "{who}: {listed}");
+            assert_eq!(listed["unread"], json!(u32::from(reads)), "{who}");
+            if who != "the person" && reads {
+                continue;
+            }
+            if matches!(who, "the person" | "the assistant on Claude's") {
+                let board = ask(&mut client, "dashboard.get", json!({})).await.result.unwrap();
+                assert_eq!(board["notifications"].to_string().contains("SECRET41"), reads, "{who}: {board}");
+            }
+        }
+    }
+
+    /// The run a follow-up or a rule set from private data woke on Claude's is not told what
+    /// woke it, in its wake or in the answer to `aide.run.finish`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn finishing_a_run_on_claude_does_not_hand_back_a_private_trigger() {
+        use relay_aide::model::{Reason, RunState};
+        let engine = aide_engine();
+        tier(&engine, "money", "local_only");
+        let bot = ok(&engine, "aide.job.save", json!({"spec": {"name": "Dev watch", "instructions": "Look.", "sources": ["dev"], "model": "claude-haiku-5-5"}}));
+        let thread = ok(&engine, "aide.chat", json!({"job_id": bot["id"]}))["thread_id"].as_i64().unwrap();
+        let mut aide = connect_as(&engine, crate::peer::Peer::Aide(thread));
+        for (reason, private) in [(Reason::FollowUp, true), (Reason::Rule, true), (Reason::FollowUp, false)] {
+            let now = crate::time::now();
+            crate::aide::with_db(&engine, |db| {
+                let id = db.add_run(bot["id"].as_i64().unwrap(), reason, "SECRET412 again", private, RunState::Queued, None, &now)?;
+                db.start_run(id, Some("claude-haiku-5-5"), "claude", thread, &[], "2999-01-01T00:00:00Z")
+            }).unwrap();
+            let done = ask(&mut aide, "aide.run.finish", json!({"outcome": "done"})).await;
+            let done = done.result.unwrap_or_else(|| panic!("{:?}", done.error));
+            assert_eq!(done["trigger"].as_str().unwrap().contains("SECRET412"), !private, "{reason:?}, private {private}: {done}");
+        }
+    }
+
+    /// An agent session is Claude: it reads no Aide chat, by `thread.get`, `thread.list` or the
+    /// events a thread sends, while the person reads them all.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_agent_session_reads_no_aide_chat() {
+        let engine = aide_engine();
+        engine.store.lock().execute_batch(
+            "INSERT INTO workspaces(id, path, name, created_at, updated_at) VALUES (1, '/ws', 'ws', 'now', 'now');
+             INSERT INTO projects(id, workspace_id, path, name, created_at, updated_at) VALUES (1, 1, '/ws/one', 'one', 'now', 'now');
+             INSERT INTO sessions(name, project_id, provider, role, state, token, created_at, updated_at) VALUES
+               ('ghost', 1, 'claude', 'builder', 'running', 'tok-ghost', 'now', 'now');",
+        ).unwrap();
+        let agent = |op: &str, payload: serde_json::Value| Request::new(Actor::agent("ghost"), op, payload).with_token("tok-ghost");
+        let chief = ok(&engine, "aide.chat", json!({}))["thread_id"].as_i64().unwrap();
+        let mut ghost = connect_as(&engine, crate::peer::Peer::Session("ghost".into()));
+        let mut person = connect_as(&engine, crate::peer::Peer::Outside);
+        let since = crate::time::now();
+        crate::threads::post_note(&engine, chief, &json!({"title": "SECRET412 at the shop"}), &crate::time::now()).unwrap();
+
+        let got = ghost.call(&agent("thread.get", json!({"id": chief})), |_| {}).await.unwrap();
+        assert_eq!(got.error.map(|e| e.code).as_deref(), Some("thread.not_found"));
+        let listed = ghost.call(&agent("thread.list", json!({"kind": "aide"})), |_| {}).await.unwrap();
+        assert_eq!(listed.result.unwrap()["threads"], json!([]));
+        let waited = json!({"events": ["thread.*"], "since": since, "timeout_ms": 300});
+        let woken = ghost.call(&agent("bus.wait", waited.clone()), |_| {}).await.unwrap();
+        assert_eq!(woken.result.as_ref().map(|r| r["timed_out"].clone()), Some(json!(true)), "{woken:?}");
+
+        let read = ask(&mut person, "thread.get", json!({"id": chief})).await.result.unwrap();
+        assert!(read["messages"].to_string().contains("SECRET412"));
+        assert_eq!(ask(&mut person, "thread.list", json!({"kind": "aide"})).await.result.unwrap()["threads"].as_array().map(Vec::len), Some(1));
+        let woken = ask(&mut person, "bus.wait", waited).await.result.unwrap();
+        assert!(woken["event"]["payload"].to_string().contains("SECRET412"), "{woken}");
     }
 }

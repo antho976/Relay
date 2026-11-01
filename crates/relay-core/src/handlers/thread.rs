@@ -11,12 +11,29 @@ use relay_bus::ops::thread::*;
 use relay_bus::{BusError, Empty};
 use serde_json::json;
 
+/// Whether the caller may read Aide's chats (docs/AIDE.md): the person. An agent session is
+/// Claude, and a chat holds what the person's own models read and wrote from data for them only
+/// (a run's wake, their replies, a bot's notes in the Chief of Staff's).
+fn aide_reader(ctx: &crate::engine::Unlocked) -> bool {
+    ctx.actor.is_privileged() && ctx.thread().is_none()
+}
+
 pub fn register(e: &mut Engine) {
-    e.register_unlocked::<List>(|ctx, p| Ok(ListOut { threads: threads::list(ctx.engine(), threads::checked_kind(p.kind.as_deref())?)? }));
+    e.register_unlocked::<List>(|ctx, p| {
+        let kind = threads::checked_kind(p.kind.as_deref())?;
+        if kind == threads::AIDE && !aide_reader(ctx) {
+            return Ok(ListOut { threads: Vec::new() });
+        }
+        Ok(ListOut { threads: threads::list(ctx.engine(), kind)? })
+    });
     e.register_unlocked::<Get>(|ctx, p| {
         let engine = ctx.engine();
+        let thread = threads::get(engine, p.id)?;
+        if thread.kind == threads::AIDE && !aide_reader(ctx) {
+            return Err(BusError::not_found("thread.not_found", format!("No thread {}", p.id)));
+        }
         let page = threads::page(engine, p.id, p.after, p.before)?;
-        Ok(GetOut { thread: threads::get(engine, p.id)?, messages: page.messages, earlier: page.earlier, later: page.later })
+        Ok(GetOut { thread, messages: page.messages, earlier: page.earlier, later: page.later })
     });
     // A message's pictures are only looked up here, in `threads.db`; the agent is handed their
     // bytes after the handler (`threads::deliver`).

@@ -299,6 +299,16 @@ waits on Aide, and a channel the person is typing in keeps its run queued.
   learned from a local-only source is not handed to Claude's either, nor one from a source turned
   off to any model. You see everything. What was kept before rows were marked cannot be told
   apart, so with any source local only, all of it is taken as private.
+- **Every other way out is closed too** (reviewed 2026-11-01). An interrupt is also a Relay
+  notification: `notify.list` and the dashboard hand Aide's to you and your own models only, never
+  to Aide or the assistant on Claude's, and a run's wake reads its sources as its own thread
+  would. `aide.run.finish` does not hand Claude's back a trigger its wake kept from it. A rule on
+  a source for your own models only marks its run's trigger so, and one on a source turned off
+  wakes nothing (what it found would be the trigger); turned back on, it speaks of what is new.
+  Aide's agent is checked against what its thread may read when it asks, not when it started, so
+  a source made yours only while a chat's agent is live is not read on Claude's. And an agent
+  session (Claude, with a shell) reads no Aide chat: `thread.get` and `thread.list` leave them
+  out, and `bus.wait` and `bus.subscribe` hand a session no thread's events.
 - **Approvals.** Aide has no outward action to approve: it cannot pay, trade, delete, send to
   anyone but you, or change settings (`policy::REFUSED`); those ops are not in any run's list. What
   needs you is a job it proposes (does nothing until turned on), a fact it learned (not given to
