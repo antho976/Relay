@@ -206,6 +206,10 @@ fn complete_group_assignment(ctx: &mut Ctx, session: &Session, task_id: Id, sha:
 /// current task instead and offers the launch text only as background (RA-397).
 /// `transcript::relay_typed` reads these back as Relay's lines in the agent's chat: keep their openings.
 fn launch_nudge(row: &Row_, first_launch: bool) -> Option<String> {
+    // A shell runs whatever is typed into it: there is no agent to read an assignment.
+    if is_shell(&row.session) {
+        return None;
+    }
     let assignment = row.launch_prompt.as_deref().map(str::trim).filter(|text| !text.is_empty());
     if let Some(assignment) = assignment.filter(|_| first_launch) {
         return Some(format!(
@@ -862,6 +866,19 @@ const AGENT_ENV: &[&str] = &[
     "RELAY_SESSION", "RELAY_TOKEN", "RELAY_INSTANCE", "RELAY_PROJECT", "RELAY_WORKTREE", "RELAY_BRIEF", "RELAY_BIN", "RELAY_STORE",
 ];
 
+/// What a shell does not inherit from the engine: [`AGENT_ENV`], every other `RELAY_` variable
+/// (`RELAY_ACTOR` among them), and git's repository variables ([`crate::check::GIT_LOCAL_ENV`]),
+/// which point every git command typed into it at another checkout.
+fn shell_env_remove(inherited: impl Iterator<Item = std::ffi::OsString>) -> Vec<String> {
+    let mut names: Vec<String> = AGENT_ENV.iter().chain(crate::check::GIT_LOCAL_ENV).map(|name| name.to_string()).collect();
+    for name in inherited.filter_map(|name| name.into_string().ok()) {
+        if name.starts_with("RELAY_") && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
 /// A shell's launch: the person's login shell in the project's folder, or their home when the
 /// folder is gone. No hooks, brief, token or Relay variables: there is no agent to tell anything.
 fn shell_launch(row: Row_, kind: LaunchKind, cmd: PathBuf, project_path: &str, initial_scrollback: Vec<u8>) -> PreparedLaunch {
@@ -881,7 +898,7 @@ fn shell_launch(row: Row_, kind: LaunchKind, cmd: PathBuf, project_path: &str, i
             cmd: cmd.display().to_string(),
             args,
             env: Vec::new(),
-            env_remove: AGENT_ENV.iter().map(|name| name.to_string()).collect(),
+            env_remove: shell_env_remove(std::env::vars_os().map(|(name, _)| name)),
             cwd,
             cols: 120,
             rows: 40,
@@ -1188,8 +1205,15 @@ fn finish_launch(ctx: &mut Ctx, prepared: PreparedLaunch) -> Result<Session, Bus
          exit_code=NULL,restore_reason=NULL,done_pending_stop=NULL,updated_at=?3 WHERE id=?4",
         params![pty.pid() as i64, epoch as i64, ctx.now, sid],
     ).bus()?;
-    // Into the agents' slice, where gaming mode can cap it and everything it starts.
-    crate::gaming::adopt(pty.pid(), &name);
+    // Into the agents' slice, where gaming mode can cap it and everything it starts. Not the
+    // person's own shell: what they run in it is theirs, gaming or not.
+    if !is_shell(&current.session) {
+        crate::gaming::adopt(pty.pid(), &name);
+    }
+    ctx.engine().mark_shell_pty(sid, is_shell(&current.session));
+    if is_shell(&current.session) {
+        pty.hang_up_first();
+    }
     if let Some(old) = ctx.engine().set_pty(sid, &name, pty) {
         kill_detached(old, Duration::from_millis(500));
     }
@@ -1551,7 +1575,13 @@ pub fn register(e: &mut Engine) {
                     },
                 ),
             )),
-        }, |row| {
+        }.and_then(|()| match &p.prompt {
+            // It would be typed in and run (`launch_nudge`): a shell has no agent to read it.
+            Some(prompt) if is_shell(&row.session) && !prompt.trim().is_empty() => Err(BusError::invalid(
+                "session.shell", format!("{} is a shell: it takes no opening message", row.session.name),
+            )),
+            _ => Ok(()),
+        }), |row| {
             if let Some(prompt) = &p.prompt {
                 row.launch_prompt = (!prompt.trim().is_empty()).then(|| prompt.clone());
             }
@@ -2620,6 +2650,19 @@ pub fn pty_by_name(engine: &Engine, name: &str) -> Result<(Id, Arc<Pty>), BusErr
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn a_shell_inherits_no_relay_or_git_repository_variable() {
+        let inherited = ["RELAY_ACTOR", "RELAY_TOKEN", "RELAY_SOMETHING_NEW", "PATH", "HOME", "GIT_AUTHOR_NAME"].map(std::ffi::OsString::from);
+        let removed = shell_env_remove(inherited.into_iter());
+        for name in ["RELAY_ACTOR", "RELAY_SOMETHING_NEW", "RELAY_SESSION", "GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE"] {
+            assert!(removed.iter().any(|n| n == name), "{name} is removed");
+        }
+        for name in ["PATH", "HOME", "GIT_AUTHOR_NAME"] {
+            assert!(!removed.iter().any(|n| n == name), "{name} is the person's");
+        }
+        assert_eq!(removed.iter().filter(|n| *n == "RELAY_TOKEN").count(), 1, "named once");
+    }
 
     #[test]
     fn launch_files_replace_planted_symlinks_instead_of_following_them() {

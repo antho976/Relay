@@ -127,7 +127,7 @@ pub fn identify(stream: &tokio::net::UnixStream, engine: &Engine) -> Peer {
     // and not a stranger that inherited its number (kernels before 6.5 have no SO_PEERPIDFD).
     let pidfd = peer_pidfd(stream.as_raw_fd());
     let peer = match classify_with(pid, std::process::id(), &engine.session_pids(), &crate::threads::agent_pids(engine), proc_ppid) {
-        Peer::Session(name) if crate::sessions::by_name(&engine.store.lock(), &name).is_ok_and(|row| crate::handlers::session::is_shell(&row.session)) => {
+        Peer::Session(name) if engine.is_shell_pty(&name) => {
             Peer::Shell(name)
         }
         peer => peer,

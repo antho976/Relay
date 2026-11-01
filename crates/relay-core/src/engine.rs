@@ -561,6 +561,9 @@ pub struct Engine {
     /// Session name → id for the live PTYs above, so `session.input` can resolve a keystroke's
     /// target without a `SELECT` (D148).
     pty_ids: std::sync::Mutex<BTreeMap<String, Id>>,
+    /// The live PTYs above that are the person's shells (`Provider::Shell`), so the socket door
+    /// can tell a shell's process tree from an agent's without the store (`peer::identify`).
+    shell_ptys: std::sync::Mutex<HashSet<Id>>,
     pub(crate) mirrors: std::sync::Mutex<HashMap<Id, Arc<MirrorRuntime>>>,
     pub(crate) device_runs: std::sync::Mutex<HashMap<Id, Arc<RunRuntime>>>,
     pub(crate) device_watch: std::sync::Mutex<DeviceWatchState>,
@@ -629,6 +632,7 @@ impl Engine {
                 in_flight_done: std::sync::Condvar::new(),
                 ptys: std::sync::Mutex::new(BTreeMap::new()),
                 pty_ids: std::sync::Mutex::new(BTreeMap::new()),
+                shell_ptys: std::sync::Mutex::new(HashSet::new()),
                 mirrors: std::sync::Mutex::new(HashMap::new()),
                 device_runs: std::sync::Mutex::new(HashMap::new()),
                 device_watch: std::sync::Mutex::new(DeviceWatchState::default()),
@@ -849,11 +853,28 @@ impl Engine {
             .insert(name.to_string(), session_id);
         self.ptys.lock().unwrap_or_else(PoisonError::into_inner).insert(session_id, pty)
     }
+    /// Mark session `session_id`'s live PTY as the person's shell, or not.
+    pub(crate) fn mark_shell_pty(&self, session_id: Id, shell: bool) {
+        let mut shells = self.shell_ptys.lock().unwrap_or_else(PoisonError::into_inner);
+        if shell {
+            shells.insert(session_id);
+        } else {
+            shells.remove(&session_id);
+        }
+    }
+    /// Whether the live PTY named `name` is the person's shell. Memory only: the socket door asks
+    /// on a runtime thread, for every connection from a session's tree.
+    pub(crate) fn is_shell_pty(&self, name: &str) -> bool {
+        let Some(id) = self.pty_ids.lock().unwrap_or_else(PoisonError::into_inner).get(name).copied() else { return false };
+        self.shell_ptys.lock().unwrap_or_else(PoisonError::into_inner).contains(&id)
+    }
     pub fn take_pty(&self, session_id: Id) -> Option<Arc<Pty>> {
+        // The name first: a shell is never found by name without its mark (`is_shell_pty`).
         self.pty_ids
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .retain(|_, id| *id != session_id);
+        self.shell_ptys.lock().unwrap_or_else(PoisonError::into_inner).remove(&session_id);
         self.ptys.lock().unwrap_or_else(PoisonError::into_inner).remove(&session_id)
     }
     pub fn live_pty_count(&self) -> usize {
@@ -905,6 +926,7 @@ impl Engine {
             );
         }
         self.pty_ids.lock().unwrap_or_else(PoisonError::into_inner).clear();
+        self.shell_ptys.lock().unwrap_or_else(PoisonError::into_inner).clear();
         let ptys: Vec<(Id, Arc<Pty>)> = std::mem::take(&mut *self.ptys.lock().unwrap_or_else(PoisonError::into_inner)).into_iter().collect();
         if ptys.is_empty() {
             return;
@@ -1030,8 +1052,15 @@ impl Engine {
         self.dispatch_with_watch_state(req, door, None, Some(thread))
     }
 
-    pub(crate) fn dispatch_socket_watch(&self, req: Request, already_watching: bool) -> Response {
-        self.dispatch_with_watch_state(req, Door::Socket, Some(already_watching), None)
+    /// [`Engine::dispatch`] or [`Engine::dispatch_from_thread`], by who sent it: the socket door
+    /// passes every request from a connection through this, so no path it takes drops the
+    /// thread a handler's checks depend on.
+    pub fn dispatch_as(&self, req: Request, door: Door, thread: Option<Id>) -> Response {
+        self.dispatch_with_watch_state(req, door, None, thread)
+    }
+
+    pub(crate) fn dispatch_socket_watch(&self, req: Request, already_watching: bool, thread: Option<Id>) -> Response {
+        self.dispatch_with_watch_state(req, Door::Socket, Some(already_watching), thread)
     }
 
     fn dispatch_with_watch_state(&self, req: Request, door: Door, watching: Option<bool>, thread: Option<Id>) -> Response {

@@ -9,6 +9,7 @@ use relay_bus::envelope::{Event, Frame, Response, ENVELOPE_V};
 use relay_bus::error::BusError;
 use relay_bus::ops::bus::{SubscribeIn, SubscribeOut, WaitIn, WaitOut};
 use relay_bus::registry::Op;
+use relay_bus::types::Id;
 use relay_bus::{Empty, Request};
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
@@ -637,12 +638,12 @@ fn visible(scope: Option<&AgentScope>, ev: &Event) -> bool {
 /// token, schema, allowlist and role. They are dispatched like any request; their handlers
 /// only say "answered by the door", so that answer means every check passed. `Err` is the
 /// refusal to send; `Ok(Some)` is an agent, scoped to its own project and mail.
-async fn door_preflight(engine: &Arc<Engine>, req: &Request) -> Result<Result<Option<AgentScope>, Response>> {
+async fn door_preflight(engine: &Arc<Engine>, req: &Request, thread: Option<Id>) -> Result<Result<Option<AgentScope>, Response>> {
     let (e, r) = (engine.clone(), req.clone());
     let joined = tokio::task::spawn_blocking(move || {
         let id = r.id;
         let actor = r.actor.clone();
-        let resp = e.dispatch(r, Door::Socket);
+        let resp = e.dispatch_as(r, Door::Socket, thread);
         if resp.error.as_ref().map(|error| error.code.as_str()) != Some(crate::handlers::bus::DOOR_ONLY) {
             return Err(resp);
         }
@@ -671,17 +672,18 @@ fn own_session(mut req: Request) -> Request {
 
 /// The pipeline on the blocking pool: it takes the store lock, which a runtime thread must
 /// not wait on. A handler that panics is answered like an unlocked query ([`answered`]).
-async fn dispatch_blocking(engine: &Arc<Engine>, req: Request) -> Result<Response> {
+/// `thread` is the connection's (`peer::Peer::Thread`), else `None`.
+async fn dispatch_blocking(engine: &Arc<Engine>, req: Request, thread: Option<Id>) -> Result<Response> {
     let (e, id, op) = (engine.clone(), req.id, req.op.clone());
-    Ok(answered(id, &op, tokio::task::spawn_blocking(move || e.dispatch(req, Door::Socket)).await))
+    Ok(answered(id, &op, tokio::task::spawn_blocking(move || e.dispatch_as(req, Door::Socket, thread)).await))
 }
 
 /// The pipeline on this runtime thread, for a request that never waits ([`Engine::answers_from_memory`]).
 /// A panic is answered here: unwound through the connection's loop, it would end the connection
 /// with its streams and leave the keystroke unanswered.
-fn dispatch_inline(engine: &Engine, req: Request) -> Response {
+fn dispatch_inline(engine: &Engine, req: Request, thread: Option<Id>) -> Response {
     let (id, op) = (req.id, req.op.clone());
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.dispatch(req, Door::Socket)))
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.dispatch_as(req, Door::Socket, thread)))
         .unwrap_or_else(|_| failed(id, &op, &"it panicked"))
 }
 
@@ -715,6 +717,11 @@ const MAX_CONCURRENT_QUERIES: usize = 8;
 async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStream) -> Result<()> {
     // Who connected, once: a process never leaves the tree it was born in (RA-096, D165).
     let peer = crate::peer::identify(&stream, &engine);
+    serve_conn(engine, recent, stream, peer).await
+}
+
+/// One connection from `peer`, request by request.
+async fn serve_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStream, peer: crate::peer::Peer) -> Result<()> {
     // A thread's agent proposes for its own thread alone (`thread.propose`): its requests carry
     // the thread to their handler, which nothing in a request can claim.
     let thread = match peer {
@@ -865,7 +872,7 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
             let (e, tx, recent) = (engine.clone(), out_tx.clone(), recent.clone());
             let (id, op) = (req.id, req.op.clone());
             inflight.spawn(async move {
-                let resp = tokio::task::spawn_blocking(move || e.dispatch(req, Door::Socket)).await;
+                let resp = tokio::task::spawn_blocking(move || e.dispatch_as(req, Door::Socket, thread)).await;
                 drop(permit);
                 let resp = answered(id, &op, resp);
                 recent.refused(arrival, &resp);
@@ -892,7 +899,7 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
                 // A flag: a panic that poisoned it left it as true as it was.
                 let mut active = lease.active.lock().unwrap_or_else(|poison| poison.into_inner());
                 let on = req.payload["on"].as_bool();
-                let response = lease.engine.dispatch_socket_watch(req, *active);
+                let response = lease.engine.dispatch_socket_watch(req, *active, thread);
                 if response.ok {
                     *active = on.expect("successful Watch validated its boolean payload");
                 }
@@ -901,7 +908,7 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
             .await;
             answered(id, &op, resp)
         } else if req.op == relay_bus::ops::bus::Subscribe::NAME {
-            match door_preflight(&engine, &req).await? {
+            match door_preflight(&engine, &req, thread).await? {
                 Err(refused) => refused,
                 Ok(scope) => match serde_json::from_value::<SubscribeIn>(req.payload.clone()) {
                     Err(e) => Response::err(req.id, BusError::schema(&req.op, e)),
@@ -944,7 +951,7 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
             // The wake-up an agent has instead of a poll loop. It blocks on the event
             // broadcast inside this connection's task — no timer anywhere, and the engine's
             // store lock is never held while waiting (SPEC §15, D115).
-            match door_preflight(&engine, &req).await? {
+            match door_preflight(&engine, &req, thread).await? {
                 Err(refused) => refused,
                 Ok(scope) => match serde_json::from_value::<WaitIn>(req.payload.clone()) {
                     Err(e) => Response::err(req.id, BusError::schema(&req.op, e)),
@@ -1023,7 +1030,7 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
         } else if req.op == relay_bus::ops::design::RenderServe::NAME {
             // The desktop app offers to draw on this connection (render-SPEC-v2 §5.2). The engine
             // keeps only a weak sender to it, so the offer never keeps the writer alive.
-            match door_preflight(&engine, &req).await? {
+            match door_preflight(&engine, &req, thread).await? {
                 Err(refused) => refused,
                 Ok(_) => match serde_json::from_value::<relay_bus::ops::design::ServeIn>(req.payload.clone()) {
                     Err(e) => Response::err(req.id, BusError::schema(&req.op, e)),
@@ -1037,7 +1044,7 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
         } else if req.op == relay_bus::ops::design::Render::NAME {
             // A picture of a design, drawn by the desktop app (render-SPEC-v2 §5.3). Checked against
             // the store and sent before the wait; the wait holds no lock, as bus.wait's.
-            match door_preflight(&engine, &req).await? {
+            match door_preflight(&engine, &req, thread).await? {
                 Err(refused) => refused,
                 Ok(scope) => {
                     let asker = scope.map(|scope| crate::design_render::Asker { project_id: scope.project_id, session: scope.session });
@@ -1069,7 +1076,7 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
                 }
             }
         } else if req.op == relay_bus::ops::bus::Unsubscribe::NAME {
-            match door_preflight(&engine, &req).await? {
+            match door_preflight(&engine, &req, thread).await? {
                 Err(refused) => refused,
                 Ok(_) => {
                     if let Some(h) = streams.forwarder.take() {
@@ -1086,7 +1093,7 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
             // The PTY is found through the store, so on the blocking pool with the dispatch
             // rather than parking a runtime thread on the store lock (RA-341).
             let (resp, pty) = tokio::task::spawn_blocking(move || {
-                let resp = e.dispatch(r2, Door::Socket);
+                let resp = e.dispatch_as(r2, Door::Socket, thread);
                 let pty = match (resp.ok, name) {
                     (true, Some(name)) => Some(crate::handlers::session::pty_by_name(&e, &name)),
                     _ => None,
@@ -1137,7 +1144,7 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
         } else if req.op == relay_bus::ops::session::Detach::NAME {
             let req = own_session(req);
             let name = req.payload.get("session").and_then(|v| v.as_str()).map(str::to_string);
-            let resp = dispatch_blocking(&engine, req).await?;
+            let resp = dispatch_blocking(&engine, req, thread).await?;
             if let (true, Some(name)) = (resp.ok, name) {
                 if let Some(h) = streams.attached.remove(&name) {
                     h.abort();
@@ -1152,16 +1159,16 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
                 (pty, size)
             });
             let resp = if engine.answers_from_memory(&req) {
-                dispatch_inline(&engine, req)
+                dispatch_inline(&engine, req, thread)
             } else {
-                dispatch_blocking(&engine, req).await?
+                dispatch_blocking(&engine, req, thread).await?
             };
             if let (true, Some(p)) = (resp.ok, parsed) {
                 borrowed.resized(&p, prior);
             }
             resp
         } else if req.op == relay_bus::ops::device::MirrorStart::NAME {
-            let response = dispatch_blocking(&engine, req).await?;
+            let response = dispatch_blocking(&engine, req, thread).await?;
             if response.ok {
                 if let Some(id) = response
                     .result
@@ -1290,7 +1297,7 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
             || req.op == relay_bus::ops::device::Build::NAME
         {
             let req_id = req.id;
-            let resp = dispatch_blocking(&engine, req).await?;
+            let resp = dispatch_blocking(&engine, req, thread).await?;
             if resp.ok {
                 if let Some(id) = resp
                     .result
@@ -1352,7 +1359,7 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
             resp
         } else if req.op == relay_bus::ops::device::RunStop::NAME {
             let run_id = req.payload.get("run_id").and_then(|value| value.as_i64());
-            let resp = dispatch_blocking(&engine, req).await?;
+            let resp = dispatch_blocking(&engine, req, thread).await?;
             if resp.ok {
                 if let Some(id) = run_id {
                     if let Some(task) = streams.runs.remove(&id) {
@@ -1365,14 +1372,9 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
             // A keystroke is the one request whose latency a person can feel, and it is also the
             // one that never reaches the store. Answer it here rather than paying a trip to the
             // blocking pool and back for a map lookup and a write.
-            dispatch_inline(&engine, req)
-        } else if let Some(thread) = thread {
-            // A thread's agent reaches only its own ops (`threads::AGENT_OPS`), none of which
-            // the branches above answer.
-            let (e, id, op) = (engine.clone(), req.id, req.op.clone());
-            answered(id, &op, tokio::task::spawn_blocking(move || e.dispatch_from_thread(req, Door::Socket, thread)).await)
+            dispatch_inline(&engine, req, thread)
         } else {
-            dispatch_blocking(&engine, req).await?
+            dispatch_blocking(&engine, req, thread).await?
         };
         recent.refused(arrival, &resp);
         let _ = out_tx.send(serde_json::to_string(&resp)?).await;
@@ -2223,5 +2225,82 @@ mod frame_tests {
         assert!(!resp.ok);
         assert_eq!(resp.id, Some(id));
         assert_eq!(resp.error.unwrap().kind, relay_bus::ErrorKind::Internal);
+    }
+}
+
+#[cfg(test)]
+mod thread_tests {
+    use super::*;
+    use relay_bus::Actor;
+    use serde_json::json;
+
+    /// A connection to `engine` from `peer`, served by the door's own loop: what a process in
+    /// that tree gets, without having to be one.
+    fn connect_as(engine: &Arc<Engine>, peer: crate::peer::Peer) -> Client {
+        let (ours, theirs) = std::os::unix::net::UnixStream::pair().unwrap();
+        for end in [&ours, &theirs] {
+            end.set_nonblocking(true).unwrap();
+        }
+        let (ours, theirs) = (UnixStream::from_std(ours).unwrap(), UnixStream::from_std(theirs).unwrap());
+        let recent = Arc::new(Recent::new(engine));
+        tokio::spawn(serve_conn(engine.clone(), recent, theirs, peer));
+        let (r, w) = ours.into_split();
+        Client { lines: BufReader::new(r).lines(), w }
+    }
+
+    fn ok(engine: &Engine, op: &str, payload: serde_json::Value) -> serde_json::Value {
+        engine.dispatch(Request::new(Actor::User, op, payload), Door::InProcess).into_result().unwrap()
+    }
+
+    /// The door's own code dispatches only through calls that take the connection's thread:
+    /// a bare `Engine::dispatch` there is the path that let the assistant read a shell.
+    #[test]
+    fn the_door_never_dispatches_without_the_connections_thread() {
+        let door = include_str!("socket.rs").split("#[cfg(test)]").next().unwrap();
+        for (n, line) in door.lines().enumerate() {
+            let code = line.split("//").next().unwrap();
+            assert!(!code.contains(".dispatch(") && !code.contains(".dispatch_from_thread("), "socket.rs:{}: dispatch with the thread (`dispatch_as`): {line}", n + 1);
+        }
+    }
+
+    /// Every path through the door hands a thread's request to its handler as that thread's:
+    /// an unlocked query (`session.scrollback`) as much as a locked one. Dropped on the unlocked
+    /// path, the assistant read the person's shell, which its handler refuses a thread.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_threads_request_reaches_its_handler_as_the_threads_on_every_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = std::fs::canonicalize(dir.path()).unwrap().join("ws");
+        let repo = ws.join("app");
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [&["init", "-q", "-b", "main"][..], &["commit", "-q", "--allow-empty", "-m", "init"]] {
+            let out = std::process::Command::new("git").arg("-C").arg(&repo)
+                .args(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]).args(args).output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        ok(&engine, "workspace.create", json!({"path": ws}));
+        ok(&engine, "project.add", json!({"workspace_id": 1, "path": repo}));
+        ok(&engine, "settings.set", json!({"path": "providers.shell.path", "value": "/bin/sh"}));
+        let shell = ok(&engine, "session.create", json!({"project_id": 1, "provider": "shell"}))["name"].clone();
+        // An opening message would be typed into the shell and run.
+        let typed = engine.dispatch(Request::new(Actor::User, "session.spawn", json!({"session": shell, "prompt": "touch typed"})), Door::InProcess);
+        assert_eq!(typed.error.map(|e| e.code), Some("session.shell".to_string()));
+        ok(&engine, "session.spawn", json!({"session": shell}));
+        // Known as a shell from memory, so `peer::identify` never takes the store to ask.
+        assert!(engine.is_shell_pty(shell.as_str().unwrap()));
+        assert!(engine.runs_unlocked("session.scrollback"), "the case this guards is the unlocked path");
+
+        let read = Request::new(Actor::User, "session.scrollback", json!({"session": shell}));
+        let mut person = connect_as(&engine, crate::peer::Peer::Outside);
+        let resp = person.call(&read, |_| {}).await.unwrap();
+        assert!(resp.ok, "the person reads their own shell: {resp:?}");
+
+        let mut assistant = connect_as(&engine, crate::peer::Peer::Assistant(7));
+        let resp = assistant.call(&read, |_| {}).await.unwrap();
+        assert_eq!(resp.error.map(|e| e.code), Some("session.shell".to_string()), "the assistant never reads a shell");
+        let resp = assistant.call(&Request::new(Actor::User, "session.transcript", json!({"session": shell})), |_| {}).await.unwrap();
+        assert_eq!(resp.error.map(|e| e.code), Some("session.shell".to_string()), "nor its transcript");
+        ok(&engine, "session.close", json!({"session": shell}));
+        assert!(!engine.is_shell_pty(shell.as_str().unwrap()), "forgotten with its PTY");
     }
 }

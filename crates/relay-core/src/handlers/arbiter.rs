@@ -473,7 +473,8 @@ pub fn register(e: &mut Engine) {
                 source: Some(Source::Agent),
                 draft: Some(p.draft.clone()),
                 changes,
-                thread_id: p.thread_id,
+                // A thread's agent's own thread: nothing a request carries claims another.
+                thread_id: ctx.thread().or(p.thread_id),
                 based_on,
                 ..Default::default()
             };
@@ -501,7 +502,7 @@ pub fn register(e: &mut Engine) {
             // One agent decision per minute and strategy: a retried call is the same order.
             let cause = format!("s{}:agent:{}:{}:{}", s.id, p.side.as_str(), p.quote.as_deref().or(p.base.as_deref()).unwrap_or("all"), book::now() / 60);
             let intent = Intent { product: s.product.clone(), side: p.side, quote, base, limit: p.limit.unwrap_or(false), source: Source::Agent, cause };
-            Ok(place_out(desk::route(engine, s.id, &intent, p.why.trim(), p.thread_id)?))
+            Ok(place_out(desk::route(engine, s.id, &intent, p.why.trim(), ctx.thread().or(p.thread_id))?))
         },
         |ctx, _, out| {
             ctx.emit("arbiter.changed", json!({"outcome": out.outcome}));

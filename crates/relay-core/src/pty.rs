@@ -412,6 +412,10 @@ struct Shared {
     /// Set by [`Pty::silence_exit`]: the request that stops this child records the outcome
     /// itself, so the exit callback must not race it to the row.
     silent: AtomicBool,
+    /// Set by [`Pty::hang_up_first`]: stopped as a closed terminal stops its shell, with SIGHUP,
+    /// which an interactive shell passes on to its jobs. SIGTERM is ignored by one, and SIGKILL
+    /// leaves its jobs (each in its own process group, out of reach of the group's signal) running.
+    hang_up: AtomicBool,
     /// The [`TermModes`] after the last read, stored by the reader: `session.input` asks it
     /// whether a paste goes in brackets without reading the ring or the store (D148).
     modes: AtomicU16,
@@ -487,6 +491,7 @@ impl Pty {
             idle: AtomicBool::new(false),
             ping_owed: AtomicBool::new(true),
             silent: AtomicBool::new(false),
+            hang_up: AtomicBool::new(false),
             modes: AtomicU16::new(term.modes.0),
             exited: AtomicBool::new(false),
             group_gone: AtomicBool::new(false),
@@ -593,6 +598,11 @@ impl Pty {
         self.shared.silent.store(true, Ordering::SeqCst);
     }
 
+    /// Stop this child with SIGHUP before SIGTERM: it is the person's shell ([`Shared::hang_up`]).
+    pub fn hang_up_first(&self) {
+        self.shared.hang_up.store(true, Ordering::SeqCst);
+    }
+
     /// Nobody is writing right now. A keystroke is answered on a runtime thread only then: one
     /// queued behind a paste that is waiting for the child to drain would park that thread.
     pub fn writer_idle(&self) -> bool {
@@ -677,8 +687,8 @@ impl Pty {
         (text, self.shared.epoch, self.seq())
     }
 
-    /// Kill the child (SIGTERM to its process group, then SIGKILL after `grace`), then drop
-    /// the master so the reader ends. Idempotent. [`kill_all`] does the same for many at once.
+    /// Kill the child (SIGTERM to its process group, then SIGKILL after `grace`; a shell is hung
+    /// up first, [`Pty::hang_up_first`]), then drop the master so the reader ends. Idempotent. [`kill_all`] does the same for many at once.
     pub fn kill(&self, grace: Duration) {
         kill_all(&[self], grace);
     }
@@ -752,13 +762,15 @@ pub fn paste_bytes(data: &str, bracketed: bool) -> Vec<u8> {
 
 /// [`Pty::kill`] for many PTYs against one shared deadline: SIGTERM to every group, one wait
 /// of at most `grace` for all of them, SIGKILL to whatever remains, then at most 2 s more.
+/// Shells are hung up first, with SIGHUP and a wait of at most `min(grace, 500 ms)` for them
+/// alone, while every other group already has its SIGTERM.
 /// Killing one at a time cost up to `grace` per stubborn session, which at shutdown summed to
 /// more than a desktop logout or a service stop allows (RA-311).
 pub fn kill_all(ptys: &[&Pty], grace: Duration) {
     // Each look scans all of /proc once per group still running. A shell that takes SIGTERM is
     // gone within a few ms, so the looks back off from 1 ms to every 50 ms: a fixed 50 ms first
     // wait made every park and close cost at least 50 ms.
-    let wait = |deadline: Instant| {
+    let wait = |ptys: &[&&Pty], deadline: Instant| {
         let mut pause = Duration::from_millis(1);
         while !ptys.iter().all(|pty| pty.settled()) {
             let now = Instant::now();
@@ -770,11 +782,17 @@ pub fn kill_all(ptys: &[&Pty], grace: Duration) {
         }
     };
     let pending: Vec<&&Pty> = ptys.iter().filter(|pty| !pty.settled()).collect();
-    for pty in &pending { pty.signal(libc::SIGTERM); }
-    if !pending.is_empty() { wait(Instant::now() + grace); }
+    // A shell hangs up its jobs and exits on SIGHUP, at once; the SIGTERM after it is for
+    // whatever ignored the hangup.
+    let (shells, others): (Vec<&&Pty>, Vec<&&Pty>) = pending.iter().partition(|pty| pty.shared.hang_up.load(Ordering::SeqCst));
+    for pty in &others { pty.signal(libc::SIGTERM); }
+    for pty in &shells { pty.signal(libc::SIGHUP); }
+    if !shells.is_empty() { wait(&shells, Instant::now() + grace.min(Duration::from_millis(500))); }
+    for pty in &shells { pty.signal(libc::SIGTERM); }
+    if !pending.is_empty() { wait(&pending, Instant::now() + grace); }
     let stubborn: Vec<&&Pty> = pending.into_iter().filter(|pty| !pty.settled()).collect();
     for pty in &stubborn { pty.signal(libc::SIGKILL); }
-    if !stubborn.is_empty() { wait(Instant::now() + Duration::from_secs(2)); }
+    if !stubborn.is_empty() { wait(&stubborn, Instant::now() + Duration::from_secs(2)); }
     for pty in ptys { pty.close(); }
 }
 
@@ -1199,6 +1217,38 @@ mod tests {
         // Caught up from where it left off: no prelude.
         assert!(pty.attach(Some(1), Some(pty.seq())).catch_up.is_empty());
         pty.kill(Duration::from_millis(100));
+    }
+
+    /// A shell's background job is in its own process group, out of reach of the group's
+    /// signals: closing the shell hangs it up, as closing a terminal does, rather than leaving
+    /// it running.
+    #[test]
+    fn closing_a_shell_hangs_up_its_background_jobs() {
+        if !std::path::Path::new("/bin/bash").exists() { return; }
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("job.pid");
+        let spec = SpawnSpec {
+            cmd: "/bin/bash".into(), args: vec!["--norc".into(), "--noprofile".into(), "-i".into()], env: Vec::new(), env_remove: Vec::new(),
+            cwd: dir.path().to_path_buf(), cols: 80, rows: 24, epoch: 1, initial_scrollback: Vec::new(),
+        };
+        let pty = Pty::spawn(spec, |_| {}).unwrap();
+        pty.hang_up_first();
+        pty.write(format!("sleep 300 & echo $! > {}\r", pidfile.display()).as_bytes()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let job: i32 = loop {
+            if let Some(pid) = std::fs::read_to_string(&pidfile).ok().and_then(|s| s.trim().parse().ok()) { break pid; }
+            assert!(Instant::now() < deadline, "the job never started");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_ne!(unsafe { libc::getpgid(job) }, unsafe { libc::getpgid(pty.pid() as i32) }, "a job of its own, as job control makes it");
+        pty.kill(Duration::from_millis(150));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while unsafe { libc::kill(job, 0) } == 0 && std::path::Path::new(&format!("/proc/{job}/stat")).exists()
+            && !std::fs::read_to_string(format!("/proc/{job}/stat")).is_ok_and(|s| s.contains(") Z "))
+        {
+            assert!(Instant::now() < deadline, "the background job outlived its shell");
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[test]

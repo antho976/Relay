@@ -307,9 +307,11 @@ internal fun LifecycleSheets(life: Lifecycle) {
     val c = Relay.colors
     life.starting?.let { s ->
         var prompt by rememberSaveable(s.name) { mutableStateOf("") }
-        DevSheet({ life.starting = null }, "Start ${s.name}", "Launch the agent's CLI in its worktree. Leave the message empty to keep the assignment it was created with.") { close ->
-            Field(prompt, { prompt = it }, Modifier.fillMaxWidth().padding(horizontal = 6.dp), placeholder = "Opening message (optional)", singleLine = false, minLines = 3, maxLines = 6)
-            SheetKeys("Start", { close { life.start(s.name, prompt) } }, { close {} })
+        // A shell runs what is typed into it: it takes no opening message, which it would run.
+        val body = if (s.shell) "Open your login shell in the project's folder." else "Launch the agent's CLI in its worktree. Leave the message empty to keep the assignment it was created with."
+        DevSheet({ life.starting = null }, "Start ${s.name}", body) { close ->
+            if (!s.shell) Field(prompt, { prompt = it }, Modifier.fillMaxWidth().padding(horizontal = 6.dp), placeholder = "Opening message (optional)", singleLine = false, minLines = 3, maxLines = 6)
+            SheetKeys("Start", { close { life.start(s.name, if (s.shell) "" else prompt) } }, { close {} })
         }
     }
     life.closing?.let { s ->
