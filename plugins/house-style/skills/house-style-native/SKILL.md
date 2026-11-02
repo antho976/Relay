@@ -68,7 +68,7 @@ project's own design doc names the exact tokens and components; use those names,
   latency (photos, Health Connect, network).
 - **Motion:** shared durations and springs from the project's `Motion.kt` (no literal durations),
   press feedback per the app (Avex: bounce, no ripple, ripple restored under TalkBack), and
-  reduce-motion settles everything.
+  reduced motion as in `house-style/reference/motion.md` §7.
 - **Semantics:** every Canvas mark carries a `contentDescription` reading its value ("4 of 5
   sessions this week"); start/end, never left/right.
 - **Icons:** the app's custom families on one grid and stroke; Material stock only where the project

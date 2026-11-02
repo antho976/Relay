@@ -455,9 +455,30 @@ mod tests {
         }
         // The core skill points at its references; each one must ship with it.
         let core = &plugin.skills[0];
-        for reference in ["reference/fundamentals.md", "reference/failures.md", "reference/evidence.md"] {
+        let references = [
+            "reference/fundamentals.md", "reference/failures.md", "reference/evidence.md",
+            "reference/motion.md", "reference/motion-recipes.md", "reference/motion-passes.md",
+            "reference/motion-vocabulary.md", "reference/react-native.md", "reference/unslop.md",
+            "reference/landing-visuals.md", "reference/stress-test.md", "reference/mobile-web.md",
+            "reference/libraries.md", "reference/variations.md",
+        ];
+        for reference in references {
             assert!(core.body.contains(reference.trim_start_matches("reference/")), "SKILL.md does not point at {reference}");
             assert!(core.files.iter().any(|(path, _)| *path == reference), "{reference} is missing");
+        }
+        // The unslop guides run these scripts and point at these pictures.
+        for asset in [
+            "scripts/snapshot.mjs", "scripts/story.mjs", "reference/refs/unslop-hero-after.webp",
+            "reference/refs/unslop-dashboard-after.webp", "reference/refs/beacon-engraving.webp",
+            "reference/refs/meadow-3d.webp", "reference/refs/story-dashboard-frames.webp",
+        ] {
+            assert!(core.files.iter().any(|(path, _)| *path == asset), "{asset} is missing");
+        }
+        // unslop is CC BY 4.0: the adapted guides keep its credit.
+        for guide in ["reference/unslop.md", "reference/landing-visuals.md"] {
+            let (_, bytes) = core.files.iter().find(|(path, _)| *path == guide).unwrap();
+            let text = std::str::from_utf8(bytes).unwrap();
+            assert!(text.contains("Damir Sokolovsky") && text.contains("CC BY 4.0"), "{guide} lost unslop's credit");
         }
     }
 

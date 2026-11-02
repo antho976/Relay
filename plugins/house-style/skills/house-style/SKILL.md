@@ -1,6 +1,6 @@
 ---
 name: house-style
-description: The owner's design taste and the craft rules under it, for any interface they build (desktop, phone, web, game UI) - what they ask for and what they reject, learned from their Relay, Avex and Tally work (clean, professional, black with at most a little colour, nothing crowded, too round, too big, boxed, dated or AI-looking), precedence over generic design skills, how to work with them (variations side by side with the before, one screen at a time, keep what they like, look at the render before reporting), and the fundamentals of hierarchy, type, spacing, colour, contrast, controls, states, copy, motion, data and icons. Load before designing, redesigning, polishing or reviewing any screen, component, mockup or design-canvas artboard.
+description: The owner's design package for any interface (desktop, phone, web, game UI, mockups) - their taste (clean, professional, near-black with one accent, nothing crowded, too round, too big, boxed, dated or AI-looking), how to work with them, the fundamentals of hierarchy, type, spacing, colour, controls, states, copy, data and icons, and task guides - motion (whether to animate, curves, durations, springs, gestures, haptics, reduced motion, jank; reviewing, auditing, finding or removing animations; naming an effect; React Native), unslopping an AI-looking screen, landing heroes and generated visuals, worst-case data stress tests, web apps that feel native on a phone, React library picks and variations in code. Load before designing, redesigning, animating, polishing or reviewing any screen, component or artboard.
 ---
 
 # House style
@@ -114,10 +114,36 @@ existing shell, it does not invent its own world.
 7. **Small batches of feedback come as numbered lists.** Answer each number, fix each one, and don't
    drop the small ones ("skill icon is not centred").
 
-## Fundamentals
+## What to read next
 
-The general craft (hierarchy, type, spacing, colour, contrast, controls, the seven states, copy,
-motion, data display, icons, accessibility) is in `reference/fundamentals.md`. Read it for any new
-screen. The named failure shapes, each with its fix, are in `reference/failures.md`: use them to
-diagnose "something's wrong and I can't point what". Their own words behind each rule, with dates,
-are in `reference/evidence.md`. Check there before arguing that a rule doesn't apply.
+**First, the kind of surface.** It decides how dense the screen is, how much moves, and where colour
+may go.
+
+| Surface | Examples | Motion | Colour and visuals |
+|---|---|---|---|
+| Working screen, used daily | Board, terminals, ledger, coach list, Git panel | Feedback only. Nothing idles, nothing on keyboard actions | Neutral chrome, colour in data |
+| Occasional | Settings, sheets, dialogs, pickers | Standard | The same |
+| Rare moment | First run, empty state, success, a startup beat | The delight budget | One moment may be rich |
+| Persuasion | Landing page, release video, store listing | Expressive, short, once | A scene or product visual (`landing-visuals.md`) |
+
+**Then the task.** Every file is in `reference/` and loads only when the task needs it.
+
+| Task | Read |
+|---|---|
+| Any new screen or component | `fundamentals.md` (hierarchy, type, spacing, colour, contrast, controls, the seven states, copy, data, icons, accessibility), then `house-style-native` |
+| "Something's off and I can't point at what" | `failures.md`, the named failure shapes with fixes |
+| Animate anything: transition, gesture, drag, sheet, spring, haptics, reduced motion, jank | `motion.md`, plus `motion-recipes.md` for web code or `react-native.md` for Expo |
+| Review a diff's motion, audit and plan, find what should move, remove what shouldn't | `motion-passes.md` |
+| "What's it called when…" a motion effect | `motion-vocabulary.md` |
+| A screen that looks AI-made, or a polish or clean-up pass | `unslop.md` |
+| A landing hero, a generated image, the unslop story video | `landing-visuals.md` |
+| Worst-case data and edge cases | `stress-test.md` |
+| A web app or PWA used on a phone | `mobile-web.md` |
+| Picking a React library | `libraries.md` |
+| Variations built in code | `variations.md` |
+| Why a rule exists, in the owner's words with dates | `evidence.md`. Check it before arguing a rule doesn't apply |
+| Before calling it done | `house-style-review` |
+
+This package replaces the separate generic design skills (emil-design-eng, apple-design, unslop,
+the animation skills, break-ui, mobile-native, pick-ui-library, prototype). If any of them is still
+installed, these files win wherever they differ.
