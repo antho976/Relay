@@ -41,7 +41,8 @@ Go through every line. A screen passes a line or gets a finding.
   glass scale exactly.
 - [ ] No hairlines as decoration; lines are data.
 - [ ] Translucency and surface steps match the rest of the app.
-- [ ] No glow, neon, gradient chrome or decorative shadow.
+- [ ] No glow, neon, gradient chrome or decorative shadow. A screen with several signs of slop gets
+  the full pass in `house-style/reference/unslop.md`.
 
 **Consistency**
 - [ ] Same shell, tokens, type ramp, radius, press response and ground as the rest of the app (and
@@ -77,11 +78,16 @@ Go through every line. A screen passes a line or gets a finding.
 
 **Motion**
 - [ ] Motion explains a change; no idle loops on working screens; related items stagger.
-- [ ] Popups and sheets ease in smoothly; reduce-motion settles everything.
+- [ ] Popups and sheets ease in smoothly; with reduced motion, movement becomes short cross-fades
+  and everything still reaches its end state.
+- [ ] Nothing on `house-style/reference/motion.md`'s never-ship list. For a diff that is mostly
+  motion code, run the Review pass in `motion-passes.md` and use its Before/After table and verdict.
 
 **Physics** (per `house-style-native`)
 - [ ] Text hugs its container; longest realistic string fits; 200% font scale on phones, minimum
-  window width on desktop.
+  window width on desktop. For a list or a screen fed by people's data, run the worst-case fixture
+  from `house-style/reference/stress-test.md`.
+- [ ] A web page used on phones passes `house-style/reference/mobile-web.md`.
 - [ ] Touch 44–48 dp / desktop keys ≥ 28 px; keyboard path and visible focus for every action.
 - [ ] Screen-reader labels; charts describe their value.
 
