@@ -411,17 +411,13 @@ pub fn brief(
     } else {
         let listed = skill_rows
             .iter()
-            .map(|(name, _, dir)| {
-                format!(
-                    "- {name} — {}/{dir}/, {}/{dir}/",
-                    crate::skills::TARGETS[0],
-                    crate::skills::TARGETS[1]
-                )
-            })
+            .map(|(name, _, dir)| if *name == *dir { format!("- {name}") } else { format!("- {name} ({dir}/)") })
             .collect::<Vec<_>>();
         let listed = capped_lines(listed, "`skill.list`");
         format!(
-            "These are installed in this checkout as skill folders. Load one through your own skill mechanism before work it covers; if your provider has none, read its SKILL.md at the path below.\n{listed}\nFull bodies, inline: {SESSION_SKILLS_PATH}"
+            "Installed in this checkout as folders under {}/ and {}/. Load one through your own skill mechanism before work it covers; if your provider has none, read its SKILL.md there.\n{listed}\nFull bodies, inline: {SESSION_SKILLS_PATH}",
+            crate::skills::TARGETS[0],
+            crate::skills::TARGETS[1]
         )
     };
     let skills = if skill_rows.is_empty() {
@@ -443,9 +439,11 @@ pub fn brief(
         skills,
         plugins,
     };
+    // No comms section: the compact half always travels behind the role instructions
+    // (`providers::role_instructions`), which say how to reach peers already.
     let compact = format!(
-        "# Relay session brief\n\n## Current state\n{}\n\n## Live peers\n{}\n\n## Adjacent tasks\n{}\n\n## Comms\n{}\n\n## Assignment\nRun `session.bootstrap` for your launch assignment and current task.\n\n## Enabled skills\n{}\n\n## Enabled plugins\n{}",
-        state_public, parts.peers, parts.adjacent, COMMS_HINT, skills_summary, parts.plugins,
+        "# Relay session brief\n\n## Current state\n{}\n\n## Live peers\n{}\n\n## Adjacent tasks\n{}\n\n## Assignment\nRun `session.bootstrap` for your launch assignment and current task.\n\n## Enabled skills\n{}\n\n## Enabled plugins\n{}",
+        state_public, parts.peers, parts.adjacent, skills_summary, parts.plugins,
     );
     let text = format!(
         "# Relay session brief\n\n## Current state\n{}\n\n## Live peers\n{}\n\n## Adjacent tasks\n{}\n\n## Comms\n{}\n\n## Enabled skills\n{}\n\n## Enabled plugins\n{}",
