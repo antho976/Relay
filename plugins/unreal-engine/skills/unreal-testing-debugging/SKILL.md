@@ -1,6 +1,6 @@
 ---
 name: unreal-testing-debugging
-description: Testing and debugging Unreal Engine 5 projects - Automation tests (IMPLEMENT_SIMPLE_AUTOMATION_TEST, Automation Spec BEGIN_DEFINE_SPEC, latent commands, test flags), running tests from the command line or the Test Automation / Session Frontend window, Functional Tests (AFunctionalTest in test maps), Gauntlet, attaching a debugger, DebugGame builds, check/ensure/verify, crash logs and minidumps, log categories and verbosity, Visual Logger, Gameplay Debugger, DrawDebug helpers, on-screen messages, console variables and commands, cheat managers and Exec functions, reading the log with ue_log. Use when writing tests, when something crashes, asserts, misbehaves or needs investigation, or when adding debug tooling.
+description: Testing and debugging Unreal Engine 5 - automation tests and specs, running them headless, Functional Tests, Gauntlet, debuggers and DebugGame, crash logs and minidumps, logging, the Visual Logger and Gameplay Debugger, DrawDebug, console variables, cheat managers, ue_log. Use when writing tests, when something crashes, asserts or misbehaves, or when adding debug tooling.
 ---
 
 # Unreal Testing and Debugging

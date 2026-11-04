@@ -1,6 +1,6 @@
 ---
 name: unreal-performance
-description: Profiling and optimizing Unreal Engine 5 games - frame budgets (16.6/33.3 ms), stat unit/unitgraph/gpu/scenerendering/game/memory/streaming, Unreal Insights traces and CPU scopes, ProfileGPU, optimization view modes, tick management and the significance manager, GC, pooling, async loading and soft references, memreport and texture streaming, scalability groups and device profiles, Lumen/Nanite/Virtual Shadow Map costs, draw calls and ISM/HISM instancing, LODs and HLOD. Use when the game is slow, hitches, stutters, runs out of memory, has low FPS or long frame times, or before shipping to set and check budgets.
+description: Profiling and optimizing Unreal Engine 5 games - frame budgets, stat commands, Unreal Insights, ProfileGPU, tick management, GC and pooling, async loading, memory and texture streaming, scalability and device profiles, Lumen, Nanite and shadow costs, draw calls and instancing, LODs. Use when a game is slow, hitches, stutters or runs out of memory, or before shipping.
 ---
 
 # Unreal Performance

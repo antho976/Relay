@@ -1,6 +1,6 @@
 ---
 name: unreal-level-environment
-description: Level design and environment art in Unreal Engine 5, covering blockout and greybox (Modeling Mode, BSP brushes, Cube Grid), player metrics, flow, landmarks, sightlines, pacing and gating, modular kits and pivot/grid rules, Landscape (sculpt, paint layers, landscape materials, sizes), Foliage and procedural foliage, the PCG framework, World Partition (grid, Data Layers, HLOD, One File Per Actor), Level Instances and Packed Level Actors, lighting (Lumen, Sky Atmosphere, Volumetric Clouds, fog, post process, exposure), Nanite, Virtual Shadow Maps, Fab/Megascans import, collision and navmesh. Use it for any level building, environment dressing, lighting or map-streaming task, and when scripting level edits in Python (spawning actors, placing along splines, setting mobility, outliner folders, data layers).
+description: Level design and environment art in Unreal Engine 5 - blockout, player metrics, flow and pacing, modular kits, Landscape, foliage and PCG, World Partition, Data Layers and HLOD, Level Instances, lighting (Lumen, sky, fog, post process), Nanite and shadows, Megascans, collision and navmesh. Use for any level building, dressing, lighting or streaming task, and for scripting level edits in Python.
 ---
 
 # Level Design and Environment in Unreal Engine

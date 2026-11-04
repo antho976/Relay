@@ -1,6 +1,6 @@
 ---
 name: perf-profiling
-description: Find where time, memory and wakeups go - choosing between sampling and instrumenting profilers, building with symbols and frame pointers, perf record/report/stat and flame graphs (reading them correctly), samply and the Firefox Profiler, callgrind attribution by subsystem and inclusive entry point, off-CPU and lock-wait analysis (offcputime, perf sched, bpftrace), strace syscall counts, allocation and heap profiling (heaptrack, dhat, massif), memory over time, idle CPU and wakeups (powertop, perf stat), Netflix's 60-second checklist, tracing spans, and the platform UI tools (GTK frame timings and sysprof, Android Perfetto, Chrome DevTools). Use when a path is slow and you need to know why before changing code.
+description: Find where time, memory and wakeups go - sampling versus instrumenting, symbols and frame pointers, perf and flame graphs, samply, callgrind attribution, off-CPU and lock waits, strace counts, heap profiling, idle wakeups, tracing spans, and the GTK, Android and browser tools. Use when a path is slow and you need to know why before changing code.
 ---
 
 # Profiling

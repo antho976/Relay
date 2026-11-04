@@ -1,6 +1,6 @@
 ---
 name: perf-benchmarks
-description: Build benchmarks that can be climbed and that guard against regressions, in any language - deterministic proxies (instruction counts under Valgrind callgrind/cachegrind or perf stat, allocation, syscall, query, render and layout counts), proving a proxy tracks wall-clock time, micro versus scenario harnesses, wall-clock benchmarks with statistical rigor (criterion, JMH, benchstat, pyperf, hyperfine), noise control on the machine, deciding whether two runs really differ, and CI ratchets - a checked-in baseline per guarded path that fails a change raising it and is lowered when it drops. Use when writing a benchmark, a perf regression test, a CI performance gate, or deciding whether a measured change is real.
+description: Build benchmarks you can climb and that guard against regressions - deterministic proxies (instruction, allocation, syscall, query and render counts) proven to track wall-clock time, micro versus scenario harnesses, sound wall-clock statistics, noise control, and CI ratchets. Use when writing a benchmark, a perf regression test or a CI gate, or judging whether a measured change is real.
 ---
 
 # Benchmarks and ratchets

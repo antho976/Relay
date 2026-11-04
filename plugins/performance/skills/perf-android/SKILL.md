@@ -1,6 +1,6 @@
 ---
 name: perf-android
-description: Android performance with Kotlin, Jetpack Compose and Room - cold/warm/hot startup, TTID and TTFD (ReportDrawn), Application.onCreate and App Startup, Baseline and Startup Profiles, Macrobenchmark (StartupTimingMetric, FrameTimingMetric, TraceSectionMetric, CompilationMode) and Microbenchmark, locked clocks and noise, jank budgets, JankStats, Perfetto, Play vitals thresholds (ANR, slow and frozen frames, wake locks), Compose stability and strong skipping, compiler reports, recomposition counts, deferred state reads, lazy list keys and contentType, R8, Room main-thread rules, Flow invalidation storms, indexes and transactions, Paging, WorkManager, wake locks, network and StrictMode. Use for any Android performance, startup, jank, battery or Compose recomposition work.
+description: Android performance with Kotlin, Compose and Room - startup (TTID, TTFD, Baseline Profiles), Macrobenchmark and Microbenchmark, jank and JankStats, Perfetto, Compose stability and recomposition, lazy lists, R8, Room and Flow invalidation, WorkManager and wake locks. Use for any Android startup, jank, battery or recomposition work.
 ---
 
 # Android performance

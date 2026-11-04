@@ -1,6 +1,6 @@
 ---
 name: design-canvas
-description: Draw, animate and revise designs on Relay's design canvas with the design.* tools - the node model (pages, frames, groups, rects, ellipses, lines and arrows, text, stickies, pen paths, images, icons), coordinates relative to the parent, auto layout (row, column or wrap, gap, padding, justify, items, hug or fill), pinning, absolute children, min and max sizes and scrolling frames, copies, named colours and styles, rings, glows, gradients and styled runs of text, motion (keyframes, easing, timelines), choosing your own node ids so one design.apply builds a whole screen, revising exactly the layers a person selected and asked about, looking at what you drew with design.render, reading validation errors and limits, and the craft that makes a mockup look real. Use whenever a task asks to design, sketch, mock up, wireframe, diagram or animate something, or a message starts with "[Relay design]".
+description: Draw, animate and revise designs on Relay's design canvas with the design.* tools - the node model, auto layout, pinning, copies, named colours and styles, motion and timelines, revising exactly the layers a person selected, design.render to look at what you drew, and the craft of a real-looking mockup. Use whenever a task asks to design, sketch, mock up, wireframe, diagram or animate something, or a message starts with "[Relay design]".
 ---
 
 # Relay design canvas
@@ -111,7 +111,8 @@ kind (it never refuses), so an update can drop a stale one. A page takes no `sty
 polygon.
 
 Any node but a page can also take `rotation` (degrees clockwise about its centre, ±3600; **not a
-`line`: its turn is its points**), `opacity`, `blur` (0 to 200 px), `blend` and a shape `gradient`
+`line`: its turn is its points**), `locked` (the person cannot select or move it on the canvas;
+your edits still change it), `opacity`, `blur` (0 to 200 px), `blend` and a shape `gradient`
 instead of `fill`:
 `{"kind": "linear", "angle": 135, "stops": [{"at": 0, "color": "#4C9DFF"}, {"at": 1, "color": "#A178FF"}]}`
 (2 to 8 stops; `angle` reads as CSS: 180 top to bottom; `"radial"` from the centre; `"conic"` round

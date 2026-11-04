@@ -1,6 +1,6 @@
 ---
 name: unreal-source-control
-description: Unreal Engine 5 projects in git (and a Perforce note) - what to commit and ignore (Binaries, Intermediate, Saved, DerivedDataCache, .vs, *.sln), .gitattributes with Git LFS for .uasset/.umap and binary source art, LFS file locking (lockable), One File Per Actor and World Partition to cut map conflicts, redirectors and Fix Up Redirectors, why binary assets cannot be merged, resolving asset conflicts, config .ini diffs, generated files, and rules for coordinating several agents or people on binary assets. Use when setting up a repo, committing, branching, merging, resolving conflicts, locking assets, or before modifying any .uasset/.umap another person or agent might touch.
+description: Unreal Engine 5 projects in git (and Perforce) - what to commit and ignore, Git LFS and locking for .uasset/.umap, One File Per Actor, redirectors, unmergeable binary assets and their conflicts, and coordinating several agents or people on binary assets. Use when setting up a repo, committing, branching, merging, locking assets, or before changing a .uasset/.umap someone else might touch.
 ---
 
 # Unreal Source Control

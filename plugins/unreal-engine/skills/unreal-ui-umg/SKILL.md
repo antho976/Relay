@@ -1,6 +1,6 @@
 ---
 name: unreal-ui-umg
-description: Game UI in Unreal Engine 5 with UMG and CommonUI - UUserWidget C++ base classes with BindWidget/BindWidgetOptional/BindWidgetAnim, Widget Blueprints, layout panels (Canvas, Overlay, Horizontal/Vertical Box, Grid, Size Box, Scale Box), anchors and DPI scaling, CommonUI activatable widgets, stacks and input routing, UMG Viewmodel (MVVM), input modes, focus and gamepad navigation, HUDs, world-space WidgetComponent, main/pause/settings menus with GameUserSettings, fonts and styles, FText localization, UMG animations, UI performance (invalidation, retainer boxes, no property bindings), accessibility and game UI/UX design. Use for any HUD, menu, widget, button, health bar, inventory screen, settings screen, gamepad UI or "the UI does not react / cannot be focused / looks wrong at 4K" task.
+description: Game UI in Unreal Engine 5 with UMG and CommonUI - C++ widget bases with BindWidget, layout panels, anchors and DPI, activatable widgets and input routing, MVVM, focus and gamepad navigation, HUDs, world-space widgets, menus and settings, styles, localization, animations, UI performance, accessibility. Use for any HUD, menu, widget, inventory or settings screen, gamepad UI, or UI that does not react, focus or scale.
 ---
 
 # Unreal UI: UMG, CommonUI and game UI design

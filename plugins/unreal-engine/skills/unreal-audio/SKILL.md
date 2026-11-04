@@ -1,6 +1,6 @@
 ---
 name: unreal-audio
-description: Unreal Engine 5 audio - Sound Waves, Sound Cues, MetaSounds (sources, patches, parameters), playing sounds from C++, Blueprint and anim notifies, attenuation and spatialization, occlusion, concurrency, Sound Classes, Sound Mixes, Submixes and effects, Audio Modulation control buses (volume sliders), reverb, music systems with stems and Quartz beat sync, dialogue and subtitles, audio memory/CPU budgets, and sound design for game feel. Use for any SFX, music, footsteps, UI sounds, volume settings, ducking, or audio bugs and optimization.
+description: Unreal Engine 5 audio - Sound Waves and Cues, MetaSounds, playing sounds from C++, Blueprint and notifies, attenuation and occlusion, concurrency, classes, mixes and submixes, Audio Modulation, music with Quartz, dialogue and subtitles, budgets. Use for any SFX, music, footsteps, UI sound, volume setting, ducking or audio bug.
 ---
 
 # Unreal Audio

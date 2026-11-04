@@ -1,6 +1,6 @@
 ---
 name: blender-materials-baking
-description: PBR materials and texture baking in Blender for Unreal Engine - Principled BSDF inputs that map to Unreal (base color, metallic, roughness, normal, emissive, opacity), texture naming and ORM channel packing, sRGB vs Non-Color, building shader node trees from Python, Cycles baking from Python (high-to-low normal and AO, procedural-to-texture, cage/extrusion, margin), saving images, texel density, what FBX does and does not carry, M_/MI_ slot naming, vertex color masks. Use whenever you create or change materials, textures, UV-dependent bakes, or prepare a texture set for Unreal.
+description: PBR materials and texture baking in Blender for Unreal - Principled BSDF inputs that map to Unreal, texture naming and ORM packing, sRGB versus Non-Color, shader nodes from Python, Cycles baking (normal, AO, procedural to texture), texel density, what FBX carries, slot naming. Use whenever you create or change materials, textures or bakes, or prepare a texture set for Unreal.
 ---
 
 # Materials and baking for Unreal

@@ -1,6 +1,6 @@
 ---
 name: perf-rust
-description: Rust performance - build profiles for measuring and shipping (opt-level, LTO, codegen-units, panic=abort, debug line tables, frame pointers, PGO and BOLT with cargo-pgo, linkers), allocators (mimalloc, jemalloc), allocation reduction (with_capacity, reuse, clone_from, Cow, SmallVec), hashing (FxHash vs SipHash, clippy disallowed-types), type sizes, bounds checks, strings and formatting, iterators and collections, buffered I/O, Mutex and lock hold times, async blocking (spawn_blocking, rayon), serde costs, subprocess spawning (posix_spawn vs fork), and the Rust tools - gungraun (formerly iai-callgrind), criterion, divan, dhat, cargo-flamegraph and samply. Use for any Rust hot path, benchmark, profile or build-configuration question.
+description: Rust performance - build profiles (LTO, codegen-units, debug lines, frame pointers, PGO), allocators, fewer allocations and copies, hashing, bounds checks, strings, iterators, buffered I/O, lock hold times, blocking in async, serde, subprocesses, and the tools (gungraun, criterion, divan, dhat, flamegraph, samply). Use for any Rust hot path, benchmark, profile or build-configuration question.
 ---
 
 # Rust performance

@@ -431,6 +431,20 @@ mod tests {
         }
     }
 
+    /// Claude Code and Codex list every installed skill's description in each session's context,
+    /// so a description says what the skill is for and when to load it; what is in it is the body's
+    /// job. Before this cap the 17 skills of the five plugins on in RelayV4 came to ~14 KB a session.
+    #[test]
+    fn every_bundled_skill_description_is_a_trigger_not_a_table_of_contents() {
+        for plugin in all() {
+            for skill in &plugin.skills {
+                let length = skill.description.len();
+                assert!(length <= 520, "{}'s description is {length} bytes: say when to load it, not what is in it", skill.dir);
+                assert!(!skill.description.contains(": "), "{}'s description has ': ', which YAML front matter misreads", skill.dir);
+            }
+        }
+    }
+
     #[test]
     fn the_performance_plugin_is_bundled_and_complete() {
         let plugin = get("performance").expect("performance is bundled");

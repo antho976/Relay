@@ -1,6 +1,6 @@
 ---
 name: unreal-materials-vfx
-description: Unreal Engine 5 materials, textures and Niagara VFX - PBR, material domains, blend modes, shading models, material instances and parameters, Material Parameter Collections, material functions, Substrate, texture compression/sRGB/mips/virtual textures, dynamic material instances and custom primitive data from C++/Blueprint, decals, post-process materials, Niagara systems/emitters/user parameters/spawning from C++, GPU vs CPU particles, scalability, shader performance, and Python material scripting with MaterialEditingLibrary. Use when creating or editing materials, shaders, textures, particles, VFX, outlines, decals, or optimizing GPU cost.
+description: Unreal Engine 5 materials, textures and Niagara - PBR, domains, blend and shading models, instances and parameters, functions, Substrate, texture settings, dynamic materials from code, decals, post process, Niagara systems and spawning, scalability, shader cost, Python material scripting. Use when creating or editing materials, shaders, textures, particles, VFX or decals, or cutting GPU cost.
 ---
 
 # Materials and VFX

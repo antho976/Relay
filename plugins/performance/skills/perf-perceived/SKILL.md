@@ -1,6 +1,6 @@
 ---
 name: perf-perceived
-description: Perceived performance - what a person sees and feels, on any platform - response-time thresholds (100 ms / 1 s / 10 s), input-to-photon latency, frame budgets at 60/120 Hz, layout shift after the page is usable, streaming text smoothly, interactive-before-ready shells, optimistic updates with rollback, prefetch on hover or intent, skeletons and when to delay them, progress for long work, and keeping the thing being typed into stable. Use when a change is visible on screen, when something "feels slow" or janky but the numbers look fine, when designing loading, streaming or transition behaviour, or when measuring layout stability and frame pacing.
+description: Perceived performance, what a person sees and feels - the 100 ms / 1 s / 10 s thresholds, input-to-photon latency, frame budgets, layout shift, smooth streaming text, interactive-before-ready shells, optimistic updates, prefetch, skeletons and progress. Use when a change is visible on screen, something feels slow though the numbers look fine, or when designing loading, streaming or transitions.
 ---
 
 # Perceived performance

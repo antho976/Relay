@@ -1,6 +1,6 @@
 ---
 name: unreal-ai
-description: Game AI in Unreal Engine 5 - AIController, Behavior Trees and Blackboards (C++ tasks, decorators, services), StateTree, Environment Query System (EQS), AI Perception (sight, hearing, damage, teams via IGenericTeamAgentInterface), Navigation (NavMesh, nav modifiers, nav links, runtime generation, invokers, query filters, RVO and Detour crowd avoidance), Smart Objects, Mass Entity, enemy behaviour design (telegraphing, fairness, attack tokens), debugging with the Gameplay Debugger and Visual Logger, and AI performance. Use for any NPC, enemy, companion, patrol, chase, cover, "AI does not move / does not see the player / stuck" or pathfinding task.
+description: Game AI in Unreal Engine 5 - AIController, Behavior Trees and Blackboards, StateTree, EQS, AI Perception and teams, navigation and avoidance, Smart Objects, Mass, enemy design, the Gameplay Debugger and Visual Logger, AI performance. Use for any NPC, enemy, companion, patrol, chase or pathfinding task, or an AI that does not move, see or path.
 ---
 
 # Unreal AI

@@ -1,6 +1,6 @@
 ---
 name: house-style-native
-description: The owner's house style applied per platform - GTK 4 desktop apps in Rust (Relay - theme.css tokens, the Glass Rule, native controls, keyboard and focus, title-bar folding, headless screenshots in a virtual KWin), Android with Jetpack Compose and Material 3 (Avex, Tally, Relay's phone app - theme tokens instead of stock Material, typography from the theme, 200% font scale, 44-48 dp targets, TalkBack descriptions on Canvas marks, Roborazzi and golden screenshots), web pages and HTML artifacts (tokens on :root, dark and light, phone width), design-canvas mockups, and game UI (Unreal, Unity, Godot HUDs and menus). Load with house-style when building or changing UI on one of these stacks.
+description: The house style per platform - GTK 4 in Rust (Relay's theme.css tokens, headless screenshots), Android with Compose and Material 3 (Avex, Tally, Relay's phone app), web pages and HTML artifacts, design-canvas mockups, and game UI (Unreal, Unity, Godot). Load with house-style when building or changing UI on one of these stacks.
 ---
 
 # House style on each platform

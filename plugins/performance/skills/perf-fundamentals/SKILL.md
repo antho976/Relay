@@ -1,6 +1,6 @@
 ---
 name: perf-fundamentals
-description: Load first for any performance work, in any language or app - the measure-change-measure loop and the anti-methods to avoid, journeys and budgets from human perception thresholds (100 ms, 1 s, 10 s, 16.7/8.33 ms frames, RAIL, Core Web Vitals), the USE and RED methods for finding a bottleneck, percentiles and tail latency (why averages and averaged percentiles lie, coordinated omission, HdrHistogram), noise and deciding whether a change is real, geometric means for combining speedups, Amdahl's and Little's laws, latency numbers for back-of-the-envelope estimates, lab versus field data, the metric ladder and ratchets. Use before measuring, optimizing, reviewing or reporting anything about speed, responsiveness, memory, startup or battery.
+description: Load first for any performance work, in any language - the measure-change-measure loop, journeys and budgets from perception thresholds, USE and RED, percentiles and tail latency, noise, Amdahl and Little, latency numbers, lab versus field, ratchets, and the Performance plugin's rules for this project. Use before measuring, optimizing, reviewing or reporting speed, memory, startup or battery.
 ---
 
 # Performance fundamentals

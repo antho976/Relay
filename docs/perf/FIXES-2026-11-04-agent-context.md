@@ -53,5 +53,30 @@ see what they saw. The door shapes `bus.ops` only when no `actor` is asked about
   cannot see as the worst case; loosening it would let an agent answer its own guardrail. It
   costs a turn when it fires.
 - The ~20 internal references in tool schemas (`SPEC §6`, `(D118)`) come to ~200 bytes.
-- Next, not in this change: shorter skill descriptions in front matter (~2k tokens a session),
-  and `design.apply`'s 61 KB tool schema (40 KB of it the node model `design-canvas` teaches).
+
+## Second batch: skill descriptions and `design.apply`'s tool
+
+**Skill descriptions** (front matter `description:`, which Claude Code and Codex list for every
+installed skill in each session's context). Each said what the skill holds, a table of contents
+of up to 1.7 KB; now it says what the skill is for and when to load it, with the trigger words
+kept. A test caps each at 520 bytes.
+
+| Plugin skills | before | after |
+|---|---:|---:|
+| the 17 of the five plugins on for RelayV4, every session | 13 422 | **6 521** |
+| the 26 of Blender and Unreal Engine, in projects that turn them on | 17 145 | **9 833** |
+
+**`design.apply`'s tool** (`relay mcp`, read whole each time a session loads it). The schema keeps
+every field's name, type, enum and limit, and each edit's own description; the prose under each
+edit's fields goes, since the `design-canvas` skill teaches it (it named 86 of the 87 node
+fields; `locked` added) and `bus.schema {"op":"design.apply"}` still has all of it. A test holds
+the tool under 28 KB and every node field named.
+
+| `tools/list` | before | after |
+|---|---:|---:|
+| `design.apply` | 61 205 | **29 902** |
+| all 196 tools | 204 077 | **172 774** |
+
+Not measured: whether agents trigger skills as often from the shorter descriptions, or draw
+valid designs as often from the leaner schema. The engine's validation of `design.apply` is
+unchanged, so a field it took before it takes now, and a wrong one is refused by index as before.

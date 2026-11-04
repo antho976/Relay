@@ -1,6 +1,6 @@
 ---
 name: unreal-blueprints
-description: Blueprint work in Unreal Engine 5 - the C++/Blueprint split (BlueprintCallable, BlueprintPure, BlueprintImplementableEvent, BlueprintNativeEvent, exposing C++ to Blueprint), Blueprint types (Actor, Component, Function Library, Macro Library, Interface, data-only, Widget, Anim BP), Data Assets, Primary Data Assets, Data Tables and Curve Tables, creating and editing Blueprint assets through Python editor scripting (AssetTools, BlueprintFactory, CDO defaults, SubobjectDataSubsystem components, BlueprintEditorLibrary compile), handing graph wiring to the human, and Blueprint performance (Tick, casting, hard references). Use whenever a task involves a .uasset Blueprint, data asset, data table, or deciding what goes in C++ vs Blueprint.
+description: Blueprints in Unreal Engine 5 - the C++/Blueprint split and exposing C++, Blueprint types, Data Assets, Data Tables and Curve Tables, creating and editing Blueprint assets through Python editor scripting, handing graph wiring to the human, Blueprint performance. Use for any Blueprint .uasset, data asset or data table, or deciding what goes in C++ versus Blueprint.
 ---
 
 # Blueprints

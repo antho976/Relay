@@ -1,6 +1,6 @@
 ---
 name: perf-patterns
-description: The performance patterns that pay off in almost any codebase, whatever the language - do less work (skip, cache, memoize, invalidate correctly), do it once (hoist setup out of loops, batch, avoid N+1 queries, compile once), do it in the right place (off the UI thread and outside shared locks, in a worker, deferred, lazily), do it in the right shape (data structures, allocation and copies, string representations, I/O buffering, streaming instead of whole-file), avoid work nobody sees (idle polling, hidden reloads, re-renders of unchanged items, refetch storms), and the database, subprocess, network and startup habits that keep paths cheap. Use when fixing a hot path a profile has already pointed at, when reviewing code for performance, or when writing new code on a path people wait on.
+description: Performance fixes that pay off in any codebase - do less (skip, cache, invalidate correctly), do it once (hoist, batch, no N+1), do it in the right place (off the UI thread, outside locks, lazily), in the right shape (data structures, allocation, streaming), and skip work nobody sees. Use when fixing a hot path a profile pointed at, reviewing code for performance, or writing code on a path people wait on.
 ---
 
 # Patterns that pay off everywhere

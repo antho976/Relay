@@ -1,6 +1,6 @@
 ---
 name: blender-fundamentals
-description: Load first for any Blender work - the bpy data model (bpy.data vs bpy.context vs bpy.ops, objects vs data blocks, users, fake users, orphans, linking vs appending, collections, view layers), background-mode rules (no UI context, data API first, temp_override for operators), transforms and applying them, units and scale, edit/object/pose modes from Python, bmesh, finding and selecting objects, modifiers, saving with save_as, reading blender_render images, and the order to use the blender MCP tools (info, python, render, checks, export). Use whenever a task touches a .blend file, bpy code, or errors like "context is incorrect", "poll() failed" or "not in View Layer".
+description: Load first for any Blender work - the bpy data model (data versus context versus ops, data blocks, users, collections), background-mode rules and temp_override, transforms, units, modes, bmesh, modifiers, saving, and the order to use the blender MCP tools. Use whenever a task touches a .blend or bpy code, or on errors like "context is incorrect", "poll() failed" or "not in View Layer".
 ---
 
 # Blender fundamentals (background mode, bpy)

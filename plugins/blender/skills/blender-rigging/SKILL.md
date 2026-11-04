@@ -1,6 +1,6 @@
 ---
 name: blender-rigging
-description: Rig and skin game characters and props in Blender for Unreal Engine - armature structure (single root, deform vs control bones, bone roll, .L/.R naming, symmetrize, bone collections), matching the UE mannequin skeleton, Rigify and exporting a clean game skeleton from it, automatic weights, weight cleanup (normalize, limit to 4/8 influences, clean, mirror), sockets and held props (grip pivot, bone parenting, Child Of pick-up/drop), twist bones and corrective shape keys. Use it for any armature, skinning, weight painting, bone, socket or attachment work, and when a rig deforms badly, twists, mirrors wrong or exports with the wrong scale.
+description: Rig and skin characters and props in Blender for Unreal - armature structure and naming, matching the UE mannequin, Rigify to a clean game skeleton, weights and their cleanup, sockets and held props, twist bones and corrective shape keys. Use for any armature, skinning, weight, bone, socket or attachment work, and when a rig deforms, twists, mirrors or exports wrong.
 ---
 
 # Rigging and skinning for games
