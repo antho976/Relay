@@ -121,8 +121,8 @@ the background (an ongoing notification), and otherwise from a catch-up every ha
 
 A phone may also pair with the cloud copy on your server (`docs/CLOUD.md`): on the PC's page,
 **Your server's copy** takes a link from `relay --instance stable remote pair --via-only` run on
-the server; the personal build offers it through Discord right after the PC is paired (enroll
-kind `relay-cloud`) and takes a pasted link while the bot does not know that kind. It is a
+the server; pairing through the server offers it through Discord right after the PC is paired
+(enroll kind `relay-cloud`) and takes a pasted link while the bot does not know that kind. It is a
 second, data-only host and never replaces the PC. Once the PC's link has been down for three
 seconds (not when it was disconnected on the phone, and not while the copy refuses this phone),
 the phone dials the copy and asks it only for the ledger's and the training history's
@@ -367,15 +367,20 @@ uninstalled. CI (`.github/workflows/relay-android.yml`)
 runs the core tests, the app's unit tests, Lint and the APK builds, and uploads the debug APK as
 `relay-android-apk`. Pair from the app's first screen with `relay remote pair` on the PC.
 
+### Pairing through your server
+
+Every build can pair through the person's own server, the way Tally 2 connects (docs/CLOUD.md,
+"Connecting through your server"): on the first screen, **Server**, type the server's address
+(the one Tally uses; a bare host, `https://…` or the PC's `wss://…/relay` all read), then Connect
+through my server. The server DMs Allow on Discord, the PC opens a pairing window and asks on its
+own screen, and the phone pairs. No scanning, no typing a code, on the WiFi or away from it. The
+PC needs `relay cloud connect <server>` once. The address is remembered (`Prefs.server`), and the
+Server tab comes first whenever one is known; Scan, Link and Code stay beside it.
+
 ### The personal build
 
 `./gradlew :app:assemblePersonal` builds Antho's own copy: the release, plus `app/src/personal`,
-which pairs through his server instead of a QR code (docs/CLOUD.md, "Connecting through your
-server"). The first screen has one key, Connect through my server: the server DMs him Allow on
-Discord, his PC opens a pairing window and asks on its own screen, and the phone pairs. No scanning,
-no typing, on the WiFi or away from it. The PC needs `relay cloud connect <server>` once.
-
-Only that source set knows the server's address, and nothing in `main`, `debug` or `release`
-refers to it: `src/standard` holds the QR pairing those builds use (`PairEntry`), and CI fails if
-the debug or release APK carries the address. The personal build keeps the release application id
-and signs with the release key when `keystore.properties` is complete, else with the debug key.
+which fills in his server's address (`BUILT_IN_SERVER`) so the first screen needs one tap. Only
+that source set knows the address: `src/standard` leaves it blank for `debug` and `release`, and
+CI fails if the debug or release APK carries it. The personal build keeps the release application
+id and signs with the release key when `keystore.properties` is complete, else with the debug key.

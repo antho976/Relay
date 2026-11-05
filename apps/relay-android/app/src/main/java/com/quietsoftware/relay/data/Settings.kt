@@ -35,6 +35,8 @@ data class Prefs(
     val chatKeys: Boolean = false,
     /** The terminal takes the keyboard key by key (vim, a shell, a TUI's menus) instead of a message box. */
     val terminalDirect: Boolean = false,
+    /** The server this phone pairs through (the pairing screen's "Your server"); blank is the build's own. */
+    val server: String = "",
 )
 
 class Settings(private val context: Context) {
@@ -53,6 +55,7 @@ class Settings(private val context: Context) {
         lastProject = p[PROJECT]?.toLongOrNull() ?: 0,
         chatKeys = p[CHAT_KEYS] ?: false,
         terminalDirect = p[DIRECT] ?: false,
+        server = p[SERVER] ?: "",
     )
 
     suspend fun update(change: (Prefs) -> Prefs) {
@@ -70,6 +73,7 @@ class Settings(private val context: Context) {
             p[PROJECT] = next.lastProject.toString()
             p[CHAT_KEYS] = next.chatKeys
             p[DIRECT] = next.terminalDirect
+            p[SERVER] = next.server
         }
     }
 
@@ -86,5 +90,6 @@ class Settings(private val context: Context) {
         val PROJECT = stringPreferencesKey("last_project")
         val CHAT_KEYS = booleanPreferencesKey("chat_keys")
         val DIRECT = booleanPreferencesKey("terminal_direct")
+        val SERVER = stringPreferencesKey("server")
     }
 }

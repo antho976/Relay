@@ -58,6 +58,7 @@ class ScreensTest {
 
     private lateinit var relay: Relay
     private lateinit var shell: ShellModel
+    private lateinit var settings: Settings
 
     @Before
     fun seed() {
@@ -65,7 +66,7 @@ class ScreensTest {
         val db = Room.inMemoryDatabaseBuilder(context, RelayDb::class.java).allowMainThreadQueries().build()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         relay = Relay(context, db, PcStore(context), scope)
-        val settings = Settings(context)
+        settings = Settings(context)
         runBlocking {
             settings.update { it.copy(name = "Antho", lastProject = 1) }
             val ledger = relay.hub.ledger
@@ -285,6 +286,11 @@ class ScreensTest {
     }
     @Test fun tally() = shoot("tally", "tally")
     @Test fun pc() = shoot("pc", "pc")
+    /** Pairing through the server the phone used last (Settings' `server`), as Tally 2 connects. */
+    @Test fun pairServer() {
+        runBlocking { settings.update { it.copy(server = "https://my-bot.onrender.com") } }
+        shoot("pair-server", "pair")
+    }
     @Test fun projectSettings() = shoot("project-settings", "project-settings/1")
     @Test fun files() = shoot("files", "files/1")
     @Test fun git() = shoot("git", "git/1")

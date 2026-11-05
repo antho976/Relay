@@ -1,4 +1,4 @@
-package com.quietsoftware.relay.personal
+package com.quietsoftware.relay.data.link
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -10,6 +10,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -17,12 +18,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
-
-/**
- * PERSONAL BUILD ONLY. Antho's server: the bot beside Relay's cloud copy (antho976/antho-s-bot,
- * `/api/connect`). The release build never holds this address (CI checks its APK for it).
- */
-const val SERVER = "https://antho-s-bot-8dve.onrender.com"
 
 /** [unsupported]: the server does not know what was asked for (a bot older than the request's kind). */
 class ConnectFailure(message: String, val unsupported: Boolean = false) : Exception(message)
@@ -43,16 +38,24 @@ sealed interface Reply {
 }
 
 /**
- * PERSONAL BUILD ONLY. Asking the owner's server to pair this phone with the owner's PC (docs/CLOUD.md,
- * "Connecting through your server"): the phone keeps a random secret and sends only its sha256; the
- * owner taps Allow on the Discord DM the server sends, the PC opens a pairing window and hands its
- * link over through the server, and the phone collects it with the secret. The PC then asks on its
- * own screen before it pairs the phone.
+ * Asking the owner's server (the bot beside Relay's cloud copy, antho976/antho-s-bot,
+ * `/api/connect`) to pair this phone with the owner's PC (docs/CLOUD.md, "Connecting through your
+ * server"), the way Tally 2 asks it for the ledger: the phone keeps a random secret and sends only
+ * its sha256; the owner taps Allow on the Discord DM the server sends, the PC opens a pairing window
+ * and hands its link over through the server, and the phone collects it with the secret. The PC
+ * then asks on its own screen before it pairs the phone. [server] is whatever the person typed;
+ * [normalize] makes it `https://host`.
  */
 class ServerConnect(
-    private val server: String = SERVER,
+    server: String,
     base: OkHttpClient = OkHttpClient(),
 ) {
+    /** `https://host`, however it was typed. */
+    val server = normalize(server)
+
+    /** The server's host, as the person would type it. */
+    val host: String get() = server.substringAfter("://")
+
     // Render wakes a sleeping service on the first request; give it the time it takes.
     private val http = base.newBuilder().callTimeout(45, TimeUnit.SECONDS).build()
 
@@ -64,17 +67,19 @@ class ServerConnect(
                 r.code to o
             }
         } catch (e: java.io.IOException) {
-            throw ConnectFailure("Your server could not be reached. Check the connection and try again.")
+            throw ConnectFailure("Your server could not be reached. Check the address and the connection, then try again.")
         }
     }
 
+    private fun url(path: String) = (server + path).toHttpUrlOrNull() ?: throw ConnectFailure("That does not read as a server's address")
+
     private fun post(path: String, body: JsonObject): Request =
-        Request.Builder().url(server + path).post(body.toString().toRequestBody(JSON)).build()
+        Request.Builder().url(url(path)).post(body.toString().toRequestBody(JSON)).build()
 
     /** Whether a PC checks in at the server, so a request can reach it. */
     suspend fun pcConnected(): Boolean {
-        val (status, o) = call(Request.Builder().url("$server/api/connect").get().build())
-        if (status != 200 || o?.str("service") != "relay-connect") throw ConnectFailure("Your server does not answer as expected ($status)")
+        val (status, o) = call(Request.Builder().url(url("/api/connect")).get().build())
+        if (status != 200 || o?.str("service") != "relay-connect") throw ConnectFailure("That address does not answer as your server ($status)")
         return o.bool("pc") == true
     }
 
@@ -107,7 +112,7 @@ class ServerConnect(
         if (status in 400..499 && status != 429 && error !in KNOWN_ERRORS) throw ConnectFailure("Your server does not offer this yet ($status)", unsupported = true)
         throw ConnectFailure(
             when (error) {
-                "no_pc" -> "No PC is connected to your server yet. On the PC, run: relay cloud connect ${server.removePrefix("https://")}"
+                "no_pc" -> noPc(host)
                 "busy" -> "Your server has requests waiting already. Answer those, then try again."
                 "slow_down" -> "Something on your network keeps asking. Wait a minute and try again."
                 "off" -> "Your server does not take requests to connect: it is turned off there."
@@ -142,6 +147,28 @@ class ServerConnect(
         const val KIND_CLOUD = "relay-cloud"
 
         private val KNOWN_ERRORS = setOf("no_pc", "busy", "slow_down", "off", "cloud_off")
+
+        fun noPc(host: String) = "No PC is connected to your server yet. On the PC, run: relay cloud connect $host"
+
+        /**
+         * `https://host` for whatever was typed or pasted: a bare host, a trailing slash, the
+         * `wss://…/relay` address the PC prints, or an `/api/connect` or Tally `/api/tally` address,
+         * which all name the same server. Blank stays blank.
+         */
+        fun normalize(server: String): String {
+            var s = server.trim().trimEnd('/')
+            if (s.isEmpty()) return ""
+            s = when {
+                s.startsWith("wss://", ignoreCase = true) -> "https://" + s.substring(6)
+                s.startsWith("ws://", ignoreCase = true) -> "http://" + s.substring(5)
+                s.startsWith("https://", ignoreCase = true) || s.startsWith("http://", ignoreCase = true) -> s
+                else -> "https://$s"
+            }
+            for (suffix in listOf("/relay", "/api/connect", "/api/tally", "/dashboard/devices", "/dashboard")) {
+                if (s.endsWith(suffix, ignoreCase = true)) return s.dropLast(suffix.length).trimEnd('/')
+            }
+            return s
+        }
 
         fun readReply(o: JsonObject, status: Int): Reply = when (o.str("status")) {
             "waiting" -> Reply.Waiting
