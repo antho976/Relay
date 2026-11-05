@@ -29,7 +29,7 @@ series, a real object, a figure set well.
    - *No slop*: say so, and offer two or three refinements with exact values. Apply them only if the
      owner agrees. Never change a good screen just to make it different.
 4. **Set the direction and stop:** show the audit and the direction, then wait, unless they said to
-   just do it. A redesign shows variations beside the before (`../SKILL.md`).
+   just do it. A redesign is one version beside the before unless they ask for options (`../SKILL.md`).
 5. **Fix in nine passes, in order,** each across the whole screen before the next: spacing, colour,
    icons, copy, type, layout, details, visuals, motion. Spacing comes first because everything reads
    differently once the rhythm is right. Copy comes before type and layout because the headline's

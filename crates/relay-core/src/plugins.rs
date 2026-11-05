@@ -455,6 +455,10 @@ mod tests {
         }
         // The core skill points at its references; each one must ship with it.
         let core = &plugin.skills[0];
+        // The owner's own list is read first and wins over the rest of the package.
+        assert!(core.files.iter().any(|(path, _)| *path == "my-list.md"), "my-list.md is missing");
+        assert!(core.body.contains("`my-list.md`"), "SKILL.md does not point at my-list.md");
+        assert!(plugin.instructions().contains("`my-list.md`"), "the brief does not name my-list.md");
         let references = [
             "reference/fundamentals.md", "reference/failures.md", "reference/evidence.md",
             "reference/motion.md", "reference/motion-recipes.md", "reference/motion-passes.md",

@@ -19,7 +19,7 @@ screenshot harness or the emulator.
 
 | Skill | Covers |
 | --- | --- |
-| `house-style` | The owner's taste (what they ask for and reject, rules that hold everywhere), precedence over project docs and generic skills, how to work with the owner, and a router to the task guides below. `reference/fundamentals.md` holds the general craft, `reference/failures.md` the named failure shapes with fixes, `reference/evidence.md` the owner's own words with dates |
+| `house-style` | `my-list.md`, the owner's own rules, kept by hand and read first. The owner's taste (what they ask for and reject, rules that hold everywhere), precedence over project docs and generic skills, how to work with the owner, and a router to the task guides below. `reference/fundamentals.md` holds the general craft, `reference/failures.md` the named failure shapes with fixes, `reference/evidence.md` the owner's own words with dates |
 | `house-style-native` | GTK 4 desktop (Relay's tokens, the Glass Rule, folding, headless screenshots), Android Compose (theming off stock Material, 200% font scale, touch, semantics, goldens), web pages, design-canvas mockups, game UI |
 | `house-style-review` | The review: look at the real render, the checklist, ranking findings by what the owner notices first, the report format, one bounded fix round |
 
@@ -70,6 +70,11 @@ and landing pages.
 | Translucency | Translucent chrome everywhere (Apple); avoid glass as a trend (unslop) | Only where the project uses it (Relay's Glass Rule), with Apple's rules for doing it well |
 
 ## Keeping it right
+
+`skills/house-style/my-list.md` is the owner's own list, one rule per line, and it wins over every
+other file here; only what they say in a conversation beats it. They edit it by hand. Agents never
+write to it unless asked: when the owner corrects a design, the agent offers the line for them to
+add. Plugins are compiled into the engine, so an edit reaches agents after Relay is rebuilt.
 
 The taste is a snapshot of 2026-07 to 2026-10. When the owner makes a new call, add their words to
 `skills/house-style/reference/evidence.md` and the rule to the skill. When a rule turns out to be

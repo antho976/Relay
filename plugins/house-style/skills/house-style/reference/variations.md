@@ -1,6 +1,6 @@
 # Variations that really differ
 
-For a redesign, the owner sees two or three variations beside the before (`../SKILL.md`). On a
+When the owner asks for options, they see two or three variations beside the before (`../SKILL.md`); otherwise a redesign is one version. On a
 Relay project they go on the design canvas (`house-style-native`). This file is for building them
 as working code, when the piece is interactive or its motion is the question.
 

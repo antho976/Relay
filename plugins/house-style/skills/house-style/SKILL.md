@@ -7,17 +7,21 @@ description: The owner's design package for any interface (desktop, phone, web, 
 
 This is how the owner (Antho) wants their interfaces to look and work. It was learned from what they
 chose, rejected and corrected across Relay (GTK desktop and Android), Avex (Android gym coach) and
-Tally (Android budget). Read it before any UI work, then follow the platform skill
-(`house-style-native`) for the stack you are on and `house-style-review` before you call it done.
+Tally (Android budget). Read `my-list.md` beside this file first: the owner's own rules, which
+they keep by hand. Then read this skill, follow the platform skill (`house-style-native`) for the
+stack you are on, and run `house-style-review` before you call it done.
 
 ## Who wins
 
 1. **What they say in this conversation.** A named reference, colour or layout beats any rule here.
-2. **The project's own design doc** (`DESIGN.md`, `.claude/DESIGN.md`, `PRODUCT.md` and its
+2. **`my-list.md`, the owner's list.** They edit it by hand. It beats every other file in this
+   package and the project's doc; where a rule below or in `reference/` says otherwise, the list
+   wins and you don't argue it from `evidence.md`. Never edit it unless they ask.
+3. **The project's own design doc** (`DESIGN.md`, `.claude/DESIGN.md`, `PRODUCT.md` and its
    satellites). It holds the exact tokens, components and settled decisions. Read it first, use its
    names, and never re-add something its removals ledger lists (`SETTLED.md`, `FAILURES.md`).
-3. **This skill.** Their taste, where the project doc is silent.
-4. **Generic design skills** (impeccable and the like) and your own instincts. Where they push for
+4. **This skill.** Their taste, where the project doc is silent.
+5. **Generic design skills** (impeccable and the like) and your own instincts. Where they push for
    "bold", "out-of-distribution" or expressive treatment of an app screen, this skill wins: their apps
    are tools they use every day. Their craft checks still apply. Use their bigger moves only on
    surfaces meant to persuade or show off: a launch beat, a release video, a landing page.
@@ -96,15 +100,17 @@ existing shell, it does not invent its own world.
 
 1. **Read first:** the project's design doc and removals ledger, then the screen as it is today (a
    screenshot or render, not just the code).
-2. **For a redesign, offer 2–3 variations that really differ** (layout, hierarchy, density), not
-   three colourways of one layout. "You didn't change much" is a failure. Put **the before** beside
-   them. On a Relay project draw them on the design canvas (load `design-canvas`), one artboard each,
-   named A, B, C, so they can answer "B, but take C's chart".
+2. **For a redesign, make one version** unless they ask for options. It must really differ from the
+   before ("you didn't change much" is a failure). When they ask for options, make 2–3 that differ
+   in layout, hierarchy or density, not three colourways of one layout, named A, B, C so they can
+   answer "B, but take C's chart". Put **the before** beside them. On a Relay project mockups go
+   on the design canvas (load `design-canvas`), one artboard each.
 3. **One screen at a time, overview first.** Finish and agree the main page before its sub-pages,
    then reuse the agreed style for the rest ("after we can use this style format for the rest of the
    app").
 4. **Look before you report.** Render or screenshot the result at real size, check it against
-   `house-style-review`, fix what you see, then show them. They judge on the device, and things that
+   `house-style-review`, fix what you see, then show them. A web page is shown as the real thing in
+   a browser on localhost, checked at every width first. They judge on the device, and things that
    won on argument have been cut on sight.
 5. **Decide, don't ask, when they say so.** "Don't ask me, take care of the design" means make the
    taste calls yourself with this skill and say what you chose. Otherwise flag a real taste call
@@ -113,6 +119,9 @@ existing shell, it does not invent its own world.
    turn (or its settled/decisions satellite), so the next agent doesn't undo it.
 7. **Small batches of feedback come as numbered lists.** Answer each number, fix each one, and don't
    drop the small ones ("skill icon is not centred").
+8. **A correction keeps their placement.** Fix only what they named and ask nothing they already
+   said. If the correction is a rule worth keeping, offer it as one line for `my-list.md` in your
+   reply; they add it themselves.
 
 ## What to read next
 

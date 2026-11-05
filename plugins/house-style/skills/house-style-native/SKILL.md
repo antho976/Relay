@@ -93,7 +93,7 @@ project's own design doc names the exact tokens and components; use those names,
 - Load `design-canvas` for the mechanics. Copy the design's shell template artboard for a new Relay
   screen (designs 12 and 13 hold the approved A2 "Workbench, reworked" look).
 - Build with auto layout, named colours and styles that match the project's tokens, real copy,
-  an 8 px rhythm. Variations go side by side, 80 px apart, named A/B/C, with the before beside them.
+  an 8 px rhythm. When they ask for options, they go side by side, 80 px apart, named A/B/C, with the before beside them.
 - `design.render` every artboard and read its `issues` before showing the owner.
 
 ## Game UI (Unreal, Unity, Godot)
