@@ -14,6 +14,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,8 +70,10 @@ import com.quietsoftware.relay.ui.theme.Relay
 import kotlinx.coroutines.launch
 
 /**
- * Pairing (docs/MOBILE.md §5): scan the QR `relay remote pair` prints, paste its link, or type
- * the address and code. The PC asks its person to approve this phone before it gets a token.
+ * Pairing (docs/MOBILE.md §5): through the person's own server (Allow on Discord, then Accept on
+ * the PC; [ServerPair]), or with what `relay remote pair` prints on the PC: scan its QR, paste its
+ * link, or type the address and code. The PC asks its person to approve this phone before it gets
+ * a token. The server comes first whenever an address is known: the one used last, or the build's.
  */
 @Composable
 fun PairScreen(link: String?, nav: Nav) {
@@ -78,7 +82,18 @@ fun PairScreen(link: String?, nav: Nav) {
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val paired by nav.shell.state.collectAsStateWithLifecycle()
-    var mode by remember { mutableStateOf(if (link != null) "link" else "scan") }
+    var server by remember { mutableStateOf(startingServer(paired.prefs.server)) }
+    var mode by remember { mutableStateOf(if (link != null) "link" else if (server.isNotBlank()) "server" else "scan") }
+    var serverTyped by remember { mutableStateOf(false) }
+    // The settings arrive a moment after the first frame on a cold start: the saved address then.
+    LaunchedEffect(paired.loaded) {
+        if (paired.loaded && !serverTyped) {
+            server = startingServer(paired.prefs.server)
+            if (link == null && mode == "scan" && server.isNotBlank()) mode = "server"
+        }
+    }
+    val viaServer = remember { ServerPairing(nav, scope, context) }
+    DisposableEffect(Unit) { onDispose { viaServer.stop() } }
     var pasted by remember { mutableStateOf(link.orEmpty()) }
     var address by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
@@ -120,13 +135,18 @@ fun PairScreen(link: String?, nav: Nav) {
                             T("relay", Modifier.padding(start = 9.dp), Relay.type.brand.copy(fontSize = Relay.type.heading.fontSize), c.ink)
                         }
                     }
-                    T("Pair this phone with your PC", Modifier.padding(top = 12.dp), Relay.type.heading, c.ink)
+                    val copying = viaServer.copying
+                    T(if (copying) "Your server's copy" else "Pair this phone with your PC", Modifier.padding(top = 12.dp), Relay.type.heading, c.ink)
                     T(
-                        "On the PC, run relay remote pair. It prints a code to scan and asks you to approve this phone. Pairing works on your WiFi, over Tailscale, or through your own server.",
+                        when {
+                            copying -> "Tally and Avex sync with your server, PC on or off. Connected, this phone reads them there while the PC is off."
+                            mode == "server" -> "Your server asks you on Discord, then your PC asks you on its screen. Nothing to scan or type, on your WiFi or away from it."
+                            else -> "On the PC, run relay remote pair. It prints a code to scan and asks you to approve this phone. Pairing works on your WiFi, over Tailscale, or through your own server."
+                        },
                         style = Relay.type.body,
                         color = c.ink2,
                     )
-                    paired.pc?.let { pc ->
+                    paired.pc?.takeIf { !copying }?.let { pc ->
                         val unsent = paired.outbox.size
                         T(
                             "Pairing a different PC replaces ${pc.name.ifBlank { "this one" }}: this phone's copy of its data" +
@@ -135,8 +155,12 @@ fun PairScreen(link: String?, nav: Nav) {
                             color = if (unsent > 0) c.heldText else c.ink3,
                         )
                     }
-                    Segmented(listOf("scan" to "Scan", "link" to "Paste link", "type" to "Type code"), mode, { mode = it }, Modifier.fillMaxWidth(), fill = true)
+                    // Once the server has the request, the other ways in would only start a second pairing.
+                    if (!viaServer.busy) {
+                        Segmented(listOf("server" to "Server", "scan" to "Scan", "link" to "Link", "type" to "Code"), mode, { mode = it; problem = null }, Modifier.fillMaxWidth(), fill = true)
+                    }
                     when (mode) {
+                        "server" -> ServerPair(viaServer, server, { server = it; serverTyped = true }, nav)
                         "scan" -> QrScanner(
                             onCode = { text -> PairLink.parse(text)?.let(::pair) ?: run { problem = "That code is not a Relay pairing code" } },
                             modifier = Modifier.fillMaxWidth().aspectRatio(1f).clip(Radii.card),

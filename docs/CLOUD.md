@@ -175,8 +175,11 @@ that asked: it sent only the sha256 of a secret it keeps, and collects the link 
   cloud pair` did, and keeps a token for the server in `cloud.json` (`server`, `server_token`). A PC
   already linked with `relay cloud pair` keeps its link and only adds the token.
 - **Tally** asks the first time it opens; **Avex** (personal build) from "Avex → Relay".
-- **The Relay app** (personal build only, `apps/relay-android/app/src/personal`): Pair, Connect
-  through my server. The bot cannot reach the PC, so the PC comes to it: while `relay serve
+- **The Relay app** (every build): Pair, **Server**, the server's address, Connect through my
+  server. The address is typed the way Tally 2's is (a bare host, `https://…`, or the
+  `wss://…/relay` the PC prints all read), remembered for the next pairing, and filled in by the
+  personal build (`apps/relay-android/app/src/personal`, the only build that names the owner's
+  server); QR, link and code pairing stay beside it. The bot cannot reach the PC, so the PC comes to it: while `relay serve
   --remote` runs on a PC connected this way, it asks the server every five seconds for Relay phones
   the owner allowed, opens a pairing window that **this desktop confirms** for each, and hands the
   phone that window's link through the server. When the phone presents the code, the PC asks with a

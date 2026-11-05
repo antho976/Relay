@@ -65,10 +65,10 @@ android {
             applicationIdSuffix = ".debug"
             isDebuggable = true
         }
-        // Antho's own build: the release, plus src/personal, where pairing goes through his server
-        // (one tap on Discord, then Accept on the PC; docs/CLOUD.md, "Connecting through your
-        // server") instead of a QR code. Nothing in main, debug or release refers to it, and the
-        // server's address lives only there: `assembleRelease` compiles exactly what it did.
+        // Antho's own build: the release, plus src/personal, which fills in his server's address
+        // on the pairing screen (one tap on Discord, then Accept on the PC; docs/CLOUD.md,
+        // "Connecting through your server"). Every build can pair through a server the person
+        // types; the address itself lives only in src/personal (CI checks the other APKs for it).
         // Signed with the release key when keystore.properties is complete, else the debug key,
         // so it installs straight from the PC: `./gradlew :app:assemblePersonal`.
         create("personal") {
@@ -78,8 +78,8 @@ android {
         }
     }
 
-    // Pairing as the builds anyone can install do it (scan, paste or type what `relay remote pair`
-    // printed). The personal build has its own PairEntry in src/personal instead.
+    // The builds anyone can install know no server (`BUILT_IN_SERVER` is blank there); the
+    // personal build's src/personal names its owner's.
     sourceSets["debug"].java.srcDir("src/standard/java")
     sourceSets["release"].java.srcDir("src/standard/java")
 
