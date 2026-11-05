@@ -20,9 +20,11 @@ Everything lives in this source set, and nothing in `src/main` refers to it:
   schedules it 3 s later. A newer change replaces a send still waiting, and a send is skipped while
   a workout is in progress, because finishing the workout schedules the next one.
 - `relay/RelayConnect.kt`: asking Antho's server to let this phone in (`/api/connect`, kind
-  `avex`): the server DMs him Allow on Discord, and the phone collects its pairing link. The
-  server's address lives here and nowhere else.
-- `relay/RelaySyncActivity.kt`: Connect, see the last send, send now, forget.
+  `avex`): the phone first checks the address answers as his bot (`GET /api/connect`, with `avex`
+  among its kinds and the cloud copy on), the server DMs him Allow on Discord, and the phone
+  collects its pairing link. No address is built in: the one typed on the screen is kept in the
+  app's private preferences.
+- `relay/RelaySyncActivity.kt`: the bot's address, Connect, the last send, send now, forget.
 
 ## Building and pairing
 
@@ -35,10 +37,13 @@ keeps the release application id, so it installs over a sideloaded release build
 install over the Play Store install, which Play signs with its own key. To move from that, take a
 backup in Avex (Settings, Backup), install this build, and restore.
 
-In "Avex → Relay", tap Connect to my server, then Allow on the Discord message the server sends
-(it shows the same four-character code). That is all: the phone pairs with the cloud copy and
+In "Avex → Relay", type your bot's address (its `PUBLIC_URL`, e.g. `bot.<domain>`), tap Connect,
+then Allow on the Discord message the bot sends (it shows the same four-character code). The
+address reads like Tally 2's: a bare host, `https://…`, `wss://…/relay` or a pasted `/api/connect`
+all work. It is kept for next time, and Forget keeps it too. That is all: the phone pairs with the cloud copy and
 sends the history from then on (antho976/Relay, docs/CLOUD.md, "Connecting through your server").
 
-## Not built here
+## Checking it
 
-Written in an agent session with no Android SDK: this source set has not been compiled.
+`./gradlew -p forge-android :app:compilePersonalKotlin` compiles this source set. AGP gives the
+`personal` build type no unit-test task, so it has no tests of its own.

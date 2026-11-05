@@ -33,8 +33,18 @@ class RelayStore(context: Context) {
         publish()
     }
 
+    /** The bot's address as last typed on the screen (`https://host`), or null before the first. */
+    var server: String?
+        get() = prefs.getString(SERVER, null)
+        set(value) {
+            prefs.edit().apply { if (value.isNullOrBlank()) remove(SERVER) else putString(SERVER, RelayConnect.normalize(value)) }.apply()
+            publish()
+        }
+
+    /** Drops the pairing and its history; the typed address stays for the next Connect. */
     fun forget() {
-        prefs.edit().clear().apply()
+        val keep = prefs.getString(SERVER, null)
+        prefs.edit().clear().apply { if (keep != null) putString(SERVER, keep) }.apply()
         publish()
     }
 
@@ -50,7 +60,7 @@ class RelayStore(context: Context) {
 
     /** One line for the screen: where it goes and how the last send went. */
     fun status(): String {
-        val p = paired ?: return "Not connected yet. Connect, then tap Allow on the Discord message your server sends."
+        val p = paired ?: return "Not connected yet. Check your bot's address, connect, then tap Allow on the Discord message it sends."
         val ok = prefs.getLong(LAST_OK, 0L)
         val last = if (ok == 0L) "Nothing sent yet." else
             "Last sent ${DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(ok))}" +
@@ -64,6 +74,7 @@ class RelayStore(context: Context) {
     }
 
     companion object {
+        private const val SERVER = "server"
         private const val VIA = "via"
         private const val HOST = "host"
         private const val DEVICE = "device"

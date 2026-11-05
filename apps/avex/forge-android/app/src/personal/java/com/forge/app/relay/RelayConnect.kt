@@ -13,12 +13,6 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 
-/**
- * PERSONAL BUILD ONLY. Antho's server: the bot beside Relay's cloud copy (antho976/antho-s-bot,
- * `/api/connect`). The public build never holds this address, nor anything in this source set.
- */
-const val RELAY_SERVER = "https://antho-s-bot-8dve.onrender.com"
-
 /** A request the owner has not answered yet, and the secret that collects its link. */
 data class ConnectRequest(val id: String, val code: String, val notified: Boolean, val verifier: String)
 
@@ -33,23 +27,54 @@ sealed interface ConnectReply {
 }
 
 /**
- * PERSONAL BUILD ONLY. Asking Antho's server to let this phone send its training history
+ * PERSONAL BUILD ONLY. Asking Antho's server, the bot beside Relay's cloud copy
+ * (antho976/Discord-bot-V2, `/api/connect`) at the address typed on the screen, to let this phone
+ * send its training history
  * (antho976/Relay, docs/CLOUD.md, "Connecting through your server"): the phone keeps a random
  * secret and sends only its sha256; Antho taps Allow on the Discord DM the server sends; the phone
  * then collects a pairing link for the cloud copy with the secret, and pairs with it.
  */
-class RelayConnect(private val server: String = RELAY_SERVER) {
+class RelayConnect(server: String) {
+
+    private val server = normalize(server)
 
     // Render wakes a sleeping service on the first request; give it the time it takes.
     private val http = OkHttpClient.Builder().callTimeout(45, TimeUnit.SECONDS).build()
 
     private suspend fun post(path: String, body: JSONObject): Pair<Int, JSONObject?> = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url(server + path).post(body.toString().toRequestBody(JSON)).build()
         try {
+            val request = Request.Builder().url(server + path).post(body.toString().toRequestBody(JSON)).build()
             http.newCall(request).execute().use { r -> r.code to runCatching { JSONObject(r.body?.string().orEmpty()) }.getOrNull() }
         } catch (e: IOException) {
             throw RelayFailure("Your server could not be reached. Check the connection and try again.")
+        } catch (e: IllegalArgumentException) {
+            throw RelayFailure("That does not read as a server address.")
         }
+    }
+
+    /**
+     * Checks that [server] is Antho's bot and can let Avex in, before asking: a typo or another
+     * site reads as one plain sentence here, not as a request that waits forever.
+     */
+    suspend fun hello() {
+        val (status, o) = withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder().url("$server/api/connect").get().build()
+                http.newCall(request).execute().use { r -> r.code to runCatching { JSONObject(r.body?.string().orEmpty()) }.getOrNull() }
+            } catch (e: IOException) {
+                throw RelayFailure("Nothing answered at ${server.removePrefix("https://")}. Check the address and the connection.")
+            } catch (e: IllegalArgumentException) {
+                throw RelayFailure("That does not read as a server address.")
+            }
+        }
+        if (status != 200 || o == null || o.optString("service") != "relay-connect") {
+            throw RelayFailure("${server.removePrefix("https://")} does not answer as your bot.")
+        }
+        val kinds = o.optJSONArray("kinds")
+        if (kinds != null && (0 until kinds.length()).none { kinds.optString(it) == "avex" }) {
+            throw RelayFailure("Your bot there is too old to let Avex in. Update it, then try again.")
+        }
+        if (!o.optBoolean("cloud", false)) throw RelayFailure("Your bot answers, but Relay's cloud copy is not running beside it.")
     }
 
     /** Asks Antho to let this phone in. */
@@ -92,6 +117,23 @@ class RelayConnect(private val server: String = RELAY_SERVER) {
 
     companion object {
         private val JSON = "application/json".toMediaType()
+
+        /**
+         * `https://host` for whatever was typed, as Tally 2 reads it: a bare host, a trailing
+         * slash, a wss:// address, or a pasted API or Relay address all name the same server.
+         */
+        fun normalize(server: String): String {
+            var s = server.trim().trimEnd('/')
+            s = when {
+                s.startsWith("wss://", ignoreCase = true) -> "https://" + s.substring(6)
+                s.startsWith("ws://", ignoreCase = true) -> "http://" + s.substring(5)
+                s.startsWith("https://", ignoreCase = true) -> "https://" + s.substring(8)
+                s.startsWith("http://", ignoreCase = true) -> "http://" + s.substring(7)
+                else -> "https://$s"
+            }
+            for (tail in listOf("/relay", "/api/connect", "/api/tally", "/dashboard")) s = s.removeSuffix(tail).trimEnd('/')
+            return s
+        }
 
         fun reply(o: JSONObject, status: Int): ConnectReply = when (o.optString("status")) {
             "waiting" -> ConnectReply.Waiting
