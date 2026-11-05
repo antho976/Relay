@@ -1,6 +1,6 @@
 ---
 name: unreal-animation-verification
-description: Verify and fix character animation, rigging and attachments in Unreal Engine 5 for any skeleton and any held or worn item - weapons, tools, shields, props, instruments, bags, hats - and for two-character interactions (hits, grabs, hugs, handshakes, carries). Covers axes and handedness, import orientation, sockets and grip points, one- and two-handed holds, off-hand and foot IK, clipping through bodies or other characters, contact timing, retargeting mistakes, and animation flow. Use it whenever an item sits on the wrong side, points the wrong way or floats off the hand, a character clips, an interaction does not line up, or an animation "does not feel right", and before reporting any animation or attachment work as done. Uses ue_anim_inspect and ue_anim_preview.
+description: Verify and fix animation, rigging and attachments in Unreal Engine 5 for any skeleton, any held or worn item, and two-character interactions - axes, sockets and grips, one- and two-handed holds, IK, clipping, contact timing, retargeting mistakes. Use when an item sits wrong or floats, a character clips, an interaction does not line up or an animation feels off, and before reporting animation work as done. Uses ue_anim_inspect and ue_anim_preview.
 ---
 
 # Animation verification, rigging and attachments

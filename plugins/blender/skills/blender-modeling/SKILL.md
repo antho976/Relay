@@ -1,6 +1,6 @@
 ---
 name: blender-modeling
-description: Game-ready modeling in Blender from Python for Unreal - blockouts, hard-surface props, modular kits on a grid, procedural modeling with modifiers and geometry nodes, kitbashing, booleans and cleanup, bevels and weighted normals, smoothing and custom normals, UV unwrapping (smart project, seams, pack islands, texel density, lightmap UVs), LODs with Decimate, UCX_ collision, polycount budgets, topology and scale checks. Use whenever you create, edit, clean, UV, LOD or measure a mesh in a .blend.
+description: Game-ready modeling in Blender from Python for Unreal - blockouts, hard-surface props, modular kits, modifiers and geometry nodes, booleans and cleanup, normals, UV unwrapping and lightmap UVs, LODs, UCX_ collision, polycount and scale checks. Use whenever you create, edit, clean, UV, LOD or measure a mesh in a .blend.
 ---
 
 # Game-ready modeling in Blender (agent edition)

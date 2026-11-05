@@ -1,6 +1,6 @@
 ---
 name: blender-animation
-description: Author and export game animation in Blender for Unreal Engine - one action per move (A_<Char>_<Move>, fake user), keyframing pose bones from Python, interpolation and loops, root motion vs in-place, frame rate, timing and spacing for games, two-character interactions on one timeline, props picked up and thrown, retargeting mocap or Mixamo-style clips, foot sliding, baking constraints and IK, and exporting actions. Use it for any keyframe, action, NLA, walk/run/attack/hit-react cycle, paired or synced animation, mocap cleanup or animation export work, and before reporting any animation as done.
+description: Game animation in Blender for Unreal - one action per move, keyframing pose bones from Python, loops, root motion versus in-place, timing for games, two-character interactions, props, retargeting mocap, foot sliding, baking IK, and exporting actions. Use for any keyframe, action, NLA, cycle, paired animation, mocap cleanup or animation export, and before reporting any animation as done.
 ---
 
 # Animation for games

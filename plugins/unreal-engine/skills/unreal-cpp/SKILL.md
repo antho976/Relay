@@ -1,6 +1,6 @@
 ---
 name: unreal-cpp
-description: Writing Unreal Engine 5 C++ - UCLASS/USTRUCT/UENUM/UPROPERTY/UFUNCTION specifiers and meta, Epic coding standard, TArray/TMap/TSet, FString/FName/FText, delegates (single, multicast, dynamic), timers, UE_LOG and log categories, check/ensure/verify, subsystems, UINTERFACE interfaces, async tasks and FRunnable, TSharedPtr/TUniquePtr, Live Coding vs full rebuild, include-what-you-use, and fixing compile/link/UHT errors. Use whenever creating or editing .h/.cpp files in an Unreal project.
+description: Writing Unreal Engine 5 C++ - UCLASS/UPROPERTY/UFUNCTION specifiers, Epic's coding standard, containers and strings, delegates, timers, logging, check/ensure, subsystems, interfaces, async tasks, smart pointers, Live Coding, and compile, link and UHT errors. Use whenever creating or editing .h/.cpp files in an Unreal project.
 ---
 
 # Unreal C++

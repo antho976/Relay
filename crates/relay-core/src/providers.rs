@@ -79,9 +79,12 @@ pub fn role_instructions_relative(session: &str) -> String {
     format!(".relay/sessions/{session}/role-instructions.md")
 }
 
-pub const DISCOVERY_HINT: &str = "Discover operations with `bus.ops` and inspect the exact payload \
-and result with `bus.schema {\"op\":\"<op>\"}`; do not guess fields. From a shell, use \
-`$RELAY_BIN ops --mine` and `$RELAY_BIN schema <op>`. Relay fills your bound `project_id` and \
+/// Points at the cheap answers first: the MCP tool list already is the callable set, and a full
+/// `bus.ops` is ~120 KB, which an agent told to "discover with bus.ops" read whole.
+pub const DISCOVERY_HINT: &str = "Your Relay tools are exactly the ops you may call; inspect one op's \
+exact payload and result with `bus.schema {\"op\":\"<op>\"}` rather than guessing fields (`bus.ops` \
+answers the callable ops with a line each). From a shell, use `$RELAY_BIN ops --mine` and \
+`$RELAY_BIN schema <op>`. Relay fills your bound `project_id` and \
 `session` when omitted. `session.done` always reports the current bootstrap task, so omit \
 `task` and `task_id`.";
 
@@ -90,7 +93,7 @@ and result with `bus.schema {\"op\":\"<op>\"}`; do not guess fields. From a shel
 /// the provider's own agent messaging, and where the brief is (D101).
 const COMMON_INSTRUCTIONS: &str = "On your first turn, obtain the current assignment and queue before \
 acting: call the session.bootstrap Relay MCP tool when available; otherwise run `$RELAY_BIN q \
-session.bootstrap`. It also returns your live peers, every op you may call, and your \
+session.bootstrap`. It also returns your live peers and your \
 guardrails, and `base_sync` says how far your checkout is behind the base right now: when \
 `behind` is not 0, follow its `hint` before starting. Coordinate with those peers through Relay `mailbox.send` — it reaches every \
 provider including Codex, which your own cross-agent messaging tool does not; send \

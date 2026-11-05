@@ -1,6 +1,6 @@
 ---
 name: unreal-game-design
-description: Game design for an Unreal Engine 5 project, covering design pillars, the core loop and meta loop, MDA, player verbs, game feel (juice, hit-stop, camera shake, input buffering, coyote time), difficulty and progression curves, economy and balancing with Data Tables, Curve Tables and Data Assets, GDDs and one-page designs, scoping (vertical slice, MVP, milestones, cut lists), fast prototyping (greybox, Blueprint first, then C++), playtesting and telemetry, genre notes and accessibility. Use it when designing, tuning, scoping or playtesting a game or a mechanic, or when turning design intent into data-driven UE assets and Gameplay Tags.
+description: Game design for an Unreal Engine 5 project - pillars, core and meta loops, player verbs, game feel, difficulty and progression, economy and balancing in data, GDDs, scoping, prototyping, playtesting and telemetry, accessibility. Use when designing, tuning, scoping or playtesting a game or mechanic, or turning design intent into data-driven assets and Gameplay Tags.
 ---
 
 # Game Design in Unreal Engine

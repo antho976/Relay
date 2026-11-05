@@ -1,6 +1,6 @@
 ---
 name: unreal-fundamentals
-description: Core Unreal Engine 5 knowledge to load before touching any UE project - project layout (.uproject, Source, Content, Config, Plugins, Saved, Intermediate, Binaries, DerivedDataCache), modules and targets (.Build.cs, .Target.cs, loading phases), UObject reflection (UCLASS, USTRUCT, UENUM, UHT, generated.h), garbage collection, TObjectPtr/TWeakObjectPtr/TSoftObjectPtr, CDOs, Actors and Components, Worlds, Levels, Packages and asset paths, hard vs soft references, config .ini hierarchy, plugins (.uplugin), naming conventions and asset prefixes. Use at the start of any Unreal task or whenever unsure where something lives or how the engine is organized.
+description: Load first for any Unreal Engine 5 project - project layout, modules and targets, UObject reflection and UHT, garbage collection and object pointers, CDOs, Actors and Components, worlds, levels and asset paths, hard versus soft references, config .ini, plugins, naming and prefixes. Use at the start of any Unreal task or when unsure where something lives.
 ---
 
 # Unreal Engine fundamentals

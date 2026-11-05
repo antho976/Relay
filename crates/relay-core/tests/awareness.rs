@@ -193,7 +193,7 @@ fn notes_mailbox_and_brief_are_persistent_and_scoped() {
     // to the bodies: an agent has to know a skill exists before it can decide to load it.
     let compact = brief["compact"].as_str().unwrap();
     assert!(compact.contains("Verification"), "the injected half never names the skill");
-    assert!(compact.contains(".claude/skills/verification/"), "no registered location: {compact}");
+    assert!(compact.contains(".claude/skills/") && compact.contains("(verification/)"), "no registered location: {compact}");
     assert!(compact.contains(".relay/session-skills.md"), "the bodies are still reachable");
     assert!(!compact.contains("Run the repository test suite"), "bodies stay out of the prompt (D101)");
     assert!(!compact.contains("Always run cargo fmt"), "the standing note leaked into the injected half");

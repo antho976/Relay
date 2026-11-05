@@ -1,6 +1,6 @@
 ---
 name: perf-sqlite
-description: SQLite performance in any embedding (rusqlite, Room, Python sqlite3, others) - WAL and checkpoints, pragmas (synchronous, cache_size, mmap_size, temp_store, busy_timeout, journal_size_limit, optimize), prepared-statement caching and its capacity, indexes, covering indexes and EXPLAIN QUERY PLAN, N+1 hydration and set queries, transactions (batching, BEGIN IMMEDIATE), one connection behind a mutex, keeping slow work out of the transaction, reactive-query invalidation, migrations on large tables, and measuring where SQLite time goes (prepare vs step, callgrind, the profile hook). Use for any query, schema, store or persistence performance question.
+description: SQLite performance in any embedding (rusqlite, Room, sqlite3) - WAL and checkpoints, pragmas, prepared-statement caching, indexes and EXPLAIN QUERY PLAN, N+1 hydration, transactions, one connection behind a mutex, reactive-query invalidation, migrations on big tables, and measuring where SQLite time goes. Use for any query, schema, store or persistence performance question.
 ---
 
 # SQLite performance

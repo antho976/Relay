@@ -406,7 +406,10 @@ fn bootstrap_and_the_brief_disclose_what_the_engine_already_knows() {
     let brief = ok(&f.engine, f.me(), "session.brief", json!({"session": f.name()}));
     let compact = brief["compact"].as_str().unwrap();
     assert!(compact.contains(f.peer_name()), "the injected half must carry the peer table");
-    assert!(compact.contains("mailbox.send"));
+    // How to reach the peers rides in the role instructions the compact half is always sent
+    // behind, once, not again in the brief.
+    assert!(!compact.contains("## Comms"));
+    assert!(relay_core::providers::role_instructions(relay_bus::types::Role::Builder).contains("mailbox.send"));
     // With nothing installed the skills section says so; when skills exist it names them and
     // the folders they are registered in, and still never inlines a body (see awareness.rs).
     assert!(

@@ -1,6 +1,6 @@
 ---
 name: unreal-narrative
-description: Narrative design and implementation in Unreal Engine 5, covering story structure for games (three-act, hero's journey, kishotenketsu), environmental storytelling, character bibles, branching dialogue (hubs, gates, state), quest design (objectives, state machines, fail states), barks and systemic dialogue, game writing style and subtitle limits, localization-ready text (FText, LOCTEXT/NSLOCTEXT, String Tables, Localization Dashboard), data-driven dialogue and quests (Data Tables, Data Assets, Gameplay Tag story flags, a savable story-state subsystem in C++), Sequencer cinematics triggered from gameplay, and voice lines with subtitles. Use it when writing or structuring story content, or when building dialogue, quest, story-flag, cutscene, subtitle or localization systems.
+description: Narrative design in Unreal Engine 5 - story structure, environmental storytelling, character bibles, branching dialogue, quests, barks, game writing and subtitle limits, localization-ready text, data-driven dialogue, quests and story flags, cinematics from gameplay, voice lines. Use when writing or structuring story, or building dialogue, quest, story-flag, cutscene, subtitle or localization systems.
 ---
 
 # Narrative Design and Implementation in Unreal Engine

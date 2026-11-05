@@ -1,6 +1,6 @@
 ---
 name: unreal-build-packaging
-description: Building and shipping Unreal Engine 5 projects - UnrealBuildTool (UBT) targets and modules, build configurations (Debug, DebugGame, Development, Test, Shipping; Editor vs Game/Client/Server targets), Build.bat/Build.sh/RunUAT per OS, BuildCookRun (build, cook, stage, pak, IoStore, archive), Project Launcher, packaging settings (maps to cook, Asset Manager primary assets, compression), Windows/Linux/Android/Mac notes, dedicated server targets, CI (headless, -nullrhi, -unattended, shared DDC), GenerateProjectFiles, fixing compile/link/UHT errors (Build.cs dependencies, LNK2019, undefined reference, plugin mismatches), and plugin authoring (.uplugin). Use for any compile, build, package, cook, ship, CI or build-error task.
+description: Building and shipping Unreal Engine 5 projects - UBT targets and modules, build configurations, Build and RunUAT per OS, BuildCookRun, packaging settings, dedicated servers, headless CI, GenerateProjectFiles, compile, link and UHT errors, and plugin authoring. Use for any compile, build, package, cook, ship, CI or build-error task.
 ---
 
 # Unreal Build and Packaging

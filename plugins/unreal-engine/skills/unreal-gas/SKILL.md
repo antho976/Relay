@@ -1,6 +1,6 @@
 ---
 name: unreal-gas
-description: Gameplay Ability System (GAS) in Unreal Engine 5 C++ - AbilitySystemComponent placement and replication mode, AttributeSets, GameplayEffects (cost, cooldown, damage, buffs, MMC, execution calculations), GameplayAbilities and AbilityTasks, native Gameplay Tags, Gameplay Cues, Enhanced Input ability binding, prediction and InitAbilityActorInfo order bugs. Use when adding or debugging abilities, attributes, health/mana/stamina, damage, buffs/debuffs, cooldowns, or anything using UAbilitySystemComponent.
+description: The Gameplay Ability System in Unreal Engine 5 C++ - AbilitySystemComponent placement and replication, AttributeSets, GameplayEffects, abilities and AbilityTasks, Gameplay Tags and Cues, input binding, prediction and init-order bugs. Use when adding or debugging abilities, attributes, damage, buffs, cooldowns or anything on UAbilitySystemComponent.
 ---
 
 # Gameplay Ability System (GAS)

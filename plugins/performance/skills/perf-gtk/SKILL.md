@@ -1,6 +1,6 @@
 ---
 name: perf-gtk
-description: GTK 4 desktop client performance, especially from Rust (gtk4-rs) - the frame clock and its phases, GLib main-loop priorities (events, resize 110, redraw 120, idle 200) and how a flood of default-priority futures starves painting, queue_draw vs queue_resize, layout cascades from changing labels, snapshot and render-node cost, the GL/Vulkan renderers and Cairo fallbacks, CSS invalidation and provider reloads, GtkListView/ColumnView recycling instead of widget-per-row boxes, Pango text cost, VTE and GtkSourceView knobs, async patterns (spawn_future_local, gio::spawn_blocking, async-channel, tokio off the UI thread), tick callbacks vs timeouts, startup (icon themes, CSS parse, building hidden pages), reference-cycle leaks with clone!, idle wakeups, and the measuring tools (GDK_DEBUG=frames, GSK_DEBUG, the Inspector's frame timings, recorder and statistics, sysprof marks, FrameClock timings). Use for any GTK UI that janks, starts slowly, uses CPU at rest, leaks, or lags on input.
+description: GTK 4 performance, especially from Rust - the frame clock, main-loop priorities and starved painting, layout cascades, snapshot and renderer cost, CSS invalidation, list-view recycling, Pango, VTE, async off the UI thread, startup, leaks, idle wakeups, and the measuring tools (GDK_DEBUG=frames, the Inspector, sysprof). Use for any GTK UI that janks, starts slowly, uses CPU at rest, leaks or lags on input.
 ---
 
 # GTK 4 performance

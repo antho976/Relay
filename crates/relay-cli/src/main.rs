@@ -351,8 +351,18 @@ async fn run(cli: Cli) -> Result<u8> {
                     name.contains(needle) || summary.contains(needle)
                 }
             };
-            // `--mine` used to answer with layer 1 only, which overstated a builder's write
-            // surface tenfold. Every row now says whether it is really callable and why.
+            if mine {
+                // What the caller may call, a line each: the question `--mine` asks. Listing all
+                // 271 ops with the refused ones marked was 46 KB an agent read to find ~170.
+                let mut shown = 0;
+                for o in ops.iter().filter(|o| matches(o) && o["call"] != "no") {
+                    shown += 1;
+                    let own = if o["call"] == "self_only" { " (own session only)" } else { "" };
+                    println!("{:<30} {}{own}", o["name"].as_str().unwrap_or(""), o["summary"].as_str().unwrap_or(""));
+                }
+                println!("\n{shown} callable");
+                return Ok(0);
+            }
             println!("{:<32} {:<9} {:>3}  {:<5} {:<5} {:<34} summary", "op", "kind", "ph", "impl", "call", "why");
             let mut shown = 0;
             for o in ops.iter().filter(|o| matches(o)) {
@@ -374,10 +384,7 @@ async fn run(cli: Cli) -> Result<u8> {
                     o["summary"].as_str().unwrap_or(""),
                 );
             }
-            if mine {
-                let callable = ops.iter().filter(|o| matches(o) && o["call"] != "no").count();
-                println!("\n{shown} listed, {callable} callable (SELF = own session only)");
-            }
+            println!("\n{shown} listed");
             Ok(0)
         }
         Command::Events { filter } => {
@@ -923,19 +930,23 @@ async fn do_cmd(instance: Instance, actor_override: Option<&str>, op: String, pa
         fill_project(&mut c, &actor, &token, &req.op, &mut req.payload).await?;
     }
     let resp = c.call(&req, |_| {}).await?;
-    print_response(&resp, pretty, &mut std::io::stdout().lock(), &mut std::io::stderr().lock())?;
+    // Indented for a person at a terminal; one line when piped, which is how an agent reads it
+    // (a third fewer tokens on a typical answer).
+    let indent = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    print_response(&resp, pretty, indent, &mut std::io::stdout().lock(), &mut std::io::stderr().lock())?;
     Ok(exit_for(&resp))
 }
 
 /// What `q` and `cmd` print: stdout carries the JSON alone, so it pipes into a parser; a refusal
 /// and the priority-mail notice go to stderr.
-fn print_response(resp: &relay_bus::Response, pretty: bool, out: &mut impl std::io::Write, err: &mut impl std::io::Write) -> Result<()> {
+fn print_response(resp: &relay_bus::Response, pretty: bool, indent: bool, out: &mut impl std::io::Write, err: &mut impl std::io::Write) -> Result<()> {
+    let text = |value: &Value| if indent { serde_json::to_string_pretty(value) } else { serde_json::to_string(value) };
     if pretty {
         match &resp.error {
-            None => writeln!(out, "{}", serde_json::to_string_pretty(resp.result.as_ref().unwrap_or(&Value::Null))?)?,
+            None => writeln!(out, "{}", text(resp.result.as_ref().unwrap_or(&Value::Null))?)?,
             // A typed refusal printed on stdout beside real results reads as a result — every
             // caller then has to special-case an error that arrived looking like success.
-            Some(e) => writeln!(err, "{}", serde_json::to_string_pretty(e)?)?,
+            Some(e) => writeln!(err, "{}", text(&serde_json::to_value(e)?)?)?,
         }
         if let Some(mail) = &resp.mail {
             writeln!(err,
@@ -960,9 +971,21 @@ mod tests {
         let mut resp = relay_bus::Response::ok(uuid::Uuid::new_v4(), json!({"ok": true, "errors": []}));
         resp.mail = Some(relay_bus::MailHint { priority: 1 });
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        print_response(&resp, true, &mut out, &mut err).unwrap();
+        print_response(&resp, true, true, &mut out, &mut err).unwrap();
         assert_eq!(serde_json::from_slice::<Value>(&out).unwrap(), json!({"ok": true, "errors": []}));
         assert!(String::from_utf8(err).unwrap().starts_with("RELAY priority mail: 1 unread"));
+    }
+
+    /// Piped (an agent's shell), the result is one line: the same JSON, without the indent.
+    #[test]
+    fn a_piped_result_is_one_line() {
+        let resp = relay_bus::Response::ok(uuid::Uuid::new_v4(), json!({"tasks": [{"id": 1, "title": "x"}]}));
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        print_response(&resp, true, false, &mut out, &mut err).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "{\"tasks\":[{\"id\":1,\"title\":\"x\"}]}\n");
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        print_response(&resp, true, true, &mut out, &mut err).unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("\n  \"tasks\""), "a terminal still gets it indented");
     }
 
     /// RA-401: the tool's output is not forwarded; what session.report reads is.

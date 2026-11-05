@@ -1061,7 +1061,9 @@ fn a_plugin_that_is_on_reaches_every_agent_of_its_project() {
     let role = std::fs::read_to_string(worktree.join(format!(".relay/sessions/{name}/role-instructions.md"))).unwrap();
     assert!(role.contains("## Enabled plugins"), "the brief never names the plugin");
     assert!(role.contains("Start every task with `ue_project_info`"), "the plugin's rules are not in the injected brief");
-    assert!(role.contains("- unreal-animation — "), "plugin skills are not listed with their descriptions");
+    // Its rules name the skill; the description is the provider's own skill list's to show.
+    assert!(role.contains("`unreal-animation`"), "the plugin's rules no longer name its skills");
+    assert!(!role.contains("- unreal-animation — "), "plugin skills are listed with their descriptions twice");
     let status = git(&worktree, &["status", "--porcelain"]);
     assert!(status.trim().is_empty(), "plugin skills dirty the worktree: {status}");
     ok(&f.engine, "session.close", json!({"session": name}));

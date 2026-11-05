@@ -1,6 +1,6 @@
 ---
 name: perf-audit
-description: Run a whole-application performance audit - inventory the journeys people use and the paths behind them, define each measurement from a person's action to the result on screen, take a baseline with a reproducible harness, attribute every cost (instructions, allocations, syscalls, SQL, frames, locks held), separate the work from overhead, rank fixes by milliseconds saved times frequency, write the reading as a BASELINE document, then fix in measured, guarded steps and record before-and-after in a FIXES document. Use when asked to audit, baseline, sweep or speed up an app as a whole, or to plan a performance sprint.
+description: Run a whole-app performance audit - inventory the journeys, measure each from a person's action to the result on screen, baseline with a reproducible harness, attribute every cost, rank fixes by milliseconds saved times frequency, and record BASELINE and FIXES documents. Use when asked to audit, baseline or speed up an app as a whole, or to plan a performance sprint.
 ---
 
 # Performance audit

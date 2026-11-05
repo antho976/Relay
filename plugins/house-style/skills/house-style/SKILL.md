@@ -1,6 +1,6 @@
 ---
 name: house-style
-description: The owner's design package for any interface (desktop, phone, web, game UI, mockups) - their taste (clean, professional, near-black with one accent, nothing crowded, too round, too big, boxed, dated or AI-looking), how to work with them, the fundamentals of hierarchy, type, spacing, colour, controls, states, copy, data and icons, and task guides - motion (whether to animate, curves, durations, springs, gestures, haptics, reduced motion, jank; reviewing, auditing, finding or removing animations; naming an effect; React Native), unslopping an AI-looking screen, landing heroes and generated visuals, worst-case data stress tests, web apps that feel native on a phone, React library picks and variations in code. Load before designing, redesigning, animating, polishing or reviewing any screen, component or artboard.
+description: The owner's design taste and fundamentals for any interface (desktop, phone, web, game UI, mockups) - clean, near-black with one accent, nothing crowded, oversized, boxed or AI-looking; hierarchy, type, spacing, colour, controls, states and copy; and guides for motion, unslopping, heroes, worst-case data, mobile web and variations. Load before designing, redesigning, animating, polishing or reviewing any screen.
 ---
 
 # House style

@@ -1,6 +1,6 @@
 ---
 name: unreal-editor-automation
-description: Drive the running Unreal Editor through the `unreal` MCP server - setup (Remote Control API, Python Editor Script Plugin, Editor Scripting Utilities, web server on port 30010, remote Python execution), every ue_* tool with example arguments, and the `unreal` Python API (EditorAssetLibrary, EditorActorSubsystem, LevelEditorSubsystem, AssetTools, factories, Asset Registry, transactions, slow tasks, saving). Use whenever you must create, import, rename, move, edit or save .uasset/.umap content, spawn or modify level actors, create materials instances, Data Tables or Blueprints, or query assets, since binary assets cannot be edited as text.
+description: Drive the running Unreal Editor through the `unreal` MCP server - setup (Remote Control, the Python plugin, port 30010), every ue_* tool with examples, and the `unreal` Python API for assets, actors, factories, transactions and saving. Use whenever you must create, import, edit or save .uasset/.umap content, spawn or change level actors, or query assets, since binary assets cannot be edited as text.
 ---
 
 # Unreal Editor Automation

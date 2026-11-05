@@ -1,6 +1,6 @@
 ---
 name: stream-clips
-description: Turn a stream's VOD (Twitch, or any long recording) into vertical Shorts that look hand-edited, and edit gameplay footage into guides - finding the moments with streamclips.py (whisper.cpp words with timings, loudness and chat replay peaks, ranked candidates), choosing clips that start on the hook and end on the payoff, the facecam-over-gameplay layout (StreamClip, Camera, cam and game rects found once per channel), dead air cut with captions moved to match (keepSpeech, remapCaptions), punch-ins, caption styles (lit, box, pop, plain) and a reference channel's style measured and copied, the opening Hook, guide marks over footage the person gives (Camera keys that glide and zoom, Callout rings with labels, Arrow, Step), rendering at Shorts loudness, and the review list the person approves before anything is posted. Use with video-code when a task asks for clips, Shorts, highlights or a guide from a stream, a VOD or game footage.
+description: Turn a stream's VOD into vertical Shorts that look hand-edited, and edit gameplay footage into guides - finding the moments with streamclips.py, clips that start on the hook and end on the payoff, the facecam-over-gameplay layout, dead air cut with captions kept in step, punch-ins, caption styles, guide marks over footage, Shorts loudness, and the review list the person approves before anything is posted. Use with video-code for clips, Shorts, highlights or a guide from a stream, a VOD or game footage.
 ---
 
 # Stream clips and guides

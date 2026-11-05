@@ -1,6 +1,6 @@
 ---
 name: unreal-gameplay-framework
-description: Unreal Engine 5 Gameplay Framework - GameModeBase/GameMode, GameStateBase, PlayerController, PlayerState, Pawn, Character and CharacterMovementComponent, HUD, GameInstance, Enhanced Input (Input Actions, Input Mapping Contexts, triggers, modifiers, C++ binding), camera (SpringArm, CameraComponent, PlayerCameraManager), damage, spawning and actor lifecycle (BeginPlay, EndPlay, construction script, deferred spawn), SaveGame, level travel (OpenLevel, seamless travel, level streaming) and World Partition. Use when building player characters, controls, cameras, game rules, spawning, saving/loading, or switching levels.
+description: The Unreal Engine 5 Gameplay Framework - GameMode and GameState, PlayerController and PlayerState, Pawn, Character and movement, Enhanced Input, cameras, damage, spawning and actor lifecycle, SaveGame, level travel and streaming, World Partition. Use when building player characters, controls, cameras, game rules, spawning, saving and loading, or switching levels.
 ---
 
 # Gameplay Framework

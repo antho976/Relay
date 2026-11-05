@@ -56,6 +56,48 @@ pub(crate) fn extend_tool(tool: &mut Value) {
     if let Some(required) = schema["required"].as_array_mut() {
         required.retain(|field| field != "ops");
     }
+    lean_edits(schema);
+}
+
+/// What `ops` says once its fields' own prose is gone: where that prose is.
+const EDIT_FIELDS_ELSEWHERE: &str = " Each edit's fields are named and typed here; what each one does is in the design-canvas skill, and bus.schema {\"op\":\"design.apply\"} has every field's description.";
+
+/// design.apply's input schema with every field's names, types, enums and limits but not the
+/// prose under each edit's fields: that prose was 40 KB of a 61 KB tool, read whole each time a
+/// session loads the tool, and it is what the design-canvas skill teaches (which an agent loads
+/// before drawing). Each edit's own description stays; the engine's `bus.schema` is unchanged.
+fn lean_edits(schema: &mut Value) {
+    if let Some(ops) = schema.pointer_mut("/properties/ops") {
+        if let Some(about) = ops["description"].as_str() {
+            ops["description"] = json!(format!("{about}{EDIT_FIELDS_ELSEWHERE}"));
+        }
+        for edit in ops.pointer_mut("/items/oneOf").and_then(Value::as_array_mut).into_iter().flatten() {
+            if let Some(fields) = edit.get_mut("properties").and_then(Value::as_object_mut) {
+                fields.values_mut().for_each(without_descriptions);
+            }
+        }
+    }
+    if let Some(defs) = schema.get_mut("$defs").and_then(Value::as_object_mut) {
+        defs.values_mut().for_each(without_descriptions);
+    }
+}
+
+/// `schema` without a `description` anywhere in it; a field that is itself named `description`
+/// (a key of `properties`) stays.
+fn without_descriptions(schema: &mut Value) {
+    match schema {
+        Value::Object(map) => {
+            map.remove("description");
+            for (key, value) in map.iter_mut() {
+                match (key.as_str(), value) {
+                    ("properties" | "patternProperties", Value::Object(fields)) => fields.values_mut().for_each(without_descriptions),
+                    (_, value) => without_descriptions(value),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(without_descriptions),
+        _ => {}
+    }
 }
 
 /// design.apply's arguments made the op's own: `render` taken out and returned (`None` when not
@@ -220,5 +262,27 @@ mod tests {
         assert!(props.contains_key("render") && props.contains_key("fix") && props.contains_key("drop"));
         assert_eq!(tool["inputSchema"]["required"], json!(["design_id"]));
         assert_eq!(props["render"]["anyOf"][1]["properties"]["motion_checks"]["enum"], json!(["frames", "end", "off"]));
+    }
+
+    #[test]
+    fn the_tool_names_every_field_without_its_prose() {
+        let engine = relay_bus::schema::render_op(<relay_bus::ops::design::Apply as relay_bus::Op>::NAME).unwrap()["payload"].clone();
+        let mut tool = json!({"description": "Edit a design", "inputSchema": crate::units::agent_schema(&engine)});
+        extend_tool(&mut tool);
+        let bytes = serde_json::to_string(&tool).unwrap().len();
+        assert!(bytes < 28 * 1024, "design.apply's tool is {bytes} bytes: was 61 KB with its fields' prose");
+        let node = |schema: &Value| schema.pointer("/properties/ops/items/oneOf/0/properties/node/properties").and_then(Value::as_object).unwrap().clone();
+        let (lean, full) = (node(&tool["inputSchema"]), node(&engine));
+        assert_eq!(lean.keys().collect::<Vec<_>>(), full.keys().collect::<Vec<_>>(), "every node field is still named");
+        assert!(lean.values().all(|field| field.get("description").is_none()));
+        assert_eq!(lean["id"]["pattern"], full["id"]["pattern"], "limits stay");
+        let ops = &tool["inputSchema"]["properties"]["ops"];
+        assert!(ops["description"].as_str().unwrap().ends_with(EDIT_FIELDS_ELSEWHERE));
+        assert!(ops["items"]["oneOf"].as_array().unwrap().iter().all(|edit| edit["description"].is_string()), "each edit still says what it does");
+        assert!(tool["inputSchema"]["properties"]["render"]["description"].is_string());
+        // A field named `description` is a field, not prose.
+        let mut schema = json!({"properties": {"description": {"type": "string", "description": "prose"}}, "description": "prose"});
+        without_descriptions(&mut schema);
+        assert_eq!(schema, json!({"properties": {"description": {"type": "string"}}}));
     }
 }

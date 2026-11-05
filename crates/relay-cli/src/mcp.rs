@@ -687,6 +687,22 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
         if name == "bus.schema" {
             value = units::agent_schema(&value);
         }
+        if name == relay_bus::ops::bus::Ops::NAME && request.payload.get("actor").is_none_or(Value::is_null) {
+            value = callable_ops(value);
+        }
+        if name == relay_bus::ops::session::Bootstrap::NAME {
+            lean_bootstrap(&mut value);
+        }
+        if name == relay_bus::ops::design::Get::NAME && whole_design(&request.payload) {
+            let bytes = serde_json::to_string(&value).map_or(0, |text| text.len());
+            if bytes > WHOLE_DESIGN_MAX {
+                let pages = json!({"design_id": request.payload["design_id"], "pages_only": true});
+                if let Some(pages) = read(&mut client, actor, token, name, pages).await {
+                    let nodes = value["nodes"].as_array().map_or(0, Vec::len);
+                    value = too_big_for_a_reply(pages, nodes, bytes);
+                }
+            }
+        }
         if name == relay_bus::ops::design::Render::NAME {
             return Ok(render_success(value, mail.as_ref()));
         }
@@ -1113,6 +1129,55 @@ async fn ledger_digits(client: &mut Client, actor: &Actor, token: Option<&str>) 
     }
 }
 
+/// `bus.ops` as an agent asked it through this door: the ops it may call, a line each. The
+/// engine's answer is every registered op with eleven registry attributes (~120 KB, 271 rows),
+/// most of them refused or of no use in choosing a call; the tools this server lists are the
+/// callable set already. `self_only` marks an op the agent may call only on its own session.
+fn callable_ops(value: Value) -> Value {
+    let ops: Vec<Value> = value["ops"].as_array().map(Vec::as_slice).unwrap_or_default().iter()
+        .filter(|op| op["call"] != "no")
+        .map(|op| {
+            let mut row = json!({"name": op["name"], "summary": op["summary"]});
+            if op["call"] == "self_only" {
+                row["self_only"] = json!(true);
+            }
+            row
+        })
+        .collect();
+    json!({"ops": ops})
+}
+
+/// `session.bootstrap` as this door gives it: without `can_call`, which is this server's tool
+/// list again (~3.5 KB), and the `discovery` and `comms` texts, which every session's system
+/// prompt carries already (`providers::role_instructions`). The CLI's answer still has them.
+fn lean_bootstrap(value: &mut Value) {
+    if let Some(fields) = value.as_object_mut() {
+        for key in ["can_call", "discovery", "comms"] {
+            fields.remove(key);
+        }
+    }
+}
+
+/// The most of a whole design this door hands an agent in one reply: ~20k tokens, under Claude
+/// Code's 25k-token cap on a tool's answer. A large design whole runs past it (design 13 of the
+/// redesign is 3,238 nodes, 555 KB), and the agent got an error or a cut-off answer for it.
+const WHOLE_DESIGN_MAX: usize = 80 * 1024;
+
+/// A `design.get` that asks for the whole design: no page, nodes, rev or page list.
+fn whole_design(payload: &Value) -> bool {
+    ["page", "nodes", "since_rev", "pages_only"].iter().all(|key| payload.get(*key).is_none_or(Value::is_null))
+}
+
+/// A design too big for one reply, answered with its pages and how to read it in parts.
+fn too_big_for_a_reply(mut pages: Value, nodes: usize, bytes: usize) -> Value {
+    pages["whole_too_big"] = json!(format!(
+        "This design is {nodes} nodes ({} KB) whole, more than one reply holds, so only its pages are here. \
+         Read one page with `page`, some nodes with `nodes`, or find ids with design.find.",
+        bytes / 1024
+    ));
+    pages
+}
+
 fn exposed(entry: &OpEntry) -> bool {
     entry.meta.stream.is_none()
         && !matches!(entry.name, "bus.subscribe" | "bus.unsubscribe")
@@ -1327,6 +1392,39 @@ async fn connect(instance: Instance) -> Result<Client> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bus_ops_through_the_door_is_the_callable_set_a_line_each() {
+        let engine = json!({"ops": [
+            {"name": "bus.ping", "kind": "query", "audit": "never", "summary": "Liveness", "call": "yes", "why": "query"},
+            {"name": "task.create", "kind": "mutation", "summary": "Make a task", "call": "no", "why": "role"},
+            {"name": "session.done", "kind": "mutation", "summary": "Record completion", "call": "self_only", "why": "self"},
+        ]});
+        assert_eq!(callable_ops(engine), json!({"ops": [
+            {"name": "bus.ping", "summary": "Liveness"},
+            {"name": "session.done", "summary": "Record completion", "self_only": true},
+        ]}));
+    }
+
+    #[test]
+    fn bootstrap_through_the_door_leaves_out_what_the_prompt_and_tool_list_carry() {
+        let mut boot = json!({"session": "a", "peers": [], "can_call": ["bus.ping"], "discovery": "d", "comms": "c", "guardrails": {}});
+        lean_bootstrap(&mut boot);
+        assert_eq!(boot, json!({"session": "a", "peers": [], "guardrails": {}}));
+    }
+
+    #[test]
+    fn only_a_whole_design_read_is_measured_against_a_reply() {
+        assert!(whole_design(&json!({"design_id": 13})));
+        assert!(whole_design(&json!({"design_id": 13, "page": null})));
+        for scoped in [json!({"design_id": 13, "page": "Flows"}), json!({"design_id": 13, "nodes": ["a"]}),
+            json!({"design_id": 13, "since_rev": 4}), json!({"design_id": 13, "pages_only": true})] {
+            assert!(!whole_design(&scoped), "{scoped}");
+        }
+        let answer = too_big_for_a_reply(json!({"design": {"id": 13}, "nodes": [{"id": "p1", "kind": "page"}]}), 3238, 555_567);
+        assert_eq!(answer["nodes"].as_array().unwrap().len(), 1, "the pages stay");
+        assert!(answer["whole_too_big"].as_str().unwrap().contains("3238 nodes (542 KB)"));
+    }
 
     #[test]
     fn a_plugin_switched_in_this_project_changes_the_tools() {

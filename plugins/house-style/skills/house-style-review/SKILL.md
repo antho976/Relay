@@ -1,6 +1,6 @@
 ---
 name: house-style-review
-description: Review a screen, component, mockup or design-canvas artboard against the owner's house style and design fundamentals before calling UI work done, or when asked to critique, audit, polish or say what's wrong with a design - look at the real render, run the checklist (the one answer, hierarchy, crowding, size, roundness, boxes and lines, consistency with the rest of the app, colour and measured contrast, the seven states, copy and voice, icons, motion, platform physics), name each problem with its failure shape, rank by what the owner would notice first, fix in one batch and re-check once. Use with house-style; for a whole-app sweep run it screen by screen.
+description: Review a screen, component, mockup or artboard against the house style before calling UI work done, or when asked to critique, audit or polish one - look at the real render, run the checklist, rank the problems by what the owner would notice first, fix in one batch and re-check once. Use with house-style.
 ---
 
 # Reviewing against the house style

@@ -1,6 +1,6 @@
 ---
 name: unreal-multiplayer
-description: Unreal Engine 5 networking and multiplayer - client-server model, authority and net roles, property replication (Replicated, ReplicatedUsing, DOREPLIFETIME, conditions), RPCs (Server, Client, NetMulticast, Reliable), ownership, relevancy, net update frequency, dormancy, Push Model, Iris, CharacterMovement prediction, replicating GAS, sessions and Online Subsystems (Null, Steam, EOS), PIE multiplayer testing with net emulation, dedicated server targets. Use for any replicated gameplay, co-op, PvP, lobbies, "works on server but not on client" bugs, or desync.
+description: Unreal Engine 5 networking - authority and roles, property replication, RPCs, ownership and relevancy, update rates, dormancy, Push Model and Iris, movement prediction, replicating GAS, sessions and Online Subsystems, PIE testing with net emulation, dedicated servers. Use for any replicated gameplay, co-op, PvP, lobby, desync or "works on the server, not the client" bug.
 ---
 
 # Unreal Multiplayer and Replication

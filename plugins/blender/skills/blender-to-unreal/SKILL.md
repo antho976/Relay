@@ -1,6 +1,6 @@
 ---
 name: blender-to-unreal
-description: The Blender to Unreal Engine 5 pipeline - conventions both sides must agree on (metres to centimetres, -Y facing, Z up, applied transforms, one root bone, deform-only bones, no leaf bones, SM_/SK_/A_ naming, UCX_ collision, SOCKET_ empties, _LOD names), static vs skeletal vs animation-only FBX exports, sharing one Skeleton across characters, material slots and textures, smoothing and tangents, lightmap UVs, pivots, and using blender_export and blender_to_unreal and reading their measurements (x100 size, root bone scale, facing, mirrored hands). Use for any FBX export, Unreal import or reimport, or when an asset arrives in Unreal too big, too small, rotated, mirrored, faceted or with an extra root bone.
+description: The Blender to Unreal Engine 5 pipeline - the conventions both sides share (scale, axes, applied transforms, root and deform bones, SM_/SK_/A_ naming, UCX_, sockets, LODs), static, skeletal and animation FBX exports, one shared Skeleton, materials, normals, pivots, and reading blender_export and blender_to_unreal measurements. Use for any FBX export or Unreal import, or an asset that arrives too big, too small, rotated, mirrored or faceted.
 ---
 
 # Blender to Unreal

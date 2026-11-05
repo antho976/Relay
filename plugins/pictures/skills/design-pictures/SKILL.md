@@ -1,6 +1,6 @@
 ---
 name: design-pictures
-description: Put real photographs on a Relay design - when a photo is right and when to draw instead, searching Openverse or Pexels with design.picture.search, looking at a candidate, storing it with design.picture.add, sizing the image node, and keeping the photographer's credit and licence. Use when a design needs a real photograph.
+description: Put real photographs on a Relay design with design.picture.search and design.picture.add - when a photo is right and when to draw instead, sizing the image node, keeping the credit and licence. Use when a design needs a real photograph.
 ---
 
 # Photos on a design

@@ -1,6 +1,6 @@
 ---
 name: design-canvas
-description: Draw, animate and revise designs on Relay's design canvas with the design.* tools - the node model (pages, frames, groups, rects, ellipses, lines and arrows, text, stickies, pen paths, images, icons), coordinates relative to the parent, auto layout (row, column or wrap, gap, padding, justify, items, hug or fill), pinning, absolute children, min and max sizes and scrolling frames, copies, named colours and styles, rings, glows, gradients and styled runs of text, motion (keyframes, easing, timelines), choosing your own node ids so one design.apply builds a whole screen, revising exactly the layers a person selected and asked about, looking at what you drew with design.render, reading validation errors and limits, and the craft that makes a mockup look real. Use whenever a task asks to design, sketch, mock up, wireframe, diagram or animate something, or a message starts with "[Relay design]".
+description: Draw, animate and revise designs on Relay's design canvas with the design.* tools - the node model, auto layout, pinning, copies, named colours and styles, motion and timelines, revising exactly the layers a person selected, design.render to look at what you drew, and the craft of a real-looking mockup. Use whenever a task asks to design, sketch, mock up, wireframe, diagram or animate something, or a message starts with "[Relay design]".
 ---
 
 # Relay design canvas
@@ -20,7 +20,7 @@ the Design view.
 | --- | --- |
 | `design.list {project_id, session?}` | The project's designs, newest change first. Yours carry your session name. |
 | `design.create {project_id, title?}` | A new design with one empty page (`page-1`); answers `{design, nodes:[page]}`. Tied to your terminal. |
-| `design.get {design_id, page?, nodes?, since_rev?, pages_only?}` | The design and its nodes (parents before children, siblings bottom to top), plus `colors`, `styles` and picture `credits`. `page`: one page, by id or by a name no other page has. `nodes`: 1 to 500 ids and what is inside them. `since_rev`: only what changed after that rev (`nodes`, and `removed` ids). `pages_only`: the page list alone. |
+| `design.get {design_id, page?, nodes?, since_rev?, pages_only?}` | The design and its nodes (parents before children, siblings bottom to top), plus `colors`, `styles` and picture `credits`. `page`: one page, by id or by a name no other page has. `nodes`: 1 to 500 ids and what is inside them. `since_rev`: only what changed after that rev (`nodes`, and `removed` ids). `pages_only`: the page list alone. A whole design past ~80 KB comes back as its pages with `whole_too_big`: read it a page at a time. |
 | `design.find {design_id, kind?, name?, text?, match?, fill?, stroke?, color?, any_color?, font?, page?, inside?, with_nodes?}` | The ids of nodes that match every filter, in paint order; `with_nodes: true` adds the first 200 as stored. `name` and `text` match whole words by default ("Edit" passes over "CREDIT"); `match: "prefix"`, `"contains"` or `"exact"` asks for the others. Use it instead of reading a whole design to find a colour, a word or a kind. |
 | `design.fonts {name?}` | The font families the desktop app can draw. |
 | `design.apply {design_id, ops, base_rev?, lenient?, reply?, render?, fix?, drop?}` | Add, update, move, copy, delete nodes (`update_many` and `delete_many` for many in one edit); name colours and styles. `render: true` also answers with the picture of what it changed. Answers `{rev, prev_rev, ids, removed_count, audit_id}`, with `rebased`, `copied`, `contrast`, `skipped` and `warnings` when there are any. `contrast` lists the contrast flags your change made (words it made too faint, or whose ground it changed), on every page a colour or style edit reaches: read it before you move on, and fix what it names. It is worked out without the desktop app, so `design.render` has the last word. |
@@ -111,7 +111,8 @@ kind (it never refuses), so an update can drop a stale one. A page takes no `sty
 polygon.
 
 Any node but a page can also take `rotation` (degrees clockwise about its centre, ±3600; **not a
-`line`: its turn is its points**), `opacity`, `blur` (0 to 200 px), `blend` and a shape `gradient`
+`line`: its turn is its points**), `locked` (the person cannot select or move it on the canvas;
+your edits still change it), `opacity`, `blur` (0 to 200 px), `blend` and a shape `gradient`
 instead of `fill`:
 `{"kind": "linear", "angle": 135, "stops": [{"at": 0, "color": "#4C9DFF"}, {"at": 1, "color": "#A178FF"}]}`
 (2 to 8 stops; `angle` reads as CSS: 180 top to bottom; `"radial"` from the centre; `"conic"` round
@@ -418,7 +419,7 @@ in scope moves, the reply warns and gives one picture at rest.
   else changed the design in between.
 - On `design.stale`, read only what changed: `design.get {design_id, since_rev: <your base_rev>}`
   (`details.conflicts` names the nodes), redo the edits that touch them, and send again with the
-  new `rev`. `since_rev` reaches back 1000 revs; older is `design.since_too_old`: read it whole.
+  new `rev`. `since_rev` reaches back 1000 revs; older is `design.since_too_old`: read it again (page by page on a big design).
 - Read `warnings` (a font the desktop lacks, a rule a lenient list let through) and `skipped`
   (what did not apply, and why: `missing`, `changed`, `fields`, …).
 - **`lenient: true`** is for replaying an undo or a list built from an old read: an edit whose node

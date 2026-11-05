@@ -1,6 +1,6 @@
 ---
 name: unreal-animation
-description: Unreal Engine 5 character animation pipeline - skeletons, skeletal meshes, FBX/Interchange import and root motion, Animation Blueprints (EventGraph vs AnimGraph, thread-safe update, property access, C++ UAnimInstance with NativeUpdateAnimation/NativeThreadSafeUpdateAnimation), state machines, blend spaces, aim offsets, montages/slots/sections, AnimNotify/NotifyState, anim layers and linked anim graphs, root motion vs in-place, IK (Two Bone IK, Full Body IK, IK Rig, IK Retargeter), Control Rig, Motion Matching / Pose Search, distance matching and stride/orientation warping, Sequencer cinematics, compression and animation budget, CharacterMovement interplay. Use for any locomotion, attack animation, montage, anim notify, retargeting, AnimBP, "character slides / T-poses / foot sliding" or Python animation-asset scripting task.
+description: Unreal Engine 5 character animation - skeletons and import, Animation Blueprints (thread-safe update, C++ UAnimInstance), state machines, blend spaces, aim offsets, montages, notifies, anim layers, root motion, IK and retargeting, Control Rig, Motion Matching, warping, Sequencer, compression. Use for any locomotion, montage, notify, retargeting or AnimBP task, a character that slides or T-poses, or Python animation-asset scripting.
 ---
 
 # Unreal animation
