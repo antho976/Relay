@@ -849,7 +849,7 @@ pub fn api_key_helper(token: &Path) -> String {
 /// session is there) and, with the Video plugin on, the videos folder (the kit's sources and
 /// Remotion's types, D167). Only read: never written or edited, and not added as directories,
 /// which would let it work there as in its checkout.
-pub fn claude_settings(api_key_helper: Option<&str>, reads: &[&Path]) -> String {
+pub fn claude_settings(api_key_helper: Option<&str>, reads: &[&Path], dirs: &[PathBuf]) -> String {
     let mut settings = json!({"statusLine": {"type": "command", "command": claude_statusline_script(), "padding": 0}});
     // Claude's absolute-path rule: `//` then the path without its leading `/`.
     let allow: Vec<String> = reads.iter().filter(|dir| dir.is_absolute())
@@ -857,6 +857,11 @@ pub fn claude_settings(api_key_helper: Option<&str>, reads: &[&Path]) -> String 
         .collect();
     if !allow.is_empty() {
         settings["permissions"] = json!({"allow": allow});
+    }
+    // The write roots, as `--add-dir` would add them, but without a trust prompt per folder.
+    let dirs: Vec<String> = dirs.iter().filter(|dir| dir.is_absolute()).map(|dir| dir.display().to_string()).collect();
+    if !dirs.is_empty() {
+        settings["permissions"]["additionalDirectories"] = json!(dirs);
     }
     if let Some(helper) = api_key_helper {
         settings["apiKeyHelper"] = json!(helper);
@@ -1053,22 +1058,27 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&out).unwrap(), "{\"rate_limits\":{\"five_hour\":1}}\n");
         // Written beside and renamed into place, so a reader never sees half of it.
         assert_eq!(std::fs::read_dir(out.parent().unwrap()).unwrap().count(), 1, "a temp file was left behind");
-        let settings: serde_json::Value = serde_json::from_str(&super::claude_settings(None, &[])).unwrap();
+        let settings: serde_json::Value = serde_json::from_str(&super::claude_settings(None, &[], &[])).unwrap();
         assert_eq!(settings["statusLine"]["command"], claude_statusline_script());
         assert!(settings.get("apiKeyHelper").is_none() && settings.get("env").is_none(), "a subscription session must not be pointed at the key");
         assert!(settings.get("permissions").is_none());
         // TM-5: the design pictures may be read without asking, and only read.
-        let settings: serde_json::Value = serde_json::from_str(&super::claude_settings(None, &[Path::new("/home/a b/.local/share/relay-v4/dev/design-assets")])).unwrap();
+        let settings: serde_json::Value = serde_json::from_str(&super::claude_settings(None, &[Path::new("/home/a b/.local/share/relay-v4/dev/design-assets")], &[])).unwrap();
         assert_eq!(settings["permissions"], json!({"allow": ["Read(//home/a b/.local/share/relay-v4/dev/design-assets/**)"]}));
         let text = settings.to_string();
         assert!(!text.contains("Write(") && !text.contains("Edit(") && !text.contains("additionalDirectories"), "{text}");
         // D167: with Video on, the videos folder (the kit, Remotion's types) as well; a relative path never.
         let settings: serde_json::Value = serde_json::from_str(&super::claude_settings(None,
-            &[Path::new("/data/design-assets"), Path::new("/data/videos"), Path::new("relative")])).unwrap();
+            &[Path::new("/data/design-assets"), Path::new("/data/videos"), Path::new("relative")], &[])).unwrap();
         assert_eq!(settings["permissions"], json!({"allow": ["Read(//data/design-assets/**)", "Read(//data/videos/**)"]}));
+        // Write roots are working directories, granted in settings rather than one prompt each.
+        let settings: serde_json::Value = serde_json::from_str(&super::claude_settings(None, &[Path::new("/data/design-assets")],
+            &[std::path::PathBuf::from("/home/a b/.codex/memories"), std::path::PathBuf::from("/tmp"), std::path::PathBuf::from("relative")])).unwrap();
+        assert_eq!(settings["permissions"], json!({"allow": ["Read(//data/design-assets/**)"],
+            "additionalDirectories": ["/home/a b/.codex/memories", "/tmp"]}));
         let helper = super::api_key_helper(Path::new("/home/a b/.config/relay/key-proxy-token"));
         assert_eq!(helper, "/usr/bin/cat '/home/a b/.config/relay/key-proxy-token'");
-        let settings: serde_json::Value = serde_json::from_str(&super::claude_settings(Some(&helper), &[])).unwrap();
+        let settings: serde_json::Value = serde_json::from_str(&super::claude_settings(Some(&helper), &[], &[])).unwrap();
         assert_eq!(settings["apiKeyHelper"], helper);
         assert_eq!(settings["env"], json!({"ANTHROPIC_BASE_URL": format!("http://127.0.0.1:{}", super::KEY_PROXY_PORT),
             "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"}));

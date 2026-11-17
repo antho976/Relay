@@ -885,7 +885,7 @@ fn shell_launch(row: Row_, kind: LaunchKind, cmd: PathBuf, project_path: &str, i
     let cwd = Some(PathBuf::from(project_path)).filter(|path| path.is_dir())
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from).filter(|home| home.is_dir()))
         .unwrap_or_else(|| PathBuf::from("/"));
-    let args = crate::providers::driver(Provider::Shell).args(&row.session, crate::providers::Launch::Fresh, None, &[]);
+    let args = crate::providers::driver(Provider::Shell).args(&row.session, crate::providers::Launch::Fresh, None, &[], &[]);
     PreparedLaunch {
         session_id: row.session.id,
         name: row.session.name.clone(),
@@ -1018,6 +1018,7 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
             crate::providers::Launch::Fresh,
             Some(&brief_compact),
             &reads,
+            &write_roots,
         ),
         LaunchKind::Resume => crate::providers::driver(row.session.provider).args(
             &row.session,
@@ -1026,6 +1027,7 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
             },
             Some(&brief_compact),
             &reads,
+            &write_roots,
         ),
     };
     if row.session.provider == Provider::Codex {
@@ -1037,6 +1039,7 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
             args.extend(crate::providers::codex_mcp_config(name, command, server_args, env));
         }
     }
+    let add_dirs = !crate::providers::driver(row.session.provider).grants_dirs_in_args();
     for root in write_roots {
         // Provider directory grants need a real directory. Test engines never
         // create directories in the user's provider homes.
@@ -1045,7 +1048,9 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
                 "session.write_root", format!("cannot prepare {}: {error}", root.display()),
             ))?;
         }
-        args.extend(["--add-dir".into(), root.display().to_string()]);
+        if add_dirs {
+            args.extend(["--add-dir".into(), root.display().to_string()]);
+        }
     }
     let spec = SpawnSpec {
         cmd: cmd.display().to_string(),

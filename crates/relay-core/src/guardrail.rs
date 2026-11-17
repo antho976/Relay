@@ -140,7 +140,7 @@ pub fn config(conn: &Connection, project_id: Option<Id>) -> Result<GuardrailConf
     let mut cfg = config_for(conn, project_id.map_or(ConfigScope::Global, ConfigScope::Project))?;
     // A project with the Video plugin on has its videos' folders beside the store, written with
     // the agents' own file tools (D167): every session of it may write there, as it may in its
-    // checkout, and its agents get the folder with --add-dir at launch. The person's stored
+    // checkout, and its agents get the folder at launch (Claude in its settings, Codex by --add-dir). The person's stored
     // settings (`config_for`) do not show it.
     if let Some(id) = project_id {
         let on = crate::plugins::enabled_ids(conn, id).bus()?.iter().any(|p| p == crate::video::PLUGIN);

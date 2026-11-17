@@ -296,8 +296,17 @@ fn launch_passes_configured_and_memory_write_roots_to_both_providers() {
             extra.clone(),
             std::env::temp_dir(),
         ];
-        let granted: Vec<PathBuf> = args.windows(2).filter(|pair| pair[0] == "--add-dir").map(|pair| PathBuf::from(pair[1])).collect();
-        assert_eq!(granted, expected, "{provider}: --add-dir grants");
+        let add_dirs: Vec<PathBuf> = args.windows(2).filter(|pair| pair[0] == "--add-dir").map(|pair| PathBuf::from(pair[1])).collect();
+        // Claude takes them in its settings: each `--add-dir` folder asks for trust at launch.
+        let granted = if provider == "claude" {
+            assert!(add_dirs.is_empty(), "claude: no --add-dir, {add_dirs:?}");
+            let settings = args.windows(2).find(|pair| pair[0] == "--settings").map(|pair| pair[1]).unwrap();
+            let settings: serde_json::Value = serde_json::from_str(settings).unwrap();
+            settings["permissions"]["additionalDirectories"].as_array().unwrap().iter().map(|dir| PathBuf::from(dir.as_str().unwrap())).collect()
+        } else {
+            add_dirs
+        };
+        assert_eq!(granted, expected, "{provider}: directory grants");
         let check = |path: PathBuf| f.engine.dispatch(Request::new(Actor::agent(session["name"].as_str().unwrap()), "guardrail.check", json!({
             "project_id":1,"kind":"write","path":path,"new_text":"note"
         })), Door::InProcess).into_result().unwrap();
