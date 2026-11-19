@@ -68,6 +68,10 @@ data class DayUiState(
      */
     val easingBackNote: String? = null,
     val exercises: List<ExerciseUiState> = emptyList(),
+    /** Hands-off coach mode with the coach on: each lift's first set opens on the coach's target. */
+    val coachFillsTargets: Boolean = false,
+    /** When a card asks how hard the set just logged was (Settings → Session). */
+    val effortPrompt: com.forge.app.domain.adapt.EffortPromptMode = com.forge.app.domain.adapt.EffortPromptMode.LAST_SET,
     /** The generated warmup for this session. Empty until the plan and working loads are known. */
     val warmupProtocol: com.forge.app.domain.warmup.WarmupProtocol =
         com.forge.app.domain.warmup.WarmupProtocol.EMPTY,

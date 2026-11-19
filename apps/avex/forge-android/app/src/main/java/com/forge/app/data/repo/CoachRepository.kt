@@ -352,15 +352,20 @@ class CoachRepository @Inject constructor(
      * no-auto-apply-on-error rule (hardening 13) holds by construction.
      */
     private suspend fun autoApplyEarnedTypes(weekId: String) {
-        if (settings.coachMode.first() != "auto") return
-        val earned = TrustLedger.earnedTypes(coachDao.allDecisions().filter { it.weekId != weekId })
-        if (earned.isEmpty()) return
+        val mode = settings.coachMode.first()
+        if (!com.forge.app.domain.coach.CoachMode.appliesItself(mode)) return
+        // Hands-off has nothing to earn: every type applies itself from the first week. Its safety is
+        // what happens AFTER the apply (the reason, the two-week watch, Undo), not a gate before it.
+        val handsOff = mode == com.forge.app.domain.coach.CoachMode.HANDS_OFF
+        val earned = if (handsOff) emptySet()
+        else TrustLedger.earnedTypes(coachDao.allDecisions().filter { it.weekId != weekId })
+        if (!handsOff && earned.isEmpty()) return
         // A deload regenerates the program, which discards the in-progress workout. Autopilot runs
         // on an app resume, so with a workout open it leaves the deload proposed, to be applied
         // from the UI behind its confirm, instead of deleting the workout unasked.
         val workoutOpen = database.sessionDao().getActiveSession() != null
         coachDao.decisionsFor(weekId)
-            .filter { it.status == STATUS_PROPOSED && it.type in earned }
+            .filter { it.status == STATUS_PROPOSED && (handsOff || it.type in earned) }
             .filterNot { it.type == "deload" && workoutOpen }
             .forEach { d ->
                 // One bad decision must not stop the rest, but a cancelled scope must unwind — swallowing
@@ -1060,7 +1065,7 @@ class CoachRepository @Inject constructor(
             sessionsLogged = s.sessions.size,
             minSessions = AutoCoachPlanner.MIN_SESSIONS,
             sessionsToGo = (AutoCoachPlanner.MIN_SESSIONS - s.sessions.size).coerceAtLeast(0),
-            autopilot = settings.coachMode.first() == "auto",
+            autopilot = com.forge.app.domain.coach.CoachMode.appliesItself(settings.coachMode.first()),
             fatigueScore = fatigue?.score,
             fatigueThreshold = t.deloadScoreThreshold,
             recoveryGateSessions = t.deloadMinSessions,

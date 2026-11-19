@@ -18,15 +18,16 @@ object OnboardingType {
     /** A grid tile's name, one step down so two fit a row at 384dp: sans 15 semibold. */
     val gridTitle = OpenType.rowTitle
 
-    /** The big serif answer on a slider step ("5 days"). */
-    val sliderFigure = OpenType.figureXL.copy(lineHeight = 1.05.em)
+    /**
+     * A slider's answer ("4 days", "Any length"): serif 22, on the same line as the slider's label.
+     * It was a 56sp figure over the days slider and a 40sp one over the length slider, each on a line
+     * of its own; Antho found both sections bigger than they needed to be (2026-11-18), and at that
+     * size the week preview below them was cut off by the Continue button.
+     */
+    val sliderFigure = OpenType.figureXL.copy(fontSize = 22.sp, lineHeight = 1.1.em)
 
-    /** Its unit at the size the design draws it ("days"). */
-    val sliderFigureUnit = OpenType.figureXLUnit
-
-    /** The second, smaller slider answer ("60 min"). */
-    val sliderFigureS = OpenType.figureXL.copy(fontSize = 40.sp, lineHeight = 1.05.em)
-    val sliderFigureSUnit = OpenType.figureXL.copy(fontSize = 18.sp)
+    /** Its unit ("days", "min"), muted. */
+    val sliderFigureUnit = OpenType.figureXL.copy(fontSize = 13.sp)
 
     /** A movement's sets by reps on the week page ("3 × 8–12"): serif 16, a step under the name it sits beside. */
     val setsByReps = OpenType.figureXL.copy(fontSize = 16.sp, lineHeight = 1.1.em)

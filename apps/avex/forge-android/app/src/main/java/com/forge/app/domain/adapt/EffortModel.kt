@@ -56,6 +56,13 @@ object EffortModel {
         val highEffort: Boolean
     )
 
+    /**
+     * Whether a set says anything about effort on its own: an RPE, a difficulty tag, a failure mark,
+     * or a technique that ends past failure. What [EffortPrompt] checks before asking again.
+     */
+    fun setSpeaks(set: LoggedSet): Boolean =
+        set.rpe != null || set.toFailure || set.difficultyTag != null || set.setType in PAST_FAILURE_SET_TYPES
+
     /** Working sets for effort purposes: warm-up rows carry no information about the top set. */
     fun workingSets(sets: List<LoggedSet>): List<LoggedSet> = sets.filter { it.setType != SET_TYPE_WARMUP }
 

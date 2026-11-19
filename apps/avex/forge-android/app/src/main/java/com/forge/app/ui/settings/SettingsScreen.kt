@@ -89,7 +89,7 @@ internal val PAGE_ENTRIES = listOf(
     SettingsPageEntry(SettingsPage.Notifications, "notifications reminders quiet hours recap timer alerts notify suppress daily check-in morning sleep soreness stress drive weight"),
     SettingsPageEntry(SettingsPage.Security, "security lock app lock gallery lock biometric fingerprint face pin passcode privacy mode screenshots recents photos protect unlock"),
     SettingsPageEntry(SettingsPage.Program, "program equipment generate auto split days routine rotate trainings workouts barbell dumbbell cable machine plate focus goal experience emphasis priority"),
-    SettingsPageEntry(SettingsPage.Coach, "coach weekly review autopilot auto-apply suggest mode on off tweaks"),
+    SettingsPageEntry(SettingsPage.Coach, "coach weekly review autopilot auto-apply suggest hands-off hands off automatic mode on off tweaks"),
     SettingsPageEntry(SettingsPage.Recovery, "recovery health connect sleep heart rate resting samsung galaxy pixel fitbit wearable watch ring coach deload steps bodyweight"),
     SettingsPageEntry(SettingsPage.ExercisePrefs, "exercise likes dislike favourite exclude preferences movements heart hidden preferred"),
     SettingsPageEntry(SettingsPage.CardioActivities, "cardio custom activity activities types padel kayak sport add own create running walking"),
@@ -111,6 +111,7 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Haptic feedback", "haptic vibration strength", SettingsPage.Session),
     SettingsItem("Keep screen on", "keep screen on awake display lock timeout sleep session logging", SettingsPage.Session),
     SettingsItem("Rest times", "rest timer seconds between sets compound isolation default", SettingsPage.Session),
+    SettingsItem("Effort question", "effort rpe rir reps in reserve how hard ask rate set", SettingsPage.Session),
     SettingsItem("Note templates", "notes templates prompts form energy pain focus", SettingsPage.Session),
     SettingsItem("Training reminders", "reminder notify nudge daily streak train schedule engagement", SettingsPage.Notifications),
     SettingsItem("Quiet hours", "quiet hours suppress notifications silent", SettingsPage.Notifications),
@@ -142,7 +143,8 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Generate a new plan", "generate new plan program split regenerate", SettingsPage.Program),
     SettingsItem("Deload week", "deload lighter recovery week", SettingsPage.Program),
     SettingsItem("Days per week", "days per week schedule weekdays split frequency", SettingsPage.Program),
-    SettingsItem("Priority muscles", "priority muscles emphasis focus weak", SettingsPage.Program, ProgramSection.Emphasis),
+    SettingsItem("Cardio in your week", "cardio plan days rest minutes week conditioning zone", SettingsPage.Program),
+    SettingsItem("Body parts", "body parts skip legs upper light focus priority muscles specialize weak no legs", SettingsPage.Program, ProgramSection.Emphasis),
     SettingsItem("Problem areas", "problem areas injury pain sore avoid joints", SettingsPage.Program, ProgramSection.Emphasis),
     SettingsItem("Advanced tracking", "advanced tracking coach signals detail", SettingsPage.Coach),
 ) + com.forge.app.program.Equipment.entries.map { equip ->
@@ -301,8 +303,11 @@ fun SettingsScreen(
     val healthState by health.state.collectAsStateWithLifecycle()
     val watchStatus = if (healthState.loading) null
         else watchReading(healthState.available, healthState.needsUpdate, connectedReadings(healthState))
-    // The plan's split, from the program facade the plan screens read.
-    val split = remember(state.daysPerWeek, state.freestyleMode) {
+    // The plan's split, from the program facade the plan screens read. Keyed on the program's
+    // revision as well as the day count: a rebuild that skipped a region kept five days and changed
+    // every one of them, and the line went on naming the old split.
+    val programRevision by viewModel.programRevision.collectAsStateWithLifecycle()
+    val split = remember(state.daysPerWeek, state.freestyleMode, programRevision) {
         splitLabel(com.forge.app.program.Program.days.map { it.defaultName })
     }
 

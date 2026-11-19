@@ -269,7 +269,103 @@ object SplitTemplates {
             MuscleSlot(MuscleGroup.CALVES, PUMP)
         ))
 
-    fun forDays(daysPerWeek: Int): List<DayArchetype> = when (daysPerWeek.coerceIn(1, 7)) {
+    /**
+     * The week's days for [daysPerWeek], reshaped around [parts].
+     *
+     * With nothing skipped, held or focused this is exactly [base]. Otherwise, in order:
+     *  1. **A whole region out picks a different split** instead of leaving half-empty days: no legs
+     *     turns upper/lower into push and pull, no upper body turns it into quad-led and hinge-led
+     *     leg days (four a week at most: legs need the days between).
+     *  2. **A skipped muscle's slots go.** One small muscle out (calves, say) drops its slot and
+     *     moves nothing else. A day left with fewer than two slots is not a session and goes too.
+     *  3. **A light muscle keeps one slot a week**, its first.
+     *  4. **A focused muscle leads the days that train it and gains a slot on days that could**, up
+     *     to three exposures a week, so it is worked while fresh and more often.
+     */
+    fun forDays(daysPerWeek: Int, parts: BodyParts): List<DayArchetype> {
+        if (parts.isDefault) return base(daysPerWeek)
+        val days = daysPerWeek.coerceIn(1, 7)
+        val split = when {
+            parts.noLegs && parts.noUpper -> listOf(coreDay())
+            parts.noLegs -> upperOnly(days)
+            parts.noUpper -> lowerOnly(days)
+            else -> base(days)
+        }
+        // 2. Skipped slots, then days too thin to be a session (the fullest day always survives).
+        val trimmed = split.map { d -> d.copy(targets = d.targets.filter { it.muscle !in parts.skip }) }
+        val kept = trimmed.filter { it.targets.size >= MIN_SLOTS }
+            .ifEmpty { listOfNotNull(trimmed.maxByOrNull { it.targets.size }?.takeIf { it.targets.isNotEmpty() }) }
+        // 3. Light: the first slot of the week stays, the rest go.
+        val seen = HashSet<MuscleGroup>()
+        val lightened = kept.map { d ->
+            d.copy(targets = d.targets.filter { it.muscle !in parts.light || seen.add(it.muscle) })
+        }
+        // 4. Focus.
+        return parts.focus.filter { it !in parts.skip }.fold(lightened) { week, muscle -> focused(week, muscle) }
+    }
+
+    /** Fewest slots a day may be left with after skips before it stops being a session. */
+    private const val MIN_SLOTS = 2
+
+    /** How often a focused muscle is trained, when the week has that many days that can take it. */
+    private const val FOCUS_EXPOSURES = 3
+
+    private fun focused(week: List<DayArchetype>, muscle: MuscleGroup): List<DayArchetype> {
+        val region = BodyParts.regionOf(muscle)
+        var exposures = week.count { d -> d.targets.any { it.muscle == muscle } }
+        return week.map { d ->
+            val own = d.targets.indexOfFirst { it.muscle == muscle }
+            when {
+                // Its own day: the first slot of it leads.
+                own > 0 -> d.copy(targets = listOf(d.targets[own]) + d.targets.filterIndexed { i, _ -> i != own })
+                own == 0 -> d
+                // A day that trains its region but not it: one slot, right after the day's lead.
+                exposures < FOCUS_EXPOSURES && d.targets.any { it.muscle in region } -> {
+                    exposures++
+                    d.copy(targets = d.targets.take(1) + MuscleSlot(muscle, HYP) + d.targets.drop(1))
+                }
+                else -> d
+            }
+        }
+    }
+
+    /** No legs: push and pull take the days the lower-body sessions held. */
+    private fun upperOnly(days: Int): List<DayArchetype> = when (days) {
+        1 -> listOf(upper("upper", "Upper", "UPPER", BLUE))
+        2 -> listOf(upperA("upper-a", "Upper A", "PUSH"), upperB("upper-b", "Upper B", "PULL"))
+        3 -> listOf(push("push"), pull("pull"), upper("upper", "Upper", "UPPER", BLUE))
+        4 -> listOf(push("push-a", "Push A"), pull("pull-a", "Pull A"), pushB("push-b"), pullB("pull-b"))
+        5 -> listOf(
+            push("push-a", "Push A"), pull("pull-a", "Pull A"), upper("upper", "Upper", "UPPER", BLUE),
+            pushB("push-b"), pullB("pull-b")
+        )
+        else -> listOf(
+            push("push-a", "Push A"), pull("pull-a", "Pull A"), upperA("upper-a", "Upper A", "UPPER"),
+            pushB("push-b"), pullB("pull-b"), upperB("upper-b", "Upper B", "UPPER")
+        )
+    }
+
+    /** No upper body: quad-led and hinge-led days alternate, never more than four a week. */
+    private fun lowerOnly(days: Int): List<DayArchetype> = when (days) {
+        1 -> listOf(legs("legs"))
+        2 -> listOf(legs("legs-a", "Legs A"), legsB("legs-b"))
+        3 -> listOf(legs("legs-a", "Legs A"), legsB("legs-b"), lower("lower", "Lower", "LOWER", GOLD))
+        else -> listOf(
+            lowerA("lower-a", "Lower A", "QUADS"), lowerB("lower-b", "Lower B", "HAMS"),
+            legs("legs-a", "Legs A"), legsB("legs-b")
+        )
+    }
+
+    /** Everything but the core is out: one short core session is all there is to plan. */
+    private fun coreDay() = DayArchetype("core", "Core", "CORE", BLUE, listOf(
+        MuscleSlot(MuscleGroup.CORE, HYP),
+        MuscleSlot(MuscleGroup.CORE, PUMP)
+    ))
+
+    /** The week's days for [daysPerWeek] with every muscle at its normal level. */
+    fun forDays(daysPerWeek: Int): List<DayArchetype> = base(daysPerWeek)
+
+    private fun base(daysPerWeek: Int): List<DayArchetype> = when (daysPerWeek.coerceIn(1, 7)) {
         1 -> listOf(fullBodyA("fb", "Full Body", "FULL").let {
             it.copy(targets = it.targets + MuscleSlot(MuscleGroup.CALVES, PUMP))
         })

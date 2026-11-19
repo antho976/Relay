@@ -41,7 +41,9 @@ import com.forge.app.ui.theme.OpenType
  * Antho asked to have improved rather than replaced: the name with its tags, date and body map, the
  * journal, the session's figures with heart rate beside them, then the metric switch (Weight /
  * Volume / Reps / Effort) over every lift. The lift bars, the opened lift's chips and its per-set
- * chart all follow the metric. Read-only, as before; the top bar's share saves the session as JSON.
+ * chart all follow the metric. Read-only except for effort: an opened lift can take or change the
+ * rating of its last working set, because a rating forgotten on the day had nowhere to go afterwards.
+ * The top bar's share saves the session as JSON.
  */
 @Composable
 fun SessionDetailScreen(
@@ -81,7 +83,8 @@ fun SessionDetailScreen(
         state = state,
         onBack = onBack,
         onExport = viewModel::exportSession,
-        onOpenLiftTrend = onOpenLiftTrend
+        onOpenLiftTrend = onOpenLiftTrend,
+        onRateSet = viewModel::rateSet
     )
 }
 
@@ -92,6 +95,8 @@ fun SessionDetailPage(
     onBack: () -> Unit,
     onExport: () -> Unit,
     onOpenLiftTrend: ((String) -> Unit)? = null,
+    /** Writes a late effort rating to a set; null leaves the page read-only (the goldens). */
+    onRateSet: ((setId: Long, rpe: Double) -> Unit)? = null,
     initialMetric: SessionMetric = SessionMetric.WEIGHT
 ) {
     val ink = MaterialTheme.colorScheme.onBackground
@@ -181,7 +186,8 @@ fun SessionDetailPage(
                             style = style,
                             maxValue = max,
                             defaultOpen = i == 0,
-                            onOpenLiftTrend = onOpenLiftTrend
+                            onOpenLiftTrend = onOpenLiftTrend,
+                            onRateSet = onRateSet
                         )
                     }
                 }

@@ -196,6 +196,8 @@ fun OnboardingScreen(
     // null until the user touches the coach toggle, so the default can follow the plan mode: a
     // generated plan is what the coach adapts, freestyle has nothing to adapt.
     var coachChoice by remember { mutableStateOf(draft?.coachChoice) }
+    // Whether the coach applies its changes itself. Off unless chosen: asking first is the default.
+    var coachHandsOff by remember { mutableStateOf(draft?.coachHandsOff ?: false) }
     // Four days is where the slider starts: an empty slider with no answer read as broken (Antho,
     // 2026-10-21), and 4 sits in the 3-to-5 most people progress on.
     var daysPerWeek by remember { mutableIntStateOf(draft?.daysPerWeek?.takeIf { it in 1..7 } ?: 4) }
@@ -234,7 +236,7 @@ fun OnboardingScreen(
         step, planMode, name, useKg, useMilesChoice, distanceTouched, goal, experience,
         bodyweightInput, sex, daysPerWeek, equipment, frozenIds, plateWeightLb,
         problemAreas, cadence, everyN, previewSeed, appLock, coachChoice, sessionMinutes,
-        fixedDays, weekdays
+        fixedDays, weekdays, coachHandsOff
     )
     SideEffect { viewModel.saveDraft(snapshot) }
 
@@ -278,7 +280,8 @@ fun OnboardingScreen(
             problemAreas = problemAreas, seed = previewSeed,
             plateWeightLb = plateWeightLb, frozenIds = frozenIds, coachEnabled = coachEnabled,
             appLock = appLock, sessionMinutes = sessionMinutes,
-            trainingWeekdays = weekdays.takeIf { fixedDays == true }
+            trainingWeekdays = weekdays.takeIf { fixedDays == true },
+            coachHandsOff = coachHandsOff
         )
         onFinished(planMode)
     }
@@ -432,6 +435,7 @@ fun OnboardingScreen(
                             bodyweightInput = bodyweightInput, onBodyweightChange = { bodyweightInput = it },
                             sex = sex, onSexSelect = { sex = it },
                             coachEnabled = coachEnabled, onCoachToggle = { coachChoice = it },
+                            coachHandsOff = coachHandsOff, onCoachHandsOff = { coachHandsOff = it },
                             appLock = appLock, onAppLockToggle = { appLock = it },
                             plateWeightLb = plateWeightLb, onPlateWeight = { plateWeightLb = it },
                             cadence = cadence, everyN = everyN,

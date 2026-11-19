@@ -411,7 +411,10 @@ fun DayScreen(
     }
 
     state.summary?.let { summary ->
-        SessionSummarySheet(summary = summary, onDismiss = { mood, tags, journal ->
+        SessionSummarySheet(
+            summary = summary,
+            onRateSet = { setId, rpe -> viewModel.onEvent(DayUiEvent.SetRpe(setId, rpe)) },
+            onDismiss = { mood, tags, journal ->
             // Fold the journal into DismissSummary so it's written in the same coroutine that runs
             // before PopBack — a separate UpdateJournal event raced the VM clearing and could be lost.
             viewModel.onEvent(DayUiEvent.DismissSummary(mood, tags, journal))

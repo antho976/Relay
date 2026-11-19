@@ -48,8 +48,17 @@ class OverviewViewModel @Inject constructor(
     private val timeSignals: com.forge.app.core.time.TimeSignals,
     private val clock: Clock,
     private val snackbar: com.forge.app.ui.common.SnackbarController,
-    private val coachRepo: com.forge.app.data.repo.CoachRepository
+    private val coachRepo: com.forge.app.data.repo.CoachRepository,
+    private val cardioHandOff: com.forge.app.domain.cardio.CardioHandOff
 ) : ViewModel() {
+
+    /**
+     * Leave today's cardio prescription for the Cardio tab, so the log it opens is already filled in.
+     * Called by the hero button on a cardio day, just before it switches tabs.
+     */
+    fun handOffCardio(prescription: com.forge.app.domain.engine.ConditioningPlanner.Prescription) =
+        cardioHandOff.offer(prescription)
+
 
     // ── design/surface-experiment (2026-08-15) ────────────────────────────────────────────────
     // The card-led Home opens with a header row (name · bell · Profile), so it needs the name
@@ -202,7 +211,12 @@ class OverviewViewModel @Inject constructor(
         // would silently resolve the stale key to the wrong day. An invalid key reads as no resume here.
         s.copy(activeSessionDayKey = active?.dayKey?.takeIf { it in com.forge.app.program.Program.dayKeys })
     }.combine(_directive) { s, answer ->
-        s.copy(directive = answer?.directive, brief = answer?.brief, coldStartLesson = answer?.coldStartLesson)
+        s.copy(
+            directive = answer?.directive, brief = answer?.brief, coldStartLesson = answer?.coldStartLesson,
+            weekCardioDays = answer?.week?.days.orEmpty()
+                .filter { it.kind == com.forge.app.domain.schedule.WeekPlan.Kind.CARDIO }.map { it.weekday }.toSet(),
+            cardioEpochDays = answer?.week?.cardioEpochDays.orEmpty()
+        )
     }.combine(settingsRepo.daysPerWeek) { s, days ->
         // The "of N target" denominator is the actual number of training days in the generated program
         // (the real weekly schedule), not a hardcoded 6 and not the raw days/week preference — the two

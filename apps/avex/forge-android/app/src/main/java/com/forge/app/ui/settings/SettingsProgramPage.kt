@@ -43,6 +43,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.schedule.WeeklySchedule
+import com.forge.app.program.MuscleGroup
+import com.forge.app.program.BodyParts
+import com.forge.app.program.BodyPartLevel
 import com.forge.app.program.Equipment
 import com.forge.app.program.EquipmentPreset
 import com.forge.app.program.equipmentGroups
@@ -67,7 +70,7 @@ import com.forge.app.ui.theme.OpenType
 internal enum class ProgramSection(val title: String) {
     Plan("Schedule"),
     Goal("Goal & experience"),
-    Emphasis("Emphasis & priorities"),
+    Emphasis("Body parts & emphasis"),
     Equipment("Equipment")
 }
 
@@ -113,6 +116,8 @@ private fun ProgramMenu(
             setDays = vm::setDaysPerWeek,
             setMinutes = vm::setSessionMinutes,
             setRotation = vm::setRotationCadence,
+            setCardioInPlan = vm::setCardioInPlan,
+            setCardioMinutes = vm::setCardioWeeklyTargetMin,
             rebuild = { rebuild = Rebuild.GENERATE },
             reroll = { rebuild = Rebuild.REROLL },
             deload = { rebuild = Rebuild.DELOAD }
@@ -128,6 +133,8 @@ internal class ProgramMenuActions(
     val setDays: (Int) -> Unit = {},
     val setMinutes: (Int?) -> Unit = {},
     val setRotation: (String, Int) -> Unit = { _, _ -> },
+    val setCardioInPlan: (Boolean) -> Unit = {},
+    val setCardioMinutes: (Int) -> Unit = {},
     val rebuild: () -> Unit = {},
     val reroll: () -> Unit = {},
     val deload: () -> Unit = {}
@@ -189,6 +196,35 @@ internal fun ProgramMenuContent(
         SettingsNavigationRow(ProgramSection.Equipment.title, equipmentSummary(state)) { onOpen(ProgramSection.Equipment) }
         // The builder is its own screen, not a fifth section.
         SettingsNavigationRow("Plan builder", "Edit each day and exercise by hand", onClick = onOpenBuilder)
+    }
+
+    // One week, three kinds of day: the plan lays cardio and rest around the lifting days.
+    SettingsGroup(
+        "Cardio in your week",
+        footer = if (scheduleMode == WeeklySchedule.MODE_WEEKDAY) {
+            "Cardio goes on your free days and one day always stays off. Anything hard keeps clear of leg day."
+        } else {
+            "With no fixed weekdays the week can't be laid out ahead, so cardio is offered the day after you lift."
+        }
+    ) {
+        SettingsSwitchRow(
+            "Plan cardio days",
+            "Home tells you when, how long and how hard",
+            state.cardioInPlan,
+            onCheckedChange = vm.setCardioInPlan
+        )
+        if (state.cardioInPlan) {
+            val minutes = CARDIO_WEEK_MINUTES
+            val current = state.cardioWeeklyTargetMin.takeIf { it > 0 }
+                ?: com.forge.app.domain.engine.ConditioningPlanner.HEALTH_FLOOR_MINUTES
+            SettingsSegmentedRow(
+                "Minutes a week",
+                minutes.map { "$it" },
+                // A target set elsewhere that is not one of the steps reads as the nearest one.
+                minutes.indices.minBy { kotlin.math.abs(minutes[it] - current) },
+                stacked = true
+            ) { vm.setCardioMinutes(minutes[it]) }
+        }
     }
 
     SettingsGroup("Rotation") {
@@ -282,7 +318,7 @@ private fun DayCountChips(days: Int, onSelect: (Int) -> Unit) {
 }
 
 /** The four Settings actions that replace the plan in one tap. */
-private enum class Rebuild { GENERATE, REROLL, DELOAD, REGENERATE }
+private enum class Rebuild { GENERATE, REROLL, DELOAD, REGENERATE, BODY_PARTS }
 
 /**
  * Each of these replaces the plan and drops its overlay: the plan builder's hand edits, "make
@@ -307,6 +343,11 @@ private fun RebuildConfirm(
             "Start deload"
         )
         Rebuild.REGENERATE -> Triple("Rebuild for this equipment?", "A new $days-day plan that uses only the gear you picked. $lost", "Rebuild plan")
+        Rebuild.BODY_PARTS -> Triple(
+            "Rebuild around these body parts?",
+            "A new plan with what you skipped left out and what you focused trained more often. $lost",
+            "Rebuild plan"
+        )
     }
     SettingsConfirmDialog(
         title = title,
@@ -317,7 +358,7 @@ private fun RebuildConfirm(
             onDone()
             onConfirmed()
             when (r) {
-                Rebuild.GENERATE, Rebuild.REGENERATE -> vm.generateProgram(days)
+                Rebuild.GENERATE, Rebuild.REGENERATE, Rebuild.BODY_PARTS -> vm.generateProgram(days)
                 Rebuild.REROLL -> vm.rerollProgram()
                 Rebuild.DELOAD -> vm.generateDeloadWeek()
             }
@@ -342,7 +383,9 @@ private fun goalSummary(state: SettingsUiState): String {
 /** "Balanced · 2 prioritized" — the Emphasis & priorities row's live value. */
 private fun emphasisSummary(state: SettingsUiState): String = buildList {
     add(EMPHASIS_OPTIONS.firstOrNull { it.first == state.programEmphasis }?.second ?: "Balanced")
-    add("${state.priorityMuscles.size} prioritized")
+    if (state.skipMuscles.isNotEmpty()) add("${state.skipMuscles.size} skipped")
+    if (state.lightMuscles.isNotEmpty()) add("${state.lightMuscles.size} light")
+    if (state.priorityMuscles.isNotEmpty()) add("${state.priorityMuscles.size} focused")
     add("${state.problemAreas.size} sore spots")
 }.joinToString(" · ")
 
@@ -366,6 +409,9 @@ private fun plateHardwareLabel(lb: Double, unit: com.forge.app.domain.units.Weig
         lb,
         if (unit.isMetric) com.forge.app.domain.units.WeightUnit.KG else com.forge.app.domain.units.WeightUnit.LB
     )
+
+/** The weekly cardio targets on offer, in minutes; 150 is the health floor the plan defaults to. */
+private val CARDIO_WEEK_MINUTES = listOf(60, 90, 120, 150, 180, 240)
 
 private val EMPHASIS_OPTIONS = listOf(
     "balanced" to "Balanced", "upper" to "Upper body",
@@ -449,17 +495,142 @@ private fun EmphasisSection(state: SettingsUiState, vm: SettingsViewModel) {
             SettingsRadioRow(label, state.programEmphasis == value) { vm.setProgramEmphasis(value) }
         }
     }
-    SettingsGroup("Priority muscles", footer = "These get extra volume.") {
-        SettingsChipBlock {
-            com.forge.app.program.MuscleGroup.entries.forEach { m ->
-                SettingsFilterChip(m.displayName.sentenceCase(), m.code in state.priorityMuscles) { vm.togglePriorityMuscle(m.code) }
-            }
-        }
-    }
+    BodyPartsGroups(state, vm)
     SettingsGroup("Sore spots", footer = "Flag a sore joint and the plan steers around it.") {
         SettingsChipBlock {
             com.forge.app.program.ProblemArea.entries.forEach { a ->
                 SettingsFilterChip(a.displayName.sentenceCase(), a.code in state.problemAreas) { vm.toggleProblemArea(a.code) }
+            }
+        }
+    }
+}
+
+// ─── Body parts ────────────────────────────────────────────────────────────────
+
+private val BODY_PART_LEVELS = listOf(BodyPartLevel.SKIP, BodyPartLevel.LIGHT, BodyPartLevel.NORMAL, BodyPartLevel.FOCUS)
+
+/** How long a skip or a light can be set to last, in weeks; null is "until I change it". */
+private val BODY_PART_WEEKS: List<Int?> = listOf(null, 2, 4, 8, 12)
+
+/** "14 Jan": a day as the settings page names it. */
+private fun shortDate(epochDay: Long): String =
+    java.time.LocalDate.ofEpochDay(epochDay)
+        .format(java.time.format.DateTimeFormatter.ofPattern("d MMM", java.util.Locale.getDefault()))
+
+/** "legs", "quads and calves", "5 muscles": what is out, named the way a person would. */
+private fun namedParts(muscles: Set<MuscleGroup>): String = when {
+    muscles.containsAll(BodyParts.LEGS) && muscles.containsAll(BodyParts.UPPER) -> "everything but your core"
+    muscles == BodyParts.LEGS -> "legs"
+    muscles == BodyParts.UPPER -> "your upper body"
+    muscles.size <= 2 -> muscles.joinToString(" and ") { it.displayName.lowercase() }
+    else -> "${muscles.size} muscles"
+}
+
+/**
+ * Skip, Light, Normal or Focus for every muscle, with the two whole-region shortcuts above them.
+ *
+ * This replaced a block of "priority muscle" chips, which could only add a set. There was no way to
+ * say "no legs", and taking the leg lifts out by hand lasted until the next rotation put them back.
+ *
+ * A level is a staged preference like the rest of this page: it changes the NEXT plan, so once
+ * anything here is touched the section offers the rebuild that applies it. Skipping says what it
+ * costs once, in the group's own footer, and then nothing else in the app raises it again.
+ */
+@Composable
+private fun BodyPartsGroups(state: SettingsUiState, vm: SettingsViewModel) {
+    var edited by remember { mutableStateOf(false) }
+    var rebuild by remember { mutableStateOf(false) }
+    if (rebuild) RebuildConfirm(Rebuild.BODY_PARTS, state.daysPerWeek, vm, onConfirmed = { edited = false }) { rebuild = false }
+
+    val parts = BodyParts(
+        skip = BodyParts.muscles(state.skipMuscles),
+        light = BodyParts.muscles(state.lightMuscles),
+        focus = BodyParts.muscles(state.priorityMuscles)
+    )
+    val until = state.bodyPartsUntilEpochDay
+
+    SettingsGroup(
+        "Whole regions",
+        footer = when {
+            parts.skip.isEmpty() -> null
+            until != null -> "${namedParts(parts.skip).replaceFirstChar { it.uppercase() }} out of the plan until ${shortDate(until)}, then back with lighter loads first."
+            else -> "${namedParts(parts.skip).replaceFirstChar { it.uppercase() }} out of the plan. Nothing brings that back until you do, and the coach won't raise it."
+        }
+    ) {
+        SettingsSegmentedRow(
+            "Train",
+            listOf("Everything", "No legs", "No upper body"),
+            when {
+                parts.noLegs && !parts.noUpper -> 1
+                parts.noUpper && !parts.noLegs -> 2
+                else -> 0
+            },
+            stacked = true
+        ) {
+            vm.setSkippedRegion(
+                when (it) {
+                    1 -> BodyParts.LEGS
+                    2 -> BodyParts.UPPER
+                    // "Everything" only brings back whole regions; a single skipped muscle stays as set.
+                    else -> parts.skip.filterNot { m -> (parts.noLegs && m in BodyParts.LEGS) || (parts.noUpper && m in BodyParts.UPPER) }.toSet()
+                }
+            )
+            edited = true
+        }
+    }
+
+    listOf(
+        "Upper body" to MuscleGroup.entries.filter { it in BodyParts.UPPER },
+        "Legs" to MuscleGroup.entries.filter { it in BodyParts.LEGS },
+        "Core" to listOf(MuscleGroup.CORE)
+    ).forEachIndexed { gi, (title, muscles) ->
+        SettingsGroup(
+            title,
+            footer = if (gi == 0) "Skip leaves it out. Light keeps one easy slot a week. Focus trains it more often and first, for ${BodyParts.FOCUS_WEEKS} weeks, two muscles at most." else null
+        ) {
+            muscles.forEach { m ->
+                SettingsSegmentedRow(
+                    m.displayName.sentenceCase(),
+                    BODY_PART_LEVELS.map { it.displayName },
+                    BODY_PART_LEVELS.indexOf(parts.levelOf(m)),
+                    stacked = true
+                ) {
+                    vm.setBodyPartLevel(m.code, BODY_PART_LEVELS[it])
+                    edited = true
+                }
+            }
+        }
+    }
+
+    if (parts.held.isNotEmpty()) {
+        val today = remember { java.time.LocalDate.now().toEpochDay() }
+        SettingsGroup("How long") {
+            SettingsSegmentedRow(
+                "Skip and Light last",
+                BODY_PART_WEEKS.map { w -> if (w == null) "For good" else "$w wk" },
+                // An end date reads as the shortest choice that still covers what is left of it.
+                if (until == null) 0 else BODY_PART_WEEKS.indexOfFirst { w -> w != null && today + w * 7L >= until }
+                    .takeIf { it > 0 } ?: BODY_PART_WEEKS.lastIndex,
+                supporting = until?.let { "Back on ${shortDate(it)}" },
+                stacked = true
+            ) {
+                vm.setBodyPartsWeeks(BODY_PART_WEEKS[it])
+                edited = true
+            }
+        }
+    }
+
+    if (parts.focus.isNotEmpty() || edited) {
+        Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            state.focusUntilEpochDay?.takeIf { parts.focus.isNotEmpty() }?.let { end ->
+                OpenLabel(
+                    "Focus on ${namedParts(parts.focus)} runs until ${shortDate(end)}, then the plan returns to normal",
+                    style = OpenType.monoXS
+                )
+            }
+            if (edited) {
+                SettingsButton("Rebuild the plan to apply", kind = ButtonKind.Outlined) { rebuild = true }
+                OpenLabel("These change the next plan, not the one you have", style = OpenType.monoXS)
             }
         }
     }

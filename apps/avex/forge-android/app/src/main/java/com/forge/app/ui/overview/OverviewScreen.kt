@@ -177,6 +177,8 @@ fun OverviewScreen(
     }
 
     var pickingSlot by remember { mutableStateOf<Boolean?>(null) }
+    // "Different day": the sheet of the plan's other days, to train one of them instead.
+    var pickingDay by remember { mutableStateOf(false) }
 
     val settings = LocalForgeSettings.current
     val today = LocalDate.now()
@@ -247,7 +249,12 @@ fun OverviewScreen(
                 resumeKey != null -> ({ onStartSession(resumeKey) })
                 freestyleMode -> onLogFreestyle
                 programEmpty -> onBuildPlan
-                directive?.kind == TodayDirective.Kind.CARDIO -> onGoToCardio
+                // A planned cardio day hands its prescription to the Cardio tab first, so the log
+                // that opens there is already filled in and finishing it is one tap.
+                directive?.kind == TodayDirective.Kind.CARDIO -> ({
+                    directive.cardio?.let(viewModel::handOffCardio)
+                    onGoToCardio()
+                })
                 directive?.kind == TodayDirective.Kind.LEARN -> onOpenAcademy
                 else -> ({ onStartSession(sessionDayKey) })
             }
@@ -275,6 +282,12 @@ fun OverviewScreen(
                 Spacer(Modifier.height(8.dp))
                 OpenLabel(specLine, style = OpenType.monoSTight)
             }
+            // A lifting day that carries an easy finisher says so on a line of its own.
+            val finisher = directive?.cardio?.takeIf { startsNewGymSession && directive.kind == TodayDirective.Kind.TRAIN }
+            if (finisher != null) {
+                Spacer(Modifier.height(4.dp))
+                OpenLabel("Then ${finisher.minutes} min easy cardio", style = OpenType.monoSTight)
+            }
             coach?.let { summary ->
                 Spacer(Modifier.height(20.dp))
                 CoachRow(summary, onOpenCoachBrief)
@@ -299,6 +312,45 @@ fun OverviewScreen(
                 onLongClick = if (startsNewGymSession) ({ onStartSessionSkipWarmup(sessionDayKey) }) else null,
                 onLongClickLabel = if (startsNewGymSession) "Start, skipping warmup" else null,
             )
+            // A lifting day can be traded for another of the plan's days, today only. Legs on the
+            // card and not the day for them is the case; the plan itself is left alone.
+            val otherDays = if (startsNewGymSession) Program.days.filter { it.key != sessionDayKey && it.exercises.isNotEmpty() } else emptyList()
+            if (otherDays.isNotEmpty() && directive?.kind == TodayDirective.Kind.TRAIN) {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    OpenLabel(
+                        // Not "Not today": the warm-up screen already says that to skip the warm-up.
+                        "Different day",
+                        Modifier
+                            .touchSlop(vertical = 6.dp)
+                            .clickableLabeled("Train a different day instead, today only") { pickingDay = true }
+                            .padding(horizontal = 16.dp, vertical = 14.dp)
+                    )
+                }
+                if (pickingDay) {
+                    NotTodaySheet(
+                        todayName = headline,
+                        days = otherDays,
+                        onPick = { key -> pickingDay = false; onStartSession(key) },
+                        onDismiss = { pickingDay = false }
+                    )
+                }
+            }
+            // A planned cardio day still offers the bar: the plan decides, the lifter can overrule.
+            // Not once today's lifting is done: the cardio left then is its finisher, and there is no
+            // session to do "instead".
+            val liftInstead = resumeKey == null && !freestyleMode && !programEmpty && !trainedToday &&
+                directive?.kind == TodayDirective.Kind.CARDIO && directive.cardio != null
+            if (liftInstead) {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    OpenLabel(
+                        "Lift instead",
+                        Modifier
+                            .touchSlop(vertical = 6.dp)
+                            .clickableLabeled("Lift instead: start the next session") { onStartSession(sessionDayKey) }
+                            .padding(horizontal = 16.dp, vertical = 14.dp)
+                    )
+                }
+            }
 
             Spacer(Modifier.height(SECTION_GAP))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
@@ -478,7 +530,9 @@ internal fun coachLine(summary: CoachHomeSummary): String {
 
 /**
  * THIS WEEK with the count, then seven dots: red with a dark letter for a day trained, a red ring on
- * a wash for today, a moon for a planned rest day, an outlined letter for the rest.
+ * a wash for today, a moon for a planned rest day, an outlined letter for the rest. A day the week
+ * plan gives to cardio wears the pulse glyph instead of its letter: outlined while it is planned, on
+ * red once the session is logged, so lifting, cardio and rest read as one week.
  */
 @Composable
 private fun WeekRow(
@@ -497,16 +551,30 @@ private fun WeekRow(
         append("THIS WEEK  ")
         withStyle(SpanStyle(color = ink)) { append(count.uppercase()) }
     }
+    // The plan counts weekdays from Monday and cardio is logged by date, while the strip is in the
+    // user's own week order, so each cell is placed by its calendar date.
+    val todayDate = remember(state.todayStartMs) {
+        if (state.todayStartMs > 0) Instant.ofEpochMilli(state.todayStartMs).atZone(ZoneId.systemDefault()).toLocalDate()
+        else java.time.LocalDate.now()
+    }
+    val cellDate: (Int) -> java.time.LocalDate = { i -> todayDate.plusDays((i - todayIndex).toLong()) }
+    val cardioDone: (Int) -> Boolean = { i -> cellDate(i).toEpochDay() in state.cardioEpochDays }
+    val cardioPlanned: (Int) -> Boolean = { i -> !freestyle && (cellDate(i).dayOfWeek.value - 1) in state.weekCardioDays }
+    val cardioCount = (0 until 7).count { cardioDone(it) }
     val dots: @Composable (dot: androidx.compose.ui.unit.Dp, gap: androidx.compose.ui.unit.Dp, modifier: Modifier) -> Unit = { dot, gap, m ->
         Row(horizontalArrangement = Arrangement.spacedBy(gap), modifier = m.clearAndSetSemantics { }) {
             for (i in 0 until 7) {
+                val trained = i in state.weekDaysTrained
+                val cardio = cardioDone(i) || cardioPlanned(i)
                 WeekDot(
                     letter = initials[i],
-                    trained = i in state.weekDaysTrained,
+                    trained = trained,
                     today = i == todayIndex,
-                    rest = i in state.weekRestDays && i !in state.weekDaysTrained,
+                    rest = i in state.weekRestDays && !trained && !cardio,
                     name = names[i],
                     size = dot,
+                    cardio = cardio && !trained,
+                    cardioDone = cardioDone(i) && !trained,
                 )
             }
         }
@@ -520,7 +588,13 @@ private fun WeekRow(
             .touchSlop(vertical = 8.dp)
             .clickableLabeled("Open the plan builder", onClick = onOpenPlan)
             .padding(vertical = 8.dp)
-            .semantics(mergeDescendants = true) { contentDescription = reading }
+            .semantics(mergeDescendants = true) {
+                contentDescription = reading + when (cardioCount) {
+                    0 -> ""
+                    1 -> ", 1 cardio day"
+                    else -> ", $cardioCount cardio days"
+                }
+            }
     ) {
         val measurer = androidx.compose.ui.text.rememberTextMeasurer()
         val density = LocalDensity.current
@@ -548,17 +622,39 @@ private fun WeekRow(
 private val DotLetter = OpenType.tag.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.sp)
 
 @Composable
-private fun WeekDot(letter: String, trained: Boolean, today: Boolean, rest: Boolean, name: String, size: androidx.compose.ui.unit.Dp = 24.dp) {
+private fun WeekDot(
+    letter: String,
+    trained: Boolean,
+    today: Boolean,
+    rest: Boolean,
+    name: String,
+    size: androidx.compose.ui.unit.Dp = 24.dp,
+    /** A cardio day, planned or logged: the dot wears the pulse glyph instead of its letter. */
+    cardio: Boolean = false,
+    /** Its session is logged, so the dot is lit like a day trained. */
+    cardioDone: Boolean = false,
+) {
     val accent = MaterialTheme.colorScheme.primary
     val base = Modifier.size(size)
     val modifier = when {
-        trained -> base.background(accent, CircleShape)
+        trained || cardioDone -> base.background(accent, CircleShape)
         today -> base.background(MaterialTheme.colorScheme.primaryContainer, CircleShape).border(1.5.dp, accent, CircleShape)
         rest -> base.border(1.5.dp, OpenColors.Track, CircleShape)
         else -> base.border(1.5.dp, OpenColors.Rule, CircleShape)
     }
     Box(modifier, contentAlignment = Alignment.Center) {
-        if (rest && !today) {
+        if (cardio) {
+            Icon(
+                OpenIcons.Activity,
+                contentDescription = "$name, cardio" + if (cardioDone) " done" else "",
+                tint = when {
+                    cardioDone -> MaterialTheme.colorScheme.onPrimary
+                    today -> MaterialTheme.colorScheme.onBackground
+                    else -> OpenColors.Glyph
+                },
+                modifier = Modifier.size(size / 2)
+            )
+        } else if (rest && !today) {
             Icon(OpenIcons.Moon, contentDescription = "$name, rest", tint = OpenColors.Glyph, modifier = Modifier.size(12.dp))
         } else {
             Text(
@@ -791,7 +887,14 @@ private fun RecentRow(item: OverviewRecentItem, onClick: () -> Unit) {
             com.forge.app.domain.units.formatDistance(it, LocalForgeSettings.current.useMiles)
         }
     ).joinToString(" · ")
-    val glyph = if (item.isGym) dayGlyph(title) else item.cardioTypeCode?.let { cardioGlyph(it) } ?: OpenIcons.Activity
+    // A lifting day wears its body map (the part it trained, lit); anything the name doesn't place
+    // keeps the dumbbell. Cardio keeps its activity's own icon.
+    val dayBody = if (item.isGym) com.forge.app.ui.theme.DayIcons.forDayName(title) else null
+    val glyph = when {
+        dayBody != null -> dayBody
+        item.isGym -> OpenIcons.Dumbbell
+        else -> item.cardioTypeCode?.let { cardioGlyph(it) } ?: OpenIcons.Activity
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -805,7 +908,13 @@ private fun RecentRow(item: OverviewRecentItem, onClick: () -> Unit) {
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh, androidx.compose.foundation.shape.RoundedCornerShape(4.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(glyph, contentDescription = null, tint = muted, modifier = Modifier.size(18.dp))
+            // The body map is a filled figure whose lit part has to read at a glance, so it is drawn
+            // larger and in ink; the outline glyphs stay small and muted.
+            Icon(
+                glyph, contentDescription = null,
+                tint = if (dayBody != null) ink else muted,
+                modifier = Modifier.size(if (dayBody != null) 30.dp else 18.dp)
+            )
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, style = OpenType.rowTitle, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -815,19 +924,6 @@ private fun RecentRow(item: OverviewRecentItem, onClick: () -> Unit) {
             }
         }
         OpenLabel("$dow ${date.dayOfMonth}", style = OpenType.monoXS)
-    }
-}
-
-/** One glyph per kind of training day, read from its name: Push, Pull, Upper, Lower and Legs, Full body. */
-internal fun dayGlyph(title: String): androidx.compose.ui.graphics.vector.ImageVector {
-    val t = title.lowercase()
-    return when {
-        "push" in t -> OpenIcons.DayPush
-        "pull" in t -> OpenIcons.DayPull
-        "lower" in t || "leg" in t || "glute" in t -> OpenIcons.DayLower
-        "upper" in t || "chest" in t || "back" in t || "shoulder" in t || "arm" in t -> OpenIcons.DayUpper
-        "full" in t || "total" in t -> OpenIcons.DayFullBody
-        else -> OpenIcons.Dumbbell
     }
 }
 

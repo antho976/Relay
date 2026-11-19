@@ -72,7 +72,10 @@ object ProjectScanner {
 
     private fun imbalance(s: AdaptationSnapshot): List<Candidate> {
         val sets = setsByMuscle(s, weeks = 4)
+        val held = s.prefs.bodyParts.held
         return BalancePair.entries.mapNotNull { pair ->
+            // A side the lifter skipped or holds light is behind by choice: nothing to even out.
+            if ((pair.left + pair.right).any { it in held }) return@mapNotNull null
             val left = pair.left.sumOf { sets[it] ?: 0 }
             val right = pair.right.sumOf { sets[it] ?: 0 }
             if (left < 8 || right < 8) return@mapNotNull null
@@ -97,6 +100,8 @@ object ProjectScanner {
         val sets = setsByMuscle(s, weeks = 1)
         val trained = s.program.flatMap { it.slots }.map { it.muscle }.toSet()
         return trained.mapNotNull { muscle ->
+            // Held light on purpose is not a muscle being carried.
+            if (muscle in s.prefs.bodyParts.held) return@mapNotNull null
             val weekly = sets[muscle] ?: 0
             val cap = profile.capFor(muscle)
             // Well under half its own ceiling, week after week, is a muscle being carried.

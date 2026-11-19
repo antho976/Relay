@@ -8,6 +8,42 @@ an entry whenever a rule is added, changed or retired.
 
 ---
 
+## 2026-11-18 — The app does the thinking: one week, body parts, hands-off, and a new icon set
+
+Antho: "I want the app to do the thinking for me and I just sit back and do the only thing I just do
+and think about which is workout." Four things followed from it, plus two he asked for on sight of
+the screens. Designs: Relay design 8, page "Icons + days step".
+
+**Changed.**
+
+- **One week, three kinds of day.** Lifting and cardio were planned in two places that never met.
+  `WeekPlan` lays cardio and rest days around the lifting weekdays (one day always off, the one hard
+  session clear of leg day, what does not fit as an easy finisher after an upper day), and the Today
+  directive carries it, so Home's hero can read "35 min easy" and the week row marks cardio days
+  with the pulse glyph. Sequence mode has no week to lay out and answers day by day instead.
+- **Body parts: Skip / Light / Normal / Focus** replaced the priority-muscle chips, which could only
+  add a set. A whole region out picks a different split instead of leaving half-empty days. A skip
+  says what it costs once, in its group footer, and the coach then stays quiet about it.
+- **Hands-off coach mode.** A third mode beside Suggest and Earn auto-apply: every change applies
+  itself and the brief reports it. This retires "nothing changes without consent" as an absolute
+  (PRODUCT.md principle 1 is reworded); the evidence, the watch window and Undo are what remain
+  non-negotiable. Onboarding asks once; the default stays Suggest.
+- **Effort is one tap, where it counts.** "How many more could you have done?" over five keys, 0 to
+  4+, under the set just logged; by default only after a lift's last planned set, the one the coach
+  reads. It replaced the four-way "How did it feel?" rater. The finish summary asks about anything
+  left unrated, and a finished session's page can now take or change it.
+- **Onboarding's days step is compact** (variant B): each slider's label and serif value share one
+  line (22sp, was 56 and 40 on lines of their own), and the week's bars took the room.
+- **Icons.** Gear, gym setups and goals are one outline set (24 grid, 1.75 stroke, nothing filled,
+  nothing repeated). Workout days are a body map instead: one smooth figure with the trained part
+  solid and the rest at a quarter strength. The body map is deliberately FILLED, the one exception to
+  the outline family: a region has to read as lit at 30dp, and an outlined torso does not. An earlier
+  draft built from straight-edged shapes was rejected as "blocky".
+
+**Not done, on purpose.** The Cardio tab is unchanged apart from opening its log prefilled from
+Home; turning it into history-and-trends only is a redesign of its own. A lift goal on a skipped
+muscle is not shown as paused yet.
+
 ## 2026-10-17 — Settings comes back into the family: the app's grouped measures, chrome and anchors
 
 Antho: Settings "looks nice but too different from the rest". The 2026-09-26 kit was right about the

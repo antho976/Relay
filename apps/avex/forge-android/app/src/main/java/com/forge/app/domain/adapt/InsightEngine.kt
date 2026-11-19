@@ -76,6 +76,7 @@ object InsightEngine {
     fun evaluate(s: AdaptationSnapshot, t: AdaptThresholds = AdaptThresholds()): List<Recommendation.Insight> {
         val slots = s.program.flatMap { it.slots }.associateBy { it.exerciseId }
         val ratios = balanceRatios(s, t)
+        val held = s.prefs.bodyParts.held
         // Per-lift bout e1RM series, computed ONCE — the lagging-lift / time-of-day rules both read
         // it instead of each re-walking exerciseHistory and re-running Epley per set. (Volume
         // response reads the shared [VolumeResponse] model instead, which the cap learner also uses.)
@@ -93,9 +94,9 @@ object InsightEngine {
             bestTimeOfDay(s, t),
             mostImproved(s, slots, t),
             muscleDominance(s, slots, t),
-            ratioInsight(ratios.first { it.key == "pushpull" }, t, "Push/pull balance"),
-            ratioInsight(ratios.first { it.key == "quadham" }, t, "Quad/ham balance"),
-            mostSkipped(s, slots, t),
+            ratioInsight(ratios.first { it.key == "pushpull" }, t, "Push/pull balance", chosen = held.any { it in PUSH || it in PULL }),
+            ratioInsight(ratios.first { it.key == "quadham" }, t, "Quad/ham balance", chosen = MuscleGroup.QUADS in held || MuscleGroup.HAMSTRINGS in held),
+            skippedBodyPart(s, slots, t) ?: mostSkipped(s, slots, t),
             repeatedSessionSwaps(s, slots, t),
             recoverySignalsBuilding(s, t),
             estimateCalibration(s, t),
@@ -184,6 +185,9 @@ object InsightEngine {
             val muscle = slots[id]?.muscle ?: return@flatMap emptyList()
             bouts.filter { it.sessionStartedAt >= weekStart }.map { muscle to it }
         }
+        // With a whole region left out, one muscle carrying most of the week is the plan working as
+        // asked, not a balance to restore.
+        if (s.prefs.bodyParts.noLegs || s.prefs.bodyParts.noUpper) return null
         val totalSets = weekBouts.sumOf { it.second.sets.size }
         if (totalSets < t.insightBalanceMinWeekSets) return null
         val volumeByMuscle = weekBouts
@@ -229,7 +233,14 @@ object InsightEngine {
         return RatioCounts(key, labelA, labelB, a, b, low, high)
     }
 
-    private fun ratioInsight(rc: RatioCounts, t: AdaptThresholds, title: String): Recommendation.Insight? {
+    private fun ratioInsight(
+        rc: RatioCounts,
+        t: AdaptThresholds,
+        title: String,
+        /** One side is skipped or held light on purpose: its being behind is not a finding. */
+        chosen: Boolean = false
+    ): Recommendation.Insight? {
+        if (chosen) return null
         if (rc.setsA < t.insightRatioMinSetsPerSide || rc.setsB < t.insightRatioMinSetsPerSide) return null
         if (rc.balanced != false) return null
         val skew = if (rc.setsA.toDouble() / rc.setsB > rc.healthyHigh) rc.labelA else rc.labelB
@@ -255,6 +266,40 @@ object InsightEngine {
         return insight(
             "skip.${worst.first}", "Often skipped",
             "${worst.first} was skipped ${worst.second} of the last ${worst.third} times. Swap it for something you'll actually do, or drop it."
+        )
+    }
+
+    /**
+     * Several skipped lifts that are all one part of the body: the pattern behind [mostSkipped].
+     *
+     * One lift skipped again and again is a lift to swap. Two or more, all legs or all upper body
+     * or all one muscle, is a body part the lifter has decided against, and the answer is to take
+     * it out of the plan rather than to keep skipping around it. It replaces the single-lift note,
+     * which would otherwise name one of them and miss the point.
+     */
+    private fun skippedBodyPart(
+        s: AdaptationSnapshot,
+        slots: Map<String, ProgramSlotSnap>,
+        t: AdaptThresholds
+    ): Recommendation.Insight? {
+        val skipped = slots.values.filter { slot ->
+            val recent = s.exerciseHistory[slot.exerciseId]?.takeLast(t.insightAdherenceWindow) ?: return@filter false
+            recent.size >= t.insightAdherenceWindow && recent.count { it.skipped } >= t.insightSkipCount
+        }
+        if (skipped.size < 2) return null
+        val muscles = skipped.map { it.muscle }.toSet()
+        // Already out or held: nothing to offer.
+        if (muscles.all { it in s.prefs.bodyParts.held }) return null
+        val part = when {
+            muscles.size == 1 -> muscles.first().displayName.lowercase()
+            muscles.all { it in com.forge.app.program.BodyParts.LEGS } -> "legs"
+            muscles.all { it in com.forge.app.program.BodyParts.UPPER } -> "upper body"
+            else -> return null
+        }
+        return insight(
+            "skip.part.$part", "A part you keep skipping",
+            "${skipped.size} of your $part lifts are skipped most weeks. If you'd rather not train $part, " +
+                "set it to Skip in Settings, Program, Body parts, and the plan is rebuilt without it."
         )
     }
 

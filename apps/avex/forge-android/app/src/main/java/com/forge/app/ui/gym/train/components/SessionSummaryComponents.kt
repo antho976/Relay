@@ -62,92 +62,67 @@ internal fun CountUpStat(value: Double, label: String, modifier: Modifier = Modi
 }
 
 /**
- * The coach's corner of the summary: first the celebratory [coachOpinion] (what he reads from THIS
- * session), then the [CoachCaptureNudge] showing how much effort signal the session actually carried
- * (per-set RPE + per-exercise "how hard it felt") with an ask to log more so he can calibrate load
- * and rest. Purely informational; effort capture itself stays inline during the session.
+ * The coach's corner of the summary: the one-line [coachOpinion] (what the coach reads from THIS
+ * session), then [EffortCatchUp] for any exercise it could not read the effort of.
  */
 @Composable
 internal fun CoachReadSection(
     coachOpinion: String?,
-    setsWithRpe: Int,
-    totalSets: Int,
-    exercisesRated: Int,
-    exercisesLogged: Int,
-    onBg: Color,
-    muted: Color,
-    outline: Color
+    unrated: List<com.forge.app.ui.gym.train.state.UnratedLift>,
+    onRateSet: (setId: Long, rpe: Double) -> Unit,
+    onBg: Color
 ) {
     // Nothing logged → nothing for the coach to read.
-    if (coachOpinion == null && exercisesLogged == 0) return
+    if (coachOpinion == null && unrated.isEmpty()) return
     // Air, not a rule, above the section (grouped-surface pass, 2026-09-27).
     Spacer(Modifier.height(4.dp))
     Column(
         modifier = Modifier.fillMaxWidth().statsEntrance(1),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        OpenLabel("What the coach sees")
+        OpenLabel("Coach")
         coachOpinion?.let {
             Text(it, style = OpenType.body, color = onBg)
         }
-        CoachCaptureNudge(setsWithRpe, totalSets, exercisesRated, exercisesLogged, onBg, muted, outline)
+        EffortCatchUp(unrated, onRateSet)
     }
 }
 
 /**
- * The "give me more to work with" block. Hidden for an empty session; a quiet confirmation when every
- * lift + set carried its effort signal; otherwise the coverage is shown as two stat-style figures
- * (effort per lift, RPE per set) above a short ask. Surfacing the numbers — rather than burying them
- * in an italic line — makes it obvious at a glance how much the coach actually had to read.
+ * The effort question for everything the session left unrated, in one place: each exercise's name
+ * over the same five reps-left keys the card uses. A pick is written straight to that exercise's
+ * last working set and stays shown, so it can be changed until the sheet is closed.
+ *
+ * This replaced a pair of coverage figures ("EFFORT 2/5 lifts", "RPE 3/14 sets") and a line asking
+ * for more next time: it reported the gap at the one moment it could have been closed instead.
  */
 @Composable
-private fun CoachCaptureNudge(
-    setsWithRpe: Int,
-    totalSets: Int,
-    exercisesRated: Int,
-    exercisesLogged: Int,
-    onBg: Color,
-    muted: Color,
-    outline: Color
+private fun EffortCatchUp(
+    unrated: List<com.forge.app.ui.gym.train.state.UnratedLift>,
+    onRateSet: (setId: Long, rpe: Double) -> Unit
 ) {
-    if (exercisesLogged == 0) return
-    val effortComplete = exercisesRated >= exercisesLogged
-    val rpeComplete = totalSets == 0 || setsWithRpe >= totalSets
-    val complete = effortComplete && rpeComplete
-
-    // No card around it: the figures and the ask sit on the sheet like everything else here.
+    if (unrated.isEmpty()) return
+    // What was picked here, by set: the summary is a snapshot, so the sheet keeps its own answers.
+    val picks = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateMapOf<Long, Double>() }
     Column(
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        if (complete) {
-            Text(
-                "Full effort data this session. He can read exactly how hard it landed and tune the next one precisely.",
-                style = OpenType.bodyS,
-                color = onBg
+        Text(
+            if (unrated.size == 1) "One lift has no effort yet. How many more could you have done on its last set?"
+            else "${unrated.size} lifts have no effort yet. How many more could you have done on each last set?",
+            style = OpenType.bodyS,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        unrated.forEach { lift ->
+            RepsLeftRow(
+                rpe = picks[lift.setId],
+                onPick = { rpe ->
+                    picks[lift.setId] = rpe
+                    onRateSet(lift.setId, rpe)
+                },
+                label = lift.exerciseName
             )
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                CoverageStat("EFFORT", exercisesRated, exercisesLogged, "lifts", onBg, muted)
-                if (totalSets > 0) CoverageStat("RPE", setsWithRpe, totalSets, "sets", onBg, muted)
-            }
-            Text(
-                "Rate how hard each set feels next time and the coach can dial in your load and rest.",
-                style = OpenType.bodyS,
-                color = muted
-            )
-        }
-    }
-}
-
-/** One coverage figure for [CoachCaptureNudge]: a mono label over a serif "done/total" and its unit. */
-@Composable
-private fun CoverageStat(label: String, done: Int, total: Int, unit: String, onBg: Color, muted: Color) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        OpenLabel(label, style = OpenType.monoXS)
-        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("$done/$total", style = OpenType.figureS, color = onBg)
-            OpenLabel(unit, style = OpenType.monoXS, color = muted)
         }
     }
 }

@@ -30,6 +30,7 @@ class DirectiveRepository @Inject constructor(
     private val coachGoalRepository: CoachGoalRepository,
     private val academyRepository: AcademyRepository,
     private val blockRepository: BlockRepository,
+    private val conditioningRepository: ConditioningRepository,
     private val clock: Clock
 ) {
 
@@ -50,7 +51,12 @@ class DirectiveRepository @Inject constructor(
          * beside `today()` — which had just done the same walk to reach the same number. One
          * assembly, one answer, and the two cannot disagree.
          */
-        val readiness: com.forge.app.domain.adapt.Recommendation.ReadinessScale? = null
+        val readiness: com.forge.app.domain.adapt.Recommendation.ReadinessScale? = null,
+        /**
+         * The week the plan laid out (lift, cardio and rest days) and what was done of it, for the
+         * surfaces that draw the week. Empty in sequence mode, where there is no layout.
+         */
+        val week: ConditioningRepository.WeekRead = ConditioningRepository.WeekRead.NONE
     )
 
     /**
@@ -161,7 +167,7 @@ class DirectiveRepository @Inject constructor(
                 ?.targetValue?.toInt()
         }.getOrNull()
 
-        val directive = TodayDirective.compute(
+        val lifting = TodayDirective.compute(
             s = snapshot,
             readiness = readiness,
             life = life,
@@ -175,6 +181,47 @@ class DirectiveRepository @Inject constructor(
             upcomingDayKey = upcoming,
             upcomingInDays = if (upcoming != null) resolved?.daysAhead ?: 0 else 0
         )
+
+        // The week plan, laid over the lifting answer so the day is still one answer: a day off the
+        // bar becomes its cardio session, a lifting day picks up its finisher. Sequence mode has no
+        // week to read, so it gets the facts for a day-by-day answer instead.
+        val week = conditioningRepository.week(life)
+        val dayByDay = if (weekdayMode || freestyle || week.targetMinutes <= 0) null else {
+            val yesterday = today.minusDays(1)
+            val liftedYesterday = snapshot.sessions.any {
+                it.finishedAt != null && !it.isUntracked &&
+                    Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate() == yesterday
+            }
+            val liftsLeft = ((weeklyTarget ?: settingsRepository.daysPerWeek.first()) -
+                TodayDirective.sessionsSince(snapshot, weekStartMs)).coerceAtLeast(0)
+            val resting = life.sick || life.layoff?.away == true
+            val owed = week.owedMinutes
+            TodayDirective.DayByDay(
+                liftedYesterday = liftedYesterday,
+                weekHasRoom = (7 - todayIndex) > liftsLeft,
+                cardio = if (resting || week.doneToday || owed < com.forge.app.domain.schedule.WeekPlan.MIN_SESSION) null
+                else com.forge.app.domain.engine.ConditioningPlanner.steady(
+                    week.profile,
+                    minOf(owed, com.forge.app.domain.schedule.WeekPlan.TYPICAL_SESSION),
+                    week.phase
+                ),
+                nextDayName = lifting.dayKey?.let { Program.day(it)?.defaultName }
+            )
+        }
+        val directive = TodayDirective.withWeek(lifting, week.today, week.todayIsCardioDay, dayByDay)
+        // The week lesson is flagged the first time there is a laid-out week with cardio in it.
+        if (week.days.any { it.kind == com.forge.app.domain.schedule.WeekPlan.Kind.CARDIO }) {
+            runCatching { academyRepository.unlock(AcademyRepository.LESSON_YOUR_WEEK) }
+        }
+        // The cardio lessons open the first time the app actually prescribes what they teach.
+        directive.cardio?.takeIf { directive.kind == TodayDirective.Kind.CARDIO }?.let { p ->
+            runCatching {
+                academyRepository.unlock(AcademyRepository.LESSON_ZONE2)
+                if (p.structure == com.forge.app.domain.engine.ConditioningPlanner.Structure.INTERVALS) {
+                    academyRepository.unlock(AcademyRepository.LESSON_INTERVALS)
+                }
+            }
+        }
 
         // The active block's phase, so the brief the athlete reads before the session describes the
         // same week the Coach tab does (H-02). Fail-soft: no block, or an unreadable one, is the
@@ -198,7 +245,7 @@ class DirectiveRepository @Inject constructor(
         ) {
             runCatching { academyRepository.coldStartLesson() }.getOrNull()
         } else null
-        return TodayAnswer(directive, brief, lesson, readiness)
+        return TodayAnswer(directive, brief, lesson, readiness, week)
     }
 
     private fun todayStart(nowMs: Long, zone: ZoneId): Long =

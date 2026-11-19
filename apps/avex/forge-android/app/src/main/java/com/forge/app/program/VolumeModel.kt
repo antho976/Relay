@@ -14,6 +14,9 @@ object VolumeModel {
 
     const val MIN_SETS = 2
     const val MAX_SETS = 5
+
+    /** What a muscle held at Light is given each week: two sets is enough to keep what is there. */
+    const val LIGHT_SETS = 2
     private const val EMPHASIS_BONUS_SETS = 1
     /** Cap on how far an emphasised muscle's weekly total may exceed its [weeklyCap] (junk-volume guard). */
     private const val MAX_EMPHASIS_HEADROOM = 2
@@ -103,10 +106,31 @@ object VolumeModel {
          * The athlete's "about this long per session" answer (onboarding / Settings → Program), in
          * minutes; null or ≤ 0 = no ceiling. Applied last, see [fitSessionToTime].
          */
-        sessionMinutes: Int? = null
+        sessionMinutes: Int? = null,
+        /**
+         * Muscles held at maintenance ([BodyPartLevel.LIGHT]): their one slot runs [LIGHT_SETS].
+         * The split has already cut them to that one slot ([SplitTemplates.forDays]).
+         */
+        light: Set<MuscleGroup> = emptySet(),
+        /**
+         * Muscles being specialized in ([BodyPartLevel.FOCUS]). They take the [focus] bonus like any
+         * emphasised muscle, and while any is set every OTHER muscle's hypertrophy accessory gives up
+         * a set, so the extra work comes out of the week instead of on top of it. Heavy compounds and
+         * pump work are left alone: the first is what holds strength, the second is already minimal.
+         */
+        specialize: Set<MuscleGroup> = emptySet()
     ): List<List<Int>> {
         val result: List<IntArray> = days.map { day ->
-            IntArray(day.targets.size) { si -> slotSets(day.targets[si], focus, volumeFactor, goal, minSets) }
+            IntArray(day.targets.size) { si ->
+                val slot = day.targets[si]
+                val sets = slotSets(slot, focus, volumeFactor, goal, minSets)
+                when {
+                    slot.muscle in light -> minOf(sets, LIGHT_SETS)
+                    specialize.isNotEmpty() && slot.muscle !in specialize && slot.muscle !in focus &&
+                        slot.scheme == RepScheme.HYPERTROPHY -> (sets - 1).coerceAtLeast(minSets)
+                    else -> sets
+                }
+            }
         }
         val positions = HashMap<MuscleGroup, MutableList<Pair<Int, Int>>>()
         days.forEachIndexed { di, day ->

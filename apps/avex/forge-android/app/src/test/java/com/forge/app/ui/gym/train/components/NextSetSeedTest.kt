@@ -57,4 +57,27 @@ class NextSetSeedTest {
         // With no prior set at all, the target is the seed.
         assertEquals(85.0, nextSetSeedLb(null, null, null, rampLb = 85.0)!!, 0.0)
     }
+
+    // ── Hands-off coach mode: the coach's target is the first set's seed ────────
+
+    @Test
+    fun handsOffTheFirstSetOpensOnTheCoachesTarget() {
+        // Last time 100; the coach says 102.5, and that is what the field holds.
+        assertEquals(102.5, nextSetSeedLb(null, set(100.0), null, coachLb = 102.5)!!, 0.0)
+        // It may be lower than last time too (a reset, a light day).
+        assertEquals(90.0, nextSetSeedLb(null, set(100.0), null, coachLb = 90.0)!!, 0.0)
+        // And it stands in when there is no last time to seed from.
+        assertEquals(45.0, nextSetSeedLb(null, null, null, coachLb = 45.0)!!, 0.0)
+    }
+
+    @Test
+    fun handsOffTodayStillLeadsFromTheSecondSet() {
+        // Set one was logged at 105, not the coach's 102.5: set two follows what was lifted.
+        assertEquals(105.0, nextSetSeedLb(set(105.0), set(100.0), set(100.0), coachLb = 102.5)!!, 0.0)
+    }
+
+    @Test
+    fun withoutACoachTargetNothingChanges() {
+        assertEquals(100.0, nextSetSeedLb(null, set(100.0), null, coachLb = null)!!, 0.0)
+    }
 }

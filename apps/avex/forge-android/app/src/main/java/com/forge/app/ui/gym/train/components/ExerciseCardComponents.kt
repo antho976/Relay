@@ -57,7 +57,6 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.timer.RestTimerState
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeightDelta
@@ -507,7 +506,6 @@ internal fun ExerciseCardFooter(
     state: ExerciseUiState,
     onNoteChange: (String) -> Unit,
     onPinNote: (String) -> Unit,
-    onRate: (EffortRating) -> Unit,
     onOpenSwapPicker: () -> Unit,
     onToggleSkipped: () -> Unit
 ) {
@@ -538,28 +536,6 @@ internal fun ExerciseCardFooter(
             currentPinnedNote = state.pinnedNote,
             showTemplates = false
         )
-    }
-
-    var showRater by remember { mutableStateOf(state.difficulty != null) }
-    Spacer(Modifier.height(8.dp))
-    Row(
-        modifier = Modifier.clickableLabeled(
-            if (showRater) "Hide the effort rating" else "Rate the effort"
-        ) { showRater = !showRater },
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        Text(
-            "How did it feel?",
-            style = MaterialTheme.typography.bodySmall,
-            color = muted,
-            fontStyle = FontStyle.Italic
-        )
-        ForgeDisclosureCaret(showRater, tint = muted)
-    }
-    if (showRater) {
-        Spacer(Modifier.height(8.dp))
-        DifficultyRater(selected = state.difficulty, onSelect = onRate)
     }
 
     Spacer(Modifier.height(8.dp))

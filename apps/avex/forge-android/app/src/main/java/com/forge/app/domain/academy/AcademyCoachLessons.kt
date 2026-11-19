@@ -363,5 +363,93 @@ internal object AcademyCardio {
         )
     )
 
-    val ordered: List<Lesson> = listOf(zone2, intervals)
+    /**
+     * How one week holds lifting, cardio and rest (2026-11-18): the rules the week plan follows,
+     * said so a lifter could lay the same week out by hand. Built on the same two reviews as
+     * [intervals], which is where the placement rule comes from.
+     */
+    val yourWeek = Lesson(
+        id = "cardio.your_week",
+        track = LessonTrack.CARDIO,
+        title = "How your week fits together",
+        summary = "Lifting days stay put, cardio fills the free days, and one day stays fully off. Only the hard session needs placing.",
+        unlock = LessonUnlock(
+            label = "When your week is laid out",
+            detail = "Opens once Home shows cardio and rest days around your lifting days.",
+            byYou = false
+        ),
+        blocks = listOf(
+            Paragraph(
+                "A week has seven days and three things to put in them: lifting, cardio and rest. " +
+                    "They all draw on the same recovery, so where each one goes matters more than " +
+                    "how much of each there is."
+            ),
+            Heading("Lifting first"),
+            Paragraph(
+                "Your lifting days are the fixed points. They are the sessions that have to be done " +
+                    "fresh, and they are the ones you already built your week around. Everything " +
+                    "else fits in the gaps."
+            ),
+            Heading("One day fully off"),
+            Paragraph(
+                "At least one day a week has nothing planned on it. However much cardio you ask " +
+                    "for, it is never laid over your last free day. A day off is where the work of " +
+                    "the other six lands."
+            ),
+            Heading("Easy cardio goes almost anywhere"),
+            Paragraph(
+                "Easy work, the pace you can talk at, costs your lifting close to nothing. So it " +
+                    "goes on the free days that are left, spread apart rather than bunched. If the " +
+                    "free days cannot hold all of it, the rest becomes a short easy finisher after " +
+                    "an upper-body session. Never after legs: tired legs do not need more."
+            ),
+            Heading("Hard cardio needs placing"),
+            Bullets(
+                listOf(
+                    "One hard session a week, at most.",
+                    "Never the day before a heavy leg day, and better not the day after one.",
+                    "Only once you have a few weeks of easy minutes behind you.",
+                    "None in a deload week, when the whole week is meant to ask less."
+                )
+            ),
+            Paragraph(
+                "The reviews of lifting and endurance training done together point the same way: " +
+                    "the two get in each other's way mostly when hard endurance work sits close to " +
+                    "heavy leg work, and running costs more than cycling. Spaced apart, the cost is " +
+                    "small."
+            ),
+            Heading("When a day is missed"),
+            Paragraph(
+                "A missed lifting day is skipped, not chased: tomorrow is tomorrow's session. A " +
+                    "missed cardio day is different, because cardio is counted in minutes over the " +
+                    "week. Its minutes roll into the cardio days that are left, up to an hour a " +
+                    "session, and stop once the week's target is met."
+            ),
+            Heading("What the coach does"),
+            Paragraph(
+                "It lays the week out from two numbers: how many days you lift and how many " +
+                    "minutes of cardio you want. Home then gives one answer a day, a lifting day, a " +
+                    "cardio session with its length and effort, or rest. If you train whenever you " +
+                    "can instead of on fixed weekdays, it cannot see the week ahead, so it decides " +
+                    "one day at a time: the day after you lift is cardio or rest."
+            ),
+            Callout("Lifting days stay put. Easy cardio fills the gaps. Only the hard session needs a careful place.")
+        ),
+        sources = listOf(
+            Source(
+                authors = "Schumann M, Feuerbacher J, Sunkeler M, et al.",
+                title = "Compatibility of concurrent aerobic and strength training for skeletal muscle size and function: an updated systematic review and meta-analysis",
+                journal = "Sports Medicine",
+                year = 2022
+            ),
+            Source(
+                authors = "Wilson J, Marin P, Rhea M, et al.",
+                title = "Concurrent training: a meta-analysis examining interference of aerobic and resistance exercises",
+                journal = "Journal of Strength and Conditioning Research",
+                year = 2012
+            )
+        )
+    )
+
+    val ordered: List<Lesson> = listOf(zone2, intervals, yourWeek)
 }

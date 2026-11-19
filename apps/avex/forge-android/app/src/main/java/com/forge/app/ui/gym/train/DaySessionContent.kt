@@ -336,7 +336,6 @@ internal fun DayContent(
                                     onEvent(DayUiEvent.EditSet(setId, stored, r))
                                 },
                                 onLogSameAsLast = { setId -> onEvent(DayUiEvent.LogSameAsLast(id, setId)) },
-                                onRate = { rating -> onEvent(DayUiEvent.RateExercise(id, rating)) },
                                 onNoteChange = { note -> onEvent(DayUiEvent.UpdateNote(id, note)) },
                                 onToggleSkipped = {
                                     onEvent(DayUiEvent.ToggleSkipped(id))
@@ -361,6 +360,8 @@ internal fun DayContent(
                                 onPinNote = { note -> onEvent(DayUiEvent.SetPinnedNote(id, note)) },
                                 onToggleSetDifficultyTag = { setId, tag -> onEvent(DayUiEvent.ToggleSetDifficultyTag(setId, tag)) },
                                 onSetRpe = { setId, rpe -> onEvent(DayUiEvent.SetRpe(setId, rpe)) },
+                                effortPrompt = state.effortPrompt,
+                                coachFillsTargets = state.coachFillsTargets,
                                 undoableSetId = state.undoableSetId,
                                 onUndoSet = { onEvent(DayUiEvent.UndoLastSet) },
                                 onAddSet = { onEvent(DayUiEvent.AddBonusSet(id)) },

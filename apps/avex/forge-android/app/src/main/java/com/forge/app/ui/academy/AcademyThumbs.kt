@@ -2,10 +2,12 @@ package com.forge.app.ui.academy
 
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Path
 import com.forge.app.domain.academy.AcademyCardio
 import com.forge.app.domain.academy.AcademyCoachLessons
+import com.forge.app.domain.academy.AcademyPractice
 import com.forge.app.domain.academy.AcademyRegistry
 import com.forge.app.domain.academy.AcademyTraining
 import java.util.concurrent.ConcurrentHashMap
@@ -39,7 +41,13 @@ object AcademyThumbs {
             AcademyCoachLessons.readiness.id to { band() },
             AcademyCoachLessons.blocks.id to { phases() },
             AcademyCardio.zone2.id to { zone() },
-            AcademyCardio.intervals.id to { pulses() }
+            AcademyCardio.intervals.id to { pulses() },
+            AcademyCardio.yourWeek.id to { week() },
+            AcademyPractice.swaps.id to { overlap() },
+            AcademyPractice.plateaus.id to { stall() },
+            AcademyPractice.comingBack.id to { rebound() },
+            AcademyPractice.losingWeight.id to { holding() },
+            AcademyPractice.bodyParts.id to { levels() }
         )
     }
     private val cache = ConcurrentHashMap<String, Sketch>()
@@ -230,5 +238,77 @@ object AcademyThumbs {
             SketchMark.Area(fills, Ink.ACCENT),
             accent(wave)
         )
+    }
+
+    // ── Added 2026-11-18 ─────────────────────────────────────────────────────
+
+    /** Two circles and the lens they share. */
+    private fun overlap(): Sketch = with(AcademySketches) {
+        still(
+            ink(Path().apply { addOval(Rect(28f, 24f, 96f, 92f)) }),
+            ink(Path().apply { addOval(Rect(64f, 24f, 132f, 92f)) }),
+            SketchMark.Area(lens(), Ink.ACCENT),
+            SketchMark.Dot(80f, 58f, 6f, Ink.ACCENT, halo = true)
+        )
+    }
+
+    /** A climb that goes flat, then the step back that gets past it. */
+    private fun stall(): Sketch = with(AcademySketches) {
+        val restart = smooth(98f, 52f, 108f, 64f, 122f, 52f, 146f, 26f)
+        still(
+            guide(line(12f, 96f, 150f, 96f)),
+            ink(line(16f, 86f, 52f, 52f, 98f, 52f)),
+            SketchMark.Area(under(restart, 98f, 146f, 96f), Ink.ACCENT),
+            accent(restart),
+            SketchMark.Dot(108f, 64f, 6f, Ink.ACCENT, halo = true)
+        )
+    }
+
+    /** Built slowly, a dip, rebuilt steeply. */
+    private fun rebound(): Sketch = with(AcademySketches) {
+        val rebuilt = smooth(88f, 68f, 98f, 52f, 112f, 40f, 146f, 30f)
+        still(
+            guide(line(12f, 96f, 150f, 96f)),
+            ink(smooth(16f, 88f, 36f, 72f, 60f, 50f)),
+            SketchMark.Line(line(60f, 50f, 88f, 68f), Ink.GUIDE, weight = GUIDE_W, style = Stroked.DASHED),
+            SketchMark.Area(under(rebuilt, 88f, 146f, 96f), Ink.ACCENT),
+            accent(rebuilt),
+            SketchMark.Dot(101f, 50f, 6f, Ink.ACCENT, halo = true)
+        )
+    }
+
+    /** One line coming down, one holding level. */
+    private fun holding(): Sketch = with(AcademySketches) {
+        val lift = line(16f, 70f, 146f, 70f)
+        still(
+            SketchMark.Line(line(16f, 24f, 146f, 52f), Ink.GUIDE, weight = GUIDE_W, style = Stroked.DASHED),
+            SketchMark.Area(under(lift, 16f, 146f, 96f), Ink.INK),
+            ink(lift),
+            SketchMark.Dot(146f, 70f, 6f, Ink.ACCENT, halo = true)
+        )
+    }
+
+    /** Four columns: none, a little, the usual, and more. */
+    private fun levels(): Sketch = with(AcademySketches) {
+        still(
+            guide(line(12f, 92f, 150f, 92f)),
+            SketchMark.Column(30f, 62f, 92f, 20f, Ink.GUIDE, ghost = true),
+            SketchMark.Column(64f, 76f, 92f, 20f, Ink.INK),
+            SketchMark.Column(98f, 54f, 92f, 20f, Ink.INK),
+            SketchMark.Column(132f, 22f, 92f, 20f, Ink.ACCENT),
+            SketchMark.Dot(132f, 22f, 6f, Ink.ACCENT, halo = true)
+        )
+    }
+
+    /** Seven days: lifting columns, two cardio marks, one day left open. */
+    private fun week(): Sketch = with(AcademySketches) {
+        fun day(i: Int) = 22f + i * 19.4f
+        val marks = ArrayList<SketchMark>()
+        marks += guide(line(12f, 92f, 150f, 92f))
+        listOf(0, 1, 3, 4).forEach { marks += SketchMark.Column(day(it), if (it == 1 || it == 4) 30f else 44f, 92f, 9f, Ink.INK) }
+        marks += accent(smooth(day(2) - 7f, 70f, day(2) - 2.5f, 60f, day(2) + 2.5f, 70f, day(2) + 7f, 60f))
+        marks += accent(line(day(6) - 6f, 88f, day(6) - 6f, 40f, day(6), 40f, day(6), 88f, day(6) + 6f, 88f, day(6) + 6f, 40f))
+        marks += SketchMark.Dot(day(5), 66f, 5f, Ink.INK, filled = false)
+        still(*marks.toTypedArray())
     }
 }

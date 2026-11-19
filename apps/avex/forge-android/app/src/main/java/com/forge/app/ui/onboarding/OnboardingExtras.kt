@@ -72,6 +72,8 @@ internal fun StepExtras(
     onSexSelect: (String) -> Unit,
     coachEnabled: Boolean,
     onCoachToggle: (Boolean) -> Unit,
+    coachHandsOff: Boolean = false,
+    onCoachHandsOff: (Boolean) -> Unit = {},
     appLock: Boolean,
     onAppLockToggle: (Boolean) -> Unit,
     plateWeightLb: Double,
@@ -116,10 +118,17 @@ internal fun StepExtras(
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             OnbSwitchRow(
                 label = "Weekly coach",
-                description = "Reads your logs and proposes small changes each week. You approve each one.",
+                description = if (coachHandsOff) "Reads your logs and makes small changes each week. Monday tells you what changed, and each one can be undone."
+                else "Reads your logs and proposes small changes each week. You approve each one.",
                 checked = coachEnabled,
                 onToggle = onCoachToggle
             )
+            // The one question about how much to decide: asked here, once, and changeable in Settings.
+            if (coachEnabled) {
+                ChoiceLine("Its changes", listOf("Ask me first", "Just apply them"), if (coachHandsOff) 1 else 0) {
+                    onCoachHandsOff(it == 1)
+                }
+            }
             // With no screen lock there is no credential to prompt against, so the row renders inert
             // rather than tappable-but-dead, and says what would make it work (GYMAP-69).
             OnbSwitchRow(

@@ -83,6 +83,13 @@ data class OverviewUiState(
      * empty in sequence mode, where every day reads as unplanned.
      */
     val weekPlannedDays: Set<Int> = emptySet(),
+    /**
+     * Weekdays (0 = Monday, the schedule's own order, NOT the user's week order) the week plan puts
+     * a cardio session on. Empty in sequence mode or with cardio out of the plan.
+     */
+    val weekCardioDays: Set<Int> = emptySet(),
+    /** Recent days, as `LocalDate.toEpochDay`, that hold an active cardio session. */
+    val cardioEpochDays: Set<Long> = emptySet(),
     /** Custom name for the next-up day set by the user, or null if using the program default. */
     val customDayName: String? = null,
     /** Combined gym + cardio, sorted newest first, capped at 3. */

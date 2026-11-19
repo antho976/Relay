@@ -25,7 +25,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.schedule.WeeklySchedule
@@ -181,10 +180,14 @@ internal fun FigureText(
 }
 
 /**
- * Days a week and the session length, each a big serif value over a red slider with named ends, and
- * under them the week those two answers draw: one bar per training day carrying its sets, which
- * redraws as either answer moves. Both sliders and the week sit on one page so the cost of an
- * answer is seen while it is given.
+ * Days a week and the session length, each a label and its serif value on one line over a red slider
+ * with named ends, and under them the week those two answers draw: one bar per training day carrying
+ * its sets, which redraws as either answer moves. Both sliders and the week sit on one page so the
+ * cost of an answer is seen while it is given.
+ *
+ * The compact form (design 8, "Icons + days step", variant B, picked 2026-11-18): the two answers
+ * used to be 56sp and 40sp figures on lines of their own, which pushed the week under the Continue
+ * button. The room they gave up went to the week's bars.
  */
 @Composable
 internal fun StepDays(
@@ -200,39 +203,36 @@ internal fun StepDays(
     val answered = days in 1..7
     Column {
         StepHeader("How many days a week?", "Your split follows, and it becomes your weekly target on Home.")
-        Spacer(Modifier.height(28.dp))
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
+        Spacer(Modifier.height(26.dp))
+        SliderHeading("Days a week") {
             FigureText(
                 value = if (answered) "$days" else "0",
                 unit = if (days == 1) "day" else "days",
                 style = OnboardingType.sliderFigure,
                 unitStyle = OnboardingType.sliderFigureUnit,
-                dim = !answered,
-                modifier = Modifier.alignByBaseline()
-            )
-            OpenLabel(
-                // Each day's name holds together on a line ("PUSH B", never "PUSH / B").
-                if (answered) archetypes.joinToString("\u00A0· ") { it.name.replace(' ', '\u00A0') } else "Slide to pick",
-                modifier = Modifier.weight(1f).alignByBaseline(),
-                color = if (answered) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
-                style = OpenType.monoXS.copy(textAlign = TextAlign.End)
+                dim = !answered
             )
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(8.dp))
         OnbSlider(
             labels = (1..7).map { "$it" },
             selectedIndex = if (answered) days - 1 else -1,
             onSelect = { onChange(it + 1) },
             valueDescription = { if (it == 0) "1 day a week" else "${it + 1} days a week" }
         )
+        Spacer(Modifier.height(10.dp))
+        OpenLabel(
+            // Each day's name holds together on a line ("PUSH B", never "PUSH / B").
+            if (answered) archetypes.joinToString("\u00A0· ") { it.name.replace(' ', '\u00A0') } else "Slide to pick",
+            color = if (answered) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
+            style = OpenType.monoXS
+        )
         val advice = daysAdvice(days, experience)
         // The note's room is kept whether or not it shows, so sliding onto 6 never shoves the page
-        // down (Antho, 2026-10-21); the note itself fades and rises into that room.
-        Spacer(Modifier.height(14.dp))
-        Box(Modifier.fillMaxWidth().heightIn(min = 44.dp)) {
+        // down (Antho, 2026-10-21); the note itself fades and rises into that room. The room doubles
+        // as the gap before the next slider, so an in-range answer leaves no second gap under it.
+        Spacer(Modifier.height(10.dp))
+        Box(Modifier.fillMaxWidth().heightIn(min = 40.dp)) {
             androidx.compose.animation.AnimatedContent(
                 targetState = advice,
                 transitionSpec = {
@@ -246,9 +246,7 @@ internal fun StepDays(
 
         // Optional: the CTA doesn't wait on it. The week below redraws as it changes, because the
         // answer trims each day to fit (accessories first, never the main lift).
-        Spacer(Modifier.height(26.dp))
-        StepSectionLabel("Session length", meta = "Optional")
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
         val lengths = SessionEstimate.SESSION_LENGTH_CHOICES
         // null = unanswered and 0 = an explicit "Any": both mean no ceiling, so both read as Any.
         val lengthIndex = when (sessionMinutes) {
@@ -256,20 +254,22 @@ internal fun StepDays(
             else -> lengths.indexOf(sessionMinutes).takeIf { it >= 0 } ?: lengths.lastIndex
         }
         val minutes = lengths[lengthIndex]
-        FigureText(
-            value = minutes?.toString() ?: "Any",
-            unit = if (minutes != null) "min" else "length",
-            style = OnboardingType.sliderFigureS,
-            unitStyle = OnboardingType.sliderFigureSUnit
-        )
-        Spacer(Modifier.height(12.dp))
+        SliderHeading("Session length \u00B7 optional") {
+            FigureText(
+                value = minutes?.toString() ?: "Any",
+                unit = if (minutes != null) "min" else "length",
+                style = OnboardingType.sliderFigure,
+                unitStyle = OnboardingType.sliderFigureUnit
+            )
+        }
+        Spacer(Modifier.height(8.dp))
         OnbSlider(
             labels = lengths.map { SessionEstimate.sessionLengthLabel(it) },
             selectedIndex = lengthIndex,
             onSelect = { onSessionMinutes(lengths[it] ?: 0) },
             valueDescription = { i -> lengths[i]?.let { "$it minutes" } ?: "Any length" }
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(10.dp))
         Text(
             "Avex trims each workout to fit, extras first.",
             style = OpenType.bodyS,
@@ -278,17 +278,40 @@ internal fun StepDays(
 
         if (archetypes.isNotEmpty()) {
             val sets = weekSets(archetypes, plannedSets, previewDays)
-            Spacer(Modifier.height(36.dp))
+            Spacer(Modifier.height(32.dp))
             StepSectionLabel("Your week", meta = "${sets.sum()} sets")
             Spacer(Modifier.height(12.dp))
             WeekBars(
                 names = archetypes.map { it.name },
                 sets = sets,
-                trackWidth = 36.dp,
-                trackHeight = 70.dp,
+                // Up to four days the bars are wide; past that seven still have to fit a 384dp phone.
+                trackWidth = when {
+                    archetypes.size <= 4 -> 56.dp
+                    archetypes.size == 5 -> 46.dp
+                    else -> 36.dp
+                },
+                trackHeight = 120.dp,
                 labelGap = 6.dp
             )
         }
+    }
+}
+
+/**
+ * A slider's heading: its mono label at the start and its current answer, in serif, at the end of
+ * the same line. Wraps under the label rather than squeezing it when the font is scaled up.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun SliderHeading(label: String, value: @Composable () -> Unit) {
+    androidx.compose.foundation.layout.FlowRow(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        itemVerticalAlignment = Alignment.Bottom
+    ) {
+        OpenLabel(label, Modifier.padding(bottom = 3.dp))
+        value()
     }
 }
 

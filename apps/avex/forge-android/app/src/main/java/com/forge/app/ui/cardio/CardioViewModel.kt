@@ -73,7 +73,8 @@ class CardioViewModel @Inject constructor(
     private val healthConnectManager: HealthConnectManager,
     private val snackbar: SnackbarController,
     private val clock: Clock,
-    private val timeSignals: com.forge.app.core.time.TimeSignals
+    private val timeSignals: com.forge.app.core.time.TimeSignals,
+    private val cardioHandOff: com.forge.app.domain.cardio.CardioHandOff
 ) : ViewModel() {
 
     /** "Not now" on the connect row; the same flag clears the notification feed's watch invite. */
@@ -125,6 +126,10 @@ class CardioViewModel @Inject constructor(
 
     init {
         refreshConnection()
+        // Home's hero button on a cardio day leaves its prescription here before switching tabs.
+        viewModelScope.launch {
+            cardioHandOff.pending.collect { if (it != null) cardioHandOff.take()?.let(::openPrescribed) }
+        }
         viewModelScope.launch {
             timeSignals.dayStarts().collect { start ->
                 val moved = start != dayStart.value
@@ -432,6 +437,32 @@ class CardioViewModel @Inject constructor(
         // A longer measured distance can cross a trophy threshold, same as an edit does.
         viewModelScope.launch { runCatching { trophyRepo.evaluateAndUnlockNew() } }
         snackbar.showUndo("Watch stats applied") { cardioRepo.update(original) }
+    }
+
+    /**
+     * Open the log sheet prefilled with the session the week plan prescribed for today: its length,
+     * its effort and its intervals, in the activity logged last. Saving inserts a NEW entry, and
+     * every field can still be changed to what was actually done.
+     */
+    private fun openPrescribed(p: com.forge.app.domain.engine.ConditioningPlanner.Prescription) {
+        val hard = p.structure == com.forge.app.domain.engine.ConditioningPlanner.Structure.INTERVALS
+        viewModelScope.launch {
+            val type = settingsRepo.lastCardioType.first() ?: CardioType.WALK.code
+            transient.update {
+                it.copy(
+                    sheetOpen = true,
+                    editing = CardioEntry(
+                        id = 0,
+                        date = clock.nowMs(),
+                        type = type,
+                        durationMin = p.totalMinutes,
+                        effort = (if (hard) com.forge.app.domain.cardio.CardioEffort.HARD
+                        else com.forge.app.domain.cardio.CardioEffort.EASY).code,
+                        intervalCount = p.intervals.takeIf { hard && it > 0 }
+                    )
+                )
+            }
+        }
     }
 
     /** Open the log sheet prefilled from a watch workout (W5 import). Saving inserts a NEW entry. */

@@ -419,8 +419,9 @@ class ProgramRepository @Inject constructor(
         goal = settings.userGoal.first().ifBlank { "build_muscle" },
         experience = settings.programExperience.first(),
         problemAreas = settings.problemAreas.first().mapNotNull { ProblemArea.fromCode(it) }.toSet(),
-        priorityMuscles = settings.priorityMuscles.first()
-            .mapNotNull { runCatching { MuscleGroup.fromCode(it) }.getOrNull() }.toSet(),
+        priorityMuscles = bodyParts().focus,
+        skipMuscles = bodyParts().skip,
+        lightMuscles = bodyParts().light,
         pinned = settings.pinnedExercises.first(),
         dbMaxLb = settings.maxDbWeightLb.first(),
         frozenIds = settings.frozenExerciseIds.first(),
@@ -429,6 +430,50 @@ class ProgramRepository @Inject constructor(
         // otherwise, which is exactly the pre-D behavior.
         personalCaps = personalCaps()
     )
+
+    /**
+     * The body-part levels in force today: what is skipped, held light and focused. A level whose end
+     * date has passed is already not in force here, so a plan built on the day a skip ends has the
+     * muscle back even before [endTimedBodyParts] has cleared the preference.
+     */
+    suspend fun bodyParts(): com.forge.app.program.BodyParts {
+        val today = todayEpochDay()
+        val restOver = settings.bodyPartsUntilEpochDay.first()?.let { it <= today } == true
+        val focusOver = settings.focusUntilEpochDay.first()?.let { it <= today } == true
+        return com.forge.app.program.BodyParts(
+            skip = if (restOver) emptySet() else com.forge.app.program.BodyParts.muscles(settings.skipMuscles.first()),
+            light = if (restOver) emptySet() else com.forge.app.program.BodyParts.muscles(settings.lightMuscles.first()),
+            focus = if (focusOver) emptySet() else com.forge.app.program.BodyParts.muscles(settings.priorityMuscles.first())
+        )
+    }
+
+    private fun todayEpochDay(): Long =
+        java.time.Instant.ofEpochMilli(clock.nowMs()).atZone(java.time.ZoneId.systemDefault()).toLocalDate().toEpochDay()
+
+    /**
+     * Bring back what a timed skip, a timed light or a finished focus was holding: rebuild the plan
+     * with those muscles at their normal level, then clear the preference.
+     *
+     * The plan is rebuilt FIRST and the preference cleared only if that worked, so a rebuild that
+     * could not run (a workout is open) leaves the end date standing and the next finish retries.
+     * It rebuilds at the days-a-week the lifter asked for rather than the current plan's count: a
+     * legs-only week is capped at four days, and the cap should not outlive the reason for it.
+     */
+    suspend fun endTimedBodyParts(unlessWorkoutOpen: Boolean = false): Boolean {
+        val today = todayEpochDay()
+        val restOver = settings.bodyPartsUntilEpochDay.first()?.let { it <= today } == true &&
+            (settings.skipMuscles.first().isNotEmpty() || settings.lightMuscles.first().isNotEmpty())
+        val focusOver = settings.focusUntilEpochDay.first()?.let { it <= today } == true &&
+            settings.priorityMuscles.first().isNotEmpty()
+        if (!restOver && !focusOver) return false
+        val rebuilt = generate(
+            currentParams(daysPerWeek = settings.daysPerWeek.first()), currentEquipment(),
+            settings.likedExercises.first(), settings.dislikedExercises.first(),
+            unlessWorkoutOpen = unlessWorkoutOpen
+        )
+        if (rebuilt) settings.endTimedBodyParts(today)
+        return rebuilt
+    }
 
     /**
      * The athlete's measured per-muscle caps (Coach v3 D). Never throws: a failed read degrades to

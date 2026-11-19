@@ -1,6 +1,5 @@
 package com.forge.app.ui.gym.train.state
 
-import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.mood.Mood
 import com.forge.app.program.ExerciseDef
 
@@ -17,7 +16,6 @@ sealed interface DayUiEvent {
     /** The deleted set's Undo window closed without a tap. */
     data object ForgetDeletedSet : DayUiEvent
     data class EditSet(val setId: Long, val weightText: String, val reps: Int) : DayUiEvent
-    data class RateExercise(val exerciseId: String, val rating: EffortRating) : DayUiEvent
     data class UpdateNote(val exerciseId: String, val note: String) : DayUiEvent
     data class ToggleSkipped(val exerciseId: String) : DayUiEvent
 

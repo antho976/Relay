@@ -21,7 +21,6 @@ import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.SessionSegment
 import com.forge.app.data.db.entities.SuggestionOutcome
-import com.forge.app.data.db.types.EffortRating
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.coach.LifeEvents
@@ -555,6 +554,11 @@ class WorkoutRepository @Inject constructor(
         // toward rotation.
         if (sessionDao.getActiveSession() != null) return
 
+        // A timed skip, a timed light or a six-week focus that has run its course ends here, the same
+        // way a deload week does: the plan is rebuilt with those muscles back at normal. It is its
+        // own rebuild, so this finish does nothing more to the plan.
+        if (programRepository.endTimedBodyParts(unlessWorkoutOpen = true)) return
+
         val deloadStart = settingsRepo.deloadWeekStartMs.first()
         val deloadRange = if (deloadStart > 0) deloadWindow(deloadStart) else null
         // A deload WEEK has to end. applyDeloadWeek regenerates at reduced volume and stamps the
@@ -795,9 +799,6 @@ class WorkoutRepository @Inject constructor(
 
     // Targeted single-column writes rather than read-modify-write of the whole row: see the DAO's
     // note — a note commit racing a SKIP tap used to silently un-skip the exercise.
-    suspend fun setRating(loggedExerciseId: Long, rating: EffortRating) =
-        loggedExerciseDao.setDifficulty(loggedExerciseId, rating)
-
     suspend fun setSkipped(loggedExerciseId: Long, skipped: Boolean) =
         loggedExerciseDao.setSkipped(loggedExerciseId, skipped)
 

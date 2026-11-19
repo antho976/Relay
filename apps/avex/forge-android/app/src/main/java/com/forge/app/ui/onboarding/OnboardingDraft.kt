@@ -39,7 +39,9 @@ internal data class OnboardingDraft(
     /** Fixed weekdays (true) or "whenever I can" (false); null = not answered yet. */
     val fixedDays: Boolean? = null,
     /** Weekdays picked for fixed days, 0 = Monday. */
-    val weekdays: Set<Int> = emptySet()
+    val weekdays: Set<Int> = emptySet(),
+    /** The coach applies its changes itself (hands-off) rather than asking first. */
+    val coachHandsOff: Boolean = false
 ) {
     fun toJson(): String = JSONObject().apply {
         put("schema", SCHEMA)
@@ -66,6 +68,7 @@ internal data class OnboardingDraft(
         sessionMinutes?.let { put("sessionMinutes", it) } // absent = never answered
         fixedDays?.let { put("fixedDays", it) }           // absent = never answered
         put("weekdays", JSONArray(weekdays.sorted()))
+        put("coachHandsOff", coachHandsOff)
     }.toString()
 
     companion object {
@@ -104,7 +107,8 @@ internal data class OnboardingDraft(
                 sessionMinutes = if (o.has("sessionMinutes")) o.getInt("sessionMinutes") else null,
                 fixedDays = if (o.has("fixedDays")) o.getBoolean("fixedDays") else null,
                 weekdays = o.optJSONArray("weekdays")?.let { a -> (0 until a.length()).map { a.getInt(it) }.toSet() }
-                    ?: emptySet()
+                    ?: emptySet(),
+                coachHandsOff = o.optBoolean("coachHandsOff", false)
             )
         }.getOrNull()
 
