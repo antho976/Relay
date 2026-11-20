@@ -61,8 +61,8 @@ fun WeekBars(values: List<Long>, today: Int, labels: List<String>, description: 
                 val color = when {
                     i > today -> c.track
                     daily != null && v > daily -> c.waiting
-                    i == today -> c.ink
-                    else -> c.ink3
+                    i == today -> c.signal
+                    else -> c.signal.copy(alpha = .38f)
                 }
                 if (i > today || v <= 0L) {
                     drawRoundRect(c.track, Offset(x, size.height - 3.dp.toPx()), Size(bar, 3.dp.toPx()), CornerRadius(2.dp.toPx()))
@@ -139,7 +139,7 @@ fun SpendLine(
             lineTo(x(0), h)
             close()
         }
-        val ink = if (over) c.held else c.ink
+        val ink = if (over) c.held else c.signal
         drawPath(area, ink.copy(alpha = .08f))
         drawPath(line, ink, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
         // Where today's rate would end the month.
@@ -148,7 +148,7 @@ fun SpendLine(
         }
         val p = (picked ?: (cumulative.size - 1)).coerceIn(0, cumulative.size - 1)
         drawLine(c.ink2.copy(alpha = .5f), Offset(x(p), 0f), Offset(x(p), h), strokeWidth = 1.dp.toPx())
-        drawCircle(c.wall, 5.dp.toPx(), Offset(x(p), y(cumulative[p])))
+        drawCircle(c.raised, 5.dp.toPx(), Offset(x(p), y(cumulative[p])))
         drawCircle(ink, 3.5.dp.toPx(), Offset(x(p), y(cumulative[p])))
     }
 }
@@ -197,7 +197,7 @@ fun TrendBars(spent: List<Long>, income: List<Long>, labels: List<String>, descr
                 val sh = size.height * s / top
                 val ih = size.height * inc / top
                 val on = i == highlight
-                drawRoundRect(if (on) c.ink else c.ink3, Offset(base, size.height - sh), Size(bar, sh), CornerRadius(3.dp.toPx()))
+                drawRoundRect(if (on) c.signal else c.signal.copy(alpha = .38f), Offset(base, size.height - sh), Size(bar, sh), CornerRadius(3.dp.toPx()))
                 drawRoundRect(c.live.copy(alpha = if (on) 1f else .55f), Offset(base + bar + 3.dp.toPx(), size.height - ih), Size(bar * .6f, ih), CornerRadius(3.dp.toPx()))
             }
         }
@@ -228,7 +228,7 @@ fun HeatGrid(heat: List<Int>, lead: Int, elapsed: Int, weekdays: List<String>, d
                         day < 0 -> Color.Transparent
                         day >= elapsed -> Color.Transparent
                         step == 0 -> c.slab
-                        else -> c.ink.copy(alpha = .14f + .2f * step)
+                        else -> c.signal.copy(alpha = .14f + .2f * step)
                     }
                     Box(
                         Modifier.weight(1f).aspectRatio(1f).clip(Radii.icon).background(fill)
@@ -243,7 +243,7 @@ fun HeatGrid(heat: List<Int>, lead: Int, elapsed: Int, weekdays: List<String>, d
                                 color = when {
                                     day == picked -> c.signal
                                     day >= elapsed -> c.ink3.copy(alpha = .5f)
-                                    step >= 3 -> c.wall
+                                    step >= 3 -> c.onInk
                                     else -> c.ink2
                                 },
                             )

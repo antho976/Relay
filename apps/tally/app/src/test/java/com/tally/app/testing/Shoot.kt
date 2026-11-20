@@ -32,7 +32,7 @@ val screenshotOptions = RoborazziOptions(
 fun ComposeContentTestRule.shoot(
     name: String,
     fontScale: Float = 1f,
-    palette: Palette = Palette.Matte,
+    palette: Palette = Palette.Sky,
     content: @Composable () -> Unit,
 ) {
     setContent {
@@ -41,7 +41,7 @@ fun ComposeContentTestRule.shoot(
                 LocalDensity provides Density(LocalDensity.current.density, fontScale),
                 LocalMoney provides MoneyFormatter("CAD", Locale.CANADA),
             ) {
-                Box(Modifier.fillMaxSize().background(Tally.colors.wall)) { content() }
+                Box(Modifier.fillMaxSize().background(Tally.colors.groundBrush)) { content() }
             }
         }
     }

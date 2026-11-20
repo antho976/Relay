@@ -46,6 +46,16 @@ import com.tally.app.ui.kit.SpacePage
 import com.tally.app.ui.kit.Stat
 import com.tally.app.ui.kit.StatGrid
 import com.tally.app.ui.kit.T
+import com.tally.app.ui.kit.ChoiceTile
+import com.tally.app.ui.kit.RoundKey
+import com.tally.app.ui.kit.TileGrid
+import com.tally.app.ui.kit.TintTile
+import com.tally.app.ui.kit.deepOf
+import com.tally.app.ui.kit.knownBank
+import com.tally.app.ui.kit.softOf
+import com.tally.app.ui.banks.BankMark
+import com.tally.app.ui.banks.ConnectBanksCard
+import com.tally.app.ui.theme.Hue
 import com.tally.app.ui.kit.ToggleRow
 import com.tally.app.ui.kit.accountGlyph
 import com.tally.app.ui.nav.AppNav
@@ -60,7 +70,7 @@ import com.tally.core.Registration
 fun AccountsRoute(nav: AppNav) {
     val vm: AccountsViewModel = hiltViewModel()
     val s by vm.state.collectAsStateWithLifecycle()
-    AccountsScreen(s, open = { nav.transactions(accountId = it) }, add = { nav.accountEdit() }, transfer = { nav.entry(type = com.tally.core.TxType.TRANSFER) })
+    AccountsScreen(s, open = { nav.transactions(accountId = it) }, add = { nav.accountEdit() }, transfer = { nav.entry(type = com.tally.core.TxType.TRANSFER) }, connectBank = { nav.banks() })
 }
 
 /**
@@ -69,23 +79,24 @@ fun AccountsRoute(nav: AppNav) {
  * ("holds", "owes"), never as a negative figure.
  */
 @Composable
-fun AccountsScreen(s: AccountsState, open: (Long) -> Unit, add: () -> Unit, transfer: () -> Unit) {
+fun AccountsScreen(s: AccountsState, open: (Long) -> Unit, add: () -> Unit, transfer: () -> Unit, connectBank: () -> Unit = {}) {
     val c = Tally.colors
     val fmt = LocalMoney.current
     SpacePage(
         "Accounts",
         context = if (s.loaded) Copy.plural(s.active.size, "account") + " · " + Copy.plural(s.entries, "entry", "entries") else null,
         actions = {
-            if (s.canTransfer) IconKey("transfer", transfer, label = "Move money between accounts")
-            IconKey("plus", add, label = "New account")
+            if (s.canTransfer) RoundKey("transfer", transfer, label = "Move money between accounts")
+            RoundKey("plus", add, label = "New account")
         },
     ) {
         if (!s.loaded) return@SpacePage
+        ConnectBanksCard(onConnect = connectBank)
         if (s.active.isEmpty() && s.archived.isEmpty()) {
             Slab { Empty("bank", "No accounts yet", "An account is what you pay with: a chequing account, a card, cash. Each entry says which one.") { Key("Add an account", add, glyph = "plus") } }
             return@SpacePage
         }
-        Slab(Modifier.fillMaxWidth(), padding = PaddingValues(16.dp), spacing = 6.dp) {
+        Slab(Modifier.fillMaxWidth(), padding = PaddingValues(18.dp), spacing = 6.dp) {
             Eyebrow("Spent this month")
             T(fmt.formatWhole(s.monthSpent), style = Tally.type.hero, color = c.ink, maxLines = 1)
             T(
@@ -103,12 +114,12 @@ fun AccountsScreen(s: AccountsState, open: (Long) -> Unit, add: () -> Unit, tran
             if (s.trackedOwed > 0) {
                 StatGrid(
                     listOf(
-                        { m -> Stat("Held", fmt.formatWhole(s.trackedHeld), m, glyph = "wallet", sub = held) },
-                        { m -> Stat("Owed", fmt.formatWhole(s.trackedOwed), m, glyph = "card", sub = "On cards and below zero") },
+                        { m -> TintTile("Held", fmt.formatWhole(s.trackedHeld), Hue.mint, m, sub = held) },
+                        { m -> TintTile("Owed", fmt.formatWhole(s.trackedOwed), Hue.coral, m, sub = "On cards and below zero") },
                     ),
                 )
             } else {
-                Stat("Held", fmt.formatWhole(s.trackedHeld), Modifier.fillMaxWidth(), glyph = "wallet", sub = held)
+                TintTile("Held", fmt.formatWhole(s.trackedHeld), Hue.mint, Modifier.fillMaxWidth(), sub = held)
             }
         }
         Panel("Accounts", glyph = "bank", subtitle = s.defaultName?.let { "New entries start in $it" }) {
@@ -131,13 +142,13 @@ private fun AccountLineRow(line: AccountLine, fmt: com.tally.core.MoneyFormatter
     val c = Tally.colors
     val a = line.account
     ListRow(onClick = onClick, padding = PaddingValues(horizontal = 4.dp, vertical = 10.dp)) {
-        AccountBadge(a.type)
+        if (knownBank(a.name)) BankMark(a.name) else AccountBadge(a.type)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                T(a.name, Modifier.weight(1f), Tally.type.ui, c.ink, maxLines = 1)
+                T(a.name, Modifier.weight(1f), Tally.type.ui, c.ink, maxLines = 1, weight = androidx.compose.ui.text.font.FontWeight.SemiBold)
                 if (!a.archived) T(fmt.formatWhole(line.spent), style = Tally.type.amount, color = if (line.spent > 0) c.ink else c.ink3, maxLines = 1)
             }
-            if (!a.archived) Meter(line.spentShare, color = c.ink3, height = 3.dp)
+            if (!a.archived) Meter(line.spentShare, color = c.signal, height = 5.dp)
             T(accountCaption(line, fmt), style = Tally.type.caption, color = c.ink3, maxLines = 1)
         }
     }
@@ -214,8 +225,8 @@ fun AccountEditScreen(s: AccountEditState, a: AccountEditActions) {
         ).joinToString(" · "),
         actions = {
             if (!s.isNew) {
-                IconKey("list", a.entries, label = "Its entries")
-                IconKey("trash", a.requestDelete, label = "Delete the account")
+                RoundKey("list", a.entries, label = "Its entries")
+                RoundKey("trash", a.requestDelete, label = "Delete the account", tint = Tally.colors.heldText)
             }
         },
         footer = {
@@ -227,18 +238,18 @@ fun AccountEditScreen(s: AccountEditState, a: AccountEditActions) {
         if (s.isNew && s.templates.isNotEmpty()) {
             Labelled("Quick start") {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    s.templates.forEach { t -> Pill(t.name, glyph = accountGlyph(t.type), onClick = { a.template(t) }) }
+                    s.templates.forEach { t -> Pill(t.name, glyph = accountGlyph(t.type), fill = softOf(accountKindHue(t.type)), color = deepOf(accountKindHue(t.type)), onClick = { a.template(t) }) }
                 }
             }
         }
         Labelled("Name", problem = p.name.takeIf { errors }) {
             Field(d.name, a.name, Modifier.fillMaxWidth(), placeholder = "Chequing, Visa, Cash", error = errors && p.name != null, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words))
         }
-        Labelled("Kind") {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                AccountType.entries.forEach { t ->
-                    PickRow(typeLabel(t), d.type == t, onClick = { a.type(t) }, sub = typeHint(t), leading = { Glyph(accountGlyph(t), 18.dp, c.ink3) })
-                }
+        Labelled("Kind", hint = typeHint(d.type)) {
+            val kinds = AccountType.entries
+            TileGrid(kinds.size, 3, gap = 8.dp) { i, m ->
+                val t = kinds[i]
+                ChoiceTile(typeLabel(t), accountGlyph(t), accountKindHue(t), d.type == t, onClick = { a.type(t) }, modifier = m)
             }
         }
         if (d.type == AccountType.INVESTMENT) {
@@ -252,7 +263,7 @@ fun AccountEditScreen(s: AccountEditState, a: AccountEditActions) {
         Labelled(if (d.owe) "Owed when it opened" else "Balance when it opened", problem = p.opening.takeIf { errors }, hint = "What it held before the first entry in Tally") {
             Field(d.openingText, a.opening, Modifier.fillMaxWidth(), placeholder = fmt.format(0), leading = "coins", error = errors && p.opening != null, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
         }
-        Slab(padding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) {
+        Slab(padding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
             if (d.showsOwe) ToggleRow("Money owed", d.owe, a.owe, glyph = "card", subtitle = "A card's balance counts against what you hold")
             ToggleRow("New entries start here", d.isDefault, a.default, glyph = "flag", enabled = !d.archived)
             if (!s.isNew) ToggleRow("Archived", d.archived, a.archived, glyph = "save", subtitle = "Kept with its entries, out of the pickers")
@@ -283,4 +294,13 @@ fun AccountEditScreen(s: AccountEditState, a: AccountEditActions) {
             alternate = if (s.canArchive) "Archive" to a.archiveInstead else null,
         )
     }
+}
+
+/** Each kind of account's hue on its tile. */
+internal fun accountKindHue(type: AccountType): androidx.compose.ui.graphics.Color = when (type) {
+    AccountType.CASH -> Hue.mint
+    AccountType.CHEQUING -> Hue.sky
+    AccountType.SAVINGS -> Hue.sun
+    AccountType.CREDIT -> Hue.violet
+    AccountType.INVESTMENT -> Hue.teal
 }

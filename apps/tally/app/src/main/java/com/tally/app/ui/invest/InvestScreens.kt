@@ -40,6 +40,15 @@ import com.tally.app.ui.kit.StackBar
 import com.tally.app.ui.kit.Stat
 import com.tally.app.ui.kit.StatGrid
 import com.tally.app.ui.kit.T
+import com.tally.app.ui.kit.GradientMeter
+import com.tally.app.ui.kit.Postcard
+import com.tally.app.ui.kit.RoundKey
+import com.tally.app.ui.kit.Scene
+import com.tally.app.ui.kit.TintTile
+import com.tally.app.ui.kit.knownBank
+import com.tally.app.ui.banks.BankMark
+import com.tally.app.ui.theme.Hue
+import androidx.compose.ui.text.font.FontWeight
 import com.tally.app.ui.nav.AppNav
 import com.tally.app.ui.plan.PadKeys
 import com.tally.app.ui.plan.padText
@@ -77,7 +86,7 @@ fun InvestScreen(
     SpacePage(
         "Investments",
         context = if (s.loaded) investContext(v.accounts.size, v.newest, s.today) { Dates.short(it, s.today) } else null,
-        actions = { IconKey("download", import, label = "Import a Wealthsimple file") },
+        actions = { RoundKey("download", import, label = "Import a Wealthsimple file") },
     ) {
         if (!s.loaded) return@SpacePage
         s.problem?.let { T(it, style = Tally.type.caption, color = c.heldText) }
@@ -98,43 +107,43 @@ fun InvestScreen(
                 v.lenses.forEach { l -> Pill(l.label, selected = v.lens?.key == l.key, onClick = { lensKey = l.key }) }
             }
         }
-        Slab(Modifier.fillMaxWidth(), padding = PaddingValues(16.dp), spacing = 6.dp) {
+        Postcard(Scene.GROWTH, Modifier.fillMaxWidth(), sceneHeight = 110.dp) {
             Eyebrow(v.lens?.label ?: "Worth")
-            T(fmt.formatWhole(v.worth), style = Tally.type.hero, color = c.ink, maxLines = 1)
+            T(fmt.formatWhole(v.worth), style = Tally.type.hero.copy(fontSize = 40.sp), color = c.ink, maxLines = 1)
             if (v.hasHoldings) {
-                T(gainText(v.gain, v.gainBps, fmt) + " on " + fmt.formatWhole(v.cost) + " put in", style = Tally.type.caption, color = if (v.gain >= 0) c.liveText else c.heldText)
+                T(gainText(v.gain, v.gainBps, fmt) + " on " + fmt.formatWhole(v.cost) + " put in", style = Tally.type.uiMedium, color = if (v.gain >= 0) c.liveText else c.heldText)
             }
-            v.newest?.let { if (isStale(it, s.today)) T(staleLine(it, s.today), style = Tally.type.caption, color = c.waiting) }
+            v.newest?.let { if (isStale(it, s.today)) T(staleLine(it, s.today), style = Tally.type.caption, color = c.waitingText) }
         }
         StatGrid(
             listOf(
-                { m -> Stat("Cash", fmt.formatWhole(v.cash), m, glyph = "coins") },
-                { m -> Stat("Income, 12 months", v.income12m?.let { fmt.formatWhole(it) } ?: "–", m, glyph = "money-in", sub = "dividends and interest") },
+                { m -> TintTile("Cash", fmt.formatWhole(v.cash), Hue.sky, m) },
+                { m -> TintTile("Income, 12 months", v.income12m?.let { fmt.formatWhole(it) } ?: "–", Hue.sun, m, sub = "dividends and interest") },
             ),
         )
         if (v.allocation.isNotEmpty()) {
             Panel("By account kind", glyph = "pie") {
-                StackBar(v.allocation.map { categoryColor(it.hue) to it.value }, Modifier.padding(4.dp))
+                StackBar(v.allocation.map { categoryColor(it.hue) to it.value }, Modifier.padding(4.dp), height = 14.dp)
                 v.allocation.forEach { line -> ShareRow(line.label, line.hue, fmt.formatWhole(line.value), sharePercent(line.shareBps)) }
             }
         }
         if (v.kinds.isNotEmpty()) {
             Panel("By kind of holding", glyph = "bars") {
-                StackBar(v.kinds.map { categoryColor(it.hue) to it.value }, Modifier.padding(4.dp))
+                StackBar(v.kinds.map { categoryColor(it.hue) to it.value }, Modifier.padding(4.dp), height = 14.dp)
                 v.kinds.forEach { line -> ShareRow(line.label, line.hue, fmt.formatWhole(line.value), sharePercent(line.shareBps)) }
             }
         }
         Panel("Accounts", glyph = "bank") {
             v.accounts.forEach { a ->
                 ListRow(onClick = { account(a.id) }, padding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
-                    GlyphBadge("trend", categoryColor(registrationHue(a.registration)), categoryColor(registrationHue(a.registration)).copy(alpha = .16f))
+                    if (knownBank(a.name)) BankMark(a.name) else GlyphBadge("trend", categoryColor(registrationHue(a.registration)), categoryColor(registrationHue(a.registration)).copy(alpha = .16f))
                     Column(Modifier.weight(1f)) {
-                        T(a.name, style = Tally.type.ui, color = c.ink, maxLines = 1)
+                        T(a.name, style = Tally.type.ui, color = c.ink, maxLines = 1, weight = FontWeight.SemiBold)
                         T(accountMeta(a) { Dates.short(it, s.today) }, style = Tally.type.caption, color = c.ink3, maxLines = 1)
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         T(fmt.formatWhole(a.worth), style = Tally.type.amount, color = c.ink)
-                        returnText(a) { Dates.short(it, s.today) }?.let { T(it, style = Tally.type.mono, color = c.ink3) }
+                        returnText(a) { Dates.short(it, s.today) }?.let { T(it, style = Tally.type.caption, color = if (it.startsWith("-") || it.startsWith("−")) c.heldText else c.liveText, weight = FontWeight.SemiBold) }
                     }
                 }
             }
@@ -166,7 +175,7 @@ fun InvestScreen(
                                 T(roomReading(line, fmt), style = Tally.type.amount, color = if (line.over > 0) c.heldText else c.ink2)
                             }
                             val room = line.room
-                            if (room != null && room > 0) PaceMeter(line.contributed.toFloat() / room, roomPaceFraction(line.registration, line.year, s.today))
+                            if (room != null && room > 0) GradientMeter(line.contributed.toFloat() / room, roomHues(line.registration).first, roomHues(line.registration).second, over = line.over > 0, pace = roomPaceFraction(line.registration, line.year, s.today))
                             T(roomText(line, s.today, fmt) { Dates.short(it, s.today) }, style = Tally.type.caption, color = if (line.over > 0) c.heldText else c.ink3, maxLines = 2)
                         }
                     }
@@ -181,10 +190,10 @@ fun InvestScreen(
 private fun ShareRow(label: String, hue: Int, value: String, share: String) {
     val c = Tally.colors
     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Dot(categoryColor(hue), 8.dp)
-        T(label, Modifier.weight(1f), Tally.type.caption, c.ink2, maxLines = 1)
-        T(value, style = Tally.type.mono, color = c.ink2)
-        T(share, style = Tally.type.mono, color = c.ink3)
+        Dot(categoryColor(hue), 10.dp)
+        T(label, Modifier.weight(1f), Tally.type.ui, c.ink, maxLines = 1)
+        T(value, style = Tally.type.amount, color = c.ink2)
+        T(share, style = Tally.type.caption, color = c.ink3)
     }
 }
 
@@ -198,17 +207,29 @@ fun RoomEditRoute(nav: AppNav) {
         s.registration.label + " room " + s.year,
         nav::back,
         subtitle = "Deadline " + Dates.long(s.deadline),
-        actions = { if (s.existing != null) IconKey("trash", vm::remove, label = "Remove the figure") },
+        actions = { if (s.existing != null) RoundKey("trash", vm::remove, label = "Remove the figure", tint = Tally.colors.heldText) },
         footer = {
             PadKeys(s.input.fractionDigits, fmt.decimalSeparator, vm::press)
             Key("Save room", vm::save, Modifier.fillMaxWidth(), kind = KeyKind.Primary, enabled = s.input.minor > 0, glyph = "check")
         },
     ) {
         if (!s.loaded) return@DetailPage
-        Eyebrow("Room for " + s.year)
-        T(padText(s.input, fmt), style = Tally.type.hero.copy(fontSize = 40.sp), color = if (s.input.isEmpty) Tally.colors.ink3 else Tally.colors.ink, maxLines = 1)
-        T(roomSource(s.registration), style = Tally.type.caption, color = Tally.colors.ink3)
-        T(fmt.formatWhole(s.contributed) + " went in this year so far", style = Tally.type.caption, color = Tally.colors.ink2)
+        Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 18.dp, vertical = 22.dp), spacing = 10.dp) {
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Eyebrow("Room for " + s.year)
+                T(padText(s.input, fmt), style = Tally.type.hero.copy(fontSize = 44.sp), color = if (s.input.isEmpty) Tally.colors.ink3 else Tally.colors.ink, maxLines = 1)
+                Pill(fmt.formatWhole(s.contributed) + " went in this year so far", fill = Hue.skySoft, color = Hue.skyInk)
+                T(roomSource(s.registration), style = Tally.type.caption, color = Tally.colors.ink2, align = androidx.compose.ui.text.style.TextAlign.Center)
+            }
+        }
         s.limit?.let { Pill("This year's limit " + fmt.formatWhole(it), glyph = "sparkle", onClick = { vm.fill(it) }) }
     }
+}
+
+/** The two hues a room row's meter runs between, one pair per registration. */
+private fun roomHues(r: com.tally.core.Registration): Pair<androidx.compose.ui.graphics.Color, androidx.compose.ui.graphics.Color> = when (r.name) {
+    "TFSA" -> Hue.sky to Hue.violet
+    "RRSP" -> Hue.teal to Hue.mint
+    "FHSA" -> Hue.sun to Hue.coral
+    else -> Hue.violet to Hue.pink
 }

@@ -132,6 +132,7 @@ fun TallyNavHost(onboarded: Boolean, incoming: IncomingFiles? = null, launches: 
         composable(Routes.EXPORT) { ExportRoute(nav) }
         composable(Routes.IMPORT, arguments = listOf(stringArg(Args.SOURCE, ""))) { ImportRoute(nav) }
         composable(Routes.ABOUT) { AboutRoute(nav) }
+        composable(Routes.BANKS) { com.tally.app.ui.banks.BanksRoute(nav) }
         composable(Routes.ROOM_EDIT, arguments = listOf(stringArg(Args.KIND, "TFSA"))) { RoomEditRoute(nav) }
     }
 }

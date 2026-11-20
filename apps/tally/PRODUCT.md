@@ -45,6 +45,9 @@ keep what the accounts hold unless an account was given a balance to start from.
    days.
 3. **Honest at zero.** No data, no budget, no accounts: each state is drawn, never hidden.
 4. **Nothing leaves the owner's own devices.** The phone, the owner's server, the owner's PC.
+   Exception, asked for by the owner (2026-11-19): bank connections through Plaid, which the owner
+   already uses to link Desjardins to Wealthsimple. Plaid's access is read-only; its secret and the
+   access tokens live on the owner's server, never in the APK.
 5. **Reversible by default.** Deletes come with Undo; only erasing everything, replacing a ledger
    wholesale, or deleting an account with entries asks first.
 

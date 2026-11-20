@@ -79,9 +79,9 @@ fun Sheet(onDismiss: () -> Unit, title: String? = null, content: @Composable Col
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = state,
-        containerColor = c.slab,
+        containerColor = c.raised,
         contentColor = c.ink,
-        scrimColor = Color.Black.copy(alpha = .5f),
+        scrimColor = Color(0xFF1A1A2E).copy(alpha = .45f),
         shape = Radii.sheet,
         dragHandle = {
             Box(Modifier.padding(top = 10.dp, bottom = 6.dp).size(width = 36.dp, height = 4.dp).clip(Radii.pill).background(c.track))
@@ -124,13 +124,13 @@ fun DateSheet(date: LocalDate, onPick: (LocalDate) -> Unit, onDismiss: () -> Uni
         },
     )
     val colors = DatePickerDefaults.colors(
-        containerColor = c.slab,
+        containerColor = c.raised,
         titleContentColor = c.ink3,
         headlineContentColor = c.ink,
         weekdayContentColor = c.ink3,
         dayContentColor = c.ink,
         selectedDayContainerColor = c.ink,
-        selectedDayContentColor = c.wall,
+        selectedDayContentColor = c.onInk,
         todayContentColor = c.ink,
         todayDateBorderColor = c.ink2,
     )

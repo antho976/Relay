@@ -37,6 +37,9 @@ import com.tally.app.ui.kit.Stat
 import com.tally.app.ui.kit.StatGrid
 import com.tally.app.ui.kit.StackBar
 import com.tally.app.ui.kit.T
+import com.tally.app.ui.kit.RoundKey
+import com.tally.app.ui.kit.TintTile
+import com.tally.app.ui.theme.Hue
 import com.tally.app.ui.nav.AppNav
 import com.tally.app.ui.theme.Tally
 import com.tally.app.ui.theme.categoryColor
@@ -82,25 +85,25 @@ fun BudgetsScreen(s: PlanState, edit: (Long) -> Unit, applySuggestions: () -> Un
     SpacePage(
         "Budgets",
         context = Dates.period(s.period, s.today) + " · " + Copy.plural(s.daysLeft, "day") + " left",
-        actions = { IconKey("plus", add, label = "Budget a category") },
+        actions = { RoundKey("plus", add, label = "Budget a category") },
     ) {
         if (!s.loaded) return@SpacePage
         val overall = b.overall
-        Slab(Modifier.fillMaxWidth(), onClick = { edit(0) }, spacing = 8.dp, padding = PaddingValues(16.dp)) {
+        Slab(Modifier.fillMaxWidth(), onClick = { edit(0) }, spacing = 10.dp, padding = PaddingValues(18.dp)) {
             if (overall != null) {
                 val reached = limitReached(overall)
                 Eyebrow(if (reached) "Limit reached" else "Monthly budget", color = if (reached) c.heldText else c.ink3)
                 Row(verticalAlignment = Alignment.Bottom) {
                     T(fmt.formatWhole(if (reached) overall.spent else overall.remaining), Modifier.weight(1f), Tally.type.hero, if (reached) c.heldText else c.ink, maxLines = 1)
-                    T((if (reached) "spent of " else "left of ") + fmt.formatWhole(overall.budget), Modifier.padding(bottom = 6.dp), Tally.type.ui, c.ink3)
+                    T((if (reached) "spent of " else "left of ") + fmt.formatWhole(overall.budget), Modifier.padding(bottom = 8.dp), Tally.type.ui, c.ink2)
                 }
-                PaceMeter(overall.spentFraction, overall.paceFraction, height = 8.dp)
+                PaceMeter(overall.spentFraction, overall.paceFraction, height = 12.dp)
                 T(
                     if (reached) budgetWords(overall, fmt) + " · " + Copy.plural(s.daysLeft, "day") + " to go" else Copy.daysLine(overall) + " · " + Copy.marginLine(overall, fmt),
                     style = Tally.type.caption,
                     color = paceTone(overall),
                 )
-                b.projected?.let { T("At this pace the month ends at " + fmt.formatWhole(it), style = Tally.type.caption, color = if (it > overall.budget) c.waiting else c.ink3) }
+                b.projected?.let { T("At this pace the month ends at " + fmt.formatWhole(it), style = Tally.type.caption, color = if (it > overall.budget) c.waitingText else c.ink3) }
             } else {
                 Eyebrow("Monthly budget")
                 T("One number for the whole month, and Tally reads every day against it.", style = Tally.type.ui, color = c.ink2)
@@ -110,10 +113,10 @@ fun BudgetsScreen(s: PlanState, edit: (Long) -> Unit, applySuggestions: () -> Un
 
         StatGrid(
             listOf(
-                { m -> Stat("Spent", fmt.formatWhole(b.spent), m, glyph = "money-out", sub = Copy.versusLastLine(b.spent, b.lastPeriodSpent, fmt)) },
-                { m -> Stat("In envelopes", fmt.formatWhole(b.budgeted), m, glyph = "pie", sub = Copy.plural(b.envelopes.size, "category", "categories")) },
-                { m -> Stat("Without a budget", fmt.formatWhole(b.unbudgetedSpent), m, glyph = "tag", sub = Copy.plural(b.unbudgeted.size, "category", "categories")) },
-                { m -> Stat("Projected", b.projected?.let { fmt.formatWhole(it) } ?: "–", m, glyph = "trend", sub = "by the month's end") },
+                { m -> TintTile("Spent", fmt.formatWhole(b.spent), Hue.coral, m, sub = Copy.versusLastLine(b.spent, b.lastPeriodSpent, fmt)) },
+                { m -> TintTile("In envelopes", fmt.formatWhole(b.budgeted), Hue.violet, m, sub = Copy.plural(b.envelopes.size, "category", "categories")) },
+                { m -> TintTile("Without a budget", fmt.formatWhole(b.unbudgetedSpent), Hue.sun, m, sub = Copy.plural(b.unbudgeted.size, "category", "categories")) },
+                { m -> TintTile("Projected", b.projected?.let { fmt.formatWhole(it) } ?: "–", Hue.sky, m, sub = "by the month's end") },
             ),
         )
 
@@ -177,7 +180,7 @@ fun BillsScreen(s: PlanState, edit: (Long) -> Unit, add: () -> Unit) {
     SpacePage(
         "Bills",
         context = if (r.active.isEmpty()) "Rent, salary, subscriptions: they post on their day" else fmt.formatWhole(r.monthlyCost) + " a month out · " + fmt.formatWhole(r.monthlyIncome) + " in",
-        actions = { IconKey("plus", add, label = "New bill") },
+        actions = { RoundKey("plus", add, label = "New bill") },
     ) {
         if (!s.loaded) return@SpacePage
         if (r.active.isEmpty() && r.paused.isEmpty()) {
@@ -186,19 +189,19 @@ fun BillsScreen(s: PlanState, edit: (Long) -> Unit, add: () -> Unit) {
         }
         StatGrid(
             listOf(
-                { m -> Stat("Due this week", fmt.formatWhole(r.week.total), m, glyph = "calendar", sub = Copy.plural(r.week.payments, "payment")) },
-                { m -> Stat("Due this month", fmt.formatWhole(r.month.total), m, glyph = "receipt", sub = Copy.plural(r.month.payments, "payment")) },
+                { m -> TintTile("Due this week", fmt.formatWhole(r.week.total), Hue.sky, m, sub = Copy.plural(r.week.payments, "payment")) },
+                { m -> TintTile("Due this month", fmt.formatWhole(r.month.total), Hue.pink, m, sub = Copy.plural(r.month.payments, "payment")) },
             ),
         )
         if (r.costShares.isNotEmpty()) {
             Panel("Where the monthly cost goes", glyph = "pie") {
-                StackBar(r.costShares.map { categoryColor(it.color) to it.perMonth }, Modifier.fillMaxWidth())
-                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                StackBar(r.costShares.map { categoryColor(it.color) to it.perMonth }, Modifier.fillMaxWidth(), height = 14.dp)
+                Column(Modifier.fillMaxWidth().padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     r.costShares.take(5).forEach { share ->
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            com.tally.app.ui.kit.Dot(categoryColor(share.color), 8.dp)
-                            T(share.name, Modifier.weight(1f), Tally.type.caption, c.ink2, maxLines = 1)
-                            T(fmt.formatWhole(share.perMonth) + " a month", style = Tally.type.mono, color = c.ink3)
+                            com.tally.app.ui.kit.Dot(categoryColor(share.color), 10.dp)
+                            T(share.name, Modifier.weight(1f), Tally.type.ui, c.ink, maxLines = 1)
+                            T(fmt.formatWhole(share.perMonth) + " a month", style = Tally.type.amount, color = c.ink2)
                         }
                     }
                 }
@@ -212,6 +215,7 @@ fun BillsScreen(s: PlanState, edit: (Long) -> Unit, add: () -> Unit) {
                     onClick = { edit(bill.id) },
                     due = bill.daysUntil,
                     autoPost = bill.autoPost,
+                    date = bill.nextDate,
                 )
             }
         }
@@ -248,7 +252,7 @@ fun GoalsScreen(s: PlanState, open: (Long) -> Unit, add: () -> Unit) {
             g.behind > 0 -> Copy.plural(g.behind, "goal") + " behind pace · " + Copy.plural(g.onTrack, "on track", "on track")
             else -> Copy.plural(g.goals.size, "goal") + " · " + Copy.plural(g.reached, "reached", "reached")
         },
-        actions = { IconKey("plus", add, label = "New goal") },
+        actions = { RoundKey("plus", add, label = "New goal") },
     ) {
         if (!s.loaded) return@SpacePage
         if (g.goals.isEmpty()) {
@@ -258,14 +262,12 @@ fun GoalsScreen(s: PlanState, open: (Long) -> Unit, add: () -> Unit) {
         if (g.pots > 0) {
             StatGrid(
                 listOf(
-                    { m -> Stat("Saved in pots", fmt.formatWhole(g.saved), m, glyph = "wallet", sub = "of " + fmt.formatWhole(g.target)) },
-                    { m -> Stat("Next date", g.nextDate?.let { Dates.short(it, s.today) } ?: "–", m, glyph = "calendar", sub = g.nextDateName) },
+                    { m -> TintTile("Saved in pots", fmt.formatWhole(g.saved), Hue.mint, m, sub = "of " + fmt.formatWhole(g.target)) },
+                    { m -> TintTile("Next date", g.nextDate?.let { Dates.short(it, s.today) } ?: "–", Hue.violet, m, sub = g.nextDateName) },
                 ),
             )
         }
-        Panel("Goals", glyph = "target") {
-            g.goals.forEach { goal -> GoalRow(goal, s.today, onClick = { open(goal.id) }) }
-        }
+        g.goals.forEach { goal -> GoalPostcard(goal, s.today, onClick = { open(goal.id) }) }
         if (g.reached > 0) T(Copy.plural(g.reached, "goal") + " reached.", style = Tally.type.caption, color = c.liveText)
     }
 }

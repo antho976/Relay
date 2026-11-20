@@ -4,6 +4,15 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import com.tally.app.ui.kit.GlyphTile
+import com.tally.app.ui.kit.Group
+import com.tally.app.ui.kit.PalettePreview
+import com.tally.app.ui.kit.WelcomeSky
+import com.tally.app.ui.kit.WhiteCard
+import com.tally.app.ui.theme.Hue
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -84,28 +93,31 @@ fun SettingsRoute(nav: AppNav) {
     val fmt = LocalMoney.current
     val line = syncLine(s.pc, s.syncing, s.connect, System.currentTimeMillis())
     DetailPage("Settings", nav::back) {
-        Panel("Sync", glyph = "sync") {
-            SettingRow("Your server", glyph = "globe", subtitle = line.text, onClick = nav::sync) { Dot(toneColor(line.tone), 7.dp) }
+        Group("Sync") {
+            SettingRow("Your server", glyph = "globe", glyphTint = Hue.mint, subtitle = line.text, onClick = nav::sync) { Dot(toneColor(line.tone), 8.dp) }
+            SettingRow("Connected banks", glyph = "link", glyphTint = Hue.violet, subtitle = "Desjardins and Wealthsimple through Plaid, read only", onClick = nav::banks)
         }
-        Panel("Look and money", glyph = "palette") {
-            SettingRow("Appearance", glyph = "palette", subtitle = paletteName(s.settings.palette), onClick = nav::appearance)
-            SettingRow("Currency and dates", glyph = "calendar", subtitle = formatSummary(s.settings.currency, s.settings.monthStartDay, s.settings.weekStartsMonday), onClick = nav::format)
+        Group("Look and money") {
+            SettingRow("Appearance", glyph = "palette", glyphTint = Hue.pink, subtitle = paletteName(s.settings.palette), onClick = nav::appearance)
+            SettingRow("Currency and dates", glyph = "calendar", glyphTint = Hue.sky, subtitle = formatSummary(s.settings.currency, s.settings.monthStartDay, s.settings.weekStartsMonday), onClick = nav::format)
         }
-        Panel("Ledger", glyph = "list") {
-            SettingRow("Accounts", glyph = "bank", subtitle = accountsSummary(s.accounts, fmt.formatWhole(s.net)), onClick = nav::accounts)
-            SettingRow("Categories", glyph = "tag", subtitle = categoriesSummary(s.spendingCategories, s.incomeCategories), onClick = nav::categories)
-            SettingRow("Import a statement", glyph = "download", subtitle = "Desjardins, Wealthsimple or any bank's CSV", onClick = { nav.import() })
-            SettingRow("Backup", glyph = "save", subtitle = backupSummary(s.backup.auto, s.backup.lastAt.takeIf { it > 0 }?.let { backupWhen(it, s.today) }, s.backup.lastFailed), onClick = nav::backup)
-            SettingRow("Export", glyph = "upload", subtitle = "Your entries as CSV, or the backup file", onClick = nav::export)
+        Group("Ledger") {
+            SettingRow("Accounts", glyph = "bank", glyphTint = Hue.sky, subtitle = accountsSummary(s.accounts, fmt.formatWhole(s.net)), onClick = nav::accounts)
+            SettingRow("Categories", glyph = "tag", glyphTint = Hue.sun, subtitle = categoriesSummary(s.spendingCategories, s.incomeCategories), onClick = nav::categories)
+            SettingRow("Import a statement", glyph = "download", glyphTint = Hue.teal, subtitle = "Desjardins, Wealthsimple or any bank's CSV", onClick = { nav.import() })
+            SettingRow("Backup", glyph = "save", glyphTint = Hue.violet, subtitle = backupSummary(s.backup.auto, s.backup.lastAt.takeIf { it > 0 }?.let { backupWhen(it, s.today) }, s.backup.lastFailed), onClick = nav::backup)
+            SettingRow("Export", glyph = "upload", glyphTint = Hue.coral, subtitle = "Your entries as CSV, or the backup file", onClick = nav::export)
         }
-        Panel("Data", glyph = "shield") {
+        Group("Data") {
             if (s.canLoadSample) {
-                SettingRow("Try it with sample data", glyph = "sparkle", subtitle = "A sample household, labelled as one; erase removes it", onClick = data::loadSample)
+                SettingRow("Try it with sample data", glyph = "sparkle", glyphTint = Hue.sun, subtitle = "A sample household, labelled as one; erase removes it", onClick = data::loadSample)
             }
-            SettingRow("Erase everything", glyph = "trash", titleColor = Tally.colors.heldText, subtitle = Copy.plural(s.entries, "entry", "entries") + " on this phone", onClick = { erasing = true })
+            SettingRow("Erase everything", glyph = "trash", glyphTint = Tally.colors.held, titleColor = Tally.colors.heldText, subtitle = Copy.plural(s.entries, "entry", "entries") + " on this phone", onClick = { erasing = true })
             d.results[DataGroup.RESET]?.let { r -> T(resultText(r), Modifier.padding(4.dp), Tally.type.caption, if (r is DataResult.Failed) Tally.colors.heldText else Tally.colors.ink3) }
         }
-        SettingRow("About Tally", glyph = "notes", value = "v" + s.version, onClick = nav::about)
+        Group(null) {
+            SettingRow("About Tally", glyph = "notes", glyphTint = Tally.colors.ink2, value = "v" + s.version, onClick = nav::about)
+        }
     }
     if (erasing) {
         ConfirmDialog(
@@ -124,10 +136,11 @@ internal fun resultText(r: DataResult): String = when (r) {
     is DataResult.Failed -> r.message
 }
 
-internal fun paletteName(name: String): String = when (name) {
-    "dark" -> "Dark"
-    "oled" -> "Pure black"
-    else -> "Matte"
+internal fun paletteName(name: String): String = when (Palette.of(name).name) {
+    "dusk" -> "Dusk"
+    "mint" -> "Mint morning"
+    "night" -> "Night"
+    else -> "Sky"
 }
 
 // ── Sync ─────────────────────────────────────────────────────────────────────
@@ -171,16 +184,19 @@ fun SyncScreen(
     var address by rememberSaveable(s.server) { mutableStateOf(s.server) }
     var confirm by rememberSaveable { mutableStateOf<String?>(null) }
     DetailPage("Sync", back, subtitle = s.server.removePrefix("https://")) {
-        Slab(Modifier.fillMaxWidth(), padding = PaddingValues(16.dp), spacing = 10.dp) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Dot(toneColor(line.tone), 9.dp)
-                T(line.text, Modifier.weight(1f), Tally.type.title, c.ink, maxLines = 2)
+        WhiteCard(padding = PaddingValues(18.dp), spacing = 10.dp) {
+            val tone = toneColor(line.tone)
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.size(64.dp).clip(CircleShape).background(tone.copy(alpha = .16f)), contentAlignment = Alignment.Center) {
+                    Glyph(if (line.tone == Tone.LIVE) "check" else "sync", 28.dp, tone)
+                }
+                T(line.text, style = Tally.type.title.copy(fontSize = 19.sp), color = c.ink, maxLines = 2, align = TextAlign.Center)
+                line.detail?.let { T(it, style = Tally.type.ui, color = c.ink2, align = TextAlign.Center) }
             }
-            line.detail?.let { T(it, style = Tally.type.ui, color = c.ink2) }
             val connect = s.connect
             if (!s.pc.paired && connect is Connect.Waiting) {
                 Eyebrow("The code your bot shows")
-                T(connect.code, style = Tally.type.hero.copy(fontSize = 44.sp, letterSpacing = 6.sp), color = c.signal)
+                T(connect.code, style = Tally.type.mono.copy(fontSize = 34.sp, lineHeight = 40.sp, letterSpacing = 6.sp), color = c.ink, weight = FontWeight.Medium)
                 T("Tap Allow on the message from your bot on Discord. This phone connects by itself the moment you do, and syncs from then on with nothing to set up.", style = Tally.type.caption, color = c.ink3)
                 Key("Open the dashboard instead", { runCatching { uri.openUri(connect.server + "/dashboard/tally") } }, glyph = "external", kind = if (connect.notified) KeyKind.Quiet else KeyKind.Plain, compact = true)
             }
@@ -191,23 +207,23 @@ fun SyncScreen(
             }
         }
         if (s.pc.paired) {
-            Panel("Last sync", glyph = "history") {
+            Group("Last sync") {
                 SettingRow("When", value = s.pc.lastSuccessAt.takeIf { it > 0 }?.let { com.tally.app.ui.shell.agoText(it, System.currentTimeMillis()) } ?: "Not yet")
                 SettingRow("Sent and received", value = s.pc.lastSent.toString() + " · " + s.pc.lastReceived.toString())
                 s.pc.lastError?.let { SettingRow("Problem", subtitle = it, titleColor = c.waiting) }
                 s.pc.note?.let { SettingRow("News", subtitle = it) }
             }
         }
-        Panel("How it works", glyph = "notes") {
+        Group("How it works") {
             T(
                 "Tally syncs with Relay's copy on your server, wherever the phone is: home Wi-Fi or not. Your PC's Relay syncs with the same copy, so all three hold one ledger. Entries made offline go when the network comes back; the newest edit wins.",
-                Modifier.padding(4.dp),
-                Tally.type.caption,
-                c.ink3,
+                Modifier.padding(horizontal = 4.dp, vertical = 10.dp),
+                Tally.type.ui,
+                c.ink2,
             )
         }
-        Panel("Server", glyph = "globe") {
-            Column(Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Group("Server") {
+            Column(Modifier.padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Field(address, { address = it }, Modifier.fillMaxWidth(), placeholder = BuildConfig.TALLY_SERVER, leading = "globe", keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Key("Use this address", { server(address) }, enabled = address.isNotBlank() && address.trim() != s.server, compact = true)
@@ -215,12 +231,12 @@ fun SyncScreen(
                 }
             }
         }
-        Panel("This phone", glyph = "device") {
+        Group("This phone") {
             ToggleRow("Sync with my server", !s.pc.phoneOnly, { phoneOnly(!it) }, glyph = "sync", subtitle = if (s.pc.phoneOnly) "Off: the ledger stays on this phone" else "On: it syncs by itself")
             if (s.pc.paired) {
-                SettingRow("Send this phone's ledger", glyph = "upload", subtitle = "Replace the server's copy with this phone's", onClick = { confirm = "send" })
-                SettingRow("Take the server's ledger", glyph = "download", subtitle = "Replace this phone's with the server's copy", onClick = { confirm = "take" })
-                SettingRow("Disconnect", glyph = "close", titleColor = c.heldText, subtitle = "Stop syncing; both copies stay as they are", onClick = disconnect)
+                SettingRow("Send this phone's ledger", glyph = "upload", glyphTint = Hue.sky, subtitle = "Replace the server's copy with this phone's", onClick = { confirm = "send" })
+                SettingRow("Take the server's ledger", glyph = "download", glyphTint = Hue.teal, subtitle = "Replace this phone's with the server's copy", onClick = { confirm = "take" })
+                SettingRow("Disconnect", glyph = "close", glyphTint = c.held, titleColor = c.heldText, subtitle = "Stop syncing; both copies stay as they are", onClick = disconnect)
             }
         }
     }
@@ -237,34 +253,26 @@ fun AppearanceRoute(nav: AppNav) {
     val vm: AppearanceViewModel = hiltViewModel()
     val s by vm.state.collectAsStateWithLifecycle()
     val c = Tally.colors
+    val chosen = Palette.of(s.palette).name
     DetailPage("Appearance", nav::back) {
-        Labelled("Ground") {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Palette.ALL.forEach { p ->
-                    Row(
-                        Modifier.fillMaxWidth().clip(Radii.card).background(p.wall).border(1.dp, if (s.palette == p.name) c.ink else p.edge, Radii.card)
-                            .clickable(role = Role.RadioButton) { vm.setPalette(p.name) }.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Box(Modifier.size(width = 44.dp, height = 28.dp).clip(Radii.key).background(p.slab).border(1.dp, p.strong, Radii.key))
-                        Column(Modifier.weight(1f)) {
-                            T(paletteName(p.name), style = Tally.type.ui, color = p.ink)
-                            T(paletteHint(p.name), style = Tally.type.caption, color = p.ink3)
-                        }
-                        if (s.palette == p.name) Glyph("check", 16.dp, p.ink)
-                    }
+        Eyebrow("Ground", Modifier.padding(start = 4.dp, top = 4.dp))
+        Palette.ALL.chunked(2).forEach { pair ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                pair.forEach { p ->
+                    PalettePreview(p, paletteName(p.name), paletteHint(p.name), chosen == p.name, { vm.setPalette(p.name) }, Modifier.weight(1f))
                 }
+                if (pair.size == 1) Box(Modifier.weight(1f))
             }
         }
-        T("Relay's own grounds, so Tally sits beside it on the phone.", style = Tally.type.caption, color = c.ink3)
+        T("Every ground keeps the same cards, colours and readings; Night is the one for a dark room.", style = Tally.type.caption, color = c.ink3)
     }
 }
 
-internal fun paletteHint(name: String): String = when (name) {
-    "dark" -> "A shade deeper"
-    "oled" -> "True black, for an OLED screen"
-    else -> "Relay's warm near-black"
+internal fun paletteHint(name: String): String = when (Palette.of(name).name) {
+    "dusk" -> "Violet into a warm sunset"
+    "mint" -> "Fresh green on cream"
+    "night" -> "Deep navy, for dark mode"
+    else -> "Morning blue to peach"
 }
 
 // ── Currency and dates ───────────────────────────────────────────────────────
@@ -278,7 +286,7 @@ fun FormatRoute(nav: AppNav) {
     val locale = LocalConfiguration.current.locales[0]
     DetailPage("Currency and dates", nav::back, subtitle = "This month: " + Dates.period(s.period, s.today)) {
         Labelled("Currency", hint = "Your server and PC take it on the next sync") {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 8.dp, vertical = 6.dp), spacing = 2.dp) {
                 currencyCodes(s.currency).forEach { code ->
                     val o = currencyOption(code, locale)
                     PickRow(o.name, s.currency == o.code, onClick = { vm.setCurrency(o.code) }, sub = o.code + " · " + o.subtitle)
@@ -318,6 +326,7 @@ fun BackupRoute(nav: AppNav) {
             SettingRow(
                 "A folder of your choice",
                 glyph = "folder",
+                glyphTint = Hue.sun,
                 subtitle = s.prefs.folderUri?.let { folderLabel(it) + if (s.prefs.folderFailed) " · the last copy there failed" else "" } ?: "A second copy that outlives an uninstall",
                 onClick = { pick { folderPicker.launch(null) } },
             ) { if (s.prefs.folderUri != null) IconKey("close", vm::clearFolder, size = 14.dp, label = "Forget the folder") }
@@ -331,7 +340,7 @@ fun BackupRoute(nav: AppNav) {
             if (s.copies.isEmpty()) T("No copies yet.", Modifier.padding(4.dp), Tally.type.caption, c.ink3)
             s.copies.forEach { copy ->
                 ListRow(onClick = { vm.readCopy(copy) }, padding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
-                    Glyph("file", 16.dp, c.ink3)
+                    GlyphTile("file", Hue.violet, size = 32.dp)
                     T(backupWhen(copy.savedAt, s.today), Modifier.weight(1f), Tally.type.ui, c.ink)
                     T(sizeLabel(copy.bytes), style = Tally.type.mono, color = c.ink3)
                 }
@@ -357,7 +366,7 @@ fun ExportRoute(nav: AppNav) {
     val file = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri: Uri? -> if (uri != null) vm.exportFile(uri) }
     DetailPage("Export", nav::back, subtitle = Copy.plural(s.entries, "entry", "entries")) {
         Panel("Entries as CSV", glyph = "file", subtitle = "For a spreadsheet; Tally reads it back too") {
-            Column(Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.padding(vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Key("Every entry", { monthOnly = false; runCatching { csv.launch(csvFileName(s.today)) }.onFailure { vm.noPicker(DataGroup.EXPORT) } }, Modifier.fillMaxWidth(), glyph = "upload", enabled = !s.isEmpty && s.busy == null)
                 Key("This month only", { monthOnly = true; runCatching { csv.launch(monthCsvFileName(s.period.start)) }.onFailure { vm.noPicker(DataGroup.EXPORT) } }, Modifier.fillMaxWidth(), glyph = "calendar", enabled = !s.isEmpty && s.busy == null)
             }
@@ -376,18 +385,21 @@ fun ExportRoute(nav: AppNav) {
 fun AboutRoute(nav: AppNav) {
     val c = Tally.colors
     DetailPage("About", nav::back) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            TallyMark(44.dp)
-            Column {
-                T("tally", style = Tally.type.brand.copy(fontSize = 26.sp), color = c.ink)
+        Column(Modifier.fillMaxWidth().clip(Radii.card).background(c.raised)) {
+            WelcomeSky(c, Modifier.fillMaxWidth().height(150.dp))
+            Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                TallyMark(48.dp)
+                T("tally", style = Tally.type.brand.copy(fontSize = 28.sp), color = c.ink)
                 T("Version " + BuildConfig.VERSION_NAME, style = Tally.type.mono, color = c.ink3)
+                T("A month read as a pace: how much room is left, and whether the month is on track. Synced through Relay's copy on your own server.", style = Tally.type.ui, color = c.ink2, align = TextAlign.Center)
             }
         }
-        T("A month read as a pace: how much room is left, and whether the month is on track. In Relay's look, synced through Relay's copy on your own server.", style = Tally.type.ui, color = c.ink2)
-        Hairline()
-        SettingRow("Server", value = BuildConfig.TALLY_SERVER.removePrefix("https://"))
-        SettingRow("Fonts", subtitle = "Geist and Geist Mono (Vercel), Sora: SIL Open Font License")
-        SettingRow("Data", subtitle = "On this phone, on your server and on your PC. Nothing else: no account, no analytics.")
+        Group(null) {
+            SettingRow("Server", glyph = "globe", glyphTint = Hue.mint, subtitle = BuildConfig.TALLY_SERVER.removePrefix("https://"))
+            SettingRow("Bank connections", glyph = "link", glyphTint = Hue.violet, subtitle = "Plaid, read only. The keys stay on your server.")
+            SettingRow("Fonts", glyph = "notes", glyphTint = Hue.sky, subtitle = "Geist and Geist Mono (Vercel), Sora: SIL Open Font License")
+            SettingRow("Data", glyph = "shield", glyphTint = Hue.teal, subtitle = "On this phone, on your server and on your PC. Nothing else: no account, no analytics.")
+        }
         Box(Modifier.height(8.dp))
     }
 }

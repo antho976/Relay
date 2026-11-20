@@ -1,6 +1,16 @@
 package com.tally.app.ui.kit
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.sp
+import com.tally.app.ui.theme.ground
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -38,8 +48,8 @@ import com.tally.app.ui.theme.Tally
 /** Relay's gutter: 16dp on a phone, 24dp from a tablet's width. */
 fun gutter(width: Dp): Dp = if (width < 600.dp) 16.dp else 24.dp
 
-/** Room under a page's last row for the floating Add key. */
-val ADD_CLEARANCE = 84.dp
+/** Room under a page's last row; the bottom bar sits below the page, not over it. */
+val ADD_CLEARANCE = 28.dp
 
 /**
  * Where the one toast must clear: each page's pinned footer (an editor's keypad and Save) reports
@@ -131,17 +141,32 @@ private fun PageTitle(title: String, context: String?, contextColor: androidx.co
     }
 }
 
-/** A page's own bar (Relay's `PageBar`): back, title, then its keys. */
+/** A frosted round key, as the C mockups' back and header keys: 44dp, glass, an icon in ink. */
+@Composable
+fun RoundKey(glyph: String, onClick: () -> Unit, modifier: Modifier = Modifier, label: String? = null, filled: Boolean = false, tint: Color? = null) {
+    val c = Tally.colors
+    Box(
+        modifier.size(44.dp).clip(CircleShape).background(if (filled) c.ink else c.slab)
+            .clickable(role = Role.Button, onClick = onClick)
+            .then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        Glyph(glyph, 19.dp, tint ?: if (filled) c.onInk else c.ink)
+    }
+}
+
+/** A page's own bar: a round back key, the title, then its keys. */
 @Composable
 fun PageBar(title: String, onBack: () -> Unit, subtitle: String? = null, actions: @Composable RowScope.() -> Unit = {}) {
     val c = Tally.colors
     Row(
-        Modifier.fillMaxWidth().background(c.wall).statusBarsPadding().heightIn(min = 56.dp).padding(horizontal = 4.dp),
+        Modifier.fillMaxWidth().statusBarsPadding().heightIn(min = 64.dp).padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        IconKey("arrow-left", onBack, size = 18.dp, tint = c.ink2, label = "Back")
-        Column(Modifier.weight(1f).padding(start = 2.dp)) {
-            T(title, style = Tally.type.title, color = c.ink, maxLines = 1)
+        RoundKey("chevron-left", onBack, label = "Back")
+        Column(Modifier.weight(1f)) {
+            T(title, style = Tally.type.title.copy(fontSize = 20.sp, lineHeight = 25.sp), color = c.ink, maxLines = 1)
             subtitle?.let { T(it, style = Tally.type.caption, color = c.ink3, maxLines = 1) }
         }
         actions()
@@ -163,7 +188,7 @@ fun DetailPage(
     body: @Composable ColumnScope.() -> Unit,
 ) {
     val c = Tally.colors
-    Column(Modifier.fillMaxSize().background(c.wall).imePadding()) {
+    Column(Modifier.fillMaxSize().ground(c).imePadding()) {
         PageBar(title, onBack, subtitle, actions)
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
             val side = gutter(maxWidth)
@@ -181,12 +206,11 @@ fun DetailPage(
             val key = remember { Any() }
             DisposableEffect(clearance, key) { onDispose { clearance.clear(key) } }
             Column(
-                Modifier.fillMaxWidth().background(c.console).navigationBarsPadding()
+                Modifier.fillMaxWidth().clip(Radii.sheet).background(c.console).navigationBarsPadding()
                     .onSizeChanged { clearance.set(key, with(density) { it.height.toDp() }) },
             ) {
-                Hairline(color = c.edge)
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Column(Modifier.column().fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = f)
+                    Column(Modifier.column().fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = f)
                 }
             }
         } ?: Box(Modifier.navigationBarsPadding())

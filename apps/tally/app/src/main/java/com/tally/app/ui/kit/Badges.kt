@@ -24,20 +24,20 @@ import com.tally.core.AccountType
  * The hue is data (which category), so it is spent here and in charts, never on text.
  */
 @Composable
-fun CategoryBadge(icon: String?, color: Int?, modifier: Modifier = Modifier, size: Dp = 34.dp) {
+fun CategoryBadge(icon: String?, color: Int?, modifier: Modifier = Modifier, size: Dp = 40.dp) {
     val hue = categoryColor(color)
     VectorBadge(CategoryIcons.of(icon), hue, hue.copy(alpha = .16f), modifier, size)
 }
 
 /** A transfer has no category: Relay's transfer glyph in ink-2. */
 @Composable
-fun TransferBadge(modifier: Modifier = Modifier, size: Dp = 34.dp) {
+fun TransferBadge(modifier: Modifier = Modifier, size: Dp = 40.dp) {
     val c = Tally.colors
     GlyphBadge("transfer", c.ink2, c.wash, modifier, size)
 }
 
 @Composable
-fun AccountBadge(type: AccountType, modifier: Modifier = Modifier, size: Dp = 34.dp) {
+fun AccountBadge(type: AccountType, modifier: Modifier = Modifier, size: Dp = 40.dp) {
     val c = Tally.colors
     GlyphBadge(accountGlyph(type), c.ink2, c.wash, modifier, size)
 }
@@ -54,7 +54,7 @@ fun accountGlyph(type: AccountType): String = when (type) {
 @Composable
 fun GlyphBadge(glyph: String, tint: Color, fill: Color, modifier: Modifier = Modifier, size: Dp = 34.dp) {
     Box(
-        modifier.size(size).clip(Radii.badge).background(fill).border(1.dp, Tally.colors.edge.copy(alpha = .6f), Radii.badge),
+        modifier.size(size).clip(Radii.badge).background(fill),
         contentAlignment = Alignment.Center,
     ) {
         Glyph(glyph, size * .5f, tint)

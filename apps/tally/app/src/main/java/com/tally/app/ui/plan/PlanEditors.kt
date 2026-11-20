@@ -63,6 +63,16 @@ import com.tally.app.ui.kit.Slab
 import com.tally.app.ui.kit.Stat
 import com.tally.app.ui.kit.StatGrid
 import com.tally.app.ui.kit.T
+import com.tally.app.ui.kit.ChoiceTile
+import com.tally.app.ui.kit.GlyphTile
+import com.tally.app.ui.kit.Postcard
+import com.tally.app.ui.kit.RoundKey
+import com.tally.app.ui.kit.SwatchRow
+import com.tally.app.ui.kit.TileGrid
+import com.tally.app.ui.kit.TintTile
+import com.tally.app.ui.kit.sceneFor
+import com.tally.app.ui.theme.Hue
+import androidx.compose.foundation.layout.heightIn
 import com.tally.app.ui.kit.ToggleRow
 import com.tally.app.ui.nav.AppNav
 import com.tally.app.ui.theme.CategoryPalette
@@ -123,27 +133,29 @@ fun BudgetEditScreen(s: BudgetEditState, back: () -> Unit, key: (PadKey) -> Unit
         name,
         back,
         subtitle = resetLine(s.startDay),
-        actions = { if (s.existing != null) IconKey("trash", remove, label = "Remove the budget") },
+        actions = { if (s.existing != null) RoundKey("trash", remove, label = "Remove the budget", tint = Tally.colors.heldText) },
         footer = {
             PadKeys(s.input.fractionDigits, fmt.decimalSeparator, key)
             Key(if (s.existing == null) "Set budget" else "Save budget", save, Modifier.fillMaxWidth(), kind = KeyKind.Primary, enabled = s.input.minor > 0, glyph = "check")
         },
     ) {
         if (!s.loaded) return@DetailPage
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (!s.isOverall) CategoryBadge(s.icon, s.color, size = 40.dp)
-            Column(Modifier.weight(1f)) {
-                Eyebrow("A month")
-                T(padText(s.input, fmt), style = Tally.type.hero.copy(fontSize = 40.sp), color = if (s.input.isEmpty) c.ink3 else c.ink, maxLines = 1)
+        Slab(Modifier.fillMaxWidth(), padding = PaddingValues(18.dp), spacing = 10.dp) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (!s.isOverall) CategoryBadge(s.icon, s.color, size = 48.dp)
+                Column(Modifier.weight(1f)) {
+                    Eyebrow("A month")
+                    T(padText(s.input, fmt), style = Tally.type.hero.copy(fontSize = 42.sp), color = if (s.input.isEmpty) c.ink3 else c.ink, maxLines = 1)
+                }
             }
-        }
-        if (s.input.minor > 0) {
-            PaceMeter(s.reading.spentFraction, s.reading.paceFraction, height = 8.dp)
-            T(Copy.ofBudget(s.reading.spent, s.reading.budget, fmt) + " so far · " + paceDays(s.reading), style = Tally.type.caption, color = paceTone(s.reading))
-        }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            s.suggestAverage?.let { Pill("Average " + fmt.formatWhole(it), glyph = "sparkle", onClick = { fill(it) }) }
-            s.suggestLast?.let { Pill("Last month " + fmt.formatWhole(it), onClick = { fill(it) }) }
+            if (s.input.minor > 0) {
+                PaceMeter(s.reading.spentFraction, s.reading.paceFraction, height = 10.dp)
+                T(Copy.ofBudget(s.reading.spent, s.reading.budget, fmt) + " so far · " + paceDays(s.reading), style = Tally.type.caption, color = paceTone(s.reading))
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                s.suggestAverage?.let { Pill("Average " + fmt.formatWhole(it), glyph = "sparkle", fill = Hue.mintSoft, color = Hue.mintInk, onClick = { fill(it) }) }
+                s.suggestLast?.let { Pill("Last month " + fmt.formatWhole(it), fill = Hue.skySoft, color = Hue.skyInk, onClick = { fill(it) }) }
+            }
         }
         Panel("What it spent", glyph = "bars") {
             val top = (s.history.maxOrNull() ?: 0L).coerceAtLeast(1L)
@@ -151,7 +163,7 @@ fun BudgetEditScreen(s: BudgetEditState, back: () -> Unit, key: (PadKey) -> Unit
                 val start = s.historyStarts.getOrNull(i)
                 Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     T(start?.let { Dates.monthShort(it) } ?: "", Modifier.padding(end = 2.dp), Tally.type.mono, if (i == s.history.size - 1) c.ink else c.ink3)
-                    Meter(v.toFloat() / top, Modifier.weight(1f), color = if (i == s.history.size - 1) c.ink else c.ink3)
+                    Meter(v.toFloat() / top, Modifier.weight(1f), color = if (i == s.history.size - 1) c.signal else c.signal.copy(alpha = .38f), height = 10.dp)
                     T(fmt.formatWhole(v), style = Tally.type.mono, color = c.ink2)
                 }
             }
@@ -219,7 +231,7 @@ fun BillEditScreen(s: BillEditState, a: BillEditActions) {
     DetailPage(
         if (s.isNew) "New bill" else d.name.ifBlank { "Bill" },
         a.back,
-        actions = { if (!s.isNew) IconKey("trash", a.delete, label = "Delete the bill") },
+        actions = { if (!s.isNew) RoundKey("trash", a.delete, label = "Delete the bill", tint = Tally.colors.heldText) },
         footer = {
             if (errors) refusalLine(listOf(p.name, p.amount, p.account))?.let { T(it, style = Tally.type.caption, color = c.heldText) }
             Key(if (s.isNew) "Add bill" else "Save bill", a.save, Modifier.fillMaxWidth(), kind = KeyKind.Primary, glyph = "check")
@@ -248,8 +260,8 @@ fun BillEditScreen(s: BillEditState, a: BillEditActions) {
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             T(everyLabel(d.frequency, d.interval), Modifier.weight(1f), Tally.type.ui, c.ink2)
-            IconKey("minus", { a.step(-1) }, enabled = d.interval > 1, label = "Less often")
-            IconKey("plus", { a.step(1) }, label = "More apart")
+            RoundKey("minus", { if (d.interval > 1) a.step(-1) }, label = "Less often", tint = if (d.interval > 1) null else c.ink3)
+            RoundKey("plus", { a.step(1) }, label = "More apart")
         }
         Labelled(if (s.isNew) "First due" else "Counted from") {
             PickField(Dates.day(d.anchorDate, s.today), true, glyph = "calendar") { picking = "date" }
@@ -257,7 +269,7 @@ fun BillEditScreen(s: BillEditState, a: BillEditActions) {
         if (s.preview.isNotEmpty()) {
             T("Next: " + s.preview.take(3).joinToString(", ") { Dates.short(it, s.today) }, style = Tally.type.caption, color = c.ink3)
         }
-        Slab(padding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) {
+        Slab(padding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
             ToggleRow("Posts itself", d.autoPost, a.autoPost, glyph = "bolt", subtitle = if (d.autoPost) "Logged on its day, with nothing to do" else "A reminder on Overview instead; you log it")
             ToggleRow("Active", d.active, a.active, glyph = "play", subtitle = if (d.active) "Running" else "Paused: nothing posts until it is resumed")
         }
@@ -280,7 +292,7 @@ fun BillEditScreen(s: BillEditState, a: BillEditActions) {
 @Composable
 fun PickField(text: String, filled: Boolean, glyph: String? = null, onClick: () -> Unit) {
     val c = Tally.colors
-    ListRow(Modifier.clip(Radii.key).background(c.raised).border(1.dp, c.strong, Radii.key), onClick = onClick) {
+    ListRow(Modifier.clip(Radii.key).background(c.raised).heightIn(min = 50.dp), onClick = onClick) {
         glyph?.let { Glyph(it, 16.dp, c.ink3) }
         T(text, Modifier.weight(1f), Tally.type.ui, if (filled) c.ink else c.ink3, maxLines = 1)
         Glyph("chevron-down", 14.dp, c.ink3)
@@ -308,20 +320,20 @@ fun GoalScreen(s: GoalState, back: () -> Unit, edit: () -> Unit, contribute: (St
     val g = s.goal
     var amount by rememberSaveable { mutableStateOf("") }
     var note by rememberSaveable { mutableStateOf("") }
-    DetailPage(g?.name ?: "Goal", back, subtitle = g?.let { goalKindLabel(it.kind) }, actions = { if (g != null) IconKey("edit", edit, label = "Edit the goal") }) {
+    DetailPage(g?.name ?: "Goal", back, subtitle = g?.let { goalKindLabel(it.kind) }, actions = { if (g != null) RoundKey("edit", edit, label = "Edit the goal") }) {
         if (!s.loaded || g == null) return@DetailPage
         val hue = categoryColor(g.color)
-        Slab(Modifier.fillMaxWidth(), padding = PaddingValues(16.dp), spacing = 8.dp) {
+        Postcard(sceneFor(g.name, invest = g.kind == GoalKind.INVEST), Modifier.fillMaxWidth(), sceneHeight = 140.dp) {
             Eyebrow(if (g.reached) "Reached" else goalKindLabel(g.kind))
             T(goalReading(g, fmt), style = Tally.type.hero.copy(fontSize = 34.sp), color = c.ink, maxLines = 1)
-            if (g.paceFraction != null) PaceMeter(g.fraction, g.paceFraction, height = 8.dp) else Meter(g.fraction, color = if (g.reached) c.live else hue, height = 8.dp)
+            if (g.paceFraction != null) PaceMeter(g.fraction, g.paceFraction, height = 10.dp) else Meter(g.fraction, color = if (g.reached) c.live else hue, height = 10.dp)
             T(goalRowLine(g, fmt, s.today), style = Tally.type.caption, color = c.ink2)
         }
         s.pace?.let { pace ->
             StatGrid(
                 listOf(
-                    { m -> Stat("A month so far", fmt.formatWhole(pace.perMonth), m, glyph = "trend", sub = "over " + Copy.plural(pace.months, "month")) },
-                    { m -> Stat("At that pace", pace.reachBy?.let { Dates.short(it, s.today) } ?: "–", m, glyph = "flag", sub = if (pace.reachBy != null) "reached by then" else "no date yet") },
+                    { m -> TintTile("A month so far", fmt.formatWhole(pace.perMonth), Hue.mint, m, sub = "over " + Copy.plural(pace.months, "month")) },
+                    { m -> TintTile("At that pace", pace.reachBy?.let { Dates.short(it, s.today) } ?: "–", Hue.violet, m, sub = if (pace.reachBy != null) "reached by then" else "no date yet") },
                 ),
             )
         }
@@ -340,7 +352,7 @@ fun GoalScreen(s: GoalState, back: () -> Unit, edit: () -> Unit, contribute: (St
                 Panel("History", glyph = "history", subtitle = fmt.formatWhole(s.added) + " in · " + fmt.formatWhole(s.withdrawn) + " out") {
                     s.contributions.forEach { row ->
                         ListRow(onLongClick = { deleteContribution(row.id) }, onClick = {}, padding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
-                            Glyph(if (row.amount < 0) "money-out" else "money-in", 16.dp, c.ink3)
+                            GlyphTile(if (row.amount < 0) "money-out" else "money-in", if (row.amount < 0) Hue.coral else Hue.mint, size = 34.dp)
                             Column(Modifier.weight(1f)) {
                                 T(row.note.ifBlank { if (row.amount < 0) "Taken out" else "Put in" }, style = Tally.type.ui, color = c.ink, maxLines = 1)
                                 T(Dates.day(row.date, s.today), style = Tally.type.caption, color = c.ink3)
@@ -414,7 +426,7 @@ fun GoalEditScreen(
     DetailPage(
         if (s.isNew) "New goal" else d.name.ifBlank { "Goal" },
         back,
-        actions = { if (!s.isNew) IconKey("trash", delete, label = "Delete the goal") },
+        actions = { if (!s.isNew) RoundKey("trash", delete, label = "Delete the goal", tint = Tally.colors.heldText) },
         footer = {
             if (errors) refusalLine(listOf(p.name, p.target))?.let { T(it, style = Tally.type.caption, color = c.heldText) }
             Key(if (s.isNew) "Add goal" else "Save goal", save, Modifier.fillMaxWidth(), kind = KeyKind.Primary, glyph = "check")
@@ -423,10 +435,10 @@ fun GoalEditScreen(
         if (!s.loaded) return@DetailPage
         if (s.isNew) {
             Labelled("Kind") {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    GoalKind.entries.forEach { k ->
-                        PickRow(goalKindLabel(k), d.kind == k, onClick = { kind(k) }, sub = goalKindHint(k), leading = { Glyph(goalGlyph(k), 18.dp, c.ink3) })
-                    }
+                val kinds = GoalKind.entries
+                TileGrid(kinds.size, 2) { i, m ->
+                    val k = kinds[i]
+                    ChoiceTile(goalKindLabel(k), goalGlyph(k), goalKindHue(k), d.kind == k, onClick = { kind(k) }, modifier = m, hint = goalKindHint(k))
                 }
             }
         }
@@ -442,9 +454,9 @@ fun GoalEditScreen(
         if (monthly && d.byShare) {
             Labelled("Share", problem = p.target.takeIf { errors }) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    IconKey("minus", { percent(d.percent - 1) }, label = "Less")
-                    T(d.percent.toString() + "%", Modifier.weight(1f), Tally.type.figure, c.ink, align = androidx.compose.ui.text.style.TextAlign.Center)
-                    IconKey("plus", { percent(d.percent + 1) }, label = "More")
+                    RoundKey("minus", { percent(d.percent - 1) }, label = "Less")
+                    T(d.percent.toString() + "%", Modifier.weight(1f), Tally.type.figure.copy(fontSize = 28.sp), c.ink, align = androidx.compose.ui.text.style.TextAlign.Center)
+                    RoundKey("plus", { percent(d.percent + 1) }, label = "More")
                 }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(5, 10, 15, 20, 25).forEach { v -> Pill("$v%", selected = d.percent == v, onClick = { percent(v) }) }
@@ -470,15 +482,7 @@ fun GoalEditScreen(
             }
         }
         Labelled("Colour") {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                CategoryPalette.forEachIndexed { i, hue ->
-                    Box(
-                        Modifier.size(32.dp).clip(CircleShape).background(hue)
-                            .border(2.dp, if (d.color == i) c.ink else androidx.compose.ui.graphics.Color.Transparent, CircleShape)
-                            .clickable(role = Role.RadioButton) { color(i) },
-                    )
-                }
-            }
+            SwatchRow(d.color, color)
         }
     }
     when (picking) {
@@ -490,4 +494,12 @@ fun GoalEditScreen(
             }
         }
     }
+}
+
+/** A goal kind's hue on its choice tile. */
+internal fun goalKindHue(kind: GoalKind): androidx.compose.ui.graphics.Color = when (kind) {
+    GoalKind.SAVINGS -> Hue.coral
+    GoalKind.BALANCE -> Hue.violet
+    GoalKind.INVEST -> Hue.mint
+    GoalKind.SAVE -> Hue.sky
 }

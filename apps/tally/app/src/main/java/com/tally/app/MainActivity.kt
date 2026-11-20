@@ -58,10 +58,16 @@ class MainActivity : ComponentActivity() {
         setContent {
             val settings by root.settings.collectAsStateWithLifecycle()
             val s = settings ?: return@setContent
-            TallyTheme(Palette.of(s.palette)) {
+            val palette = Palette.of(s.palette)
+            androidx.compose.runtime.LaunchedEffect(palette.light) {
+                val t = android.graphics.Color.TRANSPARENT
+                val style = if (palette.light) SystemBarStyle.light(t, t) else SystemBarStyle.dark(t)
+                enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+            }
+            TallyTheme(palette) {
                 val clearance = remember { ToastClearance() }
                 CompositionLocalProvider(LocalMoney provides rememberMoney(s.currency), LocalToastClearance provides clearance) {
-                    Box(Modifier.fillMaxSize().background(Tally.colors.wall)) {
+                    Box(Modifier.fillMaxSize().background(Tally.colors.groundBrush)) {
                         TallyNavHost(onboarded = s.onboarded, incoming = incoming, launches = launches)
                         ToastHost(notices)
                     }

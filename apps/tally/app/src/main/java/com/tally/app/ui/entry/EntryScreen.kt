@@ -1,5 +1,10 @@
 package com.tally.app.ui.entry
 
+import com.tally.app.ui.common.LineTone
+import com.tally.app.ui.kit.Eyebrow
+import com.tally.app.ui.kit.RoundKey
+import com.tally.app.ui.kit.StatePill
+import com.tally.app.ui.kit.skyTone
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -179,8 +184,8 @@ fun EntryScreen(s: EntryState, a: EntryActions) {
         spacing = 14.dp,
         actions = {
             if (!s.isNew) {
-                IconKey("copy", a.duplicate, label = "Copy to today")
-                IconKey("trash", a.delete, label = "Delete")
+                RoundKey("copy", a.duplicate, label = "Copy to today")
+                RoundKey("trash", a.delete, label = "Delete", tint = Tally.colors.heldText)
             }
         },
         footer = {
@@ -189,9 +194,9 @@ fun EntryScreen(s: EntryState, a: EntryActions) {
             }
             // What still stops the save, once the amount is typed and the keypad is folded: a line that
             // appeared while typing would push the keys up under the thumb.
-            if (!s.canSave && !d.amount.isEmpty && !padOpen) T(s.problem.orEmpty(), style = Tally.type.caption, color = c.waiting)
+            if (!s.canSave && !d.amount.isEmpty && !padOpen) T(s.problem.orEmpty(), style = Tally.type.caption, color = c.waitingText, weight = FontWeight.Medium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (s.isNew) Key("Save, next", a.saveAndNew, Modifier.weight(1f), enabled = s.canSave)
+                if (s.isNew) Key("Save, next", a.saveAndNew, Modifier.weight(.8f), enabled = s.canSave)
                 Key(if (s.isNew) "Save" else "Save changes", a.save, Modifier.weight(1f), kind = KeyKind.Primary, enabled = s.canSave, glyph = "check")
             }
         },
@@ -216,7 +221,7 @@ fun EntryScreen(s: EntryState, a: EntryActions) {
 
         if (d.type != TxType.TRANSFER) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                T("Category", style = Tally.type.caption, color = c.ink3, weight = FontWeight.Medium)
+                Eyebrow("Category", Modifier.padding(start = 2.dp, bottom = 2.dp))
                 CategoryGrid(
                     s.categories,
                     d.categoryId,
@@ -228,13 +233,13 @@ fun EntryScreen(s: EntryState, a: EntryActions) {
                 )
                 s.category?.let { cat ->
                     val line = categoryLine(d.type, cat.name, s.month, s.budget, fmt)
-                    T(line.text, Modifier.padding(horizontal = 2.dp), Tally.type.caption, toneColor(line.tone))
+                    T(line.text, Modifier.padding(horizontal = 2.dp, vertical = 2.dp), Tally.type.caption, if (line.tone == LineTone.QUIET) c.ink2 else skyTone(line.tone), weight = FontWeight.Medium)
                 }
             }
         }
 
         // The rest, already filled with what is usual: one card, one row each.
-        Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)) {
+        Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
             if (d.type == TxType.TRANSFER) {
                 AccountRow("From", s.account) { foldIfTyped(); picking = "from" }
                 Hairline()
@@ -293,7 +298,7 @@ private fun AmountBlock(s: EntryState, padOpen: Boolean, fmt: MoneyFormatter, on
             )
             if (padOpen) Caret() else Glyph("edit", 15.dp, c.ink3, Modifier.padding(start = 10.dp))
         }
-        after?.let { T(it.text, style = Tally.type.caption, color = toneColor(it.tone), align = androidx.compose.ui.text.style.TextAlign.Center) }
+        after?.let { StatePill(it.text, it.tone, glyph = if (it.tone == LineTone.QUIET) "check" else null) }
     }
 }
 
@@ -306,7 +311,7 @@ private fun Caret() {
         animationSpec = infiniteRepeatable(tween(530, easing = LinearEasing), RepeatMode.Reverse),
         label = "caret",
     )
-    Box(Modifier.padding(start = 4.dp).width(2.dp).height(36.dp).alpha(if (blink > .5f) 1f else 0f).clip(Radii.pill).background(Tally.colors.ink2))
+    Box(Modifier.padding(start = 4.dp).width(2.dp).height(36.dp).alpha(if (blink > .5f) 1f else 0f).clip(Radii.pill).background(Tally.colors.signal))
 }
 
 /** The account an entry comes from (or goes to): its kind's glyph, what the row is, the account's name. */
@@ -314,13 +319,13 @@ private fun Caret() {
 private fun AccountRow(label: String, account: AccountBalance?, onClick: () -> Unit) {
     val c = Tally.colors
     ListRow(onClick = onClick, padding = PaddingValues(horizontal = 10.dp, vertical = 10.dp)) {
-        Glyph(account?.let { accountGlyph(it.type) } ?: "bank", 16.dp, c.ink3)
+        Glyph(account?.let { accountGlyph(it.type) } ?: "bank", 18.dp, c.ink2)
         T(label, style = Tally.type.ui, color = c.ink2, maxLines = 1)
         T(
             account?.name ?: "Pick an account",
             Modifier.weight(1f),
             Tally.type.uiMedium,
-            if (account != null) c.ink else c.waiting,
+            if (account != null) c.ink else c.waitingText,
             maxLines = 1,
             align = androidx.compose.ui.text.style.TextAlign.End,
         )
@@ -334,7 +339,7 @@ private fun AccountRow(label: String, account: AccountBalance?, onClick: () -> U
 private fun DayRow(date: java.time.LocalDate, today: java.time.LocalDate, pick: (java.time.LocalDate) -> Unit, other: () -> Unit) {
     val c = Tally.colors
     Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Glyph("calendar", 16.dp, c.ink3)
+        Glyph("calendar", 18.dp, c.ink2)
         FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             val yesterday = today.minusDays(1)
             Pill("Today", selected = date == today) { pick(today) }
@@ -386,7 +391,7 @@ private fun RepeatRow(s: EntryState, a: EntryActions, onBill: () -> Unit) {
     val bill = s.bill
     Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Glyph("repeat", 16.dp, c.ink3)
+            Glyph("repeat", 18.dp, c.ink2)
             Column(Modifier.weight(1f).padding(start = 10.dp, end = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 if (bill != null) {
                     T("Repeats " + everyLabel(bill.frequency, bill.interval).lowercase(), style = Tally.type.ui, color = c.ink)
@@ -420,14 +425,14 @@ internal fun frequencyWord(f: Frequency): String = when (f) {
 private fun QuickChip(note: String, amount: String, icon: String?, color: Int?, onClick: () -> Unit) {
     val c = Tally.colors
     Row(
-        Modifier.height(40.dp).clip(Radii.pill).background(c.slab).border(1.dp, c.strong, Radii.pill)
+        Modifier.height(42.dp).clip(Radii.pill).background(c.raised)
             .clickable(role = Role.Button, onClick = onClick).padding(start = 6.dp, end = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
         CategoryBadge(icon, color, size = 26.dp)
         T(note, style = Tally.type.caption, color = c.ink, maxLines = 1, weight = FontWeight.Medium)
-        T(amount, style = Tally.type.mono, color = c.ink3, maxLines = 1)
+        T(amount, style = Tally.type.amount, color = c.ink2, maxLines = 1)
     }
 }
 
@@ -450,5 +455,5 @@ fun Keypad(showDecimal: Boolean, separator: Char, onKey: (KeypadKey) -> Unit, mo
             }
         }
     }
-    KeyGrid(rows, modifier.padding(bottom = 2.dp), keyHeight = 44.dp, gap = 5.dp)
+    KeyGrid(rows, modifier.padding(bottom = 2.dp), keyHeight = 48.dp, gap = 8.dp)
 }

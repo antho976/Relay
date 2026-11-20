@@ -13,6 +13,10 @@ import androidx.compose.ui.unit.dp
 import com.tally.app.ui.common.Dates
 import com.tally.app.ui.common.LocalMoney
 import com.tally.app.ui.kit.CategoryBadge
+import com.tally.app.ui.kit.DateBadge
+import com.tally.app.ui.kit.Postcard
+import com.tally.app.ui.kit.sceneFor
+import androidx.compose.ui.text.font.FontWeight
 import com.tally.app.ui.kit.EntryAmount
 import com.tally.app.ui.kit.Glyph
 import com.tally.app.ui.kit.GlyphBadge
@@ -40,7 +44,7 @@ fun limitReached(r: PaceReading): Boolean = r.budget > 0 && r.remaining <= 0
 @Composable
 fun paceTone(r: PaceReading): Color = when {
     limitReached(r) -> Tally.colors.heldText
-    r.status == PaceStatus.OVER_PACE -> Tally.colors.waiting
+    r.status == PaceStatus.OVER_PACE -> Tally.colors.waitingText
     else -> Tally.colors.ink3
 }
 
@@ -63,7 +67,7 @@ fun BudgetRow(name: String, icon: String?, color: Int?, reading: PaceReading, on
         CategoryBadge(icon, color)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                T(name, Modifier.weight(1f), Tally.type.ui, c.ink, maxLines = 1)
+                T(name, Modifier.weight(1f), Tally.type.ui, c.ink, maxLines = 1, weight = FontWeight.SemiBold)
                 T(Copy.ofBudget(reading.spent, reading.budget, fmt), style = Tally.type.amount, color = c.ink2, maxLines = 1)
             }
             PaceMeter(reading.spentFraction, reading.paceFraction)
@@ -85,16 +89,21 @@ fun BillRow(
     modifier: Modifier = Modifier,
     due: Long? = null,
     autoPost: Boolean = true,
+    date: LocalDate? = null,
 ) {
     val c = Tally.colors
     ListRow(modifier, onClick = onClick, padding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
-        if (type == TxType.TRANSFER) TransferBadge() else CategoryBadge(icon, color)
+        when {
+            date != null -> DateBadge(date, hue = if (type == TxType.TRANSFER) Tally.colors.ink2 else categoryColor(color))
+            type == TxType.TRANSFER -> TransferBadge()
+            else -> CategoryBadge(icon, color)
+        }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                T(name, Modifier.weight(1f, fill = false), Tally.type.ui, c.ink, maxLines = 1)
-                if (!autoPost) Glyph("bell", 12.dp, c.ink3)
+                T(name, Modifier.weight(1f, fill = false), Tally.type.ui, c.ink, maxLines = 1, weight = FontWeight.SemiBold)
+                if (!autoPost) Glyph("bell", 12.dp, c.waitingText)
             }
-            T(line, style = Tally.type.caption, color = if (due != null && due < 0) c.heldText else if (due == 0L) c.waiting else c.ink3, maxLines = 1)
+            T(line, style = Tally.type.caption, color = if (due != null && due < 0) c.heldText else if (due == 0L) c.waitingText else c.ink3, maxLines = 1)
         }
         EntryAmount(amount, type)
     }
@@ -114,12 +123,38 @@ fun GoalRow(g: GoalLine, today: LocalDate, onClick: () -> Unit, modifier: Modifi
         GlyphBadge(goalGlyph(g.kind), hue, hue.copy(alpha = .16f))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                T(g.name, Modifier.weight(1f), Tally.type.ui, c.ink, maxLines = 1)
+                T(g.name, Modifier.weight(1f), Tally.type.ui, c.ink, maxLines = 1, weight = FontWeight.SemiBold)
                 T(goalReading(g, fmt), style = Tally.type.amount, color = c.ink2, maxLines = 1)
             }
-            if (g.paceFraction != null) PaceMeter(g.fraction, g.paceFraction) else Meter(g.fraction, color = if (g.reached) c.live else c.ink)
-            T(goalRowLine(g, fmt, today), style = Tally.type.caption, color = if (g.status == GoalStatus.BEHIND) c.waiting else if (g.reached) c.liveText else c.ink3, maxLines = 2)
+            if (g.paceFraction != null) PaceMeter(g.fraction, g.paceFraction) else Meter(g.fraction, color = if (g.reached) c.live else hue)
+            T(goalRowLine(g, fmt, today), style = Tally.type.caption, color = if (g.status == GoalStatus.BEHIND) c.waitingText else if (g.reached) c.liveText else c.ink3, maxLines = 2)
         }
+    }
+}
+
+/**
+ * A goal as a postcard: a drawn scene for what it is for (a trip, a cushion, an investment), its
+ * kind on the scene, then its name, what it reads, its meter and what it needs.
+ */
+@Composable
+fun GoalPostcard(g: GoalLine, today: LocalDate, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val c = Tally.colors
+    val fmt = LocalMoney.current
+    val hue = categoryColor(g.color)
+    Postcard(
+        sceneFor(g.name, invest = g.kind == GoalKind.INVEST),
+        modifier,
+        sceneHeight = 118.dp,
+        tag = if (g.reached) "Reached" else goalKindLabel(g.kind),
+        tagGlyph = goalGlyph(g.kind),
+        onClick = onClick,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            T(g.name, Modifier.weight(1f), Tally.type.title, c.ink, maxLines = 1)
+            T(goalReading(g, fmt), style = Tally.type.amount, color = c.ink2, maxLines = 1)
+        }
+        if (g.paceFraction != null) PaceMeter(g.fraction, g.paceFraction) else Meter(g.fraction, color = if (g.reached) c.live else hue, height = 9.dp)
+        T(goalRowLine(g, fmt, today), style = Tally.type.caption, color = if (g.status == GoalStatus.BEHIND) c.waitingText else if (g.reached) c.liveText else c.ink3, maxLines = 2)
     }
 }
 

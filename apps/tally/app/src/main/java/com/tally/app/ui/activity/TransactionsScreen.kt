@@ -1,5 +1,15 @@
 package com.tally.app.ui.activity
 
+import androidx.compose.runtime.key
+import androidx.compose.ui.text.font.FontWeight
+import com.tally.app.ui.kit.DayHeader
+import com.tally.app.ui.kit.GlassGroup
+import com.tally.app.ui.kit.RoundKey
+import com.tally.app.ui.kit.TintTile
+import com.tally.app.ui.kit.deepOf
+import com.tally.app.ui.kit.softOf
+import com.tally.app.ui.theme.Hue
+import com.tally.app.ui.theme.categoryColor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -76,14 +86,14 @@ fun TransactionsScreen(
     val c = Tally.colors
     val fmt = LocalMoney.current
     var text by rememberSaveable { mutableStateOf("") }
-    Column(Modifier.fillMaxSize().background(c.wall)) {
+    Column(Modifier.fillMaxSize().background(c.groundBrush)) {
         PageBar(
             s.name ?: "",
             back,
             subtitle = if (s.loaded) Copy.plural(s.entryCount, "entry", "entries") else null,
             actions = {
-                IconKey("plus", add, label = "New entry here")
-                IconKey("edit", edit, label = "Edit")
+                RoundKey("edit", edit, label = "Edit")
+                RoundKey("plus", add, label = "New entry here", filled = true)
             },
         )
         if (s.missing) {
@@ -95,7 +105,13 @@ fun TransactionsScreen(
             showTitle = false,
             bottom = 24.dp,
             header = {
-                Slab(Modifier.fillMaxWidth(), padding = PaddingValues(16.dp), spacing = 6.dp) {
+                val hue = if (s.isAccount) Hue.sky else categoryColor(s.color)
+                Slab(
+                    Modifier.fillMaxWidth(),
+                    padding = PaddingValues(18.dp),
+                    spacing = 8.dp,
+                    color = softOf(hue),
+                ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         if (s.isAccount) AccountBadge(s.accountType, size = 40.dp) else CategoryBadge(s.icon, s.color, size = 40.dp)
                         // An account reads what it holds only when it was given a balance to start
@@ -103,7 +119,8 @@ fun TransactionsScreen(
                         val holds = s.isAccount && s.tracksBalance
                         Column(Modifier.weight(1f)) {
                             Eyebrow(
-                                when {
+                                color = deepOf(hue),
+                                text = when {
                                     !holds -> if (s.isAccount) "Out in " + Dates.period(s.period, s.today) else Dates.period(s.period, s.today)
                                     s.balance >= 0 -> "Balance"
                                     s.accountType == com.tally.core.AccountType.CREDIT -> "Owed"
@@ -126,23 +143,32 @@ fun TransactionsScreen(
                     }
                     val r = s.reading
                     if (!s.isAccount && r != null) {
-                        PaceMeter(r.spentFraction, r.paceFraction, height = 8.dp)
-                        T(Copy.ofBudget(r.spent, r.budget, fmt) + " · " + paceDays(r), style = Tally.type.caption, color = paceTone(r))
+                        PaceMeter(r.spentFraction, r.paceFraction, height = 10.dp)
+                        T(
+                            Copy.ofBudget(r.spent, r.budget, fmt) + " · " + paceDays(r),
+                            style = Tally.type.caption,
+                            color = when {
+                                r.spent > r.budget -> c.heldText
+                                r.status == com.tally.core.PaceStatus.OVER_PACE -> c.waitingText
+                                else -> deepOf(hue)
+                            },
+                            weight = FontWeight.SemiBold,
+                        )
                     } else if (!s.isAccount && s.categoryKind == com.tally.core.CategoryKind.EXPENSE) {
-                        T("No budget · tap to set one", Modifier.padding(top = 2.dp).then(Modifier), Tally.type.caption, c.ink3)
-                        com.tally.app.ui.kit.Key("Set a budget", budget, compact = true, glyph = "pie")
+                        T("No budget · tap to set one", Modifier.padding(top = 2.dp).then(Modifier), Tally.type.caption, deepOf(hue))
+                        com.tally.app.ui.kit.Key("Set a budget", budget, compact = true, glyph = "pie", kind = com.tally.app.ui.kit.KeyKind.Primary)
                     }
                 }
                 val stats: List<@Composable (Modifier) -> Unit> = if (s.isAccount) listOf(
-                        { m -> Stat("In this month", fmt.formatWhole(s.flows.moneyIn), m, glyph = "money-in", sub = Copy.plural(s.flows.inCount, "entry", "entries")) },
+                        { m -> TintTile("In this month", fmt.formatWhole(s.flows.moneyIn), Hue.mint, m, glyph = "money-in", sub = Copy.plural(s.flows.inCount, "entry", "entries")) },
                         if (s.tracksBalance) {
-                            { m -> Stat("Out this month", fmt.formatWhole(s.flows.moneyOut), m, glyph = "money-out", sub = Copy.plural(s.flows.outCount, "entry", "entries")) }
+                            { m -> TintTile("Out this month", fmt.formatWhole(s.flows.moneyOut), Hue.coral, m, glyph = "money-out", sub = Copy.plural(s.flows.outCount, "entry", "entries")) }
                         } else {
-                            { m -> Stat("Entries this month", (s.flows.inCount + s.flows.outCount).toString(), m, glyph = "list", sub = Copy.plural(s.flows.outCount, "payment") + " out") }
+                            { m -> TintTile("Entries this month", (s.flows.inCount + s.flows.outCount).toString(), Hue.violet, m, glyph = "list", sub = Copy.plural(s.flows.outCount, "payment") + " out") }
                         },
                     ) else listOf(
-                        { m -> Stat("This month", fmt.formatWhole(s.periodTotal), m, glyph = "calendar", sub = Copy.plural(s.periodCount, "entry", "entries")) },
-                        { m -> Stat("Last month", fmt.formatWhole(s.lastPeriodTotal), m, glyph = "history", sub = Copy.versusLastLine(s.periodTotal, s.lastPeriodSameDay, fmt)) },
+                        { m -> TintTile("This month", fmt.formatWhole(s.periodTotal), Hue.sky, m, glyph = "calendar", sub = Copy.plural(s.periodCount, "entry", "entries")) },
+                        { m -> TintTile("Last month", fmt.formatWhole(s.lastPeriodTotal), Hue.violet, m, glyph = "history", sub = Copy.versusLastLine(s.periodTotal, s.lastPeriodSameDay, fmt)) },
                     )
                 StatGrid(stats)
                 Field(text, { text = it; query(it) }, Modifier.fillMaxWidth(), placeholder = "Search these entries", leading = "search")
@@ -150,13 +176,17 @@ fun TransactionsScreen(
         ) {
             s.days.forEach { day ->
                 item(key = "day-" + day.date) {
-                    Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 14.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        T(Dates.day(day.date, s.today), style = Tally.type.section, color = c.ink2)
-                        Fill()
-                        T(fmt.formatWhole(day.spent + day.income), style = Tally.type.mono, color = c.ink3)
+                    Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                        DayHeader(Dates.day(day.date, s.today)) {
+                            T(fmt.formatWhole(day.spent + day.income), style = Tally.type.amount, color = c.ink2, weight = FontWeight.SemiBold)
+                        }
+                        GlassGroup {
+                            day.rows.forEach { row ->
+                                key("tx-" + row.id) { EntryRow(row, onClick = { entry(row.id) }, onLongClick = { delete(row.id) }) }
+                            }
+                        }
                     }
                 }
-                items(day.rows, key = { "tx-" + it.id }) { row -> EntryRow(row, onClick = { entry(row.id) }, onLongClick = { delete(row.id) }) }
             }
             if (s.loaded && s.days.isEmpty()) {
                 item(key = "empty") { Empty("list", if (s.searching) "Nothing matches" else "No entries yet", null) }

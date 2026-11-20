@@ -53,6 +53,11 @@ import com.tally.app.ui.kit.Sheet
 import com.tally.app.ui.kit.Slab
 import com.tally.app.ui.kit.StackBar
 import com.tally.app.ui.kit.T
+import com.tally.app.ui.kit.CategoryTile
+import com.tally.app.ui.kit.IconChoice
+import com.tally.app.ui.kit.RoundKey
+import com.tally.app.ui.kit.SwatchRow
+import com.tally.app.ui.kit.TileGrid
 import com.tally.app.ui.kit.ToggleRow
 import com.tally.app.ui.nav.AppNav
 import com.tally.app.ui.theme.CategoryPalette
@@ -77,25 +82,34 @@ fun CategoriesScreen(s: CategoriesState, back: () -> Unit, open: (Long) -> Unit,
     val fmt = LocalMoney.current
     var kind by rememberSaveable { mutableStateOf(CategoryKind.EXPENSE) }
     val summary = if (kind == CategoryKind.EXPENSE) s.spending else s.income
-    DetailPage("Categories", back, subtitle = Dates.period(s.period, s.today), actions = { IconKey("plus", { edit(0, kind) }, label = "New category") }) {
+    DetailPage("Categories", back, subtitle = Dates.period(s.period, s.today), actions = { RoundKey("plus", { edit(0, kind) }, label = "New category", filled = true) }) {
         Segmented(listOf(CategoryKind.EXPENSE to "Spending", CategoryKind.INCOME to "Income"), kind, { kind = it }, Modifier.fillMaxWidth(), fill = true)
         if (!s.loaded) return@DetailPage
         if (summary.segments.isNotEmpty()) {
-            Slab(spacing = 8.dp) {
-                T(fmt.formatWhole(summary.periodTotal) + " this month across " + Copy.plural(summary.usedThisPeriod, "category", "categories"), style = Tally.type.ui, color = c.ink2)
-                StackBar(summary.segments.map { categoryColor(it.color) to it.total })
+            Slab(spacing = 10.dp) {
+                T(fmt.formatWhole(summary.periodTotal) + " this month across " + Copy.plural(summary.usedThisPeriod, "category", "categories"), style = Tally.type.title, color = c.ink)
+                StackBar(summary.segments.map { categoryColor(it.color) to it.total }, height = 14.dp)
                 summary.mostUsed?.let { T("Most used: " + it.name, style = Tally.type.caption, color = c.ink3) }
             }
         }
-        Panel(kindLabel(kind), glyph = "tag", subtitle = Copy.plural(summary.active.size, "category", "categories")) {
-            summary.active.forEach { line -> CategoryLineRow(line, onClick = { open(line.id) }, onLongClick = { edit(line.id, line.kind) }) }
+        T(kindLabel(kind) + " · " + Copy.plural(summary.active.size, "category", "categories"), Modifier.padding(start = 4.dp, top = 4.dp), Tally.type.section, c.ink)
+        TileGrid(summary.active.size, 2) { i, m ->
+            val line = summary.active[i]
+            CategoryTile(
+                line.name, line.icon, line.color,
+                figure = fmt.formatWhole(line.periodTotal),
+                line = Copy.plural(line.entries, "entry", "entries") + if (line.percent > 0) " · ${line.percent}% of this month" else "",
+                onClick = { open(line.id) },
+                onLongClick = { edit(line.id, line.kind) },
+                modifier = m,
+            )
         }
         if (summary.archived.isNotEmpty()) {
             Panel("Archived", glyph = "save") {
                 summary.archived.forEach { line -> CategoryLineRow(line, onClick = { edit(line.id, line.kind) }, onLongClick = null) }
             }
         }
-        T("Tap a category for its entries; hold it to edit.", style = Tally.type.caption, color = c.ink3)
+        T("Tap a category for its entries; hold it to edit.", Modifier.fillMaxWidth(), Tally.type.caption, c.ink3, align = androidx.compose.ui.text.style.TextAlign.Center)
     }
 }
 
@@ -159,7 +173,7 @@ fun CategoryEditScreen(
         if (s.isNew) "New " + kindLabel(s.kind).lowercase() + " category" else s.storedName,
         back,
         subtitle = if (s.isNew) null else Copy.plural(s.entryCount, "entry", "entries") + " · " + fmt.formatWhole(s.periodTotal) + " this month",
-        actions = { if (!s.isNew) IconKey("trash", requestDelete, label = "Delete the category") },
+        actions = { if (!s.isNew) RoundKey("trash", requestDelete, label = "Delete the category", tint = Tally.colors.heldText) },
         footer = {
             s.shownNameProblem?.let { T(it, style = Tally.type.caption, color = c.heldText) }
             Key(if (s.isNew) "Add category" else "Save category", save, Modifier.fillMaxWidth(), kind = KeyKind.Primary, glyph = "check")
@@ -167,43 +181,25 @@ fun CategoryEditScreen(
     ) {
         if (!s.loaded) return@DetailPage
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            CategoryBadge(d.icon, d.color, size = 48.dp)
+            CategoryBadge(d.icon, d.color, size = 52.dp)
             Box(Modifier.weight(1f)) {
                 Field(d.name, name, Modifier.fillMaxWidth(), placeholder = "Groceries, Rent, Salary", error = s.shownNameProblem != null, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words))
             }
         }
         Labelled("Colour") {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                CategoryPalette.forEachIndexed { i, hue ->
-                    Box(
-                        Modifier.size(32.dp).clip(CircleShape).background(hue)
-                            .border(2.dp, if (d.color == i) c.ink else Color.Transparent, CircleShape)
-                            .clickable(role = Role.RadioButton) { color(i) }
-                            .semantics { contentDescription = hueName(i) },
-                    )
-                }
-            }
+            SwatchRow(d.color, color, name = ::hueName)
         }
         CategoryIcons.groups.forEach { (group, keys) ->
             Labelled(group) {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    keys.forEach { key ->
-                        val on = d.icon == key
-                        Box(
-                            Modifier.size(40.dp).clip(Radii.badge).background(if (on) categoryColor(d.color).copy(alpha = .22f) else c.slab)
-                                .border(1.dp, if (on) categoryColor(d.color) else c.edge, Radii.badge)
-                                .clickable(role = Role.RadioButton) { icon(key) }
-                                .semantics { contentDescription = iconName(key) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            CategoryGlyph(key, if (on) d.color else 10, 20.dp)
-                        }
+                Slab(Modifier.fillMaxWidth(), padding = PaddingValues(12.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        keys.forEach { key -> IconChoice(key, d.color, d.icon == key, onClick = { icon(key) }, label = iconName(key)) }
                     }
                 }
             }
         }
         if (!s.isNew) {
-            Slab(padding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) {
+            Slab(padding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
                 ToggleRow("Archived", d.archived, archived, glyph = "save", subtitle = "Kept with its entries, out of the grid")
             }
         }

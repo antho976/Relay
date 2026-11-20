@@ -163,6 +163,9 @@ tasks.register<JacocoReport>("coverageReport") {
 }
 
 dependencies {
+    // Plaid's own sign-in for bank connections (docs/PLAID.md): the phone opens it with a link token
+    // from the owner's server and hands the public token back; no Plaid secret is ever on the phone.
+    implementation("com.plaid.link:sdk-core:6.4.0")
     // The money arithmetic, codecs and enums live in the pure-JVM :core module.
     implementation(project(":core"))
     // Relay's door and the request that connects this phone to the owner's server: pure JVM.

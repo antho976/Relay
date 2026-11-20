@@ -4,6 +4,10 @@ import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.foundation.background
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -18,62 +22,123 @@ import androidx.compose.ui.unit.sp
 import com.tally.app.R
 
 /**
- * Relay's tokens (apps/relay-android's Theme.kt, from the desktop's DESIGN.md), so Tally looks like
- * Relay's phone app: warm near-black chrome in Geist, off-white primary keys, colour only where it
- * means something (a state, or a category's hue as data).
+ * Direction C, "Postcard sky" (DESIGN.md): a sky gradient for the ground, frosted white glass cards,
+ * deep ink, and colour that means something: categories, money in, pace. The names stay Relay's so
+ * every component reads the same tokens; four grounds share them (Sky, Dusk, Mint morning, Night).
  */
 @Immutable
 data class Palette(
     val name: String,
-    /** App ground, bars, the drawer. */
+    /** A solid stand-in for the ground: bars that must be opaque, text on an ink key. */
     val wall: Color,
-    /** The status bar's ground. */
+    /** Frosted bars: the bottom navigation, an editor's footer. */
     val console: Color,
-    /** Keys, cards, pills. */
+    /** Glass: cards, keys, pills. */
     val slab: Color,
     /** Pressed and selected rows. */
     val wash: Color,
-    /** The deepest ground: the space switch, a plate. */
+    /** The deepest plate: a switch's track. */
     val screen: Color,
     val ink: Color,
     val ink2: Color,
     val edge: Color,
     val ink3: Color,
     val strong: Color,
-) {
-    val raised = Color(0xFF1C1B19)
-    val track = Color(0xFF2A2826)
-    val lineSubtle = Color(0xFF211F1D)
-    val lineFocus = Color(0xFF3A3733)
+    /** The sky, top to bottom. */
+    val ground: List<Color>,
+    val light: Boolean = true,
+    /** Fields and sheets: solid, so typing never sits on glass. */
+    val raised: Color = Color.White,
+    val track: Color = Color(0x1A1A1A2E),
+    val lineSubtle: Color = Color(0x141A1A2E),
+    val lineFocus: Color = Color(0xFF6C4BF4),
     /** On pace, money in, synced. */
-    val live = Color(0xFF2EC469)
+    val live: Color = Color(0xFF13A36E),
     /** Over budget, a refusal. As a mark only; words in red use [heldText]. */
-    val held = Color(0xFFE5382E)
+    val held: Color = Color(0xFFE5382E),
     /** Over pace, waiting. */
-    val waiting = Color(0xFFF0A828)
-    val heldText = Color(0xFFF0786F)
-    val liveText = Color(0xFF5FD38E)
+    val waiting: Color = Color(0xFFF0A828),
+    val heldText: Color = Color(0xFFB3261E),
+    val liveText: Color = Color(0xFF0A7A50),
+    val waitingText: Color = Color(0xFF7A4A00),
+    /** The one accent: links, the focused field, the mark's slash. */
+    val signal: Color = Color(0xFF6C4BF4),
+    /** Text on an ink key. */
+    val onInk: Color = Color.White,
+) {
     val selection = ink.copy(alpha = .22f)
-    /** Relay's signal green: the mark's slash, a figure that is good news. */
-    val signal = Color(0xFFC6F24E)
+    val groundBrush: Brush get() = Brush.verticalGradient(ground)
 
     companion object {
-        val Matte = Palette("matte", Color(0xFF171614), Color(0xFF171614), Color(0xFF1E1D1B), Color(0xFF23211F), Color(0xFF0A0A0B), Color(0xFFEDE9E2), Color(0xFFB5B0A8), Color(0xFF292725), Color(0xFF8C877F), Color(0xFF2C2A28))
-        val Dark = Palette("dark", Color(0xFF131211), Color(0xFF131211), Color(0xFF1A1917), Color(0xFF1F1D1B), Color(0xFF08090A), Color(0xFFEDE9E2), Color(0xFFB5B0A8), Color(0xFF242220), Color(0xFF8C877F), Color(0xFF262422))
-        val Oled = Palette("oled", Color(0xFF000000), Color(0xFF000000), Color(0xFF0F0E0D), Color(0xFF161513), Color(0xFF000000), Color(0xFFEDE9E2), Color(0xFFB5B0A8), Color(0xFF1C1B19), Color(0xFF8C877F), Color(0xFF211F1D))
+        private val LightInk = Color(0xFF1A1A2E)
+        private val LightInk2 = Color(0xFF4A4A63)
+        private val LightInk3 = Color(0xFF626279)
 
-        val ALL = listOf(Matte, Dark, Oled)
+        val Sky = Palette(
+            "sky", wall = Color(0xFFEFEEFB), console = Color(0xF2FFFFFF), slab = Color(0xBFFFFFFF),
+            wash = Color(0x141A1A2E), screen = Color(0x991A1A2E).copy(alpha = .06f),
+            ink = LightInk, ink2 = LightInk2, edge = Color(0x00000000), ink3 = LightInk3, strong = Color(0x261A1A2E),
+            ground = listOf(Color(0xFFA9D8FF), Color(0xFFE6E4FF), Color(0xFFFFE4D4)),
+        )
+        val Dusk = Sky.copy(
+            name = "dusk", wall = Color(0xFFF3ECFB),
+            ground = listOf(Color(0xFFC9B8FF), Color(0xFFF2C9E0), Color(0xFFFFD9BC)),
+        )
+        val Mint = Sky.copy(
+            name = "mint", wall = Color(0xFFEFF8F2),
+            ground = listOf(Color(0xFFB9EDD6), Color(0xFFE6F6EE), Color(0xFFFFF2DE)),
+        )
+        val Night = Palette(
+            "night", wall = Color(0xFF15173A), console = Color(0xF21A1C40), slab = Color(0x1FFFFFFF),
+            wash = Color(0x1FFFFFFF), screen = Color(0x33000000),
+            ink = Color(0xFFEDEBF7), ink2 = Color(0xFFBDBAD6), edge = Color(0x00000000), ink3 = Color(0xFF9A97B8), strong = Color(0x33FFFFFF),
+            ground = listOf(Color(0xFF0E1330), Color(0xFF1B1640), Color(0xFF2A1838)),
+            light = false, raised = Color(0xFF23264D), track = Color(0x26FFFFFF), lineSubtle = Color(0x1AFFFFFF),
+            lineFocus = Color(0xFFA996FF), live = Color(0xFF2EC469), heldText = Color(0xFFF0786F), liveText = Color(0xFF5FD38E),
+            waitingText = Color(0xFFF5C46A), signal = Color(0xFFA996FF), onInk = Color(0xFF15173A),
+        )
 
+        val ALL = listOf(Sky, Dusk, Mint, Night)
+
+        /** Older names (Relay's grounds) land on the closest sky. */
         fun of(name: String?) = when (name) {
-            "dark" -> Dark
-            "oled" -> Oled
-            else -> Matte
+            "dusk" -> Dusk
+            "mint" -> Mint
+            "night", "dark", "oled" -> Night
+            else -> Sky
         }
 
-        /** The ring mark's dimmed arc and the start screen's quiet text (start.rs). */
-        val DIM = Color(0xFF63666B)
+        /** The ring mark's dimmed arc. */
+        val DIM = Color(0xFF9A97B8)
     }
 }
+
+/** Soft tints and strong marks for colour that means something, drawn from the C mockups. */
+object Hue {
+    val violet = Color(0xFF6C4BF4)
+    val mint = Color(0xFF13A36E)
+    val coral = Color(0xFFFF5A4E)
+    val sky = Color(0xFF2F7CF6)
+    val sun = Color(0xFFFFB020)
+    val pink = Color(0xFFF0508C)
+    val teal = Color(0xFF0EA5A0)
+    val mintSoft = Color(0xFFDCF5E9)
+    val peachSoft = Color(0xFFFFE5D9)
+    val lilacSoft = Color(0xFFECE6FF)
+    val skySoft = Color(0xFFDDEAFF)
+    val sunSoft = Color(0xFFFFF0C7)
+    val pinkSoft = Color(0xFFFFE0EC)
+    /** Words on the soft tints, each 4.5:1 on its tint. */
+    val mintInk = Color(0xFF085C3C)
+    val peachInk = Color(0xFF7A3A26)
+    val lilacInk = Color(0xFF3B2A86)
+    val skyInk = Color(0xFF173E86)
+    val sunInk = Color(0xFF5E3A00)
+    val pinkInk = Color(0xFF7A1F3D)
+}
+
+/** A screen's ground: the palette's sky. */
+fun Modifier.ground(p: Palette): Modifier = this.background(p.groundBrush)
 
 object Fonts {
     val Geist = FontFamily(
@@ -98,10 +163,10 @@ data class Type(
     val uiMedium: TextStyle = ui.copy(fontWeight = FontWeight.Medium),
     val body: TextStyle = TextStyle(fontFamily = Fonts.Geist, fontSize = 15.sp, lineHeight = 22.sp),
     val caption: TextStyle = TextStyle(fontFamily = Fonts.Geist, fontSize = 12.5.sp, lineHeight = 17.sp),
-    val title: TextStyle = TextStyle(fontFamily = Fonts.Geist, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, lineHeight = 21.sp),
-    val heading: TextStyle = TextStyle(fontFamily = Fonts.Geist, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, lineHeight = 28.sp),
+    val title: TextStyle = TextStyle(fontFamily = Fonts.Geist, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, lineHeight = 22.sp),
+    val heading: TextStyle = TextStyle(fontFamily = Fonts.Geist, fontSize = 26.sp, fontWeight = FontWeight.SemiBold, lineHeight = 31.sp, letterSpacing = (-0.02).em),
     val nav: TextStyle = TextStyle(fontFamily = Fonts.Geist, fontSize = 15.sp, lineHeight = 20.sp),
-    val section: TextStyle = TextStyle(fontFamily = Fonts.Geist, fontSize = 13.sp, fontWeight = FontWeight.Medium, lineHeight = 17.sp),
+    val section: TextStyle = TextStyle(fontFamily = Fonts.Geist, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, lineHeight = 21.sp),
     /** Small capitals over a group: 11.5/600 with 0.08em tracking. */
     val eyebrow: TextStyle = TextStyle(fontFamily = Fonts.Geist, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.08.em),
     val mono: TextStyle = TextStyle(fontFamily = Fonts.GeistMono, fontSize = 12.sp, lineHeight = 16.sp),
@@ -111,10 +176,10 @@ data class Type(
     /** A figure in a stat card. */
     val figure: TextStyle = TextStyle(fontFamily = Fonts.Geist, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, lineHeight = 26.sp, fontFeatureSettings = "tnum"),
     /** The one large figure a page opens on. */
-    val hero: TextStyle = TextStyle(fontFamily = Fonts.Geist, fontSize = 40.sp, fontWeight = FontWeight.SemiBold, lineHeight = 46.sp, letterSpacing = (-0.03).em, fontFeatureSettings = "tnum"),
+    val hero: TextStyle = TextStyle(fontFamily = Fonts.Geist, fontSize = 46.sp, fontWeight = FontWeight.SemiBold, lineHeight = 46.sp, letterSpacing = (-0.03).em, fontFeatureSettings = "tnum"),
 )
 
-val LocalPalette = staticCompositionLocalOf { Palette.Matte }
+val LocalPalette = staticCompositionLocalOf { Palette.Sky }
 val LocalType = staticCompositionLocalOf { Type() }
 
 object Tally {
@@ -127,27 +192,28 @@ object Tally {
  * picker, the drawer) get a dark scheme in the same colours so they do not stand apart.
  */
 @Composable
-fun TallyTheme(palette: Palette = Palette.Matte, content: @Composable () -> Unit) {
-    val scheme = darkColorScheme(
+fun TallyTheme(palette: Palette = Palette.Sky, content: @Composable () -> Unit) {
+    val base = if (palette.light) lightColorScheme() else darkColorScheme()
+    val scheme = base.copy(
         primary = palette.ink,
-        onPrimary = palette.wall,
+        onPrimary = palette.onInk,
         secondary = palette.ink2,
-        onSecondary = palette.wall,
+        onSecondary = palette.onInk,
         background = palette.wall,
         onBackground = palette.ink,
-        surface = palette.slab,
+        surface = palette.raised,
         onSurface = palette.ink,
         surfaceVariant = palette.raised,
         onSurfaceVariant = palette.ink2,
-        surfaceContainer = palette.slab,
-        surfaceContainerHigh = palette.slab,
+        surfaceContainer = palette.raised,
+        surfaceContainerHigh = palette.raised,
         surfaceContainerHighest = palette.wash,
         surfaceContainerLow = palette.wall,
         surfaceContainerLowest = palette.wall,
         outline = palette.strong,
         outlineVariant = palette.edge,
         error = palette.held,
-        onError = palette.wall,
+        onError = Color.White,
     )
     MaterialTheme(colorScheme = scheme) {
         CompositionLocalProvider(

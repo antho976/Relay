@@ -6,6 +6,16 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.tally.app.ui.kit.RoundKey
+import com.tally.app.ui.theme.ground
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -43,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tally.app.BuildConfig
 import com.tally.app.ui.common.LocalMoney
@@ -50,6 +61,7 @@ import com.tally.app.ui.home.statusMonthLine
 import com.tally.app.ui.common.Notice
 import com.tally.app.ui.common.Notices
 import com.tally.app.ui.kit.Dot
+import com.tally.app.ui.kit.DrawerRow
 import com.tally.app.ui.kit.Fill
 import com.tally.app.ui.kit.Glyph
 import com.tally.app.ui.kit.Hairline
@@ -79,8 +91,9 @@ fun toneColor(tone: Tone): Color = when (tone) {
 }
 
 /**
- * The frame of the spaces' pages, as Relay's: the top bar with the Spend | Plan switch, the drawer,
- * the page, the floating Add key, and the status bar where sync and the month say where they stand.
+ * The frame of the spaces' pages, direction C: the sky behind everything, a slim row of round keys
+ * (the drawer, the section's pages, search, settings), the page, and a frosted bottom bar with the
+ * four places and the Add key in its middle. Sync stands in the drawer's foot and on Settings.
  */
 @Composable
 fun SpaceFrame(
@@ -100,151 +113,174 @@ fun SpaceFrame(
     }
     ModalNavigationDrawer(
         drawerState = drawer,
-        scrimColor = Color.Black.copy(alpha = .45f),
+        scrimColor = Color(0xFF1A1A2E).copy(alpha = .45f),
         drawerContent = {
-            ModalDrawerSheet(drawerContainerColor = c.wall, drawerShape = Radii.icon, windowInsets = WindowInsets(0.dp)) {
+            ModalDrawerSheet(drawerContainerColor = c.raised, drawerShape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp), windowInsets = WindowInsets(0.dp)) {
                 Sidebar(route, shell, onGo = { r -> close { nav.page(r) } }, onPage = { go -> close(go) }, nav = nav, onSync = onSync)
             }
         },
     ) {
-        Column(Modifier.fillMaxSize().background(c.wall)) {
-            TopBar(
-                space = Space.of(route),
-                onSpace = { nav.space(it) },
+        Column(Modifier.fillMaxSize().ground(c)) {
+            TopRow(
+                route = route,
+                onGo = { nav.page(it) },
                 onDrawer = { scope.launch { drawer.open() } },
                 onSearch = { nav.search() },
                 onSettings = { nav.settings() },
             )
-            Box(Modifier.fillMaxWidth().weight(1f)) {
-                content()
-                if (onAdd != null) AddKey(onAdd, Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 14.dp))
-            }
-            StatusBar(shell, onSync = onSync, onMonth = { nav.overview() })
+            Box(Modifier.fillMaxWidth().weight(1f)) { content() }
+            BottomBar(route, onGo = { nav.page(it) }, onAdd = onAdd)
         }
     }
 }
 
-/** Relay's top bar (theme.css `.topbar`): the drawer key, the mark and wordmark, the space switch, then search and settings. */
-@Composable
-fun TopBar(space: Space, onSpace: (Space) -> Unit, onDrawer: () -> Unit, onSearch: () -> Unit, onSettings: () -> Unit) {
-    val c = Tally.colors
-    Row(
-        Modifier.fillMaxWidth().background(c.wall).statusBarsPadding().height(56.dp).padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconKey("sidebar", onDrawer, size = 18.dp, label = "Menu")
-        TallyMark(22.dp)
-        T("tally", Modifier.padding(start = 6.dp, end = 10.dp), Tally.type.brand, c.ink)
-        SpaceSwitch(space, onSpace)
-        Fill()
-        IconKey("search", onSearch, size = 18.dp, label = "Search entries")
-        IconKey("gear", onSettings, size = 18.dp, label = "Settings")
-    }
-}
+/** A section's pages, as pills in the top row: Spend's three, Plan's three. */
+private val SECTIONS = listOf(
+    listOf(Routes.OVERVIEW to "Overview", Routes.ENTRIES to "Entries", Routes.INSIGHTS to "Insights"),
+    listOf(Routes.BUDGETS to "Budgets", Routes.BILLS to "Bills", Routes.GOALS to "Goals"),
+)
 
-/** Relay's space switch (money.css): a pill on the screen colour, the chosen space in ink. */
+/** The top row: the drawer key, the section's pages, then search and settings. */
 @Composable
-fun SpaceSwitch(space: Space, onSpace: (Space) -> Unit) {
+fun TopRow(route: String, onGo: (String) -> Unit, onDrawer: () -> Unit, onSearch: () -> Unit, onSettings: () -> Unit) {
     val c = Tally.colors
     Row(
-        Modifier.clip(Radii.pill).background(c.screen).border(1.dp, c.edge, Radii.pill).padding(3.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        for (s in Space.entries) {
-            val on = s == space
-            Box(
-                Modifier.heightIn(min = 28.dp).clip(Radii.pill).background(if (on) c.ink else Color.Transparent)
-                    .clickable(role = Role.Tab) { onSpace(s) }.padding(horizontal = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                T(s.label, style = Tally.type.caption, color = if (on) c.wall else c.ink3, weight = FontWeight.Medium)
-            }
-        }
-    }
-}
-
-/** The floating Add key: Relay's primary key, as a pill, where a thumb rests. */
-@Composable
-fun AddKey(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val c = Tally.colors
-    Row(
-        modifier.shadow(10.dp, Radii.pill).clip(Radii.pill).background(c.ink)
-            .clickable(role = Role.Button, onClick = onClick).heightIn(min = 52.dp).padding(start = 16.dp, end = 20.dp),
+        Modifier.fillMaxWidth().statusBarsPadding().height(60.dp).padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Glyph("plus", 18.dp, c.wall)
-        T("Add", style = Tally.type.uiMedium, color = c.wall, weight = FontWeight.SemiBold)
+        RoundKey("sidebar", onDrawer, label = "Menu")
+        val section = SECTIONS.firstOrNull { list -> list.any { it.first == route } }
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center) {
+            if (section != null) {
+                Row(Modifier.clip(Radii.pill).background(c.slab).padding(3.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    for ((r, label) in section) {
+                        val on = r == route
+                        Box(
+                            Modifier.heightIn(min = 34.dp).clip(Radii.pill).background(if (on) c.ink else Color.Transparent)
+                                .clickable(role = Role.Tab) { if (!on) onGo(r) }.padding(horizontal = 11.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            T(label, style = Tally.type.caption, color = if (on) c.onInk else c.ink2, weight = FontWeight.SemiBold, maxLines = 1)
+                        }
+                    }
+                }
+            }
+        }
+        RoundKey("search", onSearch, label = "Search entries")
+        RoundKey("gear", onSettings, label = "Settings")
     }
 }
 
-/**
- * Relay's status bar (30px, Geist Mono, quiet): where sync stands on the left, the month on the
- * right. Tapping the sync side syncs now, or opens what needs the person.
- */
+private data class Place(val route: String, val glyph: String, val label: String, val owns: Set<String>)
+
+private val PLACES = listOf(
+    Place(Routes.OVERVIEW, "home", "Overview", setOf(Routes.OVERVIEW, Routes.ENTRIES, Routes.INSIGHTS)),
+    Place(Routes.BUDGETS, "pie", "Plan", setOf(Routes.BUDGETS, Routes.BILLS, Routes.GOALS)),
+    Place(Routes.ACCOUNTS, "bank", "Accounts", setOf(Routes.ACCOUNTS)),
+    Place(Routes.INVESTMENTS, "trend", "Invest", setOf(Routes.INVESTMENTS)),
+)
+
+/** The frosted bottom bar: four places, the Add key in the middle when the page has one. */
 @Composable
-fun StatusBar(s: ShellState, onSync: () -> Unit, onMonth: () -> Unit) {
+fun BottomBar(route: String, onGo: (String) -> Unit, onAdd: (() -> Unit)?) {
     val c = Tally.colors
-    val fmt = LocalMoney.current
-    Column(Modifier.fillMaxWidth().background(c.console).navigationBarsPadding()) {
-        Hairline(color = c.edge)
+    val clearance = LocalToastClearance.current
+    val density = LocalDensity.current
+    val key = remember { Any() }
+    DisposableEffect(clearance, key) { onDispose { clearance.clear(key) } }
+    Column(
+        Modifier.fillMaxWidth().clip(Radii.sheet).background(c.console).navigationBarsPadding()
+            .onSizeChanged { clearance.set(key, with(density) { it.height.toDp() }) },
+    ) {
         Row(
-            Modifier.fillMaxWidth().height(34.dp).padding(horizontal = 12.dp),
+            Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.SpaceAround,
         ) {
-            Row(Modifier.weight(1f).clickable(role = Role.Button, onClick = onSync), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Dot(toneColor(s.sync.tone), 6.dp)
-                T(s.sync.text, style = Tally.type.mono, color = c.ink3, maxLines = 1)
-            }
-            if (s.period != null) {
-                val month = statusMonthLine(s.left, s.spent, s.daysLeft, fmt)
-                T(month.text, Modifier.clickable(role = Role.Button, onClick = onMonth), Tally.type.mono, com.tally.app.ui.common.toneColor(month.tone), maxLines = 1)
+            for ((i, p) in PLACES.withIndex()) {
+                if (i == 2) AddKey(onAdd)
+                val on = route in p.owns
+                Column(
+                    Modifier.size(width = 64.dp, height = 56.dp).clip(Radii.key).clickable(role = Role.Tab) { if (route != p.route) onGo(p.route) }
+                        .semantics { contentDescription = p.label },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Glyph(p.glyph, 22.dp, if (on) c.ink else c.ink3)
+                    Box(Modifier.padding(top = 5.dp).size(width = 16.dp, height = 3.dp).clip(Radii.pill).background(if (on) c.signal else Color.Transparent))
+                }
             }
         }
+    }
+}
+
+/** The Add key: a dark square in the bar's middle; a quiet placeholder where a page has none. */
+@Composable
+fun AddKey(onClick: (() -> Unit)?, modifier: Modifier = Modifier) {
+    val c = Tally.colors
+    if (onClick == null) {
+        Box(modifier.size(56.dp))
+        return
+    }
+    Box(
+        modifier.size(56.dp).shadow(10.dp, RoundedCornerShape(20.dp)).clip(RoundedCornerShape(20.dp)).background(c.ink)
+            .clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = "Add" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Glyph("plus", 24.dp, c.onInk)
     }
 }
 
 /** The drawer (Relay's sidebar): the spaces' pages, the ledger's own pages, and sync at the foot. */
 @Composable
-private fun Sidebar(route: String, s: ShellState, onGo: (String) -> Unit, onPage: (() -> Unit) -> Unit, nav: AppNav, onSync: () -> Unit) {
+internal fun Sidebar(route: String, s: ShellState, onGo: (String) -> Unit, onPage: (() -> Unit) -> Unit, nav: AppNav, onSync: () -> Unit) {
     val c = Tally.colors
-    Column(Modifier.fillMaxHeight().width(300.dp).background(c.wall).statusBarsPadding().navigationBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            TallyMark(24.dp)
-            T("tally", Modifier.padding(start = 8.dp), Tally.type.brand, c.ink)
+    Column(Modifier.fillMaxHeight().width(300.dp).background(c.raised).statusBarsPadding().navigationBarsPadding()) {
+        Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 16.dp, top = 18.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(38.dp).clip(RoundedCornerShape(12.dp)).background(com.tally.app.ui.theme.Hue.lilacSoft), contentAlignment = Alignment.Center) { TallyMark(26.dp) }
+            T("tally", Modifier.padding(start = 10.dp), Tally.type.brand.copy(fontSize = 22.sp), c.ink)
             Fill()
             T("v" + BuildConfig.VERSION_NAME, style = Tally.type.mono, color = c.ink3)
         }
-        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) {
-            item { SectionLabel("Spend") }
-            item { NavRow("Overview", "home", route == Routes.OVERVIEW) { onGo(Routes.OVERVIEW) } }
-            item { NavRow("Entries", "list", route == Routes.ENTRIES) { onGo(Routes.ENTRIES) } }
-            item { NavRow("Insights", "bars", route == Routes.INSIGHTS) { onGo(Routes.INSIGHTS) } }
-            item { SectionLabel("Plan") }
-            item { NavRow("Budgets", "pie", route == Routes.BUDGETS) { onGo(Routes.BUDGETS) } }
-            item { NavRow("Bills", "repeat", route == Routes.BILLS) { onGo(Routes.BILLS) } }
-            item { NavRow("Goals", "target", route == Routes.GOALS) { onGo(Routes.GOALS) } }
-            item { NavRow("Accounts", "bank", route == Routes.ACCOUNTS) { onGo(Routes.ACCOUNTS) } }
-            item { NavRow("Investments", "trend", route == Routes.INVESTMENTS) { onGo(Routes.INVESTMENTS) } }
-            item { SectionLabel("Ledger") }
-            item { NavRow("Categories", "tag") { onPage { nav.categories() } } }
-            item { NavRow("Import a statement", "download") { onPage { nav.import() } } }
-            item { NavRow("Backup", "save") { onPage { nav.backup() } } }
-            item { NavRow("Settings", "gear") { onPage { nav.settings() } } }
+        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+            item { DrawerLabel("Spend") }
+            item { DrawerRow("Overview", "home", route == Routes.OVERVIEW) { onGo(Routes.OVERVIEW) } }
+            item { DrawerRow("Entries", "list", route == Routes.ENTRIES) { onGo(Routes.ENTRIES) } }
+            item { DrawerRow("Insights", "bars", route == Routes.INSIGHTS) { onGo(Routes.INSIGHTS) } }
+            item { DrawerLabel("Plan") }
+            item { DrawerRow("Budgets", "pie", route == Routes.BUDGETS) { onGo(Routes.BUDGETS) } }
+            item { DrawerRow("Bills", "repeat", route == Routes.BILLS) { onGo(Routes.BILLS) } }
+            item { DrawerRow("Goals", "target", route == Routes.GOALS) { onGo(Routes.GOALS) } }
+            item { DrawerRow("Accounts", "bank", route == Routes.ACCOUNTS) { onGo(Routes.ACCOUNTS) } }
+            item { DrawerRow("Investments", "trend", route == Routes.INVESTMENTS) { onGo(Routes.INVESTMENTS) } }
+            item { DrawerLabel("Ledger") }
+            item { DrawerRow("Categories", "tag") { onPage { nav.categories() } } }
+            item { DrawerRow("Import a statement", "download") { onPage { nav.import() } } }
+            item { DrawerRow("Connected banks", "link") { onPage { nav.banks() } } }
+            item { DrawerRow("Backup", "save") { onPage { nav.backup() } } }
+            item { DrawerRow("Settings", "gear") { onPage { nav.settings() } } }
         }
-        Hairline(Modifier.padding(horizontal = 10.dp), c.edge)
-        Column(Modifier.padding(10.dp)) {
-            ListRow(onClick = { onPage { nav.sync() } }) {
-                Dot(toneColor(s.sync.tone), 7.dp)
-                Column(Modifier.weight(1f)) {
-                    T(if (s.paired) "Your server" else "Sync", style = Tally.type.uiMedium, color = c.ink, maxLines = 1)
-                    T(s.sync.text, style = Tally.type.caption, color = c.ink3, maxLines = 1)
-                }
-                IconKey("sync", onSync, size = 16.dp, label = "Sync now")
+        Row(
+            Modifier.padding(12.dp).fillMaxWidth().clip(Radii.card).background(com.tally.app.ui.theme.Hue.mintSoft)
+                .clickable(role = Role.Button) { onPage { nav.sync() } }.padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Dot(toneColor(s.sync.tone), 9.dp)
+            Column(Modifier.weight(1f)) {
+                T(if (s.paired) "Your server" else "Sync", style = Tally.type.uiMedium, color = com.tally.app.ui.theme.Hue.mintInk, maxLines = 1, weight = FontWeight.SemiBold)
+                T(s.sync.text, style = Tally.type.caption, color = com.tally.app.ui.theme.Hue.mintInk, maxLines = 1)
             }
+            IconKey("sync", onSync, size = 16.dp, tint = com.tally.app.ui.theme.Hue.mintInk, label = "Sync now")
         }
     }
+}
+
+/** A drawer section's label: small capitals, quiet. */
+@Composable
+private fun DrawerLabel(text: String) {
+    com.tally.app.ui.kit.Eyebrow(text, Modifier.padding(start = 12.dp, top = 16.dp, bottom = 6.dp))
 }
 
 /**
@@ -264,20 +300,20 @@ fun BoxScope.ToastHost(notices: Notices, modifier: Modifier = Modifier) {
         visible = current != null,
         // Above the status bar on a space page; above the keypad and Save on an editor.
         modifier = modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()
-            .padding(bottom = maxOf(44.dp, LocalToastClearance.current.bottom + 10.dp), start = 16.dp, end = 16.dp),
+            .padding(bottom = maxOf(24.dp, LocalToastClearance.current.bottom + 10.dp), start = 16.dp, end = 16.dp),
         enter = fadeIn() + slideInVertically { it / 2 },
         exit = fadeOut() + slideOutVertically { it / 2 },
     ) {
         val n = current ?: return@AnimatedVisibility
         Row(
-            Modifier.widthIn(max = 520.dp).shadow(8.dp, Radii.popover).clip(Radii.popover).background(c.slab).border(1.dp, c.strong, Radii.popover)
+            Modifier.widthIn(max = 520.dp).shadow(12.dp, Radii.popover).clip(Radii.popover).background(c.ink)
                 .padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            T(n.message, Modifier.weight(1f, fill = false).padding(vertical = 8.dp), Tally.type.ui, c.ink)
+            T(n.message, Modifier.weight(1f, fill = false).padding(vertical = 8.dp), Tally.type.ui, c.onInk)
             if (n.undo != null) {
                 Box(Modifier.width(8.dp))
-                Key("Undo", { notices.settle(n, undone = true) }, kind = KeyKind.Quiet, compact = true)
+                T("Undo", Modifier.clip(Radii.key).clickable(role = Role.Button) { notices.settle(n, undone = true) }.padding(horizontal = 12.dp, vertical = 10.dp), Tally.type.uiMedium, Color(0xFFC9BDFF), weight = FontWeight.SemiBold)
             }
         }
     }
