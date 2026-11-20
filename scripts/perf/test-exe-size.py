@@ -28,8 +28,10 @@ import sys
 # executable: 24 executables, largest (that one) 223 MB, all 3.0 GB. 2026-10-28, Aide (#159: the
 # relay-aide crate, its handlers and tests/aide.rs in `all`) took `all` from 246 MB to 252 MB and
 # added relay-aide's own test executable: 25 executables, 3.5 GB. Code, not a dependency or debug
-# info, so the budgets moved.
-MAX_MB = 265
+# info, so the budgets moved. 2026-11-19: features since (main at 267 MB from 2026-11-05) and
+# Plaid bank connections (#193, relay-core's plaid.rs and ring) took `all` to 268 MB, 25
+# executables, 3.7 GB. Code again, so the largest's budget moved.
+MAX_MB = 275
 TOTAL_GB = 3.8
 
 
