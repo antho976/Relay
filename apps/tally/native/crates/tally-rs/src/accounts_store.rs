@@ -8,7 +8,9 @@
 //! write stamps `updated_at` as relay-money does and never touches `seq`; deletes set `deleted`.
 //!
 //! The account new entries start in is this phone's own preference ([`DEFAULT_PREF`]), as the
-//! Kotlin app keeps it in its settings rather than the ledger.
+//! Kotlin app keeps it in its settings rather than the ledger. It names the account by its `uid`:
+//! ids are this file's own and start again at 1 after a first sync, an erase or a restore, where
+//! a stored id would quietly name another account.
 
 use std::collections::HashMap;
 
@@ -25,24 +27,56 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
-/// The preference naming the account new entries start in.
-pub const DEFAULT_PREF: &str = "default_account";
+/// The preference naming the account new entries start in, by its uid.
+pub const DEFAULT_PREF: &str = "default_account_uid";
+
+/// Where 0.3 kept the default, by the account's id. An id cannot be trusted after a renumbering,
+/// so it is never read: the first change to the default drops it, and until then new entries
+/// start where they would with no default set.
+const OLD_DEFAULT_PREF: &str = "default_account";
 
 /// relay-money's stamp for a row written again: now, or just past the row's own stamp when that
 /// is ahead of this clock, so an edit always outranks what it replaces.
 const RESTAMP: &str = "updated_at = MAX(?8, MIN(updated_at, 4000000000000000) + 1)";
 
-/// The account new entries start in, if one is set.
+/// The account new entries start in, if one is set and it is still open: its id in this file.
 pub fn default_account(store: &Store) -> Option<i64> {
-    store.pref(DEFAULT_PREF).and_then(|v| v.parse().ok()).filter(|&v: &i64| v > 0)
+    let uid = store.pref(DEFAULT_PREF)?;
+    let db = store.sql().ok()?;
+    db.prepare_cached("SELECT id FROM accounts WHERE uid = ?1 AND deleted = 0 AND archived = 0")
+        .ok()?
+        .query_row([uid], |r| r.get(0))
+        .optional()
+        .ok()
+        .flatten()
 }
 
+/// Sets (or clears) the default by the account's id, stored as its uid.
 pub fn set_default_account(store: &mut Store, id: Option<i64>) -> Result<()> {
-    match id {
-        Some(id) => store.set_pref(DEFAULT_PREF, &id.to_string()),
+    if store.pref(OLD_DEFAULT_PREF).is_some() {
+        store.clear_pref(OLD_DEFAULT_PREF)?;
+    }
+    let uid: Option<String> = match id {
+        Some(id) => Some(
+            store
+                .sql()?
+                .prepare_cached("SELECT uid FROM accounts WHERE id = ?1 AND deleted = 0")
+                .map_err(err)?
+                .query_row([id], |r| r.get(0))
+                .optional()
+                .map_err(err)?
+                .ok_or("That account is gone")?,
+        ),
+        None => None,
+    };
+    match uid {
+        Some(uid) => store.set_pref(DEFAULT_PREF, &uid),
         None => store.clear_pref(DEFAULT_PREF),
     }
 }
+
+/// What [`save`] says to an opening balance past what the ledger keeps.
+const TOO_LARGE: &str = crate::plan_store::TOO_LARGE;
 
 // Words
 
@@ -383,7 +417,11 @@ impl Draft {
 pub fn problems(d: &Draft, digits: u32) -> (Option<&'static str>, Option<&'static str>) {
     (
         d.name.trim().is_empty().then_some("Give the account a name"),
-        d.opening(digits).is_none().then_some("Enter an amount, like 250 or 1,250.50"),
+        match d.opening(digits) {
+            None => Some("Enter an amount, like 250 or 1,250.50"),
+            Some(o) if crate::plan_store::too_large(o) => Some(TOO_LARGE),
+            Some(_) => None,
+        },
     )
 }
 
@@ -431,7 +469,12 @@ pub fn save(store: &mut Store, id: Option<i64>, d: &Draft, digits: u32) -> Resul
         return Err("Give the account a name".into());
     }
     let opening = d.signed_opening(digits).ok_or("Enter an amount, like 250 or 1,250.50")?;
+    if crate::plan_store::too_large(opening) {
+        return Err(TOO_LARGE.into());
+    }
     let registration = if d.kind == AccountType::Investment { d.registration } else { None };
+    // Read before the write: an account archived by it no longer reads as the default.
+    let current = default_account(store);
     let id = match id {
         None => {
             let institution = if d.kind == AccountType::Investment { institution_for(name, "") } else { String::new() };
@@ -454,7 +497,6 @@ pub fn save(store: &mut Store, id: Option<i64>, d: &Draft, digits: u32) -> Resul
             id
         }
     };
-    let current = default_account(store);
     if d.is_default && !d.archived {
         if current != Some(id) {
             set_default_account(store, Some(id))?;
@@ -493,8 +535,9 @@ pub fn registration_name(r: Registration) -> &'static str {
 /// Archives (or brings back) an account through relay-money; an archived account is never the
 /// default.
 pub fn set_archived(store: &mut Store, id: i64, archived: bool) -> Result<()> {
+    let was_default = default_account(store) == Some(id);
     store.ledger.account_update(id, &AccountPatch { archived: Some(archived), ..Default::default() }).map_err(err)?;
-    if archived && default_account(store) == Some(id) {
+    if archived && was_default {
         set_default_account(store, None)?;
     }
     Ok(())
@@ -588,9 +631,11 @@ pub fn account_use(store: &Store, id: i64) -> Result<AccountUse> {
 }
 
 /// Deletes an account and, as the Kotlin app's foreign keys do, every entry and bill that touches
-/// it and its recorded values and investment rows. Cannot be undone; the dialog says so.
+/// it and its recorded values and investment rows. A goal that followed it stays and follows
+/// everything again (Kotlin `GoalDao.forgetAccount`). Cannot be undone; the dialog says so.
 pub fn delete(store: &mut Store, id: i64) -> Result<()> {
     let (_, now) = Store::stamp();
+    let was_default = default_account(store) == Some(id);
     {
         let db = store.sql()?;
         let tx = db.unchecked_transaction().map_err(err)?;
@@ -601,6 +646,7 @@ pub fn delete(store: &mut Store, id: i64) -> Result<()> {
             format!("UPDATE account_values SET {gone} WHERE deleted = 0 AND account_id = ?1"),
             format!("UPDATE holdings SET {gone} WHERE deleted = 0 AND account_id = ?1"),
             format!("UPDATE activities SET {gone} WHERE deleted = 0 AND account_id = ?1"),
+            "UPDATE goals SET account_id = NULL, updated_at = MAX(?2, MIN(updated_at, 4000000000000000) + 1) WHERE deleted = 0 AND account_id = ?1".to_string(),
         ] {
             tx.execute(&sql, params![id, now]).map_err(err)?;
         }
@@ -610,7 +656,7 @@ pub fn delete(store: &mut Store, id: i64) -> Result<()> {
         }
         tx.commit().map_err(err)?;
     }
-    if default_account(store) == Some(id) {
+    if was_default {
         set_default_account(store, None)?;
     }
     Ok(())

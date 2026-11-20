@@ -1,8 +1,9 @@
 //! The Plan rows relay-money has no calls for yet: bills (`recurring`), goals (`goals`) and their
 //! contributions (`contributions`), read and written through the store's second connection
 //! (`Store::sql`), with relay-money's conventions (ledger.rs): a random `uid` on insert,
-//! `updated_at` in milliseconds and bumped past the stored one on every change
-//! (`MAX(now, MIN(updated_at, ceiling) + 1)`), deletes as `deleted = 1` so sync carries them, and
+//! `updated_at` in milliseconds and bumped past the stored one (`MAX(now, MIN(updated_at, ceiling)
+//! + 1)`) by a write that changes something, never by one that does not (it would outrank a newer
+//! edit from another device), deletes as `deleted = 1` so sync carries them, and
 //! `seq` never touched (the tables' triggers number every change). Enums are stored by their
 //! Kotlin names, dates as `YYYY-MM-DD`.
 //!
@@ -24,6 +25,17 @@ fn err(e: impl std::fmt::Display) -> String {
 
 /// The stamp arithmetic relay-money uses on every update: never behind the stored stamp.
 const BUMP: &str = "updated_at = MAX(?2, MIN(updated_at, 4000000000000000) + 1)";
+
+/// What a writer here says to an amount past relay-money's [`MAX_AMOUNT`]: a bill posts its amount
+/// as an entry, which the ledger would refuse to edit.
+///
+/// [`MAX_AMOUNT`]: relay_money::ledger::MAX_AMOUNT
+pub const TOO_LARGE: &str = "That amount is larger than any the ledger keeps";
+
+/// Whether `amount` (either sign) is past what the ledger keeps.
+pub fn too_large(amount: i64) -> bool {
+    amount.unsigned_abs() > relay_money::ledger::MAX_AMOUNT as u64
+}
 
 /// The names the ledger stores its enums by (the Kotlin constant names).
 pub fn tx_type_name(t: TxType) -> &'static str {
@@ -238,6 +250,9 @@ pub fn bill_save(conn: &Connection, id: Option<i64>, input: &BillInput, today: D
     if input.amount <= 0 {
         return Err("Enter an amount above zero".into());
     }
+    if too_large(input.amount) {
+        return Err(TOO_LARGE.into());
+    }
     let transfer = input.kind == TxType::Transfer;
     if transfer && (input.to_account_id.is_none() || input.to_account_id == Some(input.account_id)) {
         return Err("A transfer needs two accounts".into());
@@ -261,7 +276,9 @@ pub fn bill_save(conn: &Connection, id: Option<i64>, input: &BillInput, today: D
             tx.prepare_cached(&format!(
                 "UPDATE recurring SET name = ?3, type = ?4, amount = ?5, account_id = ?6, to_account_id = ?7, category_id = ?8,
                  frequency = ?9, interval = ?10, anchor_date = ?11, next_date = ?12, auto_post = ?13, active = ?14, {BUMP}
-                 WHERE id = ?1"
+                 WHERE id = ?1 AND (name IS NOT ?3 OR type IS NOT ?4 OR amount IS NOT ?5 OR account_id IS NOT ?6 OR to_account_id IS NOT ?7
+                    OR category_id IS NOT ?8 OR frequency IS NOT ?9 OR interval IS NOT ?10 OR anchor_date IS NOT ?11 OR next_date IS NOT ?12
+                    OR auto_post IS NOT ?13 OR active IS NOT ?14)"
             ))
             .map_err(err)?
             .execute(params![b.id, Store::stamp().1, name, kind, input.amount, input.account_id, to, category, freq, interval, input.anchor.to_string(), next.to_string(), input.auto_post, input.active])
@@ -376,6 +393,9 @@ pub fn goal_save(conn: &Connection, id: Option<i64>, g: &GoalInput) -> Result<i6
     if name.is_empty() {
         return Err("Name the goal so you can find it later".into());
     }
+    if too_large(g.target) || too_large(g.start_amount) {
+        return Err(TOO_LARGE.into());
+    }
     let existing = match id {
         Some(id) => goal(conn, id)?,
         None => None,
@@ -385,7 +405,9 @@ pub fn goal_save(conn: &Connection, id: Option<i64>, g: &GoalInput) -> Result<i6
         Some(old) => {
             conn.prepare_cached(&format!(
                 "UPDATE goals SET name = ?3, target = ?4, target_date = ?5, color = ?6, kind = ?7, account_id = ?8, percent = ?9,
-                 start_date = ?10, start_amount = ?11, {BUMP} WHERE id = ?1"
+                 start_date = ?10, start_amount = ?11, {BUMP}
+                 WHERE id = ?1 AND (name IS NOT ?3 OR target IS NOT ?4 OR target_date IS NOT ?5 OR color IS NOT ?6 OR kind IS NOT ?7
+                    OR account_id IS NOT ?8 OR percent IS NOT ?9 OR start_date IS NOT ?10 OR start_amount IS NOT ?11)"
             ))
             .map_err(err)?
             .execute(params![old.id, Store::stamp().1, name, g.target, date_s, g.color, kind, g.account_id, g.percent, start_s, g.start_amount])
@@ -470,6 +492,9 @@ pub fn contributions(conn: &Connection, goal_id: i64) -> Result<Vec<Contribution
 pub fn contribute(conn: &Connection, goal_id: i64, amount: i64, date: Date, note: &str) -> Result<i64> {
     if amount == 0 {
         return Err("Enter an amount above zero".into());
+    }
+    if too_large(amount) {
+        return Err(TOO_LARGE.into());
     }
     if goal(conn, goal_id)?.is_none() {
         return Err("That goal is gone".into());

@@ -13,7 +13,7 @@ use relay_money::Date;
 use relay_money::copy;
 use relay_money::model::{CategoryKind, TxType};
 use relay_money::views::{CategoryView, TxQuery};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
 use crate::model::{Result, Store};
 
@@ -282,9 +282,19 @@ pub fn delete(store: &Store, id: i64, move_to: Option<i64>) -> Result<()> {
     let restamp = "updated_at = MAX(?3, MIN(updated_at, 4000000000000000) + 1)";
     let target = move_to.filter(|t| *t != id);
     if let Some(t) = target {
-        let ok: bool = tx.prepare("SELECT 1 FROM categories WHERE id = ?1 AND deleted = 0").map_err(err)?.exists([t]).map_err(err)?;
-        if !ok {
-            return Err("The category to move them to is gone".into());
+        // (its kind, the deleted one's kind): spending never moves under an income category.
+        let kinds: Option<(String, Option<String>)> = tx
+            .prepare("SELECT t.kind, (SELECT kind FROM categories WHERE id = ?2) FROM categories t WHERE t.id = ?1 AND t.deleted = 0")
+            .map_err(err)?
+            .query_row(params![t, id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()
+            .map_err(err)?;
+        match kinds {
+            None => return Err("The category to move them to is gone".into()),
+            Some((to, Some(from))) if to != from => {
+                return Err(if from == "INCOME" { "Move them to another income category" } else { "Move them to another spending category" }.into());
+            }
+            Some(_) => {}
         }
     }
     for table in ["transactions", "recurring"] {
