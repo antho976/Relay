@@ -125,15 +125,97 @@ struct Picture {
     uv: [f32; 4],
     w: u32,
     h: u32,
+    /// The part of the atlas it holds (x, y, w, h): at least the picture, kept whole for the
+    /// next picture when this one is evicted.
+    slot: [u32; 4],
+    /// The last frame that drew it.
+    used: u64,
 }
+
+/// The picture atlas's room. Pictures go on shelves; when there is no room, the picture drawn
+/// longest ago, and not lately, gives up its slot (nearly every picture is the same size, so a
+/// slot fits the next one). A picture drawn this frame or the last is never evicted, so the set a
+/// page shows stays put however many others come and go.
+struct ImageAtlas {
+    size: u32,
+    /// Next free place: x, y, and the height of the shelf being filled.
+    shelf: (u32, u32, u32),
+    /// Slots given up by evicted pictures.
+    free: Vec<[u32; 4]>,
+    pics: HashMap<String, Picture>,
+    /// The frame being drawn (counted by [`Canvas::begin`]).
+    frame: u64,
+}
+
+impl ImageAtlas {
+    fn new(size: u32) -> ImageAtlas {
+        ImageAtlas { size, shelf: (1, 1, 0), free: Vec::new(), pics: HashMap::new(), frame: 0 }
+    }
+
+    fn reset(&mut self) {
+        self.shelf = (1, 1, 0);
+        self.free.clear();
+        self.pics.clear();
+    }
+
+    fn shelf_place(&mut self, w: u32, h: u32) -> Option<[u32; 4]> {
+        let (mut x, mut y, mut row) = self.shelf;
+        if x + w + 1 > self.size {
+            x = 1;
+            y += row + 1;
+            row = 0;
+        }
+        if x + w + 1 > self.size || y + h + 1 > self.size {
+            return None;
+        }
+        self.shelf = (x + w + 1, y, row.max(h));
+        Some([x, y, w, h])
+    }
+
+    /// Room for a `w`×`h` picture under `key`, evicting only pictures last drawn before frame
+    /// `keep_from`. None when everything that could make room is still being drawn.
+    fn place(&mut self, key: &str, w: u32, h: u32, keep_from: u64) -> Option<[u32; 4]> {
+        let fits = |s: &[u32; 4]| s[2] >= w && s[3] >= h;
+        let slot = if let Some(i) = (0..self.free.len()).filter(|&i| fits(&self.free[i])).min_by_key(|&i| self.free[i][2] * self.free[i][3]) {
+            Some(self.free.swap_remove(i))
+        } else if let Some(s) = self.shelf_place(w, h) {
+            Some(s)
+        } else if let Some(old) = self
+            .pics
+            .iter()
+            .filter(|(_, p)| p.used < keep_from && fits(&p.slot))
+            .min_by_key(|(_, p)| (p.used, p.slot[2] * p.slot[3]))
+            .map(|(k, _)| k.clone())
+        {
+            self.pics.remove(&old).map(|p| p.slot)
+        } else if self.pics.values().all(|p| p.used < keep_from) {
+            // Nothing on screen, yet no single slot fits (an odd size): start the atlas over.
+            self.reset();
+            self.shelf_place(w, h)
+        } else {
+            None
+        }?;
+        let s = self.size as f32;
+        let (x, y) = (slot[0], slot[1]);
+        let uv = [(x as f32 + 0.5) / s, (y as f32 + 0.5) / s, (x + w) as f32 / s - 0.5 / s, (y + h) as f32 / s - 0.5 / s];
+        self.pics.insert(key.to_string(), Picture { uv, w, h, slot, used: self.frame });
+        Some([x, y, w, h])
+    }
+}
+
+/// How many decoded pictures may wait for room in the atlas.
+const MAX_WAITING: usize = 6;
 
 pub struct Canvas {
     pub insts: Vec<Inst>,
     pub batches: Vec<Batch>,
     pub uploads: Vec<AtlasUpload>,
     pub image_uploads: Vec<AtlasUpload>,
-    images: HashMap<String, Picture>,
-    image_shelf: (u32, u32, u32),
+    images: ImageAtlas,
+    /// Decoded pictures with no room yet: placed at the end of a frame that leaves some.
+    image_waiting: Vec<(String, u32, u32, Vec<u8>)>,
+    /// A waiting picture was placed after the frame was drawn: draw another.
+    image_late: bool,
     fonts: [fontdue::Font; 4],
     glyphs: HashMap<(u8, u16, u16), Glyph>,
     icons: HashMap<(&'static str, u16), Glyph>,
@@ -170,8 +252,9 @@ impl Canvas {
             batches: Vec::with_capacity(16),
             uploads: Vec::new(),
             image_uploads: Vec::new(),
-            images: HashMap::new(),
-            image_shelf: (1, 1, 0),
+            images: ImageAtlas::new(gfx::IMAGES_SIZE),
+            image_waiting: Vec::new(),
+            image_late: false,
             fonts: [load(fonts[0]), load(fonts[1]), load(fonts[2]), load(fonts[3])],
             glyphs: HashMap::with_capacity(512),
             icons: HashMap::with_capacity(64),
@@ -207,6 +290,7 @@ impl Canvas {
         self.dy = 0.0;
         self.fade = 1.0;
         self.globals.screen = [px_w, px_h];
+        self.images.frame += 1;
     }
 
     /// Close the last batch. Call once the frame is drawn.
@@ -215,6 +299,25 @@ impl Canvas {
         if let Some(b) = self.batches.last_mut() {
             b.end = n;
         }
+        // Pictures waiting for room take the slots of pictures this frame did not draw.
+        if !self.image_waiting.is_empty() {
+            let frame = self.images.frame;
+            for (key, w, h, pixels) in std::mem::take(&mut self.image_waiting) {
+                match self.images.place(&key, w, h, frame) {
+                    Some([x, y, w, h]) => {
+                        self.image_uploads.push(AtlasUpload { x, y, w, h, pixels });
+                        self.image_late = true;
+                    }
+                    None => self.image_waiting.push((key, w, h, pixels)),
+                }
+            }
+        }
+    }
+
+    /// True once after a picture became drawable when the frame was already drawn: the host
+    /// should draw another frame.
+    pub fn take_late_pictures(&mut self) -> bool {
+        std::mem::take(&mut self.image_late)
     }
 
     /// Left edge of the layout column, in pixels: centred when the target is wider.
@@ -311,37 +414,52 @@ impl Canvas {
 
     // Pictures
 
-    /// Put a picture (RGBA, row by row) in the atlas under `key`. False when the atlas is full.
+    /// Put a picture (RGBA, row by row) in the atlas under `key`. False when there is no room
+    /// yet: it waits, and takes the slot of a picture no longer drawn at the end of a frame
+    /// ([`Self::take_late_pictures`] then says so). Pictures drawn this frame or the last are
+    /// never evicted for it.
     pub fn add_image(&mut self, key: &str, w: u32, h: u32, pixels: Vec<u8>) -> bool {
-        if self.images.contains_key(key) || w == 0 || h == 0 || pixels.len() != (w * h * 4) as usize {
-            return self.images.contains_key(key);
+        if self.images.pics.contains_key(key) {
+            return true;
         }
-        let size = gfx::IMAGES_SIZE;
-        let (mut x, mut y, mut row) = self.image_shelf;
-        if x + w + 1 > size {
-            x = 1;
-            y += row + 1;
-            row = 0;
-        }
-        if y + h + 1 > size {
+        if w == 0 || h == 0 || w + 2 > self.images.size || h + 2 > self.images.size || pixels.len() != (w * h * 4) as usize {
             return false;
         }
-        self.image_shelf = (x + w + 1, y, row.max(h));
-        let s = size as f32;
-        let uv = [(x as f32 + 0.5) / s, (y as f32 + 0.5) / s, (x + w) as f32 / s - 0.5 / s, (y + h) as f32 / s - 0.5 / s];
-        self.images.insert(key.to_string(), Picture { uv, w, h });
-        self.image_uploads.push(AtlasUpload { x, y, w, h, pixels });
-        true
+        let keep_from = self.images.frame.saturating_sub(1);
+        if let Some([x, y, w, h]) = self.images.place(key, w, h, keep_from) {
+            self.image_waiting.retain(|(k, ..)| k != key);
+            self.image_uploads.push(AtlasUpload { x, y, w, h, pixels });
+            return true;
+        }
+        self.image_waiting.retain(|(k, ..)| k != key);
+        if self.image_waiting.len() >= MAX_WAITING {
+            self.image_waiting.remove(0);
+        }
+        self.image_waiting.push((key.to_string(), w, h, pixels));
+        false
     }
 
     pub fn has_image(&self, key: &str) -> bool {
-        self.images.contains_key(key)
+        self.images.pics.contains_key(key)
     }
 
-    /// Empty the picture atlas (it is full); pictures are added again as they are asked for.
+    /// Decoded and waiting for room in the atlas (asking for it again would decode it again).
+    pub fn image_waiting(&self, key: &str) -> bool {
+        self.image_waiting.iter().any(|(k, ..)| k == key)
+    }
+
+    /// Empty the picture atlas; pictures are added again as they are asked for.
     pub fn clear_images(&mut self) {
-        self.images.clear();
-        self.image_shelf = (1, 1, 0);
+        self.images.reset();
+        self.image_waiting.clear();
+    }
+
+    /// A picture about to be drawn: its place, marked as drawn this frame.
+    fn picture(&mut self, key: &str) -> Option<Picture> {
+        let frame = self.images.frame;
+        let p = self.images.pics.get_mut(key)?;
+        p.used = frame;
+        Some(*p)
     }
 
     /// Draw the picture `key` cropped to fill a rounded rectangle, as `ContentScale.Crop` does.
@@ -354,7 +472,7 @@ impl Canvas {
     /// into the box: a close-up, such as the coin in a small circle.
     #[allow(clippy::too_many_arguments)]
     pub fn image_part(&mut self, key: &str, x: f32, y: f32, w: f32, h: f32, radius: f32, tint: Rgba, part: [f32; 4]) -> bool {
-        let Some(p) = self.images.get(key).copied() else { return false };
+        let Some(p) = self.picture(key) else { return false };
         let [u0, v0, u1, v1] = p.uv;
         let (du, dv) = (u1 - u0, v1 - v0);
         let uv = [u0 + du * part[0], v0 + dv * part[1], u0 + du * part[2], v0 + dv * part[3]];
@@ -375,7 +493,7 @@ impl Canvas {
     /// down) when it is cropped: (0.5, 0.1) keeps the top, where a studio picture's object sits.
     #[allow(clippy::too_many_arguments)]
     pub fn image_cover_at(&mut self, key: &str, x: f32, y: f32, w: f32, h: f32, radius: f32, tint: Rgba, focus: (f32, f32)) -> bool {
-        let Some(p) = self.images.get(key).copied() else { return false };
+        let Some(p) = self.picture(key) else { return false };
         let [u0, v0, u1, v1] = p.uv;
         let (iw, ih) = (p.w as f32, p.h as f32);
         let (box_a, img_a) = (w / h.max(0.01), iw / ih);
@@ -695,4 +813,79 @@ fn raster_icon(name: &str, px: u32, size_units: f32) -> Vec<u8> {
 pub fn ease_out(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     1.0 - (1.0 - t).powi(3)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ImageAtlas;
+
+    /// The studio pictures' size: twelve fit the 3072 atlas.
+    const PW: u32 = 720;
+    const PH: u32 = 823;
+
+    fn key(i: usize) -> String {
+        format!("p{i}")
+    }
+
+    #[test]
+    fn a_full_atlas_evicts_the_picture_drawn_longest_ago() {
+        let mut a = ImageAtlas::new(3072);
+        a.frame = 1;
+        let mut n = 0;
+        while a.place(&key(n), PW, PH, 0).is_some() {
+            n += 1;
+        }
+        assert_eq!(n, 12);
+        // Frame 10 draws every picture but p3 (last drawn in frame 5).
+        a.frame = 10;
+        for (k, p) in a.pics.iter_mut() {
+            p.used = if k == "p3" { 5 } else { 10 };
+        }
+        let slot3 = a.pics["p3"].slot;
+        assert!(a.place("new", PW, PH, 9).is_some());
+        assert!(!a.pics.contains_key("p3"));
+        assert_eq!(a.pics["new"].slot, slot3);
+        assert_eq!(a.pics.len(), 12);
+    }
+
+    #[test]
+    fn pictures_on_screen_are_never_evicted() {
+        let mut a = ImageAtlas::new(3072);
+        a.frame = 1;
+        for i in 0..12 {
+            assert!(a.place(&key(i), PW, PH, 0).is_some());
+        }
+        // A thirteenth while all twelve are drawn each frame: it waits; nothing is cleared.
+        for frame in 2..50 {
+            a.frame = frame;
+            for p in a.pics.values_mut() {
+                p.used = frame;
+            }
+            assert!(a.place("p12", PW, PH, frame - 1).is_none());
+            assert_eq!(a.pics.len(), 12);
+        }
+    }
+
+    #[test]
+    fn an_odd_size_starts_over_only_when_nothing_is_on_screen() {
+        let mut a = ImageAtlas::new(3072);
+        a.frame = 1;
+        for i in 0..12 {
+            a.place(&key(i), PW, PH, 0).unwrap();
+        }
+        a.place("small", 336, 336, 0).unwrap();
+        // Fill the rest of the shelves so a wide picture has nowhere to go.
+        let mut i = 100;
+        while a.shelf_place(336, 336).is_some() {
+            i += 1;
+        }
+        assert!(i > 100);
+        a.frame = 5;
+        a.pics.get_mut("p0").unwrap().used = 5;
+        assert!(a.place("wide", 960, 552, 4).is_none(), "p0 is on screen");
+        a.pics.get_mut("p0").unwrap().used = 1;
+        let [x, y, w, h] = a.place("wide", 960, 552, 4).unwrap();
+        assert_eq!((x, y, w, h), (1, 1, 960, 552));
+        assert_eq!(a.pics.len(), 1);
+    }
 }

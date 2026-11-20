@@ -307,6 +307,10 @@ impl ApplicationHandler for Windowed {
             WindowEvent::RedrawRequested => {
                 let Some((gfx, screen)) = &mut self.gfx else { return };
                 self.next = app.frame(now_ns());
+                // A picture found room in the atlas after the frame was drawn: show it.
+                if app.canvas.take_late_pictures() {
+                    self.next = Next::Now;
+                }
                 gfx.upload_glyphs(&mut app.canvas.uploads);
                 gfx.upload_images(&mut app.canvas.image_uploads);
                 let (globals, clear) = (app.canvas.globals, app.clear_colour());

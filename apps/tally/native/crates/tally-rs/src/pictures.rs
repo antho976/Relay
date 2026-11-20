@@ -2,8 +2,9 @@
 //! dark one for Dark, made on the owner's PC with Qwen-Image.
 //!
 //! They are decoded off the UI thread the first time a screen asks for one, and handed to the
-//! canvas's picture atlas on the next frame. The atlas holds about a dozen; when it is full it is
-//! emptied and what is still on screen is asked for again.
+//! canvas's picture atlas on the next frame. The atlas holds about a dozen; when it is full, a
+//! picture no longer drawn gives up its place (`draw::Canvas::add_image`), and one that finds no
+//! room waits there rather than being decoded again.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -11,16 +12,24 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::draw::{Canvas, Rgba};
 
-/// Called from the decoding thread when a picture is ready, so a sleeping app draws it at once.
-static WAKE: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+type Waker = Box<dyn Fn() + Send + Sync>;
 
-pub fn has_waker() -> bool {
-    WAKE.get().is_some()
+/// Called from the decoding thread when a picture is ready, so a sleeping app draws it at once.
+/// Replaceable: Android starts the app's loop again for each new activity, with a new looper.
+static WAKE: Mutex<Option<Waker>> = Mutex::new(None);
+
+fn waker() -> std::sync::MutexGuard<'static, Option<Waker>> {
+    WAKE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// How the platform wakes the app's loop (Android: the activity's waker).
-pub fn set_waker(f: Box<dyn Fn() + Send + Sync>) {
-    let _ = WAKE.set(f);
+pub fn has_waker() -> bool {
+    waker().is_some()
+}
+
+/// How the platform wakes the app's loop (Android: the activity's waker). A later call replaces
+/// the earlier waker.
+pub fn set_waker(f: Waker) {
+    *waker() = Some(f);
 }
 
 /// Every picture, by the name screens use; `_d` is its Dark version.
@@ -161,15 +170,20 @@ fn shared() -> &'static Mutex<Shared> {
             .spawn(move || {
                 for key in rx {
                     let Some((_, bytes)) = FILES.iter().find(|(n, _)| *n == key) else { continue };
-                    let Ok(img) = image::load_from_memory_with_format(bytes, image::ImageFormat::WebP) else { continue };
-                    let img = img.to_rgba8();
-                    let (w, h) = img.dimensions();
-                    let px = img.into_raw();
-                    let ground = foot(&px, w, h);
+                    // A picture that fails to decode (or panics the decoder) stays a plain box;
+                    // the thread lives on for the others.
+                    let decoded = std::panic::catch_unwind(|| {
+                        let img = image::load_from_memory_with_format(bytes, image::ImageFormat::WebP).ok()?.to_rgba8();
+                        let (w, h) = img.dimensions();
+                        let px = img.into_raw();
+                        let ground = foot(&px, w, h);
+                        Some((w, h, px, ground))
+                    });
+                    let Ok(Some((w, h, px, ground))) = decoded else { continue };
                     if tx.send((key, w, h, px, ground)).is_err() {
                         break;
                     }
-                    if let Some(wake) = WAKE.get() {
+                    if let Some(wake) = waker().as_ref() {
                         wake();
                     }
                 }
@@ -183,6 +197,9 @@ fn shared() -> &'static Mutex<Shared> {
 pub fn ensure(c: &mut Canvas, key: &'static str) -> bool {
     if c.has_image(key) {
         return true;
+    }
+    if c.image_waiting(key) {
+        return false;
     }
     let mut s = shared().lock().expect("pictures lock");
     if s.asked.insert(key) {
@@ -198,12 +215,8 @@ pub fn drain(c: &mut Canvas) -> bool {
     let mut arrived = false;
     while let Ok((key, w, h, px, ground)) = s.done.try_recv() {
         s.grounds.insert(key, ground);
-        if !c.add_image(key, w, h, px.clone()) {
-            // Full: start the atlas over with this one; the rest are asked for again as drawn.
-            c.clear_images();
-            s.asked.clear();
-            c.add_image(key, w, h, px);
-        }
+        // Placed now, or kept by the canvas until a picture no longer drawn makes room.
+        c.add_image(key, w, h, px);
         s.asked.remove(key);
         arrived = true;
     }
