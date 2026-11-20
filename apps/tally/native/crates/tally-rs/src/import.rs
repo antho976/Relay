@@ -106,6 +106,25 @@ impl State {
     fn account_name(&self, id: Option<i64>) -> Option<String> {
         id.and_then(|id| self.accounts.iter().find(|a| a.id == id)).map(|a| a.name.clone())
     }
+    /// Back on a preview left open: entries may have come or gone since, and an account it names
+    /// may have been archived or deleted. Duplicates are read again from the ledger, and a target,
+    /// counterpart or mapping that is no longer open is let go (a new account, or the owner picks).
+    fn revalidate(&mut self) {
+        let open = |id: &i64| self.accounts.iter().any(|a| a.id == *id);
+        self.target = self.target.filter(open);
+        self.choices.counterpart = self.choices.counterpart.filter(open);
+        if let Some(inv) = &mut self.invest {
+            inv.statement_account = inv.statement_account.filter(open);
+            for (_, id) in &mut inv.mapping {
+                *id = id.filter(open);
+            }
+        }
+        if self.picking == Some(Pick::Target) || self.picking == Some(Pick::Counterpart) {
+            self.picking = None;
+        }
+        self.existing_for = None;
+        self.stale = true;
+    }
     fn reset(&mut self) {
         self.stage = Stage::Choose;
         self.problem = None;
@@ -140,6 +159,11 @@ type SheetItems = Vec<(String, Option<String>)>;
 
 const NEW_NAME: &str = "import.new_name";
 
+/// Back closes the account picker when it is open.
+pub fn back(app: &mut App) -> bool {
+    app.st.import.picking.take().is_some()
+}
+
 pub fn draw(app: &mut App, dt: f32) -> bool {
     if app.fresh && app.st.import.stage != Stage::Reading {
         let st = &mut app.st.import;
@@ -147,6 +171,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         st.categories = app.store.ledger.categories().unwrap_or_default();
         if st.stage == Stage::Done {
             st.reset();
+        }
+        if st.stage == Stage::Preview {
+            st.revalidate();
         }
     }
     let waiting = poll(app);

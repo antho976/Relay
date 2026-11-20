@@ -1,8 +1,8 @@
 # Tally RS
 
 Tally in Rust, drawn with wgpu (asked for 2026-11-19: the owner writes their apps in Rust now).
-It installs beside the Kotlin app as **Tally RS** (`com.quietsoftware.tally.rs`, violet icon) and
-takes over the real package once it can do everything the Kotlin app does.
+It installs as **Tally RS** (`com.quietsoftware.tally.rs`, violet icon). The Kotlin app it was ported
+from left the repo after `cf4b63b` (2026-11-20); read it there with `git show cf4b63b:app/...`.
 
 ## What it is made of
 
@@ -13,7 +13,7 @@ takes over the real package once it can do everything the Kotlin app does.
 | `draw.rs` | The canvas: boxes, soft shadows, arcs, text (fontdue, Geist and Sora), icons (zeno), pictures. Units are 1/390 of the phone's width, like the design canvas. |
 | `kit.rs`, `theme.rs`, `pictures.rs` | The premium look (DESIGN.md): Light and Dark palettes, cards, picture cards, rows, badges, meters, keys, carousels, and the pictures. |
 | `overview.rs`, `entry.rs` | The screens ported so far. |
-| `glyphs.rs`, `category_icons.rs` | Generated: Relay's glyphs from the Kotlin `Glyphs.kt`/`Icon.kt` (`tools/gen_glyphs.py`), and the category icons as the Kotlin app draws them, Material Rounded from Google's Apache-2.0 SVGs (`tools/gen_category_icons.py`). |
+| `glyphs.rs`, `category_icons.rs` | Generated: Relay's glyphs from the Kotlin `Glyphs.kt`/`Icon.kt` at `cf4b63b` (`tools/gen_glyphs.py`), and the category icons as the Kotlin app draws them, Material Rounded from Google's Apache-2.0 SVGs (`tools/gen_category_icons.py`). |
 | `desktop.rs` | A phone-shaped window (winit) and `--shot` screenshots with no window. |
 | `android.rs`, `android/` | GameActivity (the AndroidX activity that gives a native app the soft keyboard) and a Gradle module that only packs `libtally.so` with it. No Kotlin or Java of our own. |
 
@@ -53,7 +53,10 @@ Currency and dates, Backup and export, About), `import` (bank statements, Wealth
 Sync (`sync*.rs`): pairing as the Kotlin app does (`/api/tally`, `/enroll`, `/claim`, the door),
 then two-way `money.sync`. Tally RS never asks to connect by itself (each ask DMs the owner), and
 can never replace the server's ledger: its first sync only pulls (`sync_ledger.rs` makes a
-replace unrepresentable; tests check it against a fake server).
+replace unrepresentable; tests check it against a fake server). A ledger replaced on the phone
+(Erase everything, the sample) never pushes its deletions: the next sync takes the server's ledger
+whole instead. Restore asks you to disconnect first. Plain `ws://`/`http://` is used only to
+loopback, private-LAN and Tailscale (100.64/10) addresses.
 
 Writes relay-money has no call for (bills, goals, contributions, categories, account kind and
 opening balance, the week start) go through `Store::sql()` in `*_store.rs`, each tested by reading
@@ -65,8 +68,9 @@ Back (AndroidX would finish the activity), and the system bars' icon colour.
 
 Not done yet:
 
-1. Background work while the app is closed: sync (WorkManager in the Kotlin app), bill reminder
+1. Background work while the app is closed: sync (WorkManager in the Kotlin app did it), bill reminder
    notifications, the weekly backup. Bills that fell due are posted when the app opens.
 2. The server's Plaid ops (docs/PLAID.md) are not in RelayV4 yet; Connected banks says so.
 3. Insights' Worth lens, the repeat toggle on a new entry, Kotlin's onboarding set-up questions.
-4. Then it takes the package `com.quietsoftware.tally2` and the Kotlin app retires.
+4. Taking the package `com.quietsoftware.tally2` (it needs that app's signing key, `keystore.properties`),
+   so phones with the Kotlin app update in place instead of installing beside it.

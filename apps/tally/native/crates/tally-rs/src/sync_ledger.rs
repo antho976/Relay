@@ -34,6 +34,8 @@ pub const PAGE: u32 = 2_000;
 pub const SCHEMA: &str = "bus.schema";
 /// The server's ledger is not the one this phone last merged with.
 pub const STALE: &str = "money.sync_stale";
+/// This phone's ledger is not the one it last merged with: it sends nothing.
+pub const STALE_HERE: &str = "tally.sync_stale_here";
 
 /// The name the server is recorded under in this phone's ledger (`sync.device.*`).
 const LOCAL: &str = "Your server";
@@ -190,18 +192,34 @@ fn err(e: impl std::fmt::Display) -> Failure {
     fail("tally.ledger", format!("This phone's ledger could not take it: {e}"))
 }
 
-/// Whether this phone's ledger is still the one the last sync saw (not restored or replaced since).
+/// Whether this phone's ledger is still the one the last sync saw (not restored, erased or
+/// replaced since).
 fn same_ledger(store: &Store) -> bool {
-    store.pref(LOCAL_GENERATION).is_some_and(|g| store.ledger.generation().is_ok_and(|mine| mine == g))
+    store.pref(LOCAL_GENERATION).is_some_and(|g| !g.is_empty() && store.ledger.generation().is_ok_and(|mine| mine == g))
+}
+
+/// relay-money's `sync_page` on this phone's own ledger. It records the server as a device synced
+/// with, which would stop bills posting here: the record goes again at once.
+fn local_page(store: &mut Store, replace: bool, since: i64, changes: &[Change]) -> Result<relay_money::views::SyncOut, Failure> {
+    let out = store.ledger.sync_page(LOCAL, replace, since, None, changes, None, &now_text()).map_err(err);
+    store.forget_sync_records();
+    out
 }
 
 /// The rows changed on this phone since the last push, and the local cursor they were read at.
-/// A ledger replaced here since (a restore) sends everything: the server merges it, newest wins.
+///
+/// Only from the ledger the last sync saw. One replaced here since (an erase, a restore, the
+/// sample) holds a tombstone for every row it had: sent, they would erase the server's ledger. So
+/// such a ledger sends nothing, ever; the next sync takes the server's whole instead
+/// ([`next_ask`]).
 pub fn collect(store: &mut Store) -> Result<(Vec<Change>, i64), Failure> {
+    if !same_ledger(store) {
+        return Err(fail(STALE_HERE, "This phone's ledger was replaced since it last synced, so it sends nothing; the next sync takes your server's"));
+    }
     let pushed = store.pref(PUSHED).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
     let cursor = store.ledger.cursor().map_err(err)?;
-    let since = if same_ledger(store) && pushed <= cursor { pushed } else { 0 };
-    let out = store.ledger.sync_page(LOCAL, false, since, None, &[], None, &now_text()).map_err(err)?;
+    let since = if pushed <= cursor { pushed } else { 0 };
+    let out = local_page(store, false, since, &[])?;
     Ok((out.changes, out.cursor))
 }
 
@@ -218,35 +236,43 @@ pub struct Applied {
 /// `collected_at` is the local cursor the sent rows were read at (None for a whole sync).
 pub fn apply(store: &mut Store, answer: &Answer, collected_at: Option<i64>) -> Result<Applied, Failure> {
     let (received, pushed, again) = if answer.whole {
-        let out = store.ledger.sync_page(LOCAL, true, 0, None, &answer.changes, None, &now_text()).map_err(err)?;
-        (out.applied, Some(out.cursor), false)
+        let out = local_page(store, true, 0, &answer.changes)?;
+        (out.applied, out.cursor, false)
     } else {
         let at = collected_at.unwrap_or(0);
-        if same_ledger(store) && at <= store.ledger.cursor().map_err(err)? {
-            let out = store.ledger.sync_page(LOCAL, false, at, None, &answer.changes, None, &now_text()).map_err(err)?;
-            // Rows numbered after `at` that this answer did not bring were edited here meanwhile.
-            if out.changes.is_empty() { (out.applied, Some(out.cursor), false) } else { (out.applied, Some(at), true) }
-        } else {
-            // This ledger was replaced while the sync ran: merge, and send all of it next time.
-            let out = store.ledger.sync_page(LOCAL, false, 0, None, &answer.changes, None, &now_text()).map_err(err)?;
-            (out.applied, None, true)
+        if !same_ledger(store) || at > store.ledger.cursor().map_err(err)? {
+            // This ledger was replaced while the sync ran (an erase, a restore): it is not the one
+            // the answer is for, and what it holds must never go up. Nothing is applied; the next
+            // sync takes the server's ledger whole.
+            forget(store);
+            return Ok(Applied { received: 0, again: true });
         }
+        let out = local_page(store, false, at, &answer.changes)?;
+        // Rows numbered after `at` that this answer did not bring were edited here meanwhile.
+        if out.changes.is_empty() { (out.applied, out.cursor, false) } else { (out.applied, at, true) }
     };
     let local_gen = store.ledger.generation().map_err(err)?;
-    let mut save = |k: &str, v: &str| store.set_pref(k, v).map_err(err);
-    save(CURSOR, &answer.cursor.to_string())?;
-    save(GENERATION, answer.generation.as_str())?;
-    save(PUSHED, &pushed.unwrap_or(0).to_string())?;
-    save(LOCAL_GENERATION, if pushed.is_some() { &local_gen } else { "" })?;
-    // Last: a merge needs it, and it says the server's ledger is here.
-    save(PULLED, "1")?;
+    store.holding_prefs(|store| {
+        let mut save = |k: &str, v: &str| store.set_pref(k, v).map_err(err);
+        save(CURSOR, &answer.cursor.to_string())?;
+        save(GENERATION, answer.generation.as_str())?;
+        save(PUSHED, &pushed.to_string())?;
+        save(LOCAL_GENERATION, &local_gen)?;
+        // Last: a merge needs it, and it says the server's ledger is here.
+        save(PULLED, "1")
+    })?;
     Ok(Applied { received, again })
 }
 
 /// The next sync's ask: a merge of what changed here once this phone holds the server's ledger,
-/// its whole ledger before. Returns the local cursor the rows were read at.
+/// its whole ledger before, or after this phone's ledger was replaced here. Returns the local
+/// cursor the rows were read at.
 pub fn next_ask(store: &mut Store) -> Result<(Ask, Option<i64>), Failure> {
     let Some(generation) = Generation::saved(store) else { return Ok((Ask::Whole, None)) };
+    if !same_ledger(store) {
+        forget(store);
+        return Ok((Ask::Whole, None));
+    }
     let since = store.pref(CURSOR).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
     let (changes, at) = collect(store)?;
     Ok((Ask::Merge { since, generation, changes }, Some(at)))
@@ -255,9 +281,11 @@ pub fn next_ask(store: &mut Store) -> Result<(Ask, Option<i64>), Failure> {
 /// Forget where sync stood with the server (a new pairing, or a disconnect): the next sync takes
 /// the server's ledger whole again.
 pub fn forget(store: &mut Store) {
-    for k in [PULLED, GENERATION, CURSOR, PUSHED, LOCAL_GENERATION] {
-        let _ = store.clear_pref(k);
-    }
+    store.holding_prefs(|store| {
+        for k in [PULLED, GENERATION, CURSOR, PUSHED, LOCAL_GENERATION] {
+            let _ = store.clear_pref(k);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -477,6 +505,125 @@ pub mod tests {
         assert!(applied.again);
         sync_once(&mut phone, &mut server);
         assert!(server.entries().contains(&meanwhile.uid));
+    }
+
+    /// How many rows, and how many deletions, the phone has sent the server so far.
+    fn sent(server: &FakeServer) -> (usize, usize) {
+        let all: Vec<&Value> = server.requests.iter().flat_map(|r| r["changes"].as_array().unwrap().iter()).collect();
+        (all.len(), all.iter().filter(|c| c["deleted"] == Value::Bool(true)).count())
+    }
+
+    /// A ledger in a file of its own: the second connection is there, as on the phone.
+    pub fn file_store() -> (Store, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("tally-sync-ledger-{}", uuid::Uuid::new_v4()));
+        (Store::open(&dir.join("tally.db")).unwrap(), dir)
+    }
+
+    #[test]
+    fn an_erase_on_a_synced_phone_sends_nothing_and_takes_the_servers_ledger_back() {
+        let mut server = FakeServer::with_owners_ledger();
+        let before = server.entries();
+        let mut phone = Store::in_memory().unwrap();
+        sync_once(&mut phone, &mut server);
+        let (rows_before, _) = sent(&server);
+        // Erase everything, as Settings does, and sync without being told: the clear's
+        // tombstones never go.
+        phone.ledger.reset().unwrap();
+        phone.ledger.ensure_categories().unwrap();
+        let (ask, _) = next_ask(&mut phone).unwrap();
+        assert!(matches!(ask, Ask::Whole), "a ledger replaced here only pulls");
+        assert!(collect(&mut phone).is_err() || phone.pref(PULLED).is_none());
+        sync_once(&mut phone, &mut server);
+        sync_once(&mut phone, &mut server);
+        assert_eq!(sent(&server), (rows_before, 0), "not one row, and not one tombstone, went up");
+        assert_eq!(server.entries(), before);
+        assert_eq!(server.replaces, 0);
+        assert_eq!(all_uids(&phone.ledger), before, "the server's ledger came back here");
+    }
+
+    #[test]
+    fn a_restore_on_a_synced_phone_sends_nothing() {
+        let mut server = FakeServer::with_owners_ledger();
+        let before = server.entries();
+        let mut phone = Store::in_memory().unwrap();
+        sync_once(&mut phone, &mut server);
+        let mut other = Store::in_memory().unwrap();
+        other.load_sample(crate::model::today()).unwrap();
+        let file = other.ledger.export_backup("t").unwrap();
+        phone.ledger.import_backup(&file).unwrap();
+        // As Settings does after it, and without it.
+        for forget_first in [true, false] {
+            if forget_first {
+                forget(&mut phone);
+            }
+            sync_once(&mut phone, &mut server);
+            assert_eq!(sent(&server).1, 0, "no tombstone went up");
+            assert_eq!(server.entries(), before);
+            phone.ledger.import_backup(&file).unwrap();
+        }
+        assert_eq!(sent(&server).0, 0, "nothing at all went up");
+        assert_eq!(server.replaces, 0);
+    }
+
+    #[test]
+    fn an_erase_while_a_sync_runs_drops_its_answer_and_sends_nothing() {
+        let mut server = FakeServer::with_owners_ledger();
+        let before = server.entries();
+        let mut phone = Store::in_memory().unwrap();
+        sync_once(&mut phone, &mut server);
+        let (ask, at) = next_ask(&mut phone).unwrap();
+        let answer = exchange(&mut server, "Tally RS", ask).unwrap();
+        phone.ledger.reset().unwrap();
+        let applied = apply_store(&mut phone, &answer, at);
+        assert_eq!(applied, Applied { received: 0, again: true });
+        sync_once(&mut phone, &mut server);
+        assert_eq!(sent(&server), (0, 0));
+        assert_eq!(server.entries(), before);
+        assert_eq!(all_uids(&phone.ledger), before);
+    }
+
+    #[test]
+    fn bills_still_post_here_after_a_sync() {
+        let mut server = FakeServer::with_owners_ledger();
+        let (mut phone, dir) = file_store();
+        sync_once(&mut phone, &mut server);
+        sync_once(&mut phone, &mut server);
+        assert!(phone.ledger.synced_devices().unwrap().is_empty(), "the server is not recorded as a device here");
+        let today = crate::model::today();
+        let account = phone.ledger.accounts().unwrap()[0].id;
+        let bill = crate::plan_store::BillInput {
+            name: "Phone plan".into(),
+            kind: TxType::Expense,
+            amount: 55_00,
+            account_id: account,
+            to_account_id: None,
+            category_id: None,
+            frequency: relay_money::recurrence::Frequency::Monthly,
+            interval: 1,
+            anchor: today,
+            auto_post: true,
+            active: true,
+        };
+        crate::plan_store::bill_save(phone.sql().unwrap(), None, &bill, today).unwrap();
+        assert!(phone.ledger.post_due(today).unwrap() >= 1, "the bill due today posted");
+        // And the posted entry goes up on the next sync, as an edit here does.
+        let n = server.entries().len();
+        sync_once(&mut phone, &mut server);
+        assert!(server.entries().len() > n);
+        drop(phone);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_ledger_synced_before_this_build_posts_bills_again_once_opened() {
+        let (phone, dir) = file_store();
+        phone.sql().unwrap().execute("INSERT INTO settings (key, value, updated_at) VALUES ('sync.device.Your server', 't', 0)", []).unwrap();
+        assert!(!phone.ledger.synced_devices().unwrap().is_empty());
+        drop(phone);
+        let phone = Store::open(&dir.join("tally.db")).unwrap();
+        assert!(phone.ledger.synced_devices().unwrap().is_empty());
+        drop(phone);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

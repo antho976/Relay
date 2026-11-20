@@ -1,8 +1,14 @@
 //! The Android build: GameActivity (for the keyboard), everything else in Rust.
 //!
 //! One thread runs the app. Each turn of the loop takes pending system events, then every pending
-//! touch and keyboard event, then draws a frame. When nothing is moving it sleeps until there is
-//! input. The system bars and the keyboard are read from the window's insets.
+//! touch and keyboard event, then draws a frame if anything asked for one: input, a system event,
+//! a wake from another thread, or the app itself (`Next`). Otherwise it sleeps until there is
+//! input, or until the time the app named. The system bars and the keyboard are read from the
+//! window's insets when they change, and a few times a second while the keyboard may be moving.
+//!
+//! JNI from this thread: it is attached for as long as `android_main` runs, and never returns to
+//! Java, so local references would pile up until the VM aborts. Every JNI sequence runs inside a
+//! local frame ([`with_activity`]), which frees them.
 //!
 //! What only Android can do for the app goes through JNI: the browser (an `ACTION_VIEW` intent),
 //! the file picker and the share sheet. The last two need Java callbacks (an activity result, and
@@ -13,7 +19,7 @@
 use std::ffi::CString;
 use std::path::PathBuf;
 use std::ptr::NonNull;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use android_activity::input::{InputEvent, InputType, ImeOptions, KeyAction, Keycode, MotionAction, TextInputAction, TextInputState, TextSpan};
@@ -61,7 +67,10 @@ impl Host for AndroidHost {
                 TextInputAction::Done,
                 ImeOptions::empty(),
             );
-            let end = text.len();
+            // The caret after the last character. GameTextInput hands the span to Java's
+            // `setSelection`, which counts UTF-16 units, not UTF-8 bytes ("Café", €, emoji).
+            // (Spans coming back in `TextEvent`s count the same way; the app takes only the text.)
+            let end = utf16_len(text);
             self.app.set_text_input_state(TextInputState { text: text.to_string(), selection: TextSpan { start: end, end }, compose_region: None });
             self.app.show_soft_input(true);
         } else {
@@ -132,28 +141,45 @@ impl Host for AndroidHost {
     }
 }
 
-/// Runs `f` with this thread attached to the VM and the activity at hand. A Java exception is
-/// cleared and logged, and makes it answer none.
+/// Length of `text` in UTF-16 units, the way Java's strings (and the keyboard's spans) count.
+fn utf16_len(text: &str) -> usize {
+    text.chars().map(char::len_utf16).sum()
+}
+
+/// Runs `f` with this thread attached to the VM and the activity at hand, inside a local frame:
+/// every local reference `f` makes is freed when it returns (this thread never returns to Java,
+/// which would otherwise free them), so `f` must not return one. A Java exception is cleared and
+/// logged, and makes it answer none.
 fn with_activity<T>(app: &AndroidApp, f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<T>) -> Option<T> {
-    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }.ok()?;
-    let mut env = vm.attach_current_thread().ok()?;
+    with_activity_quiet(app, f).map_err(|e| log(&format!("jni: {e}"))).ok()
+}
+
+/// As [`with_activity`], answering the error rather than logging it.
+fn with_activity_quiet<T>(app: &AndroidApp, f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<T>) -> jni::errors::Result<T> {
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }?;
+    // The loop's thread is attached already: this only borrows the attachment (and never
+    // detaches it).
+    let mut env = vm.attach_current_thread()?;
+    // A global reference that android-activity holds for the activity's life; never deleted here.
     let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
-    let out = f(&mut env, &activity);
+    let out = env.with_local_frame(16, |env| f(env, &activity));
     if env.exception_check().unwrap_or(false) {
         let _ = env.exception_describe();
         let _ = env.exception_clear();
     }
-    match out {
-        Ok(v) => Some(v),
-        Err(e) => {
-            log(&format!("jni: {e}"));
-            None
-        }
-    }
+    out
 }
 
-/// Wakes the app's loop from another thread: a picked file arrived.
-static WAKER: std::sync::OnceLock<AndroidAppWaker> = std::sync::OnceLock::new();
+/// Wakes the app's loop from another thread: a picked file arrived, Back, a decoded picture.
+/// Replaced on each `android_main`: Android starts the loop again, with a new looper, for each new
+/// activity, and a waker for the old one would wake nothing.
+static WAKER: Mutex<Option<AndroidAppWaker>> = Mutex::new(None);
+
+fn wake() {
+    if let Some(w) = WAKER.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        w.wake();
+    }
+}
 
 /// `TallyActivity.nativeFilePicked`: the file the person picked, read by the activity on a thread
 /// of its own (an empty array when it could not be read).
@@ -163,9 +189,7 @@ pub extern "system" fn Java_com_tally_rs_TallyActivity_nativeFilePicked<'local>(
     let bytes = if bytes.is_null() { Vec::new() } else { env.convert_byte_array(&bytes).unwrap_or_default() };
     let bytes = if bytes.len() > crate::settings_files::MAX_PICK_BYTES { Vec::new() } else { bytes };
     crate::settings_files::deliver(name, bytes);
-    if let Some(w) = WAKER.get() {
-        w.wake();
-    }
+    wake();
 }
 
 /// Back, from TallyActivity's back callback (AndroidX would otherwise finish the activity).
@@ -174,9 +198,7 @@ static BACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_tally_rs_TallyActivity_nativeBack<'local>(_env: JNIEnv<'local>, _class: JClass<'local>) {
     BACK.store(true, std::sync::atomic::Ordering::SeqCst);
-    if let Some(w) = WAKER.get() {
-        w.wake();
-    }
+    wake();
 }
 
 #[link(name = "log")]
@@ -203,53 +225,88 @@ fn prefer_high_refresh(window: NonNull<std::ffi::c_void>) {
     }
 }
 
-/// The system bars' and the keyboard's insets, in pixels: (top, bottom bars, keyboard).
-fn insets(app: &AndroidApp) -> Option<(f32, f32, f32)> {
-    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }.ok()?;
-    let mut env = vm.attach_current_thread().ok()?;
-    let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
-    let result = (|| -> jni::errors::Result<Option<(f32, f32, f32)>> {
-        let window = env.call_method(&activity, "getWindow", "()Landroid/view/Window;", &[])?.l()?;
-        let decor = env.call_method(&window, "getDecorView", "()Landroid/view/View;", &[])?.l()?;
-        let insets = env.call_method(&decor, "getRootWindowInsets", "()Landroid/view/WindowInsets;", &[])?.l()?;
-        if insets.is_null() {
-            return Ok(None);
+/// How this Android reports the window's insets, decided once.
+enum InsetsApi {
+    /// Android 11 and later: `WindowInsets.getInsets(Type)`, with the masks of `Type.systemBars()`,
+    /// `Type.displayCutout()` and `Type.ime()`.
+    Types { bars: i32, cutout: i32, ime: i32 },
+    /// Android 8 to 10 (`WindowInsets$Type` does not exist): the system window insets, which
+    /// include the keyboard (the activity resizes for it), beside the stable ones, which do not.
+    Legacy { cutout: bool },
+}
+
+impl InsetsApi {
+    fn new(app: &AndroidApp) -> InsetsApi {
+        let sdk = AndroidApp::sdk_version();
+        let legacy = InsetsApi::Legacy { cutout: sdk >= 28 };
+        if sdk < 30 {
+            return legacy;
         }
-        let mut read = |kind: &str| -> jni::errors::Result<(i32, i32)> {
-            let t = env.call_static_method("android/view/WindowInsets$Type", kind, "()I", &[])?.i()?;
-            let i = env.call_method(&insets, "getInsets", "(I)Landroid/graphics/Insets;", &[JValue::Int(t)])?.l()?;
-            Ok((env.get_field(&i, "top", "I")?.i()?, env.get_field(&i, "bottom", "I")?.i()?))
-        };
-        let (top, bottom) = read("systemBars")?;
-        let (cut_top, _) = read("displayCutout")?;
-        let (_, ime) = read("ime")?;
-        Ok(Some((top.max(cut_top) as f32, bottom as f32, ime as f32)))
-    })();
-    let _ = env.exception_clear();
-    result.ok().flatten()
+        let types = with_activity(app, |env, _| {
+            let mut mask = |kind: &str| env.call_static_method("android/view/WindowInsets$Type", kind, "()I", &[])?.i();
+            Ok(InsetsApi::Types { bars: mask("systemBars")?, cutout: mask("displayCutout")?, ime: mask("ime")? })
+        });
+        types.unwrap_or(legacy)
+    }
+
+    /// The system bars' and the keyboard's insets, in pixels: (top, bottom bars, keyboard). The
+    /// keyboard's is measured from the screen's bottom (it includes the bar under it).
+    fn read(&self, app: &AndroidApp) -> Option<(f32, f32, f32)> {
+        let read = with_activity_quiet(app, |env, activity| -> jni::errors::Result<Option<(f32, f32, f32)>> {
+            let window = env.call_method(activity, "getWindow", "()Landroid/view/Window;", &[])?.l()?;
+            let decor = env.call_method(&window, "getDecorView", "()Landroid/view/View;", &[])?.l()?;
+            let insets = env.call_method(&decor, "getRootWindowInsets", "()Landroid/view/WindowInsets;", &[])?.l()?;
+            if insets.is_null() {
+                return Ok(None);
+            }
+            match *self {
+                InsetsApi::Types { bars, cutout, ime } => {
+                    let mut read = |mask: i32| -> jni::errors::Result<(i32, i32)> {
+                        let i = env.call_method(&insets, "getInsets", "(I)Landroid/graphics/Insets;", &[JValue::Int(mask)])?.l()?;
+                        Ok((env.get_field(&i, "top", "I")?.i()?, env.get_field(&i, "bottom", "I")?.i()?))
+                    };
+                    let (top, bottom) = read(bars)?;
+                    let (cut_top, _) = read(cutout)?;
+                    let (_, ime) = read(ime)?;
+                    Ok(Some((top.max(cut_top) as f32, bottom as f32, ime as f32)))
+                }
+                InsetsApi::Legacy { cutout } => {
+                    let mut int = |name: &str| -> jni::errors::Result<i32> { env.call_method(&insets, name, "()I", &[])?.i() };
+                    let top = int("getSystemWindowInsetTop")?;
+                    let bars = int("getStableInsetBottom")?;
+                    let with_keyboard = int("getSystemWindowInsetBottom")?;
+                    let mut cut_top = 0;
+                    if cutout {
+                        let c = env.call_method(&insets, "getDisplayCutout", "()Landroid/view/DisplayCutout;", &[])?.l()?;
+                        if !c.is_null() {
+                            cut_top = env.call_method(&c, "getSafeInsetTop", "()I", &[])?.i()?;
+                        }
+                    }
+                    Ok(Some((top.max(cut_top) as f32, bars as f32, with_keyboard.max(bars) as f32)))
+                }
+            }
+        });
+        read.ok().flatten()
+    }
 }
 
 /// Send the task to the back, as the back gesture does on an app's first screen.
 fn leave(app: &AndroidApp) {
-    let run = || -> Result<(), jni::errors::Error> {
-        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }?;
-        let mut env = vm.attach_current_thread()?;
-        let activity = unsafe { jni::objects::JObject::from_raw(app.activity_as_ptr().cast()) };
-        env.call_method(&activity, "moveTaskToBack", "(Z)Z", &[jni::objects::JValue::Bool(1)])?;
-        Ok(())
-    };
-    let _ = run();
+    with_activity(app, |env, activity| env.call_method(activity, "moveTaskToBack", "(Z)Z", &[JValue::Bool(1)]).map(|_| ()));
 }
+
+/// While the keyboard may be moving (a field has focus, or it was just put away), the insets are
+/// read this often.
+const KEYBOARD_POLL: Duration = Duration::from_millis(120);
+/// How long after typing ends the insets are still watched: the keyboard slides away.
+const KEYBOARD_SETTLE_NS: u64 = 1_500_000_000;
 
 #[unsafe(no_mangle)]
 fn android_main(android: AndroidApp) {
     std::panic::set_hook(Box::new(|info| log(&format!("panic: {info}"))));
-    let _ = WAKER.set(android.create_waker());
-    crate::pictures::set_waker(Box::new(|| {
-        if let Some(w) = WAKER.get() {
-            w.wake();
-        }
-    }));
+    // Called again for each new activity: the wakers must wake this loop, not the last one.
+    *WAKER.lock().unwrap_or_else(|e| e.into_inner()) = Some(android.create_waker());
+    crate::pictures::set_waker(Box::new(wake));
     let host = Arc::new(AndroidHost { app: android.clone() });
     let mut app = App::new(host, now_ns());
     let mut gfx: Option<Gfx> = None;
@@ -257,26 +314,47 @@ fn android_main(android: AndroidApp) {
     // Kept alive for as long as `screen` draws to it.
     let mut window = None;
     let mut next = Next::Now;
+    // Something happened that the next frame must show (input, a wake, the window or insets).
+    let mut dirty = true;
     let mut foreground = false;
     let mut quit = false;
     let mut last_insets = (0.0, 0.0, 0.0);
+    let mut insets_api: Option<InsetsApi> = None;
+    // Until when the keyboard's insets are watched without an event saying they changed.
+    let mut watch_until = 0u64;
     // The bars' icons and the launcher icon follow the palette: dark icons on Light, light on Dark.
     let mut bars_light: Option<bool> = None;
 
     while !quit {
         let drawing = screen.is_some() && foreground;
-        // While the keyboard may be moving, look at the insets again a few times a second.
-        let timeout = match (drawing, next) {
-            (true, Next::Now) => Some(Duration::ZERO),
-            (true, _) if app.focus.id.is_some() => Some(Duration::from_millis(120)),
-            // A sync in the background, or the next one due: wake for it without input.
-            (true, Next::At(at)) => Some(Duration::from_nanos(at.saturating_sub(now_ns()))),
-            _ => None,
+        let now = now_ns();
+        if app.focus.id.is_some() || app.keyboard_up {
+            watch_until = now + KEYBOARD_SETTLE_NS;
+        }
+        let timeout = if !drawing {
+            None
+        } else if dirty || matches!(next, Next::Now) {
+            Some(Duration::ZERO)
+        } else {
+            // A sync in the background, the next one due, or a toast to take down: wake for it
+            // without input. While the keyboard may be moving, look at the insets a few times a
+            // second (drawing only if they changed).
+            let due = match next {
+                Next::At(at) => Some(Duration::from_nanos(at.saturating_sub(now))),
+                _ => None,
+            };
+            let watch = (now < watch_until).then_some(KEYBOARD_POLL);
+            match (due, watch) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
         };
         let mut resized = false;
-        android.poll_events(timeout, |event| {
-            let PollEvent::Main(event) = event else { return };
-            match event {
+        let mut config = false;
+        android.poll_events(timeout, |event| match event {
+            // Another thread woke the loop: a decoded picture, a picked file, Back.
+            PollEvent::Wake => dirty = true,
+            PollEvent::Main(event) => match event {
                 MainEvent::InitWindow { .. } => {
                     let Some(native) = android.native_window() else { return };
                     let (w, h) = (native.width().max(1) as u32, native.height().max(1) as u32);
@@ -307,27 +385,37 @@ fn android_main(android: AndroidApp) {
                     screen = None;
                     window = None;
                 }
-                MainEvent::WindowResized { .. } | MainEvent::ContentRectChanged { .. } | MainEvent::ConfigChanged { .. } | MainEvent::InsetsChanged { .. } => {
+                MainEvent::WindowResized { .. } | MainEvent::ContentRectChanged { .. } | MainEvent::InsetsChanged { .. } => resized = true,
+                MainEvent::ConfigChanged { .. } => {
                     resized = true;
+                    config = true;
                 }
+                MainEvent::RedrawNeeded { .. } => dirty = true,
                 MainEvent::Resume { .. } | MainEvent::GainedFocus => {
                     foreground = true;
-                    next = Next::Now;
+                    config = true;
+                    dirty = true;
                     app.invalidate();
                 }
                 MainEvent::Pause | MainEvent::LostFocus => foreground = false,
                 MainEvent::Destroy => quit = true,
                 _ => {}
-            }
+            },
+            _ => {}
         });
 
-        if resized || foreground {
+        if config || resized {
             // Appearance "System" follows the phone's dark theme as it changes.
             app.set_system_dark(system_dark(&android));
+            dirty = true;
         }
-        if let (Some(g), Some(s), Some(native)) = (&gfx, &mut screen, &window) {
+        let watching = now_ns() < watch_until;
+        if (resized || watching)
+            && let (Some(g), Some(s), Some(native)) = (&gfx, &mut screen, &window)
+        {
             let (w, h) = (native.width().max(1) as u32, native.height().max(1) as u32);
-            let found = insets(&android).unwrap_or_else(|| {
+            let api = insets_api.get_or_insert_with(|| InsetsApi::new(&android));
+            let found = api.read(&android).unwrap_or_else(|| {
                 let content = android.content_rect();
                 (content.top.max(0) as f32, (h as i32 - content.bottom).max(0) as f32, 0.0)
             });
@@ -337,14 +425,14 @@ fn android_main(android: AndroidApp) {
                 // The keyboard covers the bottom: the app lays out above it.
                 app.resize(w as f32, h as f32, found.0, found.1.max(found.2));
                 app.keyboard_up = found.2 > found.1 + 1.0;
-                next = Next::Now;
+                dirty = true;
             }
         }
 
         // A file the person picked (the picker answered while the loop slept).
         if let Some((name, bytes)) = crate::settings_files::take_delivered() {
             app.file_picked(name, bytes);
-            next = Next::Now;
+            dirty = true;
         }
 
         let mut go_back = BACK.swap(false, std::sync::atomic::Ordering::SeqCst);
@@ -375,6 +463,8 @@ fn android_main(android: AndroidApp) {
                         InputStatus::Handled
                     }
                     InputEvent::TextEvent(state) => {
+                        // Only the text: its selection and compose spans count UTF-16 units, and
+                        // the app keeps the caret at the end.
                         text = Some(state.text.clone());
                         InputStatus::Handled
                     }
@@ -387,34 +477,47 @@ fn android_main(android: AndroidApp) {
                 if !more {
                     break;
                 }
-                next = Next::Now;
+                dirty = true;
             }
         }
         if let Some(t) = text {
             app.set_text(&t);
-            next = Next::Now;
+            dirty = true;
         }
         if done_typing || (go_back && app.focus.id.is_some()) {
             app.finish_typing();
             go_back = false;
-            next = Next::Now;
+            dirty = true;
         }
-        if go_back && !app.back() {
-            leave(&android);
+        if go_back {
+            dirty = true;
+            if !app.back() {
+                leave(&android);
+            }
         }
 
         if foreground && bars_light != Some(app.palette.light) {
             let light = app.palette.light;
             with_activity(&android, |env, activity| {
-                env.call_method(activity, "setLightBars", "(Z)V", &[jni::objects::JValue::Bool(light as u8)])?;
+                env.call_method(activity, "setLightBars", "(Z)V", &[JValue::Bool(light as u8)])?;
                 // The home screen icon follows too (icon E, dark or light).
-                env.call_method(activity, "setIconDark", "(Z)V", &[jni::objects::JValue::Bool(!light as u8)]).map(|_| ())
+                env.call_method(activity, "setIconDark", "(Z)V", &[JValue::Bool(!light as u8)]).map(|_| ())
             });
             bars_light = Some(light);
         }
 
-        if foreground && let (Some(g), Some(s)) = (&mut gfx, &mut screen) {
+        // Draw only when something changed or the app asked for this frame.
+        let due = dirty || matches!(next, Next::Now) || matches!(next, Next::At(at) if now_ns() >= at);
+        if foreground
+            && due
+            && let (Some(g), Some(s)) = (&mut gfx, &mut screen)
+        {
+            dirty = false;
             next = app.frame(now_ns());
+            // A picture found room in the atlas after the frame was drawn: show it.
+            if app.canvas.take_late_pictures() {
+                next = Next::Now;
+            }
             g.upload_glyphs(&mut app.canvas.uploads);
             g.upload_images(&mut app.canvas.image_uploads);
             let (globals, clear) = (app.canvas.globals, app.clear_colour());

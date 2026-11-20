@@ -258,6 +258,20 @@ enum Act {
     Remove(Option<bool>),
 }
 
+/// Back closes the sheet or the dialog open over the page, then leaves a bank's accounts for the
+/// list (as Cancel does).
+pub fn back(app: &mut App) -> bool {
+    let st = &mut app.st.banks;
+    if st.picking.take().is_some() || st.removing.take().is_some() {
+        return true;
+    }
+    if st.choosing.take().is_some() {
+        app.scroll().off = 0.0;
+        return true;
+    }
+    false
+}
+
 pub fn draw(app: &mut App, dt: f32) -> bool {
     if app.fresh {
         app.st.banks.mine = mine(app);

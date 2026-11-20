@@ -760,8 +760,17 @@ pub fn goal_pace(first: Option<Date>, saved: i64, target: i64, today: Date) -> O
     let months = months_until(first, today).max(1);
     let per_month = saved / months;
     let left = target - saved;
-    let reach_by = (left > 0 && per_month > 0).then(|| today.checked_add(((left + per_month - 1) / per_month).months()).ok()).flatten();
+    let reach_by = (left > 0 && per_month > 0).then(|| months_ahead(today, left, per_month)).flatten();
     Some(GoalPace { per_month, months, reach_by })
+}
+
+/// The day `left` is reached at `per_month` (both above zero), counted in whole months from
+/// `today`; none past the calendar's end. A pace of $5 against $50,000 lands ten thousand months
+/// out, and jiff's spans stop short of that, so the span is built without a panic.
+fn months_ahead(today: Date, left: i64, per_month: i64) -> Option<Date> {
+    let n = (left - 1) / per_month + 1;
+    let span = jiff::Span::new().try_months(n).ok()?;
+    today.checked_add(span).ok()
 }
 
 pub fn balance_pace(line: &GoalLine, start: Option<Date>, today: Date) -> Option<GoalPace> {
@@ -775,7 +784,7 @@ pub fn balance_pace(line: &GoalLine, start: Option<Date>, today: Date) -> Option
         return Some(GoalPace { per_month: 0, months, reach_by: None });
     }
     let per_month = toward / months;
-    let reach_by = (!line.reached() && per_month > 0).then(|| today.checked_add(((line.left() + per_month - 1) / per_month).months()).ok()).flatten();
+    let reach_by = (!line.reached() && per_month > 0 && line.left() > 0).then(|| months_ahead(today, line.left(), per_month)).flatten();
     Some(GoalPace { per_month, months, reach_by })
 }
 

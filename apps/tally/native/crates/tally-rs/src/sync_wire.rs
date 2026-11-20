@@ -143,7 +143,7 @@ pub struct PairLink {
     pub host: String,
     pub host_id: String,
     pub instance: String,
-    /// `ws://…` addresses tried first, then the rendezvous `via`.
+    /// The door's own addresses (`ws://` on its network or a tailnet, or `wss://`).
     pub direct: Vec<String>,
     pub via: Option<String>,
 }
@@ -176,20 +176,80 @@ fn decode(s: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| s.to_string())
 }
 
+/// Whether `url` is encrypted: `wss://` or `https://`.
+pub fn is_secure(url: &str) -> bool {
+    url.split_once("://").is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("wss") || scheme.eq_ignore_ascii_case("https"))
+}
+
+/// Whether Tally RS may reach `url`: always over TLS; in the clear (`ws://`, `http://`) only when
+/// its host is an address on this machine or a private network: loopback, RFC 1918, link-local,
+/// the 100.64/10 block Tailscale gives its tailnet (WireGuard under it), IPv6 unique-local and
+/// link-local, or `localhost`. A name is refused in the clear: a foreign network's DNS answers for
+/// it. The door's proof is not bound to the connection, so whoever relays a clear one could
+/// replay it; the Kotlin app refuses clear traffic altogether (network_security_config.xml).
+pub fn may_reach(url: &str) -> bool {
+    let Some((scheme, rest)) = url.split_once("://") else { return false };
+    if scheme.eq_ignore_ascii_case("wss") || scheme.eq_ignore_ascii_case("https") {
+        return true;
+    }
+    if !(scheme.eq_ignore_ascii_case("ws") || scheme.eq_ignore_ascii_case("http")) {
+        return false;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // A user part ("ws://10.0.0.2@elsewhere") hides where it really goes.
+    if authority.contains('@') {
+        return false;
+    }
+    let host = match authority.strip_prefix('[') {
+        Some(h) => match h.split_once(']') {
+            Some((h, _)) => h,
+            None => return false,
+        },
+        None => authority.rsplit_once(':').map_or(authority, |(h, _)| h),
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(a)) => private_v4(a),
+        Ok(std::net::IpAddr::V6(a)) => {
+            let first = a.segments()[0];
+            a.is_loopback() || (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80 || a.to_ipv4_mapped().is_some_and(private_v4)
+        }
+        Err(_) => false,
+    }
+}
+
+fn private_v4(a: std::net::Ipv4Addr) -> bool {
+    let [x, y, ..] = a.octets();
+    a.is_loopback() || a.is_private() || a.is_link_local() || (x == 100 && (64..128).contains(&y))
+}
+
+/// `routes` in the order to try them, encrypted first, and without the clear ones
+/// [`may_reach`] refuses.
+pub fn ordered_routes(routes: &[String]) -> Vec<String> {
+    let (secure, clear): (Vec<&String>, Vec<&String>) = routes.iter().filter(|r| may_reach(r)).partition(|r| is_secure(r));
+    secure.into_iter().chain(clear).cloned().collect()
+}
+
 impl PairLink {
+    /// Where to reach the door, in the order to try: [`ordered_routes`] of its own addresses and
+    /// the rendezvous.
     pub fn routes(&self) -> Vec<String> {
-        self.direct.iter().cloned().chain(self.via.clone()).collect()
+        let all: Vec<String> = self.direct.iter().cloned().chain(self.via.clone()).collect();
+        ordered_routes(&all)
     }
 
     /// A `relay://pair` link, or None for anything else, so a stray paste is not misread.
     pub fn parse(text: &str) -> Option<PairLink> {
         let t = text.trim();
         let prefix = "relay://pair?";
-        if t.len() < prefix.len() || !t[..prefix.len()].eq_ignore_ascii_case(prefix) {
+        // `get`: the server's text may hold any character, and a slice inside one panics.
+        if !t.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix)) {
             return None;
         }
         let mut params = std::collections::HashMap::new();
-        for pair in t[prefix.len()..].split('&').filter(|p| !p.is_empty()) {
+        for pair in t.get(prefix.len()..).unwrap_or("").split('&').filter(|p| !p.is_empty()) {
             let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
             params.insert(decode(k), decode(v));
         }
@@ -215,9 +275,9 @@ pub fn normalize(server: &str) -> String {
     let mut s = server.trim().trim_end_matches('/').to_string();
     let lower = s.to_ascii_lowercase();
     s = if lower.starts_with("wss://") {
-        format!("https://{}", &s[6..])
+        format!("https://{}", s.get(6..).unwrap_or(""))
     } else if lower.starts_with("ws://") {
-        format!("http://{}", &s[5..])
+        format!("http://{}", s.get(5..).unwrap_or(""))
     } else if lower.starts_with("https://") || lower.starts_with("http://") {
         s
     } else {
@@ -300,12 +360,53 @@ mod tests {
         let l = PairLink::parse("relay://pair?v=1&code=AB%2012&host=Cloud&direct=ws%3A%2F%2F10.0.0.2%3A7420,http://no&via=wss://s.example/join/r1").unwrap();
         assert_eq!(l.code, "AB 12");
         assert_eq!(l.host, "Cloud");
-        assert_eq!(l.routes(), vec!["ws://10.0.0.2:7420".to_string(), "wss://s.example/join/r1".to_string()]);
+        assert_eq!(l.routes(), vec!["wss://s.example/join/r1".to_string(), "ws://10.0.0.2:7420".to_string()], "encrypted first");
         assert_eq!(l.instance, "stable");
         assert!(PairLink::parse("relay://pair?v=2&code=A&via=wss://x").is_none());
         assert!(PairLink::parse("relay://pair?v=1&via=wss://x").is_none());
         assert!(PairLink::parse("relay://pair?v=1&code=A").is_none(), "nowhere to go");
         assert!(PairLink::parse("https://example.com").is_none());
+        // Text that is not ASCII where the prefix would end reads as no link, never a panic.
+        for odd in ["relay://pairé?v=1", "relay://pai\u{e9}", "é", "relay://pair?v=1&code=é&via=wss://x/é", "\u{1F600}\u{1F600}\u{1F600}\u{1F600}"] {
+            let _ = PairLink::parse(odd);
+        }
+        assert!(PairLink::parse("relay://pairé?v=1&code=A&via=wss://x").is_none());
+    }
+
+    #[test]
+    fn the_clear_is_only_for_this_machine_and_private_networks() {
+        for ok in [
+            "wss://anywhere.example/join/r",
+            "https://anthobot.bid",
+            "ws://10.0.0.2:7420",
+            "ws://192.168.1.20:7420",
+            "ws://172.16.4.1",
+            "ws://127.0.0.1:7430",
+            "ws://169.254.3.3",
+            "ws://100.74.208.9:7420",
+            "ws://[::1]:7420",
+            "ws://[fd7a:115c:a1e0::1]:7420",
+            "ws://[fe80::1]",
+            "http://10.0.2.2:3000",
+            "http://localhost:3901",
+        ] {
+            assert!(may_reach(ok), "{ok}");
+        }
+        for no in [
+            "ws://8.8.8.8:7420",
+            "ws://relay.example.org/join/room",
+            "ws://pc.tail.ts.net:7420",
+            "http://anthobot.bid",
+            "ws://10.0.0.2@evil.example",
+            "ws://100.128.0.1",
+            "ws://[2001:db8::1]",
+            "ftp://10.0.0.2",
+            "10.0.0.2",
+        ] {
+            assert!(!may_reach(no), "{no}");
+        }
+        let routes = ["ws://8.8.8.8:7420", "ws://192.168.1.20:7420", "wss://s.example/join/r"].map(String::from);
+        assert_eq!(ordered_routes(&routes), vec!["wss://s.example/join/r".to_string(), "ws://192.168.1.20:7420".to_string()]);
     }
 
     #[test]

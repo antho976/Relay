@@ -53,6 +53,11 @@ pub struct State {
     /// The entry an overview shows, read as the editor reads it; `editing` none when it is gone.
     view: Option<((u64, i64), Box<Entry>)>,
     problem: Option<String>,
+    /// The reading that failed, so it is not tried again every frame (it is when the ledger
+    /// moves, the day turns or what is asked changes).
+    entries_failed: Option<EntriesKey>,
+    search_failed: Option<SearchKey>,
+    tx_failed: Option<TxKey>,
 }
 
 enum Act {
@@ -90,6 +95,11 @@ fn act(app: &mut App, act: Option<Act>) {
     }
 }
 
+/// Back closes the month switcher when it is open.
+pub fn back(app: &mut App) -> bool {
+    app.st.activity.months.take().is_some()
+}
+
 /// A tapped entry opens its overview; Edit is one tap from there.
 fn open_entry(id: i64) -> Act {
     Act::Go(Route::EntryView { id })
@@ -101,13 +111,19 @@ fn entries(app: &mut App, dt: f32) -> bool {
     let today = model::today();
     let st = &mut app.st.activity;
     let key = (app.ledger_gen, today, st.offset, st.filter, st.category);
-    if st.entries.as_ref().is_none_or(|(k, _, _)| *k != key) {
+    if st.entries.as_ref().is_none_or(|(k, _, _)| *k != key) && st.entries_failed.as_ref() != Some(&key) {
         match activity_data::period_listing_in(&app.store, today, st.offset, st.filter, st.category) {
             Ok((p, l)) => {
                 st.entries = Some((key, p, l));
+                st.entries_failed = None;
                 st.problem = None;
             }
-            Err(e) => st.problem = Some(e),
+            Err(e) => {
+                // What was listed is not this; the problem shows in its place.
+                st.entries = None;
+                st.entries_failed = Some(key);
+                st.problem = Some(e);
+            }
         }
     }
     let fmt = app.store.formatter();
@@ -127,8 +143,16 @@ fn entries(app: &mut App, dt: f32) -> bool {
         match &st.entries {
             None => {
                 let words = st.problem.as_deref().unwrap_or("Reading the ledger");
-                cx.c.text(words, PAD, y, Text::new(ty::UI, p.ink2));
-                y += 40.0;
+                y += cx.c.para(words, PAD, y, W, Text::new(ty::UI, p.ink2).line(1.4), 4) + 16.0;
+                // A month that cannot be read is not where the page stays.
+                if st.entries_failed.is_some() && st.offset != 0 {
+                    let t = Text::new(ty::BODY, p.ink).semi();
+                    let kw = cx.c.measure("Back to this month", t) + 32.0;
+                    if kit::key(&mut cx, PAD, y, kw, 44.0, "Back to this month", None, KeyKind::Plain) {
+                        todo = Some(Act::Offset(0));
+                    }
+                    y += 44.0 + 10.0;
+                }
             }
             Some((_, period, l)) => {
                 // The month, with a chevron that opens the switcher.
@@ -262,7 +286,10 @@ fn month_switcher(cx: &mut Ctx, y: f32, st: &mut State) -> Option<i64> {
 fn search(app: &mut App, dt: f32) -> bool {
     let today = model::today();
     let st = &mut app.st.activity;
-    if app.fresh {
+    // Opened from the tab or the drawer it starts empty, with the keyboard; back from a result it
+    // keeps what was typed.
+    let opened = app.fresh && !app.returned;
+    if opened {
         st.query.clear();
     }
     if app.focus.is(SEARCH) {
@@ -270,14 +297,21 @@ fn search(app: &mut App, dt: f32) -> bool {
     }
     let q = st.query.trim().to_string();
     let key = (app.ledger_gen, today, q.clone(), st.search_filter);
-    if !q.is_empty() && st.search.as_ref().is_none_or(|(k, _)| *k != key) {
+    if !q.is_empty() && st.search.as_ref().is_none_or(|(k, _)| *k != key) && st.search_failed.as_ref() != Some(&key) {
         match activity_data::search_listing(&app.store, today, &q, st.search_filter) {
-            Ok(l) => st.search = Some((key, l)),
-            Err(e) => st.problem = Some(e),
+            Ok(l) => {
+                st.search = Some((key, l));
+                st.search_failed = None;
+                st.problem = None;
+            }
+            Err(e) => {
+                st.search = None;
+                st.search_failed = Some(key);
+                st.problem = Some(e);
+            }
         }
     }
     let fmt = app.store.formatter();
-    let fresh = app.fresh;
     let pg = app.page_begin(dt);
     let mut todo = None;
     let moving = pg.moving;
@@ -295,7 +329,13 @@ fn search(app: &mut App, dt: f32) -> bool {
         }
         let mut y = head_bottom + 2.0;
         let searching = !st.query.trim().is_empty();
+        let failed = searching && st.search.is_none() && st.search_failed.is_some();
         match (&st.search, searching) {
+            (None, true) if failed => {
+                let words = st.problem.as_deref().unwrap_or("The search could not be read");
+                y += 6.0;
+                y += cx.c.para(words, PAD, y, W, Text::new(ty::UI, p.ink2).line(1.4), 4) + 12.0;
+            }
             (Some((_, l)), true) => {
                 let t = &l.totals;
                 let lt = Text::new(13.0, p.ink2);
@@ -346,7 +386,7 @@ fn search(app: &mut App, dt: f32) -> bool {
         cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, head_bottom, 0.0, ground);
         cx.c.rect_grad(-1000.0, head_bottom, WIDTH + 2000.0, 12.0, 0.0, ground, ground.a(0.0));
         let y = pg.top;
-        if fresh {
+        if opened {
             ak::focus_field(&mut cx, SEARCH, &st.query);
         }
         kit::menu_key(&mut cx, 10.0, y);
@@ -378,7 +418,9 @@ fn search(app: &mut App, dt: f32) -> bool {
 fn transactions(app: &mut App, dt: f32, category: Option<i64>, account: Option<i64>) -> bool {
     let today = model::today();
     let st = &mut app.st.activity;
-    if app.fresh {
+    // A new subject starts with no search; back from one of its entries the search stays.
+    let same = st.tx.as_ref().is_some_and(|(k, _)| k.2 == category && k.3 == account);
+    if app.fresh && !(app.returned && same) {
         st.tx_query.clear();
     }
     if app.focus.is(TX_SEARCH) {
@@ -386,10 +428,18 @@ fn transactions(app: &mut App, dt: f32, category: Option<i64>, account: Option<i
     }
     let q = st.tx_query.trim().to_string();
     let key = (app.ledger_gen, today, category, account, q.clone());
-    if st.tx.as_ref().is_none_or(|(k, _)| *k != key) {
+    if st.tx.as_ref().is_none_or(|(k, _)| *k != key) && st.tx_failed.as_ref() != Some(&key) {
         match activity_data::subject_listing(&app.store, today, category, account, &q) {
-            Ok(v) => st.tx = Some((key, v)),
-            Err(e) => st.problem = Some(e),
+            Ok(v) => {
+                st.tx = Some((key, v));
+                st.tx_failed = None;
+                st.problem = None;
+            }
+            Err(e) => {
+                st.tx = None;
+                st.tx_failed = Some(key);
+                st.problem = Some(e);
+            }
         }
     }
     let fmt = app.store.formatter();
@@ -417,6 +467,8 @@ fn transactions(app: &mut App, dt: f32, category: Option<i64>, account: Option<i
             None => {
                 if st.tx.is_some() {
                     y += widgets::empty(&mut cx, PAD, y, W, "list", "This is gone", "It was deleted, here or on another of your devices.");
+                } else if let Some(words) = st.problem.as_deref() {
+                    y += cx.c.para(words, PAD, y + 8.0, W, Text::new(ty::UI, p.ink2).line(1.4), 4) + 20.0;
                 }
             }
             Some((s, l)) => {
@@ -582,7 +634,7 @@ fn stats<'a>(s: &Subject, fmt: &MoneyFormatter) -> Vec<ak::Stat<'a>> {
 fn view(app: &mut App, dt: f32, id: i64) -> bool {
     let key = (app.ledger_gen, id);
     if app.st.activity.view.as_ref().is_none_or(|(k, _)| *k != key) {
-        let e = Entry::open(&app.store, Some(id), None, None, None);
+        let e = Entry::view(&app.store, id);
         app.st.activity.view = Some((key, Box::new(e)));
     }
     let fmt = app.store.formatter();

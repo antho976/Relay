@@ -52,7 +52,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
   confirm, empty). Colours only from `cx.p` (the palette) and `theme::hue` / `theme::category_color`.
   Type sizes from `kit::ty`. Never hard-code a colour a palette has.
 - Match the Kotlin screen (its `ui/<area>/*.kt`, and the reference captures in
-  `app/src/test/screenshots/`): the same sections, the same words, the same order. Its copy rules
+  `app/src/test/screenshots/`; the Kotlin app left the repo after `cf4b63b`, so read them with
+  `git show cf4b63b:app/...`): the same sections, the same words, the same order. Its copy rules
   (`relay_money::copy`, `PRODUCT.md`'s voice: dry, specific, no exclamation marks, no em dashes)
   hold. Honest at zero: every empty list draws `widgets::empty` with what to do.
 - Confirm only what cannot be undone (`widgets::confirm`, naming the act); everything else is Undo

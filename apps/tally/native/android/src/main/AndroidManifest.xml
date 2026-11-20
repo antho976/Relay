@@ -11,14 +11,16 @@
         android:allowBackup="false"
         android:theme="@style/Theme.TallyRs">
         <!-- The whole app is libtally.so; TallyActivity (GameActivity with the file picker's and
-             the share sheet's callbacks) hosts it and its keyboard. -->
+             the share sheet's callbacks) hosts it and its keyboard. Every configuration change
+             the app can follow by itself is listed in configChanges, so the activity is not
+             recreated for them (the app reads the dark theme and the window's size live). -->
         <activity
             android:name="com.tally.rs.TallyActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|screenLayout|smallestScreenSize|density|uiMode|navigation">
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|screenLayout|smallestScreenSize|density|uiMode|navigation|fontScale|fontWeightAdjustment|locale|layoutDirection|colorMode|touchscreen|mcc|mnc|grammaticalGender">
             <meta-data android:name="android.app.lib_name" android:value="tally" />
             <!-- Plaid's Hosted Link sends the browser here when a bank is connected
                  (docs/PLAID.md, completion_redirect_uri), which brings Tally RS back to the front. -->

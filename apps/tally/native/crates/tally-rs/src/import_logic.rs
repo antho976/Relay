@@ -208,17 +208,39 @@ pub fn learned_categories(uses: &[NoteUse], categories: &[CategoryView]) -> Hash
         .collect()
 }
 
+/// What the ledger already holds, counted by a line's key: each logged entry stands twin to one
+/// line of a file only, so a file holding the same coffee twice, once logged, adds the second.
+#[derive(Clone, Debug)]
+pub struct Twins<K>(HashMap<K, usize>);
+
+impl<K: std::hash::Hash + Eq> Twins<K> {
+    pub fn new(logged: impl IntoIterator<Item = K>) -> Twins<K> {
+        let mut counts = HashMap::new();
+        for k in logged {
+            *counts.entry(k).or_default() += 1;
+        }
+        Twins(counts)
+    }
+
+    /// True when a logged twin of `key` is left, which it then uses up.
+    pub fn take(&mut self, key: &K) -> bool {
+        match self.0.get_mut(key) {
+            Some(n) if *n > 0 => {
+                *n -= 1;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 /// Every line of `statement` as the import would write it, with the choices applied. `existing`
 /// is what the target account already holds over those days, as (day, signed effect).
 pub fn plan_import(statement: &Statement, choices: &Choices, categories: &[CategoryView], learned: &HashMap<String, i64>, existing: &[(Date, i64)]) -> Plan {
     let rows = chronological(statement.rows.iter().filter(|r| choices.file_account.is_none() || r.account == choices.file_account).cloned().collect());
     let sign = if choices.flip { -1 } else { 1 };
     let by_id: HashMap<i64, &CategoryView> = categories.iter().map(|c| (c.id, c)).collect();
-    // Each logged entry can stand twin to one statement line only.
-    let mut logged: HashMap<(Date, i64), usize> = HashMap::new();
-    for e in existing {
-        *logged.entry(*e).or_default() += 1;
-    }
+    let mut logged = Twins::new(existing.iter().copied());
     let lines: Vec<PlannedLine> = rows
         .iter()
         .map(|r| {
@@ -226,11 +248,7 @@ pub fn plan_import(statement: &Statement, choices: &Choices, categories: &[Categ
             let cleaned = payees::clean(&r.description);
             let note = if cleaned.trim().is_empty() { "Bank entry".to_string() } else { cleaned };
             let transfer = payees::looks_like_transfer(&r.description, r.code.as_deref());
-            let twin = (r.date, amount);
-            let duplicate = logged.get(&twin).copied().unwrap_or(0) > 0;
-            if duplicate && let Some(n) = logged.get_mut(&twin) {
-                *n -= 1;
-            }
+            let duplicate = logged.take(&(r.date, amount));
             let kind = if amount < 0 { CategoryKind::Expense } else { CategoryKind::Income };
             let from_ledger = learned.get(&format!("{}:{}", kind_name(kind), payees::key(&note))).copied().filter(|id| by_id.get(id).is_some_and(|c| c.kind == kind));
             let guessed = if from_ledger.is_none() {
@@ -313,6 +331,18 @@ pub fn imported_line(count: usize, into: &str, duplicates: usize) -> String {
     let n = if count == 1 { "1 entry".to_string() } else { format!("{count} entries") };
     let dup = if duplicates > 0 { format!(" · {duplicates} already there") } else { String::new() };
     format!("{n} imported into {into}{dup}")
+}
+
+/// Tally's own CSV read back: "Imported 40 entries, skipped 2 · 12 already there".
+pub fn csv_imported_line(added: usize, skipped: usize, already: usize) -> String {
+    let mut s = if added == 0 { "Nothing new to add".to_string() } else { format!("Imported {}", copy::plural_as(added as i64, "entry", "entries")) };
+    if skipped > 0 {
+        s.push_str(&format!(", skipped {skipped}"));
+    }
+    if already > 0 {
+        s.push_str(&format!(" · {already} already there"));
+    }
+    s
 }
 
 /// True when `name` reads like an account of `source`'s ("Desjardins chequing" for Desjardins).

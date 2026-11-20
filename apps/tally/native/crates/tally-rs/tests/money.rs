@@ -433,7 +433,7 @@ fn the_value_chart_reads_each_month_end_from_recorded_values() {
 #[test]
 fn chart_gridlines_hold_the_values_at_round_amounts() {
     use tally::accounts_kit::nice_range;
-    for (lo, hi) in [(1_500_000, 2_200_000), (935_000, 935_000), (0, 0), (-50_000, 120_000), (8_200_00, 9_350_00)] {
+    for (lo, hi) in [(1_500_000, 2_200_000), (935_000, 935_000), (0, 0), (-50_000, 120_000), (820_000, 935_000)] {
         let (floor, ceil, step) = nice_range(lo, hi);
         assert!(floor <= lo && ceil >= hi, "{lo}..{hi} -> {floor}..{ceil}");
         assert_eq!(ceil - floor, step * 2);

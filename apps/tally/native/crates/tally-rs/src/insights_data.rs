@@ -192,8 +192,10 @@ pub fn ticks(max: i64, unit: i64) -> Vec<i64> {
     out
 }
 
+/// The share of income kept, in whole percent, rounded as Kotlin's `Math.round` does (halves up,
+/// so -12.5 reads -12).
 pub fn kept_share(income: i64, spent: i64) -> Option<i64> {
-    (income > 0).then(|| ((income - spent) as f64 * 100.0 / income as f64).round() as i64)
+    (income > 0).then(|| ((income - spent) as f64 * 100.0 / income as f64 + 0.5).floor() as i64)
 }
 
 /// What an even spend of `budget` would have used by the end of day `index` (0 is the first).
@@ -306,7 +308,18 @@ pub fn summarize_calendar(daily: &[i64], period: &BudgetPeriod, elapsed: i64, we
             WeekdaySpend { day, total: idx.iter().map(|i| days[*i]).sum(), days: idx.len() as i64 }
         })
         .collect();
-    let top = weekdays.iter().filter(|w| w.total > 0).max_by_key(|w| w.average()).map(|w| w.day);
+    // As Kotlin's maxByOrNull over the weekdays in the order the period meets them: a tie goes to
+    // the first weekday of the period, not the week's.
+    let opening = date(0).weekday();
+    let mut top: Option<&WeekdaySpend> = None;
+    for k in 0..7 {
+        let day = opening.wrapping_add(k);
+        let Some(w) = weekdays.iter().find(|w| w.day == day && w.total > 0) else { continue };
+        if top.is_none_or(|t| w.average() > t.average()) {
+            top = Some(w);
+        }
+    }
+    let top = top.map(|w| w.day);
     CalendarSummary {
         days_so_far: days.len() as i64,
         active_days: days.iter().filter(|v| **v > 0).count() as i64,
@@ -318,20 +331,19 @@ pub fn summarize_calendar(daily: &[i64], period: &BudgetPeriod, elapsed: i64, we
     }
 }
 
-/// The period's biggest payees by what they took, from the entries' notes.
+/// The period's biggest payees by what they took, from the entries' notes. Grouped on the note
+/// exactly as written, as Kotlin's `observePayees` groups (`GROUP BY note`).
 pub fn payees(rows: &[Tx], top: usize) -> Vec<Payee> {
-    let mut by: Vec<(String, Payee)> = Vec::new();
-    for t in rows.iter().filter(|t| t.r#type == TxType::Expense && !t.note.trim().is_empty()) {
-        let key = t.note.trim().to_lowercase();
-        match by.iter_mut().find(|(k, _)| *k == key) {
-            Some((_, p)) => {
+    let mut out: Vec<Payee> = Vec::new();
+    for t in rows.iter().filter(|t| t.r#type == TxType::Expense && !t.note.is_empty()) {
+        match out.iter_mut().find(|p| p.note == t.note) {
+            Some(p) => {
                 p.total += t.amount;
                 p.count += 1;
             }
-            None => by.push((key, Payee { note: t.note.trim().to_string(), total: t.amount, count: 1 })),
+            None => out.push(Payee { note: t.note.clone(), total: t.amount, count: 1 }),
         }
     }
-    let mut out: Vec<Payee> = by.into_iter().map(|(_, p)| p).collect();
     out.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| a.note.cmp(&b.note)));
     out.truncate(top);
     out

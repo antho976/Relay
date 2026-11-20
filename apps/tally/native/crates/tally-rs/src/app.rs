@@ -62,8 +62,19 @@ pub struct Toast {
     pub undo: Option<i64>,
     /// Undo puts a deleted entry back instead of deleting a new one.
     pub restore: bool,
+    /// Any other Undo: what puts it back (a goal, a bill, a budget, a category).
+    pub action: Option<UndoFn>,
     pub until_ns: u64,
 }
+
+/// What a toast's Undo does, for anything other than an entry.
+pub type UndoFn = Box<dyn FnOnce(&mut App) -> Result<(), String> + Send>;
+
+/// The most a field holds, in characters.
+const MAX_TYPED: usize = 200;
+
+/// How long a toast stays.
+const TOAST_NS: u64 = 4_000_000_000;
 
 /// Each screen module's own state, kept while the app runs.
 #[derive(Default)]
@@ -108,6 +119,9 @@ pub struct App {
     pub nav: Vec<(Route, Scroll)>,
     /// True on the first frame a page is shown (pushed, or uncovered): reload what it reads.
     pub fresh: bool,
+    /// With `fresh`: the page was uncovered (Back from a page over it), not opened. What was typed
+    /// on it stays.
+    pub returned: bool,
     /// Bumps on every change to the ledger, so a screen can cache what it read.
     pub ledger_gen: u64,
     pub entry: crate::entry::Entry,
@@ -118,6 +132,13 @@ pub struct App {
     pub problem: Option<String>,
     /// The soft keyboard covers the bottom of the window (its height is in the bottom inset).
     pub keyboard_up: bool,
+    /// `keyboard_up` as the last frame saw it, to notice the system taking the keyboard away.
+    keyboard_was_up: bool,
+    /// The keyboard went away under this focused field at this time; it lets go if the keyboard
+    /// stays away (switching between a digits and a words keyboard can dip it for a moment).
+    keyboard_gone: Option<(u64, &'static str)>,
+    /// The soonest a screen asked to be drawn again without input (a notice timing out).
+    wake: Option<u64>,
     /// How far the drawer is out, 0 to 1, and where it is going.
     pub drawer: f32,
     pub drawer_open: bool,
@@ -161,6 +182,7 @@ impl App {
             palette,
             nav: vec![(start, Scroll::default())],
             fresh: true,
+            returned: false,
             ledger_gen: 0,
             entry: crate::entry::Entry::default(),
             st: States::default(),
@@ -168,6 +190,9 @@ impl App {
             toast: None,
             problem: None,
             keyboard_up: false,
+            keyboard_was_up: false,
+            keyboard_gone: None,
+            wake: None,
             drawer: 0.0,
             drawer_open: false,
             drawer_depth: None,
@@ -213,18 +238,26 @@ impl App {
 
     // Navigation
 
-    fn shown(&mut self) {
+    /// A page is showing: opened (`returned` false), or uncovered by Back (`returned` true).
+    fn shown(&mut self, returned: bool) {
         if self.drawer_depth.is_some_and(|d| d >= self.nav.len()) {
             self.drawer_depth = None;
         }
         self.fresh = true;
+        self.returned = returned;
         self.drawer_open = false;
         self.ui.reset();
         if self.focus.id.take().is_some() {
             self.host.keyboard(false, "", false);
         }
         if let Route::Entry { id, kind, account, category } = self.route().clone() {
-            self.entry = crate::entry::Entry::open(&self.store, id, kind, account, category);
+            if returned {
+                // Back from a page the editor opened (a new account or category, a bill): the
+                // draft stays, and what was just made is picked.
+                self.entry.came_back(&self.store);
+            } else {
+                self.entry = crate::entry::Entry::open(&self.store, id, kind, account, category);
+            }
         }
     }
 
@@ -238,7 +271,7 @@ impl App {
             self.nav.clear();
         }
         self.nav.push((route, Scroll::default()));
-        self.shown();
+        self.shown(false);
     }
 
     /// Open a tab's page from inside another page (Overview's "See all"): on top of it, with Back,
@@ -248,7 +281,7 @@ impl App {
             return;
         }
         self.nav.push((route, Scroll::default()));
-        self.shown();
+        self.shown(false);
     }
 
     /// The page showing is one the drawer opened (it gets the drawer's key, not Back).
@@ -272,7 +305,7 @@ impl App {
         self.nav.push((Route::Overview, Scroll::default()));
         self.nav.push((route, Scroll::default()));
         self.drawer_depth = Some(1);
-        self.shown();
+        self.shown(false);
     }
 
     /// Replace the page showing (an editor that saved and opens what it made).
@@ -281,7 +314,7 @@ impl App {
             self.nav.pop();
         }
         self.nav.push((route, Scroll::default()));
-        self.shown();
+        self.shown(false);
     }
 
     /// Close the page showing. False when it was the last one.
@@ -290,12 +323,13 @@ impl App {
             return false;
         }
         self.nav.pop();
-        self.shown();
+        self.shown(true);
         true
     }
 
-    /// Back: typing stops first, then the menu closes, then the page; a space page other than
-    /// Overview goes to Overview. False when there was nowhere to go back to.
+    /// Back: typing stops first, then the menu closes, then a sheet or dialog open on the page,
+    /// then the page; a space page other than Overview goes to Overview. False when there was
+    /// nowhere to go back to.
     pub fn back(&mut self) -> bool {
         if self.focus.id.is_some() {
             self.finish_typing();
@@ -303,6 +337,10 @@ impl App {
         }
         if self.drawer_open {
             self.drawer_open = false;
+            return true;
+        }
+        if self.close_over_page() {
+            self.ui.reset();
             return true;
         }
         if self.pop() {
@@ -315,12 +353,35 @@ impl App {
         false
     }
 
+    /// Close what is open over the page showing (a sheet, a dialog, a switcher), as its own
+    /// module knows it. True when something closed.
+    fn close_over_page(&mut self) -> bool {
+        match self.route() {
+            Route::Entry { .. } => crate::entry::back(self),
+            Route::Entries | Route::Transactions { .. } | Route::Search | Route::EntryView { .. } => crate::activity::back(self),
+            Route::Budgets | Route::BudgetEdit { .. } | Route::Bills | Route::BillEdit { .. } | Route::Goals | Route::Goal { .. } | Route::GoalEdit { .. } => {
+                crate::plan::back(self)
+            }
+            Route::Accounts | Route::AccountEdit { .. } => crate::accounts::back(self),
+            Route::Categories | Route::CategoryEdit { .. } => crate::categories::back(self),
+            Route::Banks => crate::banks::back(self),
+            Route::Import => crate::import::back(self),
+            Route::Settings | Route::Appearance | Route::Format | Route::Backup | Route::About => crate::settings::back(self),
+            Route::Sync => crate::sync::back(self),
+            _ => false,
+        }
+    }
+
     // Typing
 
     /// Text the keyboard sent: the field's whole text (Android's input state).
     pub fn set_text(&mut self, text: &str) {
         if self.focus.id.is_some() {
-            self.focus.text = text.chars().take(200).collect();
+            self.focus.text = text.chars().take(MAX_TYPED).collect();
+            // Cut short: the keyboard's copy is cut too, so the two never drift apart.
+            if text.chars().count() > MAX_TYPED {
+                self.host.keyboard(true, &self.focus.text, self.focus.numeric);
+            }
         }
     }
 
@@ -361,12 +422,23 @@ impl App {
     }
 
     pub fn say(&mut self, words: impl Into<String>, undo: Option<i64>) {
-        self.toast = Some(Toast { words: words.into(), undo, restore: false, until_ns: self.now_ns + 4_000_000_000 });
+        self.toast = Some(Toast { words: words.into(), undo, restore: false, action: None, until_ns: self.now_ns + TOAST_NS });
     }
 
     /// A toast for an entry just deleted: its Undo restores it.
     pub fn say_restore(&mut self, words: impl Into<String>, id: i64) {
-        self.toast = Some(Toast { words: words.into(), undo: Some(id), restore: true, until_ns: self.now_ns + 4_000_000_000 });
+        self.toast = Some(Toast { words: words.into(), undo: Some(id), restore: true, action: None, until_ns: self.now_ns + TOAST_NS });
+    }
+
+    /// A toast whose Undo does `undo` (anything but an entry: a goal, a bill, a category).
+    pub fn say_undo(&mut self, words: impl Into<String>, undo: impl FnOnce(&mut App) -> Result<(), String> + Send + 'static) {
+        self.toast = Some(Toast { words: words.into(), undo: None, restore: false, action: Some(Box::new(undo)), until_ns: self.now_ns + TOAST_NS });
+    }
+
+    /// Draw again at `at` (on [`crate::clock::now_ns`]) even with no input: something on the
+    /// page changes then (a notice goes).
+    pub fn wake_at(&mut self, at: u64) {
+        self.wake = Some(self.wake.map_or(at, |w| w.min(at)));
     }
 
     pub fn set_palette(&mut self, p: Palette) {
@@ -448,6 +520,8 @@ impl App {
         let dt = ((now_ns.saturating_sub(self.last_ns)) as f32 / 1e9).clamp(0.0, 0.05);
         self.last_ns = now_ns;
         self.now_ns = now_ns;
+        self.wake = None;
+        self.follow_keyboard(now_ns);
         crate::sync::tick(self, now_ns);
         let today = model::today();
         if self.posted_on != Some(today) {
@@ -484,6 +558,13 @@ impl App {
         kit::ground(&mut self.canvas, &p);
 
         let moving_pictures = crate::pictures::drain(&mut self.canvas);
+
+        // The toast sits over everything: it takes a tap on it before the page (or the drawer)
+        // under it can, wherever it is.
+        let toast_tap = match (self.ui.tap, self.toast_rect()) {
+            (Some((tx, ty_)), Some([x, y, w, h])) if tx >= x && tx < x + w && ty_ >= y && ty_ < y + h => self.ui.tap.take(),
+            _ => None,
+        };
 
         // The fixed bars take their taps first, so a tap on them never lands on what scrolls under.
         let space = self.route().is_space();
@@ -540,7 +621,9 @@ impl App {
         }
 
         if space && self.route() == &route {
-            self.ui.tap = chrome_tap;
+            if chrome_tap.is_some() {
+                self.ui.tap = chrome_tap;
+            }
             if route != Route::Search {
                 self.top_bar(&route);
             }
@@ -556,22 +639,73 @@ impl App {
             moving |= self.draw_drawer(dt);
         }
         moving |= drawer_moving;
-        // A picture asked for is decoding: the decoder wakes the loop when it lands (Android), or,
-        // with no waker (the desktop), frames keep coming until it has.
+        // A picture asked for is decoding. With a waker (Android) the decoder wakes the loop when it
+        // lands, and the platform loop draws once more for pictures that landed late; with none
+        // (the desktop, a test) frames keep coming until it has.
         moving |= moving_pictures && !crate::pictures::has_waker();
         moving |= crate::pictures::pending() && !crate::pictures::has_waker();
-        let toast_bottom = if self.route().is_space() { bar_top } else { self.canvas.h - self.canvas.inset_bottom - 8.0 };
-        moving |= self.draw_toast(toast_bottom);
+        // Only the tap it claimed reaches the toast: what the page left of the frame's is spent.
+        self.ui.tap = toast_tap;
+        if let Some(until) = self.draw_toast() {
+            // Wake again when it is due to go.
+            self.wake_at(until + 1);
+        }
 
         self.canvas.finish();
         self.ui.end_frame();
+        let wake = [self.st.sync.wake_at(now_ns), self.wake].into_iter().flatten().min();
         if moving || tapped || self.ui.busy() || self.fresh {
             Next::Now
-        } else if let Some(at) = self.st.sync.wake_at(now_ns) {
+        } else if let Some(at) = wake {
             Next::At(at)
         } else {
             Next::OnInput
         }
+    }
+
+    /// The bottom of the toast's place: over the bottom bar on a tab's page, over the editor's
+    /// keys on an entry, else over the bottom edge.
+    fn toast_bottom(&self) -> f32 {
+        match self.route() {
+            r if r.is_space() => self.canvas.h - self.bar_h(),
+            Route::Entry { .. } if self.entry.footer_top > 0.0 => self.entry.footer_top - 4.0,
+            _ => self.canvas.h - self.canvas.inset_bottom - 8.0,
+        }
+    }
+
+    /// Where the toast is (screen units), while there is one.
+    fn toast_rect(&self) -> Option<[f32; 4]> {
+        let t = self.toast.as_ref()?;
+        if self.now_ns > t.until_ns {
+            return None;
+        }
+        let (h, bottom) = (48.0, self.toast_bottom());
+        Some([16.0, bottom - h - 12.0, WIDTH - 32.0, h])
+    }
+
+    /// The system took the keyboard away (Back on Android's keyboard is the keyboard's own): the
+    /// field lets go too, so nothing waits on a keyboard that is gone and a tap on the field
+    /// brings it back.
+    fn follow_keyboard(&mut self, now_ns: u64) {
+        const SETTLE_NS: u64 = 300_000_000;
+        if self.keyboard_was_up && !self.keyboard_up {
+            self.keyboard_gone = self.focus.id.map(|id| (now_ns, id));
+        }
+        if self.keyboard_up {
+            self.keyboard_gone = None;
+        }
+        if let Some((at, id)) = self.keyboard_gone {
+            if self.focus.id != Some(id) {
+                self.keyboard_gone = None;
+            } else if now_ns.saturating_sub(at) >= SETTLE_NS {
+                self.keyboard_gone = None;
+                self.finish_typing();
+            } else {
+                self.wake_at(at + SETTLE_NS);
+            }
+        }
+        self.keyboard_was_up = self.keyboard_up;
+        self.focus.keyboard_up = self.keyboard_up;
     }
 
     /// Over a tab's page: the drawer's key, the page's title, bills and settings.
@@ -784,8 +918,12 @@ impl App {
                 y += eyebrow.lh() + 8.0;
                 for (glyph, label, route, value, tone) in rows {
                     let on = *route == current;
-                    if on || cx.pressed(lx, y, rw, 44.0) {
-                        cx.c.rect(lx, y, rw, 44.0, 12.0, if on { p.wash } else { p.wash });
+                    // The page showing is a filled row, as a chosen key is; a press washes over it.
+                    if on {
+                        cx.c.rect(lx, y, rw, 44.0, 12.0, p.card2);
+                    }
+                    if cx.pressed(lx, y, rw, 44.0) {
+                        cx.c.rect(lx, y, rw, 44.0, 12.0, p.wash);
                     }
                     cx.c.icon(glyph, lx + 12.0 + 10.5, y + 22.0, 21.0, if on { p.ink } else { p.ink2 });
                     let lt = if on { Text::new(15.0, p.ink).semi() } else { Text::new(15.0, p.ink).medium() };
@@ -821,42 +959,48 @@ impl App {
         moving
     }
 
-    /// The toast: an ink pill above `bottom`, with Undo when there is something to undo.
-    fn draw_toast(&mut self, bottom: f32) -> bool {
-        let Some(t) = &self.toast else { return false };
-        if self.now_ns > t.until_ns {
+    /// The toast: an ink pill in its place ([`App::toast_bottom`]), with Undo when there is
+    /// something to undo. Returns when it is due to go, while it shows.
+    fn draw_toast(&mut self) -> Option<u64> {
+        let Some([x, y, w, h]) = self.toast_rect() else {
             self.toast = None;
-            return false;
-        }
-        let (words, undo, restore) = (t.words.clone(), t.undo, t.restore);
+            return None;
+        };
+        let t = self.toast.as_ref()?;
+        let (words, undo, restore, until) = (t.words.clone(), t.undo, t.restore, t.until_ns);
+        let can_undo = undo.is_some() || t.action.is_some();
         let mut cx = cx!(self);
-        let (x, w, h) = (16.0, WIDTH - 32.0, 48.0);
-        let y = bottom - h - 12.0;
+        let dy = cx.c.dy;
+        cx.c.dy = 0.0;
         cx.c.shadow(x, y + 3.0, w, h, 16.0, 14.0, Rgba::argb(0x331A1A2E));
         cx.c.rect(x, y, w, h, 16.0, Rgba::hex(0x1A1A2E));
         let tt = Text::new(ty::UI, Rgba::WHITE).medium();
-        let room = if undo.is_some() { w - 32.0 - 60.0 } else { w - 32.0 };
+        let room = if can_undo { w - 32.0 - 60.0 } else { w - 32.0 };
         cx.c.text_fit(&words, x + 16.0, y + (h - tt.lh()) / 2.0, room, tt);
-        let mut undone = None;
-        if let Some(id) = undo {
+        let mut undone = false;
+        if can_undo {
             let ut = Text::new(ty::UI, Rgba::hex(0xC9B8FF)).semi().right();
             cx.c.text("Undo", x + w - 16.0, y + (h - ut.lh()) / 2.0, ut);
-            if cx.tap(x + w - 80.0, y, 80.0, h) {
-                undone = Some(id);
-            }
+            undone = cx.tap(x + w - 80.0, y, 80.0, h);
         }
-        if let Some(id) = undone {
-            let done = if restore { self.store.restore(id) } else { self.store.delete(id) };
-            match done {
-                Ok(()) => {
-                    self.toast = None;
-                    self.invalidate();
-                }
-                Err(e) => self.say(format!("Could not undo: {e}"), None),
-            }
+        // A tap on the rest of the pill goes nowhere.
+        let _ = cx.tap(x, y, w, h);
+        cx.c.dy = dy;
+        if !undone {
+            return Some(until);
         }
-        // Wake again when it is due to go.
-        true
+        let t = self.toast.take()?;
+        let done = match (t.action, undo) {
+            (Some(f), _) => f(self),
+            (None, Some(id)) if restore => self.store.restore(id),
+            (None, Some(id)) => self.store.delete(id),
+            (None, None) => Ok(()),
+        };
+        match done {
+            Ok(()) => self.invalidate(),
+            Err(e) => self.say(format!("Could not undo: {e}"), None),
+        }
+        self.toast.as_ref().map(|t| t.until_ns)
     }
 }
 

@@ -3,9 +3,24 @@
 // app the soft keyboard. The one Java class, src/main/java/com/tally/rs/TallyActivity.java, adds
 // only what Android gives through Java callbacks: the file picker's result and the share sheet's
 // FileProvider (androidx.core). No Kotlin.
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
 }
+
+// Release signing, as the Kotlin app does (app/build.gradle.kts): keystore.properties at the repo
+// root (gitignored) with storeFile, storePassword, keyAlias and keyPassword. With a complete file
+// the release is signed with that key, the one com.quietsoftware.tally2 must be signed with when
+// Tally RS takes the package over. Without one (or with a half-filled one) the release falls back
+// to the debug key, so it still installs on the owner's phone.
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) keystorePropertiesFile.inputStream().use { load(it) }
+}
+val hasReleaseKeystore = keystorePropertiesFile.exists() &&
+    listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+        .all { !keystoreProperties.getProperty(it).isNullOrBlank() }
 
 android {
     namespace = "com.tally.rs"
@@ -20,10 +35,21 @@ android {
         versionName = "0.3.3"
     }
 
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (hasReleaseKeystore) "release" else "debug")
         }
     }
 }

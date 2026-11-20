@@ -123,12 +123,14 @@ fn line(text: impl Into<String>, tone: Tone, detail: Option<&str>) -> Line {
     Line { text: text.into(), tone, detail: detail.map(str::to_string) }
 }
 
-/// What the threads hand back.
+/// What the threads hand back. Each but a screen's reply carries the attempt it belongs to (a
+/// connect thread's [`State::attempt`], a sync's number): one that has been cancelled, or that a
+/// disconnect, a new address or a ledger replaced here has left behind, is dropped unread.
 enum Event {
-    Connect(Connect),
-    Pending(Option<Enrollment>),
-    Paired(Creds),
-    Synced(Result<Answer, Failure>, Option<i64>),
+    Connect(u64, Connect),
+    Pending(u64, Option<Enrollment>),
+    Paired(u64, Creds),
+    Synced(u64, Result<Answer, Failure>, Option<i64>),
     Replied(u64, Result<Value, Failure>),
 }
 
@@ -137,7 +139,15 @@ enum Event {
 enum Confirm {
     Take,
     Disconnect,
+    /// The first pull would replace what this phone holds.
+    First,
 }
+
+/// The question a first pull asks when this phone already holds a ledger (the Sync page and the
+/// first-run page put it).
+pub const FIRST_TITLE: &str = "Replace this phone's ledger?";
+pub const FIRST_BODY: &str = "Its first sync puts your server's ledger in place of what is here; Tally keeps a copy of this phone's first. Nothing here is sent to your server. Cancel turns sync off and keeps this phone as it is.";
+pub const FIRST_YES: &str = "Take it";
 
 /// This phone's key to the server, apart from the prefs: its own file, readable by this app
 /// only, never logged.
@@ -171,8 +181,14 @@ pub struct State {
     pending: Option<Enrollment>,
     pub connect: Connect,
     cancel: Option<Arc<AtomicBool>>,
-    /// A sync is running; the local cursor its rows were read at.
-    in_flight: Option<Option<i64>>,
+    /// The connect thread whose news is taken; any other's is dropped.
+    attempt: u64,
+    /// A sync is running: its number, and the local cursor its rows were read at.
+    in_flight: Option<(u64, Option<i64>)>,
+    syncs: u64,
+    /// A pull of the server's whole ledger waits on the person's yes: it would replace what this
+    /// phone holds.
+    ask_first: bool,
     /// The person asked for the server's whole ledger.
     take_whole: bool,
     /// The sync running is the one they asked for.
@@ -210,7 +226,10 @@ impl State {
             pending: None,
             connect: Connect::Idle,
             cancel: None,
+            attempt: 0,
             in_flight: None,
+            syncs: 0,
+            ask_first: false,
             take_whole: false,
             whole_asked: false,
             sync_asked: false,
@@ -312,19 +331,68 @@ impl State {
     }
 
     fn start_connect(&mut self, server: String, pending: Option<Enrollment>) {
-        if let Some(c) = self.cancel.take() {
-            c.store(true, Ordering::Relaxed);
-        }
+        self.stop_connect();
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel = Some(cancel.clone());
         self.connect = Connect::Reaching;
-        let (net, tx) = (self.net.clone(), self.tx.clone());
-        std::thread::spawn(move || run_connect(&net, &tx, &cancel, &server, pending, &device_name()));
+        let (net, tx, attempt) = (self.net.clone(), self.tx.clone(), self.attempt);
+        std::thread::spawn(move || {
+            let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_connect(&net, &tx, &cancel, attempt, &server, pending, &device_name())));
+            // A fault in there must not leave the page waiting for good.
+            if ran.is_err() && !cancel.load(Ordering::Relaxed) {
+                let _ = tx.send(Event::Connect(attempt, Connect::Trouble { reason: "Connecting stopped on a fault. Ask again.".into(), cloud_off: false }));
+            }
+        });
     }
 
+    /// Cancels the connect thread, if one runs; whatever it still sends is dropped.
     fn stop_connect(&mut self) {
         if let Some(c) = self.cancel.take() {
             c.store(true, Ordering::Relaxed);
+        }
+        self.attempt += 1;
+    }
+
+    /// Drops the sync running, if one is: its answer is not applied when it comes.
+    fn drop_sync(&mut self) {
+        self.in_flight = None;
+        self.whole_asked = false;
+    }
+
+    /// This phone's ledger was replaced here (Erase everything, a restore, the sample). The next
+    /// sync takes the server's ledger whole: a replaced ledger holds a tombstone for every row it
+    /// had, and sending those would erase the server's. A sync already running is dropped.
+    pub fn ledger_replaced(&mut self, store: &mut Store) {
+        self.drop_sync();
+        self.take_whole = false;
+        self.ask_first = false;
+        ledger::forget(store);
+    }
+
+    /// The sample is in: it stays on this phone, so sync turns off (connecting again turns it on,
+    /// and the first sync then asks before it replaces the sample).
+    pub fn keep_on_phone(&mut self, store: &mut Store) {
+        if !self.paired(store) {
+            self.stop_connect();
+            self.connect = Connect::Idle;
+        }
+        self.ledger_replaced(store);
+        let _ = store.set_pref(pref::PHONE_ONLY, "1");
+    }
+
+    /// A pull of the server's whole ledger is waiting on the person's yes ([`FIRST_BODY`]).
+    pub fn awaiting_yes(&self) -> bool {
+        self.ask_first
+    }
+
+    /// The person's answer to [`FIRST_BODY`]: take the server's ledger, or turn sync off and keep
+    /// this phone's.
+    pub fn answer_first(&mut self, store: &mut Store, take: bool) {
+        self.ask_first = false;
+        if take {
+            self.take_whole = true;
+        } else {
+            let _ = store.set_pref(pref::PHONE_ONLY, "1");
         }
     }
 
@@ -382,25 +450,40 @@ impl State {
                 }
             }
         };
+        // A pull nobody asked for (a first pairing, a ledger replaced here) replaces this phone's
+        // ledger: when it holds anything, the person says so first.
+        if matches!(ask, Ask::Whole) && !self.whole_asked && store.holds_anything() {
+            self.ask_first = true;
+            return;
+        }
         let _ = store.set_pref(pref::LAST_ATTEMPT, &now_ms().to_string());
-        self.in_flight = Some(at);
+        self.syncs += 1;
+        let id = self.syncs;
+        self.in_flight = Some((id, at));
         let (dial, tx) = (self.net.dial.clone(), self.tx.clone());
         std::thread::spawn(move || {
-            let result = net::open(dial.as_ref(), &creds).and_then(|mut s| ledger::exchange(&mut s, &device_name(), ask));
-            let _ = tx.send(Event::Synced(result, at));
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| net::open(dial.as_ref(), &creds).and_then(|mut s| ledger::exchange(&mut s, &device_name(), ask))))
+                .unwrap_or_else(|_| Err(net::fail(code::ANSWER, "The sync stopped on a fault. It goes again by itself.")));
+            let _ = tx.send(Event::Synced(id, result, at));
         });
     }
 
-    /// Forget the server: its key and where sync stood. This phone's ledger stays as it is.
+    /// Forget the server: its key and where sync stood. This phone's ledger stays as it is. A
+    /// connect or a sync still running is dropped with it.
     fn disconnect(&mut self, store: &mut Store) {
         self.stop_connect();
+        self.drop_sync();
+        self.take_whole = false;
+        self.ask_first = false;
         self.creds = None;
         self.pending = None;
         self.connect = Connect::Idle;
-        ledger::forget(store);
-        for k in [pref::UNPAIRED, pref::LAST_ATTEMPT, pref::LAST_SUCCESS, pref::LAST_ERROR, pref::SENT, pref::RECEIVED, pref::NOTE] {
-            let _ = store.clear_pref(k);
-        }
+        store.holding_prefs(|store| {
+            ledger::forget(store);
+            for k in [pref::UNPAIRED, pref::LAST_ATTEMPT, pref::LAST_SUCCESS, pref::LAST_ERROR, pref::SENT, pref::RECEIVED, pref::NOTE] {
+                let _ = store.clear_pref(k);
+            }
+        });
     }
 
     /// Where this phone stands with the owner's server, in the fewest words (Kotlin:
@@ -431,6 +514,9 @@ impl State {
         }
         if self.in_flight.is_some() {
             return line("Syncing", Tone::Waiting, None);
+        }
+        if self.ask_first {
+            return line("Waiting for your yes", Tone::Waiting, Some("The first sync replaces this phone's ledger with your server's. Answer on the Your server page."));
         }
         let num = |k: &str| store.pref(k).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
         let (last, attempt) = (num(pref::LAST_SUCCESS), num(pref::LAST_ATTEMPT));
@@ -502,10 +588,17 @@ fn record_failure(store: &mut Store, reason: &str) {
 /// `connect`, `ask`, `await`). Polls every two seconds for the first minute, while they are likely
 /// looking at Discord, then every six; once allowed, pairs, collecting a fresh link up to three
 /// times.
-fn run_connect(net: &Net, tx: &Sender<Event>, cancel: &AtomicBool, server: &str, pending: Option<Enrollment>, device: &str) {
-    let say = |c: Connect| {
-        let _ = tx.send(Event::Connect(c));
+///
+/// Once cancelled it sends nothing more, checked before every send; what slips through between the
+/// check and the send carries `attempt`, which the UI no longer takes.
+fn run_connect(net: &Net, tx: &Sender<Event>, cancel: &AtomicBool, attempt: u64, server: &str, pending: Option<Enrollment>, device: &str) {
+    let send = |e: Event| {
+        if !cancel.load(Ordering::Relaxed) {
+            let _ = tx.send(e);
+        }
     };
+    let say = |c: Connect| send(Event::Connect(attempt, c));
+    let pending_is = |e: Option<Enrollment>| send(Event::Pending(attempt, e));
     let trouble = |f: Failure| say(Connect::Trouble { cloud_off: f.code == code::CLOUD_OFF, reason: f.message });
     let e = match pending {
         Some(e) => e,
@@ -521,7 +614,7 @@ fn run_connect(net: &Net, tx: &Sender<Event>, cancel: &AtomicBool, server: &str,
             }
             match net::enroll(net.http.as_ref(), server, device, now_ms()) {
                 Ok(e) => {
-                    let _ = tx.send(Event::Pending(Some(e.clone())));
+                    pending_is(Some(e.clone()));
                     e
                 }
                 Err(f) => return trouble(f),
@@ -541,25 +634,25 @@ fn run_connect(net: &Net, tx: &Sender<Event>, cancel: &AtomicBool, server: &str,
                 say(Connect::Pairing);
                 match net::pair(net.dial.as_ref(), &link, device, now_ms()) {
                     Ok(creds) => {
-                        let _ = tx.send(Event::Pending(None));
-                        let _ = tx.send(Event::Paired(creds));
+                        pending_is(None);
+                        send(Event::Paired(attempt, creds));
                         return;
                     }
                     Err(f) => {
                         pairings += 1;
                         if pairings >= 3 {
-                            let _ = tx.send(Event::Pending(None));
+                            pending_is(None);
                             return trouble(f);
                         }
                     }
                 }
             }
             net::Claim::Denied => {
-                let _ = tx.send(Event::Pending(None));
+                pending_is(None);
                 return say(Connect::Denied);
             }
             net::Claim::Expired | net::Claim::Spent => {
-                let _ = tx.send(Event::Pending(None));
+                pending_is(None);
                 return say(Connect::Expired);
             }
             net::Claim::Trouble(reason) => {
@@ -577,10 +670,8 @@ fn run_connect(net: &Net, tx: &Sender<Event>, cancel: &AtomicBool, server: &str,
             std::thread::sleep(Duration::from_millis(100));
         }
     }
-    if !cancel.load(Ordering::Relaxed) {
-        let _ = tx.send(Event::Pending(None));
-        say(Connect::Expired);
-    }
+    pending_is(None);
+    say(Connect::Expired);
 }
 
 /// The ledger changed here: sync a few seconds after the last change (`App::invalidate`).
@@ -605,23 +696,35 @@ pub fn tick(app: &mut App, now_ns: u64) {
     }
 }
 
-/// [`tick`]'s work, apart from the App. True when the ledger changed.
+/// [`tick`]'s work, apart from the App. True when the ledger changed. The prefs it sets are
+/// written once, at its end.
 fn step(st: &mut State, store: &mut Store, now_ns: u64, log: &dyn Fn(&str)) -> bool {
+    store.holding_prefs(|store| step_held(st, store, now_ns, log))
+}
+
+fn step_held(st: &mut State, store: &mut Store, now_ns: u64, log: &dyn Fn(&str)) -> bool {
     st.pump();
     let mut ledger_changed = false;
     for e in std::mem::take(&mut st.inbox) {
         match e {
-            Event::Connect(c) => {
+            // A cancelled connect's news, or a dropped sync's answer: not this phone's any more.
+            Event::Connect(a, _) | Event::Pending(a, _) | Event::Paired(a, _) if a != st.attempt => {}
+            Event::Synced(id, ..) if st.in_flight.is_none_or(|(running, _)| running != id) => {}
+            Event::Connect(_, c) => {
                 if st.creds.is_none() || !matches!(c, Connect::Waiting { .. } | Connect::Reaching) {
                     st.connect = c;
                 }
             }
-            Event::Pending(p) => {
+            Event::Pending(_, p) => {
                 st.pending = p;
                 st.save_secret(log);
             }
-            Event::Paired(creds) => {
-                // A new pairing starts from nothing: the next sync takes the server's ledger whole.
+            Event::Paired(_, creds) => {
+                // A new pairing starts from nothing: the next sync takes the server's ledger whole
+                // (after the person's yes when this phone holds anything).
+                st.drop_sync();
+                st.ask_first = false;
+                st.take_whole = false;
                 ledger::forget(store);
                 for k in [pref::UNPAIRED, pref::LAST_ERROR, pref::NOTE, pref::LAST_SUCCESS] {
                     let _ = store.clear_pref(k);
@@ -632,7 +735,7 @@ fn step(st: &mut State, store: &mut Store, now_ns: u64, log: &dyn Fn(&str)) -> b
                 st.save_secret(log);
                 st.sync_asked = true;
             }
-            Event::Synced(result, at) => {
+            Event::Synced(_, result, at) => {
                 st.in_flight = None;
                 let asked = std::mem::take(&mut st.whole_asked);
                 match result {
@@ -666,7 +769,10 @@ fn step(st: &mut State, store: &mut Store, now_ns: u64, log: &dyn Fn(&str)) -> b
         }
     }
     let on = st.paired(store) && store.pref(pref::PHONE_ONLY).is_none();
-    if on && st.in_flight.is_none() {
+    if !on {
+        st.ask_first = false;
+    }
+    if on && st.in_flight.is_none() && !st.ask_first {
         let due = st.sync_asked
             || st.take_whole
             || st.last_try_ns.is_none()
@@ -757,6 +863,19 @@ fn quiet_key(cx: &mut Ctx, x: f32, y: f32, words: &str, glyph: &'static str) -> 
     (w, cx.tap(x, y, w, 40.0))
 }
 
+/// Back closes the open question as its Cancel does.
+pub fn back(app: &mut App) -> bool {
+    match app.st.sync.confirm.take() {
+        Some(Confirm::First) => {
+            app.st.sync.answer_first(&mut app.store, false);
+            app.say("Sync is off. This phone keeps its ledger.", None);
+            true
+        }
+        Some(_) => true,
+        None => false,
+    }
+}
+
 pub fn draw(app: &mut App, dt: f32) -> bool {
     let pg = app.page_begin(dt);
     let now = now_ms();
@@ -773,6 +892,12 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let num = |k: &str| app.store.pref(k).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
     let (last, sent, received) = (num(pref::LAST_SUCCESS), num(pref::SENT), num(pref::RECEIVED));
     let (problem, note) = (app.store.pref(pref::LAST_ERROR), app.store.pref(pref::NOTE));
+    if app.st.sync.confirm == Some(Confirm::First) && !app.st.sync.ask_first {
+        app.st.sync.confirm = None;
+    }
+    if app.st.sync.ask_first && app.st.sync.confirm.is_none() {
+        app.st.sync.confirm = Some(Confirm::First);
+    }
     let confirm = app.st.sync.confirm;
     let mut act = None;
     let bottom;
@@ -926,6 +1051,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     "Disconnect",
                     true,
                 ),
+                Confirm::First => widgets::confirm(&mut cx, FIRST_TITLE, FIRST_BODY, FIRST_YES, true),
             };
             match answer {
                 Some(true) => act = Some(Act::Confirmed(c)),
@@ -965,12 +1091,21 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             }
         }
         Some(Act::Ask(c)) => app.st.sync.confirm = Some(c),
-        Some(Act::Cancel) => app.st.sync.confirm = None,
+        Some(Act::Cancel) => {
+            if app.st.sync.confirm.take() == Some(Confirm::First) {
+                app.st.sync.answer_first(&mut app.store, false);
+                app.say("Sync is off. This phone keeps its ledger.", None);
+            }
+        }
         Some(Act::Confirmed(c)) => {
             app.st.sync.confirm = None;
             match c {
                 Confirm::Take => {
                     app.st.sync.take_whole = true;
+                    app.say("Taking your server's ledger", None);
+                }
+                Confirm::First => {
+                    app.st.sync.answer_first(&mut app.store, true);
                     app.say("Taking your server's ledger", None);
                 }
                 Confirm::Disconnect => {
@@ -1137,6 +1272,12 @@ mod tests {
         assert!(!st.paired(&store));
         assert_eq!(fake.0.lock().unwrap().enrolls, 0, "nothing is asked until the person taps Connect");
         st.connect_now(&mut store);
+        // Paired, the first pull waits on a yes: it would replace the sample here.
+        run(&mut st, &mut store, |st, _| st.awaiting_yes());
+        assert!(st.paired(&store));
+        assert!(!fake.0.lock().unwrap().requests.iter().any(|o| o == "money.sync"), "nothing pulled before the yes");
+        assert_eq!(st.line(&store, now_ms()).text, "Waiting for your yes");
+        st.answer_first(&mut store, true);
         run(&mut st, &mut store, |st, store| st.paired(store) && store.pref(pref::LAST_SUCCESS).is_some());
         let i = fake.0.lock().unwrap();
         assert_eq!(i.enrolls, 1);
@@ -1167,6 +1308,107 @@ mod tests {
         assert!(i.server.entries().contains(&mine.uid));
         assert_eq!(i.server.replaces, 0);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A State paired with `fake` and synced once, over an empty phone ledger.
+    fn paired(fake: &Fake) -> (State, Store, PathBuf) {
+        let d = dir();
+        let mut store = Store::in_memory().unwrap();
+        let mut st = State::with_net(fake.net());
+        st.start(d.clone(), &mut store);
+        st.connect_now(&mut store);
+        run(&mut st, &mut store, |st, store| st.paired(store) && store.pref(pref::LAST_SUCCESS).is_some() && st.in_flight.is_none());
+        (st, store, d)
+    }
+
+    /// Every row the phone sent the fake server, and how many of them were deletions.
+    fn sent(fake: &Fake) -> (usize, usize) {
+        let i = fake.0.lock().unwrap();
+        let all: Vec<Value> = i.server.requests.iter().flat_map(|r| r["changes"].as_array().unwrap().clone()).collect();
+        (all.len(), all.iter().filter(|c| c["deleted"] == Value::Bool(true)).count())
+    }
+
+    #[test]
+    fn a_first_pull_into_an_empty_phone_asks_nothing() {
+        let fake = Fake::new();
+        let (st, store, d) = paired(&fake);
+        assert!(!st.awaiting_yes());
+        assert_eq!(all_uids(&store.ledger), fake.0.lock().unwrap().server.entries());
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn erase_and_restore_on_a_paired_phone_send_no_tombstones() {
+        let fake = Fake::new();
+        let before = fake.0.lock().unwrap().server.entries();
+        let (mut st, mut store, d) = paired(&fake);
+        // Erase everything, as Settings does it.
+        store.ledger.reset().unwrap();
+        store.ledger.ensure_categories().unwrap();
+        st.ledger_replaced(&mut store);
+        st.sync_now();
+        run(&mut st, &mut store, |st, store| store.pref(ledger::PULLED).is_some() && st.in_flight.is_none());
+        assert_eq!(sent(&fake), (0, 0), "nothing went up, not one tombstone");
+        assert_eq!(fake.0.lock().unwrap().server.entries(), before);
+        assert_eq!(all_uids(&store.ledger), before, "the server's copy came back on the next sync");
+
+        // A restore (Settings refuses one while paired; this is the ledger's own guard).
+        let mut other = Store::in_memory().unwrap();
+        other.load_sample(crate::model::today()).unwrap();
+        store.ledger.import_backup(&other.ledger.export_backup("t").unwrap()).unwrap();
+        st.sync_now();
+        run(&mut st, &mut store, |st, _| st.awaiting_yes() || (st.in_flight.is_none() && !st.sync_asked));
+        assert!(st.awaiting_yes(), "the restored ledger is not replaced without a yes");
+        st.answer_first(&mut store, true);
+        run(&mut st, &mut store, |st, _| st.in_flight.is_none() && !st.take_whole);
+        assert_eq!(sent(&fake), (0, 0));
+        let i = fake.0.lock().unwrap();
+        assert_eq!(i.server.entries(), before);
+        assert_eq!(i.server.replaces, 0);
+        drop(i);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn a_sync_in_flight_at_a_disconnect_is_not_applied() {
+        let fake = Fake::new();
+        let (mut st, mut store, d) = paired(&fake);
+        let account = store.ledger.accounts().unwrap()[0].id;
+        store.add(&relay_money::views::TxInput { r#type: relay_money::model::TxType::Expense, amount: 1_00, date: crate::model::today().to_string(), account_id: account, to_account_id: None, category_id: None, note: None }).unwrap();
+        st.sync_now();
+        step(&mut st, &mut store, 1, &|_| {});
+        assert!(st.in_flight.is_some());
+        st.disconnect(&mut store);
+        // The thread answers; the answer is dropped.
+        std::thread::sleep(Duration::from_millis(300));
+        step(&mut st, &mut store, 2, &|_| {});
+        assert!(st.in_flight.is_none());
+        for k in [ledger::PULLED, ledger::GENERATION, ledger::CURSOR, pref::LAST_SUCCESS] {
+            assert!(store.pref(k).is_none(), "{k} stays forgotten");
+        }
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn a_cancelled_connect_says_nothing_more() {
+        let fake = Fake::new();
+        fake.0.lock().unwrap().allow_after = 1_000;
+        let d = dir();
+        let mut store = Store::in_memory().unwrap();
+        let mut st = State::with_net(fake.net());
+        st.start(d.clone(), &mut store);
+        st.connect_now(&mut store);
+        run(&mut st, &mut store, |st, _| matches!(st.connect, Connect::Waiting { .. }));
+        st.disconnect(&mut store);
+        let started = std::time::Instant::now();
+        while started.elapsed() < Duration::from_millis(2_500) {
+            step(&mut st, &mut store, 1, &|_| {});
+            assert_eq!(st.connect, Connect::Idle, "nothing from the old attempt is taken");
+            assert!(st.pending.is_none());
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(fake.0.lock().unwrap().enrolls, 1, "and nothing asked again");
+        let _ = std::fs::remove_dir_all(d);
     }
 
     #[test]
