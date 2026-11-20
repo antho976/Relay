@@ -63,13 +63,13 @@ import com.tally.app.ui.theme.Tally
 
 /** Relay's radii (DESIGN.md "Shapes"). */
 object Radii {
-    val key = RoundedCornerShape(10.dp)
-    val icon = RoundedCornerShape(7.dp)
-    val badge = RoundedCornerShape(9.dp)
-    val tab = RoundedCornerShape(9.dp)
-    val popover = RoundedCornerShape(12.dp)
-    val card = RoundedCornerShape(14.dp)
-    val sheet = RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp)
+    val key = RoundedCornerShape(14.dp)
+    val icon = RoundedCornerShape(10.dp)
+    val badge = RoundedCornerShape(13.dp)
+    val tab = RoundedCornerShape(11.dp)
+    val popover = RoundedCornerShape(16.dp)
+    val card = RoundedCornerShape(22.dp)
+    val sheet = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     val pill = RoundedCornerShape(999.dp)
 }
 
@@ -136,15 +136,15 @@ fun Key(
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
     val (bg, fg, border) = when (kind) {
-        KeyKind.Plain -> Triple(if (pressed) c.wash else c.slab, c.ink, c.strong)
-        KeyKind.Primary -> Triple(if (pressed) Color.White else c.ink, c.wall, Color.Transparent)
+        KeyKind.Plain -> Triple(if (pressed) c.wash else c.raised, c.ink, c.strong)
+        KeyKind.Primary -> Triple(if (pressed) c.ink2 else c.ink, c.onInk, Color.Transparent)
         KeyKind.Quiet -> Triple(if (pressed) c.wash else Color.Transparent, c.ink2, Color.Transparent)
-        KeyKind.Danger -> Triple(if (pressed) c.wash else c.slab, c.heldText, c.strong)
+        KeyKind.Danger -> Triple(if (pressed) c.wash else c.raised, c.heldText, c.strong)
     }
     Row(
         modifier
             .alpha(if (enabled) 1f else .4f)
-            .heightIn(min = if (compact) 36.dp else 44.dp)
+            .heightIn(min = if (compact) 38.dp else 50.dp)
             .clip(Radii.key)
             .background(bg)
             .border(1.dp, border, Radii.key)
@@ -196,7 +196,7 @@ fun CountBadge(n: Int, color: Color = Tally.colors.ink) {
         Modifier.defaultMinSize(minWidth = 16.dp, minHeight = 16.dp).clip(Radii.pill).background(color).padding(horizontal = 4.dp),
         contentAlignment = Alignment.Center,
     ) {
-        T(if (n > 99) "99+" else n.toString(), style = Tally.type.mono.copy(fontSize = 10.sp), color = Tally.colors.wall, weight = FontWeight.Medium)
+        T(if (n > 99) "99+" else n.toString(), style = Tally.type.mono.copy(fontSize = 10.sp), color = Tally.colors.onInk, weight = FontWeight.Medium)
     }
 }
 
@@ -244,11 +244,11 @@ fun Field(
         decorationBox = { inner ->
             Row(
                 Modifier
-                    .heightIn(min = 44.dp)
+                    .heightIn(min = 50.dp)
                     .clip(Radii.key)
                     .then(
                         if (bare) Modifier
-                        else Modifier.background(c.raised).border(1.dp, if (error) c.held else if (focused) c.lineFocus else c.strong, Radii.key)
+                        else Modifier.background(c.raised).border(if (focused || error) 2.dp else 1.dp, if (error) c.held else if (focused) c.lineFocus else Color.Transparent, Radii.key)
                     )
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = if (singleLine) Alignment.CenterVertically else Alignment.Top,
@@ -280,11 +280,11 @@ fun Labelled(label: String, modifier: Modifier = Modifier, problem: String? = nu
 
 // ---- Surfaces ----
 
-/** A card: slab, a thin edge, 14dp corners. */
+/** A card: frosted glass on the sky, 22dp corners, no edge. */
 @Composable
 fun Slab(
     modifier: Modifier = Modifier,
-    padding: PaddingValues = PaddingValues(14.dp),
+    padding: PaddingValues = PaddingValues(16.dp),
     color: Color = Tally.colors.slab,
     edge: Color = Tally.colors.edge,
     shape: Shape = Radii.card,
@@ -320,15 +320,14 @@ fun Panel(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val c = Tally.colors
-    Slab(modifier.fillMaxWidth(), padding = PaddingValues(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 10.dp)) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 40.dp).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            glyph?.let { Glyph(it, 15.dp, c.ink3); HGap(8.dp) }
+    Slab(modifier.fillMaxWidth(), padding = PaddingValues(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 12.dp)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                T(title, style = Tally.type.section, color = c.ink2, maxLines = 1)
+                T(title, style = Tally.type.section, color = c.ink, maxLines = 1)
                 subtitle?.let { T(it, style = Tally.type.caption, color = c.ink3, maxLines = 1) }
             }
             if (action != null && onAction != null) {
-                T(action, Modifier.clip(Radii.key).clickable(role = Role.Button, onClick = onAction).padding(horizontal = 10.dp, vertical = 8.dp), Tally.type.caption, c.ink2, weight = FontWeight.Medium)
+                T(action, Modifier.clip(Radii.key).clickable(role = Role.Button, onClick = onAction).padding(horizontal = 10.dp, vertical = 8.dp), Tally.type.uiMedium, c.signal, weight = FontWeight.SemiBold)
             }
         }
         Column(Modifier.padding(end = 8.dp)) { content() }
@@ -383,11 +382,12 @@ fun SettingRow(
     titleColor: Color = Tally.colors.ink,
     onClick: (() -> Unit)? = null,
     chevron: Boolean = onClick != null && value == null,
+    glyphTint: Color? = null,
     trailing: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val c = Tally.colors
     ListRow(modifier, onClick = onClick, padding = PaddingValues(horizontal = 4.dp, vertical = 10.dp)) {
-        glyph?.let { Glyph(it, 17.dp, c.ink3) }
+        glyph?.let { GlyphTile(it, glyphTint ?: c.ink2) }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             T(title, style = Tally.type.ui, color = titleColor, maxLines = 2)
             subtitle?.let { T(it, style = Tally.type.caption, color = c.ink3, maxLines = 4) }
@@ -400,9 +400,17 @@ fun SettingRow(
 
 /** A row with a switch at its end; the whole row toggles it. */
 @Composable
-fun ToggleRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier, glyph: String? = null, subtitle: String? = null, enabled: Boolean = true) {
-    SettingRow(title, modifier.alpha(if (enabled) 1f else .5f), glyph = glyph, subtitle = subtitle, onClick = if (enabled) ({ onChange(!checked) }) else null, chevron = false) {
+fun ToggleRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier, glyph: String? = null, subtitle: String? = null, enabled: Boolean = true, glyphTint: Color? = null) {
+    SettingRow(title, modifier.alpha(if (enabled) 1f else .5f), glyph = glyph, subtitle = subtitle, onClick = if (enabled) ({ onChange(!checked) }) else null, chevron = false, glyphTint = glyphTint ?: com.tally.app.ui.theme.Hue.violet) {
         Toggle(checked, onChange, enabled = enabled)
+    }
+}
+
+/** A glyph on a soft tile of its own colour, as the C mockups' settings rows. */
+@Composable
+fun GlyphTile(glyph: String, tint: Color, size: Dp = 36.dp, fill: Color = tint.copy(alpha = .14f)) {
+    Box(Modifier.size(size).clip(RoundedCornerShape(size * 0.32f)).background(fill), contentAlignment = Alignment.Center) {
+        Glyph(glyph, size * 0.5f, tint)
     }
 }
 
@@ -420,7 +428,7 @@ fun Pill(
     modifier: Modifier = Modifier,
     color: Color = Tally.colors.ink2,
     fill: Color = Tally.colors.slab,
-    edge: Color = Tally.colors.strong,
+    edge: Color = Color.Transparent,
     selected: Boolean = false,
     dot: Color? = null,
     glyph: String? = null,
@@ -429,7 +437,7 @@ fun Pill(
     val c = Tally.colors
     Row(
         modifier
-            .heightIn(min = 32.dp)
+            .heightIn(min = 34.dp)
             .clip(Radii.pill)
             .background(if (selected) c.ink else fill)
             .border(1.dp, if (selected) Color.Transparent else edge, Radii.pill)
@@ -439,8 +447,8 @@ fun Pill(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         dot?.let { Dot(it) }
-        glyph?.let { Glyph(it, 13.dp, if (selected) c.wall else color) }
-        T(text, style = Tally.type.caption, color = if (selected) c.wall else color, maxLines = 1, weight = FontWeight.Medium)
+        glyph?.let { Glyph(it, 13.dp, if (selected) c.onInk else color) }
+        T(text, style = Tally.type.caption, color = if (selected) c.onInk else color, maxLines = 1, weight = FontWeight.SemiBold)
     }
 }
 
@@ -452,8 +460,8 @@ fun Pill(
 fun <V> Segmented(options: List<Pair<V, String>>, selected: V, onSelect: (V) -> Unit, modifier: Modifier = Modifier, fill: Boolean = false) {
     val c = Tally.colors
     Row(
-        modifier.clip(Radii.popover).background(c.slab).border(1.dp, c.edge, Radii.popover).padding(3.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        modifier.clip(Radii.popover).background(c.slab).padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         for ((value, label) in options) {
             val on = value == selected
@@ -461,12 +469,12 @@ fun <V> Segmented(options: List<Pair<V, String>>, selected: V, onSelect: (V) -> 
                 (if (fill) Modifier.weight(1f) else Modifier)
                     .heightIn(min = 36.dp)
                     .clip(Radii.tab)
-                    .background(if (on) c.track else Color.Transparent)
+                    .background(if (on) c.ink else Color.Transparent)
                     .clickable(role = Role.Tab) { onSelect(value) }
                     .padding(horizontal = 12.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                T(label, style = Tally.type.uiMedium, color = if (on) c.ink else c.ink3, maxLines = 1)
+                T(label, Modifier.padding(vertical = 6.dp), style = Tally.type.uiMedium, color = if (on) c.onInk else c.ink2, maxLines = 2, weight = if (on) FontWeight.SemiBold else FontWeight.Medium, align = TextAlign.Center)
             }
         }
     }
@@ -491,20 +499,20 @@ fun Toggle(checked: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = M
                 .padding(start = (18 * x).dp)
                 .size(20.dp)
                 .clip(CircleShape)
-                .background(if (checked) c.wall else c.ink3),
+                .background(if (checked) c.onInk else c.raised),
         )
     }
 }
 
 /** A thin meter: ink, amber from 85%, red past 100% unless a colour is given. */
 @Composable
-fun Meter(fraction: Float, modifier: Modifier = Modifier, color: Color? = null, height: Dp = 5.dp) {
+fun Meter(fraction: Float, modifier: Modifier = Modifier, color: Color? = null, height: Dp = 7.dp) {
     val c = Tally.colors
     val f = fraction.coerceIn(0f, 1f)
     val fill = color ?: when {
         fraction > 1f -> c.held
         fraction >= .85f -> c.waiting
-        else -> c.ink
+        else -> c.signal
     }
     Canvas(modifier.fillMaxWidth().height(height)) {
         val r = CornerRadius(size.height / 2)
@@ -518,12 +526,12 @@ fun Meter(fraction: Float, modifier: Modifier = Modifier, color: Color? = null, 
  * would be today. Over the tick reads amber, over the budget red, under it ink.
  */
 @Composable
-fun PaceMeter(spent: Float, pace: Float, modifier: Modifier = Modifier, height: Dp = 6.dp) {
+fun PaceMeter(spent: Float, pace: Float, modifier: Modifier = Modifier, height: Dp = 9.dp) {
     val c = Tally.colors
     val fill = when {
         spent > 1f -> c.held
         spent > pace + 0.02f -> c.waiting
-        else -> c.ink
+        else -> c.live
     }
     Canvas(modifier.fillMaxWidth().height(height + 6.dp)) {
         val bar = height.toPx()
@@ -533,23 +541,23 @@ fun PaceMeter(spent: Float, pace: Float, modifier: Modifier = Modifier, height: 
         val f = spent.coerceIn(0f, 1f)
         if (f > 0f) drawRoundRect(fill, topLeft = Offset(0f, top), size = Size(size.width * f, bar), cornerRadius = r)
         val x = size.width * pace.coerceIn(0f, 1f)
-        drawLine(c.ink2, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
+        drawLine(c.ink, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
     }
 }
 
 /** A figure in a small card: caption, figure, a line under it. */
 @Composable
-fun Stat(caption: String, figure: String, modifier: Modifier = Modifier, sub: String? = null, glyph: String? = null, figureColor: Color = Tally.colors.ink, subColor: Color = Tally.colors.ink3, onClick: (() -> Unit)? = null) {
+fun Stat(caption: String, figure: String, modifier: Modifier = Modifier, sub: String? = null, glyph: String? = null, figureColor: Color = Tally.colors.ink, subColor: Color = Tally.colors.ink3, onClick: (() -> Unit)? = null, fill: Color = Tally.colors.slab, captionColor: Color = Tally.colors.ink3) {
     val c = Tally.colors
     Column(
-        modifier.clip(Radii.card).background(c.slab).border(1.dp, c.edge, Radii.card)
+        modifier.clip(Radii.card).background(fill)
             .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            glyph?.let { Glyph(it, 13.dp, c.ink3) }
-            T(caption, style = Tally.type.caption, color = c.ink3, maxLines = 1)
+            glyph?.let { Glyph(it, 13.dp, captionColor) }
+            T(caption, style = Tally.type.caption, color = captionColor, maxLines = 1, weight = FontWeight.Medium)
         }
         T(figure, style = Tally.type.figure, color = figureColor, maxLines = 1)
         if (!sub.isNullOrEmpty()) T(sub, style = Tally.type.caption, color = subColor, maxLines = 2)

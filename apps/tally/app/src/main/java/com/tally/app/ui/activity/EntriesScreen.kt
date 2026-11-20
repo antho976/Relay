@@ -1,5 +1,14 @@
 package com.tally.app.ui.activity
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.key
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.text.font.FontWeight
+import com.tally.app.ui.kit.GlassGroup
+import com.tally.app.ui.kit.HGap
+import com.tally.app.ui.kit.RoundKey
+import com.tally.app.ui.theme.Hue
+import com.tally.app.ui.kit.DayHeader as SkyDayHeader
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -80,15 +89,17 @@ fun EntriesScreen(s: ActivityState, a: EntriesActions) {
         title = Dates.period(s.period, s.today),
         context = context,
         actions = {
-            IconKey("chevron-left", a.previous, label = "Earlier month")
-            IconKey("chevron-right", a.next, enabled = !s.isCurrentPeriod, label = "Later month")
+            RoundKey("chevron-left", a.previous, label = "Earlier month")
+            Box(Modifier.alpha(if (s.isCurrentPeriod) .4f else 1f)) {
+                RoundKey("chevron-right", { if (!s.isCurrentPeriod) a.next() }, label = "Later month")
+            }
         },
         header = {
             Segmented(ActivityFilter.entries.map { it to it.label }, s.filter, a.filter, Modifier.fillMaxWidth(), fill = true)
             s.perDay?.let { perDay ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Pill(fmt.formatWhole(perDay) + " a day", glyph = "calendar")
-                    if (sum.activeDays > 0) Pill(Copy.plural(sum.activeDays, "day") + " with spending")
+                    Pill(fmt.formatWhole(perDay) + " a day", glyph = "calendar", fill = Hue.sunSoft, color = Hue.sunInk)
+                    if (sum.activeDays > 0) Pill(Copy.plural(sum.activeDays, "day") + " with spending", glyph = "pulse", fill = Hue.lilacSoft, color = Hue.lilacInk)
                 }
             }
         },
@@ -105,9 +116,17 @@ fun EntriesScreen(s: ActivityState, a: EntriesActions) {
 /** The day groups: a header with the day's in and out, then its entries. */
 internal fun LazyListScope.days(s: ActivityState, a: EntriesActions) {
     s.days.forEach { day ->
-        item(key = "day-" + day.date) { DayHeader(day, s) }
-        items(day.rows, key = { "tx-" + it.id }) { row ->
-            EntryRow(row, onClick = { a.entry(row.id) }, onLongClick = { a.delete(row.id) }, modifier = Modifier.padding(horizontal = 0.dp))
+        item(key = "day-" + day.date) {
+            Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                DayHeader(day, s)
+                GlassGroup {
+                    day.rows.forEach { row ->
+                        key("tx-" + row.id) {
+                            EntryRow(row, onClick = { a.entry(row.id) }, onLongClick = { a.delete(row.id) })
+                        }
+                    }
+                }
+            }
         }
     }
     if (s.truncated) {
@@ -121,12 +140,10 @@ internal fun LazyListScope.days(s: ActivityState, a: EntriesActions) {
 private fun DayHeader(day: DayGroup, s: ActivityState) {
     val c = Tally.colors
     val fmt = LocalMoney.current
-    Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 14.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        T(Dates.day(day.date, s.today), style = Tally.type.section, color = c.ink2)
-        Fill()
-        if (day.income > 0) T("+" + fmt.formatWhole(day.income), style = Tally.type.mono, color = c.liveText)
-        if (day.income > 0 && day.spent > 0) T("  ", style = Tally.type.mono)
-        if (day.spent > 0) T(fmt.formatWhole(day.spent), style = Tally.type.mono, color = c.ink3)
+    SkyDayHeader(Dates.day(day.date, s.today)) {
+        if (day.income > 0) T("+" + fmt.formatWhole(day.income), style = Tally.type.amount, color = c.liveText, weight = FontWeight.SemiBold)
+        if (day.income > 0 && day.spent > 0) HGap(10.dp)
+        if (day.spent > 0) T(fmt.formatWhole(day.spent), style = Tally.type.amount, color = c.ink2, weight = FontWeight.SemiBold)
     }
 }
 
@@ -148,7 +165,7 @@ fun SearchScreen(s: ActivityState, a: EntriesActions) {
     var text by rememberSaveable { mutableStateOf("") }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-    val clear: @Composable RowScope.() -> Unit = { IconKey("close", { text = ""; a.query("") }, size = 14.dp, label = "Clear") }
+    val clear: @Composable RowScope.() -> Unit = { IconKey("close", { text = ""; a.query("") }, size = 16.dp, label = "Clear") }
     Column(Modifier.fillMaxSize().padding(0.dp)) {
         PageBar("Search", a.back)
         SpaceList(
@@ -168,8 +185,8 @@ fun SearchScreen(s: ActivityState, a: EntriesActions) {
                 if (s.searching && s.loaded) {
                     T(
                         Copy.plural(s.summary.count, "entry", "entries") + " · " + fmt.formatWhole(s.summary.spent) + " out · " + fmt.formatWhole(s.summary.income) + " in",
-                        style = Tally.type.caption,
-                        color = c.ink3,
+                        style = Tally.type.uiMedium,
+                        color = c.ink2,
                     )
                 }
             },
@@ -179,7 +196,7 @@ fun SearchScreen(s: ActivityState, a: EntriesActions) {
                 item(key = "none") { Empty("search", "Nothing matches", "Search reads notes, categories and accounts, across every month.") }
             }
             if (!s.searching) {
-                item(key = "hint") { T("Type to search every month at once.", Modifier.padding(4.dp), Tally.type.caption, c.ink3) }
+                item(key = "hint") { T("Type to search every month at once.", Modifier.padding(4.dp), Tally.type.caption, c.ink2) }
             }
         }
     }

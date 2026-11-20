@@ -9,18 +9,18 @@ import androidx.compose.ui.graphics.Color
  * and synced, so append, never reorder.
  */
 val CategoryPalette = listOf(
-    Color(0xFF7FB27A), // 0 sage
-    Color(0xFF4FA9A0), // 1 teal
-    Color(0xFF6A9FD8), // 2 sky
-    Color(0xFF8C87D9), // 3 iris
-    Color(0xFFC27BC0), // 4 orchid
-    Color(0xFFD9768E), // 5 rose
-    Color(0xFFE08A5F), // 6 coral
-    Color(0xFFD9A441), // 7 amber
-    Color(0xFFA3A84E), // 8 olive
-    Color(0xFFC2A585), // 9 sand
-    Color(0xFF8D99A6), // 10 slate
-    Color(0xFFB8664F), // 11 brick
+    Color(0xFF13A36E), // 0 sage
+    Color(0xFF0EA5A0), // 1 teal
+    Color(0xFF2F7CF6), // 2 sky
+    Color(0xFF6C4BF4), // 3 iris
+    Color(0xFFB25BC4), // 4 orchid
+    Color(0xFFF0508C), // 5 rose
+    Color(0xFFFF6A3D), // 6 coral
+    Color(0xFFE89A12), // 7 amber
+    Color(0xFF8C9A2E), // 8 olive
+    Color(0xFFB98A5E), // 9 sand
+    Color(0xFF6B7A8C), // 10 slate
+    Color(0xFFC2452D), // 11 brick
 )
 
 fun categoryColor(index: Int?): Color = CategoryPalette[((index ?: 10) % CategoryPalette.size + CategoryPalette.size) % CategoryPalette.size]

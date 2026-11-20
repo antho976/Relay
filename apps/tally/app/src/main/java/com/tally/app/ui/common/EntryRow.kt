@@ -8,6 +8,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
 import com.tally.app.data.db.TransactionRow
 import com.tally.app.ui.kit.CategoryBadge
 import com.tally.app.ui.kit.EntryAmount
@@ -48,15 +50,15 @@ fun EntryRow(
     today: LocalDate? = null,
 ) {
     val c = Tally.colors
-    ListRow(modifier, onClick = onClick, onLongClick = onLongClick, padding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
+    ListRow(modifier, onClick = onClick, onLongClick = onLongClick, padding = PaddingValues(horizontal = 4.dp, vertical = 7.dp)) {
         if (row.type == TxType.TRANSFER) TransferBadge() else CategoryBadge(row.categoryIcon, row.categoryColor)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                T(entryName(row), Modifier.weight(1f, fill = false), Tally.type.ui, c.ink, maxLines = 1)
+                T(entryName(row), Modifier.weight(1f, fill = false), Tally.type.body, c.ink, maxLines = 1, weight = FontWeight.SemiBold)
                 if (row.recurringId != null) Glyph("repeat", 12.dp, c.ink3)
             }
             T(entryLine(row, today?.let { Dates.day(row.date, it) }), style = Tally.type.caption, color = c.ink3, maxLines = 1)
         }
-        EntryAmount(row.amount, row.type)
+        EntryAmount(row.amount, row.type, style = Tally.type.amount.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold))
     }
 }

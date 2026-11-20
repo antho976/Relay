@@ -155,6 +155,15 @@ class RelaySync @Inject constructor(
 
     suspend fun restore(prefs: SyncPrefs) = mutex.withLock { store.restore(prefs) }
 
+    /**
+     * One request on a connection of its own, for what is not a sync (bank connections, docs/PLAID.md).
+     * Not under the sync's lock: it changes no ledger row here; what it causes arrives by the next sync.
+     */
+    suspend fun call(op: String, payload: JsonObject, timeoutMs: Long = 30_000): JsonElement? {
+        val pc = store.current().pc ?: throw RelayFailure(NOT_CONNECTED)
+        return open(pc).use { it.request(op, payload, timeoutMs) }
+    }
+
     private suspend fun open(pc: PairedPc): RelaySession =
         client.connect(pc.routes, hello = { g -> RelayWire.proofHello(pc.deviceId, g.challenge, pc.token) })
 
@@ -350,6 +359,7 @@ class RelaySync @Inject constructor(
         const val STALE = "money.sync_stale"
 
         const val NOT_FINISHED = "The sync did not finish. Nothing here was changed."
+        const val NOT_CONNECTED = "This phone is not connected to your server yet."
 
         /** The status note after the server's ledger replaced this phone's on its own. */
         const val TOOK_SERVER_LEDGER = "Your server's ledger had been replaced, so this phone took it"

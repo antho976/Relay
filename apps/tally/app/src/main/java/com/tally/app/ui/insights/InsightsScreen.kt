@@ -1,5 +1,14 @@
 package com.tally.app.ui.insights
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import com.tally.app.ui.kit.Postcard
+import com.tally.app.ui.kit.RoundKey
+import com.tally.app.ui.kit.Scene
+import com.tally.app.ui.kit.TintTile
+import com.tally.app.ui.theme.Hue
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -81,8 +90,10 @@ fun InsightsScreen(
         Dates.period(s.period, s.today),
         context = if (s.loaded) fmt.formatWhole(s.spent) + " out · " + fmt.formatWhole(s.income) + " in" + (s.savingsRate?.let { " · kept $it%" } ?: "") else null,
         actions = {
-            IconKey("chevron-left", previous, label = "Earlier month")
-            IconKey("chevron-right", next, enabled = s.isCurrentPeriod.not(), label = "Later month")
+            RoundKey("chevron-left", previous, label = "Earlier month")
+            Box(Modifier.alpha(if (s.isCurrentPeriod) .4f else 1f)) {
+                RoundKey("chevron-right", { if (!s.isCurrentPeriod) next() }, label = "Later month")
+            }
         },
     ) {
         // Worth reads only when some account keeps a balance: Tally tracks spending, and a worth
@@ -114,7 +125,7 @@ private fun MonthLens(s: InsightsState, category: (Long?) -> Unit, entry: (Long)
                 val pace = s.budget?.let { paceAt(it, shown, s.period.days) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     T(Dates.day(date, s.today), Modifier.weight(1f), Tally.type.caption, c.ink3)
-                    T(fmt.formatWhole(s.cumulative[shown]) + (pace?.let { " · pace " + fmt.formatWhole(it) } ?: ""), style = Tally.type.mono, color = if (pace != null && s.cumulative[shown] > pace) c.waiting else c.ink2)
+                    T(fmt.formatWhole(s.cumulative[shown]) + (pace?.let { " · pace " + fmt.formatWhole(it) } ?: ""), style = Tally.type.mono, color = if (pace != null && s.cumulative[shown] > pace) c.waitingText else c.ink2)
                 }
             }
             SpendLine(
@@ -129,10 +140,10 @@ private fun MonthLens(s: InsightsState, category: (Long?) -> Unit, entry: (Long)
     }
     StatGrid(
         listOf(
-            { m -> Stat("A day", fmt.formatWhole(s.perDay), m, glyph = "calendar", sub = "over " + Copy.plural(s.elapsedDays, "day")) },
-            { m -> Stat("Projected", s.projected?.let { fmt.formatWhole(it) } ?: "–", m, glyph = "trend", sub = if (s.projected != null) "at this pace" else "once the month is under way") },
-            { m -> Stat("Vs last month", fmt.formatWhole(s.lastPeriodSameDay), m, glyph = "history", sub = Copy.versusLastLine(s.spent, s.lastPeriodSameDay, fmt)) },
-            { m -> Stat("Kept", s.savingsRate?.let { "$it%" } ?: "–", m, glyph = "wallet", sub = if (s.income > 0) "of what came in" else "nothing came in yet") },
+            { m -> TintTile("A day", fmt.formatWhole(s.perDay), Hue.sky, m, sub = "over " + Copy.plural(s.elapsedDays, "day")) },
+            { m -> TintTile("Projected", s.projected?.let { fmt.formatWhole(it) } ?: "–", Hue.coral, m, sub = if (s.projected != null) "at this pace" else "once the month is under way") },
+            { m -> TintTile("Vs last month", fmt.formatWhole(s.lastPeriodSameDay), Hue.mint, m, sub = Copy.versusLastLine(s.spent, s.lastPeriodSameDay, fmt)) },
+            { m -> TintTile("Kept", s.savingsRate?.let { "$it%" } ?: "–", Hue.violet, m, sub = if (s.income > 0) "of what came in" else "nothing came in yet") },
         ),
     )
     if (s.categories.isEmpty()) {
@@ -147,9 +158,9 @@ private fun MonthLens(s: InsightsState, category: (Long?) -> Unit, entry: (Long)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         T(slice.name, Modifier.weight(1f), Tally.type.ui, c.ink, maxLines = 1)
-                        T(fmt.formatWhole(slice.total), style = Tally.type.amount, color = c.ink2)
+                        T(fmt.formatWhole(slice.total), style = Tally.type.amount, color = c.ink, weight = FontWeight.SemiBold)
                     }
-                    Meter(if (s.spent > 0) slice.total.toFloat() / s.spent else 0f, color = categoryColor(slice.color), height = 3.dp)
+                    Meter(if (s.spent > 0) slice.total.toFloat() / s.spent else 0f, color = categoryColor(slice.color), height = 6.dp)
                     T(Copy.plural(slice.count, "entry", "entries") + " · " + percentOf(slice.total, s.spent) + "%", style = Tally.type.caption, color = c.ink3)
                 }
             }
@@ -192,7 +203,7 @@ private fun TrendLens(s: InsightsState, showPeriod: (Int) -> Unit) {
     val fmt = LocalMoney.current
     val t = s.trendSummary
     val labels = s.trend.map { Dates.monthShort(it.period.start) }
-    Panel("Six months", glyph = "bars", subtitle = "Out in ink, in in green; tap a month to read it") {
+    Panel("Six months", glyph = "bars", subtitle = "Out in violet, in in green; tap a month to read it") {
         TrendBars(
             s.trend.map { it.spent },
             s.trend.map { it.income },
@@ -205,10 +216,10 @@ private fun TrendLens(s: InsightsState, showPeriod: (Int) -> Unit) {
     }
     StatGrid(
         listOf(
-            { m -> Stat("Spent a month", fmt.formatWhole(t.averageSpent), m, glyph = "money-out", sub = "average of " + Copy.plural(t.months, "month")) },
-            { m -> Stat("Earned a month", fmt.formatWhole(t.averageIncome), m, glyph = "money-in", sub = "average of " + Copy.plural(t.months, "month")) },
-            { m -> Stat("Net a month", fmt.formatWhole(t.averageNet), m, glyph = "wallet", figureColor = if (t.averageNet < 0) c.heldText else c.ink) },
-            { m -> Stat("Over budget", Copy.plural(t.overBudget, "month"), m, glyph = "flag", sub = "of the last " + s.trend.size) },
+            { m -> TintTile("Spent a month", fmt.formatWhole(t.averageSpent), Hue.violet, m, sub = "average of " + Copy.plural(t.months, "month")) },
+            { m -> TintTile("Earned a month", fmt.formatWhole(t.averageIncome), Hue.mint, m, sub = "average of " + Copy.plural(t.months, "month")) },
+            { m -> TintTile("Net a month", fmt.formatWhole(t.averageNet), Hue.sky, m, figureColor = if (t.averageNet < 0) c.heldText else Color(0xFF1A1A2E)) },
+            { m -> TintTile("Over budget", Copy.plural(t.overBudget, "month"), Hue.coral, m, sub = "of the last " + s.trend.size) },
         ),
     )
     Panel("By month", glyph = "list") {
@@ -253,10 +264,10 @@ private fun CalendarLens(s: InsightsState, entry: (Long) -> Unit, delete: (Long)
     }
     StatGrid(
         listOf(
-            { m -> Stat("Days with spending", cal.activeDays.toString(), m, glyph = "calendar", sub = "of " + cal.daysSoFar + " so far") },
-            { m -> Stat("Longest quiet run", Copy.plural(cal.longestQuietRun, "day"), m, glyph = "pause") },
-            { m -> Stat("Busiest day", cal.busiestDate?.let { Dates.short(it, s.today) } ?: "–", m, glyph = "flag", sub = if (cal.busiestTotal > 0) fmt.formatWhole(cal.busiestTotal) else null) },
-            { m -> Stat("Weekends", fmt.formatWhole(cal.weekendTotal), m, glyph = "sparkle", sub = cal.topWeekday?.let { "Most on " + Dates.weekday(it) + "s" }) },
+            { m -> TintTile("Days with spending", cal.activeDays.toString(), Hue.violet, m, sub = "of " + cal.daysSoFar + " so far") },
+            { m -> TintTile("Longest quiet run", Copy.plural(cal.longestQuietRun, "day"), Hue.mint, m) },
+            { m -> TintTile("Busiest day", cal.busiestDate?.let { Dates.short(it, s.today) } ?: "–", Hue.coral, m, sub = if (cal.busiestTotal > 0) fmt.formatWhole(cal.busiestTotal) else null) },
+            { m -> TintTile("Weekends", fmt.formatWhole(cal.weekendTotal), Hue.sun, m, sub = cal.topWeekday?.let { "Most on " + Dates.weekday(it) + "s" }) },
         ),
     )
     if (cal.weekdays.isNotEmpty()) {
@@ -265,7 +276,7 @@ private fun CalendarLens(s: InsightsState, entry: (Long) -> Unit, delete: (Long)
             cal.weekdays.forEach { w ->
                 Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     T(Dates.weekday(w.day).take(3), style = Tally.type.mono, color = c.ink3)
-                    Meter(w.average.toFloat() / top, Modifier.weight(1f), color = if (w.day == cal.topWeekday) c.ink else c.ink3)
+                    Meter(w.average.toFloat() / top, Modifier.weight(1f), color = if (w.day == cal.topWeekday) Hue.violet else Hue.violet.copy(alpha = .4f), height = 10.dp)
                     T(fmt.formatWhole(w.average), style = Tally.type.mono, color = c.ink2)
                 }
             }
@@ -278,22 +289,22 @@ private fun WorthLens(s: InsightsState, account: (Long) -> Unit) {
     val c = Tally.colors
     val fmt = LocalMoney.current
     val w = s.worth
-    Slab(Modifier.fillMaxWidth(), padding = PaddingValues(16.dp), spacing = 8.dp) {
-        T("Worth at the end of " + Dates.period(s.period, s.today), style = Tally.type.caption, color = c.ink3)
+    Postcard(Scene.GROWTH, sceneHeight = 96.dp) {
+        T("Worth at the end of " + Dates.period(s.period, s.today), style = Tally.type.caption, color = c.ink2)
         T(fmt.formatWhole(w.worth), style = Tally.type.hero, color = if (w.worth < 0) c.heldText else c.ink, maxLines = 1)
         T(
             (if (w.change >= 0) "Up " else "Down ") + fmt.formatWhole(kotlin.math.abs(w.change)) + " over the month",
             style = Tally.type.caption,
             color = if (w.change >= 0) c.liveText else c.heldText,
         )
-        Sparkline(w.points.map { it.worth }, color = if (w.change >= 0) c.ink else c.heldText)
+        Sparkline(w.points.map { it.worth }, color = if (w.change >= 0) c.live else c.held)
     }
     StatGrid(
         listOf(
-            { m -> Stat("Held", fmt.formatWhole(w.assets), m, glyph = "wallet") },
-            { m -> Stat("Owed", fmt.formatWhole(w.debts), m, glyph = "card", figureColor = if (w.debts > 0) c.heldText else c.ink) },
-            { m -> Stat("Invested this month", fmt.formatWhole(w.invested), m, glyph = "trend", sub = Copy.plural(w.investmentAccounts, "investment account")) },
-            { m -> Stat("In investments", fmt.formatWhole(w.investments), m, glyph = "coins") },
+            { m -> TintTile("Held", fmt.formatWhole(w.assets), Hue.mint, m) },
+            { m -> TintTile("Owed", fmt.formatWhole(w.debts), Hue.coral, m, figureColor = if (w.debts > 0) c.heldText else Color(0xFF1A1A2E)) },
+            { m -> TintTile("Invested this month", fmt.formatWhole(w.invested), Hue.violet, m, sub = Copy.plural(w.investmentAccounts, "investment account")) },
+            { m -> TintTile("In investments", fmt.formatWhole(w.investments), Hue.sky, m) },
         ),
     )
     if (w.accounts.isEmpty()) return

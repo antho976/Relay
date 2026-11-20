@@ -37,12 +37,12 @@ android {
         versionName = "2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
-        // The owner's server: antho-s-bot on Render, which carries Relay's cloud copy. Tally connects
+        // The owner's server (anthobot.bid), which carries Relay's cloud copy. Tally connects
         // to it by itself; -PtallyServer=… (or TALLY_SERVER) builds for another, and Settings can
         // change it on the phone.
         val server = providers.gradleProperty("tallyServer")
             .orElse(providers.environmentVariable("TALLY_SERVER"))
-            .getOrElse("https://antho-s-bot-8dve.onrender.com")
+            .getOrElse("https://anthobot.bid")
         buildConfigField("String", "TALLY_SERVER", "\"$server\"")
     }
 
@@ -163,6 +163,9 @@ tasks.register<JacocoReport>("coverageReport") {
 }
 
 dependencies {
+    // Plaid's own sign-in for bank connections (docs/PLAID.md): the phone opens it with a link token
+    // from the owner's server and hands the public token back; no Plaid secret is ever on the phone.
+    implementation("com.plaid.link:sdk-core:6.4.0")
     // The money arithmetic, codecs and enums live in the pure-JVM :core module.
     implementation(project(":core"))
     // Relay's door and the request that connects this phone to the owner's server: pure JVM.

@@ -1,5 +1,17 @@
 package com.tally.app.ui.settings
 
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.sp
+import com.tally.app.ui.banks.BankMark
+import com.tally.app.ui.kit.GlyphTile
+import com.tally.app.ui.kit.Postcard
+import com.tally.app.ui.kit.Radii
+import com.tally.app.ui.kit.Scene
+import com.tally.app.ui.kit.TintTile
+import com.tally.app.ui.theme.Hue
+
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -76,6 +88,7 @@ fun ImportRoute(nav: AppNav) {
         confirm = vm::confirm,
         again = vm::again,
         done = { if (s.invest != null || s.investFirst) nav.investmentsAfterImport() else nav.back() },
+        connectBank = nav::banks,
     )
 }
 
@@ -102,6 +115,7 @@ fun ImportScreen(
     confirm: () -> Unit,
     again: () -> Unit,
     done: () -> Unit,
+    connectBank: (() -> Unit)? = null,
 ) {
     val c = Tally.colors
     val fmt = LocalMoney.current
@@ -132,9 +146,20 @@ fun ImportScreen(
         when (s.stage) {
             ImportStage.CHOOSE -> {
                 if (!s.investFirst) {
-                    Labelled("Bank") {
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            BankSource.entries.forEach { b -> PickRow(b.label, s.source == b, onClick = { choose(b) }, sub = b.steps, leading = { Glyph("bank", 18.dp, c.ink3) }) }
+                    if (connectBank != null) {
+                        Postcard(Scene.BANKS, sceneHeight = 96.dp) {
+                            T("Skip the CSV: connect your bank", style = Tally.type.title.copy(fontSize = 18.sp), color = Color(0xFF1A1A2E))
+                            T("Desjardins and Wealthsimple send new entries on their own once they are connected, read only.", style = Tally.type.ui, color = Color(0xFF4A4A63))
+                            Key("Connect a bank", connectBank, Modifier.fillMaxWidth(), kind = KeyKind.Primary, glyph = "link")
+                        }
+                    }
+                    Labelled("Or bring a file from") {
+                        Slab(Modifier.fillMaxWidth(), padding = PaddingValues(horizontal = 8.dp, vertical = 6.dp), spacing = 2.dp) {
+                            BankSource.entries.forEach { b ->
+                                PickRow(b.label, s.source == b, onClick = { choose(b) }, sub = b.steps, leading = {
+                                    if (b != BankSource.DESJARDINS && b != BankSource.WEALTHSIMPLE) GlyphTile("bank", Hue.sky) else BankMark(b.label, size = 36.dp)
+                                })
+                            }
                         }
                     }
                 } else {
@@ -197,15 +222,15 @@ private fun StatementPreviewBody(
     T(planSpan(p, short) { fmt.formatWhole(it) }, style = Tally.type.caption, color = c.ink3)
     StatGrid(
         listOf(
-            { m -> Stat("To import", p.count.toString(), m, glyph = "download", sub = if (p.duplicates > 0) "${p.duplicates} already there" else "none already there") },
-            { m -> Stat("Filed", p.categorized.toString(), m, glyph = "tag", sub = if (p.learned > 0) "${p.learned} the way you filed them" else "${p.uncategorized} left unfiled") },
-            { m -> Stat("Out", fmt.formatWhole(p.out), m, glyph = "money-out") },
-            { m -> Stat("In", fmt.formatWhole(p.inn), m, glyph = "money-in") },
+            { m -> TintTile("To import", p.count.toString(), Hue.violet, m, glyph = "download", sub = if (p.duplicates > 0) "${p.duplicates} already there" else "none already there") },
+            { m -> TintTile("Filed", p.categorized.toString(), Hue.sun, m, glyph = "tag", sub = if (p.learned > 0) "${p.learned} the way you filed them" else "${p.uncategorized} left unfiled") },
+            { m -> TintTile("Out", fmt.formatWhole(p.out), Hue.coral, m, glyph = "money-out") },
+            { m -> TintTile("In", fmt.formatWhole(p.inn), Hue.mint, m, glyph = "money-in") },
         ),
     )
     Labelled("Into") {
-        ListRow(onClick = target) {
-            Glyph("bank", 16.dp, c.ink3)
+        ListRow(Modifier.clip(Radii.key).background(c.raised), onClick = target) {
+            BankMark(s.targetName, size = 30.dp)
             T(s.targetName, Modifier.weight(1f), Tally.type.ui, c.ink, maxLines = 1)
             Glyph("chevron-down", 14.dp, c.ink3)
         }

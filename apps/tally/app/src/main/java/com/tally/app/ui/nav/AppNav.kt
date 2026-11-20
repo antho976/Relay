@@ -41,6 +41,8 @@ object Routes {
     const val EXPORT = "settings/export"
     const val IMPORT = "settings/import?source={source}"
     const val ABOUT = "settings/about"
+    /** Bank connections through Plaid: the list, and connecting one. */
+    const val BANKS = "banks"
     /** This year's room for one registration; [Args.KIND] is its stored name ("TFSA"). */
     const val ROOM_EDIT = "investments/room?kind={kind}"
 
@@ -133,6 +135,7 @@ class AppNav(private val controller: NavHostController) {
     fun investments() = page(Routes.INVESTMENTS)
 
     fun accountEdit(id: Long = 0) = go("account/edit?id=$id")
+    fun banks() = go(Routes.BANKS)
     fun categories() = go(Routes.CATEGORIES)
     fun categoryEdit(id: Long = 0, kind: CategoryKind = CategoryKind.EXPENSE) = go("category/edit?id=$id&kind=${kind.name}")
     /** [categoryId] 0 edits the overall monthly budget. */

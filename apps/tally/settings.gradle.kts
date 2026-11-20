@@ -30,3 +30,6 @@ include(":app")
 include(":core")
 // Pure Kotlin/JVM: Relay's door and the request that connects this phone to the owner's server.
 include(":link")
+// Tally RS: the Rust + wgpu port (native/). This module only packs its library with GameActivity.
+include(":rs")
+project(":rs").projectDir = file("native/android")

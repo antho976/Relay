@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -41,7 +42,7 @@ fun KeyGrid(rows: List<List<GridKey?>>, modifier: Modifier = Modifier, keyHeight
                         Box(Modifier.weight(1f).height(keyHeight))
                     } else {
                         Box(
-                            Modifier.weight(1f).height(keyHeight).clip(Radii.key).background(c.slab).border(1.dp, c.edge, Radii.key)
+                            Modifier.weight(1f).height(keyHeight).clip(Radii.key).background(if (c.light) Color(0xFFEFEDF8) else c.slab)
                                 .clickable(role = Role.Button, onClick = key.press)
                                 .semantics { contentDescription = if (key.backspace) "Delete" else key.label },
                             contentAlignment = Alignment.Center,

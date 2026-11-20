@@ -1,5 +1,10 @@
 package com.tally.app.ui.common
 
+import androidx.compose.ui.unit.sp
+import com.tally.app.ui.kit.CategoryGlyph
+import com.tally.app.ui.kit.Glyph
+import com.tally.app.ui.kit.softOf
+import com.tally.app.ui.theme.categoryColor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -66,7 +71,9 @@ fun CategoryGrid(
     onNew: (() -> Unit)? = null,
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
-    val cells = gridCells(categories, selectedId, expanded)
+    // At a large font four names to a row would be cut: three instead.
+    val columns = if (androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.5f) 3 else GRID_COLUMNS
+    val cells = gridCells(categories, selectedId, expanded, slots = columns * 2)
     val tiles = buildList<@Composable (Modifier) -> Unit> {
         cells.shown.forEach { cat ->
             add { m -> CategoryTile(cat.name, cat.icon, cat.color, cat.id == selectedId, m) { onPick(cat.id) } }
@@ -78,42 +85,39 @@ fun CategoryGrid(
             if (expanded) add { m -> ActionTile("chevron-up", "Fewer", m) { expanded = false } }
         }
     }
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        tiles.chunked(GRID_COLUMNS).forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        tiles.chunked(columns).forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEach { tile -> tile(Modifier.weight(1f)) }
-                repeat(GRID_COLUMNS - row.size) { Box(Modifier.weight(1f)) }
+                repeat(columns - row.size) { Box(Modifier.weight(1f)) }
             }
         }
     }
 }
 
-/** One category's cell: its badge, ringed in ink when it is the one, over its name. */
+/** One category's cell: a soft tile of its own hue, its icon over its name, ringed in ink when picked. */
 @Composable
 private fun CategoryTile(name: String, icon: String?, color: Int?, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val c = Tally.colors
+    val hue = categoryColor(color)
     Column(
         modifier
-            .heightIn(min = 76.dp)
-            .clip(Radii.key)
-            .background(if (selected) c.wash else Color.Transparent)
+            .heightIn(min = 80.dp)
+            .clip(Radii.card.let { androidx.compose.foundation.shape.RoundedCornerShape(18.dp) })
+            .background(if (c.light) softOf(hue) else hue.copy(alpha = .22f))
+            .then(if (selected) Modifier.border(2.dp, c.ink, androidx.compose.foundation.shape.RoundedCornerShape(18.dp)) else Modifier)
             .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
-            .padding(horizontal = 2.dp, vertical = 8.dp),
+            .padding(horizontal = 4.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        CategoryBadge(
-            icon,
-            color,
-            size = 38.dp,
-            modifier = if (selected) Modifier.border(1.5.dp, c.ink, Radii.badge) else Modifier,
-        )
+        CategoryGlyph(icon, color, size = 24.dp)
         T(
             name,
-            style = Tally.type.caption,
-            color = if (selected) c.ink else c.ink2,
+            style = Tally.type.caption.copy(fontSize = 12.sp),
+            color = c.ink,
             maxLines = 1,
-            weight = if (selected) FontWeight.Medium else null,
+            weight = FontWeight.SemiBold,
             align = TextAlign.Center,
         )
     }
@@ -125,14 +129,15 @@ private fun ActionTile(glyph: String, label: String, modifier: Modifier, onClick
     val c = Tally.colors
     Column(
         modifier
-            .heightIn(min = 76.dp)
-            .clip(Radii.key)
+            .heightIn(min = 80.dp)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(18.dp))
+            .background(c.slab)
             .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 2.dp, vertical = 8.dp),
+            .padding(horizontal = 4.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        GlyphBadge(glyph, c.ink2, c.raised, size = 38.dp)
-        T(label, style = Tally.type.caption, color = c.ink3, maxLines = 1, align = TextAlign.Center)
+        Glyph(glyph, 22.dp, c.ink2)
+        T(label, style = Tally.type.caption.copy(fontSize = 12.sp), color = c.ink, maxLines = 1, weight = FontWeight.SemiBold, align = TextAlign.Center)
     }
 }
