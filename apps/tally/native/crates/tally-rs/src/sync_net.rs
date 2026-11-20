@@ -30,6 +30,8 @@ pub mod code {
     pub const ANSWER: &str = "tally.answer";
     /// An op Tally RS never sends from a screen (one that replaces or erases the server's ledger).
     pub const REFUSED: &str = "tally.refused";
+    /// An address Tally RS will not use: unencrypted, and not on this phone's own network.
+    pub const INSECURE: &str = "tally.insecure";
 }
 
 pub fn fail(code: &str, message: impl Into<String>) -> Failure {
@@ -46,6 +48,15 @@ fn too_slow() -> Failure {
 
 fn closed() -> Failure {
     fail(code::UNREACHABLE, "Your server closed the connection")
+}
+
+fn insecure() -> Failure {
+    fail(code::INSECURE, "Tally RS reaches a server outside your own network over https only. Use its https:// address.")
+}
+
+/// [`insecure`] unless [`wire::may_reach`] takes `url`.
+fn reachable(url: &str) -> Result<(), Failure> {
+    if wire::may_reach(url) { Ok(()) } else { Err(insecure()) }
 }
 
 /// One connection to a door, as lines.
@@ -165,16 +176,21 @@ pub fn denial(code_: Option<&str>) -> Failure {
     }
 }
 
-/// Tries each route in order until a door greets, answers with `hello`, and hands back the
-/// admitted connection. A refusal after the hello is final (a spent code, a revoked phone); a
-/// route that cannot be reached moves on to the next. `one_shot`: pairing, where the code may be
-/// spent once sent, so no other route is tried after it went.
+/// Tries each route until a door greets, answers with `hello`, and hands back the admitted
+/// connection: the encrypted ones first, then the clear ones [`wire::may_reach`] allows (a pairing
+/// kept from before this order is tried in it too). A refusal after the hello is final (a spent
+/// code, a revoked phone); a route that cannot be reached moves on to the next. `one_shot`:
+/// pairing, where the code may be spent once sent, so no other route is tried after it went.
 pub fn connect(dial: &dyn Dial, routes: &[String], hello: &dyn Fn(&Greeting) -> String, welcome_wait: Duration, one_shot: bool) -> Result<Session, Failure> {
     if routes.is_empty() {
         return Err(fail(code::UNREACHABLE, "There is no address to reach your server at. Connect again."));
     }
+    let routes = wire::ordered_routes(routes);
+    if routes.is_empty() {
+        return Err(fail(code::INSECURE, "Your server offers this phone only unencrypted addresses outside your own network, and Tally RS sends its key over none of them."));
+    }
     let mut last = unreachable_();
-    for route in routes {
+    for route in &routes {
         let mut lines = match dial.open(route) {
             Ok(l) => l,
             Err(f) => {
@@ -301,6 +317,7 @@ fn str_of(o: &Option<Value>, key: &str) -> Option<String> {
 
 /// Whether the server carries Relay's cloud copy and takes requests (`GET /api/tally`).
 pub fn hello(http: &dyn Http, server: &str) -> Result<bool, Failure> {
+    reachable(&wire::api(server))?;
     let (_, o) = http.get(&wire::api(server))?;
     if str_of(&o, "service").as_deref() != Some("tally-cloud") {
         return Err(fail(code::ANSWER, "That address does not answer as your server"));
@@ -310,6 +327,7 @@ pub fn hello(http: &dyn Http, server: &str) -> Result<bool, Failure> {
 
 /// Asks to sync. The owner gets a DM; the answer carries what to poll [`claim`] with.
 pub fn enroll(http: &dyn Http, server: &str, device_name: &str, now_ms: i64) -> Result<Enrollment, Failure> {
+    reachable(&wire::api(server))?;
     let verifier = wire::new_verifier();
     let challenge = wire::challenge_of(&verifier);
     let name: String = device_name.chars().take(100).collect();
@@ -337,6 +355,9 @@ pub fn enroll(http: &dyn Http, server: &str, device_name: &str, now_ms: i64) -> 
 }
 
 pub fn claim(http: &dyn Http, e: &Enrollment) -> Claim {
+    if let Err(f) = reachable(&wire::api(&e.server)) {
+        return Claim::Trouble(f.message);
+    }
     let body = json!({"id": e.id, "verifier": e.verifier});
     let (status, o) = match http.post(&(wire::api(&e.server) + "/claim"), &body) {
         Ok(r) => r,
@@ -450,6 +471,7 @@ struct Ws {
 impl Dial for WsDial {
     fn open(&self, route: &str) -> Result<Box<dyn Lines>, Failure> {
         let bad = || fail(code::UNREACHABLE, "That address does not read as a server's");
+        reachable(route)?;
         let (tls, host, port) = endpoint(route).ok_or_else(bad)?;
         let addrs: Vec<_> = (host.as_str(), port).to_socket_addrs().map_err(|_| unreachable_())?.collect();
         let tcp = addrs.iter().find_map(|a| TcpStream::connect_timeout(a, CONNECT_TIMEOUT).ok()).ok_or_else(unreachable_)?;
@@ -501,20 +523,34 @@ impl Drop for Ws {
     }
 }
 
-/// HTTPS through ureq (rustls and ring, Mozilla's roots).
+/// HTTPS through ureq (rustls and ring, Mozilla's roots). Plain HTTP only to an address
+/// [`wire::may_reach`] allows.
 pub struct UreqHttp {
-    agent: ureq::Agent,
+    /// For https: never follows a redirect to http.
+    secure: ureq::Agent,
+    /// For http on this phone's own network: follows no redirect at all.
+    local: ureq::Agent,
 }
 
 impl UreqHttp {
     pub fn new() -> UreqHttp {
-        let config = ureq::Agent::config_builder()
-            .timeout_connect(Some(Duration::from_secs(15)))
-            // Render wakes a sleeping service on the first request; give it the time it takes.
-            .timeout_global(Some(Duration::from_secs(75)))
-            .http_status_as_error(false)
-            .build();
-        UreqHttp { agent: config.into() }
+        let agent = |https_only: bool| -> ureq::Agent {
+            ureq::Agent::config_builder()
+                .timeout_connect(Some(Duration::from_secs(15)))
+                // Render wakes a sleeping service on the first request; give it the time it takes.
+                .timeout_global(Some(Duration::from_secs(75)))
+                .http_status_as_error(false)
+                .https_only(https_only)
+                .max_redirects(if https_only { 10 } else { 0 })
+                .build()
+                .into()
+        };
+        UreqHttp { secure: agent(true), local: agent(false) }
+    }
+
+    fn agent(&self, url: &str) -> Result<&ureq::Agent, Failure> {
+        reachable(url)?;
+        Ok(if wire::is_secure(url) { &self.secure } else { &self.local })
     }
 
     fn read(r: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Result<(u16, Option<Value>), Failure> {
@@ -536,10 +572,10 @@ impl Default for UreqHttp {
 
 impl Http for UreqHttp {
     fn get(&self, url: &str) -> Result<(u16, Option<Value>), Failure> {
-        UreqHttp::read(self.agent.get(url).call())
+        UreqHttp::read(self.agent(url)?.get(url).call())
     }
     fn post(&self, url: &str, body: &Value) -> Result<(u16, Option<Value>), Failure> {
-        UreqHttp::read(self.agent.post(url).header("content-type", "application/json").send(body.to_string()))
+        UreqHttp::read(self.agent(url)?.post(url).header("content-type", "application/json").send(body.to_string()))
     }
 }
 
@@ -554,6 +590,44 @@ mod tests {
         assert_eq!(endpoint("ws://[::1]:9/x"), Some((false, "::1".into(), 9)));
         assert_eq!(endpoint("ftp://x"), None);
         assert_eq!(endpoint("wss://"), None);
+    }
+
+    /// Records every route it is asked to open, and opens none.
+    struct Routes(std::sync::Mutex<Vec<String>>);
+
+    impl Dial for Routes {
+        fn open(&self, route: &str) -> Result<Box<dyn Lines>, Failure> {
+            self.0.lock().unwrap().push(route.to_string());
+            Err(unreachable_())
+        }
+    }
+
+    struct NoHttp;
+
+    impl Http for NoHttp {
+        fn get(&self, url: &str) -> Result<(u16, Option<Value>), Failure> {
+            panic!("asked {url}")
+        }
+        fn post(&self, url: &str, _body: &Value) -> Result<(u16, Option<Value>), Failure> {
+            panic!("asked {url}")
+        }
+    }
+
+    #[test]
+    fn encrypted_routes_go_first_and_public_clear_ones_never() {
+        let dial = Routes(Default::default());
+        let c = Creds { host: "h".into(), routes: ["ws://8.8.8.8:7420", "ws://192.168.1.20:7420", "wss://s.example/join/r"].map(String::from).to_vec(), device: "d".into(), token: "t".into(), paired_at: 0 };
+        assert!(open(&dial, &c).is_err());
+        assert_eq!(*dial.0.lock().unwrap(), vec!["wss://s.example/join/r".to_string(), "ws://192.168.1.20:7420".to_string()]);
+        let only_public = Creds { routes: vec!["ws://8.8.8.8:7420".into()], ..c };
+        assert_eq!(open(&dial, &only_public).err().map(|f| f.code), Some(code::INSECURE.to_string()));
+        // A server typed as http:// on the internet is never asked anything.
+        assert_eq!(hello(&NoHttp, "http://anthobot.bid").err().map(|f| f.code), Some(code::INSECURE.to_string()));
+        assert_eq!(enroll(&NoHttp, "http://anthobot.bid", "d", 0).err().map(|f| f.code), Some(code::INSECURE.to_string()));
+        let e = Enrollment { server: "http://anthobot.bid".into(), id: "i".into(), verifier: "v".into(), code: "AB".into(), expires_at: 0, notified: true };
+        assert!(matches!(claim(&NoHttp, &e), Claim::Trouble(_)));
+        assert!(WsDial.open("ws://8.8.8.8:7420").is_err());
+        assert!(UreqHttp::new().get("http://anthobot.bid/api/tally").is_err());
     }
 
     #[test]
