@@ -30,7 +30,11 @@ pub struct State {
     counts: Counts,
     settings: Option<relay_money::views::Settings>,
     period: String,
+    /// Nothing of the owner's here: the sample may load.
+    can_sample: bool,
     erasing: bool,
+    /// The sample's question is open.
+    sampling: bool,
     /// A restore's pick is out with the platform.
     asked: bool,
     reading: Option<Job<Result<BackupFile, String>>>,
@@ -60,7 +64,7 @@ enum Act {
     Currency(String),
     MonthStart(i64),
     Week(bool),
-    Sample,
+    Sample(Option<bool>),
     Erase(Option<bool>),
     ShareBackup,
     ShareCsv,
@@ -72,6 +76,7 @@ fn reload(app: &mut App) {
     let st = &mut app.st.settings;
     st.counts = store::counts(&app.store);
     st.settings = app.store.ledger.settings().ok();
+    st.can_sample = app.store.can_load_sample();
     st.period = app
         .store
         .ledger
@@ -97,7 +102,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         let locale = app.store.locale.clone();
         let mut cx = cx!(app);
         let st = &mut app.st.settings;
-        let dialog = st.erasing || st.restore.is_some();
+        let dialog = st.erasing || st.sampling || st.restore.is_some();
         let held = if dialog { widgets::hold(&mut cx) } else { None };
         let mut y = pg.top;
         let title = match route {
@@ -115,7 +120,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         y = match route {
             Route::Appearance => appearance(&mut cx, y, &mode, &mut act),
             Route::Format => format_page(&mut cx, y, st, &locale, &mut act),
-            Route::Backup => backup(&mut cx, y, st, &mut act),
+            Route::Backup => backup(&mut cx, y, st, paired, &mut act),
             Route::About => about(&mut cx, y),
             _ => settings(&mut cx, y, st, &line, &mode, &mut act),
         };
@@ -123,12 +128,18 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         if dialog {
             widgets::release(&mut cx, held);
             if st.erasing {
-                let body = format!(
-                    "Every entry, account, budget, bill and goal on this phone goes. {}This cannot be undone.",
-                    if paired { "Your server keeps its copy: disconnect first if this phone should start from nothing. " } else { "" }
-                );
-                if let Some(yes) = widgets::confirm(&mut cx, "Erase everything?", &body, "Erase", true) {
+                let body = if paired {
+                    "Every entry, account, budget, bill and goal goes, on this phone only: your server keeps its ledger, and the next sync brings it back. To start this phone from nothing, disconnect first."
+                } else {
+                    "Every entry, account, budget, bill and goal on this phone goes. This cannot be undone."
+                };
+                if let Some(yes) = widgets::confirm(&mut cx, "Erase everything?", body, "Erase", true) {
                     act = Some(Act::Erase(Some(yes)));
+                }
+            } else if st.sampling {
+                let body = "A labelled sample household (accounts, entries, budgets, bills and goals) takes the place of the categories here. It stays on this phone, with sync off. Erase everything removes it.";
+                if let Some(yes) = widgets::confirm(&mut cx, "Load the sample household?", body, "Load it", false) {
+                    act = Some(Act::Sample(Some(yes)));
                 }
             } else if let Some((_, preview)) = &st.restore {
                 let saved = preview.saved_on.map(|d| crate::model::short_date(&d.to_string()));
@@ -165,20 +176,29 @@ fn perform(app: &mut App, act: Act) {
             Ok(()) => app.invalidate(),
             Err(e) => app.say(e, None),
         },
-        Act::Sample => match app.store.load_sample(crate::model::today()) {
-            Ok(_) => {
-                let _ = app.store.set_pref("onboarded", "1");
-                app.invalidate();
-                app.say("Sample household loaded; Erase everything removes it", None);
+        Act::Sample(None) => app.st.settings.sampling = true,
+        Act::Sample(Some(false)) => app.st.settings.sampling = false,
+        Act::Sample(Some(true)) => {
+            app.st.settings.sampling = false;
+            match app.store.load_sample(crate::model::today()) {
+                Ok(_) => {
+                    // The sample is for trying the app here: it never goes to the server.
+                    app.st.sync.keep_on_phone(&mut app.store);
+                    let _ = app.store.set_pref("onboarded", "1");
+                    app.invalidate();
+                    app.say("Sample household loaded, on this phone only; Erase everything removes it", None);
+                }
+                Err(e) => app.say(e, None),
             }
-            Err(e) => app.say(e, None),
-        },
+        }
         Act::Erase(None) => app.st.settings.erasing = true,
         Act::Erase(Some(false)) => app.st.settings.erasing = false,
         Act::Erase(Some(true)) => {
             app.st.settings.erasing = false;
             match app.store.ledger.reset() {
                 Ok(()) => {
+                    // Its tombstones must never reach the server: the next sync pulls instead.
+                    app.st.sync.ledger_replaced(&mut app.store);
                     let _ = app.store.ledger.ensure_categories();
                     let _ = app.store.clear_pref("onboarded");
                     app.invalidate();
@@ -194,6 +214,9 @@ fn perform(app: &mut App, act: Act) {
         }
         Act::ShareBackup => share_backup(app),
         Act::ShareCsv => share_csv(app),
+        Act::Restore if app.st.sync.paired(&app.store) => {
+            app.st.settings.result = Some((RESTORE_PAIRED.into(), true));
+        }
         Act::Restore => {
             let st = &mut app.st.settings;
             st.result = None;
@@ -205,8 +228,14 @@ fn perform(app: &mut App, act: Act) {
         Act::RestoreAnswer(false) => app.st.settings.restore = None,
         Act::RestoreAnswer(true) => {
             let Some((file, _)) = app.st.settings.restore.take() else { return };
+            if app.st.sync.paired(&app.store) {
+                app.st.settings.result = Some((RESTORE_PAIRED.into(), true));
+                return;
+            }
             match app.store.ledger.import_backup(&file) {
                 Ok(n) => {
+                    // It stays on this phone: the next sync, if it connects again, pulls.
+                    app.st.sync.ledger_replaced(&mut app.store);
                     let words = format!("Restored {}", logic::entries_text(n as i64));
                     app.st.settings.result = Some((words.clone(), false));
                     let _ = app.store.set_pref("onboarded", "1");
@@ -218,6 +247,9 @@ fn perform(app: &mut App, act: Act) {
         }
     }
 }
+
+/// Why Restore waits while this phone is paired.
+const RESTORE_PAIRED: &str = "Disconnect from your server first, in Settings, Your server. While this phone is connected, its next sync would put your server's ledger back in place of the restore.";
 
 /// Moves Backup's file work along. True while something is still on its way.
 fn backup_poll(app: &mut App) -> bool {
@@ -380,7 +412,7 @@ fn settings(cx: &mut Ctx, mut y: f32, st: &State, line: &sync::Line, mode: &str,
     y += h + GROUP_GAP;
 
     // Your data
-    let empty = c.entries == 0 && c.accounts == 0;
+    let empty = st.can_sample;
     let version = env!("CARGO_PKG_VERSION");
     let mut rows = vec![Row::new("Backup and export").icon("save").opens()];
     if empty {
@@ -390,7 +422,7 @@ fn settings(cx: &mut Ctx, mut y: f32, st: &State, line: &sync::Line, mode: &str,
     let (h, tapped) = sk::group(cx, y, Some("Your data"), &rows);
     match tapped {
         Some(0) => *act = Some(Act::Go(Route::Backup)),
-        Some(1) if empty => *act = Some(Act::Sample),
+        Some(1) if empty => *act = Some(Act::Sample(None)),
         Some(_) => *act = Some(Act::Go(Route::About)),
         None => {}
     }
@@ -545,7 +577,7 @@ fn format_page(cx: &mut Ctx, mut y: f32, st: &State, locale: &relay_money::money
     y
 }
 
-fn backup(cx: &mut Ctx, mut y: f32, st: &State, act: &mut Option<Act>) -> f32 {
+fn backup(cx: &mut Ctx, mut y: f32, st: &State, paired: bool, act: &mut Option<Act>) -> f32 {
     y += 4.0;
     let entries = logic::entries_text(st.counts.entries);
     let ch = 370.0;
@@ -580,11 +612,16 @@ fn backup(cx: &mut Ctx, mut y: f32, st: &State, act: &mut Option<Act>) -> f32 {
     }
     y += GROUP_GAP - GAP;
     y += sk::eyebrow(cx, y, "Restore");
-    if sk::wide_key(cx, PAD, y, W, "Restore from a file", Some("download"), false, busy.is_none()) {
+    if sk::wide_key(cx, PAD, y, W, "Restore from a file", Some("download"), false, busy.is_none() && !paired) {
         *act = Some(Act::Restore);
     }
     y += 52.0 + 12.0;
-    y += sk::note(cx, y, None, "A restore replaces this phone's ledger, after Tally keeps a copy of it. The next sync then merges it with your server's.");
+    let note = if paired {
+        "Disconnect from your server first: while this phone is connected, its next sync would put your server's ledger back. A restore replaces this phone's ledger, after Tally keeps a copy of it."
+    } else {
+        "A restore replaces this phone's ledger, after Tally keeps a copy of it. It stays on this phone: Tally RS never sends a ledger to replace your server's."
+    };
+    y += sk::note(cx, y, None, note);
     y
 }
 

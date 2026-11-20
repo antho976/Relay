@@ -18,6 +18,7 @@ use crate::settings_kit as sk;
 use crate::sync::{self, Connect, Tone};
 use crate::sync_ledger;
 use crate::sync_wire;
+use crate::widgets;
 
 #[derive(Default)]
 pub struct State {}
@@ -31,6 +32,8 @@ enum Act {
     Dashboard(String),
     Fresh,
     Sample,
+    /// The answer to the first pull's question ([`sync::FIRST_BODY`]).
+    First(bool),
 }
 
 /// The one filled key, by where connecting stands.
@@ -68,10 +71,12 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     } else {
         None
     };
+    let asking = app.st.sync.awaiting_yes();
     let mut act = None;
     let bottom;
     {
         let mut cx = cx!(app);
+        let held = if asking { widgets::hold(&mut cx) } else { None };
         let p = cx.p;
         // The picture, edge to edge from the top of the screen, fading into the ground.
         let pic_top = 0.0;
@@ -145,26 +150,37 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             y += 40.0;
         }
         bottom = y;
+        if asking {
+            widgets::release(&mut cx, held);
+            if let Some(yes) = widgets::confirm(&mut cx, sync::FIRST_TITLE, sync::FIRST_BODY, sync::FIRST_YES, true) {
+                act = Some(Act::First(yes));
+            }
+        }
     }
     app.page_end(&pg, bottom);
     match act {
         Some(Act::Connect) | Some(Act::Again) => app.st.sync.connect_now(&mut app.store),
         Some(Act::Dashboard(url)) => app.host.open_url(&url),
         Some(Act::Fresh) => finish(app),
-        Some(Act::Sample) => {
-            // The sample is for trying the app on this phone: it never goes to the server.
-            let _ = app.store.set_pref(sync::pref::PHONE_ONLY, "1");
-            match app.store.load_sample(crate::model::today()) {
-                Ok(_) => {
-                    app.invalidate();
-                    finish(app);
-                }
-                Err(e) => app.say(format!("The sample could not be made: {e}"), None),
+        Some(Act::Sample) => match app.store.load_sample(crate::model::today()) {
+            Ok(_) => {
+                // The sample is for trying the app on this phone: it never goes to the server.
+                // Only once it is in: a sample that failed leaves sync as it was.
+                app.st.sync.keep_on_phone(&mut app.store);
+                app.invalidate();
+                finish(app);
+            }
+            Err(e) => app.say(format!("The sample could not be made: {e}"), None),
+        },
+        Some(Act::First(yes)) => {
+            app.st.sync.answer_first(&mut app.store, yes);
+            if !yes {
+                finish(app);
             }
         }
         None => {}
     }
-    pg.moving || app.st.sync.working()
+    pg.moving || app.st.sync.working() || asking
 }
 
 fn finish(app: &mut App) {
