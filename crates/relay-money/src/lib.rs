@@ -23,6 +23,8 @@ pub mod pace;
 pub mod payees;
 pub mod period;
 #[cfg(feature = "ledger")]
+pub mod plaid;
+#[cfg(feature = "ledger")]
 mod portfolio;
 pub mod recurrence;
 pub mod sample_data;

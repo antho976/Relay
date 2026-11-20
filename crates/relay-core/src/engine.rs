@@ -594,6 +594,8 @@ pub struct Engine {
     pub(crate) skill_refresh: crate::skills::Refresher,
     /// The Money space's ledger (`money.db` beside the store), opened on first use.
     pub(crate) money: std::sync::Mutex<Option<relay_money::ledger::Ledger>>,
+    /// Bank connections through Plaid (`plaid.db` beside the store), opened on first use.
+    pub(crate) banks: std::sync::Mutex<Option<crate::plaid::Store>>,
     /// Threads (`threads.db` beside the store, opened on first use) and their running agents.
     pub(crate) threads: crate::threads::Hub,
     /// The local model server Threads may run on (`local_models`), when one runs.
@@ -654,6 +656,7 @@ impl Engine {
                 build_seeds: Default::default(),
                 skill_refresh: Default::default(),
                 money: Default::default(),
+                banks: Default::default(),
                 threads: Default::default(),
                 local: Default::default(),
                 arbiter: Default::default(),

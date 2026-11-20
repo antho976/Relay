@@ -29,10 +29,13 @@ Decided with Antho on 2026-10-11:
 
 `relay serve --remote --remote-ops cloud`: the same engine, whose door admits a paired device to
 `CLOUD_OPS` (`crates/relay-remote/src/wire.rs`) and nothing else: `money.sync` and the ledger's
-reads, `gym.upload`, `gym.raw` and the training history's reads, and `bus.ping` /
+reads, Tally's bank connections (`money.bank.*`, docs/MONEY.md "Banks"), `gym.upload`, `gym.raw` and the training history's reads, and `bus.ping` /
 `bus.subscribe`. A terminal, a file, a git command, a thread, a reset or an import from a path is
 refused with `remote.op`, whatever the credential. Its data is the engine's usual files on the
-server's disk: `money.db`, `gym.db`, and `gym-upload.json`, the text of the last upload.
+server's disk: `money.db`, `gym.db`, `gym-upload.json`, the text of the last upload, and
+`plaid.db`, the connected banks with their access tokens sealed under `PLAID_TOKEN_KEY`. Plaid's
+keys are the server's environment (docs/MONEY.md, "Banks"); only an engine that has them reads
+banks, so on this server the bank entries land in the cloud's ledger and reach the PC by the link.
 
 It is reached through a rendezvous only. The engine dials its rendezvous on loopback, while its
 pairing links name the public address (`relay remote via ws://127.0.0.1:7430 --public

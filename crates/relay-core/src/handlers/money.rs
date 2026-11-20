@@ -345,6 +345,46 @@ pub fn register(e: &mut Engine) {
         },
     );
     register_invest(e);
+    register_banks(e);
+}
+
+/// Bank connections through Plaid (`crate::plaid`). Each call to Plaid runs before the store's
+/// transaction opens, and the banks' own lock is never held across one; the reads of the
+/// transactions run on a thread of their own and say what they wrote with `money.changed`.
+fn register_banks(e: &mut Engine) {
+    e.register_unlocked::<BankList>(|ctx, _: Empty| Ok(BankListOut { banks: crate::plaid::list(ctx.engine())? }));
+    e.register_staged::<BankLinkToken, _>(
+        |ctx, p| crate::plaid::link_token(ctx.engine(), &p.client_name, &p.android_package_name),
+        |_: &mut Ctx, _, link_token: String| Ok(BankLinkTokenOut { link_token }),
+    );
+    e.register_staged::<BankHostedLink, _>(
+        |ctx, p| crate::plaid::hosted_link(ctx.engine(), &p.client_name, p.completion_redirect_uri.as_deref()),
+        |_: &mut Ctx, _, (link_token, hosted_link_url, expires_at)| Ok(BankHostedLinkOut { link_token, hosted_link_url, expires_at }),
+    );
+    e.register_staged::<BankExchange, _>(
+        |ctx, p| crate::plaid::exchange(ctx.engine(), &p.public_token, p.institution_id.as_deref(), p.institution_name.as_deref()),
+        |_: &mut Ctx, _, bank| Ok(BankOut { bank }),
+    );
+    e.register_staged::<BankLinkStatus, _>(
+        |ctx, p| crate::plaid::link_status(ctx.engine(), &p.link_token),
+        |_: &mut Ctx, _, (state, bank, problem)| Ok(BankLinkStatusOut { state, bank, problem }),
+    );
+    // Following an account may make its ledger account: money.changed, then the first read.
+    e.register_staged::<BankAccounts, _>(
+        |ctx, p| crate::plaid::follow(ctx.engine(), &p.bank_id, p.since.as_deref(), &p.accounts),
+        |ctx: &mut Ctx, _, bank| {
+            ctx.emit("money.changed", json!({"bank": bank.id}));
+            ctx.after_commit(|engine| crate::plaid::read_soon(&engine));
+            Ok(BankOut { bank })
+        },
+    );
+    e.register::<BankRefresh>(|ctx, _: Empty| {
+        // Said at once rather than from the thread: a server with no Plaid has nothing to read.
+        crate::plaid::check(ctx.engine())?;
+        ctx.after_commit(|engine| crate::plaid::read_soon(&engine));
+        Ok(Empty {})
+    });
+    e.register_staged::<BankRemove, _>(|ctx, p| crate::plaid::remove(ctx.engine(), &p.bank_id), |_: &mut Ctx, _, ()| Ok(Empty {}));
 }
 
 /// Investments (docs/INVESTMENTS.md): the portfolio reading, activities, the Wealthsimple import,
