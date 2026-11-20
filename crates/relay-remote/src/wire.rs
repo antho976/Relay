@@ -169,6 +169,9 @@ pub const PHONE_OPS: &[&str] = &[
     "module.restore", "module.update",
     // Tally's sync (antho976/Tally), and for the Threads space on the phone (apps/relay-android)
     // the ledger's reads, and the Undo of an entry a thread added or changed (and its Redo).
+    // Tally's bank connections through Plaid (its docs/PLAID.md).
+    "money.bank.accounts", "money.bank.exchange", "money.bank.hosted_link", "money.bank.link_status",
+    "money.bank.link_token", "money.bank.list", "money.bank.refresh", "money.bank.remove",
     "money.invest.delete", "money.invest.list", "money.invest.restore", "money.invest.summary",
     "money.lists", "money.series", "money.summary", "money.sync", "money.tx.delete",
     "money.tx.list", "money.tx.restore", "money.tx.update",
@@ -215,6 +218,10 @@ pub const CLOUD_OPS: &[&str] = &[
     "bus.ping", "bus.subscribe", "bus.unsubscribe",
     "gym.cardio", "gym.lift.get", "gym.lifts", "gym.raw", "gym.series", "gym.session.get",
     "gym.sessions", "gym.summary", "gym.upload",
+    // Tally's bank connections: the server keeps Plaid's keys and the banks' tokens (Tally's
+    // docs/PLAID.md, docs/MONEY.md "Banks").
+    "money.bank.accounts", "money.bank.exchange", "money.bank.hosted_link", "money.bank.link_status",
+    "money.bank.link_token", "money.bank.list", "money.bank.refresh", "money.bank.remove",
     "money.invest.list", "money.invest.summary", "money.lists", "money.series", "money.summary",
     "money.sync", "money.tx.list",
 ];
@@ -589,7 +596,7 @@ mod tests {
     #[test]
     fn a_cloud_door_opens_only_the_data() {
         let line = |op: &str| format!(r#"{{"v":1,"id":"7f2b5d2e-2f1a-4b7c-9a6c-1c9d1e6a0005","actor":"user","op":"{op}","payload":{{}}}}"#);
-        for op in ["money.sync", "gym.upload", "gym.raw", "gym.summary", "bus.ping"] {
+        for op in ["money.sync", "gym.upload", "gym.raw", "gym.summary", "bus.ping", "money.bank.list", "money.bank.hosted_link", "money.bank.link_status"] {
             assert!(matches!(gate_for(&line(op), Instance::Stable, OpProfile::Cloud), Gate::Forward), "{op}");
         }
         for op in ["session.spawn", "session.input", "file.write", "git.push", "thread.send", "money.reset", "gym.import"] {

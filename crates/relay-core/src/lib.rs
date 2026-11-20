@@ -27,6 +27,7 @@ pub mod mirror;
 pub mod paths;
 pub mod peer;
 pub mod picture;
+pub mod plaid;
 pub mod pictures;
 pub mod plugins;
 pub mod private;

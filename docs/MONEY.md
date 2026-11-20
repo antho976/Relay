@@ -284,3 +284,70 @@ older than any row, so a row the device sends in any batch of that sync wins, an
 same for an import or the poster, which never write a uid with a tombstone. They go out in every
 whole answer (`since: 0`). A line deleted on the phone that the PC never heard of before the
 phone's first sync cannot be kept so: Tally sends no tombstones with `replace`.
+
+## Banks (Plaid)
+
+Asked for by Antho on 2026-11-19: connect Desjardins and Wealthsimple once, and let new purchases
+arrive in Tally by themselves. Tally's side, and the ops' shapes, are in its repository's
+`docs/PLAID.md`; this is the server's. The phone never holds Plaid's secret or a bank's token: it
+asks for a link token, opens Plaid's sign-in, and hands back the one-time public token (Tally RS,
+with no Plaid SDK, opens Plaid's hosted page and asks `money.bank.link_status` until it is done).
+
+| op | what |
+| --- | --- |
+| `money.bank.list` | the banks, their accounts, which are followed and where they land; no call to Plaid |
+| `money.bank.link_token` | `/link/token/create` for the SDK on an Android phone |
+| `money.bank.hosted_link` | the same with Plaid's hosted page: `link_token`, `hosted_link_url`, `expires_at` |
+| `money.bank.link_status` | `waiting`, `connected` (with the bank), `exited` (with Plaid's reason) or `expired`, read from `/link/token/get`; on success it makes the exchange itself, once per link token |
+| `money.bank.exchange` | `/item/public_token/exchange`, then `/accounts/get`; every account unfollowed |
+| `money.bank.accounts` | which accounts to follow, where each lands, and `since`; the first read starts in the background |
+| `money.bank.refresh` | reads every bank now, in the background |
+| `money.bank.remove` | `/item/remove`, then the bank is forgotten here; its entries stay |
+
+All but `money.bank.list` are the person's alone (`Actors::UserOnly`), and all are open on both
+doors (`PHONE_OPS`, `CLOUD_OPS`), as `money.sync` is. Only an engine with Plaid set up does
+anything with them; any other answers `money.plaid_setup`, which the phone shows as is.
+
+**Setting it up** (on the server that runs the cloud copy, anthobot.bid, never in an APK or a
+repository): `PLAID_CLIENT_ID`, `PLAID_SECRET`, `PLAID_ENV` (`production`, the default, or
+`sandbox`), and `PLAID_TOKEN_KEY`, 64 hex digits (`openssl rand -hex 32`) that seal the banks'
+access tokens (AES-256-GCM) in `plaid.db` beside `money.db` (0600). Losing or changing the key
+loses the logins, not the entries: remove each bank and connect it again. In Plaid's dashboard:
+country CA, product Transactions, and both of Tally's package names under Allowed Android package
+names. A new connection asks Plaid for two years of history (`days_requested`; Plaid's default is
+90 days).
+
+**Reading.** `crates/relay-core/src/plaid.rs` reads every bank with a followed account a minute
+after the engine starts, every four hours after, and on `money.bank.refresh` / after
+`money.bank.accounts`: `/transactions/sync` from the bank's cursor to the end, one ledger
+transaction for the lot, then the cursor moves. A bank that fails keeps its cursor and says why in
+`problem` ("Sign in to Desjardins again" for `ITEM_LOGIN_REQUIRED` and its kin); the others go on.
+Following an account not followed before, or moving `since` earlier, reads the bank from the start
+again: what was passed over is brought in, what is there already is not written twice. No webhook
+yet: transactions wait for the next read, and a hosted sign-in is learned from `/link/token/get`.
+Plaid's `client_user_id` is one fixed value, since the server holds one person's ledger, and a link
+token is answered to whoever holds it (the door does not tell the engine which device is asking).
+
+**Entries** (`crates/relay-money/src/plaid.rs`, server only, so no Kotlin twin):
+
+- uid `plaid:<transaction_id>`; a uid present, deleted or tombstoned is never written again.
+- Pending transactions are skipped; the posted one has its own id.
+- A positive amount is an EXPENSE, a negative one INCOME, read from Plaid's decimal text, never a
+  float.
+- A payment to a followed credit card from another followed account (same amount, three days
+  apart at most) is one TRANSFER on the day the money left: the second half to arrive turns the
+  first half's entry into the transfer, and is tombstoned so it is never written alone.
+- The account is the one chosen (`into`), else the one an import made (same institution and
+  number), else a new one named after the bank's (credit card → CREDIT, savings → SAVINGS, else
+  CHEQUING) with `institution` and `external_ref` set, so later imports find it.
+- The category is Plaid's `personal_finance_category` mapped to the default categories by name
+  (groceries, dining, transport, travel, housing, phone & internet, utilities, shopping,
+  entertainment, health; wages to Salary, money back to Refunds); transfers, loan payments, fees
+  and anything else stay uncategorised. A category the person renamed or archived is not used.
+- The note is `merchant_name`, else `name`.
+- An entry an import already wrote (same account, amount and direction within two days, no
+  `plaid:` uid) is matched and skipped.
+- Amounts in another currency than the ledger's are left out, except Desjardins', which sends CAD
+  labelled USD.
+- A transaction Plaid removes deletes its entry only if nobody edited it (`updated_at` still equals
+  `created_at`) and it is not a transfer.

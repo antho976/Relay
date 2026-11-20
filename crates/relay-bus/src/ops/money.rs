@@ -237,8 +237,106 @@ result!(#[schemars(rename = "MoneyFxFetchOut")] FxFetchOut {
 op!(FxFetch, "money.fx.fetch", Empty => FxFetchOut,
     OpMeta::mutation(Scope::Global, 12, "Fetch the US dollar's recent daily rates in Canadian dollars from the Bank of Canada (no key, nothing personal sent) in the background; money.changed follows").actors(Actors::UserOnly).emits(&["money.changed"]));
 
+// ── Bank connections through Plaid (Tally's docs/PLAID.md) ────────────────
+//
+// The server keeps Plaid's keys and each bank's access token; the phone asks for a link token,
+// opens Plaid's sign-in, and hands back the public token. Transactions arrive in the ledger as
+// ordinary entries (`plaid:<transaction_id>` uids) and reach every device by `money.sync`. Each op
+// that goes out to Plaid is the person's alone. Ids are Plaid's: a bank's is its item id.
+
+result!(#[schemars(rename = "MoneyBankAccount")] BankAccountView {
+    /// Plaid's account id.
+    pub id: String,
+    pub name: String,
+    /// The account number's last digits.
+    pub mask: String,
+    /// Plaid's subtype in words: "checking", "credit card", "tfsa".
+    pub kind: String,
+    /// Whether its transactions come into the ledger.
+    pub follow: bool,
+    /// The ledger account (its uid) they go into, once chosen or made.
+    pub into: Option<String>,
+});
+result!(#[schemars(rename = "MoneyBank")] BankView {
+    /// Plaid's item id.
+    pub id: String,
+    pub institution: String,
+    /// When its transactions were last read, epoch ms.
+    pub last_sync: Option<i64>,
+    /// Set when the person must act, e.g. "Sign in to Desjardins again".
+    pub problem: Option<String>,
+    pub accounts: Vec<BankAccountView>,
+});
+result!(#[schemars(rename = "MoneyBankListOut")] BankListOut { pub banks: Vec<BankView> });
+op!(BankList, "money.bank.list", Empty => BankListOut,
+    OpMeta::query(Scope::Global, 12, "The banks connected through Plaid, their accounts and which are followed"));
+payload!(#[schemars(rename = "MoneyBankLinkTokenIn")] BankLinkTokenIn {
+    /// The Android app asking, as listed in Plaid's dashboard.
+    pub android_package_name: String,
+    /// The name Plaid's sign-in shows, e.g. Tally.
+    pub client_name: String,
+});
+result!(#[schemars(rename = "MoneyBankLinkTokenOut")] BankLinkTokenOut { pub link_token: String });
+op!(BankLinkToken, "money.bank.link_token", BankLinkTokenIn => BankLinkTokenOut,
+    OpMeta::mutation(Scope::Global, 12, "A Plaid link token for the sign-in on an Android phone").actors(Actors::UserOnly));
+payload!(#[schemars(rename = "MoneyBankExchangeIn")] BankExchangeIn {
+    /// The one-time token Plaid's sign-in handed the phone.
+    pub public_token: String,
+    pub institution_id: Option<String>,
+    pub institution_name: Option<String>,
+});
+result!(#[schemars(rename = "MoneyBankOut")] BankOut { pub bank: BankView });
+op!(BankExchange, "money.bank.exchange", BankExchangeIn => BankOut,
+    OpMeta::mutation(Scope::Global, 12, "Trade Plaid's public token for a connection the server keeps; its accounts start unfollowed").actors(Actors::UserOnly));
+payload!(#[schemars(rename = "MoneyBankFollow")] BankFollow {
+    /// Plaid's account id.
+    pub id: String,
+    pub follow: bool,
+    /// A ledger account uid to write into; absent, the account an import made for it, else a new one.
+    pub into: Option<String>,
+});
+payload!(#[schemars(rename = "MoneyBankAccountsIn")] BankAccountsIn {
+    pub bank_id: String,
+    /// The first day (`YYYY-MM-DD`) to bring in; absent, whatever Plaid holds.
+    pub since: Option<String>,
+    pub accounts: Vec<BankFollow>,
+});
+op!(BankAccounts, "money.bank.accounts", BankAccountsIn => BankOut,
+    OpMeta::mutation(Scope::Global, 12, "Choose which of a bank's accounts to follow and where each lands; the first read starts in the background").actors(Actors::UserOnly).emits(&["money.changed"]));
+op!(BankRefresh, "money.bank.refresh", Empty => Empty,
+    OpMeta::mutation(Scope::Global, 12, "Read every connected bank now, in the background; money.changed follows what it writes").actors(Actors::UserOnly).emits(&["money.changed"]));
+payload!(#[schemars(rename = "MoneyBankIdIn")] BankIdIn { pub bank_id: String });
+op!(BankRemove, "money.bank.remove", BankIdIn => Empty,
+    OpMeta::mutation(Scope::Global, 12, "Disconnect a bank, at Plaid as well; entries already written stay").actors(Actors::UserOnly));
+payload!(#[schemars(rename = "MoneyBankHostedLinkIn")] BankHostedLinkIn {
+    pub client_name: String,
+    /// Where Plaid's page sends the browser at the end, e.g. tallyrs://banks.
+    pub completion_redirect_uri: Option<String>,
+});
+result!(#[schemars(rename = "MoneyBankHostedLinkOut")] BankHostedLinkOut {
+    pub link_token: String,
+    /// Plaid's page for that token, to open in the browser.
+    pub hosted_link_url: String,
+    /// When the token stops working, epoch ms.
+    pub expires_at: Option<i64>,
+});
+op!(BankHostedLink, "money.bank.hosted_link", BankHostedLinkIn => BankHostedLinkOut,
+    OpMeta::mutation(Scope::Global, 12, "A Plaid sign-in on a page Plaid hosts, for a phone without Plaid's SDK; money.bank.link_status says how it went").actors(Actors::UserOnly));
+payload!(#[schemars(rename = "MoneyBankLinkStatusIn")] BankLinkStatusIn { pub link_token: String });
+result!(#[schemars(rename = "MoneyBankLinkStatusOut")] BankLinkStatusOut {
+    /// waiting, connected, exited or expired.
+    pub state: String,
+    /// The new connection, when connected.
+    pub bank: Option<BankView>,
+    /// Plaid's reason, when exited.
+    pub problem: Option<String>,
+});
+op!(BankLinkStatus, "money.bank.link_status", BankLinkStatusIn => BankLinkStatusOut,
+    OpMeta::mutation(Scope::Global, 12, "How a hosted sign-in went; once connected, the bank is kept as money.bank.exchange keeps it (asked again, the same bank)").actors(Actors::UserOnly));
+
 entries!(
     SummaryOp, ListsOp, TxList, SeriesOp, TxAdd, TxUpdate, TxDelete, TxRestore, BudgetSet, AccountAdd, AccountUpdate, ValueSet, SettingsSet,
     Import, Export, Sample, Reset, Sync, InvestSummary, InvestList, InvestAdd, InvestDelete, InvestRestore, InvestPreview, InvestImport,
-    InvestRoom, InvestPrice, FxSet, FxFetch,
+    InvestRoom, InvestPrice, FxSet, FxFetch, BankList, BankLinkToken, BankExchange, BankAccounts, BankRefresh, BankRemove,
+    BankHostedLink, BankLinkStatus,
 );

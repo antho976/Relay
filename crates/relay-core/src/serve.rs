@@ -93,6 +93,8 @@ pub async fn start(instance: Instance, store_path: Option<PathBuf>) -> Result<Se
     crate::aide::spawn(&engine);
     // Clips: VODs worked on one at a time, renders watched, approved clips posted (clips::spawn).
     crate::clips::spawn(&engine);
+    // Banks connected through Plaid are read every four hours, where Plaid is set up (plaid).
+    crate::plaid::spawn_timer(&engine);
     let socket = lock.bind(engine.clone()).await?;
     Ok(Served { engine, socket })
 }

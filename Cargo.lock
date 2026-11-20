@@ -3090,6 +3090,7 @@ dependencies = [
  "relay-client",
  "relay-gym",
  "relay-money",
+ "ring",
  "rusqlite",
  "rust_decimal",
  "serde",

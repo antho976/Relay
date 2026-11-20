@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 434,
+  "op_count": 442,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -5198,6 +5198,154 @@
       },
       "result": {
         "$ref": "#/$defs/MoneyFxFetchOut"
+      }
+    },
+    "money.bank.list": {
+      "summary": "The banks connected through Plaid, their accounts and which are followed",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/MoneyBankListOut"
+      }
+    },
+    "money.bank.link_token": {
+      "summary": "A Plaid link token for the sign-in on an Android phone",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/MoneyBankLinkTokenIn"
+      },
+      "result": {
+        "$ref": "#/$defs/MoneyBankLinkTokenOut"
+      }
+    },
+    "money.bank.exchange": {
+      "summary": "Trade Plaid's public token for a connection the server keeps; its accounts start unfollowed",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/MoneyBankExchangeIn"
+      },
+      "result": {
+        "$ref": "#/$defs/MoneyBankOut"
+      }
+    },
+    "money.bank.accounts": {
+      "summary": "Choose which of a bank's accounts to follow and where each lands; the first read starts in the background",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "money.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/MoneyBankAccountsIn"
+      },
+      "result": {
+        "$ref": "#/$defs/MoneyBankOut"
+      }
+    },
+    "money.bank.refresh": {
+      "summary": "Read every connected bank now, in the background; money.changed follows what it writes",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "money.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "money.bank.remove": {
+      "summary": "Disconnect a bank, at Plaid as well; entries already written stay",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/MoneyBankIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "money.bank.hosted_link": {
+      "summary": "A Plaid sign-in on a page Plaid hosts, for a phone without Plaid's SDK; money.bank.link_status says how it went",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/MoneyBankHostedLinkIn"
+      },
+      "result": {
+        "$ref": "#/$defs/MoneyBankHostedLinkOut"
+      }
+    },
+    "money.bank.link_status": {
+      "summary": "How a hosted sign-in went; once connected, the bank is kept as money.bank.exchange keeps it (asked again, the same bank)",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/MoneyBankLinkStatusIn"
+      },
+      "result": {
+        "$ref": "#/$defs/MoneyBankLinkStatusOut"
       }
     },
     "thread.list": {
@@ -22396,6 +22544,308 @@
       },
       "required": [
         "started"
+      ]
+    },
+    "MoneyBankListOut": {
+      "type": "object",
+      "properties": {
+        "banks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MoneyBank"
+          }
+        }
+      },
+      "required": [
+        "banks"
+      ]
+    },
+    "MoneyBank": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Plaid's item id."
+        },
+        "institution": {
+          "type": "string"
+        },
+        "last_sync": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "When its transactions were last read, epoch ms."
+        },
+        "problem": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Set when the person must act, e.g. \"Sign in to Desjardins again\"."
+        },
+        "accounts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MoneyBankAccount"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "institution",
+        "accounts"
+      ]
+    },
+    "MoneyBankAccount": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Plaid's account id."
+        },
+        "name": {
+          "type": "string"
+        },
+        "mask": {
+          "type": "string",
+          "description": "The account number's last digits."
+        },
+        "kind": {
+          "type": "string",
+          "description": "Plaid's subtype in words: \"checking\", \"credit card\", \"tfsa\"."
+        },
+        "follow": {
+          "type": "boolean",
+          "description": "Whether its transactions come into the ledger."
+        },
+        "into": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The ledger account (its uid) they go into, once chosen or made."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "mask",
+        "kind",
+        "follow"
+      ]
+    },
+    "MoneyBankLinkTokenIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "android_package_name": {
+          "type": "string",
+          "description": "The Android app asking, as listed in Plaid's dashboard."
+        },
+        "client_name": {
+          "type": "string",
+          "description": "The name Plaid's sign-in shows, e.g. Tally."
+        }
+      },
+      "required": [
+        "android_package_name",
+        "client_name"
+      ]
+    },
+    "MoneyBankLinkTokenOut": {
+      "type": "object",
+      "properties": {
+        "link_token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "link_token"
+      ]
+    },
+    "MoneyBankExchangeIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "public_token": {
+          "type": "string",
+          "description": "The one-time token Plaid's sign-in handed the phone."
+        },
+        "institution_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "institution_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "public_token"
+      ]
+    },
+    "MoneyBankOut": {
+      "type": "object",
+      "properties": {
+        "bank": {
+          "$ref": "#/$defs/MoneyBank"
+        }
+      },
+      "required": [
+        "bank"
+      ]
+    },
+    "MoneyBankAccountsIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bank_id": {
+          "type": "string"
+        },
+        "since": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The first day (`YYYY-MM-DD`) to bring in; absent, whatever Plaid holds."
+        },
+        "accounts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MoneyBankFollow"
+          }
+        }
+      },
+      "required": [
+        "bank_id",
+        "accounts"
+      ]
+    },
+    "MoneyBankFollow": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Plaid's account id."
+        },
+        "follow": {
+          "type": "boolean"
+        },
+        "into": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A ledger account uid to write into; absent, the account an import made for it, else a new one."
+        }
+      },
+      "required": [
+        "id",
+        "follow"
+      ]
+    },
+    "MoneyBankIdIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bank_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bank_id"
+      ]
+    },
+    "MoneyBankHostedLinkIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "client_name": {
+          "type": "string"
+        },
+        "completion_redirect_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Where Plaid's page sends the browser at the end, e.g. tallyrs://banks."
+        }
+      },
+      "required": [
+        "client_name"
+      ]
+    },
+    "MoneyBankHostedLinkOut": {
+      "type": "object",
+      "properties": {
+        "link_token": {
+          "type": "string"
+        },
+        "hosted_link_url": {
+          "type": "string",
+          "description": "Plaid's page for that token, to open in the browser."
+        },
+        "expires_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "When the token stops working, epoch ms."
+        }
+      },
+      "required": [
+        "link_token",
+        "hosted_link_url"
+      ]
+    },
+    "MoneyBankLinkStatusIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "link_token": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "link_token"
+      ]
+    },
+    "MoneyBankLinkStatusOut": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "waiting, connected, exited or expired."
+        },
+        "bank": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MoneyBank"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The new connection, when connected."
+        },
+        "problem": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Plaid's reason, when exited."
+        }
+      },
+      "required": [
+        "state"
       ]
     },
     "ThreadListIn": {
