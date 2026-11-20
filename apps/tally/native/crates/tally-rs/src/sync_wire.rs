@@ -19,7 +19,7 @@ pub const DEFAULT_PORT: u16 = 7420;
 /// set in app/build.gradle.kts). `TALLY_SERVER` at build time names another.
 pub const DEFAULT_SERVER: &str = match option_env!("TALLY_SERVER") {
     Some(s) => s,
-    None => "https://antho-s-bot-8dve.onrender.com",
+    None => "https://anthobot.bid",
 };
 
 pub fn hex(bytes: &[u8]) -> String {

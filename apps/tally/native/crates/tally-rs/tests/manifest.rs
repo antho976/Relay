@@ -17,3 +17,11 @@ fn every_launcher_entry_names_the_library() {
     }
     assert!(entries >= 3, "the activity and both launcher icons, found {entries}");
 }
+
+/// Sync and bank connections go to the owner's server: without INTERNET, Android refuses every
+/// socket and "Your server could not be reached" is all the app can say (0.3.2 shipped so).
+#[test]
+fn the_app_may_reach_its_server() {
+    let manifest = include_str!("../../../android/src/main/AndroidManifest.xml");
+    assert!(manifest.contains(r#"<uses-permission android:name="android.permission.INTERNET" />"#));
+}

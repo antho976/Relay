@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- The owner's own server, over HTTPS and a WebSocket (sync, and bank connections through it).
+         No other host. Without this every connect fails before a request leaves the phone. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:label="Tally RS"
         android:icon="@mipmap/ic_launcher"
