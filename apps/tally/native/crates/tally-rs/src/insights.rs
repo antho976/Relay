@@ -44,6 +44,8 @@ pub struct State {
     cal_day: Option<usize>,
     cache: Option<((u64, Date, i64), Insights)>,
     problem: Option<String>,
+    /// The reading that failed, so it is not tried again every frame.
+    failed: Option<(u64, Date, i64)>,
 }
 
 enum Act {
@@ -55,7 +57,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let today = model::today();
     let st = &mut app.st.insights;
     let key = (app.ledger_gen, today, st.offset);
-    if st.cache.as_ref().is_none_or(|(k, _)| *k != key) {
+    if st.cache.as_ref().is_none_or(|(k, _)| *k != key) && st.failed != Some(key) {
         match data::read(&app.store, today, st.offset) {
             Ok(i) => {
                 if st.cache.as_ref().is_some_and(|(k, _)| k.2 != key.2) {
@@ -63,9 +65,15 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     st.cal_day = None;
                 }
                 st.cache = Some((key, i));
+                st.failed = None;
                 st.problem = None;
             }
-            Err(e) => st.problem = Some(e),
+            Err(e) => {
+                // Another month's reading is not this one's: the problem shows in its place.
+                st.cache = None;
+                st.failed = Some(key);
+                st.problem = Some(e);
+            }
         }
     }
     let fmt = app.store.formatter();
@@ -84,8 +92,17 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         y += 44.0 + 10.0;
         match &st.cache {
             None => {
-                cx.c.text(st.problem.as_deref().unwrap_or("Reading the ledger"), PAD, y + 10.0, Text::new(ty::UI, p.ink2));
-                y += 50.0;
+                let words = st.problem.as_deref().unwrap_or("Reading the ledger");
+                y += 10.0 + cx.c.para(words, PAD, y + 10.0, W, Text::new(ty::UI, p.ink2).line(1.4), 4) + 16.0;
+                // A month that cannot be read is not where the page stays.
+                if st.failed.is_some() && st.offset != 0 {
+                    let t = Text::new(ty::BODY, p.ink).semi();
+                    let kw = cx.c.measure("Back to this month", t) + 32.0;
+                    if kit::key(&mut cx, PAD, y, kw, 44.0, "Back to this month", None, kit::KeyKind::Plain) {
+                        todo = Some(Act::Offset(0));
+                    }
+                    y += 44.0 + 10.0;
+                }
             }
             Some((_, s)) => {
                 // The month switcher: back a month, the month, forward (never past this one).

@@ -72,6 +72,11 @@ pub struct Entry {
     pub cat_scroll: HScroll,
     pub usual_scroll: HScroll,
     pub sugg_scroll: HScroll,
+    /// Where the keys at the bottom start on screen (the app's notice sits above them).
+    pub footer_top: f32,
+    /// The account sheet's "New account" was picked from this side: the account made comes back
+    /// to it.
+    pub made_for: Option<Pick>,
 }
 
 impl Default for Entry {
@@ -106,6 +111,8 @@ impl Default for Entry {
             cat_scroll: HScroll::default(),
             usual_scroll: HScroll::default(),
             sugg_scroll: HScroll::default(),
+            footer_top: 0.0,
+            made_for: None,
         }
     }
 }
@@ -240,6 +247,104 @@ impl Entry {
         e
     }
 
+    /// One entry as its overview reads it: the entry, its accounts' names, its bill, and how its
+    /// own category stands this period. Much less than [`Entry::open`] reads (no year of usual
+    /// entries, no budget per category), so it is cheap to read again when the ledger moves.
+    pub fn view(store: &Store, id: i64) -> Entry {
+        let today = model::today();
+        let mut e = Entry { period: activity_data::period_at(store, today, 0), ..Entry::default() };
+        let Ok(t) = store.ledger.tx(id) else { return e };
+        let digits = store.formatter().fraction_digits;
+        e.accounts = store.ledger.accounts().unwrap_or_default();
+        e.editing = Some(id);
+        e.kind = t.r#type;
+        e.amount = AmountInput::of(t.amount, digits);
+        e.account = Some(t.account_id);
+        e.to_account = t.to_account_id;
+        e.category = t.category_id;
+        e.category_chosen = true;
+        e.note = t.note.clone();
+        e.pad_open = false;
+        if let Ok(d) = t.date.parse() {
+            e.date = d;
+            e.month = d;
+        }
+        if let Some(c) = t.category_id {
+            e.categories = store.ledger.categories().unwrap_or_default().into_iter().filter(|x| x.id == c).collect();
+            let q = TxQuery {
+                from: Some(e.period.start),
+                to: Some(e.period.last_day()),
+                category_id: Some(c),
+                limit: Some(100_000),
+                ..Default::default()
+            };
+            for r in store.ledger.tx_list(&q, today).map(|p| p.transactions).unwrap_or_default() {
+                if r.category_id != Some(c) {
+                    continue;
+                }
+                match e.by_category.iter_mut().find(|(_, k, _, _)| *k == r.r#type) {
+                    Some(x) => {
+                        x.2 += r.amount;
+                        x.3 += 1;
+                    }
+                    None => e.by_category.push((c, r.r#type, r.amount, 1)),
+                }
+            }
+            if e.categories.iter().any(|x| x.kind == CategoryKind::Expense)
+                && let Some(b) = store.ledger.budget(Some(c)).ok().flatten()
+            {
+                e.category_budgets.push((c, b));
+            }
+        }
+        e.bill = linked_bill(store, id);
+        e.original = Some(t);
+        e
+    }
+
+    /// Back on the editor from a page it opened (a new account or category, the bill): the draft
+    /// stays as it was; the accounts and categories are read again, and one just made is picked.
+    pub fn came_back(&mut self, store: &Store) {
+        self.picking = None;
+        let made_for = self.made_for.take();
+        let had: Vec<i64> = self.accounts.iter().map(|a| a.id).collect();
+        self.accounts = store.ledger.accounts().unwrap_or_default().into_iter().filter(|a| !a.archived || had.contains(&a.id)).collect();
+        let present = |id: Option<i64>, list: &[AccountView]| id.filter(|id| list.iter().any(|a| a.id == *id));
+        self.account = present(self.account, &self.accounts);
+        self.to_account = present(self.to_account, &self.accounts);
+        if let Some(new) = self.accounts.iter().filter(|a| !had.contains(&a.id)).map(|a| a.id).max() {
+            if made_for == Some(Pick::To) {
+                self.to_account = Some(new);
+            } else {
+                self.account = Some(new);
+            }
+        }
+        if self.account.is_none() {
+            self.account = self.accounts.first().map(|a| a.id);
+        }
+
+        let all = store.ledger.categories().unwrap_or_default();
+        let had: Vec<i64> = self.categories.iter().map(|c| c.id).collect();
+        // The order stays (the most used first); renamed ones read anew; new ones go last.
+        let mut categories: Vec<CategoryView> = self.categories.iter().filter_map(|c| all.iter().find(|x| x.id == c.id).cloned()).collect();
+        let made: Vec<CategoryView> = all.into_iter().filter(|c| !c.archived && !had.contains(&c.id)).collect();
+        let want = if self.kind == TxType::Income { CategoryKind::Income } else { CategoryKind::Expense };
+        let pick = made.iter().filter(|c| c.kind == want).map(|c| c.id).max();
+        categories.extend(made);
+        self.categories = categories;
+        if self.category.is_some_and(|id| !self.categories.iter().any(|c| c.id == id)) {
+            self.category = None;
+            self.category_chosen = false;
+        }
+        if let Some(id) = pick.filter(|_| self.kind != TxType::Transfer) {
+            self.category = Some(id);
+            self.category_chosen = true;
+            self.fold_if_typed();
+        }
+        if let Some(id) = self.editing {
+            self.bill = linked_bill(store, id);
+        }
+    }
+
     fn draft(&self) -> Draft {
         Draft { kind: self.kind, amount: self.amount.minor(), date: self.date, account: self.account, to_account: self.to_account, category: self.category }
     }
@@ -328,6 +433,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         12.0 + if problem_line { 24.0 } else { 0.0 } + KEY_H + if e.editing.is_none() { 44.0 } else { 12.0 } + app.canvas.inset_bottom
     };
     let footer_top = app.canvas.h - footer_h;
+    app.entry.footer_top = footer_top;
+    let e = &app.entry;
     let viewport = [0.0, 0.0, WIDTH, footer_top];
     let picking = e.picking;
     let ui = &app.ui;
@@ -805,6 +912,7 @@ fn sheet(cx: &mut Ctx, e: &mut Entry, dt: f32, act: &mut Option<Act>) {
                 }
                 SheetOut::Pick(_) => {
                     e.picking = None;
+                    e.made_for = Some(pick);
                     *act = Some(Act::Go(Route::AccountEdit { id: None }));
                 }
                 SheetOut::Close => e.picking = None,
@@ -844,18 +952,24 @@ fn sheet(cx: &mut Ctx, e: &mut Entry, dt: f32, act: &mut Option<Act>) {
     }
 }
 
-/// The typed amount in the currency's dress: "$12.5" while typing "12.5".
-fn dress(text: &str, fmt: &relay_money::money::MoneyFormatter) -> String {
-    let whole = fmt.format_whole(0);
-    let symbol_first = whole.starts_with(|c: char| !c.is_ascii_digit());
+/// The typed amount in the currency's dress: "$12.5" while typing "12.5" ("12,5 $" in French).
+pub fn dress(text: &str, fmt: &relay_money::money::MoneyFormatter) -> String {
     let (int, frac) = text.split_once('.').map_or((text, None), |(a, b)| (a, Some(b)));
     let n: i64 = int.parse().unwrap_or(0);
-    let grouped = fmt.format_whole(n * relay_money::money::pow10(fmt.fraction_digits));
-    let mut out = grouped;
-    if let Some(f) = frac {
-        out = if symbol_first { format!("{out}.{f}") } else { out.replacen(' ', &format!(".{f} "), 1) };
+    let whole = fmt.format_whole(n.saturating_mul(relay_money::money::pow10(fmt.fraction_digits)));
+    match frac {
+        None => whole,
+        Some(f) => {
+            // The separator goes after the last digit, wherever the symbol sits.
+            let at = whole.rfind(|c: char| c.is_ascii_digit()).map_or(whole.len(), |i| i + 1);
+            format!("{}{}{f}{}", &whole[..at], fmt.locale.decimal_separator(), &whole[at..])
+        }
     }
-    out
+}
+
+/// Back on the editor closes the sheet open over it, if one is.
+pub fn back(app: &mut App) -> bool {
+    app.entry.picking.take().is_some()
 }
 
 fn save(app: &mut App, next: bool) {

@@ -209,7 +209,10 @@ fn a_breakdown_folds_its_tail_into_everything_else() {
     assert_eq!(s[7].folded, 3);
     assert_eq!(s.iter().map(|x| x.total).sum::<i64>(), 5_500);
     let payees = ins::payees(&[tx(1, TxType::Expense, 500, "2026-10-03", None, "Metro"), tx(2, TxType::Expense, 700, "2026-10-04", None, "metro "), tx(3, TxType::Expense, 900, "2026-10-04", None, "IGA")], 5);
-    assert_eq!((payees[0].note.as_str(), payees[0].total, payees[0].count), ("Metro", 1_200, 2));
+    // Payees group by the exact note, as the Kotlin app does: "Metro" and "metro " are two rows.
+    assert_eq!(payees.len(), 3);
+    assert_eq!((payees[0].note.as_str(), payees[0].total, payees[0].count), ("IGA", 900, 1));
+    assert!(payees.iter().all(|p| p.count == 1), "nothing merged");
 }
 
 fn draft(kind: TxType, amount: i64) -> Draft {

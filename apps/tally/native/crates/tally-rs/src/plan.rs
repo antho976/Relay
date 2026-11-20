@@ -6,7 +6,8 @@
 //! its row once, when it opens.
 //!
 //! Deleting a bill, a goal, a contribution or a budget happens at once, with Undo in the Plan's
-//! own toast (the app's toast can only undo an entry).
+//! own toast, or in the app's when the page left for is not the Plan's (a goal deleted from the
+//! page Overview opened).
 
 use relay_money::Date;
 use relay_money::amount_input::AmountInput;
@@ -103,13 +104,16 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     refresh(app);
     let route = app.route().clone();
     let toast_bottom = app.canvas.h - app.canvas.inset_bottom - 8.0;
-    let live = app.st.plan.undo.as_ref().is_some_and(|u| app.now_ns <= u.until_ns);
+    let until = app.st.plan.undo.as_ref().map(|u| u.until_ns).filter(|t| app.now_ns <= *t);
+    let live = until.is_some();
     if !live {
         app.st.plan.undo = None;
     }
-    // The Undo pill takes its own taps before the page under it.
+    // The Undo pill takes its own taps before the page under it; with the keyboard up it is not
+    // drawn, and takes none.
+    let shown = live && !app.keyboard_up;
     let toast_tap = match app.ui.tap {
-        Some((x, y)) if live && (16.0..WIDTH - 16.0).contains(&x) && (toast_bottom - 60.0..toast_bottom - 12.0).contains(&y) => app.ui.tap.take(),
+        Some((x, y)) if shown && (16.0..WIDTH - 16.0).contains(&x) && (toast_bottom - 60.0..toast_bottom - 12.0).contains(&y) => app.ui.tap.take(),
         _ => None,
     };
     let moving = match route {
@@ -133,7 +137,16 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             undo(app, u.act);
         }
     }
-    moving || live
+    // Draw again when the toast is due to go, not every frame until then.
+    if let Some(t) = until {
+        app.wake_at(t + 1);
+    }
+    moving
+}
+
+/// Back closes the sheet open over a Plan page, if one is.
+pub fn back(app: &mut App) -> bool {
+    app.st.plan.sheet.take().is_some()
 }
 
 fn is_plan(r: &Route) -> bool {
@@ -164,21 +177,25 @@ fn say_undo(app: &mut App, words: String, act: UndoAct) {
     if is_plan(app.route()) {
         app.st.plan.undo = Some(Undo { words, act, until_ns: app.now_ns + 5_000_000_000 });
     } else {
-        // Off the Plan its toast is not drawn: say it plainly.
-        app.say(words, None);
+        // Off the Plan its toast is not drawn: the app's carries the Undo.
+        app.say_undo(words, move |app: &mut App| put_back(app, act));
     }
 }
 
 fn undo(app: &mut App, act: UndoAct) {
-    let result = match act {
+    match put_back(app, act) {
+        Ok(()) => app.invalidate(),
+        Err(e) => app.say(format!("Could not undo: {e}"), None),
+    }
+}
+
+/// What an Undo writes back.
+fn put_back(app: &mut App, act: UndoAct) -> Result<(), String> {
+    match act {
         UndoAct::Budgets(list) => list.into_iter().try_for_each(|(c, a)| app.store.ledger.budget_set(c, a).map_err(|e| e.to_string())),
         UndoAct::Bill(id) => app.store.sql().and_then(|c| store::bill_restore(c, id)),
         UndoAct::Goal(d) => app.store.sql().and_then(|c| store::goal_restore(c, &d)),
         UndoAct::Contribution(id) => app.store.sql().and_then(|c| store::contribution_restore(c, id)),
-    };
-    match result {
-        Ok(()) => app.invalidate(),
-        Err(e) => app.say(format!("Could not undo: {e}"), None),
     }
 }
 
@@ -464,7 +481,7 @@ fn split_tap(cx: &mut Ctx, foot_top: f32) -> Option<(f32, f32)> {
 }
 
 fn budget_edit_page(app: &mut App, dt: f32, category: Option<i64>) -> bool {
-    if app.fresh || app.st.plan.budget.as_ref().is_none_or(|b| b.category != category) {
+    if (app.fresh && !app.returned) || app.st.plan.budget.as_ref().is_none_or(|b| b.category != category) {
         match BudgetEditor::open(app, category) {
             Ok(b) => app.st.plan.budget = Some(b),
             Err(e) => {
@@ -821,7 +838,7 @@ fn bills_body(cx: &mut Ctx, d: &PlanData, top: f32, act: &mut Option<Act>) -> f3
 }
 
 fn bill_edit_page(app: &mut App, dt: f32, id: Option<i64>) -> bool {
-    if app.fresh || app.st.plan.bill.as_ref().is_none_or(|b| b.route_id != id) {
+    if (app.fresh && !app.returned) || app.st.plan.bill.as_ref().is_none_or(|b| b.route_id != id) {
         match BillEditor::open(app, id) {
             Ok(b) => app.st.plan.bill = Some(b),
             Err(e) => {
@@ -1290,11 +1307,13 @@ fn goals_body(cx: &mut Ctx, d: &PlanData, top: f32, act: &mut Option<Act>) -> f3
             button: pot.then_some("Add money"),
             ..Default::default()
         };
-        let (card, button) = kit::pic_card(cx, PAD, y, CW, ch, goal_picture(goal), &spec);
-        if button {
-            *act = Some(Act::AddMoney(goal.id));
-        } else if card {
-            *act = Some(Act::Go(Route::Goal { id: goal.id }));
+        if on_screen(cx, y, ch) {
+            let (card, button) = kit::pic_card(cx, PAD, y, CW, ch, goal_picture(goal), &spec);
+            if button {
+                *act = Some(Act::AddMoney(goal.id));
+            } else if card {
+                *act = Some(Act::Go(Route::Goal { id: goal.id }));
+            }
         }
         y += ch + 12.0;
     }
@@ -1305,6 +1324,10 @@ fn goals_body(cx: &mut Ctx, d: &PlanData, top: f32, act: &mut Option<Act>) -> f3
     let rest: Vec<&GoalLine> = g.goals.iter().enumerate().filter(|(i, _)| Some(*i) != closest).map(|(_, g)| g).collect();
     for (k, goal) in rest.iter().enumerate() {
         let (x, gy) = (PAD + (k % 2) as f32 * (cw + gap), y + (k / 2) as f32 * (ch + gap));
+        // A card off screen asks for no picture: the pictures held at once are few.
+        if !on_screen(cx, gy, ch) {
+            continue;
+        }
         let line = logic::goal_reading(goal, fmt);
         let spec = PicCard { title: &goal.name, title_size: 17.0, line: Some(&line), meter: Some(goal.fraction()), ..Default::default() };
         let (card, _) = kit::pic_card(cx, x, gy, cw, ch, goal_picture(goal), &spec);
@@ -1317,6 +1340,12 @@ fn goals_body(cx: &mut Ctx, d: &PlanData, top: f32, act: &mut Option<Act>) -> f3
         *act = Some(Act::Go(Route::GoalEdit { id: None }));
     }
     y + (k / 2 + 1) as f32 * (ch + gap) - gap
+}
+
+/// Some of the band from `y` (content units) down `h` shows on screen.
+fn on_screen(cx: &Ctx, y: f32, h: f32) -> bool {
+    let top = y + cx.c.dy;
+    top + h > 0.0 && top < cx.c.h
 }
 
 /// One goal's page: its reading, its pace and, for a pot, money in and out.
@@ -1356,7 +1385,9 @@ impl GoalPage {
 }
 
 fn goal_page(app: &mut App, dt: f32, id: i64) -> bool {
-    let renew = app.fresh || app.st.plan.goal.as_ref().is_none_or(|g| g.id != id);
+    // Opened anew it starts clean; back from its editor what was typed in Add money stays (the
+    // ledger generation below reads the goal again).
+    let renew = (app.fresh && !app.returned) || app.st.plan.goal.as_ref().is_none_or(|g| g.id != id);
     if renew {
         let adding = app.st.plan.add_money.take() == Some(id);
         app.st.plan.goal = Some(GoalPage { id, read_gen: 0, goal: None, line: None, contributions: Vec::new(), pace: None, amount: String::new(), note: String::new(), selected: None, adding });
@@ -1671,7 +1702,7 @@ impl GoalEditor {
 }
 
 fn goal_edit_page(app: &mut App, dt: f32, id: Option<i64>) -> bool {
-    if app.fresh || app.st.plan.goal_edit.as_ref().is_none_or(|g| g.route_id != id) {
+    if (app.fresh && !app.returned) || app.st.plan.goal_edit.as_ref().is_none_or(|g| g.route_id != id) {
         match GoalEditor::open(app, id) {
             Ok(g) => app.st.plan.goal_edit = Some(g),
             Err(e) => {

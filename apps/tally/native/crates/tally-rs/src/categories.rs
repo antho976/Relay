@@ -41,6 +41,8 @@ pub struct State {
 }
 
 struct Editor {
+    /// The id the page was opened for (none for a new category).
+    route_id: Option<i64>,
     id: Option<i64>,
     kind: CategoryKind,
     stored_name: String,
@@ -69,6 +71,11 @@ enum Act {
     AskDelete,
     Move(Option<i64>),
     CloseSheet,
+}
+
+/// Back closes the move sheet when it is open.
+pub fn back(app: &mut App) -> bool {
+    matches!(app.route(), Route::CategoryEdit { .. }) && app.st.categories.edit.as_mut().is_some_and(|e| e.moving.take().is_some())
 }
 
 pub fn draw(app: &mut App, dt: f32) -> bool {
@@ -234,6 +241,7 @@ fn open_editor(app: &App, id: Option<i64>, kind: CategoryKind) -> Editor {
     });
     match stored {
         Some(c) => Editor {
+            route_id: id,
             id: Some(c.id),
             kind: c.kind,
             stored_name: c.name.clone(),
@@ -253,6 +261,7 @@ fn open_editor(app: &App, id: Option<i64>, kind: CategoryKind) -> Editor {
         None => {
             let used: Vec<i64> = all.iter().filter(|c| c.kind == kind).map(|c| c.color).collect();
             Editor {
+                route_id: id,
                 id: None,
                 kind,
                 stored_name: String::new(),
@@ -274,7 +283,9 @@ fn open_editor(app: &App, id: Option<i64>, kind: CategoryKind) -> Editor {
 }
 
 fn editor(app: &mut App, dt: f32, id: Option<i64>, kind: CategoryKind) -> bool {
-    if app.fresh || app.st.categories.edit.is_none() {
+    // Opened anew it reads the category; back from a page it opened ("See its entries") the
+    // draft stays.
+    if (app.fresh && !app.returned) || app.st.categories.edit.as_ref().is_none_or(|e| e.route_id != id || (id.is_none() && e.kind != kind)) {
         let e = open_editor(app, id, kind);
         app.st.categories.edit = Some(e);
     }
@@ -435,11 +446,19 @@ fn remove(app: &mut App, id: i64, to: Option<i64>, u: CategoryUse, fmt: &MoneyFo
     let to_name = to.and_then(|t| e.all.iter().find(|c| c.id == t)).map(|c| c.name.clone());
     let budget = u.budget.map(|b| fmt.format(b));
     let line = store::deleted_line(&e.stored_name, &u, budget.as_deref(), to_name.as_deref());
+    // With nothing filed under it the delete is the whole of it, so Undo can put it back (its
+    // budget too), as the Kotlin app's does. A move is not undone.
+    let undoable = to.is_none() && !u.has_movable();
+    let budget = u.budget;
     match store::delete(&app.store, id, to) {
         Ok(()) => {
             app.invalidate();
-            app.say(line, None);
             app.pop();
+            if undoable {
+                app.say_undo(line, move |app: &mut App| store::restore(&app.store, id, budget));
+            } else {
+                app.say(line, None);
+            }
         }
         Err(err) => app.say(err, None),
     }

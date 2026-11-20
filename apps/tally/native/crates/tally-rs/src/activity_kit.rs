@@ -450,12 +450,19 @@ pub fn centred_field(cx: &mut Ctx, id: &'static str, mid: f32, y: f32, w: f32, h
         let cx_ = if value.is_empty() { x - 4.0 } else { x + tw + 3.0 };
         cx.c.rect(cx_, y + (h - 20.0) / 2.0, 2.0, 20.0, 1.0, p.signal);
     }
-    if cx.tap(mid - w / 2.0, y, w, h) && !focused {
-        cx.focus.id = Some(id);
-        cx.focus.text = value.clone();
-        cx.focus.numeric = false;
-        cx.host.keyboard(true, value, false);
-        return true;
+    if cx.tap(mid - w / 2.0, y, w, h) {
+        if !focused {
+            cx.focus.id = Some(id);
+            cx.focus.text = value.clone();
+            cx.focus.numeric = false;
+            cx.host.keyboard(true, value, false);
+            return true;
+        }
+        // Still focused but the keyboard went (the system took it away): bring it back.
+        if !cx.focus.keyboard_up {
+            cx.host.keyboard(true, value, false);
+            return true;
+        }
     }
     false
 }
