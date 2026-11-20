@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window behind the first frame: Light's ground. The launcher icon (icon E, fanned
+         cards) draws its own colours in drawable/ic_launcher_*. -->
+    <color name="ground">#FFFFFFFF</color>
+</resources>
