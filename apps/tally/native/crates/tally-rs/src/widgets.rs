@@ -20,6 +20,9 @@ pub struct Focus {
     pub numeric: bool,
     /// The focused field's place on its page (content top, height), so the page keeps it in view.
     pub at: Option<(f32, f32)>,
+    /// The soft keyboard shows (the app sets it each frame), so a tap on a focused field whose
+    /// keyboard went away brings it back.
+    pub keyboard_up: bool,
 }
 
 impl Focus {
@@ -272,12 +275,19 @@ pub fn inline(cx: &mut Ctx, id: &'static str, x: f32, y: f32, w: f32, h: f32, pl
         let cx_ = x + if value.is_empty() { 0.0 } else { tw + 1.0 };
         cx.c.rect(cx_, y + (h - 22.0) / 2.0, 2.0, 22.0, 1.0, p.signal);
     }
-    if cx.tap(x - 14.0, y, w + 28.0, h) && !focused {
-        cx.focus.id = Some(id);
-        cx.focus.text = value.clone();
-        cx.focus.numeric = numeric;
-        cx.host.keyboard(true, value, numeric);
-        return true;
+    if cx.tap(x - 14.0, y, w + 28.0, h) {
+        if !focused {
+            cx.focus.id = Some(id);
+            cx.focus.text = value.clone();
+            cx.focus.numeric = numeric;
+            cx.host.keyboard(true, value, numeric);
+            return true;
+        }
+        // Still focused but the keyboard went (the system took it away): bring it back.
+        if !cx.focus.keyboard_up {
+            cx.host.keyboard(true, value, numeric);
+            return true;
+        }
     }
     false
 }
@@ -359,6 +369,8 @@ pub fn sheet_list(cx: &mut Ctx, title: &str, items: &[(String, Option<String>)],
     let view = [0.0, top + head, WIDTH, h - head];
     scroll.update(cx.ui, view, dt);
     scroll.max = list_h + 16.0 + bottom_inset - (h - head);
+    // A row scrolled up under the heading is hidden there: a tap on the heading is not for it.
+    let in_list = cx.ui.tap.is_some_and(|(_, ty_)| ty_ >= top + head);
     cx.c.push_clip(0.0, top + head, WIDTH, h - head);
     cx.c.dy = -scroll.off;
     let mut y = top + head;
@@ -386,7 +398,7 @@ pub fn sheet_list(cx: &mut Ctx, title: &str, items: &[(String, Option<String>)],
         if on {
             cx.c.icon("check", x + w - 22.0, y + rh_i / 2.0, 18.0, p.signal);
         }
-        if cx.tap(x, y, w, rh_i) && y + rh_i - scroll.off > top + head {
+        if in_list && cx.tap(x, y, w, rh_i) {
             out = SheetOut::Pick(i);
         }
         y += rh_i;

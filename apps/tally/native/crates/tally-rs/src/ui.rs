@@ -3,6 +3,8 @@
 
 /// Movement beyond this (in units) turns a press into a drag.
 const SLOP: f32 = 8.0;
+/// A list coasting faster than this (units per second) is stopped by a touch, not tapped through.
+const CATCH: f32 = 40.0;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Phase {
@@ -51,6 +53,10 @@ pub struct Ui {
     pub fling: Option<f32>,
     velocity: f32,
     last_move_ns: u64,
+    /// A finger came down since the last frame, here: a list coasting under it stops.
+    landed: Option<(f32, f32)>,
+    /// The finger now down stopped a coasting list: lifting it is not a tap.
+    caught: std::cell::Cell<bool>,
 }
 
 impl Ui {
@@ -67,6 +73,8 @@ impl Ui {
                 self.velocity_x = 0.0;
                 self.horizontal = false;
                 self.last_move_ns = t.t_ns;
+                self.landed = Some((x, y));
+                self.caught.set(false);
             }
             Phase::Move if self.id == Some(t.id) => {
                 let dy = y - self.pos.1;
@@ -106,7 +114,7 @@ impl Ui {
                     } else {
                         self.fling = Some(if still { 0.0 } else { self.velocity });
                     }
-                } else {
+                } else if !self.caught.get() {
                     self.tap = Some(self.start);
                 }
                 self.id = None;
@@ -130,6 +138,7 @@ impl Ui {
     /// Forget one-frame events. Call after the screen has drawn.
     pub fn end_frame(&mut self) {
         self.tap = None;
+        self.landed = None;
         self.drag_dy = 0.0;
         self.drag_dx = 0.0;
         self.fling = None;
@@ -152,6 +161,11 @@ impl Ui {
 
     /// Was this rectangle (screen units) tapped this frame? Takes the tap, so one tap lands once.
     pub fn tapped(&mut self, x: f32, y: f32, w: f32, h: f32) -> bool {
+        if self.caught.get() {
+            // The touch that stopped a fling (down and up within one frame) is not a tap.
+            self.tap = None;
+            return false;
+        }
         if Self::inside(self.tap, x, y, w, h) {
             self.tap = None;
             true
@@ -161,7 +175,18 @@ impl Ui {
     }
 
     pub fn pressed(&self, x: f32, y: f32, w: f32, h: f32) -> bool {
-        Self::inside(self.down, x, y, w, h)
+        !self.caught.get() && Self::inside(self.down, x, y, w, h)
+    }
+
+    /// A finger landed in this area (screen units) since the last frame, on something coasting:
+    /// it stops there, and that touch is not taken as a tap.
+    fn catch(&self, area: [f32; 4], coasting: bool) -> bool {
+        let [x, y, w, h] = area;
+        let landed = Self::inside(self.landed, x, y, w, h);
+        if landed && coasting {
+            self.caught.set(true);
+        }
+        landed
     }
 
     /// A row that scrolls sideways is drawn here this frame.
@@ -193,6 +218,9 @@ impl HScroll {
     pub fn update(&mut self, ui: &Ui, area: [f32; 4], dt: f32) -> bool {
         let [x, y, w, h] = area;
         let mine = ui.swiping_in(x, y, w, h);
+        if ui.catch(area, self.vel.abs() > CATCH) {
+            self.vel = 0.0;
+        }
         if mine {
             self.off -= ui.drag_dx;
             self.vel = 0.0;
@@ -229,6 +257,10 @@ impl Scroll {
     pub fn update(&mut self, ui: &Ui, viewport: [f32; 4], dt: f32) -> bool {
         let [x, y, w, h] = viewport;
         let mine = !ui.horizontal && ui.drag_from.is_some_and(|(px, py)| px >= x && px < x + w && py >= y && py < y + h);
+        // A finger on a coasting list stops it, as a phone's lists do.
+        if ui.catch(viewport, self.vel.abs() > CATCH) {
+            self.vel = 0.0;
+        }
         if mine {
             self.off -= ui.drag_dy;
             self.vel = 0.0;

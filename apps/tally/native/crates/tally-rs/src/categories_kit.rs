@@ -162,6 +162,8 @@ pub fn move_sheet(cx: &mut Ctx, heading: &str, note: &str, rows: &[MoveRow], scr
     let view = [0.0, top + head, WIDTH, h - head];
     scroll.update(cx.ui, view, dt);
     scroll.max = list_h + 16.0 + cx.c.inset_bottom - (h - head);
+    // A row scrolled up under the heading is hidden there: a tap on the heading is not for it.
+    let in_list = cx.ui.tap.is_some_and(|(_, ty_)| ty_ >= top + head);
     cx.c.push_clip(0.0, top + head, WIDTH, h - head);
     cx.c.dy = -scroll.off;
     let mut out = None;
@@ -179,7 +181,7 @@ pub fn move_sheet(cx: &mut Ctx, heading: &str, note: &str, rows: &[MoveRow], scr
         let room = x + w - 12.0 - tx;
         cx.c.text_fit(r.title, tx, y + 10.0, room, Text::new(ty::BODY, p.ink).medium());
         cx.c.text_fit(r.sub, tx, y + 32.0, room, Text::new(ty::CAPTION, p.ink3));
-        if cx.tap(x, y, w, rh) && y + rh - scroll.off > top + head {
+        if in_list && cx.tap(x, y, w, rh) {
             out = Some(Some(i));
         }
         y += rh;

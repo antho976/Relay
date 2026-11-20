@@ -33,6 +33,8 @@ pub struct State {
 
 /// The account editor's draft and what it was read from.
 struct Editor {
+    /// The id the page was opened for (none for a new account).
+    route_id: Option<i64>,
     id: Option<i64>,
     read_at: u64,
     stored: Option<Stored>,
@@ -55,6 +57,11 @@ enum Act {
     CloseDialog,
     Record,
     RemoveValue(i64),
+}
+
+/// Back closes the delete dialog when it is open.
+pub fn back(app: &mut App) -> bool {
+    matches!(app.route(), Route::AccountEdit { .. }) && app.st.accounts.edit.as_mut().is_some_and(|e| e.confirm.take().is_some())
 }
 
 pub fn draw(app: &mut App, dt: f32) -> bool {
@@ -259,11 +266,13 @@ fn open_editor(app: &mut App, id: Option<i64>) -> Editor {
         Vec::new()
     };
     let values = id.map(|id| store::values(&app.store, id).unwrap_or_default()).unwrap_or_default();
-    Editor { id: stored.as_ref().map(|s| s.row.view.id), read_at: app.ledger_gen, stored, draft, show_errors: false, confirm: None, values, value_text: String::new(), templates }
+    Editor { route_id: id, id: stored.as_ref().map(|s| s.row.view.id), read_at: app.ledger_gen, stored, draft, show_errors: false, confirm: None, values, value_text: String::new(), templates }
 }
 
 fn editor(app: &mut App, dt: f32, id: Option<i64>) -> bool {
-    if app.fresh || app.st.accounts.edit.is_none() {
+    // Opened anew it reads the account; back from a page it opened ("See its entries") the
+    // draft stays.
+    if (app.fresh && !app.returned) || app.st.accounts.edit.as_ref().is_none_or(|e| e.route_id != id) {
         let e = open_editor(app, id);
         app.st.accounts.edit = Some(e);
     }
