@@ -3,13 +3,18 @@
 so both apps draw the same icons. Run from native/: python3 tools/gen_glyphs.py"""
 import re, pathlib
 root = pathlib.Path(__file__).resolve().parents[2]
-kit = root / "app/src/main/java/com/tally/app/ui/kit"
+# The Kotlin app left the repo after cf4b63b; its sources are read from that commit.
+KOTLIN_REV = "cf4b63b52b9f742095cb05d884fe2e4d1510b7c6"
+def kotlin(path):
+    import subprocess
+    return subprocess.run(["git", "-C", str(root), "show", f"{KOTLIN_REV}:{path}"], check=True, capture_output=True, text=True).stdout
+kit = "app/src/main/java/com/tally/app/ui/kit"
 shape = re.compile(r'GlyphShape\("([^"]*)",\s*(true|false),\s*(true|false),\s*(-?[\d.]+)f\)')
 out = {}
-src = (kit / "Glyphs.kt").read_text()
+src = kotlin(f"{kit}/Glyphs.kt")
 for m in re.finditer(r'put\("([a-z0-9-]+)",\s*Glyph\(([\d.]+)f,\s*listOf\((.*?)\)\)\)', src, re.S):
     out[m[1]] = (float(m[2]), [(d, f == "true", s == "true", float(r)) for d, f, s, r in shape.findall(m[3])])
-icon = (kit / "Icon.kt").read_text()
+icon = kotlin(f"{kit}/Icon.kt")
 money = icon[icon.index("private val MONEY"):]
 for m in re.finditer(r'"([a-z0-9-]+)" to (stroked\((.*?)\)|Glyph\(([\d.]+)f,\s*listOf\((.*?)\)\)),?\n', money, re.S):
     if m[3] is not None:
