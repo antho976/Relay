@@ -86,6 +86,12 @@ fn reload(app: &mut App) {
     st.read_at = Some(app.ledger_gen);
 }
 
+/// Back closes the open question (erase, sample, restore) before the page.
+pub fn back(app: &mut App) -> bool {
+    let st = &mut app.st.settings;
+    std::mem::take(&mut st.erasing) | std::mem::take(&mut st.sampling) | st.restore.take().is_some()
+}
+
 pub fn draw(app: &mut App, dt: f32) -> bool {
     if app.fresh || app.st.settings.read_at != Some(app.ledger_gen) {
         reload(app);

@@ -863,6 +863,19 @@ fn quiet_key(cx: &mut Ctx, x: f32, y: f32, words: &str, glyph: &'static str) -> 
     (w, cx.tap(x, y, w, 40.0))
 }
 
+/// Back closes the open question as its Cancel does.
+pub fn back(app: &mut App) -> bool {
+    match app.st.sync.confirm.take() {
+        Some(Confirm::First) => {
+            app.st.sync.answer_first(&mut app.store, false);
+            app.say("Sync is off. This phone keeps its ledger.", None);
+            true
+        }
+        Some(_) => true,
+        None => false,
+    }
+}
+
 pub fn draw(app: &mut App, dt: f32) -> bool {
     let pg = app.page_begin(dt);
     let now = now_ms();

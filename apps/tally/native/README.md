@@ -53,7 +53,10 @@ Currency and dates, Backup and export, About), `import` (bank statements, Wealth
 Sync (`sync*.rs`): pairing as the Kotlin app does (`/api/tally`, `/enroll`, `/claim`, the door),
 then two-way `money.sync`. Tally RS never asks to connect by itself (each ask DMs the owner), and
 can never replace the server's ledger: its first sync only pulls (`sync_ledger.rs` makes a
-replace unrepresentable; tests check it against a fake server).
+replace unrepresentable; tests check it against a fake server). A ledger replaced on the phone
+(Erase everything, the sample) never pushes its deletions: the next sync takes the server's ledger
+whole instead. Restore asks you to disconnect first. Plain `ws://`/`http://` is used only to
+loopback, private-LAN and Tailscale (100.64/10) addresses.
 
 Writes relay-money has no call for (bills, goals, contributions, categories, account kind and
 opening balance, the week start) go through `Store::sql()` in `*_store.rs`, each tested by reading

@@ -366,6 +366,8 @@ impl App {
             Route::Categories | Route::CategoryEdit { .. } => crate::categories::back(self),
             Route::Banks => crate::banks::back(self),
             Route::Import => crate::import::back(self),
+            Route::Settings | Route::Appearance | Route::Format | Route::Backup | Route::About => crate::settings::back(self),
+            Route::Sync => crate::sync::back(self),
             _ => false,
         }
     }

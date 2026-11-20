@@ -201,7 +201,9 @@ impl Store {
         let currency = self.ledger.settings().map(|s| s.currency).unwrap_or_else(|_| "CAD".into());
         let n = self.ledger.load_sample(today, &currency).map_err(err)?;
         let first = self.ledger.accounts().map_err(err)?.into_iter().next().map(|a| a.id);
-        crate::accounts_store::set_default_account(self, first)?;
+        // The sample is in either way: a default that cannot be kept (a ledger held in memory has
+        // no second connection) leaves the usual fallback, the first open account.
+        let _ = crate::accounts_store::set_default_account(self, first);
         Ok(n)
     }
 
