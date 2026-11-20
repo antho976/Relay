@@ -19,5 +19,7 @@ opt-level = 3
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-panic = "abort"
+# Unwind, not abort: a panic in a worker thread (an import, a backup, a sync, a picture) ends
+# that thread, which the UI reports (`settings_files::Poll::Lost`), instead of the whole app.
+panic = "unwind"
 strip = "debuginfo"
