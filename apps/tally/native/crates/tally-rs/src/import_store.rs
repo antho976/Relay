@@ -3,11 +3,11 @@
 
 use jiff::ToSpan;
 use relay_money::Date;
-use relay_money::ledger::{Ledger, LedgerError};
+use relay_money::ledger::{Ledger, LedgerError, MAX_AMOUNT};
 use relay_money::model::{AccountType, CategoryKind, TxType};
 use relay_money::views::{TxInput, TxQuery};
 
-use crate::import_logic::{ImportLine, NoteUse};
+use crate::import_logic::{ImportLine, NoteUse, Twins};
 use crate::model::Store;
 
 fn range(from: Date, to: Date, account: Option<i64>) -> TxQuery {
@@ -99,21 +99,61 @@ pub fn write(ledger: &mut Ledger, target: &Target, lines: &[ImportLine]) -> Resu
         .map_err(|e| e.to_string())
 }
 
+/// A line of Tally's CSV as the ledger would match it: day, type, amount, the account names (any
+/// case) and the note. Its category is left out: a line filed elsewhere since is still the same line.
+type CsvKey = (Date, TxType, i64, String, Option<String>, String);
+
+fn csv_key(date: Date, ty: TxType, amount: i64, account: &str, to: Option<&str>, note: &str) -> CsvKey {
+    let to = to.filter(|_| ty == TxType::Transfer).map(str::to_lowercase);
+    (date, ty, amount, account.to_lowercase(), to, note.trim().to_string())
+}
+
 /// Tally's own CSV (its export) read back: accounts and categories by name, made when missing.
-/// Returns what it did, in words.
+/// A line the ledger would refuse (an amount past [`MAX_AMOUNT`], a transfer to its own account)
+/// is skipped and counted, never the whole file; a line already in the ledger (its export read
+/// back) is counted and left, by the same twin count as a bank statement's. Lines with no account
+/// go to the default account. Returns what it did, in words.
+///
+/// [`MAX_AMOUNT`]: relay_money::ledger::MAX_AMOUNT
 pub fn import_tally_csv(store: &mut Store, text: &str) -> Result<String, String> {
     let digits = store.formatter().fraction_digits;
     let accounts = store.ledger.accounts().map_err(|e| e.to_string())?;
-    let default_account = accounts.iter().find(|a| !a.archived).map(|a| a.name.clone()).unwrap_or_else(|| "Imported".into());
+    // Kotlin: the default account, else the first one, else a new "Imported".
+    let default_id = crate::accounts_store::default_account(store);
+    let default_account = default_id
+        .and_then(|id| accounts.iter().find(|a| a.id == id))
+        .or_else(|| accounts.iter().find(|a| !a.archived))
+        .map(|a| a.name.clone())
+        .unwrap_or_else(|| "Imported".into());
     let parsed = relay_money::csv::decode(text, digits, &default_account);
     if parsed.rows.is_empty() {
         return Err(parsed.errors.first().cloned().unwrap_or_else(|| "No entries found in that file.".into()));
     }
-    // Categories first, through the second connection (relay-money has no call to add one); the
-    // rest goes in one transaction.
+    let mut skipped = parsed.errors.len();
+    // What the ledger already holds over the file's days.
+    let (first, last) = parsed.rows.iter().fold((parsed.rows[0].date, parsed.rows[0].date), |(a, b), r| (a.min(r.date), b.max(r.date)));
+    let logged = store.ledger.tx_list(&range(first, last, None), crate::model::today()).map_err(|e| e.to_string())?;
+    let mut twins = Twins::new(
+        logged.transactions.iter().filter_map(|t| Some(csv_key(t.date.parse().ok()?, t.r#type, t.amount, &t.account, t.to_account.as_deref(), &t.note))),
+    );
+    let mut already = 0usize;
+    let mut rows = Vec::new();
+    for r in parsed.rows {
+        let to = r.to_account.as_deref().filter(|_| r.r#type == TxType::Transfer);
+        if r.amount <= 0 || r.amount > MAX_AMOUNT || to.is_some_and(|t| t.to_lowercase() == r.account.to_lowercase()) {
+            skipped += 1;
+        } else if twins.take(&csv_key(r.date, r.r#type, r.amount, &r.account, to, &r.note)) {
+            already += 1;
+        } else {
+            rows.push(r);
+        }
+    }
+    // Categories first, through the second connection (relay-money has no call to add one), and
+    // only for lines that will be written. The ledger cannot take them into its own transaction,
+    // so a failure below takes them back out.
     let mut categories = store.ledger.categories().map_err(|e| e.to_string())?;
-    let mut made = 0usize;
-    for r in &parsed.rows {
+    let mut made: Vec<i64> = Vec::new();
+    for r in &rows {
         let Some(name) = r.category.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };
         if r.r#type == TxType::Transfer {
             continue;
@@ -122,8 +162,13 @@ pub fn import_tally_csv(store: &mut Store, text: &str) -> Result<String, String>
         if categories.iter().any(|c| c.kind == kind && c.name.trim().to_lowercase() == name.to_lowercase()) {
             continue;
         }
-        add_category(store, name, kind, ((made + 3) % 12) as i64)?;
-        made += 1;
+        match add_category(store, name, kind, ((made.len() + 3) % 12) as i64) {
+            Ok(id) => made.push(id),
+            Err(e) => {
+                forget_categories(store, &made);
+                return Err(format!("The import did not finish. Nothing was added. {e}"));
+            }
+        }
         categories = store.ledger.categories().map_err(|e| e.to_string())?;
     }
     let category_id = |name: &Option<String>, ty: TxType| -> Option<i64> {
@@ -134,45 +179,62 @@ pub fn import_tally_csv(store: &mut Store, text: &str) -> Result<String, String>
         let kind = if ty == TxType::Income { CategoryKind::Income } else { CategoryKind::Expense };
         categories.iter().find(|c| c.kind == kind && c.name.trim().to_lowercase() == name.to_lowercase()).map(|c| c.id)
     };
-    let rows: Vec<(relay_money::csv::CsvRow, Option<i64>)> = parsed.rows.iter().map(|r| (r.clone(), category_id(&r.category, r.r#type))).collect();
-    let errors = parsed.errors.len();
+    let rows: Vec<(Option<i64>, relay_money::csv::CsvRow)> = rows.into_iter().map(|r| (category_id(&r.category, r.r#type), r)).collect();
     let result = store.ledger.atomically(|l| {
         let mut by_name: Vec<(String, i64)> = l.accounts()?.into_iter().map(|a| (a.name.to_lowercase(), a.id)).collect();
-        let mut account = |l: &mut Ledger, name: &str| -> Result<i64, LedgerError> {
-            if let Some((_, id)) = by_name.iter().find(|(n, _)| *n == name.to_lowercase()) {
-                return Ok(*id);
+        let (mut added, mut refused) = (0usize, 0usize);
+        for (category, r) in &rows {
+            // Each line in a savepoint of its own: one the ledger refuses leaves nothing behind,
+            // not even the account it would have made.
+            let known = by_name.len();
+            let line = l.atomically(|l| {
+                let mut account = |l: &mut Ledger, name: &str| -> Result<i64, LedgerError> {
+                    if let Some((_, id)) = by_name.iter().find(|(n, _)| *n == name.to_lowercase()) {
+                        return Ok(*id);
+                    }
+                    let id = l.account_add(name, AccountType::Chequing, 0, None, "")?.id;
+                    by_name.push((name.to_lowercase(), id));
+                    Ok(id)
+                };
+                let from = account(l, &r.account)?;
+                let to = match &r.to_account {
+                    Some(n) if r.r#type == TxType::Transfer => Some(account(l, n)?),
+                    _ => None,
+                };
+                l.tx_add(&TxInput { r#type: r.r#type, amount: r.amount, date: r.date.to_string(), account_id: from, to_account_id: to, category_id: *category, note: Some(r.note.clone()) })
+            });
+            match line {
+                Ok(_) => added += 1,
+                Err(LedgerError::Invalid(_)) => {
+                    by_name.truncate(known);
+                    refused += 1;
+                }
+                Err(e) => return Err(e),
             }
-            let id = l.account_add(name, AccountType::Chequing, 0, None, "")?.id;
-            by_name.push((name.to_lowercase(), id));
-            Ok(id)
-        };
-        let (mut added, mut same_account) = (0usize, 0usize);
-        for (r, category) in &rows {
-            let from = account(l, &r.account)?;
-            let to = match &r.to_account {
-                Some(n) if r.r#type == TxType::Transfer => Some(account(l, n)?),
-                _ => None,
-            };
-            if r.r#type == TxType::Transfer && to == Some(from) {
-                same_account += 1;
-                continue;
-            }
-            l.tx_add(&TxInput { r#type: r.r#type, amount: r.amount, date: r.date.to_string(), account_id: from, to_account_id: to, category_id: *category, note: Some(r.note.clone()) })?;
-            added += 1;
         }
-        Ok::<(usize, usize), LedgerError>((added, same_account))
+        Ok::<(usize, usize), LedgerError>((added, refused))
     });
     match result {
-        Ok((n, same)) => {
-            let skipped = errors + same;
-            Ok(if skipped == 0 { format!("Imported {n} entries") } else { format!("Imported {n} entries, skipped {skipped}") })
+        Ok((n, refused)) => Ok(crate::import_logic::csv_imported_line(n, skipped + refused, already)),
+        Err(e) => {
+            forget_categories(store, &made);
+            Err(format!("The import did not finish. Nothing was added. {e}"))
         }
-        Err(e) => Err(format!("The import did not finish. Nothing was added. {e}")),
+    }
+}
+
+/// Takes back categories this import made, when it did not finish: they were never synced (a
+/// sync reads the ledger on this thread too), so they go outright rather than as deletes.
+fn forget_categories(store: &Store, ids: &[i64]) {
+    let Ok(db) = store.sql() else { return };
+    for id in ids {
+        let _ = db.execute("DELETE FROM categories WHERE id = ?1", [id]);
     }
 }
 
 /// A category, written as relay-money writes its own: a fresh uid, stamped now, last in order.
-fn add_category(store: &Store, name: &str, kind: CategoryKind, color: i64) -> Result<(), String> {
+/// Returns its id.
+fn add_category(store: &Store, name: &str, kind: CategoryKind, color: i64) -> Result<i64, String> {
     let db = store.sql()?;
     let (uid, now) = Store::stamp();
     let kind = match kind {
@@ -184,6 +246,6 @@ fn add_category(store: &Store, name: &str, kind: CategoryKind, color: i64) -> Re
          VALUES (?1, ?2, ?3, ?4, 'dots', (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM categories), ?5)",
         rusqlite::params![uid, name.trim(), kind, color, now],
     )
-    .map(|_| ())
+    .map(|_| db.last_insert_rowid())
     .map_err(|e| e.to_string())
 }
