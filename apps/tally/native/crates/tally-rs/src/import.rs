@@ -159,6 +159,11 @@ type SheetItems = Vec<(String, Option<String>)>;
 
 const NEW_NAME: &str = "import.new_name";
 
+/// Back closes the account picker when it is open.
+pub fn back(app: &mut App) -> bool {
+    app.st.import.picking.take().is_some()
+}
+
 pub fn draw(app: &mut App, dt: f32) -> bool {
     if app.fresh && app.st.import.stage != Stage::Reading {
         let st = &mut app.st.import;

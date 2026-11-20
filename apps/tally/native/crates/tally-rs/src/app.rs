@@ -365,6 +365,7 @@ impl App {
             Route::Accounts | Route::AccountEdit { .. } => crate::accounts::back(self),
             Route::Categories | Route::CategoryEdit { .. } => crate::categories::back(self),
             Route::Banks => crate::banks::back(self),
+            Route::Import => crate::import::back(self),
             _ => false,
         }
     }
