@@ -13,8 +13,15 @@ data class GenerationParams(
     val experience: String = "intermediate",
     /** Flagged problem areas exclude movements with a matching known contraindication. */
     val problemAreas: Set<ProblemArea> = emptySet(),
-    /** Muscles to bias extra volume toward (granular emphasis, Phase 3). */
+    /**
+     * Muscles being specialized in: [BodyPartLevel.FOCUS]. (The old "priority muscles", which only
+     * added a set; a focused muscle is now also trained more often and first in its days.)
+     */
     val priorityMuscles: Set<MuscleGroup> = emptySet(),
+    /** Muscles left out of the plan entirely: [BodyPartLevel.SKIP]. */
+    val skipMuscles: Set<MuscleGroup> = emptySet(),
+    /** Muscles held at one light slot a week: [BodyPartLevel.LIGHT]. */
+    val lightMuscles: Set<MuscleGroup> = emptySet(),
     /** Library ids the user pinned — forced into a slot of their muscle when possible (Phase 3). */
     val pinned: Set<String> = emptySet(),
     /** Deload week — cuts volume for recovery (Phase 4 periodization). */
@@ -49,7 +56,10 @@ data class GenerationParams(
      * then whole accessory slots, never the day's heavy compound.
      */
     val sessionMinutes: Int? = null
-)
+) {
+    /** The three body-part sets as one value, the shape the split and the volume model read. */
+    val bodyParts: BodyParts get() = BodyParts(skip = skipMuscles, light = lightMuscles, focus = priorityMuscles - skipMuscles - lightMuscles)
+}
 
 data class GeneratedExercise(val libId: String, val sets: Int, val reps: String)
 
@@ -152,13 +162,15 @@ object ProgramGenerator {
      */
     fun effectiveVolumeBias(params: GenerationParams): Map<MuscleGroup, Int> {
         if (params.volumeBias.isEmpty()) return emptyMap()
-        val template = SplitTemplates.forDays(params.daysPerWeek)
-        val focus = VolumeModel.emphasisFocus(params.emphasis) + params.priorityMuscles
+        val parts = params.bodyParts
+        val template = SplitTemplates.forDays(params.daysPerWeek, parts)
+        val focus = VolumeModel.emphasisFocus(params.emphasis) + parts.focus
         val volumeFactor = GoalProfiles.volumeFactor(params.experience) * (if (params.deload) DELOAD_FACTOR else 1.0)
         val minSets = if (params.deload) 1 else VolumeModel.MIN_SETS
         fun totalsPerMuscle(bias: Map<MuscleGroup, Int>): Map<MuscleGroup, Int> {
             val sets = VolumeModel.allocate(
-                template, focus, volumeFactor, minSets, bias, params.goal, params.personalCaps, params.sessionMinutes
+                template, focus, volumeFactor, minSets, bias, params.goal, params.personalCaps, params.sessionMinutes,
+                light = parts.light, specialize = parts.focus
             )
             val out = HashMap<MuscleGroup, Int>()
             template.forEachIndexed { di, day ->
@@ -192,9 +204,11 @@ object ProgramGenerator {
         onlyDay: String? = null
     ): List<GeneratedDay> {
         val rng = Random(seed)
-        val template = SplitTemplates.forDays(params.daysPerWeek)
-        // Granular priority muscles + the coarse emphasis preset both feed extra volume.
-        val focus = VolumeModel.emphasisFocus(params.emphasis) + params.priorityMuscles
+        // The split, already reshaped around what is skipped, held light or focused.
+        val parts = params.bodyParts
+        val template = SplitTemplates.forDays(params.daysPerWeek, parts)
+        // Focused muscles + the coarse emphasis preset both feed extra volume.
+        val focus = VolumeModel.emphasisFocus(params.emphasis) + parts.focus
         val volumeFactor = GoalProfiles.volumeFactor(params.experience) * (if (params.deload) DELOAD_FACTOR else 1.0)
         // A deload lowers the per-slot floor to 1 so already-light slots actually drop (otherwise a
         // beginner's 2-set accessories would floor at 2 and the deload would be a no-op for them).
@@ -203,7 +217,9 @@ object ProgramGenerator {
             bias = params.volumeBias,
             goal = params.goal,
             personalCaps = params.personalCaps,
-            sessionMinutes = params.sessionMinutes
+            sessionMinutes = params.sessionMinutes,
+            light = parts.light,
+            specialize = parts.focus
         )
         val maxDifficulty = GoalProfiles.maxDifficulty(params.experience)
         val pool = ExerciseLibrary.availablePool(available, params.frozenIds)

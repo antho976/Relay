@@ -51,7 +51,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.health.HcExerciseTypes
@@ -618,7 +617,10 @@ private fun DurationField(value: String, onValueChange: (String) -> Unit, onNext
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
-            textStyle = CardioOpenType.sheetFigure.copy(color = ink, textAlign = TextAlign.End),
+            // No end alignment: a single-line field lays its text out on an unbounded line, and
+            // aligning to the end of that put the figure past the field's right edge. The field is
+            // exactly as wide as its figure (the sizing Text below), so start and end are the same place.
+            textStyle = CardioOpenType.sheetFigure.copy(color = ink),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
@@ -626,7 +628,15 @@ private fun DurationField(value: String, onValueChange: (String) -> Unit, onNext
             modifier = Modifier.width(IntrinsicSize.Min).widthIn(min = 20.dp).semantics { contentDescription = "Duration in minutes" },
             decorationBox = { inner ->
                 Box(contentAlignment = Alignment.CenterEnd) {
-                    if (value.isEmpty()) Text("0", style = CardioOpenType.sheetFigure, color = muted.copy(alpha = 0.6f))
+                    // This Text is what gives the field its width, so the field always hugs its
+                    // figure: a typed, picked or prefilled duration used to show as a blank beside
+                    // "min". Empty, it is the "0" placeholder; filled, it is the same figure drawn
+                    // clear, under the real one.
+                    Text(
+                        value.ifEmpty { "0" },
+                        style = CardioOpenType.sheetFigure,
+                        color = if (value.isEmpty()) muted.copy(alpha = 0.6f) else androidx.compose.ui.graphics.Color.Transparent
+                    )
                     inner()
                 }
             }

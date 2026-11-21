@@ -66,12 +66,6 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             workoutRepo.updateSet(set.copy(weightText = event.weightText, weightLb = lb, reps = event.reps))
             refreshExercise(exerciseUi.plan.id)
         }
-        is DayUiEvent.RateExercise -> viewModelScope.launch {
-            val leId = ensureLoggedExercise(event.exerciseId) ?: return@launch
-            workoutRepo.setRating(leId, event.rating)
-            refreshExercise(event.exerciseId)
-            updateRestForLatestEffort(event.exerciseId)
-        }
         is DayUiEvent.UpdateNote -> viewModelScope.launch {
             // The note also commits from NoteField's onDispose, which fires while the screen is
             // tearing down — the moment viewModelScope is about to be cancelled. Without

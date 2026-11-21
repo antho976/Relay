@@ -10,6 +10,19 @@ All notable changes to **Avex** are recorded here.
 ---
 
 ## What's new (user-facing)
+### Unreleased
+- **One week, three kinds of day.** With fixed weekdays the plan now lays cardio and rest days around your lifting days: one day always stays off, the one hard cardio session keeps a day clear of leg day, and cardio that does not fit a free day becomes a short easy finisher after an upper-body session. Home's answer for the day can be a cardio session with its length and effort, its button opens the cardio log already filled in, and the week row marks cardio days. Without fixed weekdays, the day after you lift is offered as cardio or rest. Set the weekly minutes, or switch it off, in Settings → Program → Cardio in your week.
+- **Body parts: Skip, Light, Normal or Focus.** Leave a muscle or a whole region out of the plan, hold it with one light slot a week, or focus on up to two muscles for six weeks. Skipping all of your legs or your upper body picks a different split instead of leaving half-empty days, a skip survives rotations, deloads and rebuilds, and it can carry an end date. The coach stops proposing work for anything skipped or held. Replaces the priority-muscle chips in Settings → Program.
+- **"Different day".** On a lifting day, Home can start a different day from your plan for today only.
+- **Hands-off coach mode.** A third mode in Settings → Coach, also asked once in onboarding: every weekly change applies itself and Monday's brief reports what changed, each with Undo. In a session the coach's weight is already in the field.
+- **Effort in one tap.** After the last set of a lift, "How many more could you have done?" with 0 to 4+. It replaces the four-way "How did it feel?" row. Anything left unrated is asked about on the finish summary, and a finished session's page can now add or change it. Settings → Session → Effort chooses last set, every set or never.
+- **A lift you have not done in three weeks or more starts about 10 percent lighter**, the way a session after a break already did.
+- **Six new Academy lessons** (18 in all): swapping one lift for another, when a lift stops moving, coming back after time off, lifting while you lose weight, skipping or bringing up a body part, and how your week fits together.
+- **New icons.** Gear, gym setups and goals are redrawn as one outline set with no repeats, and workout days on Home show a small body with the trained part lit.
+- **Onboarding's days step is compact**, so the week preview fits above the Continue button.
+- **Fixed: the cardio log's minutes were invisible once there was a number in them.** Typing, picking a chip or opening a prefilled log all showed a blank beside "min".
+- **Fixed: Settings → Program kept naming the old split** after a rebuild that changed the split without changing the day count.
+
 ### 0.9
 - **Wear OS companion.** Log sets from the watch, capture workout heart rate, and use Avex tiles and complications without an account or server.
 - **Academy and library.** Browse the rebuilt offline learning hub and read the complete lesson catalog without unlock gates.

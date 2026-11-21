@@ -109,7 +109,8 @@ internal fun LiftRow(
     style: SessionChartStyle,
     maxValue: Double,
     defaultOpen: Boolean,
-    onOpenLiftTrend: ((String) -> Unit)?
+    onOpenLiftTrend: ((String) -> Unit)?,
+    onRateSet: ((setId: Long, rpe: Double) -> Unit)? = null
 ) {
     val ink = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -154,7 +155,7 @@ internal fun LiftRow(
         }
         if (open) {
             Spacer(Modifier.height(8.dp))
-            LiftBody(ex, metric, style, onOpenLiftTrend)
+            LiftBody(ex, metric, style, onOpenLiftTrend, onRateSet)
             Spacer(Modifier.height(14.dp))
         }
     }
@@ -180,7 +181,8 @@ private fun LiftBody(
     ex: ExerciseDetail,
     metric: SessionMetric,
     style: SessionChartStyle,
-    onOpenLiftTrend: ((String) -> Unit)?
+    onOpenLiftTrend: ((String) -> Unit)?,
+    onRateSet: ((setId: Long, rpe: Double) -> Unit)? = null
 ) {
     val ink = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -203,6 +205,9 @@ private fun LiftBody(
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             ex.sets.forEach { SetLine(it, unit) }
         }
+        // Effort, addable after the fact. It goes on the last working set, the one the coach reads.
+        val effortSet = ex.sets.lastOrNull { it.isWorking && it.id > 0 }
+        if (onRateSet != null && effortSet != null) LateEffort(effortSet, onRateSet)
         val liftId = ex.exerciseId
         if (onOpenLiftTrend != null && liftId != null) {
             Spacer(Modifier.height(2.dp))
@@ -261,6 +266,40 @@ private fun SetChart(ex: ExerciseDetail, metric: SessionMetric, style: SessionCh
         modifier = Modifier.padding(horizontal = 12.dp),
         description = description
     )
+}
+
+/**
+ * The way to add or change a finished lift's effort: a quiet link that opens the same five reps-left
+ * keys the live session uses, about [set]. Folded by default so the page stays a record first.
+ */
+@Composable
+private fun LateEffort(set: SetDetail, onRateSet: (setId: Long, rpe: Double) -> Unit) {
+    var open by rememberSaveable(set.id) { mutableStateOf(false) }
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            Modifier
+                .touchSlop(vertical = 12.dp)
+                .clickableLabeled(if (set.rpe != null) "Change this lift's effort" else "Add this lift's effort") { open = !open }
+                .padding(vertical = 12.dp)
+                .heightIn(min = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OpenLabel(if (set.rpe != null) "Change effort" else "Add effort")
+            Icon(
+                if (open) OpenIcons.ChevronUp else OpenIcons.ChevronDown,
+                contentDescription = null, tint = muted, modifier = Modifier.size(14.dp)
+            )
+        }
+        if (open) {
+            com.forge.app.ui.gym.train.components.RepsLeftRow(
+                rpe = set.rpe,
+                onPick = { rpe -> onRateSet(set.id, rpe) },
+                label = "Set ${set.number}: how many more could you have done?"
+            )
+        }
+    }
 }
 
 /** One set: its number, "195 × 5" in serif, then its marks and RPE on the right. */

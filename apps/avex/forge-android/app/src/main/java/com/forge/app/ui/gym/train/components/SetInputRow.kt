@@ -97,8 +97,15 @@ internal fun nextSetSeedLb(
      * last session is from before the break, and opening on its weight put a tap of LOG SET on the
      * load the coach had just said to come in under. Never raises a lighter prior set.
      */
-    rampLb: Double? = null
+    rampLb: Double? = null,
+    /**
+     * The coach's target for this lift, when the coach is trusted to fill the field (hands-off
+     * mode). It replaces last session's weight on the first set, so logging the coach's number is
+     * one tap instead of a tap on the "try" line first. Today's own sets still lead after that.
+     */
+    coachLb: Double? = null
 ): Double? {
+    if (todayLast?.weightLb?.takeIf { !todayLast.isAssisted } == null && coachLb != null) return coachLb
     val todayLb = todayLast?.weightLb?.takeIf { !todayLast.isAssisted } ?: return firstSetSeed(priorForRow?.weightLb, rampLb)
     val rowLb = priorForRow?.weightLb
     val beforeLb = priorBefore?.weightLb
@@ -140,6 +147,8 @@ fun SetInputRow(
     fill: SetFill? = null,
     /** The eased target to open the first set on while easing back in (see [nextSetSeedLb]). */
     rampSeedLb: Double? = null,
+    /** The coach's target to open the first set on, in hands-off mode (see [nextSetSeedLb]). */
+    coachSeedLb: Double? = null,
     /** The day asks for less than last session (easing back in after a break, or a lighter
      *  target): last session's set is shown as "last", not as one to beat. */
     easingBack: Boolean = false,
@@ -183,11 +192,15 @@ fun SetInputRow(
     // last session moved between these two sets. Straight sets carry today's weight, a pyramid or
     // back-off keeps its shape, and a session that went up 2.5 on set one stays up on every set
     // instead of re-seeding last time's lighter number, which took a +2.5 tap per set.
-    val seedLb = nextSetSeedLb(todayLastSet, priorSetForActiveRow, priorSetBeforeActiveRow, rampSeedLb)
+    val seedLb = nextSetSeedLb(todayLastSet, priorSetForActiveRow, priorSetBeforeActiveRow, rampSeedLb, coachSeedLb)
     val seedWeight = seedLb?.let { lb -> if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, weightUnit) }
         ?: priorSetForActiveRow?.weightText
         ?: prefillWeight.orEmpty()
-    val seedReps = priorSetForActiveRow?.reps?.toString() ?: targetReps?.toString().orEmpty()
+    // A weight the coach moved asks for the plan's reps, not the count last session reached at the
+    // old weight; an unchanged weight keeps last session's reps as the mark to beat.
+    val coachMovedLoad = coachSeedLb != null && todayLastSet == null && priorSetForActiveRow?.weightLb != coachSeedLb
+    val seedReps = (if (coachMovedLoad) targetReps?.toString() else null)
+        ?: priorSetForActiveRow?.reps?.toString() ?: targetReps?.toString().orEmpty()
     // Re-seed only when the SET NUMBER changes (a new set), not when the derived seed value shifts —
     // keying on the volatile seed would wipe a half-typed entry if the prior baseline changed (#11).
     var weight by rememberSaveable(nextSetNumber, exerciseKey) { mutableStateOf(seedWeight) }
@@ -196,7 +209,7 @@ fun SetInputRow(
     // time's weight before its eased target arrived, and the field kept the pre-break number. An
     // untouched field (still holding the seed it was given) follows it; a typed one is left alone.
     var seededWeight by rememberSaveable(nextSetNumber, exerciseKey) { mutableStateOf(seedWeight) }
-    LaunchedEffect(rampSeedLb) {
+    LaunchedEffect(rampSeedLb, coachSeedLb) {
         if (weight == seededWeight) weight = seedWeight
         seededWeight = seedWeight
     }

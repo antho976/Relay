@@ -21,7 +21,8 @@ import com.forge.app.program.MuscleGroup
  *    nothing — the one cohort that most needs an answer still gets one;
  *  - **cold start** → below the data gates it teaches instead of prescribing (the Academy track),
  *    so the card degrades from personalised to principled, never to silence;
- *  - **cardio** stays a suggestion until Engine E-B can actually prescribe one.
+ *  - **cardio** is prescribed by the week plan ([withWeek]) on a fixed-weekday schedule; in sequence
+ *    mode the app cannot see the week ahead, so it answers day by day instead.
  */
 object TodayDirective {
 
@@ -32,7 +33,7 @@ object TodayDirective {
         /** Deliberate rest, with something better to do than nothing. */
         REST,
 
-        /** Move, but not in the gym. Suggestion-only until Engine E-B. */
+        /** Move, but not in the gym: a planned cardio day, or an easy walk when readiness is low. */
         CARDIO,
 
         /** No data yet: the curriculum carries the day. */
@@ -57,7 +58,21 @@ object TodayDirective {
         val soreMuscles: Set<MuscleGroup> = emptySet(),
         val lessonId: String? = null,
         /** True when the coach is answering without a program (freestyle) — the UI preps nothing. */
-        val freestyle: Boolean = false
+        val freestyle: Boolean = false,
+        /**
+         * The cardio the week plan asks for today: the day's session when [kind] is CARDIO, an easy
+         * finisher after the lifting when it is TRAIN. Null when none is planned.
+         */
+        val cardio: com.forge.app.domain.engine.ConditioningPlanner.Prescription? = null,
+        /**
+         * This REST is a day off from LIFTING only (an unscheduled weekday, the weekly budget met),
+         * so the week plan may put cardio on it. A rest for illness or low readiness is not.
+         */
+        val restFromLifting: Boolean = false,
+        /** An ordinary "train what's next" answer, the only kind sequence mode may trade for cardio. */
+        val routine: Boolean = false,
+        /** Today's lifting is finished: the day's planned finisher, if any, is what is left of it. */
+        val liftingDone: Boolean = false
     )
 
     /**
@@ -118,7 +133,8 @@ object TodayDirective {
                 kind = Kind.REST,
                 headline = "Done for today",
                 reason = "You've trained. Eat, sleep, and let it land.",
-                soreMuscles = life.soreMuscles
+                soreMuscles = life.soreMuscles,
+                liftingDone = true
             )
         }
 
@@ -185,7 +201,8 @@ object TodayDirective {
                 kind = Kind.REST,
                 headline = "Rest today",
                 reason = "You've hit $sessionsThisWeek sessions this week, which is what you set out to do.",
-                soreMuscles = life.soreMuscles
+                soreMuscles = life.soreMuscles,
+                restFromLifting = true
             )
         }
 
@@ -204,7 +221,8 @@ object TodayDirective {
                 },
                 secondary = upcoming?.let { "${dayName(it)} is next, ${inDays(s, upcomingInDays)}." },
                 soreMuscles = life.soreMuscles,
-                freestyle = freestyle
+                freestyle = freestyle,
+                restFromLifting = !freestyle
             )
         }
 
@@ -234,9 +252,112 @@ object TodayDirective {
             reason = reason,
             dayKey = nextUpDayKey,
             soreMuscles = life.soreMuscles,
-            freestyle = freestyle
+            freestyle = freestyle,
+            routine = true
         )
     }
+
+    /**
+     * What sequence mode knows about today, for [withWeek]'s day-by-day answer.
+     *
+     * @param liftedYesterday a session was finished yesterday.
+     * @param weekHasRoom there are more days left this week than lifting sessions still to do, so a
+     *   day off the bar costs the week nothing.
+     * @param cardio the easy session to offer if the week still owes cardio; null when it owes none.
+     * @param nextDayName the lifting day that is being put off, named in the rest copy.
+     */
+    data class DayByDay(
+        val liftedYesterday: Boolean,
+        val weekHasRoom: Boolean,
+        val cardio: com.forge.app.domain.engine.ConditioningPlanner.Prescription?,
+        val nextDayName: String?
+    )
+
+    /**
+     * Lay the week plan over the lifting answer, so the day is still ONE answer.
+     *
+     * On a fixed-weekday schedule the plan has already decided what today is: a day off from lifting
+     * becomes its cardio session when one is planned, and a lifting day picks up its easy finisher as
+     * the second line. In sequence mode there is no week to read, so [dayByDay] alternates instead:
+     * the day after a lift is cardio while the week owes any, else rest, as long as the week has room
+     * for it.
+     *
+     * Rest for illness, a low-readiness day, a comeback and the cold-start lesson all pass through
+     * untouched: the plan fills days off, it does not overrule a reason to rest.
+     *
+     * @param planned today's planned cardio from the layout, or null.
+     * @param plannedIsSession [planned] is the day's session rather than a finisher.
+     */
+    fun withWeek(
+        base: Directive,
+        planned: com.forge.app.domain.engine.ConditioningPlanner.Prescription?,
+        plannedIsSession: Boolean,
+        dayByDay: DayByDay? = null
+    ): Directive {
+        // A planned cardio day, on a day the lifting answer already gave back.
+        if (base.kind == Kind.REST && base.restFromLifting && planned != null && plannedIsSession) {
+            return cardioDay(base, planned)
+        }
+        // The lifting is done and the day's finisher is not: the finisher is what today has left.
+        if (base.liftingDone && planned != null && !plannedIsSession) {
+            return cardioDay(base, planned)
+        }
+        // A lifting day with a finisher after it.
+        if (base.kind == Kind.TRAIN && planned != null && !plannedIsSession) {
+            return base.copy(
+                cardio = planned,
+                secondary = base.secondary ?: "Then ${planned.minutes} min easy cardio."
+            )
+        }
+        if (dayByDay == null) return base
+        // Sequence mode. The weekly budget being met is a day off like any other.
+        if (base.kind == Kind.REST && base.restFromLifting && dayByDay.cardio != null) {
+            return cardioDay(base, dayByDay.cardio)
+        }
+        if (base.kind == Kind.TRAIN && base.routine && !base.freestyle && dayByDay.liftedYesterday && dayByDay.weekHasRoom) {
+            dayByDay.cardio?.let { return cardioDay(base, it) }
+            return Directive(
+                kind = Kind.REST,
+                headline = "Rest today",
+                reason = "You lifted yesterday and the week has room for a day off.",
+                secondary = dayByDay.nextDayName?.let { "$it is next." },
+                soreMuscles = base.soreMuscles,
+                restFromLifting = true
+            )
+        }
+        return base
+    }
+
+    /** [base]'s day, answered with the cardio session [p]. */
+    private fun cardioDay(
+        base: Directive,
+        p: com.forge.app.domain.engine.ConditioningPlanner.Prescription
+    ): Directive = Directive(
+        kind = Kind.CARDIO,
+        headline = cardioHeadline(p),
+        reason = p.reason,
+        secondary = cardioDetail(p),
+        soreMuscles = base.soreMuscles,
+        lessonId = p.lessonId,
+        cardio = p
+    )
+
+    /** "35 min easy", or "Intervals" for the week's hard session. */
+    fun cardioHeadline(p: com.forge.app.domain.engine.ConditioningPlanner.Prescription): String =
+        if (p.structure == com.forge.app.domain.engine.ConditioningPlanner.Structure.INTERVALS) "Intervals"
+        else "${p.minutes} min ${p.effortWord}"
+
+    /**
+     * The line under a cardio headline: how hard, in the unit the athlete has. A bpm band when
+     * zones are known, a plain cue when they are not, and the full recipe for intervals.
+     */
+    fun cardioDetail(p: com.forge.app.domain.engine.ConditioningPlanner.Prescription): String =
+        if (p.structure == com.forge.app.domain.engine.ConditioningPlanner.Structure.INTERVALS) {
+            "${p.intervals} x 1 min hard, 1 min easy between · ${p.warmUpMinutes} min warm-up · ${p.coolDownMinutes} min cool-down"
+        } else {
+            p.zoneBand?.let { "Zone ${p.zone} · ${it.first} to ${it.last} bpm" }
+                ?: "A pace you could hold a conversation at"
+        }
 
     /** "tomorrow", or "on Thursday": the calendar day [daysAhead] days from the snapshot's today. */
     private fun inDays(s: AdaptationSnapshot, daysAhead: Int): String {

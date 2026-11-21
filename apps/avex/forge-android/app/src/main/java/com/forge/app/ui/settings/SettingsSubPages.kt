@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
+import com.forge.app.domain.adapt.EffortPromptMode
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.touchSlop
 import androidx.compose.foundation.layout.FlowRow
@@ -224,6 +225,23 @@ internal fun SessionPage(state: SettingsUiState, vm: SettingsViewModel, onBack: 
                 state.keepScreenOn,
                 onCheckedChange = vm::setKeepScreenOn
             )
+        }
+
+        SettingsGroup(
+            "Effort",
+            footer = "One tap on how many more reps you had. The coach reads the hardest set of each lift, so the last one is enough.",
+            rowGap = KitPickGap
+        ) {
+            val mode = state.effortPrompt
+            SettingsRadioRow("After the last set", mode == EffortPromptMode.LAST_SET, "Once per lift") {
+                vm.setEffortPrompt(EffortPromptMode.LAST_SET)
+            }
+            SettingsRadioRow("After every set", mode == EffortPromptMode.EVERY_SET) {
+                vm.setEffortPrompt(EffortPromptMode.EVERY_SET)
+            }
+            SettingsRadioRow("Never ask", mode == EffortPromptMode.OFF, "You can still rate a set from its RPE box") {
+                vm.setEffortPrompt(EffortPromptMode.OFF)
+            }
         }
 
         val pace by vm.restPace.collectAsStateWithLifecycle()

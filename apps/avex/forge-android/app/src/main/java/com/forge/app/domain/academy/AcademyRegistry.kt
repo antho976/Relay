@@ -13,14 +13,21 @@ import com.forge.app.data.db.entities.LessonEvent
  *    `lesson_event` ledger, the same idempotent pattern as `CoachGenBias.from(decisions)`, so
  *    read state can't drift or double-count.
  *
- * Since 2026-09-26 the Academy ships 12 lessons in three chapters, cut down from 35 pieces. The
- * retired ids live on in [aliases], because the ledger and the coach's reasons still carry them.
+ * On 2026-09-26 the Academy was cut from 35 pieces to 12 lessons in three chapters. The retired ids
+ * live on in [aliases], because the ledger and the coach's reasons still carry them. Six more were
+ * added on 2026-11-18 ([AcademyPractice], and the week lesson in Cardio), for 18.
+ *
+ * A lesson's moment no longer decides whether it can be READ: since 2026-08-16 every lesson is open
+ * from install, and a fired moment only marks it as relevant right now (see `AcademyViewModel`).
  */
 object AcademyRegistry {
 
-    /** Every lesson that currently ships, in page order: Training, then Your coach, then Cardio. */
+    /**
+     * Every lesson that currently ships, in page order: Training (the seven that are read in order,
+     * then the five that stand alone), then Your coach, then Cardio.
+     */
     val lessons: List<Lesson> =
-        AcademyTraining.ordered + AcademyCoachLessons.ordered + AcademyCardio.ordered
+        AcademyTraining.ordered + AcademyPractice.ordered + AcademyCoachLessons.ordered + AcademyCardio.ordered
 
     /**
      * Retired ids and the lesson that absorbed each one (2026-09-26, 35 pieces cut to 12).
@@ -160,6 +167,12 @@ object AcademyRegistry {
         AcademyCoachLessons.blocks.id -> UNLOCK_BLOCK_STARTED
         AcademyCardio.zone2.id -> UNLOCK_CARDIO_PRESCRIPTION
         AcademyCardio.intervals.id -> UNLOCK_INTERVAL_PRESCRIPTION
+        AcademyCardio.yourWeek.id -> UNLOCK_WEEK_LAID_OUT
+        AcademyPractice.swaps.id -> UNLOCK_LIFT_SWAPPED
+        AcademyPractice.plateaus.id -> UNLOCK_LIFT_STALLED
+        AcademyPractice.comingBack.id -> UNLOCK_BACK_FROM_BREAK
+        AcademyPractice.losingWeight.id -> UNLOCK_WEIGHT_FALLING
+        AcademyPractice.bodyParts.id -> UNLOCK_BODY_PART_SET
         else -> null
     }
 
@@ -184,4 +197,13 @@ object AcademyRegistry {
     /** Engine moments (E-A → E-D). */
     const val UNLOCK_CARDIO_PRESCRIPTION = "engine.first_prescription"
     const val UNLOCK_INTERVAL_PRESCRIPTION = "engine.interval_prescription"
+    /** The week plan first lays cardio and rest days around the lifting days. */
+    const val UNLOCK_WEEK_LAID_OUT = "engine.week_laid_out"
+
+    /** Moments for the stand-alone Training lessons ([AcademyPractice]). */
+    const val UNLOCK_LIFT_SWAPPED = "app.lift_swapped"
+    const val UNLOCK_LIFT_STALLED = "coach.lift_stalled"
+    const val UNLOCK_BACK_FROM_BREAK = "coach.back_from_break"
+    const val UNLOCK_WEIGHT_FALLING = "coach.weight_falling"
+    const val UNLOCK_BODY_PART_SET = "app.body_part_level_set"
 }

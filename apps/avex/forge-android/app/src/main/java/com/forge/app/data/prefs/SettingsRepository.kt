@@ -262,10 +262,13 @@ class SettingsRepository @Inject constructor(
                 ?.let { stored -> com.forge.app.domain.schedule.WeeklySchedule.parse(stored) }
                 ?: com.forge.app.domain.schedule.WeeklySchedule.defaultFor(com.forge.app.program.Program.dayKeys)
         val cardioWeeklyTargetMin: Int get() = prefs[PreferenceKeys.CARDIO_WEEKLY_TARGET_MIN] ?: 0
+        val cardioInPlan: Boolean get() = prefs[PreferenceKeys.CARDIO_IN_PLAN] ?: true
         val plateWeightLb: Double get() = prefs[PreferenceKeys.PLATE_WEIGHT_LB] ?: 15.0
         val maxDbWeightLb: Double? get() = prefs[PreferenceKeys.MAX_DB_WEIGHT_LB]?.takeIf { it > 0.0 }
         val coachMode: String get() = prefs[PreferenceKeys.COACH_MODE] ?: "suggest"
         val coachAdvanced: Boolean get() = prefs[PreferenceKeys.COACH_ADVANCED] ?: false
+        val effortPrompt: com.forge.app.domain.adapt.EffortPromptMode get() =
+            com.forge.app.domain.adapt.EffortPromptMode.fromCode(prefs[PreferenceKeys.EFFORT_PROMPT])
         val privacyMode: Boolean get() = protection(prefs, PreferenceKeys.PRIVACY_MODE) { p -> p.privacyMode }
         val appLockEnabled: Boolean get() =
             protection(prefs, PreferenceKeys.APP_LOCK_ENABLED) { p -> p.appLockEnabled }
@@ -279,6 +282,10 @@ class SettingsRepository @Inject constructor(
         val programExperience: String get() = prefs[PreferenceKeys.PROGRAM_EXPERIENCE] ?: "intermediate"
         val problemAreas: Set<String> get() = prefs[PreferenceKeys.PROBLEM_AREAS] ?: emptySet()
         val priorityMuscles: Set<String> get() = prefs[PreferenceKeys.PRIORITY_MUSCLES] ?: emptySet()
+        val skipMuscles: Set<String> get() = prefs[PreferenceKeys.MUSCLE_SKIP] ?: emptySet()
+        val lightMuscles: Set<String> get() = prefs[PreferenceKeys.MUSCLE_LIGHT] ?: emptySet()
+        val bodyPartsUntilEpochDay: Long? get() = prefs[PreferenceKeys.BODY_PARTS_UNTIL]?.takeIf { it > 0 }
+        val focusUntilEpochDay: Long? get() = prefs[PreferenceKeys.FOCUS_UNTIL]?.takeIf { it > 0 }
         val pinnedExercises: Set<String> get() = prefs[PreferenceKeys.PINNED_EXERCISES] ?: emptySet()
     }
 
@@ -1074,6 +1081,11 @@ class SettingsRepository @Inject constructor(
     suspend fun setCardioWeeklyTargetMin(min: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.CARDIO_WEEKLY_TARGET_MIN] = min.coerceAtLeast(0) }
 
+    /** Whether the week plan lays cardio around the lifting days (on unless switched off). */
+    val cardioInPlan: Flow<Boolean> = pref { values(it).cardioInPlan }
+    suspend fun setCardioInPlan(v: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.CARDIO_IN_PLAN] = v }
+
     /** Whether the user has dismissed the "connect a watch/ring" hint for good (cardio screen). */
     val cardioWearableHintDismissed: Flow<Boolean> = pref { it[PreferenceKeys.CARDIO_WEARABLE_HINT_DISMISSED] ?: false }
     /** [dismissed] is settable both ways so clearing the invite from the notifications feed stays
@@ -1162,6 +1174,11 @@ class SettingsRepository @Inject constructor(
     val coachMode: Flow<String> = pref { values(it).coachMode }
     suspend fun setCoachMode(mode: String) =
         context.forgePreferences.edit { it[PreferenceKeys.COACH_MODE] = mode }
+
+    /** When the live session asks how hard a set was (the one-tap reps-left row). */
+    val effortPrompt: Flow<com.forge.app.domain.adapt.EffortPromptMode> = pref { values(it).effortPrompt }
+    suspend fun setEffortPrompt(mode: com.forge.app.domain.adapt.EffortPromptMode) =
+        context.forgePreferences.edit { it[PreferenceKeys.EFFORT_PROMPT] = mode.code }
 
     /**
      * Advanced tracking on the Coach page. Off (default) the page is the account alone: this
@@ -1415,19 +1432,93 @@ class SettingsRepository @Inject constructor(
             prefs[PreferenceKeys.PROBLEM_AREAS] = if (on) cur + code else cur - code
         }
 
-    /** Priority muscle codes — granular emphasis (extra volume). */
-    val priorityMuscles: Flow<Set<String>> = pref { values(it).priorityMuscles }
-    suspend fun togglePriorityMuscle(code: String) =
-        context.forgePreferences.edit { prefs ->
-            val cur = prefs[PreferenceKeys.PRIORITY_MUSCLES] ?: emptySet()
-            prefs[PreferenceKeys.PRIORITY_MUSCLES] = if (code in cur) cur - code else cur + code
-        }
-    suspend fun togglePriorityMuscle(code: String, on: Boolean) =
-        context.forgePreferences.edit { prefs ->
-            val cur = prefs[PreferenceKeys.PRIORITY_MUSCLES] ?: emptySet()
-            prefs[PreferenceKeys.PRIORITY_MUSCLES] = if (on) cur + code else cur - code
-        }
+    // ─── Body parts: Skip / Light / Normal / Focus per muscle ─────────────────
+    /** Muscle codes left out of the plan. */
+    val skipMuscles: Flow<Set<String>> = pref { values(it).skipMuscles }
+    /** Muscle codes held at one light slot a week. */
+    val lightMuscles: Flow<Set<String>> = pref { values(it).lightMuscles }
+    /** The day the skips and lights end, or null for "until I change it". */
+    val bodyPartsUntilEpochDay: Flow<Long?> = pref { values(it).bodyPartsUntilEpochDay }
+    /** The day the current focus ends, or null with nothing focused. */
+    val focusUntilEpochDay: Flow<Long?> = pref { values(it).focusUntilEpochDay }
 
+    /**
+     * Set one muscle's level. One edit, so the three sets can never disagree about a muscle.
+     *
+     * A focus is capped at [com.forge.app.program.BodyParts.MAX_FOCUS] muscles: a third is refused
+     * (false) rather than quietly dropping one of the two. The first focus starts its clock, six
+     * weeks from [todayEpochDay]; clearing the last one stops it. With nothing skipped or held any
+     * more, their end date goes too.
+     */
+    suspend fun setBodyPartLevel(
+        code: String,
+        level: com.forge.app.program.BodyPartLevel,
+        todayEpochDay: Long
+    ): Boolean {
+        var accepted = true
+        context.forgePreferences.edit { prefs ->
+            val skip = prefs[PreferenceKeys.MUSCLE_SKIP] ?: emptySet()
+            val light = prefs[PreferenceKeys.MUSCLE_LIGHT] ?: emptySet()
+            val focus = prefs[PreferenceKeys.PRIORITY_MUSCLES] ?: emptySet()
+            if (level == com.forge.app.program.BodyPartLevel.FOCUS && code !in focus &&
+                focus.size >= com.forge.app.program.BodyParts.MAX_FOCUS
+            ) {
+                accepted = false
+                return@edit
+            }
+            val newSkip = if (level == com.forge.app.program.BodyPartLevel.SKIP) skip + code else skip - code
+            val newLight = if (level == com.forge.app.program.BodyPartLevel.LIGHT) light + code else light - code
+            val newFocus = if (level == com.forge.app.program.BodyPartLevel.FOCUS) focus + code else focus - code
+            prefs[PreferenceKeys.MUSCLE_SKIP] = newSkip
+            prefs[PreferenceKeys.MUSCLE_LIGHT] = newLight
+            prefs[PreferenceKeys.PRIORITY_MUSCLES] = newFocus
+            if (newSkip.isEmpty() && newLight.isEmpty()) prefs.remove(PreferenceKeys.BODY_PARTS_UNTIL)
+            when {
+                newFocus.isEmpty() -> prefs.remove(PreferenceKeys.FOCUS_UNTIL)
+                focus.isEmpty() || (prefs[PreferenceKeys.FOCUS_UNTIL] ?: 0L) <= todayEpochDay ->
+                    prefs[PreferenceKeys.FOCUS_UNTIL] = todayEpochDay + com.forge.app.program.BodyParts.FOCUS_WEEKS * 7L
+            }
+        }
+        return accepted
+    }
+
+    /** Set several muscles to one level at once: the "No legs" and "No upper body" shortcuts. */
+    suspend fun setBodyPartLevels(codes: Collection<String>, level: com.forge.app.program.BodyPartLevel, todayEpochDay: Long) {
+        codes.forEach { setBodyPartLevel(it, level, todayEpochDay) }
+    }
+
+    /** When the skips and lights end: a day, or null for "until I change it". */
+    suspend fun setBodyPartsUntil(epochDay: Long?) = context.forgePreferences.edit { prefs ->
+        if (epochDay == null || epochDay <= 0) prefs.remove(PreferenceKeys.BODY_PARTS_UNTIL)
+        else prefs[PreferenceKeys.BODY_PARTS_UNTIL] = epochDay
+    }
+
+    /**
+     * Drop what has run its course by [todayEpochDay]: the skips and lights once their end date is
+     * reached, the focus once its six weeks are up. Answers whether anything was dropped.
+     */
+    suspend fun endTimedBodyParts(todayEpochDay: Long): Boolean {
+        var ended = false
+        context.forgePreferences.edit { prefs ->
+            val restUntil = prefs[PreferenceKeys.BODY_PARTS_UNTIL] ?: 0L
+            if (restUntil in 1..todayEpochDay) {
+                prefs.remove(PreferenceKeys.MUSCLE_SKIP)
+                prefs.remove(PreferenceKeys.MUSCLE_LIGHT)
+                prefs.remove(PreferenceKeys.BODY_PARTS_UNTIL)
+                ended = true
+            }
+            val focusUntil = prefs[PreferenceKeys.FOCUS_UNTIL] ?: 0L
+            if (focusUntil in 1..todayEpochDay) {
+                prefs.remove(PreferenceKeys.PRIORITY_MUSCLES)
+                prefs.remove(PreferenceKeys.FOCUS_UNTIL)
+                ended = true
+            }
+        }
+        return ended
+    }
+
+    /** Focused muscle codes (stored under their old "priority" name). */
+    val priorityMuscles: Flow<Set<String>> = pref { values(it).priorityMuscles }
     /** Pinned exercise ids — kept across regenerations when their muscle is trained. */
     val pinnedExercises: Flow<Set<String>> = pref { values(it).pinnedExercises }
     suspend fun togglePinned(libId: String, on: Boolean) =

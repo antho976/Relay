@@ -245,8 +245,10 @@ private fun DayViewModel.finishWorkout(untouchedConfirmed: Boolean = false) {
                 )
             },
             setsByMuscle = setsByMuscle,
-            setsWithRpe = allSets.count { it.rpe != null },
-            exercisesRated = worked.count { it.difficulty != null },
+            unrated = worked.mapNotNull { ex ->
+                com.forge.app.domain.adapt.EffortPrompt.unratedSet(ex.loggedSets, ex.difficulty)
+                    ?.let { com.forge.app.ui.gym.train.state.UnratedLift(ex.effectiveName, it.id) }
+            },
             coachOpinion = com.forge.app.domain.coach.SessionOpinion.of(
                 setCount = allSets.size,
                 prCount = prCount,

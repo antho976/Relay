@@ -77,6 +77,19 @@ class SessionDetailViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Rate a set of this finished session: the effort that was forgotten on the day, or one worth
+     * correcting. The page is re-read so its Effort readings and chart follow at once.
+     */
+    fun rateSet(setId: Long, rpe: Double) {
+        if (sessionId < 0 || setId <= 0) return
+        viewModelScope.launch {
+            workoutRepo.setRpe(setId, rpe)
+            val data = statsRepo.getSessionDetail(sessionId)
+            _state.update { it.copy(data = data) }
+        }
+    }
+
     /** In-flight export so a double-tap doesn't launch two concurrent writers of the same file. */
     private var exportJob: Job? = null
 
