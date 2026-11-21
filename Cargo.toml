@@ -61,7 +61,7 @@ tree-sitter-svelte = { package = "tree-sitter-svelte-next", version = "0.1" }
 tree-sitter-kotlin = { package = "tree-sitter-kotlin-ng", version = "1.1" }
 notify = "8"
 regex = "1"
-similar = "2"
+similar = "3"
 
 # `run.sh` launches `target/debug`, so the dev profile is the one the application actually runs
 # in. Unoptimized dependencies are what that costs: SQLite, base64, serde, regex, tree-sitter and
