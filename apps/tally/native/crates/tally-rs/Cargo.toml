@@ -15,9 +15,9 @@ name = "tally"
 path = "src/main.rs"
 
 [dependencies]
-# The money rules and the SQLite ledger, shared with the Relay engine (antho976/RelayV4), pinned by
-# Cargo.lock. `cargo update -p relay-money` takes the engine's latest rules.
-relay-money = { git = "https://github.com/antho976/RelayV4", branch = "main" }
+# The money rules and the SQLite ledger, shared with the Relay engine: the crate in this same
+# repository, so a change to the rules builds and tests both apps in one piece of work.
+relay-money = { path = "../../../../../crates/relay-money" }
 jiff = "0.2"
 # The same SQLite relay-money links (one copy of libsqlite3 per binary): Tally RS writes the rows
 # relay-money has no calls for yet (bills, goals, categories) through a second connection. Every

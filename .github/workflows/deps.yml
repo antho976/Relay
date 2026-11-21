@@ -7,17 +7,22 @@ name: Dependencies
 # the weekly run is where it goes red and gets noticed. Sources (crates.io only, no git) are
 # enforced everywhere, since only a change here can break them.
 
-# Avex (apps/avex) is Gradle, not the locked Cargo tree; a change only there runs nothing here.
+# Avex (apps/avex) is Gradle, and Tally (apps/tally/native) is its own Cargo workspace with its own
+# Cargo.lock, not the locked tree here; a change only there runs nothing here.
 on:
   push:
     branches: [main]
     paths-ignore:
       - "apps/avex/**"
       - ".github/workflows/avex*.yml"
+      - "apps/tally/**"
+      - ".github/workflows/tally.yml"
   pull_request:
     paths-ignore:
       - "apps/avex/**"
       - ".github/workflows/avex*.yml"
+      - "apps/tally/**"
+      - ".github/workflows/tally.yml"
   schedule:
     - cron: "17 6 * * 1"
   workflow_dispatch:

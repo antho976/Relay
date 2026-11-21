@@ -1,9 +1,9 @@
-//! Tally's money rules, for the engine.
+//! Tally's money rules, for the engine and for Tally RS (`apps/tally`).
 //!
-//! A port of `core/` in Tally's repository (antho976/Tally, Kotlin), module for module, held to the
-//! same tests: the phone and the PC each keep a full copy of the ledger, so both must read the same
-//! rows to the same numbers. When a rule changes in one, it changes in the other in the same piece
-//! of work: a PR in each repository, cross-linked, tests included.
+//! Ported from the Kotlin Tally's `core/` (antho976/Tally, now `apps/tally`'s history), module for
+//! module, with its tests. The phone and the PC each keep a full copy of the ledger and both run
+//! this crate, so they read the same rows to the same numbers; a change here is tested on Tally's
+//! side too (`cd apps/tally/native && cargo test`).
 //!
 //! Money is an `i64` of MINOR units (cents for CAD) everywhere. Floating point never touches an
 //! amount. Dates are [`jiff::civil::Date`].

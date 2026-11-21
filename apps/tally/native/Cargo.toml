@@ -1,4 +1,4 @@
-# Tally RS: Tally in Rust, drawn with wgpu. The rules and the ledger are RelayV4's relay-money
+# Tally RS: Tally in Rust, drawn with wgpu. The rules and the ledger are relay-money (crates/ at the root)
 # (the Rust port of core/, held to the same tests); this workspace is the app around them.
 [workspace]
 resolver = "2"

@@ -2,18 +2,18 @@
 
 Tally in Rust, drawn with wgpu (asked for 2026-11-19: the owner writes their apps in Rust now).
 It installs as **Tally RS** (`com.quietsoftware.tally.rs`, violet icon). The Kotlin app it was ported
-from left the repo after `cf4b63b` (2026-11-20); read it there with `git show cf4b63b:app/...`.
+from left the repo after `c8aa08f` (2026-11-20); read it there with `git show c8aa08f:apps/tally/app/...`.
 
 ## What it is made of
 
 | Piece | What |
 |---|---|
-| `relay-money` (git dependency on antho976/RelayV4) | The money rules and the SQLite ledger: the Rust port of `core/`, held to the same tests, which Relay's engine already runs. Tally RS adds no money rules of its own. |
+| `relay-money` (path dependency on this repository's `crates/relay-money`) | The money rules and the SQLite ledger: the Rust port of `core/`, held to the same tests, which Relay's engine already runs. Tally RS adds no money rules of its own. |
 | `crates/tally-rs/src/gfx.rs`, `shader.wgsl` | One wgpu pipeline: every shape is an instance of one quad with a signed-distance edge (Feel the Beat's renderer, plus clip regions). |
 | `draw.rs` | The canvas: boxes, soft shadows, arcs, text (fontdue, Geist and Sora), icons (zeno), pictures. Units are 1/390 of the phone's width, like the design canvas. |
 | `kit.rs`, `theme.rs`, `pictures.rs` | The premium look (DESIGN.md): Light and Dark palettes, cards, picture cards, rows, badges, meters, keys, carousels, and the pictures. |
 | `overview.rs`, `entry.rs` | The screens ported so far. |
-| `glyphs.rs`, `category_icons.rs` | Generated: Relay's glyphs from the Kotlin `Glyphs.kt`/`Icon.kt` at `cf4b63b` (`tools/gen_glyphs.py`), and the category icons as the Kotlin app draws them, Material Rounded from Google's Apache-2.0 SVGs (`tools/gen_category_icons.py`). |
+| `glyphs.rs`, `category_icons.rs` | Generated: Relay's glyphs from the Kotlin `Glyphs.kt`/`Icon.kt` at `c8aa08f` (`tools/gen_glyphs.py`), and the category icons as the Kotlin app draws them, Material Rounded from Google's Apache-2.0 SVGs (`tools/gen_category_icons.py`). |
 | `desktop.rs` | A phone-shaped window (winit) and `--shot` screenshots with no window. |
 | `android.rs`, `android/` | GameActivity (the AndroidX activity that gives a native app the soft keyboard) and a Gradle module that only packs `libtally.so` with it. No Kotlin or Java of our own. |
 

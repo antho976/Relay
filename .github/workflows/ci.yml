@@ -4,17 +4,22 @@ name: CI
 # client in an Arch Linux container. The phone app has its own workflow, relay-android.yml, which
 # runs only when it changes; relay-server-image.yml calls this one before it publishes.
 
-# Avex (apps/avex) has its own workflow, avex.yml; a change only there runs nothing here.
+# Avex (apps/avex) and Tally (apps/tally) have their own workflows, avex.yml and tally.yml; a change
+# only there runs nothing here. tally.yml also runs for crates/relay-money, which Tally builds on.
 on:
   push:
     branches: [main]
     paths-ignore:
       - "apps/avex/**"
       - ".github/workflows/avex*.yml"
+      - "apps/tally/**"
+      - ".github/workflows/tally.yml"
   pull_request:
     paths-ignore:
       - "apps/avex/**"
       - ".github/workflows/avex*.yml"
+      - "apps/tally/**"
+      - ".github/workflows/tally.yml"
   workflow_call:
 
 # A newer push to a pull request supersedes its running check; a push to main does not, so

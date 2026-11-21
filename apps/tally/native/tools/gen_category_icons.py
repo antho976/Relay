@@ -9,11 +9,12 @@ folder given as the first argument:
 import re, sys, pathlib
 root = pathlib.Path(__file__).resolve().parents[2]
 svgs = pathlib.Path(sys.argv[1])
-# The Kotlin app left the repo after cf4b63b; its sources are read from that commit.
-KOTLIN_REV = "cf4b63b52b9f742095cb05d884fe2e4d1510b7c6"
+# The Kotlin app left the repo after c8aa08f (antho976/Tally's cf4b63b, before Tally moved into
+# apps/tally); its sources are read from that commit, relative to apps/tally ("./").
+KOTLIN_REV = "c8aa08f1f67b366c7c15a8b52252abb0353317a6"
 def kotlin(path):
     import subprocess
-    return subprocess.run(["git", "-C", str(root), "show", f"{KOTLIN_REV}:{path}"], check=True, capture_output=True, text=True).stdout
+    return subprocess.run(["git", "-C", str(root), "show", f"{KOTLIN_REV}:./{path}"], check=True, capture_output=True, text=True).stdout
 src = kotlin("app/src/main/java/com/tally/app/ui/common/Icons.kt")
 pairs = re.findall(r'"([a-z0-9_-]+)" to Icons\.(?:AutoMirrored\.)?Rounded\.([A-Za-z0-9]+)', src)
 def snake(name):

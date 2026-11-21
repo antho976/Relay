@@ -1,6 +1,14 @@
-name: CI
+name: Tally
 
-# Everything that must be true before Tally RS is installable. Cheapest first, each gating the next:
+# Everything that must be true before Tally RS is installable.
+#
+# Tally lives in apps/tally/ (it moved from antho976/Tally on 2026-11-20). This workflow runs for
+# changes there and for changes to crates/relay-money, the money rules and ledger Tally RS is built
+# on (a path dependency, so a rule changed for the engine is tested here in the same pull request).
+# Every `run:` step works from apps/tally or apps/tally/native (defaults below); paths given to
+# actions start at the repository root and carry the apps/tally/ prefix.
+#
+# Cheapest first, each gating the next:
 #
 #   guard     ~30s  Wrapper checksum, no signing material, no build output in the tree.
 #   test      ~8m   The app's rules on the host: cargo test (money, plan, sync against a fake
@@ -9,9 +17,17 @@ name: CI
 
 on:
   push:
-    paths-ignore:
-      - "**.md"
+    branches: [main]
+    paths:
+      - "apps/tally/**"
+      - "!apps/tally/**.md"
+      - "crates/relay-money/**"
+      - ".github/workflows/tally.yml"
   pull_request:
+    paths:
+      - "apps/tally/**"
+      - "crates/relay-money/**"
+      - ".github/workflows/tally.yml"
   workflow_dispatch:
 
 permissions:
@@ -29,6 +45,10 @@ jobs:
     name: Guard
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        # git ls-files from here lists only Tally's files, so the checks below stay Tally's.
+        working-directory: apps/tally
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -58,14 +78,14 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: native
+        working-directory: apps/tally/native
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Rust
         run: rustup toolchain install stable --profile minimal -c clippy && rustup default stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          workspaces: native
+          workspaces: apps/tally/native
       - name: Tests
         run: cargo test --locked
       - name: Clippy
@@ -78,14 +98,14 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: native
+        working-directory: apps/tally/native
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Rust
         run: rustup toolchain install stable --profile minimal -t aarch64-linux-android && rustup default stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          workspaces: native
+          workspaces: apps/tally/native
           key: android
       - name: Check
         run: |

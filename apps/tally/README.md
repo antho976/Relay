@@ -4,10 +4,12 @@ The budget and spending tracker for Android, in Relay's look, synced with nothin
 You log what you spend in two seconds, and the app answers one question at all times: how much
 room is left this month, and is the month on pace.
 
-Tally is **Tally RS**: Rust, drawn with wgpu, over antho976/RelayV4's `relay-money` (the money
-rules and the SQLite ledger). Everything lives in [`native/`](native/README.md): how it is made,
+Tally is **Tally RS**: Rust, drawn with wgpu, over Relay's `relay-money` (the money rules and the
+SQLite ledger, `crates/relay-money` in this repository). Tally lives in `apps/tally` since
+2026-11-20; it was antho976/Tally, and old pull request numbers in its history read
+`antho976/Tally#N`. Everything lives in [`native/`](native/README.md): how it is made,
 how to build it, and where the port stands. The Kotlin app (Jetpack Compose, Room, Hilt) it was
-ported from left the repo after `cf4b63b`; read it there with `git show cf4b63b:app/...`.
+ported from left the repo after `c8aa08f`; read it there with `git show c8aa08f:apps/tally/app/...`.
 
 ## Sync, with nothing to do
 
@@ -37,10 +39,12 @@ cd .. && ./gradlew :rs:assembleDebug
 
 ## CI
 
-`.github/workflows/ci.yml`: guard (wrapper checksum, no signing material, no build output), then
+`.github/workflows/tally.yml` at the repository root, for changes under `apps/tally/` or
+`crates/relay-money/`: guard (wrapper checksum, no signing material, no build output), then
 `cargo test` and clippy on the host, and an arm64 type-check of the Android library.
 
 ## Money rules
 
-They live in RelayV4's `crates/relay-money`, shared with the Relay engine. Tally RS adds no money
+They live in `crates/relay-money` (a path dependency), shared with the Relay engine, so a rule
+changed there is tested here in the same pull request. Tally RS adds no money
 rules of its own; writes relay-money has no call for yet go through `native/crates/tally-rs/src/*_store.rs`.
