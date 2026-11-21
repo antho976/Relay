@@ -9,7 +9,8 @@ Decided with Antho on 2026-10-07:
 
 - **Two apps, two repositories.** Tally stays its own Android app in antho976/Tally (Kotlin,
   Compose, Room). `apps/relay-android` is the phone's remote for the PC, in this one. Folding them
-  into one phone app is a later idea, not this plan.
+  into one phone app is a later idea, not this plan. *(Since 2026-11-20 Tally is Tally RS, in Rust
+  on `relay-money`, and lives in this repository as `apps/tally`; still its own app.)*
 - **Both devices hold the whole ledger and work as one.** The phone is where nearly everything is
   logged; the PC is used rarely but must never be read-only. Either can add or change anything
   offline, and they catch each other up when they reach each other.
@@ -50,8 +51,9 @@ The first sync makes the PC's ledger the phone's; after that both sides merge.
 
 ## Steps
 
-1. **Tally in its own repository** (done). Tally 2 is
-   [antho976/Tally](https://github.com/antho976/Tally), with its own CI. Tally 1 had been squashed
+1. **Tally in its own repository** (done, then undone). Tally 2 was
+   [antho976/Tally](https://github.com/antho976/Tally), with its own CI, until it moved back in as
+   `apps/tally` on 2026-11-20, with its history, as Tally RS. Tally 1 had been squashed
    in from it at `cfae7c3`, into a folder of this repository that was removed on 2026-10-13; its
    history stays in git.
 2. **The money rules in Rust** (`crates/relay-money`). A module-for-module port of

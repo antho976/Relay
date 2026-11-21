@@ -1,0 +1,117 @@
+name: Tally
+
+# Everything that must be true before Tally RS is installable.
+#
+# Tally lives in apps/tally/ (it moved from antho976/Tally on 2026-11-20). This workflow runs for
+# changes there and for changes to crates/relay-money, the money rules and ledger Tally RS is built
+# on (a path dependency, so a rule changed for the engine is tested here in the same pull request).
+# Every `run:` step works from apps/tally or apps/tally/native (defaults below); paths given to
+# actions start at the repository root and carry the apps/tally/ prefix.
+#
+# Cheapest first, each gating the next:
+#
+#   guard     ~30s  Wrapper checksum, no signing material, no build output in the tree.
+#   test      ~8m   The app's rules on the host: cargo test (money, plan, sync against a fake
+#                   server, stores, navigation), and clippy.
+#   android   ~6m   The Android library type-checks for arm64 (android.rs, GameActivity, JNI).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/tally/**"
+      - "!apps/tally/**.md"
+      - "crates/relay-money/**"
+      - ".github/workflows/tally.yml"
+  pull_request:
+    paths:
+      - "apps/tally/**"
+      - "crates/relay-money/**"
+      - ".github/workflows/tally.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  guard:
+    name: Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        # git ls-files from here lists only Tally's files, so the checks below stay Tally's.
+        working-directory: apps/tally
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Validate Gradle wrapper checksum
+        uses: gradle/actions/wrapper-validation@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
+
+      - name: No signing material in the tree
+        run: |
+          found=$(git ls-files -- '*.jks' '*.keystore' '*.p12' 'keystore.properties' '**/keystore.properties' | grep -v '\.example$' || true)
+          if [ -n "$found" ]; then
+            echo "::error::Signing material is committed:"; echo "$found"; exit 1
+          fi
+          echo "No keystores."
+
+      - name: No build output in the tree
+        run: |
+          found=$(git ls-files | grep -E '(^|/)(build|\.gradle|target)/|\.so$' || true)
+          if [ -n "$found" ]; then
+            echo "::error::Build output is committed:"; echo "$found"; exit 1
+          fi
+          echo "Clean."
+
+  test:
+    name: Test (host)
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/tally/native
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal -c clippy && rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: apps/tally/native
+      - name: Tests
+        run: cargo test --locked
+      - name: Clippy
+        run: cargo clippy --locked --all-targets
+
+  android:
+    name: Android (arm64 type-check)
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/tally/native
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal -t aarch64-linux-android && rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: apps/tally/native
+          key: android
+      - name: Check
+        run: |
+          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$bin/aarch64-linux-android26-clang"
+          export CXX_aarch64_linux_android="$bin/aarch64-linux-android26-clang++"
+          export AR_aarch64_linux_android="$bin/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$bin/aarch64-linux-android26-clang"
+          cargo check --locked -p tally-rs --lib --target aarch64-linux-android

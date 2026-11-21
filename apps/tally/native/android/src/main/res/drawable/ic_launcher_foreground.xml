@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Icon E, fanned cards (black, cream, sage), the Dark version. Inside the 66dp safe circle. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <group android:pivotX="48.00" android:pivotY="54.0" android:rotation="-16">
+        <path android:fillColor="#33000000" android:pathData="M39.43,37.60 h17.14 a4.29,4.29 0 0 1 4.29,4.29 v27.43 a4.29,4.29 0 0 1 -4.29,4.29 h-17.14 a4.29,4.29 0 0 1 -4.29,-4.29 v-27.43 a4.29,4.29 0 0 1 4.29,-4.29 z" />
+        <path android:fillColor="#FF2B2B2B" android:strokeColor="#33FFFFFF" android:strokeWidth="0.6" android:pathData="M39.43,36.00 h17.14 a4.29,4.29 0 0 1 4.29,4.29 v27.43 a4.29,4.29 0 0 1 -4.29,4.29 h-17.14 a4.29,4.29 0 0 1 -4.29,-4.29 v-27.43 a4.29,4.29 0 0 1 4.29,-4.29 z" />
+    </group>
+    <group android:pivotX="54.00" android:pivotY="54.0" android:rotation="0">
+        <path android:fillColor="#33000000" android:pathData="M45.43,37.60 h17.14 a4.29,4.29 0 0 1 4.29,4.29 v27.43 a4.29,4.29 0 0 1 -4.29,4.29 h-17.14 a4.29,4.29 0 0 1 -4.29,-4.29 v-27.43 a4.29,4.29 0 0 1 4.29,-4.29 z" />
+        <path android:fillColor="#FFE9DFCC" android:pathData="M45.43,36.00 h17.14 a4.29,4.29 0 0 1 4.29,4.29 v27.43 a4.29,4.29 0 0 1 -4.29,4.29 h-17.14 a4.29,4.29 0 0 1 -4.29,-4.29 v-27.43 a4.29,4.29 0 0 1 4.29,-4.29 z" />
+    </group>
+    <group android:pivotX="60.00" android:pivotY="54.0" android:rotation="16">
+        <path android:fillColor="#33000000" android:pathData="M51.43,37.60 h17.14 a4.29,4.29 0 0 1 4.29,4.29 v27.43 a4.29,4.29 0 0 1 -4.29,4.29 h-17.14 a4.29,4.29 0 0 1 -4.29,-4.29 v-27.43 a4.29,4.29 0 0 1 4.29,-4.29 z" />
+        <path android:fillColor="#FF9DB59E" android:pathData="M51.43,36.00 h17.14 a4.29,4.29 0 0 1 4.29,4.29 v27.43 a4.29,4.29 0 0 1 -4.29,4.29 h-17.14 a4.29,4.29 0 0 1 -4.29,-4.29 v-27.43 a4.29,4.29 0 0 1 4.29,-4.29 z" />
+    </group>
+</vector>

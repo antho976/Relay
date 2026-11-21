@@ -56,15 +56,21 @@ Avex and the Relay phone app both have an `:app` module. Its CI is `.github/work
 only for changes under `apps/avex/`, and nothing in `cargo test` touches it. Its public build
 holds no `INTERNET` permission, ever; `crates/relay-gym` reads the file it exports.
 
-## Tally 2 (antho976/Tally) and `crates/relay-money`
+## Tally: `apps/tally` and `crates/relay-money`
 
-Tally, the budget tracker for Android (Kotlin, Compose, Room, Gradle), lives in its own repository,
-`antho976/Tally`, with its own CI. It is not in this tree.
+Tally, the budget tracker, is Tally RS: Rust drawn with wgpu, for Android (a GameActivity shell in
+`apps/tally/native/android`) and a desktop window. It lives in `apps/tally` with its own
+instructions, `apps/tally/CLAUDE.md`: read them before changing anything there. Its Cargo
+workspace is `apps/tally/native`, separate from the root one, with its own `Cargo.lock`, so plain
+`cargo test` here never builds it. Its CI is `.github/workflows/tally.yml`.
 
-`crates/relay-money` is a port of that repository's `core/` with the same tests. The phone and the
-PC each hold the whole ledger (`docs/MONEY.md`), so **a money rule changed on one side is changed on
-the other in the same piece of work**: a PR in each repository, cross-linked, tests included.
-Stored enum names are the Kotlin constant names.
+Tally RS builds on `crates/relay-money` through a path dependency: the money rules and the SQLite
+ledger the engine runs, so the phone and the PC each hold the whole ledger (`docs/MONEY.md`) by the
+same code. **A change to `relay-money` is a change to Tally too**: run Tally's tests with it
+(`cd apps/tally/native && cargo test --locked`; `tally.yml` runs for `crates/relay-money` changes),
+and when `relay-money`'s dependencies change, a plain `cargo test` there updates Tally's
+`Cargo.lock`, which goes in the same pull request. Stored enum names stay the Kotlin app's constant
+names: existing ledgers and backups hold them.
 
 ## The native client cannot be built everywhere
 

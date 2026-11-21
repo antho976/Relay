@@ -1,0 +1,25 @@
+# Tally RS: Tally in Rust, drawn with wgpu. The rules and the ledger are relay-money (crates/ at the root)
+# (the Rust port of core/, held to the same tests); this workspace is the app around them.
+[workspace]
+resolver = "2"
+members = ["crates/tally-rs"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+
+[profile.dev]
+opt-level = 1
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+# Unwind, not abort: a panic in a worker thread (an import, a backup, a sync, a picture) ends
+# that thread, which the UI reports (`settings_files::Poll::Lost`), instead of the whole app.
+panic = "unwind"
+strip = "debuginfo"

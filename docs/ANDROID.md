@@ -2,8 +2,7 @@
 
 `apps/relay-android` is Relay's phone app: native Android (Kotlin, Jetpack Compose, Room on
 SQLite), no web view, no on-device model. It replaced the Expo app that lived in
-`apps/relay-mobile`. Tally is a separate app in its own repository (antho976/Tally) and is not part
-of it.
+`apps/relay-mobile`. Tally is a separate app (`apps/tally`, in Rust) and is not part of it.
 
 It is chat first, as Claude's own app is (design 14, "Phone app · chat-first redesign"), and it
 shows no terminal: everything an agent's terminal asked for is a button. **Home** greets the

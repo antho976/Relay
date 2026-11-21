@@ -1,0 +1,56 @@
+[package]
+name = "tally-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Tally, native: one wgpu pipeline over relay-money's ledger, for Android and the desktop."
+
+[lib]
+name = "tally"
+crate-type = ["lib", "cdylib"]
+
+[[bin]]
+name = "tally"
+path = "src/main.rs"
+
+[dependencies]
+# The money rules and the SQLite ledger, shared with the Relay engine: the crate in this same
+# repository, so a change to the rules builds and tests both apps in one piece of work.
+relay-money = { path = "../../../../../crates/relay-money" }
+jiff = "0.2"
+# The same SQLite relay-money links (one copy of libsqlite3 per binary): Tally RS writes the rows
+# relay-money has no calls for yet (bills, goals, categories) through a second connection. Every
+# table's sync triggers number those writes exactly as relay-money's own.
+rusqlite = { version = "0.40", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+serde_json = "1"
+wgpu = "30"
+bytemuck = { version = "1", features = ["derive"] }
+fontdue = "0.9"
+zeno = "0.3"
+# Icon paths go through svgtypes first: zeno's own parser stops early on some compact arcs.
+svgtypes = "0.16"
+image = { version = "0.25", default-features = false, features = ["webp"] }
+pollster = "0.4"
+# The link to the owner's server (sync.rs): Relay's door over a WebSocket, the request to connect
+# over HTTPS. Pure-Rust TLS with ring and Mozilla's roots, so the Android build needs no cmake or
+# NASM (aws-lc would).
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+sha2 = "0.11"
+serde = { version = "1", features = ["derive"] }
+getrandom = "0.3"
+raw-window-handle = "0.6"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+winit = "0.30"
+png = "0.17"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["game-activity"] }
+ndk = "0.9"
+jni = "0.21"
+libc = "0.2"
