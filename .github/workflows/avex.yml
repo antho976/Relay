@@ -1,6 +1,11 @@
-name: CI
+name: Avex
 
 # Everything that must be true before Avex is allowed to ship.
+#
+# Avex lives in apps/avex/ (it moved from antho976/Avex on 2026-11-20). This workflow runs only for
+# changes there, every `run:` step works from apps/avex (defaults below), so its helper scripts in
+# apps/avex/.github/scripts/ and every relative path in them are unchanged; paths given to actions
+# (`with: path:`, hashFiles) start at the repository root and carry the apps/avex/ prefix.
 #
 # Three jobs, cheapest first, each gating the next:
 #
@@ -12,7 +17,7 @@ name: CI
 #                       whether the minified APK actually launches.
 #
 # Notes specific to this project:
-#  • The Gradle project lives in forge-android/, not the repo root  ->  `-p forge-android`.
+#  • The Gradle project lives in apps/avex/forge-android/  ->  `-p forge-android` from apps/avex.
 #  • The wrapper IS committed, so CI runs ./gradlew — the exact Gradle contributors run, with no
 #    chance of the two drifting. `guard` verifies its checksum before anything executes it.
 #  • gradle/gradle-daemon-jvm.properties pins the daemon to Java 21. Setting up 21 here is not
@@ -31,30 +36,34 @@ name: CI
 on:
   push:
     branches: [main]
-    # NB: .claude/** is deliberately absent from this list. The design-doctrine parity suite reads
-    # .claude/DESIGN.md, so a doc-only edit there can absolutely turn the build red.
-    paths-ignore:
-      - "docs/**"
-      - "backups/**"
-      - ".design-backups/**"
-      - ".impeccable/**"
-      - "remotion-*/**"
-      # Repository-root marketing images only. `*` does not match `/`, so this is the top level and
-      # nothing else — deliberately NOT `**/*.png`, which used to be here and which also matched the
-      # 44 Roborazzi goldens and all 137 tracked images under forge-android/. A pull request that
-      # changed only goldens therefore ran no CI whatsoever, and merged green on the strength of no
-      # check having run: precisely the change :app:verifyRoborazziDebug exists to police.
-      - "*.png"
-      - "*.jpg"
-      - "*.mp4"
-      - "PRODUCT.md"
-      - "README.md"
+    # Avex only. NB: apps/avex/.claude/** is deliberately NOT excluded. The design-doctrine parity
+    # suite reads .claude/DESIGN.md, so a doc-only edit there can absolutely turn the build red.
+    #
+    # Root marketing images only: `*` does not match `/`, so apps/avex/*.png is Avex's top level
+    # and nothing else, deliberately NOT `**/*.png`, which once also matched the 44 Roborazzi
+    # goldens under forge-android/: a PR that changed only goldens ran no CI and merged green.
+    # Keep the exclusions in step with IGNORED in apps/avex/.github/scripts/ci_scope.py.
+    paths:
+      - "apps/avex/**"
+      - "!apps/avex/docs/**"
+      - "!apps/avex/backups/**"
+      - "!apps/avex/.design-backups/**"
+      - "!apps/avex/.impeccable/**"
+      - "!apps/avex/remotion-*/**"
+      - "!apps/avex/*.png"
+      - "!apps/avex/*.jpg"
+      - "!apps/avex/*.mp4"
+      - "!apps/avex/PRODUCT.md"
+      - "!apps/avex/README.md"
+      - ".github/workflows/avex.yml"
   pull_request:
     branches: [main]
-    # No paths-ignore here, unlike push. Guard, Verify and Instrumented are required checks on main,
-    # and a workflow that paths-ignore skips never reports them, so a docs-only PR would wait
-    # forever. Guard runs on every PR and decides (ci_scope.py, same list as above) whether the two
-    # build jobs have anything to do; a job skipped by its own `if:` reports as passed.
+    # Any change to Avex, docs included: Guard decides (ci_scope.py, the same list as above) whether
+    # the two build jobs have anything to do, and a job skipped by its own `if:` reports as passed,
+    # so a docs-only PR still gets its checks if they are ever made required.
+    paths:
+      - "apps/avex/**"
+      - ".github/workflows/avex.yml"
   merge_group:
   workflow_dispatch:
   # Callable so release.yml gates a tag on this exact pipeline rather than on a copy that drifts.
@@ -76,6 +85,10 @@ on:
 # in its own workflow (see dependency-graph.yml).
 permissions:
   contents: read
+
+defaults:
+  run:
+    working-directory: apps/avex
 
 concurrency:
   # Supersede an outdated PR run, but never cancel main or a merge queue: those results are what
@@ -229,7 +242,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.m2/repository/org/robolectric
-          key: robolectric-${{ runner.os }}-${{ hashFiles('forge-android/gradle/libs.versions.toml') }}
+          key: robolectric-${{ runner.os }}-${{ hashFiles('apps/avex/forge-android/gradle/libs.versions.toml') }}
           restore-keys: robolectric-${{ runner.os }}-
 
       - name: Unit tests + screenshot goldens
@@ -285,9 +298,9 @@ jobs:
         with:
           name: test-reports
           path: |
-            forge-android/*/build/reports/tests/**
-            forge-android/*/build/test-results/**
-            forge-android/app/build/reports/jacoco/**
+            apps/avex/forge-android/*/build/reports/tests/**
+            apps/avex/forge-android/*/build/test-results/**
+            apps/avex/forge-android/app/build/reports/jacoco/**
           if-no-files-found: warn
           retention-days: 14
 
@@ -296,7 +309,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: roborazzi-diffs
-          path: forge-android/app/build/outputs/roborazzi/**
+          path: apps/avex/forge-android/app/build/outputs/roborazzi/**
           if-no-files-found: ignore
           retention-days: 14
 
@@ -317,7 +330,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: lint-reports
-          path: forge-android/*/build/reports/lint-results-*.html
+          path: apps/avex/forge-android/*/build/reports/lint-results-*.html
           if-no-files-found: ignore
           retention-days: 14
 
@@ -331,13 +344,44 @@ jobs:
         if: ${{ !cancelled() }}
         run: ./forge-android/gradlew -p forge-android assembleDebug assembleRelease
 
+      - name: The public release holds no INTERNET permission
+        # The privacy policy says Avex "physically cannot upload anything", and that is only true
+        # while the merged manifest of the release (the Play build) lacks INTERNET. Only the
+        # `personal` build type adds it. A library can add it through manifest merging without a
+        # line here changing, and since Avex moved into the Relay repository, next to the code that
+        # receives its uploads, a change meant for `personal` can land in main by mistake. Checked
+        # on the built APKs, phone and watch, because the merged manifest is the one that ships.
+        if: ${{ !cancelled() }}
+        run: |
+          aapt2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
+          status=0
+          for apk in forge-android/app/build/outputs/apk/release/*.apk \
+                     forge-android/wear/build/outputs/apk/release/*.apk; do
+            # Fails closed: no APK, or an APK aapt2 cannot read, is a failure, not a pass.
+            if [ ! -f "$apk" ]; then
+              echo "::error::No release APK at $apk to check."
+              status=1
+              continue
+            fi
+            if ! perms=$("$aapt2" dump permissions "$apk"); then
+              echo "::error::aapt2 could not read $apk."
+              status=1
+            elif grep -q "android.permission.INTERNET" <<<"$perms"; then
+              echo "::error::$apk asks for android.permission.INTERNET. The public build must not."
+              status=1
+            else
+              echo "$apk: no INTERNET."
+            fi
+          done
+          exit $status
+
       - name: Upload debug APKs
         uses: actions/upload-artifact@v7
         with:
           name: avex-debug-apk
           path: |
-            forge-android/app/build/outputs/apk/debug/*.apk
-            forge-android/wear/build/outputs/apk/debug/*.apk
+            apps/avex/forge-android/app/build/outputs/apk/debug/*.apk
+            apps/avex/forge-android/wear/build/outputs/apk/debug/*.apk
           # error, not warn: this runs only after assembleDebug succeeded, so a missing APK means
           # the output path moved and the artifact quietly stopped being published.
           if-no-files-found: error
@@ -460,6 +504,7 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
+          working-directory: apps/avex
           script: .github/scripts/instrumented.sh
 
       - name: Upload instrumented test report
@@ -468,8 +513,8 @@ jobs:
         with:
           name: connected-test-report
           path: |
-            forge-android/app/build/reports/androidTests/**
-            forge-android/app/build/outputs/androidTest-results/**
+            apps/avex/forge-android/app/build/reports/androidTests/**
+            apps/avex/forge-android/app/build/outputs/androidTest-results/**
           if-no-files-found: ignore
           retention-days: 14
 
@@ -478,6 +523,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: smoke-logcat
-          path: smoke-logcat.txt
+          path: apps/avex/smoke-logcat.txt
           if-no-files-found: ignore
           retention-days: 14

@@ -1,5 +1,5 @@
 //! Reading Avex's training history export (`BackupRepository.exportFullDataJson` in
-//! antho976/Avex, format 1), as leniently as Avex's own `ForgeJsonImporter` reads it back: a field
+//! apps/avex, format 1), as leniently as Avex's own `ForgeJsonImporter` reads it back: a field
 //! that is missing or of the wrong kind takes its default, a set with a non-finite weight loses the
 //! weight, and a session with no start is left out.
 //!

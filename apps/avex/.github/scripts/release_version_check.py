@@ -12,7 +12,7 @@ Three facts have to line up and nothing in the build enforces any of them:
     and the upload is rejected AFTER the whole pipeline has run, or — worse — accepted with the
     watch APK ordered ahead of a phone release it predates.
 
-Usage:  release_version_check.py v0.9
+Usage:  release_version_check.py avex-v0.9   (or v0.9)
 """
 
 from __future__ import annotations
@@ -39,7 +39,9 @@ def main(argv: list[str]) -> int:
     if len(argv) != 2:
         sys.exit(f"usage: {argv[0]} <tag>")
     tag = argv[1]
-    expected = tag[1:] if tag.startswith("v") else tag
+    # Avex's tags are avex-v0.9 in the Relay repository, where v* would mean nothing in particular.
+    bare = tag.removeprefix("avex-")
+    expected = bare[1:] if bare.startswith("v") else bare
 
     app_name = read(APP, "versionName")
     app_code = int(read(APP, "versionCode"))

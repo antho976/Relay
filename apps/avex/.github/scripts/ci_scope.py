@@ -49,8 +49,12 @@ def needs_build(paths):
 def changed_paths():
     # HEAD is the PR's synthetic merge commit; its first parent is the base it merges into, so this
     # diff is exactly what the PR changes on main. Renames count on both sides.
+    #
+    # --relative: Avex lives in apps/avex/ of the Relay repository, and the workflow runs from
+    # there, so paths come back relative to Avex's own root (docs/..., forge-android/...) and
+    # changes outside Avex are left out. Run from a repository root it changes nothing.
     out = subprocess.check_output(
-        ["git", "diff", "--name-only", "--no-renames", "HEAD^1", "HEAD"], text=True
+        ["git", "diff", "--name-only", "--no-renames", "--relative", "HEAD^1", "HEAD"], text=True
     )
     return [line for line in out.splitlines() if line]
 

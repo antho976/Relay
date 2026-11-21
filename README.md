@@ -57,9 +57,11 @@ on your own Coinbase account, on paper or live, every order through one risk gat
 backtester and Coinbase client are `crates/relay-arbiter`; the design is
 [docs/ARBITER.md](docs/ARBITER.md).
 
-Avex, the gym app, is the third source there. It has no internet, so Relay reads the training
-history it exports (Settings, Export, Training history), read only; `crates/relay-gym` reads the file
-and answers the `gym.*` ops. See [docs/GYM.md](docs/GYM.md).
+Avex, the gym app for Android and Wear OS, lives in this repository too, in `apps/avex` (its own
+Gradle build and its own **Avex** workflow; it moved from antho976/Avex with its history). It is
+the third source there. It has no internet, so Relay reads the training history it exports
+(Settings, Export, Training history), read only; `crates/relay-gym` reads the file and answers the
+`gym.*` ops. See [docs/GYM.md](docs/GYM.md).
 
 Open a repository from the sidebar, then add solo agents or a group of
 one or two builders sharing a reviewer. Code can edit the primary checkout or

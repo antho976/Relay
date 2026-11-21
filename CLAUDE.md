@@ -47,6 +47,15 @@ authority for its data: the app reads a replica and sends edits through an outbo
 (`core/sync`), so an op it may queue offline needs a rule in `Optimistic` for how the row looks
 until the PC answers.
 
+## Avex: `apps/avex`
+
+Avex, the gym app for Android and Wear OS, lives here with its own Gradle build
+(`apps/avex/forge-android`) and its own instructions, `apps/avex/CLAUDE.md`: read them before
+changing anything under `apps/avex/`. Run Gradle from the app's own folder, never from the root:
+Avex and the Relay phone app both have an `:app` module. Its CI is `.github/workflows/avex.yml`,
+only for changes under `apps/avex/`, and nothing in `cargo test` touches it. Its public build
+holds no `INTERNET` permission, ever; `crates/relay-gym` reads the file it exports.
+
 ## Tally 2 (antho976/Tally) and `crates/relay-money`
 
 Tally, the budget tracker for Android (Kotlin, Compose, Room, Gradle), lives in its own repository,

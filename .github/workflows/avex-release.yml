@@ -1,11 +1,14 @@
-name: Release
+name: Avex release
 
 # The CD half: turn a version tag into signed, verified, downloadable artifacts.
 #
-#   git tag v0.9 && git push origin v0.9
+#   git tag avex-v0.9 && git push origin avex-v0.9
+#
+# avex-v*, not v*: Avex shares this repository with Relay (apps/avex/), and its tags name it.
+# Every `run:` step works from apps/avex, as in avex.yml.
 #
 # What happens then:
-#   1. The ENTIRE ci.yml pipeline runs against the tag — unit tests, goldens, lint, R8, the Room
+#   1. The ENTIRE avex.yml pipeline runs against the tag — unit tests, goldens, lint, R8, the Room
 #      migration test and the release smoke launch. Called, not copied, so a release can never be
 #      gated on a weaker check than a pull request is.
 #   2. The tag is matched against the versionName in both modules, and the wear/phone versionCode
@@ -32,16 +35,20 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["avex-v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to build (e.g. v0.9)"
+        description: "Existing tag to build (e.g. avex-v0.9)"
         required: true
         type: string
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    working-directory: apps/avex
 
 concurrency:
   # Never cancel a release in flight — a half-run release job leaves a tag with no artifacts and a
@@ -52,7 +59,7 @@ concurrency:
 jobs:
   verify:
     name: Full CI gate
-    uses: ./.github/workflows/ci.yml
+    uses: ./.github/workflows/avex.yml
     # The TAG, explicitly. Without this the called workflow checks out the caller's ref — which on a
     # workflow_dispatch is the branch the dispatch was made from, not the tag named in the input —
     # so a manual release tested main and signed something else entirely, with two green jobs
@@ -235,7 +242,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: avex-release-${{ env.TAG }}
-          path: release-artifacts/**
+          path: apps/avex/release-artifacts/**
           if-no-files-found: error
           # Longer than CI's 14 days: this is the build that shipped.
           retention-days: 90
@@ -256,9 +263,14 @@ jobs:
             echo "Draft $TAG already exists. Replacing its artifacts."
             gh release upload "$TAG" release-artifacts/* --clobber
           else
+            # Notes start at the last Avex release, not the last tag of any kind: this repository
+            # also tags Relay. The first release here has none, and its draft lists more than Avex.
+            prev=$(gh release list --limit 100 --json tagName --jq \
+              "[.[] | .tagName | select(startswith(\"avex-v\") and . != \"$TAG\")][0] // empty")
             gh release create "$TAG" \
-              --title "Avex $TAG" \
+              --title "Avex ${TAG#avex-}" \
               --generate-notes \
+              ${prev:+--notes-start-tag "$prev"} \
               --draft \
               --verify-tag \
               release-artifacts/*

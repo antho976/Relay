@@ -26,3 +26,36 @@ updates:
       security:
         applies-to: security-updates
         patterns: ["*"]
+
+  # Avex (apps/avex), monthly, as it was in its own repository. Gradle is one group because its
+  # libraries only work in versioned sets (Compose past its BOM, kotlin without ksp, AGP without
+  # its Kotlin); split, the Kotlin/AGP PR goes red on its own. The two Remotion projects are
+  # marketing-video tooling, one PR a month each; avex.yml ignores them, so run their own
+  # `npm run check` before merging anything bigger than a lockfile refresh. Avex's actions are
+  # covered by the github-actions entry above.
+  - package-ecosystem: gradle
+    directory: /apps/avex/forge-android
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      avex-android:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /apps/avex/remotion-vignettes
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      avex-remotion-vignettes:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /apps/avex/remotion-release
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      avex-remotion-release:
+        patterns: ["*"]

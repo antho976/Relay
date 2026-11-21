@@ -1,4 +1,4 @@
-name: Dependency graph
+name: Avex dependency graph
 
 # Publishes the resolved Gradle dependency graph for main.
 #
@@ -20,10 +20,10 @@ on:
   push:
     branches: [main]
     paths:
-      - "forge-android/gradle/libs.versions.toml"
-      - "forge-android/**/build.gradle.kts"
-      - "forge-android/settings.gradle.kts"
-      - ".github/workflows/dependency-graph.yml"
+      - "apps/avex/forge-android/gradle/libs.versions.toml"
+      - "apps/avex/forge-android/**/build.gradle.kts"
+      - "apps/avex/forge-android/settings.gradle.kts"
+      - ".github/workflows/avex-dependency-graph.yml"
   workflow_dispatch:
 
 permissions:
@@ -56,4 +56,4 @@ jobs:
       - name: Resolve and submit
         uses: gradle/actions/dependency-submission@v6
         with:
-          build-root-directory: forge-android
+          build-root-directory: apps/avex/forge-android
