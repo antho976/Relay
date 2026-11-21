@@ -10,6 +10,12 @@
 //! page never blocks on one, and says honestly when this phone is not paired or the server has no
 //! bank connections.
 //!
+//! A bank that asks for a sign-in again (signed out, or its consent running out within the week)
+//! has Fix on its row, which opens the same hosted page in Plaid's update mode
+//! (`money.bank.hosted_link` with `bank_id`): one sign-in, and the bank stays as it was. While
+//! Tally is open it lists the banks in the background every few hours ([`watch`]), so Overview
+//! can say a week ahead that a bank wants a sign-in.
+//!
 //! In the premium look: the bank picture with the one way in, then the banks on one card, each
 //! with a state dot and Fix when it needs signing in again.
 
@@ -41,7 +47,8 @@ const OPEN_FRESH_NS: u64 = 30 * 1_000_000_000;
 #[derive(Clone, Debug, PartialEq)]
 enum Op {
     List,
-    HostedLink,
+    /// A Plaid page for a new bank, or (with the bank) to sign in to that one again.
+    HostedLink(Option<Bank>),
     /// The state of the Plaid page with this link token: an answer for a page given up on (Stop
     /// waiting, then Connect again) must not end the newer one.
     Status(String),
@@ -59,6 +66,8 @@ struct Link {
     url: String,
     until_ns: u64,
     asked_ns: u64,
+    /// The bank being signed in to again, by name; none for a new bank.
+    fix: Option<String>,
 }
 
 #[derive(Default)]
@@ -85,6 +94,10 @@ pub struct State {
     /// The bank account whose "Into" sheet is open.
     picking: Option<String>,
     sheet: Scroll,
+    /// The background listing in flight ([`watch`]).
+    watching: Option<u64>,
+    /// What wants a sign-in, as last listed ([`logic::renew_pref`] until then).
+    renew: Option<Vec<logic::Renew>>,
 }
 
 impl State {
@@ -157,10 +170,14 @@ fn pump(app: &mut App) {
     let now = app.now_ns;
     if let Some(link) = &mut app.st.banks.link {
         if now > link.until_ns {
+            let words = match &link.fix {
+                Some(b) => format!("That Plaid page expired before you signed in to {b}. Tap Fix again."),
+                None => "That Plaid page expired before a bank was connected. Connect again.".into(),
+            };
             let st = &mut app.st.banks;
             st.link = None;
             st.working = None;
-            st.problem = Some("That Plaid page expired before a bank was connected. Connect again.".into());
+            st.problem = Some(words);
         } else if now >= link.asked_ns + POLL_NS && !app.st.banks.pending.iter().any(|(o, _)| matches!(o, Op::Status(t) if *t == link.token)) {
             link.asked_ns = now;
             let token = link.token.clone();
@@ -174,15 +191,21 @@ fn answered(app: &mut App, op: Op, r: Result<Value, crate::sync::Failure>) {
         Op::List => {
             let answer = logic::answer(r);
             // The Accounts page says which accounts are connected by this, the server's own word.
-            if let logic::Answer::Ready(list) = &answer
-                && logic::remember_followed(&mut app.store, list)
-            {
-                app.st.accounts.forget_list();
+            if let logic::Answer::Ready(list) = &answer {
+                listed(app, list);
             }
             app.st.banks.answer = Some(answer);
         }
-        Op::HostedLink => {
+        Op::HostedLink(fix) => {
             let on_banks = app.route() == &Route::Banks;
+            // A server from before the sign-in again: the old way out, on the bank's own page.
+            if let (Some(b), Err(f)) = (&fix, &r)
+                && logic::fix_not_on_server(f)
+            {
+                app.st.banks.working = None;
+                open_signed_out(app, b.clone());
+                return;
+            }
             let st = &mut app.st.banks;
             match r.map(|v| logic::parse_hosted_link(&v)) {
                 Ok(Some(link)) => {
@@ -191,15 +214,17 @@ fn answered(app: &mut App, op: Op, r: Result<Value, crate::sync::Failure>) {
                         Some(at) => now + ((at - now_ms()).max(0) as u64).saturating_mul(1_000_000),
                         None => now + LINK_LIFE_NS,
                     };
-                    st.link = Some(Link { token: link.link_token, url: link.url.clone(), until_ns: until, asked_ns: now });
+                    let name = fix.as_ref().map(|b| b.institution.clone());
+                    let bank = name.clone().unwrap_or_else(|| "your bank".into());
+                    st.link = Some(Link { token: link.link_token, url: link.url.clone(), until_ns: until, asked_ns: now, fix: name });
                     // The browser opens on its own only right after Connect, with the person still
                     // here; an answer read long after (they left Banks meanwhile) waits for them.
                     let fresh = now.saturating_sub(st.connect_ns) < OPEN_FRESH_NS && on_banks;
                     if fresh {
-                        st.working = Some("Waiting for Plaid: sign in to your bank on the page that opened, then come back".into());
+                        st.working = Some(format!("Waiting for Plaid: sign in to {bank} on the page that opened, then come back"));
                         app.host.open_url(&link.url);
                     } else {
-                        st.working = Some("Plaid's page is ready: open it to sign in to your bank, then come back".into());
+                        st.working = Some(format!("Plaid's page is ready: open it to sign in to {bank}, then come back"));
                     }
                 }
                 Ok(None) => {
@@ -227,9 +252,19 @@ fn answered(app: &mut App, op: Op, r: Result<Value, crate::sync::Failure>) {
             };
             let mine = app.st.banks.mine.clone();
             let elsewhere = followed_elsewhere(app);
+            let fix = app.st.banks.link.as_ref().and_then(|l| l.fix.clone());
             let st = &mut app.st.banks;
             match state {
                 Some(LinkState::Waiting) | None => {}
+                // Signed in to again: the bank is as it was, so there is nothing to pick.
+                Some(LinkState::Connected(bank)) if fix.is_some() => {
+                    st.link = None;
+                    st.working = None;
+                    st.problem = None;
+                    st.notice = Some(format!("{} is signed in again. New purchases arrive with the next sync.", bank.institution));
+                    app.st.sync.sync_now();
+                    ask(app, Op::List, "money.bank.list", json!({}));
+                }
                 Some(LinkState::Connected(bank)) => {
                     st.link = None;
                     st.working = None;
@@ -250,12 +285,18 @@ fn answered(app: &mut App, op: Op, r: Result<Value, crate::sync::Failure>) {
                 Some(LinkState::Exited(why)) => {
                     st.link = None;
                     st.working = None;
-                    st.problem = Some(why.unwrap_or_else(|| "Plaid's page closed before a bank was connected".into()));
+                    st.problem = Some(why.unwrap_or_else(|| match &fix {
+                        Some(b) => format!("Plaid's page closed before you signed in to {b}"),
+                        None => "Plaid's page closed before a bank was connected".into(),
+                    }));
                 }
                 Some(LinkState::Expired) => {
                     st.link = None;
                     st.working = None;
-                    st.problem = Some("That Plaid page expired before a bank was connected. Connect again.".into());
+                    st.problem = Some(match &fix {
+                        Some(b) => format!("That Plaid page expired before you signed in to {b}. Tap Fix again."),
+                        None => "That Plaid page expired before a bank was connected. Connect again.".into(),
+                    });
                 }
             }
         }
@@ -338,6 +379,65 @@ pub fn back(app: &mut App) -> bool {
         return true;
     }
     false
+}
+
+/// A server from before the sign-in again can only connect a bank anew, which would add this one a
+/// second time: its page opens with the way out instead (see `logic::sign_in_again_line`).
+fn open_signed_out(app: &mut App, b: Bank) {
+    let st = &mut app.st.banks;
+    st.notice = None;
+    st.problem = Some(logic::sign_in_again_line(&b.institution));
+    // As Edit: an Into a Tally account deleted since is placed afresh, or Follow would send the
+    // deleted uid while the page reads "Into a new account".
+    reload_mine(app, true);
+    let elsewhere = followed_elsewhere(app);
+    app.st.banks.choosing = Some(logic::with_places_beside(&b, &app.st.banks.mine, &elsewhere));
+    app.scroll().off = 0.0;
+}
+
+/// The server just listed `banks`: what they follow (the Accounts page reads it) and what wants a
+/// sign-in (Overview reads it) are kept.
+fn listed(app: &mut App, banks: &[Bank]) {
+    if logic::remember_followed(&mut app.store, banks) {
+        app.st.accounts.forget_list();
+    }
+    app.st.banks.renew = Some(logic::remember_renewals(&mut app.store, banks, now_ms()));
+}
+
+/// The banks that want a sign-in, as last listed: Overview's line.
+pub fn renewals(app: &mut App) -> &[logic::Renew] {
+    if app.st.banks.renew.is_none() {
+        app.st.banks.renew = Some(logic::renew_pref(&app.store));
+    }
+    app.st.banks.renew.as_deref().unwrap_or_default()
+}
+
+/// Once a frame: while Tally is open and paired, lists the banks every few hours, so a bank that
+/// asks for a sign-in within the week is said on Overview without opening Banks. The listing asks
+/// the server only (`money.bank.list` reaches no bank and no Plaid). Banks lists them itself.
+pub fn watch(app: &mut App) {
+    if let Some(ticket) = app.st.banks.watching {
+        match app.st.sync.reply(ticket) {
+            Reply::Pending => return,
+            Reply::Unknown => app.st.banks.watching = None,
+            Reply::Done(r) => {
+                app.st.banks.watching = None;
+                match logic::answer(r) {
+                    Answer::Ready(list) => listed(app, &list),
+                    // Not on this server, or not answering: asked again at the next turn, not
+                    // every frame. What was last known stays.
+                    _ => {
+                        let _ = app.store.set_pref(logic::CHECKED_PREF, &now_ms().to_string());
+                    }
+                }
+            }
+        }
+        return;
+    }
+    if app.route() == &Route::Banks || !app.st.sync.paired(&app.store) || !logic::check_due(&app.store, now_ms()) {
+        return;
+    }
+    app.st.banks.watching = Some(app.st.sync.request(&app.store, "money.bank.list", json!({})));
 }
 
 /// From a bank's page back to the list (Cancel, Back).
@@ -498,7 +598,7 @@ fn perform(app: &mut App, act: Act) {
             st.notice = None;
             st.working = Some("Asking your server to open Plaid".into());
             st.connect_ns = app.now_ns;
-            ask(app, Op::HostedLink, "money.bank.hosted_link", logic::hosted_link_payload());
+            ask(app, Op::HostedLink(None), "money.bank.hosted_link", logic::hosted_link_payload(None));
         }
         Act::OpenAgain => {
             if let Some(l) = &app.st.banks.link {
@@ -525,17 +625,18 @@ fn perform(app: &mut App, act: Act) {
             app.scroll().off = 0.0;
         }
         Act::SignInAgain(b) => {
-            // Not a new Hosted Link: that would connect the bank a second time (see
-            // `logic::sign_in_again_line`). Its page, with the way out, instead.
+            // Plaid's update mode for this bank: the same connection, signed in to again. From the
+            // bank's own page, back to the list, where the wait and its outcome show.
+            if app.st.banks.choosing.as_ref().is_some_and(|c| c.id == b.id) {
+                leave_bank(app);
+            }
             let st = &mut app.st.banks;
+            st.problem = None;
             st.notice = None;
-            st.problem = Some(logic::sign_in_again_line(&b.institution));
-            // As Edit: an Into a Tally account deleted since is placed afresh, or Follow would
-            // send the deleted uid while the page reads "Into a new account".
-            reload_mine(app, true);
-            let elsewhere = followed_elsewhere(app);
-            app.st.banks.choosing = Some(logic::with_places_beside(&b, &app.st.banks.mine, &elsewhere));
-            app.scroll().off = 0.0;
+            st.working = Some(format!("Asking your server to open Plaid for {}", b.institution));
+            st.connect_ns = app.now_ns;
+            let payload = logic::hosted_link_payload(Some(&b.id));
+            ask(app, Op::HostedLink(Some(b)), "money.bank.hosted_link", payload);
         }
         Act::Toggle(id) => {
             if let Some(b) = &mut app.st.banks.choosing
@@ -708,7 +809,8 @@ fn bank_list(cx: &mut Ctx, y: f32, banks: &[Bank], free: bool, act: &mut Option<
         let tx = x + 12.0 + 36.0 + 14.0;
         let mut right = x + w - 12.0;
         let mut signed = false;
-        if b.problem.is_some() {
+        let renew = logic::renewals(std::slice::from_ref(b), now).pop();
+        if renew.is_some() {
             let pw = sk::pill_w(cx, "Fix");
             if sk::pill(cx, right, ry + rh / 2.0, "Fix") && free {
                 signed = true;
@@ -721,19 +823,20 @@ fn bank_list(cx: &mut Ctx, y: f32, banks: &[Bank], free: bool, act: &mut Option<
         }
         let room = right - tx;
         let tt = Text::new(16.0, p.ink).medium();
-        let lt = Text::new(13.0, if b.problem.is_some() { p.waiting_text } else { p.ink2 });
+        let lt = Text::new(13.0, if renew.is_some() { p.waiting_text } else { p.ink2 });
         let top = ry + (rh - tt.lh() - 3.0 - lt.lh()) / 2.0;
         cx.c.text_fit(&b.institution, tx, top, room, tt);
         let followed = b.accounts.iter().filter(|a| a.follow).count() as i64;
-        let words = match &b.problem {
-            Some(why) => why.clone(),
-            None => {
+        let words = match (&b.problem, &renew) {
+            (Some(why), _) => why.clone(),
+            (None, Some(r)) => logic::renew_line(r, now),
+            (None, None) => {
                 let read = b.last_sync.map(|t| format!("Synced {}", logic::ago(t, now))).unwrap_or_else(|| "Not read yet".into());
                 format!("{read} · {}", copy::plural(followed, "account"))
             }
         };
         let ly = top + tt.lh() + 3.0;
-        cx.c.circle(tx + 3.5, ly + lt.lh() / 2.0, 3.5, if b.problem.is_some() { p.waiting } else { p.live });
+        cx.c.circle(tx + 3.5, ly + lt.lh() / 2.0, 3.5, if renew.is_some() { p.waiting } else { p.live });
         cx.c.text_fit(&words, tx + 13.0, ly, room - 13.0, lt);
         if !signed && cx.tap(x, ry, w, rh) {
             *act = Some(Act::Edit(b.clone()));
@@ -833,6 +936,19 @@ fn choose_page(cx: &mut Ctx, y: f32, st: &State, act: &mut Option<Act>) -> f32 {
     y += sk::note(cx, y, None, "Entries you already have, from a CSV or by hand, are matched and skipped.");
     // A bank already connected can be let go from here.
     let known = matches!(&st.answer, Some(Answer::Ready(list)) if list.iter().any(|b| b.id == bank.id));
+    // A bank that wants a sign-in is signed in to from its page too, unless this server can't
+    // (the page then says how instead).
+    let old_server = st.problem.as_deref() == Some(logic::sign_in_again_line(&bank.institution).as_str());
+    if known && !old_server && logic::wants_sign_in(bank, now_ms()) {
+        y += GROUP_GAP;
+        let words = format!("Sign in to {} again", bank.institution);
+        let free = !st.busy() && st.link.is_none();
+        let (h, tapped) = sk::rows_card(cx, y, &[Row::new(&words).glyph("lock", p.waiting).line("On Plaid's page. Your accounts and choices stay").opens()]);
+        if tapped.is_some() && free {
+            *act = Some(Act::SignInAgain(bank.clone()));
+        }
+        y += h;
+    }
     if known {
         y += GROUP_GAP;
         let words = format!("Disconnect {}", bank.institution);

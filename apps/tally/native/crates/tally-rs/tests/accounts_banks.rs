@@ -83,11 +83,16 @@ fn a_removed_value_comes_back() {
 }
 
 #[test]
-fn a_bank_needing_a_new_sign_in_says_how_without_a_second_connection() {
+fn a_bank_needing_a_new_sign_in_is_signed_in_to_in_place() {
+    // Fix names the bank, so the server opens Plaid's update mode rather than a second connection.
+    assert_eq!(banks_logic::hosted_link_payload(Some("item-1"))["bank_id"], "item-1");
+    assert!(banks_logic::hosted_link_payload(None).get("bank_id").is_none(), "Connect makes a new one");
+    // A server from before that refuses the field; then the old way out is said instead.
+    let old = tally::sync::Failure { code: "bus.schema".into(), message: "payload for money.bank.hosted_link does not match its schema: unknown field `bank_id`".into() };
+    assert!(banks_logic::fix_not_on_server(&old));
+    assert!(!banks_logic::fix_not_on_server(&tally::sync::Failure { code: "money.plaid".into(), message: "Plaid said: no".into() }));
     let line = banks_logic::sign_in_again_line("Desjardins");
     assert!(line.contains("Desjardins") && line.contains("Disconnect"), "{line}");
-    // The hosted-link request still names no bank: it can only make a new connection.
-    assert!(banks_logic::hosted_link_payload().get("bank_id").is_none());
 }
 
 struct Host(PathBuf);

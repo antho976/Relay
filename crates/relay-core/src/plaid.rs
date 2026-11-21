@@ -5,7 +5,10 @@
 //! the ledger as ordinary entries (`relay_money::plaid`) and reach every device by `money.sync`.
 //! The phone never holds a secret: it asks for a link token, opens Plaid's sign-in, and hands back
 //! the one-time public token (or, without Plaid's SDK, opens Plaid's hosted page and asks
-//! `money.bank.link_status` how it went).
+//! `money.bank.link_status` how it went). A bank that asks for a sign-in again is signed in to on
+//! the same hosted page in Plaid's update mode: its access token stays, so do its accounts and
+//! choices. Each read also asks Plaid when the bank's consent runs out (`expires_at`), so the
+//! phone can say so before it does.
 //!
 //! The banks are kept in `plaid.db` beside the store (0600), behind their own mutex, and never
 //! held across a call to Plaid. Access tokens are sealed with AES-256-GCM under
@@ -53,6 +56,15 @@ CREATE TABLE IF NOT EXISTS links (
     link_token TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, item_id TEXT, exited INTEGER NOT NULL DEFAULT 0,
     problem TEXT, created_at INTEGER NOT NULL);
 ";
+
+/// Columns added since `plaid.db` was first made: (table, column, declaration). A file made before
+/// them gets them when opened.
+const ADDED: [(&str, &str, &str); 2] = [
+    // When the bank's consent runs out, epoch ms, from `/item/get`.
+    ("banks", "expires_at", "INTEGER"),
+    // A sign-in again (update mode): the bank it renews.
+    ("links", "fix_item", "TEXT"),
+];
 
 /// What a request to Plaid answered, or why it did not.
 pub type Answer = Result<Value, PlaidError>;
@@ -209,6 +221,12 @@ impl Store {
             None => Connection::open_in_memory().map_err(sql)?,
         };
         conn.execute_batch(SCHEMA).map_err(sql)?;
+        for (table, column, decl) in ADDED {
+            let has = conn.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1")).map_err(sql)?.exists([column]).map_err(sql)?;
+            if !has {
+                conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}")).map_err(sql)?;
+            }
+        }
         Ok(Store { conn, config: None, fake: None, reading: false, again: false, exchanging: HashSet::new() })
     }
 }
@@ -300,12 +318,19 @@ impl Plaid {
         Err(if error.code.is_empty() { PlaidError { code: format!("HTTP_{status}"), message: format!("Plaid answered {status}"), display: None } } else { error })
     }
 
-    /// `/link/token/create` for Transactions in Canada, in English.
-    fn link_token(&self, client_name: &str, android_package_name: Option<&str>, hosted: Option<Option<&str>>) -> Answer {
+    /// `/link/token/create` for Transactions in Canada, in English. With `access`, Plaid's update
+    /// mode for that bank: no products (the bank has them already), only a sign-in.
+    fn link_token(&self, client_name: &str, android_package_name: Option<&str>, hosted: Option<Option<&str>>, access: Option<&str>) -> Answer {
         let mut body = json!({
-            "client_name": client_name, "products": ["transactions"], "country_codes": ["CA"], "language": "en",
-            "user": {"client_user_id": CLIENT_USER}, "transactions": {"days_requested": DAYS_REQUESTED},
+            "client_name": client_name, "country_codes": ["CA"], "language": "en", "user": {"client_user_id": CLIENT_USER},
         });
+        match access {
+            Some(token) => body["access_token"] = json!(token),
+            None => {
+                body["products"] = json!(["transactions"]);
+                body["transactions"] = json!({"days_requested": DAYS_REQUESTED});
+            }
+        }
         if let Some(package) = android_package_name {
             body["android_package_name"] = json!(package);
         }
@@ -316,6 +341,20 @@ impl Plaid {
             };
         }
         self.call("/link/token/create", body)
+    }
+
+    /// `/item/get`: when the bank's consent runs out (none when it sets no end), and the error
+    /// the bank's connection is in, if any.
+    fn item_state(&self, access: &str) -> Result<(Option<i64>, Option<PlaidError>), PlaidError> {
+        let v = self.call("/item/get", json!({"access_token": access}))?;
+        let item = &v["item"];
+        let expires = s(item, "consent_expiration_time").parse::<jiff::Timestamp>().ok().map(|t| t.as_millisecond());
+        let error = item.get("error").filter(|e| e.is_object()).map(|e| PlaidError {
+            code: s(e, "error_code"),
+            message: s(e, "error_message"),
+            display: Some(s(e, "display_message")).filter(|d| !d.is_empty()),
+        }).filter(|e| !e.code.is_empty());
+        Ok((expires, error))
     }
 }
 
@@ -329,14 +368,15 @@ fn now_ms() -> i64 {
 
 /// A bank as the phone reads it.
 fn bank_view(conn: &Connection, item_id: &str) -> Result<Option<BankView>, BusError> {
-    let bank = conn.prepare_cached("SELECT institution, last_sync, problem FROM banks WHERE item_id = ?1").map_err(sql)?
-        .query_row([item_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, Option<String>>(2)?))).optional().map_err(sql)?;
-    let Some((institution, last_sync, problem)) = bank else { return Ok(None) };
+    let bank = conn.prepare_cached("SELECT institution, last_sync, problem, expires_at FROM banks WHERE item_id = ?1").map_err(sql)?
+        .query_row([item_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<i64>>(3)?)))
+        .optional().map_err(sql)?;
+    let Some((institution, last_sync, problem, expires_at)) = bank else { return Ok(None) };
     let mut st = conn.prepare_cached("SELECT account_id, name, mask, kind, follow, into_uid FROM accounts WHERE item_id = ?1 ORDER BY sort, account_id").map_err(sql)?;
     let accounts = st.query_map([item_id], |r| {
         Ok(BankAccountView { id: r.get(0)?, name: r.get(1)?, mask: r.get(2)?, kind: r.get(3)?, follow: r.get(4)?, into: r.get(5)? })
     }).map_err(sql)?.collect::<Result<Vec<_>, _>>().map_err(sql)?;
-    Ok(Some(BankView { id: item_id.to_string(), institution, last_sync, problem, accounts }))
+    Ok(Some(BankView { id: item_id.to_string(), institution, last_sync, problem, expires_at, accounts }))
 }
 
 /// Every bank, oldest connection first.
@@ -355,7 +395,7 @@ pub fn link_token(engine: &Engine, name: &str, android_package_name: &str) -> Re
         return Err(BusError::invalid("money.invalid", "Name the Android app asking (its package name)"));
     }
     let p = plaid(engine)?;
-    let v = p.link_token(client_name(name)?, Some(package), None).map_err(|e| e.bus(""))?;
+    let v = p.link_token(client_name(name)?, Some(package), None, None).map_err(|e| e.bus(""))?;
     nonempty(s(&v, "link_token"), "a link token")
 }
 
@@ -375,8 +415,9 @@ fn nonempty(v: String, what: &str) -> Result<String, BusError> {
     }
 }
 
-/// A sign-in on Plaid's hosted page: its token, its address and when it runs out.
-pub fn hosted_link(engine: &Engine, name: &str, redirect: Option<&str>) -> Result<(String, String, Option<i64>), BusError> {
+/// A sign-in on Plaid's hosted page: its token, its address and when it runs out. With `bank_id`,
+/// a sign-in again to that bank (Plaid's update mode), which keeps it as it is.
+pub fn hosted_link(engine: &Engine, name: &str, redirect: Option<&str>, bank_id: Option<&str>) -> Result<(String, String, Option<i64>), BusError> {
     let redirect = redirect.map(str::trim).filter(|r| !r.is_empty());
     if let Some(uri) = redirect {
         // An app's own scheme or an https page; never a script or a file.
@@ -386,7 +427,19 @@ pub fn hosted_link(engine: &Engine, name: &str, redirect: Option<&str>) -> Resul
         }
     }
     let p = plaid(engine)?;
-    let v = p.link_token(client_name(name)?, None, Some(redirect)).map_err(|e| e.bus(""))?;
+    let fix = match bank_id.map(str::trim).filter(|b| !b.is_empty()) {
+        None => None,
+        Some(id) => {
+            let row = store(engine, |st| {
+                st.conn.prepare_cached("SELECT institution, token FROM banks WHERE item_id = ?1").map_err(sql)?
+                    .query_row([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))).optional().map_err(sql)
+            })?;
+            let (institution, sealed) = row.ok_or_else(|| BusError::not_found("money.not_found", "That bank is not connected to this server"))?;
+            Some((id.to_string(), institution, p.config.open(&sealed)?))
+        }
+    };
+    let institution = fix.as_ref().map_or("", |(_, i, _)| i.as_str());
+    let v = p.link_token(client_name(name)?, None, Some(redirect), fix.as_ref().map(|(_, _, a)| a.as_str())).map_err(|e| e.bus(institution))?;
     let token = nonempty(s(&v, "link_token"), "a link token")?;
     let url = nonempty(s(&v, "hosted_link_url"), "a sign-in page")?;
     if !url.starts_with("https://") {
@@ -395,8 +448,8 @@ pub fn hosted_link(engine: &Engine, name: &str, redirect: Option<&str>) -> Resul
     let expires_at = s(&v, "expiration").parse::<jiff::Timestamp>().ok().map(|t| t.as_millisecond());
     let created = now_ms();
     store(engine, |st| {
-        st.conn.prepare_cached("INSERT OR REPLACE INTO links (link_token, expires_at, created_at) VALUES (?1, ?2, ?3)").map_err(sql)?
-            .execute(params![token, expires_at.unwrap_or(created + HOSTED_LINK_MS), created]).map_err(sql)?;
+        st.conn.prepare_cached("INSERT OR REPLACE INTO links (link_token, expires_at, created_at, fix_item) VALUES (?1, ?2, ?3, ?4)").map_err(sql)?
+            .execute(params![token, expires_at.unwrap_or(created + HOSTED_LINK_MS), created, fix.as_ref().map(|(id, _, _)| id)]).map_err(sql)?;
         // Links long over are of no use to anyone.
         st.conn.prepare_cached("DELETE FROM links WHERE expires_at < ?1").map_err(sql)?.execute([created - 7 * 24 * 60 * 60 * 1000]).map_err(sql)?;
         Ok(())
@@ -460,74 +513,128 @@ fn connect(engine: &Engine, p: &Plaid, public_token: &str, institution_id: Optio
     })
 }
 
+/// What [`link_status`] answers: the state, the bank once connected, Plaid's reason once exited,
+/// and whether this very ask connected it (so the banks are read now).
+pub type LinkStatus = (String, Option<BankView>, Option<String>, bool);
+
 /// How a hosted sign-in went: `waiting`, `connected` (with the bank), `exited` (with Plaid's
 /// reason) or `expired`. Once connected, asked again, the same bank: nothing is exchanged twice.
-pub fn link_status(engine: &Engine, link_token: &str) -> Result<(String, Option<BankView>, Option<String>), BusError> {
+/// A sign-in again (`hosted_link` with a bank) exchanges nothing at all: Plaid renewed the login
+/// behind the token the server holds, and the bank's problem is cleared.
+pub fn link_status(engine: &Engine, link_token: &str) -> Result<LinkStatus, BusError> {
     let token = link_token.trim().to_string();
     let not_found = || BusError::not_found("money.not_found", "That sign-in is not one this server started");
     let row = store(engine, |st| {
-        st.conn.prepare_cached("SELECT expires_at, item_id, exited, problem FROM links WHERE link_token = ?1").map_err(sql)?
-            .query_row([&token], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?)))
+        st.conn.prepare_cached("SELECT expires_at, item_id, exited, problem, fix_item FROM links WHERE link_token = ?1").map_err(sql)?
+            .query_row([&token], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, Option<String>>(4)?))
+            })
             .optional().map_err(sql)
     })?;
-    let Some((expires_at, item, exited, problem)) = row else { return Err(not_found()) };
+    let Some((expires_at, item, exited, problem, fix)) = row else { return Err(not_found()) };
     if let Some(item) = item {
         let bank = store(engine, |st| bank_view(&st.conn, &item))?;
         // A bank removed since is no longer connected; the sign-in is over all the same.
         return Ok(match bank {
-            Some(bank) => ("connected".into(), Some(bank), None),
-            None => ("exited".into(), None, Some("That bank was disconnected since".into())),
+            Some(bank) => ("connected".into(), Some(bank), None, false),
+            None => ("exited".into(), None, Some("That bank was disconnected since".into()), false),
         });
     }
     if exited {
-        return Ok(("exited".into(), None, problem));
+        return Ok(("exited".into(), None, problem, false));
     }
     // One exchange per token: a second ask while one runs waits for its answer.
     let claimed = store(engine, |st| Ok(st.exchanging.insert(token.clone())))?;
     if !claimed {
-        return Ok(("waiting".into(), None, None));
+        return Ok(("waiting".into(), None, None, false));
     }
     let outcome = (|| {
         let p = plaid(engine)?;
         let v = p.call("/link/token/get", json!({"link_token": token})).map_err(|e| e.bus(""))?;
-        match session_outcome(&v) {
+        match session_outcome(&v, fix.is_some()) {
+            Outcome::Renewed => {
+                let bank = renewed(engine, &p, &token, fix.as_deref().unwrap_or_default())?;
+                // Signed in, and the bank still refuses: the person reads why, not "connected".
+                Ok(match bank.problem.clone() {
+                    Some(problem) => ("exited".to_string(), None, Some(problem), false),
+                    None => ("connected".to_string(), Some(bank), None, true),
+                })
+            }
             Outcome::Connected { public_token, institution_id, institution } => {
                 let bank = connect(engine, &p, &public_token, institution_id.as_deref(), institution.as_deref())?;
                 store(engine, |st| {
                     st.conn.prepare_cached("UPDATE links SET item_id = ?2 WHERE link_token = ?1").map_err(sql)?.execute(params![token, bank.id]).map_err(sql)?;
                     Ok(())
                 })?;
-                Ok(("connected".to_string(), Some(bank), None))
+                Ok(("connected".to_string(), Some(bank), None, true))
             }
             Outcome::Exited(problem) => {
                 store(engine, |st| {
                     st.conn.prepare_cached("UPDATE links SET exited = 1, problem = ?2 WHERE link_token = ?1").map_err(sql)?.execute(params![token, problem]).map_err(sql)?;
                     Ok(())
                 })?;
-                Ok(("exited".to_string(), None, problem))
+                Ok(("exited".to_string(), None, problem, false))
             }
-            Outcome::Waiting if now_ms() > expires_at => Ok(("expired".to_string(), None, None)),
-            Outcome::Waiting => Ok(("waiting".to_string(), None, None)),
+            Outcome::Waiting if now_ms() > expires_at => Ok(("expired".to_string(), None, None, false)),
+            Outcome::Waiting => Ok(("waiting".to_string(), None, None, false)),
         }
     })();
     store(engine, |st| Ok(st.exchanging.remove(&token)))?;
     outcome
 }
 
+/// A bank signed in to again: Plaid is asked how the bank stands now. Its problem is cleared unless
+/// Plaid still holds an error for it (the link then ends as exited, with that error), and its
+/// consent's new end is kept. The access token and the cursor do not change.
+fn renewed(engine: &Engine, p: &Plaid, link_token: &str, item_id: &str) -> Result<BankView, BusError> {
+    let not_found = || BusError::not_found("money.not_found", "That bank is not connected to this server");
+    let (institution, sealed) = store(engine, |st| {
+        st.conn.prepare_cached("SELECT institution, token FROM banks WHERE item_id = ?1").map_err(sql)?
+            .query_row([item_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))).optional().map_err(sql)
+    })?.ok_or_else(not_found)?;
+    let access = p.config.open(&sealed)?;
+    // Plaid's word on the bank now; if it cannot be had, the sign-in still went through, and the
+    // next read says whether the bank answers.
+    let state = p.item_state(&access).map_err(|e| tracing::info!(bank = item_id, code = %e.code, "plaid: /item/get after a sign-in again")).ok();
+    let problem = state.as_ref().and_then(|(_, e)| e.as_ref()).map(|e| e.human(&institution));
+    store(engine, |st| {
+        let tx = st.conn.transaction().map_err(sql)?;
+        tx.prepare_cached("UPDATE banks SET problem = ?2 WHERE item_id = ?1").map_err(sql)?.execute(params![item_id, problem]).map_err(sql)?;
+        if let Some((expires, _)) = &state {
+            tx.prepare_cached("UPDATE banks SET expires_at = ?2 WHERE item_id = ?1").map_err(sql)?.execute(params![item_id, expires]).map_err(sql)?;
+        }
+        match &problem {
+            None => tx.prepare_cached("UPDATE links SET item_id = ?2 WHERE link_token = ?1").map_err(sql)?.execute(params![link_token, item_id]),
+            Some(why) => tx.prepare_cached("UPDATE links SET exited = 1, problem = ?2 WHERE link_token = ?1").map_err(sql)?.execute(params![link_token, why]),
+        }.map_err(sql)?;
+        tx.commit().map_err(sql)?;
+        bank_view(&st.conn, item_id)?.ok_or_else(not_found)
+    })
+}
+
 #[derive(Debug, PartialEq)]
 enum Outcome {
     Waiting,
     Connected { public_token: String, institution_id: Option<String>, institution: Option<String> },
+    /// A sign-in again finished well: nothing to exchange.
+    Renewed,
     Exited(Option<String>),
 }
 
 /// What `/link/token/get` says came of a hosted sign-in: a public token in a session's results
-/// (or its `on_success`), else a session that finished on an exit, else still waiting.
-fn session_outcome(v: &Value) -> Outcome {
+/// (or its `on_success`), else a session that finished on an exit, else still waiting. A sign-in
+/// again (`renewing`) is done well on any success, or on a session that finished with no exit:
+/// update mode may hand back no public token, and none is needed.
+fn session_outcome(v: &Value, renewing: bool) -> Outcome {
     let sessions = v["link_sessions"].as_array().cloned().unwrap_or_default();
     for session in &sessions {
         let added = session["results"]["item_add_results"].as_array().and_then(|r| r.first()).cloned();
-        let success = added.or_else(|| session.get("on_success").cloned());
+        let success = added.or_else(|| session.get("on_success").cloned().filter(|o| !o.is_null()));
+        let exit = ["exit", "on_exit"].iter().any(|k| session.get(*k).is_some_and(|e| !e.is_null()));
+        let finished = session.get("finished_at").is_some_and(|f| !f.is_null());
+        if renewing && (success.is_some() || (finished && !exit)) {
+            return Outcome::Renewed;
+        }
         if let Some(found) = success {
             let public_token = s(&found, "public_token");
             if !public_token.is_empty() {
@@ -538,7 +645,8 @@ fn session_outcome(v: &Value) -> Outcome {
         }
     }
     for session in &sessions {
-        if let Some(exit) = session.get("exit").filter(|e| !e.is_null()) {
+        // `on_exit` is the older field for the same thing.
+        if let Some(exit) = ["exit", "on_exit"].iter().filter_map(|k| session.get(*k)).find(|e| !e.is_null()) {
             let problem = [s(&exit["error"], "display_message"), s(&exit["error"], "error_message")].into_iter().find(|m| !m.is_empty());
             return Outcome::Exited(problem);
         }
@@ -738,10 +846,22 @@ fn read_bank(engine: &Engine, p: &Plaid, bank: &Due) -> Result<usize, String> {
     if applied.other_currency > 0 {
         tracing::info!(bank = %bank.item_id, left_out = applied.other_currency, "plaid: transactions in another currency than the ledger's were left out");
     }
+    // When the bank's consent runs out, so the phone can say so a week ahead. Not having it is
+    // no reason to lose what was read: the end last known stays.
+    let expires = match p.item_state(&access) {
+        Ok((expires, _)) => Some(expires),
+        Err(e) => {
+            tracing::info!(bank = %bank.item_id, code = %e.code, "plaid: /item/get");
+            None
+        }
+    };
     store(engine, |st| {
         let tx = st.conn.transaction().map_err(sql)?;
         tx.prepare_cached("UPDATE banks SET cursor = ?2, last_sync = ?3, problem = NULL WHERE item_id = ?1").map_err(sql)?
             .execute(params![bank.item_id, cursor, now_ms()]).map_err(sql)?;
+        if let Some(expires) = expires {
+            tx.prepare_cached("UPDATE banks SET expires_at = ?2 WHERE item_id = ?1").map_err(sql)?.execute(params![bank.item_id, expires]).map_err(sql)?;
+        }
         for (id, uid) in &intos {
             tx.prepare_cached("UPDATE accounts SET into_uid = ?3 WHERE item_id = ?1 AND account_id = ?2").map_err(sql)?.execute(params![bank.item_id, id, uid]).map_err(sql)?;
         }
@@ -862,6 +982,12 @@ mod tests {
             match path {
                 "/link/token/create" => {
                     let hosted = body.get("hosted_link").is_some();
+                    if body.get("access_token").is_some() {
+                        // Update mode: the bank's own token, and no products to add.
+                        assert_eq!(body["access_token"], "access-1");
+                        assert!(body.get("products").is_none() && body.get("transactions").is_none());
+                        return Ok(json!({"link_token": "link-fix", "expiration": "2026-11-19T12:30:00Z", "hosted_link_url": "https://hosted.plaid.com/link/fix"}));
+                    }
                     assert_eq!(body["transactions"]["days_requested"], 730);
                     Ok(json!({"link_token": if hosted { "link-hosted" } else { "link-sdk" }, "expiration": "2026-11-19T12:30:00Z",
                               "hosted_link_url": if hosted { json!("https://hosted.plaid.com/link/abc") } else { Value::Null }}))
@@ -878,6 +1004,10 @@ mod tests {
                     ]}))
                 }
                 "/institutions/get_by_id" => Ok(json!({"institution": {"name": "Desjardins"}})),
+                "/item/get" => {
+                    assert_eq!(body["access_token"], "access-1");
+                    Ok(json!({"item": {"item_id": "item-1", "error": null, "consent_expiration_time": "2027-02-01T05:00:00Z"}}))
+                }
                 "/link/token/get" => Ok(json!({"link_sessions": [{"results": {"item_add_results": [
                     {"public_token": "public-1", "institution": {"name": "Desjardins", "institution_id": "ins_desj"}}]}}]})),
                 "/transactions/sync" => Ok(pages.lock().unwrap().next().unwrap_or_else(|| json!({"added": [], "modified": [], "removed": [], "next_cursor": "end", "has_more": false}))),
@@ -921,6 +1051,8 @@ mod tests {
         assert_eq!((visa.r#type, visa.balance), (relay_money::model::AccountType::Credit, -4000));
         let bank = &list(&e).unwrap()[0];
         assert!(bank.last_sync.is_some() && bank.problem.is_none());
+        // Each read keeps when the bank's consent runs out.
+        assert_eq!(bank.expires_at, Some("2027-02-01T05:00:00Z".parse::<jiff::Timestamp>().unwrap().as_millisecond()));
         // The token is sealed on disk.
         let sealed: Vec<u8> = store(&e, |st| Ok(st.conn.query_row("SELECT token FROM banks", [], |r| r.get(0)).unwrap())).unwrap();
         assert!(!sealed.windows(8).any(|w| w == b"access-1"));
@@ -936,16 +1068,125 @@ mod tests {
         let e = engine();
         let (f, calls) = fake(vec![]);
         set_fake(&e, f);
-        let (token, url, expires) = hosted_link(&e, "Tally", Some("tallyrs://banks")).unwrap();
+        let (token, url, expires) = hosted_link(&e, "Tally", Some("tallyrs://banks"), None).unwrap();
         assert_eq!((token.as_str(), url.as_str()), ("link-hosted", "https://hosted.plaid.com/link/abc"));
         assert!(expires.is_some());
-        let (state, bank, _) = link_status(&e, &token).unwrap();
-        assert_eq!((state.as_str(), bank.map(|b| b.id)), ("connected", Some("item-1".to_string())));
-        let (state, bank, _) = link_status(&e, &token).unwrap();
-        assert_eq!((state.as_str(), bank.map(|b| b.institution)), ("connected", Some("Desjardins".to_string())));
+        let (state, bank, _, now) = link_status(&e, &token).unwrap();
+        assert_eq!((state.as_str(), bank.map(|b| b.id), now), ("connected", Some("item-1".to_string()), true));
+        let (state, bank, _, now) = link_status(&e, &token).unwrap();
+        assert_eq!((state.as_str(), bank.map(|b| b.institution), now), ("connected", Some("Desjardins".to_string()), false));
         assert_eq!(calls.lock().unwrap().iter().filter(|c| *c == "/item/public_token/exchange").count(), 1);
         assert_eq!(link_status(&e, "someone-elses").unwrap_err().code, "money.not_found");
-        assert_eq!(hosted_link(&e, "Tally", Some("javascript://x")).unwrap_err().code, "money.invalid");
+        assert_eq!(hosted_link(&e, "Tally", Some("javascript://x"), None).unwrap_err().code, "money.invalid");
+    }
+
+    #[test]
+    fn a_bank_signed_in_to_again_keeps_its_token_its_accounts_and_its_place() {
+        let e = engine();
+        let (f, calls) = fake(vec![]);
+        let signed_out = Arc::new(Mutex::new(true));
+        let out = signed_out.clone();
+        let plaid: Fake = Arc::new(move |path: &str, body: &Value| {
+            match path {
+                "/transactions/sync" if *out.lock().unwrap() => {
+                    return Err(PlaidError { code: "ITEM_LOGIN_REQUIRED".into(), message: "the login details of this item have changed".into(), display: None });
+                }
+                // Update mode hands back no public token: the session only finishes.
+                "/link/token/get" if body["link_token"] == "link-fix" => {
+                    return Ok(json!({"link_sessions": [{"finished_at": "2026-11-21T15:00:00Z", "exit": null, "results": {"item_add_results": []}}]}));
+                }
+                _ => {}
+            }
+            f(path, body)
+        });
+        set_fake(&e, plaid);
+        exchange(&e, "public-1", Some("ins_desj"), Some("Desjardins")).unwrap();
+        follow(&e, "item-1", Some("2026-11-01"), &[BankFollow { id: "acc-chq".into(), follow: true, into: None }]).unwrap();
+        assert_eq!(read_all(&e).unwrap().failed, 1);
+        let before = list(&e).unwrap().remove(0);
+        assert_eq!(before.problem.as_deref(), Some("Sign in to Desjardins again"));
+        assert_eq!(hosted_link(&e, "Tally", None, Some("item-gone")).unwrap_err().code, "money.not_found");
+        let (token, url, _) = hosted_link(&e, "Tally", Some("tallyrs://banks"), Some("item-1")).unwrap();
+        assert_eq!((token.as_str(), url.as_str()), ("link-fix", "https://hosted.plaid.com/link/fix"));
+        *signed_out.lock().unwrap() = false;
+        let (state, bank, _, now) = link_status(&e, &token).unwrap();
+        let bank = bank.unwrap();
+        assert_eq!((state.as_str(), bank.id.as_str(), now), ("connected", "item-1", true));
+        assert_eq!(bank.problem, None, "signed in again: nothing for the person to do");
+        assert!(bank.expires_at.is_some(), "Plaid's new end for the consent is kept");
+        assert_eq!(bank.accounts, before.accounts, "the accounts and what they follow stay as they were");
+        // Asked again, the same answer, and nothing more asked of Plaid.
+        let asked = calls.lock().unwrap().len();
+        let (state, again, _, now) = link_status(&e, &token).unwrap();
+        assert_eq!((state.as_str(), again.map(|b| b.id), now), ("connected", Some("item-1".to_string()), false));
+        assert_eq!(calls.lock().unwrap().len(), asked);
+        // The one exchange is the bank's first connect, never the sign-in again.
+        assert_eq!(calls.lock().unwrap().iter().filter(|c| *c == "/item/public_token/exchange").count(), 1);
+        // The same token, the same cursor: the next read goes on from where it stopped.
+        let read = read_all(&e).unwrap();
+        assert_eq!((read.banks, read.failed), (1, 0));
+        assert_eq!(list(&e).unwrap()[0].problem, None);
+    }
+
+    #[test]
+    fn a_bank_that_still_refuses_after_a_sign_in_again_says_why() {
+        let e = engine();
+        let (f, _) = fake(vec![]);
+        let plaid: Fake = Arc::new(move |path: &str, body: &Value| match path {
+            "/link/token/get" => Ok(json!({"link_sessions": [{"finished_at": "2026-11-21T15:00:00Z", "exit": null}]})),
+            "/item/get" => Ok(json!({"item": {"error": {"error_code": "ITEM_LOCKED", "error_message": "locked"}, "consent_expiration_time": null}})),
+            _ => f(path, body),
+        });
+        set_fake(&e, plaid);
+        exchange(&e, "public-1", Some("ins_desj"), Some("Desjardins")).unwrap();
+        let (token, _, _) = hosted_link(&e, "Tally", None, Some("item-1")).unwrap();
+        for _ in 0..2 {
+            let (state, bank, problem, now) = link_status(&e, &token).unwrap();
+            assert_eq!((state.as_str(), bank.is_none(), problem.as_deref(), now), ("exited", true, Some("Sign in to Desjardins again"), false));
+        }
+        assert_eq!(list(&e).unwrap()[0].problem.as_deref(), Some("Sign in to Desjardins again"));
+    }
+
+    #[test]
+    fn a_sign_in_again_left_on_plaids_page_changes_nothing() {
+        let e = engine();
+        let (f, _) = fake(vec![]);
+        let plaid: Fake = Arc::new(move |path: &str, body: &Value| {
+            if path == "/link/token/get" {
+                return Ok(json!({"link_sessions": [{"finished_at": "2026-11-21T15:00:00Z", "exit": {"error": null}}]}));
+            }
+            f(path, body)
+        });
+        set_fake(&e, plaid);
+        exchange(&e, "public-1", Some("ins_desj"), Some("Desjardins")).unwrap();
+        store(&e, |st| st.conn.execute("UPDATE banks SET problem = 'Sign in to Desjardins again'", []).map(|_| ()).map_err(sql)).unwrap();
+        let (token, _, _) = hosted_link(&e, "Tally", None, Some("item-1")).unwrap();
+        let (state, bank, _, now) = link_status(&e, &token).unwrap();
+        assert_eq!((state.as_str(), bank.is_none(), now), ("exited", true, false));
+        assert_eq!(list(&e).unwrap()[0].problem.as_deref(), Some("Sign in to Desjardins again"));
+    }
+
+    #[test]
+    fn a_plaid_db_from_before_the_sign_in_again_opens_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plaid.db");
+        {
+            let old = Connection::open(&path).unwrap();
+            old.execute_batch(
+                "CREATE TABLE banks (item_id TEXT PRIMARY KEY, institution TEXT NOT NULL, institution_id TEXT NOT NULL DEFAULT '',
+                    token BLOB NOT NULL, cursor TEXT NOT NULL DEFAULT '', since TEXT, last_sync INTEGER, problem TEXT, created_at INTEGER NOT NULL);
+                 CREATE TABLE links (link_token TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, item_id TEXT, exited INTEGER NOT NULL DEFAULT 0,
+                    problem TEXT, created_at INTEGER NOT NULL);
+                 INSERT INTO banks (item_id, institution, token, created_at) VALUES ('item-1', 'Desjardins', x'00', 1);",
+            ).unwrap();
+        }
+        let st = Store::open(Some(&path)).unwrap();
+        let bank = bank_view(&st.conn, "item-1").unwrap().unwrap();
+        assert_eq!((bank.institution.as_str(), bank.expires_at), ("Desjardins", None));
+        st.conn.execute("UPDATE links SET fix_item = 'item-1'", []).unwrap();
+        drop(st);
+        // Opened again, nothing is added twice.
+        Store::open(Some(&path)).unwrap();
     }
 
     #[test]
@@ -967,11 +1208,18 @@ mod tests {
 
     #[test]
     fn session_outcomes_read_as_plaid_writes_them() {
-        assert_eq!(session_outcome(&json!({"link_sessions": []})), Outcome::Waiting);
-        assert_eq!(session_outcome(&json!({"link_sessions": [{"on_success": {"public_token": "p", "metadata": {"institution": {"name": "WS", "institution_id": "ins_ws"}}}}]})),
-            Outcome::Connected { public_token: "p".into(), institution_id: Some("ins_ws".into()), institution: Some("WS".into()) });
-        assert_eq!(session_outcome(&json!({"link_sessions": [{"exit": {"error": {"display_message": "The bank is down"}}}]})), Outcome::Exited(Some("The bank is down".into())));
-        assert_eq!(session_outcome(&json!({"link_sessions": [{"exit": {}}]})), Outcome::Exited(None));
+        assert_eq!(session_outcome(&json!({"link_sessions": []}), false), Outcome::Waiting);
+        let success = json!({"link_sessions": [{"on_success": {"public_token": "p", "metadata": {"institution": {"name": "WS", "institution_id": "ins_ws"}}}}]});
+        assert_eq!(session_outcome(&success, false), Outcome::Connected { public_token: "p".into(), institution_id: Some("ins_ws".into()), institution: Some("WS".into()) });
+        assert_eq!(session_outcome(&json!({"link_sessions": [{"exit": {"error": {"display_message": "The bank is down"}}}]}), false), Outcome::Exited(Some("The bank is down".into())));
+        assert_eq!(session_outcome(&json!({"link_sessions": [{"exit": {}}]}), false), Outcome::Exited(None));
+        // A sign-in again: any success, or a session finished with no exit, is done.
+        assert_eq!(session_outcome(&success, true), Outcome::Renewed);
+        let finished = json!({"link_sessions": [{"finished_at": "2026-11-21T15:00:00Z", "on_success": null, "exit": null}]});
+        assert_eq!((session_outcome(&finished, true), session_outcome(&finished, false)), (Outcome::Renewed, Outcome::Waiting));
+        assert_eq!(session_outcome(&json!({"link_sessions": [{"started_at": "2026-11-21T15:00:00Z"}]}), true), Outcome::Waiting);
+        assert_eq!(session_outcome(&json!({"link_sessions": [{"finished_at": "2026-11-21T15:00:00Z", "exit": {}}]}), true), Outcome::Exited(None));
+        assert_eq!(session_outcome(&json!({"link_sessions": [{"finished_at": "2026-11-21T15:00:00Z", "on_exit": {"status": "requires_credentials"}}]}), true), Outcome::Exited(None));
     }
 
     #[test]

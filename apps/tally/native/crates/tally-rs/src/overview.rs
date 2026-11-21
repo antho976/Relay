@@ -1,17 +1,20 @@
 //! Overview (DESIGN.md, "Premium, dark and light"): the month on a dark card with the wallet
 //! picture, this week and the next bill side by side, recent entries, the budgets under the most
 //! pressure, and the goals last, as picture cards that swipe sideways. Adding is the tab bar's +.
+//! A bank that asks for a sign-in now or within the week says so first, and opens Banks.
 
 use relay_money::copy;
 use relay_money::model::TxType;
 use relay_money::pace::PaceStatus;
 
 use crate::app::App;
+use crate::banks_logic::{self, Renew};
 use crate::cx;
 use crate::draw::{Rgba, Text, WIDTH};
 use crate::kit::{self, CW, Ctx, KeyKind, PAD, PicCard, ty};
 use crate::model::{self, Home};
 use crate::nav::Route;
+use crate::settings_kit::{self as sk, Row};
 use crate::theme;
 use crate::ui::HScroll;
 
@@ -38,6 +41,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     // A paired phone gets no sample ledger: loading one turns sync off for good and forgets the
     // pull bookkeeping, as onboarding knows (it hides its sample key once paired too).
     let paired = app.st.sync.paired(&app.store);
+    let renew = if paired { crate::banks::renewals(app).to_vec() } else { Vec::new() };
     {
         let mut cx = cx!(app);
         let st = &mut app.st.overview;
@@ -47,7 +51,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 cx.c.text(words, PAD, pg.top, Text::new(ty::UI, p.ink2));
                 pg.top + 40.0
             }
-            Some(h) => content(&mut cx, h, st, paired, pg.top + 8.0, dt, &mut act, &mut moving),
+            Some(h) => content(&mut cx, h, st, paired, &renew, pg.top + 8.0, dt, &mut act, &mut moving),
         };
     }
     app.page_end(&pg, bottom);
@@ -78,7 +82,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn content(cx: &mut Ctx, h: &Home, st: &mut State, paired: bool, top: f32, dt: f32, act: &mut Option<Act>, moving: &mut bool) -> f32 {
+fn content(cx: &mut Ctx, h: &Home, st: &mut State, paired: bool, renew: &[Renew], top: f32, dt: f32, act: &mut Option<Act>, moving: &mut bool) -> f32 {
     let s = &h.s;
     let mut y = top;
 
@@ -115,6 +119,10 @@ fn content(cx: &mut Ctx, h: &Home, st: &mut State, paired: bool, top: f32, dt: f
     }
 
     y = hero(cx, h, y, act) + 28.0;
+    // Under the month, not over it: the month stays the answer, the bank the one thing to do.
+    if !renew.is_empty() {
+        y = sign_in(cx, renew, y, act) + 28.0;
+    }
     y = week_and_bill(cx, h, y, act) + 30.0;
     y = recent(cx, h, y, act) + 26.0;
     if !s.budgets.is_empty() {
@@ -124,6 +132,20 @@ fn content(cx: &mut Ctx, h: &Home, st: &mut State, paired: bool, top: f32, dt: f
         y = goals(cx, h, st, y, dt, act, moving);
     }
     y
+}
+
+/// The banks that want a sign-in, one row each, in the waiting colour: a tap opens Banks, where
+/// Fix signs in.
+fn sign_in(cx: &mut Ctx, renew: &[Renew], y: f32, act: &mut Option<Act>) -> f32 {
+    let p = cx.p;
+    let now = jiff::Timestamp::now().as_millisecond();
+    let words: Vec<(String, String)> = renew.iter().map(|r| banks_logic::home_words(r, now)).collect();
+    let rows: Vec<Row> = words.iter().map(|(t, l)| Row::new(t).glyph("lock", p.waiting).line(l).opens()).collect();
+    let (h, tapped) = sk::rows_card(cx, y, &rows);
+    if tapped.is_some() {
+        *act = Some(Act::Go(Route::Banks));
+    }
+    y + h
 }
 
 /// The month on a dark card that stays dark on Light, like a metal card in a light wallet: what

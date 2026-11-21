@@ -5313,7 +5313,7 @@
       }
     },
     "money.bank.hosted_link": {
-      "summary": "A Plaid sign-in on a page Plaid hosts, for a phone without Plaid's SDK; money.bank.link_status says how it went",
+      "summary": "A Plaid sign-in on a page Plaid hosts, for a phone without Plaid's SDK, for a new bank or (with bank_id) to sign in to one again; money.bank.link_status says how it went",
       "kind": "mutation",
       "audit": "always",
       "undo": "none",
@@ -22585,6 +22585,14 @@
           ],
           "description": "Set when the person must act, e.g. \"Sign in to Desjardins again\"."
         },
+        "expires_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "When the bank's consent runs out and it asks for a sign-in again, epoch ms, as Plaid\nlast said; absent when the bank sets no end. Signing in again before then\n(`money.bank.hosted_link` with `bank_id`) moves it."
+        },
         "accounts": {
           "type": "array",
           "items": {
@@ -22776,6 +22784,13 @@
             "null"
           ],
           "description": "Where Plaid's page sends the browser at the end, e.g. tallyrs://banks."
+        },
+        "bank_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A bank already connected, to sign in to again (Plaid's update mode): its login is renewed\nin place, nothing is exchanged, and its accounts and choices stay. Absent: a new bank."
         }
       },
       "required": [
@@ -22834,7 +22849,7 @@
               "type": "null"
             }
           ],
-          "description": "The new connection, when connected."
+          "description": "The new connection (or the bank signed in to again), when connected."
         },
         "problem": {
           "type": [

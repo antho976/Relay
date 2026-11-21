@@ -358,7 +358,7 @@ fn register_banks(e: &mut Engine) {
         |_: &mut Ctx, _, link_token: String| Ok(BankLinkTokenOut { link_token }),
     );
     e.register_staged::<BankHostedLink, _>(
-        |ctx, p| crate::plaid::hosted_link(ctx.engine(), &p.client_name, p.completion_redirect_uri.as_deref()),
+        |ctx, p| crate::plaid::hosted_link(ctx.engine(), &p.client_name, p.completion_redirect_uri.as_deref(), p.bank_id.as_deref()),
         |_: &mut Ctx, _, (link_token, hosted_link_url, expires_at)| Ok(BankHostedLinkOut { link_token, hosted_link_url, expires_at }),
     );
     e.register_staged::<BankExchange, _>(
@@ -367,7 +367,14 @@ fn register_banks(e: &mut Engine) {
     );
     e.register_staged::<BankLinkStatus, _>(
         |ctx, p| crate::plaid::link_status(ctx.engine(), &p.link_token),
-        |_: &mut Ctx, _, (state, bank, problem)| Ok(BankLinkStatusOut { state, bank, problem }),
+        |ctx: &mut Ctx, _, (state, bank, problem, now)| {
+            // Just connected or signed in to again: read now, rather than at the next four-hourly
+            // turn (a new bank follows nothing yet, so that read passes it by).
+            if now {
+                ctx.after_commit(|engine| crate::plaid::read_soon(&engine));
+            }
+            Ok(BankLinkStatusOut { state, bank, problem })
+        },
     );
     // Following an account may make its ledger account: money.changed, then the first read.
     e.register_staged::<BankAccounts, _>(

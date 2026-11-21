@@ -50,11 +50,13 @@ All are remote-allowed for a paired Tally device. Errors are ordinary bus errors
 | `money.bank.refresh` | `{}` | `{}`: reads every bank now |
 | `money.bank.remove` | `{ bank_id }` | `{}`: `/item/remove`, drops the token; entries already written stay |
 
-| `money.bank.hosted_link` | `{ client_name, completion_redirect_uri? }` | `{ link_token, hosted_link_url, expires_at?: epoch ms }`: Plaid `/link/token/create` as for `link_token`, but with no `android_package_name` and with `hosted_link: { completion_redirect_uri }`; `hosted_link_url` is Plaid's page for that token |
+| `money.bank.hosted_link` | `{ client_name, completion_redirect_uri?, bank_id? }`; with `bank_id`, a sign-in again to that bank (see "Signing in again") | `{ link_token, hosted_link_url, expires_at?: epoch ms }`: Plaid `/link/token/create` as for `link_token`, but with no `android_package_name` and with `hosted_link: { completion_redirect_uri }`; `hosted_link_url` is Plaid's page for that token |
 | `money.bank.link_status` | `{ link_token }` | `{ state: "waiting" \| "connected" \| "exited" \| "expired", bank?: Bank, problem?: string }`; see "Hosted Link" below |
 
-`Bank` is `{ id, institution, last_sync?: epoch ms, problem?: string, accounts: [{ id, name, mask,
-kind, follow, into? }] }`. `kind` is Plaid's subtype in words ("checking", "credit card", "tfsa").
+`Bank` is `{ id, institution, last_sync?: epoch ms, problem?: string, expires_at?: epoch ms,
+accounts: [{ id, name, mask, kind, follow, into? }] }`. `expires_at` is when the bank's consent runs
+out and it asks for a sign-in again (Plaid's `consent_expiration_time` from `/item/get`, asked on
+every read); absent when the bank sets no end. `kind` is Plaid's subtype in words ("checking", "credit card", "tfsa").
 `problem` is set when the person must act ("Sign in to Desjardins again"), from Plaid's
 `ITEM_LOGIN_REQUIRED` and the like; otherwise Plaid's `display_message`, else "Plaid said: …".
 Ids: a bank's `id` is Plaid's `item_id`, an account's `id` Plaid's `account_id`, and `into` the
@@ -93,6 +95,27 @@ what came of it, so the phone only ever asks.
 
 The Kotlin app keeps using the SDK and `money.bank.link_token` / `money.bank.exchange`; both ways
 end in the same `Bank` and the same `money.bank.accounts`.
+
+### Signing in again
+
+A bank asks for a sign-in again when the person changes their password, when it wants a new
+security check, or when its consent runs out (some banks set an end, often around a year). The bank
+decides; nobody can skip it. What Tally RS makes short is everything around the sign-in:
+
+- **Fix is one sign-in.** `money.bank.hosted_link` with `bank_id` opens Plaid's **update mode** for
+  that bank on the same hosted page: the link token is made with the bank's own access token and no
+  products. Nothing is exchanged: the server keeps the same access token, cursor, accounts and
+  choices. `money.bank.link_status` answers `connected` with the bank once a session finished with
+  no exit (update mode may hand back no public token); the server then asks `/item/get` how the
+  bank stands, clears `problem` unless Plaid still holds an error, keeps the new `expires_at`, and
+  reads the banks at once.
+- **A week's warning.** Banks with `problem`, or with `expires_at` within 7 days (Plaid's own
+  `PENDING_EXPIRATION` comes a week ahead), get Fix on their row, a line on Overview under the
+  month, and a count beside Connected banks in the drawer. Tally lists the banks
+  (`money.bank.list`, which reaches neither Plaid nor a bank) on its Banks page and in the
+  background every 6 hours while open, and keeps the result in `prefs.json`.
+- **An older server** refuses `bank_id` (`bus.schema`); Fix then says to disconnect the bank and
+  connect it again, as before.
 
 ## Turning a transaction into an entry
 
