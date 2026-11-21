@@ -232,6 +232,57 @@ fn hosted_link_answers() {
     assert_eq!(banks::parse_link_state(&json!({ "state": "connected" })), None, "connected names its bank");
 }
 
+#[test]
+fn a_bank_says_a_week_ahead_that_it_wants_a_sign_in() {
+    const DAY: i64 = 24 * 60 * 60 * 1000;
+    let now = jiff::Timestamp::now().as_millisecond();
+    let bank = |id: &str, name: &str, problem: Option<&str>, expires: Option<i64>| {
+        let mut b = bank_json();
+        b["id"] = json!(id);
+        b["institution"] = json!(name);
+        if let Some(p) = problem {
+            b["problem"] = json!(p);
+        }
+        if let Some(at) = expires {
+            b["expires_at"] = json!(at);
+        }
+        banks::parse_bank(&b).unwrap()
+    };
+    let list = vec![
+        bank("far", "Far Bank", None, Some(now + 60 * DAY)),
+        bank("soon", "Wealthsimple", None, Some(now + 3 * DAY)),
+        bank("none", "No End", None, None),
+        bank("out", "Desjardins", Some("Sign in to Desjardins again"), None),
+    ];
+    assert_eq!(list[1].expires_at, Some(now + 3 * DAY));
+    let r = banks::renewals(&list, now);
+    // Signed out first, then the soonest; a bank a month off, or with no end, says nothing yet.
+    let ids: Vec<&str> = r.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, ["out", "soon"]);
+    assert!(r[0].signed_out && !r[1].signed_out);
+    assert_eq!(banks::renew_line(&r[0], now), "Signed out: sign in to bring new purchases in");
+    assert!(banks::renew_line(&r[1], now).starts_with("Asks you to sign in again by "), "{}", banks::renew_line(&r[1], now));
+    assert!(banks::wants_sign_in(&list[1], now) && !banks::wants_sign_in(&list[0], now) && !banks::wants_sign_in(&list[2], now));
+    // A consent already over is signed out, whatever the last read said.
+    assert!(banks::renewals(&[bank("over", "Over", None, Some(now - DAY))], now)[0].signed_out);
+    assert_eq!(banks::by_words(now, now), "today");
+    assert_eq!(banks::by_words(now + DAY, now), "tomorrow");
+    assert!(banks::by_words(now + 20 * DAY, now).starts_with("by "));
+    assert_eq!(banks::home_words(&r[0], now), ("Sign in to Desjardins again".into(), "New purchases are paused until you do".into()));
+    let (title, line) = banks::home_words(&r[1], now);
+    assert_eq!(title, "Sign in to Wealthsimple again");
+    assert!(line.starts_with("By ") && line.ends_with(", or new purchases pause"), "{line}");
+
+    // Kept for Overview, and listed again only every few hours.
+    let mut s = store("renewals");
+    assert!(banks::check_due(&s, now));
+    banks::remember_renewals(&mut s, &list, now);
+    assert_eq!(banks::renew_pref(&s), r);
+    assert!(!banks::check_due(&s, now + 60_000));
+    assert!(banks::check_due(&s, now + banks::CHECK_EVERY_MS));
+    assert!(banks::check_due(&s, now - DAY), "a clock set back asks again");
+}
+
 // The screens, drawn (TALLY_SHOT_DIR=dir cargo test -p tally-rs --test setup shots)
 
 struct TestHost {
@@ -322,7 +373,12 @@ fn shots() {
         troubled["id"] = json!("b2");
         troubled["institution"] = json!("Wealthsimple");
         troubled["problem"] = json!("Sign in again to keep syncing");
-        tally::banks::show(&mut a, json!({ "banks": [listed, troubled] }), None);
+        let mut soon = bank_json();
+        soon["id"] = json!("b3");
+        soon["institution"] = json!("TD Canada Trust");
+        soon["last_sync"] = json!(jiff::Timestamp::now().as_millisecond() - 20 * 60_000);
+        soon["expires_at"] = json!(jiff::Timestamp::now().as_millisecond() + 4 * 24 * 3_600_000);
+        tally::banks::show(&mut a, json!({ "banks": [listed, troubled, soon] }), None);
         shoot(&mut a, &mut clock, &mut gfx, &dir.join(format!("banks-list-{palette}.png")));
         tally::banks::show(&mut a, json!({ "banks": [] }), Some(bank_json()));
         shoot(&mut a, &mut clock, &mut gfx, &dir.join(format!("banks-choose-{palette}.png")));

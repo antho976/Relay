@@ -299,8 +299,8 @@ with no Plaid SDK, opens Plaid's hosted page and asks `money.bank.link_status` u
 | --- | --- |
 | `money.bank.list` | the banks, their accounts, which are followed and where they land; no call to Plaid |
 | `money.bank.link_token` | `/link/token/create` for the SDK on an Android phone |
-| `money.bank.hosted_link` | the same with Plaid's hosted page: `link_token`, `hosted_link_url`, `expires_at` |
-| `money.bank.link_status` | `waiting`, `connected` (with the bank), `exited` (with Plaid's reason) or `expired`, read from `/link/token/get`; on success it makes the exchange itself, once per link token |
+| `money.bank.hosted_link` | the same with Plaid's hosted page: `link_token`, `hosted_link_url`, `expires_at`; with `bank_id`, Plaid's update mode for that bank (a sign-in again) |
+| `money.bank.link_status` | `waiting`, `connected` (with the bank), `exited` (with Plaid's reason) or `expired`, read from `/link/token/get`; on success it makes the exchange itself, once per link token, or for a sign-in again clears the bank's problem from `/item/get`; either way the banks are read at once |
 | `money.bank.exchange` | `/item/public_token/exchange`, then `/accounts/get`; every account unfollowed |
 | `money.bank.accounts` | which accounts to follow, where each lands, and `since`; the first read starts in the background |
 | `money.bank.refresh` | reads every bank now, in the background |
@@ -325,7 +325,11 @@ after the engine starts, every four hours after, and on `money.bank.refresh` / a
 transaction for the lot, then the cursor moves. A bank that fails keeps its cursor and says why in
 `problem` ("Sign in to Desjardins again" for `ITEM_LOGIN_REQUIRED` and its kin); the others go on.
 Following an account not followed before, or moving `since` earlier, reads the bank from the start
-again: what was passed over is brought in, what is there already is not written twice. No webhook
+again: what was passed over is brought in, what is there already is not written twice. Each read
+also asks `/item/get` when the bank's consent runs out (`expires_at` on the bank), so the phone can
+warn a week ahead; a bank signed in to again keeps its access token, cursor and choices (Tally's
+`docs/PLAID.md`, "Signing in again"). `plaid.db` gains new columns when opened
+(`plaid::ADDED`), so a file from before them still opens. No webhook
 yet: transactions wait for the next read, and a hosted sign-in is learned from `/link/token/get`.
 Plaid's `client_user_id` is one fixed value, since the server holds one person's ledger, and a link
 token is answered to whoever holds it (the door does not tell the engine which device is asking).

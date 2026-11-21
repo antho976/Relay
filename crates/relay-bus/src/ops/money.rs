@@ -265,6 +265,11 @@ result!(#[schemars(rename = "MoneyBank")] BankView {
     pub last_sync: Option<i64>,
     /// Set when the person must act, e.g. "Sign in to Desjardins again".
     pub problem: Option<String>,
+    /// When the bank's consent runs out and it asks for a sign-in again, epoch ms, as Plaid
+    /// last said; absent when the bank sets no end. Signing in again before then
+    /// (`money.bank.hosted_link` with `bank_id`) moves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
     pub accounts: Vec<BankAccountView>,
 });
 result!(#[schemars(rename = "MoneyBankListOut")] BankListOut { pub banks: Vec<BankView> });
@@ -312,6 +317,10 @@ payload!(#[schemars(rename = "MoneyBankHostedLinkIn")] BankHostedLinkIn {
     pub client_name: String,
     /// Where Plaid's page sends the browser at the end, e.g. tallyrs://banks.
     pub completion_redirect_uri: Option<String>,
+    /// A bank already connected, to sign in to again (Plaid's update mode): its login is renewed
+    /// in place, nothing is exchanged, and its accounts and choices stay. Absent: a new bank.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bank_id: Option<String>,
 });
 result!(#[schemars(rename = "MoneyBankHostedLinkOut")] BankHostedLinkOut {
     pub link_token: String,
@@ -321,12 +330,12 @@ result!(#[schemars(rename = "MoneyBankHostedLinkOut")] BankHostedLinkOut {
     pub expires_at: Option<i64>,
 });
 op!(BankHostedLink, "money.bank.hosted_link", BankHostedLinkIn => BankHostedLinkOut,
-    OpMeta::mutation(Scope::Global, 12, "A Plaid sign-in on a page Plaid hosts, for a phone without Plaid's SDK; money.bank.link_status says how it went").actors(Actors::UserOnly));
+    OpMeta::mutation(Scope::Global, 12, "A Plaid sign-in on a page Plaid hosts, for a phone without Plaid's SDK, for a new bank or (with bank_id) to sign in to one again; money.bank.link_status says how it went").actors(Actors::UserOnly));
 payload!(#[schemars(rename = "MoneyBankLinkStatusIn")] BankLinkStatusIn { pub link_token: String });
 result!(#[schemars(rename = "MoneyBankLinkStatusOut")] BankLinkStatusOut {
     /// waiting, connected, exited or expired.
     pub state: String,
-    /// The new connection, when connected.
+    /// The new connection (or the bank signed in to again), when connected.
     pub bank: Option<BankView>,
     /// Plaid's reason, when exited.
     pub problem: Option<String>,
