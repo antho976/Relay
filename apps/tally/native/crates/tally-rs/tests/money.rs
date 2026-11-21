@@ -277,10 +277,11 @@ fn the_accounts_page_leads_with_spending_and_says_balances_in_words() {
     assert_eq!(accounts::top_line(&s), "64% of it from Chequing");
     assert_eq!(s.default_name.as_deref(), Some("Chequing"));
     assert!(s.can_transfer() && s.any_tracked());
-    assert_eq!((s.tracked_held, s.tracked_owed), (312_050, 0));
+    // A card counts what was spent on it as owed, even with no starting balance.
+    assert_eq!((s.tracked_held, s.tracked_owed), (312_050, 3_600));
     assert_eq!(accounts::caption(&s.active[0], &fmt()), "Chequing · default · holds $3,120.50");
-    // A card with no starting balance tracks only what was spent from it.
-    assert_eq!(accounts::caption(&s.active[1], &fmt()), "Credit card");
+    // A card with no starting balance owes what was spent on it.
+    assert_eq!(accounts::caption(&s.active[1], &fmt()), "Credit card · owes $36.00");
     assert_eq!(accounts::balance_words(AccountType::Credit, -41_220, &fmt()), "owes $412.20");
     assert_eq!(accounts::balance_words(AccountType::Cash, -5_000, &fmt()), "$50.00 below zero");
     let free = accounts::free_templates(&["desjardins visa".to_string()]);
@@ -380,11 +381,11 @@ fn net_worth_counts_accounts_with_a_balance_and_reads_last_month_end() {
     spend(&mut store, visa, None, 5_000);
     let rows = accounts::rows(&store).unwrap();
     let w = accounts::worth_reading(&store, &rows, today).unwrap();
-    // A card given nowhere to start is left out: its balance would be spending alone.
-    assert_eq!((w.of(chequing), w.of(visa)), (Some(80_000), None));
-    assert_eq!(w.total(), 80_000);
-    assert_eq!(w.change(), Some(-20_000));
-    assert_eq!(accounts::change_line(&w, &fmt()).unwrap(), format!("−$200 since {}", since.strftime("%B %-d")));
+    // A card counts from zero: what was spent on it is what it owes, so paying it moves nothing.
+    assert_eq!((w.of(chequing), w.of(visa)), (Some(80_000), Some(-5_000)));
+    assert_eq!(w.total(), 75_000);
+    assert_eq!(w.change(), Some(-25_000));
+    assert_eq!(accounts::change_line(&w, &fmt()).unwrap(), format!("−$250 since {}", since.strftime("%B %-d")));
     assert_eq!(accounts::balances_on(&store, since).unwrap()[&chequing], 100_000);
 
     // The card's next payment comes from the bill that pays it.

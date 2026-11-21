@@ -177,10 +177,13 @@ pub fn denial(code_: Option<&str>) -> Failure {
 }
 
 /// Tries each route until a door greets, answers with `hello`, and hands back the admitted
-/// connection: the encrypted ones first, then the clear ones [`wire::may_reach`] allows (a pairing
-/// kept from before this order is tried in it too). A refusal after the hello is final (a spent
-/// code, a revoked phone); a route that cannot be reached moves on to the next. `one_shot`:
-/// pairing, where the code may be spent once sent, so no other route is tried after it went.
+/// connection: [`wire::ordered_routes`] of them (a pairing kept from before that order is tried
+/// in it too). A refusal after the hello is final (a spent code, a revoked phone); a route that
+/// cannot be reached moves on to the next. `one_shot`: pairing, where the code may be spent once
+/// sent, so no other route is tried after it went.
+///
+/// A door at a clear address on the network proves nothing about itself, so its saying it does
+/// not know this phone is not believed: that reads as the server not reached, never as unpaired.
 pub fn connect(dial: &dyn Dial, routes: &[String], hello: &dyn Fn(&Greeting) -> String, welcome_wait: Duration, one_shot: bool) -> Result<Session, Failure> {
     if routes.is_empty() {
         return Err(fail(code::UNREACHABLE, "There is no address to reach your server at. Connect again."));
@@ -238,7 +241,17 @@ pub fn connect(dial: &dyn Dial, routes: &[String], hello: &dyn Fn(&Greeting) -> 
         };
         match welcome {
             Some(w) if w.ok => return Ok(Session { lines, greeting, welcome: w }),
-            w => return Err(denial(w.and_then(|w| w.error).as_deref())),
+            w => {
+                let f = denial(w.and_then(|w| w.error).as_deref());
+                if f.code == code::UNPAIRED && !wire::is_secure(route) && !wire::is_loopback(route) {
+                    last = fail(code::UNREACHABLE, "Something at your server's unencrypted address refused this phone's key. Tally RS does not take that as your server forgetting this phone; if it did, disconnect and connect again.");
+                    if one_shot {
+                        break;
+                    }
+                    continue;
+                }
+                return Err(f);
+            }
         }
     }
     Err(last)
@@ -325,6 +338,9 @@ pub fn hello(http: &dyn Http, server: &str) -> Result<bool, Failure> {
     Ok(o.and_then(|o| o.get("cloud").and_then(Value::as_bool)).unwrap_or(false))
 }
 
+/// How long the server keeps a request to connect open (its `TTL_MS`).
+pub const ENROLL_TTL_MS: i64 = 15 * 60_000;
+
 /// Asks to sync. The owner gets a DM; the answer carries what to poll [`claim`] with.
 pub fn enroll(http: &dyn Http, server: &str, device_name: &str, now_ms: i64) -> Result<Enrollment, Failure> {
     reachable(&wire::api(server))?;
@@ -341,7 +357,11 @@ pub fn enroll(http: &dyn Http, server: &str, device_name: &str, now_ms: i64) -> 
             id,
             verifier,
             code: str_of(&o, "code").unwrap_or_else(|| wire::code_of(&challenge)),
-            expires_at: get("expiresAt").and_then(|v| v.as_i64()).unwrap_or(now_ms + 15 * 60_000),
+            // The server's `expiresAt` is on its clock, which this phone's may be minutes off:
+            // a phone running fast would read a fresh request as long over. The deadline kept is
+            // on this phone's clock instead, the server's window from now; the server still says
+            // when the request ran out (`claim`'s Expired), which ends the wait first if sooner.
+            expires_at: now_ms + ENROLL_TTL_MS,
             notified: get("notified").and_then(|v| v.as_bool()).unwrap_or(false),
         });
     }
@@ -618,7 +638,7 @@ mod tests {
         let dial = Routes(Default::default());
         let c = Creds { host: "h".into(), routes: ["ws://8.8.8.8:7420", "ws://192.168.1.20:7420", "wss://s.example/join/r"].map(String::from).to_vec(), device: "d".into(), token: "t".into(), paired_at: 0 };
         assert!(open(&dial, &c).is_err());
-        assert_eq!(*dial.0.lock().unwrap(), vec!["wss://s.example/join/r".to_string(), "ws://192.168.1.20:7420".to_string()]);
+        assert_eq!(*dial.0.lock().unwrap(), vec!["wss://s.example/join/r".to_string()], "no clear fallback beside an encrypted route");
         let only_public = Creds { routes: vec!["ws://8.8.8.8:7420".into()], ..c };
         assert_eq!(open(&dial, &only_public).err().map(|f| f.code), Some(code::INSECURE.to_string()));
         // A server typed as http:// on the internet is never asked anything.
@@ -628,6 +648,64 @@ mod tests {
         assert!(matches!(claim(&NoHttp, &e), Claim::Trouble(_)));
         assert!(WsDial.open("ws://8.8.8.8:7420").is_err());
         assert!(UreqHttp::new().get("http://anthobot.bid/api/tally").is_err());
+    }
+
+    /// A door that greets and refuses every proof with `error`.
+    struct Refuses(&'static str, std::sync::Mutex<Vec<String>>);
+
+    struct RefusingLines(VecDeque<String>, &'static str);
+
+    impl Lines for RefusingLines {
+        fn send(&mut self, _line: &str) -> Result<(), Failure> {
+            self.0.push_back(json!({"v": 1, "ok": false, "error": self.1}).to_string());
+            Ok(())
+        }
+        fn next(&mut self, _wait: Duration) -> Result<String, Failure> {
+            self.0.pop_front().ok_or_else(closed)
+        }
+    }
+
+    impl Dial for Refuses {
+        fn open(&self, route: &str) -> Result<Box<dyn Lines>, Failure> {
+            self.1.lock().unwrap().push(route.to_string());
+            let greet = json!({"v": 1, "relay": "remote", "host": "", "host_id": "", "instance": "cloud", "challenge": "c"}).to_string();
+            Ok(Box::new(RefusingLines([greet].into(), self.0)))
+        }
+    }
+
+    #[test]
+    fn a_clear_door_saying_it_forgot_this_phone_is_not_believed() {
+        let c = |routes: &[&str]| Creds { host: "h".into(), routes: routes.iter().map(|r| r.to_string()).collect(), device: "d".into(), token: "t".into(), paired_at: 0 };
+        let door = Refuses("auth.unknown_device", Default::default());
+        // A gateway answering on the LAN address of a phone paired over wss is never asked.
+        assert_eq!(open(&door, &c(&["ws://192.168.1.20:7420", "wss://s.example/join/r"])).err().map(|f| f.code), Some(code::UNPAIRED.to_string()));
+        assert_eq!(*door.1.lock().unwrap(), vec!["wss://s.example/join/r".to_string()]);
+        // A door with only clear addresses: its refusal is no proof the server forgot this phone.
+        assert_eq!(open(&door, &c(&["ws://192.168.1.20:7420"])).err().map(|f| f.code), Some(code::UNREACHABLE.to_string()));
+        // This machine's own door is believed.
+        assert_eq!(open(&door, &c(&["ws://127.0.0.1:7430"])).err().map(|f| f.code), Some(code::UNPAIRED.to_string()));
+    }
+
+    /// A server whose clock is `behind_ms` behind this phone's.
+    struct SlowClock(i64);
+
+    impl Http for SlowClock {
+        fn get(&self, url: &str) -> Result<(u16, Option<Value>), Failure> {
+            panic!("asked {url}")
+        }
+        fn post(&self, _url: &str, _body: &Value) -> Result<(u16, Option<Value>), Failure> {
+            let server_now = 1_000_000_000 - self.0;
+            Ok((201, Some(json!({"id": "e1", "code": "AB12", "expiresAt": server_now + ENROLL_TTL_MS, "notified": true}))))
+        }
+    }
+
+    #[test]
+    fn a_request_lasts_its_window_on_this_phones_clock() {
+        // This phone runs 20 minutes fast: the server's own deadline is already past here.
+        let e = enroll(&SlowClock(20 * 60_000), "https://anthobot.bid", "d", 1_000_000_000).unwrap();
+        assert_eq!(e.expires_at, 1_000_000_000 + ENROLL_TTL_MS);
+        let e = enroll(&SlowClock(-20 * 60_000), "https://anthobot.bid", "d", 1_000_000_000).unwrap();
+        assert_eq!(e.expires_at, 1_000_000_000 + ENROLL_TTL_MS);
     }
 
     #[test]

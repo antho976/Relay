@@ -19,6 +19,9 @@ pub const FLAG_PLAIN: f32 = 128.0;
 pub const FLAG_BUTT: f32 = 256.0;
 
 pub const ATLAS_SIZE: u32 = 2048;
+/// The picture atlas's side where the GPU allows it ([`Gfx::images_size`]): twelve pictures.
+/// Some GLES 3.0 phones stop at 2048, which holds four at full size: there the canvas keeps
+/// pictures at half size ([`crate::draw::Canvas::add_image`]), and twenty fit.
 pub const IMAGES_SIZE: u32 = 3072;
 
 /// A run of instances drawn under one clip rectangle (pixels: x, y, w, h), or none.
@@ -72,6 +75,8 @@ pub struct Gfx {
     globals: wgpu::Buffer,
     atlas: wgpu::Texture,
     images: wgpu::Texture,
+    /// The picture atlas's side: [`IMAGES_SIZE`], or less where the GPU stops short of it.
+    images_size: u32,
     instances: wgpu::Buffer,
     instance_capacity: usize,
     pub format: wgpu::TextureFormat,
@@ -242,9 +247,11 @@ impl Gfx {
             view_formats: &[],
         });
         let atlas_view = atlas.create_view(&wgpu::TextureViewDescriptor::default());
+        // A texture past the device's limit fails validation, which panics.
+        let images_size = IMAGES_SIZE.min(device.limits().max_texture_dimension_2d);
         let images = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("images"),
-            size: wgpu::Extent3d { width: IMAGES_SIZE, height: IMAGES_SIZE, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d { width: images_size, height: images_size, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -353,7 +360,7 @@ impl Gfx {
         });
         let instance_capacity = 2048;
         let instances = Self::instance_buffer(&device, instance_capacity);
-        Ok(Gfx { instance, adapter, device, queue, pipeline, bind_group, globals, atlas, images, instances, instance_capacity, format })
+        Ok(Gfx { instance, adapter, device, queue, pipeline, bind_group, globals, atlas, images, images_size, instances, instance_capacity, format })
     }
 
     fn instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
@@ -381,9 +388,19 @@ impl Gfx {
         }
     }
 
+    /// The picture atlas's side, in pixels: the canvas places pictures in that much room
+    /// ([`crate::draw::Canvas::set_images_size`]).
+    pub fn images_size(&self) -> u32 {
+        self.images_size
+    }
+
     /// Copy pictures waiting in the canvas into the image atlas.
     pub fn upload_images(&self, uploads: &mut Vec<AtlasUpload>) {
         for up in uploads.drain(..) {
+            // Placed for a larger atlas than this one: writing it would fail validation.
+            if up.x + up.w > self.images_size || up.y + up.h > self.images_size {
+                continue;
+            }
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.images,

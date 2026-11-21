@@ -38,7 +38,10 @@ pub struct State {
     /// A restore's pick is out with the platform.
     asked: bool,
     reading: Option<Job<Result<BackupFile, String>>>,
-    sharing: Option<Job<String>>,
+    /// A file being made to share: its name, type and bytes. The worker only makes it; the share
+    /// sheet is opened from the frame, on the loop's thread, as every call into the activity is
+    /// (from a worker it could reach an activity already destroyed).
+    sharing: Option<Job<(String, &'static str, Vec<u8>)>>,
     /// A backup read and waiting on the person's yes.
     restore: Option<(BackupFile, logic::RestorePreview)>,
     /// What the last act on Backup did (words, whether it failed).
@@ -93,6 +96,15 @@ pub fn back(app: &mut App) -> bool {
 }
 
 pub fn draw(app: &mut App, dt: f32) -> bool {
+    // Opened anew (not uncovered by Back): a question left open when the person went elsewhere
+    // (the drawer, a notification) is not asked again with its destructive key ready. A backup
+    // read for a restore is answered later, by `backup_poll`, so open_backup's file still stands.
+    if app.fresh && !app.returned {
+        let st = &mut app.st.settings;
+        st.erasing = false;
+        st.sampling = false;
+        st.restore = None;
+    }
     if app.fresh || app.st.settings.read_at != Some(app.ledger_gen) {
         reload(app);
     }
@@ -103,6 +115,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let bottom;
     {
         let paired = app.st.sync.paired(&app.store);
+        let sync_off = app.store.pref(sync::pref::PHONE_ONLY).is_some();
         let line = app.st.sync.line(&app.store, sync::now_ms());
         let mode = app.appearance();
         let locale = app.store.locale.clone();
@@ -134,7 +147,11 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         if dialog {
             widgets::release(&mut cx, held);
             if st.erasing {
-                let body = if paired {
+                let body = if paired && sync_off {
+                    // Sync off, no sync comes by itself: the first page then asks whether to turn
+                    // it on and bring the ledger back.
+                    "Every entry, account, budget, bill and goal goes, on this phone only: your server keeps its ledger. Sync is off, so it comes back only if you turn sync on. To start this phone from nothing, disconnect first."
+                } else if paired {
                     "Every entry, account, budget, bill and goal goes, on this phone only: your server keeps its ledger, and the next sync brings it back. To start this phone from nothing, disconnect first."
                 } else {
                     "Every entry, account, budget, bill and goal on this phone goes. This cannot be undone."
@@ -168,12 +185,20 @@ fn perform(app: &mut App, act: Act) {
         Act::Back => {
             app.pop();
         }
-        Act::Go(r) => app.push(r),
+        Act::Go(r) => {
+            // Backup opened afresh starts clean: no line left from its last visit, and no pick
+            // still counted as asked for (a cancelled one would take the next file picked
+            // anywhere). Cleared here, not on the page's first frame: open_backup asks for its
+            // file just after Backup opens, and that must stand.
+            if r == Route::Backup {
+                let st = &mut app.st.settings;
+                st.result = None;
+                st.asked = false;
+            }
+            app.push(r)
+        }
         Act::Mode(m) => app.set_appearance(m),
-        Act::Currency(code) => match app.store.ledger.set_currency(&code) {
-            Ok(()) => app.invalidate(),
-            Err(e) => app.say(e.to_string(), None),
-        },
+        Act::Currency(code) => change_currency(app, &code),
         Act::MonthStart(d) => match app.store.ledger.set_month_start_day(d) {
             Ok(()) => app.invalidate(),
             Err(e) => app.say(e.to_string(), None),
@@ -192,6 +217,8 @@ fn perform(app: &mut App, act: Act) {
                     app.st.sync.keep_on_phone(&mut app.store);
                     let _ = app.store.set_pref("onboarded", "1");
                     app.invalidate();
+                    // Its bills post what is due today now, not tomorrow.
+                    app.bills_changed();
                     app.say("Sample household loaded, on this phone only; Erase everything removes it", None);
                 }
                 Err(e) => app.say(e, None),
@@ -246,6 +273,8 @@ fn perform(app: &mut App, act: Act) {
                     app.st.settings.result = Some((words.clone(), false));
                     let _ = app.store.set_pref("onboarded", "1");
                     app.invalidate();
+                    // The restored bills post what is due today now, not tomorrow.
+                    app.bills_changed();
                     app.say(words, None);
                 }
                 Err(e) => app.st.settings.result = Some((format!("Nothing was restored: {e}"), true)),
@@ -254,11 +283,36 @@ fn perform(app: &mut App, act: Act) {
     }
 }
 
+/// Takes a backup file already in hand (one picked as the system stopped Tally, or a test) as
+/// if Backup's own Restore had asked for it: it is read and waits on the same "Restore this
+/// backup?" question. Nothing is restored without the person's yes. Open Backup first.
+pub fn open_backup(app: &mut App, name: String, bytes: Vec<u8>) {
+    // As Restore itself: while paired, the restore would be undone by the next sync.
+    if app.st.sync.paired(&app.store) {
+        app.st.settings.result = Some((RESTORE_PAIRED.into(), true));
+        return;
+    }
+    let st = &mut app.st.settings;
+    st.result = None;
+    st.asked = true;
+    app.file_picked(name, bytes);
+}
+
+/// A backup read and waiting on the person's yes (for tests).
+pub fn restore_waiting(app: &App) -> bool {
+    app.st.settings.restore.is_some()
+}
+
 /// Why Restore waits while this phone is paired.
 const RESTORE_PAIRED: &str = "Disconnect from your server first, in Settings, Your server. While this phone is connected, its next sync would put your server's ledger back in place of the restore.";
 
 /// Moves Backup's file work along. True while something is still on its way.
 fn backup_poll(app: &mut App) -> bool {
+    // The person cancelled the picker: Restore no longer waits, and the next file picked (by
+    // Import, say) is not taken for a backup.
+    if app.st.settings.asked && settings_files::take_cancelled() {
+        app.st.settings.asked = false;
+    }
     if app.st.settings.asked
         && let Some((_, bytes)) = settings_files::take_picked(app)
     {
@@ -288,8 +342,9 @@ fn backup_poll(app: &mut App) -> bool {
     if let Some(job) = &st.sharing {
         match job.poll() {
             Poll::Running => {}
-            Poll::Done(words) => {
-                st.result = Some((words, false));
+            Poll::Done((name, mime, bytes)) => {
+                app.host.share_file(&name, mime, &bytes);
+                st.result = Some((format!("{name} is ready: pick where it goes"), false));
                 st.sharing = None;
             }
             Poll::Lost => {
@@ -310,14 +365,9 @@ fn share_backup(app: &mut App) {
             return;
         }
     };
-    let host = app.host.clone();
     let name = logic::backup_file_name(&today);
     app.st.settings.result = None;
-    app.st.settings.sharing = Some(Job::spawn(move || {
-        let text = relay_money::backup::encode(&file);
-        host.share_file(&name, "application/json", text.as_bytes());
-        format!("{name} is ready: pick where it goes")
-    }));
+    app.st.settings.sharing = Some(Job::spawn(move || (name, "application/json", relay_money::backup::encode(&file).into_bytes())));
 }
 
 fn share_csv(app: &mut App) {
@@ -327,14 +377,9 @@ fn share_csv(app: &mut App) {
         return;
     }
     let fmt = app.store.formatter();
-    let host = app.host.clone();
     let name = logic::csv_file_name(&settings_files::stamp_today());
     app.st.settings.result = None;
-    app.st.settings.sharing = Some(Job::spawn(move || {
-        let text = relay_money::csv::encode(&rows, &fmt.currency, fmt.fraction_digits);
-        host.share_file(&name, "text/csv", text.as_bytes());
-        format!("{name} is ready: pick where it goes")
-    }));
+    app.st.settings.sharing = Some(Job::spawn(move || (name, "text/csv", relay_money::csv::encode(&rows, &fmt.currency, fmt.fraction_digits).into_bytes())));
 }
 
 // The pages
@@ -654,4 +699,38 @@ fn about(cx: &mut Ctx, mut y: f32) -> f32 {
     ];
     let (h, _) = sk::group(cx, y, Some("How it is made"), &rows);
     y + h + 8.0
+}
+
+/// Change the ledger's currency, refusing one with other decimals once anything is kept (every
+/// amount is in minor units and nothing converts them).
+pub fn change_currency(app: &mut App, code: &str) {
+    let code = code.to_string();
+    match {
+        // Budgets, goals, bills and pot money are kept in minor units too, and relay-money's
+        // own check counts only accounts and entries: with other decimals they would all read
+        // 100 times off. Refuse here whenever the ledger holds anything at all.
+        let fd = relay_money::money::fraction_digits;
+        let current = app.store.ledger.settings().ok().and_then(|s| fd(&s.currency));
+        if fd(&code).is_some() && fd(&code) != current && app.store.holds_anything() {
+            Err(relay_money::ledger::LedgerError::Invalid("different decimals".into()))
+        } else {
+            app.store.ledger.set_currency(&code)
+        }
+    } {
+        Ok(()) => app.invalidate(),
+        Err(e) => {
+            // relay-money's refusal names the retired Kotlin app, which converted amounts;
+            // Tally RS does not convert, so say what it can do instead.
+            let fd = relay_money::money::fraction_digits;
+            let current = app.store.ledger.settings().ok().and_then(|s| fd(&s.currency));
+            if fd(&code).is_some() && fd(&code) != current {
+                app.say(
+                    "That currency has a different number of decimals, so it can only be chosen while nothing is kept yet (budgets and goals count too). Pick one with the same decimals, or Erase everything first.",
+                    None,
+                )
+            } else {
+                app.say(e.to_string(), None)
+            }
+        }
+    }
 }

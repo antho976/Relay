@@ -54,6 +54,20 @@ android {
     }
 }
 
+// The library is built outside Gradle (tools/build-lib.sh). Without it the APK would install and
+// crash at launch, so the build stops and says what to run.
+val checkNativeLib = tasks.register("checkNativeLib") {
+    // A local, not a script property: the configuration cache cannot keep the script itself.
+    val jniLibsDir = layout.projectDirectory.dir("src/main/jniLibs").asFile
+    doLast {
+        val libs = jniLibsDir.listFiles()?.filter { File(it, "libtally.so").isFile }.orEmpty()
+        if (libs.isEmpty()) {
+            throw GradleException("No libtally.so under ${jniLibsDir}: run native/tools/build-lib.sh [abi ...] first")
+        }
+    }
+}
+tasks.named("preBuild") { dependsOn(checkNativeLib) }
+
 dependencies {
     // The version android-activity 0.6 is written against.
     implementation("androidx.games:games-activity:4.4.0")

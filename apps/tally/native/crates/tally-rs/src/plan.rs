@@ -19,7 +19,7 @@ use relay_money::period::BudgetPeriod;
 use relay_money::recurrence::Frequency;
 use relay_money::views::{AccountView, CategoryView};
 
-use crate::app::App;
+use crate::app::{App, Draft, PageDraft};
 use crate::cx;
 use crate::draw::{Rgba, Text, WIDTH};
 use crate::kit::{self, CW, Ctx, KeyKind, PAD, PicCard, ty};
@@ -47,7 +47,8 @@ pub struct State {
     goal_edit: Option<GoalEditor>,
     undo: Option<Undo>,
     /// A goal opened from its "Add money" button: its page opens with the amount field typing.
-    add_money: Option<i64>,
+    /// Overview's goal cards set it too.
+    pub(crate) add_money: Option<i64>,
 }
 
 /// The sheet open over a Plan page.
@@ -66,6 +67,8 @@ struct Undo {
     words: String,
     act: UndoAct,
     until_ns: u64,
+    /// The page it was made on: another Plan page opened afresh drops it.
+    route: Route,
 }
 
 enum UndoAct {
@@ -104,14 +107,26 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     refresh(app);
     let route = app.route().clone();
     let toast_bottom = app.canvas.h - app.canvas.inset_bottom - 8.0;
+    let editor = matches!(route, Route::BudgetEdit { .. } | Route::BillEdit { .. } | Route::GoalEdit { .. });
+    // An Undo belongs to the page it was made on, as the app's toast does: another page opened
+    // (not uncovered by Back) drops it, so "Rent deleted · Undo" never sits over the goals. An
+    // editor opened from its list keeps it, unshown, for the list Back leads to.
+    if app.fresh && !app.returned && !editor && app.st.plan.undo.as_ref().is_some_and(|u| u.route != route) {
+        app.st.plan.undo = None;
+    }
     let until = app.st.plan.undo.as_ref().map(|u| u.until_ns).filter(|t| app.now_ns <= *t);
     let live = until.is_some();
     if !live {
         app.st.plan.undo = None;
     }
     // The Undo pill takes its own taps before the page under it; with the keyboard up it is not
-    // drawn, and takes none.
-    let shown = live && !app.keyboard_up;
+    // drawn, and takes none. Nor on an editor: there it would sit over the keypad's bottom row and
+    // eat its taps. It stays live, and shows again back on the list until it runs out. Nor over an
+    // open sheet: it would cover the sheet's bottom rows and run Undo when one is tapped.
+    // Nor while the app's own toast is up: it sits in the same place, draws over this one and
+    // would take its taps. The newer of the two shows (`say_undo` clears the app's).
+    let app_toast = app.toast.as_ref().is_some_and(|t| app.now_ns <= t.until_ns);
+    let shown = live && !app.keyboard_up && !editor && app.st.plan.sheet.is_none() && !app_toast;
     let toast_tap = match app.ui.tap {
         Some((x, y)) if shown && (16.0..WIDTH - 16.0).contains(&x) && (toast_bottom - 60.0..toast_bottom - 12.0).contains(&y) => app.ui.tap.take(),
         _ => None,
@@ -126,7 +141,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         Route::GoalEdit { id } => goal_edit_page(app, dt, id),
         _ => false,
     };
-    if live && app.route() == &route && !app.keyboard_up {
+    if shown && app.route() == &route && !app.keyboard_up && app.st.plan.sheet.is_none() {
         let words = app.st.plan.undo.as_ref().map(|u| u.words.clone()).unwrap_or_default();
         let undone = {
             let mut cx = cx!(app);
@@ -147,6 +162,74 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
 /// Back closes the sheet open over a Plan page, if one is.
 pub fn back(app: &mut App) -> bool {
     app.st.plan.sheet.take().is_some()
+}
+
+/// A Plan editor's draft, kept while the system has stopped Tally ([`crate::app::Saved`]).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum PlanDraft {
+    Bill(BillDraft),
+    Goal(GoalDraft),
+    /// The limit as typed on the keypad ("12." stays "12.").
+    Budget { input: String },
+    /// A goal's money in or out card.
+    GoalPage { amount: String, note: String, adding: bool },
+}
+
+/// The bill editor's fields as typed and picked. Dates as YYYY-MM-DD.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BillDraft {
+    name: String,
+    kind: TxType,
+    amount_text: String,
+    account: Option<i64>,
+    to: Option<i64>,
+    category: Option<i64>,
+    frequency: Frequency,
+    interval: i32,
+    anchor: String,
+    auto_post: bool,
+    active: bool,
+    #[serde(default)]
+    all_categories: bool,
+}
+
+/// The goal editor's fields as typed and picked.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GoalDraft {
+    name: String,
+    target_text: String,
+    target_date: Option<String>,
+    color: i64,
+    kind: GoalKind,
+    account: Option<i64>,
+    percent: i64,
+    by_share: bool,
+}
+
+/// The drafts of the Plan's editors whose pages are open, for [`App::saved`].
+pub fn saved_drafts(app: &App) -> Vec<PageDraft> {
+    let st = &app.st.plan;
+    let mut out = Vec::new();
+    let mut keep = |route: Route, draft: PlanDraft| {
+        if let Some(depth) = app.depth_of(&route) {
+            out.push(PageDraft { depth, route, draft: Draft::Plan(draft) });
+        }
+    };
+    if let Some(b) = &st.budget {
+        keep(Route::BudgetEdit { category: b.category }, PlanDraft::Budget { input: b.input.text.clone() });
+    }
+    if let Some(b) = &st.bill {
+        keep(Route::BillEdit { id: b.route_id }, PlanDraft::Bill(b.draft()));
+    }
+    if let Some(g) = &st.goal_edit {
+        keep(Route::GoalEdit { id: g.route_id }, PlanDraft::Goal(g.draft()));
+    }
+    if let Some(g) = &st.goal
+        && (g.adding || !g.amount.is_empty() || !g.note.is_empty())
+    {
+        keep(Route::Goal { id: g.id }, PlanDraft::GoalPage { amount: g.amount.clone(), note: g.note.clone(), adding: g.adding });
+    }
+    out
 }
 
 fn is_plan(r: &Route) -> bool {
@@ -175,7 +258,10 @@ fn refresh(app: &mut App) {
 
 fn say_undo(app: &mut App, words: String, act: UndoAct) {
     if is_plan(app.route()) {
-        app.st.plan.undo = Some(Undo { words, act, until_ns: app.now_ns + 5_000_000_000 });
+        // The app's toast (an earlier notice) would hide this one: the newer shows.
+        app.toast = None;
+        let route = app.route().clone();
+        app.st.plan.undo = Some(Undo { words, act, until_ns: app.now_ns + 5_000_000_000, route });
     } else {
         // Off the Plan its toast is not drawn: the app's carries the Undo.
         app.say_undo(words, move |app: &mut App| put_back(app, act));
@@ -193,10 +279,33 @@ fn undo(app: &mut App, act: UndoAct) {
 fn put_back(app: &mut App, act: UndoAct) -> Result<(), String> {
     match act {
         UndoAct::Budgets(list) => list.into_iter().try_for_each(|(c, a)| app.store.ledger.budget_set(c, a).map_err(|e| e.to_string())),
-        UndoAct::Bill(id) => app.store.sql().and_then(|c| store::bill_restore(c, id)),
+        UndoAct::Bill(id) => {
+            app.store.sql().and_then(|c| store::bill_restore(c, id))?;
+            // Back, it posts what fell due while it was gone, now rather than tomorrow.
+            app.bills_changed();
+            Ok(())
+        }
         UndoAct::Goal(d) => app.store.sql().and_then(|c| store::goal_restore(c, &d)),
-        UndoAct::Contribution(id) => app.store.sql().and_then(|c| store::contribution_restore(c, id)),
+        UndoAct::Contribution(id) => app.store.sql().and_then(|c| {
+            // A take-out put back takes the money out again: refused when the pot no longer holds
+            // it (what was put in meanwhile removed), as removing money put in is.
+            let row = c.query_row("SELECT goal_id, amount FROM contributions WHERE id = ?1", [id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)));
+            if let Ok((goal, amount)) = row
+                && let Some(g) = store::goal(c, goal)?
+                && let Some(why) = restore_problem(g.contributed, amount)
+            {
+                return Err(why.into());
+            }
+            store::contribution_restore(c, id)
+        }),
     }
+}
+
+/// Why putting back a removed contribution of `amount` into a pot holding `held` is refused, when
+/// it is: a take-out put back must not leave the pot below nothing. Money put in can always come
+/// back.
+pub fn restore_problem(held: i64, amount: i64) -> Option<&'static str> {
+    (amount < 0 && held + amount < 0).then_some("The pot no longer holds what was taken out")
 }
 
 /// While the Plan cannot be read: the header, and what is wrong.
@@ -467,6 +576,8 @@ fn editor_end(app: &mut App, fr: &Frame, bottom: f32) {
         let need = y + h + 16.0 - fr.foot_top;
         if need > sc.off {
             sc.off = need;
+            // Drawn with the old offset: draw again now, not on the next key.
+            app.wake_at(app.now_ns);
         }
     }
 }
@@ -483,7 +594,13 @@ fn split_tap(cx: &mut Ctx, foot_top: f32) -> Option<(f32, f32)> {
 fn budget_edit_page(app: &mut App, dt: f32, category: Option<i64>) -> bool {
     if (app.fresh && !app.returned) || app.st.plan.budget.as_ref().is_none_or(|b| b.category != category) {
         match BudgetEditor::open(app, category) {
-            Ok(b) => app.st.plan.budget = Some(b),
+            Ok(mut b) => {
+                // Restored after the system stopped Tally: the limit as it was being typed.
+                if let Some(Draft::Plan(PlanDraft::Budget { input })) = app.take_draft() {
+                    b.input = AmountInput::new(&input, b.input.fraction_digits);
+                }
+                app.st.plan.budget = Some(b);
+            }
             Err(e) => {
                 app.say(e, None);
                 app.pop();
@@ -840,13 +957,33 @@ fn bills_body(cx: &mut Ctx, d: &PlanData, top: f32, act: &mut Option<Act>) -> f3
 fn bill_edit_page(app: &mut App, dt: f32, id: Option<i64>) -> bool {
     if (app.fresh && !app.returned) || app.st.plan.bill.as_ref().is_none_or(|b| b.route_id != id) {
         match BillEditor::open(app, id) {
-            Ok(b) => app.st.plan.bill = Some(b),
+            // Opened for a bill that is gone (deleted meanwhile, or by a sync before a restart
+            // brought this page back): say so and leave, rather than offer a "New bill" whose Save
+            // would make a different one. A draft kept for it goes too.
+            Ok(b) if id.is_some() && b.stored.is_none() => {
+                let _ = app.take_draft();
+                leave_gone(app, "This bill is gone");
+                return true;
+            }
+            Ok(mut b) => {
+                if let Some(Draft::Plan(PlanDraft::Bill(d))) = app.take_draft() {
+                    b.apply(d);
+                }
+                app.st.plan.bill = Some(b);
+            }
             Err(e) => {
                 app.say(e, None);
                 app.pop();
                 return false;
             }
         }
+    } else if app.fresh && app.returned
+        && let Some(b) = app.st.plan.bill.as_mut()
+    {
+        // Back from the account sheet's "New account": read the accounts again, and pick the
+        // one just made for the side that asked (only that one: an account a sync brought in
+        // meanwhile would move the bill).
+        b.came_back(&app.store);
     }
     let pg = app.page_begin(dt);
     let fmt = app.store.formatter();
@@ -865,9 +1002,16 @@ fn bill_edit_page(app: &mut App, dt: f32, id: Option<i64>) -> bool {
                 Sheet::Account | Sheet::ToAccount => {
                     let chosen = if which == Sheet::ToAccount { e.to } else { e.account };
                     let list: Vec<&AccountView> = e.accounts.iter().filter(|a| !a.archived || Some(a.id) == chosen).collect();
-                    let items: Vec<(String, Option<String>)> = list.iter().map(|a| (a.name.clone(), Some(fmt.format(a.balance)))).collect();
+                    let mut items: Vec<(String, Option<String>)> = list.iter().map(|a| (a.name.clone(), Some(fmt.format(a.balance)))).collect();
+                    // With no accounts the sheet would be empty and nothing here could make one:
+                    // it always offers a new one, as the entry editor's does.
+                    items.push(("New account".into(), Some("Add one for the bill".into())));
                     let selected = list.iter().position(|a| Some(a.id) == chosen);
                     match widgets::sheet_list(&mut cx, "Account", &items, selected, sheet_scroll, dt) {
+                        SheetOut::Pick(i) if i >= list.len() => {
+                            e.made_for = Some(which);
+                            act = Some(Act::Go(Route::AccountEdit { id: None, kind: None }));
+                        }
                         SheetOut::Pick(i) => {
                             if which == Sheet::ToAccount {
                                 e.to = Some(list[i].id);
@@ -1099,6 +1243,9 @@ struct BillEditor {
     categories: Vec<CategoryView>,
     today: Date,
     digits: u32,
+    /// The account sheet's "New account" was picked from this side: the account made comes back
+    /// picked there.
+    made_for: Option<Sheet>,
 }
 
 impl BillEditor {
@@ -1138,6 +1285,7 @@ impl BillEditor {
             categories,
             today,
             digits: fmt.fraction_digits,
+            made_for: None,
         };
         if let Some(b) = stored {
             e.name = b.name.clone();
@@ -1155,6 +1303,60 @@ impl BillEditor {
         }
         e.resolve();
         Ok(e)
+    }
+
+    fn draft(&self) -> BillDraft {
+        BillDraft {
+            name: self.name.clone(),
+            kind: self.kind,
+            amount_text: self.amount_text.clone(),
+            account: self.account,
+            to: self.to,
+            category: self.category,
+            frequency: self.frequency,
+            interval: self.interval,
+            anchor: self.anchor.to_string(),
+            auto_post: self.auto_post,
+            active: self.active,
+            all_categories: self.all_categories,
+        }
+    }
+
+    /// Puts back a draft kept while the system stopped Tally, over what was just read. An
+    /// account or category gone since is dropped by `resolve`, which picks again.
+    fn apply(&mut self, d: BillDraft) {
+        self.name = d.name;
+        self.kind = d.kind;
+        self.amount_text = d.amount_text;
+        self.account = d.account;
+        self.to = d.to;
+        self.category = d.category;
+        self.frequency = d.frequency;
+        self.interval = d.interval.clamp(1, logic::MAX_INTERVAL);
+        if let Ok(a) = d.anchor.parse() {
+            self.anchor = a;
+        }
+        self.auto_post = d.auto_post;
+        self.active = d.active;
+        self.all_categories = d.all_categories;
+        self.resolve();
+    }
+
+    /// Back on the editor from the account it asked to make: the accounts are read again, and the
+    /// newest one is picked for the side that asked.
+    fn came_back(&mut self, st: &model::Store) {
+        let Some(side) = self.made_for.take() else { return };
+        let had: Vec<i64> = self.accounts.iter().map(|a| a.id).collect();
+        let Ok(accounts) = st.ledger.accounts() else { return };
+        self.accounts = accounts;
+        if let Some(new) = self.accounts.iter().filter(|a| !a.archived && !had.contains(&a.id)).map(|a| a.id).max() {
+            if side == Sheet::ToAccount {
+                self.to = Some(new);
+            } else {
+                self.account = Some(new);
+            }
+        }
+        self.resolve();
     }
 
     /// Fills what is not picked yet and drops picks that no longer fit (PlanLogic.kt `resolveBill`).
@@ -1389,9 +1591,19 @@ fn goal_page(app: &mut App, dt: f32, id: i64) -> bool {
     // ledger generation below reads the goal again).
     let renew = (app.fresh && !app.returned) || app.st.plan.goal.as_ref().is_none_or(|g| g.id != id);
     if renew {
-        let adding = app.st.plan.add_money.take() == Some(id);
-        app.st.plan.goal = Some(GoalPage { id, read_gen: 0, goal: None, line: None, contributions: Vec::new(), pace: None, amount: String::new(), note: String::new(), selected: None, adding });
-        if adding {
+        let add_money = app.st.plan.add_money.take() == Some(id);
+        let (mut amount, mut note, mut adding) = (String::new(), String::new(), add_money);
+        // Restored after the system stopped Tally: the money in or out card as it was, and the
+        // field that was typing as the app restored it (its text is what was typed). Focusing
+        // the amount afresh would clear that text, and the field would copy the blank in.
+        let restored = if let Some(Draft::Plan(PlanDraft::GoalPage { amount: a, note: n, adding: open })) = app.take_draft() {
+            (amount, note, adding) = (a, n, open || adding);
+            true
+        } else {
+            false
+        };
+        app.st.plan.goal = Some(GoalPage { id, read_gen: 0, goal: None, line: None, contributions: Vec::new(), pace: None, amount, note, selected: None, adding });
+        if add_money && !restored {
             let mut cx = cx!(app);
             focus_field(&mut cx, PUT_AMOUNT, true);
         }
@@ -1399,6 +1611,14 @@ fn goal_page(app: &mut App, dt: f32, id: i64) -> bool {
     if renew || app.st.plan.goal.as_ref().is_some_and(|g| g.read_gen != app.ledger_gen) {
         let mut page = app.st.plan.goal.take().expect("set above");
         page.read(app);
+        // Only a pot has the money in or out card: for a goal gone, or one no longer a pot, it
+        // closes, and the keyboard typing in one of its fields goes with it.
+        if page.adding && app.st.plan.data.is_some() && page.goal.as_ref().is_none_or(|g| g.kind != GoalKind::Savings) {
+            page.adding = false;
+            if matches!(app.focus.id, Some(PUT_AMOUNT | PUT_NOTE)) {
+                app.finish_typing();
+            }
+        }
         app.st.plan.goal = Some(page);
     }
     let pg = app.page_begin(dt);
@@ -1406,25 +1626,41 @@ fn goal_page(app: &mut App, dt: f32, id: i64) -> bool {
     let bottom;
     {
         let mut cx = cx!(app);
-        let State { goal, data, sheet, sheet_scroll, .. } = &mut app.st.plan;
-        let (Some(page), Some(d)) = (goal.as_mut(), data.as_ref()) else { return false };
-        let held = if sheet.is_some() { widgets::hold(&mut cx) } else { None };
-        bottom = goal_body(&mut cx, page, d, pg.top, &mut act);
-        if *sheet == Some(Sheet::GoalMore) {
-            widgets::release(&mut cx, held);
-            let items = vec![("Edit goal".to_string(), None), ("Delete goal".to_string(), Some("Its contributions go with it. Undo brings both back.".to_string()))];
-            match widgets::sheet_list(&mut cx, page.line.as_ref().map_or("Goal", |l| l.name.as_str()), &items, None, sheet_scroll, dt) {
-                SheetOut::Pick(0) => act = Some(Act::Go(Route::GoalEdit { id: Some(id) })),
-                SheetOut::Pick(_) => act = Some(Act::DeleteGoal(id)),
-                SheetOut::Close => act = Some(Act::Sheet(None)),
-                SheetOut::Nothing => {}
+        let State { goal, data, sheet, sheet_scroll, problem: prob, .. } = &mut app.st.plan;
+        if let (Some(page), Some(d)) = (goal.as_mut(), data.as_ref()) {
+            let held = if sheet.is_some() { widgets::hold(&mut cx) } else { None };
+            bottom = goal_body(&mut cx, page, d, pg.top, &mut act);
+            if *sheet == Some(Sheet::GoalMore) {
+                widgets::release(&mut cx, held);
+                let items = vec![("Edit goal".to_string(), None), ("Delete goal".to_string(), Some("Its contributions go with it. Undo brings both back.".to_string()))];
+                match widgets::sheet_list(&mut cx, page.line.as_ref().map_or("Goal", |l| l.name.as_str()), &items, None, sheet_scroll, dt) {
+                    SheetOut::Pick(0) => act = Some(Act::Go(Route::GoalEdit { id: Some(id) })),
+                    SheetOut::Pick(_) => act = Some(Act::DeleteGoal(id)),
+                    SheetOut::Close => act = Some(Act::Sheet(None)),
+                    SheetOut::Nothing => {}
+                }
             }
+        } else {
+            // The Plan's figures did not load: say why, with Back, as the other Plan pages do.
+            bottom = problem(&mut cx, pg.top, "Goal", prob.as_deref(), &mut act);
         }
     }
     app.page_end(&pg, bottom);
     let open = app.st.plan.sheet.is_some();
     perform(app, act);
     pg.moving || open
+}
+
+/// Why `amount` can't be taken out of a pot holding `held`, when it can't: a pot never goes
+/// below nothing (taking $500 from $100 would leave it at -$400).
+pub fn take_out_problem(held: i64, amount: i64, fmt: &MoneyFormatter) -> Option<String> {
+    if held <= 0 {
+        Some("Nothing in this pot to take out".to_string())
+    } else if amount > held {
+        Some(format!("This pot holds {}. Take out that or less", fmt.format(held)))
+    } else {
+        None
+    }
 }
 
 fn goal_body(cx: &mut Ctx, s: &mut GoalPage, d: &PlanData, top: f32, act: &mut Option<Act>) -> f32 {
@@ -1466,8 +1702,16 @@ fn goal_body(cx: &mut Ctx, s: &mut GoalPage, d: &PlanData, top: f32, act: &mut O
     };
     let mw = kit::money(cx, &big, PAD, y, 40.0, p.ink, p.ink2);
     let ot = Text::new(15.0, p.ink3);
-    cx.c.text(&of, PAD + mw + 10.0, y + 46.0 - ot.lh() - 3.0, ot);
-    y += 46.0 + 16.0;
+    // Beside the figure when it fits there; under it, cut to the width, when long amounts leave
+    // no room (rather than run off the screen).
+    let room = CW - mw - 10.0;
+    if cx.c.measure(&of, ot) <= room {
+        cx.c.text(&of, PAD + mw + 10.0, y + 46.0 - ot.lh() - 3.0, ot);
+        y += 46.0 + 16.0;
+    } else {
+        cx.c.text_fit(&of, PAD, y + 46.0 + 2.0, CW, ot);
+        y += 46.0 + 2.0 + ot.lh() + 14.0;
+    }
     let fill = if g.reached() { p.live } else { p.signal };
     kit::meter(cx, PAD, y, CW, g.fraction(), g.pace_fraction, fill);
     y += 6.0 + 22.0;
@@ -1496,7 +1740,18 @@ fn goal_body(cx: &mut Ctx, s: &mut GoalPage, d: &PlanData, top: f32, act: &mut O
         if pk::action_key(cx, PAD, y, CW - ew - 10.0, "Add money", "plus", true, true) {
             s.adding = !s.adding;
             if s.adding {
-                focus_field(cx, PUT_AMOUNT, true);
+                // Opened again, the amount typed before it closed is still there: the field
+                // starts from it rather than copying a cleared one over it.
+                cx.focus.id = Some(PUT_AMOUNT);
+                cx.focus.text = s.amount.clone();
+                cx.focus.numeric = true;
+                cx.focus.at = None;
+                cx.host.keyboard(true, &s.amount, true);
+            } else if matches!(cx.focus.id, Some(PUT_AMOUNT | PUT_NOTE)) {
+                // Closed, its fields go: so does the keyboard that was typing in one.
+                cx.focus.id = None;
+                cx.focus.at = None;
+                cx.host.keyboard(false, "", false);
             }
         }
         if kit::key(cx, PAD + CW - ew, y, ew, 52.0, "Edit", None, KeyKind::Plain) {
@@ -1610,6 +1865,9 @@ struct GoalEditor {
     by_share: bool,
     show_errors: bool,
     accounts: Vec<AccountView>,
+    /// Net worth as the Accounts page counts it, which an "everything you own" goal reads, and
+    /// each account's value as that page shows it, which a goal on one account reads.
+    worth: logic::WorthNow,
     today: Date,
     digits: u32,
 }
@@ -1636,12 +1894,22 @@ impl GoalEditor {
             by_share: true,
             show_errors: false,
             accounts,
+            // The same total the goal's reading uses (tracked accounts, investments at their
+            // holdings), so its start and the hint match what the goal then shows.
+            worth: logic::worth_now(&app.store, today),
             today,
             digits,
         };
         if let Some(g) = stored {
             e.name = g.name.clone();
-            e.target_text = if g.target > 0 || g.kind == GoalKind::Balance { widgets::minor_text(g.target, digits) } else { String::new() };
+            e.target_text = if g.target < 0 {
+                // Signed here: minor_text loses the sign of an amount under one (-0.50 reads "0.50").
+                format!("-{}", widgets::minor_text(-g.target, digits))
+            } else if g.target > 0 || g.kind == GoalKind::Balance {
+                widgets::minor_text(g.target, digits)
+            } else {
+                String::new()
+            };
             e.target_date = g.target_date;
             e.color = g.color;
             e.kind = g.kind;
@@ -1653,21 +1921,48 @@ impl GoalEditor {
         Ok(e)
     }
 
+    fn draft(&self) -> GoalDraft {
+        GoalDraft {
+            name: self.name.clone(),
+            target_text: self.target_text.clone(),
+            target_date: self.target_date.map(|d| d.to_string()),
+            color: self.color,
+            kind: self.kind,
+            account: self.account,
+            percent: self.percent,
+            by_share: self.by_share,
+        }
+    }
+
+    /// Puts back a draft kept while the system stopped Tally, over what was just read. An
+    /// account gone since is dropped.
+    fn apply(&mut self, d: GoalDraft) {
+        self.name = d.name;
+        self.target_text = d.target_text;
+        self.target_date = d.target_date.and_then(|t| t.parse().ok());
+        self.color = d.color;
+        self.kind = d.kind;
+        self.account = d.account.filter(|id| self.accounts.iter().any(|a| a.id == *id));
+        self.percent = d.percent;
+        self.by_share = d.by_share;
+    }
+
     fn monthly(&self) -> bool {
         matches!(self.kind, GoalKind::Invest | GoalKind::Save)
     }
 
     fn target(&self) -> Option<i64> {
-        widgets::parse_minor(&self.target_text, self.digits)
+        goal_target(&self.target_text, self.kind, self.digits)
     }
 
     fn problems(&self) -> (Option<&'static str>, Option<&'static str>) {
         logic::goal_problems(&self.name, self.kind, self.target(), self.by_share, self.percent)
     }
 
-    /// What a balance goal's pick reads now: the account's balance, or the net of every open one.
+    /// What a balance goal's pick reads now, as the goal's reading counts it: the account's value
+    /// (an investment account at its holdings), or net worth.
     fn balance_now(&self) -> i64 {
-        self.account.and_then(|id| self.accounts.iter().find(|a| a.id == id)).map_or_else(|| logic::net_worth(&self.accounts), |a| a.balance)
+        self.account.and_then(|id| self.accounts.iter().find(|a| a.id == id)).map_or(self.worth.total, |a| logic::account_value(&self.worth.of, a))
     }
 
     fn input(&self) -> GoalInput {
@@ -1701,10 +1996,33 @@ impl GoalEditor {
     }
 }
 
+/// A goal editor's target as typed. A balance goal may aim below zero (a card paid down to
+/// -$500), so its leading minus counts; parse_minor reads digits alone, and would save -1000.00
+/// as +$1,000. Every other kind's target is above zero.
+pub fn goal_target(text: &str, kind: GoalKind, digits: u32) -> Option<i64> {
+    let t = text.trim();
+    match t.strip_prefix(['-', '\u{2212}']) {
+        Some(rest) if kind == GoalKind::Balance => widgets::parse_minor(rest, digits).map(|m| -m),
+        _ => widgets::parse_minor(t, digits),
+    }
+}
+
 fn goal_edit_page(app: &mut App, dt: f32, id: Option<i64>) -> bool {
     if (app.fresh && !app.returned) || app.st.plan.goal_edit.as_ref().is_none_or(|g| g.route_id != id) {
         match GoalEditor::open(app, id) {
-            Ok(g) => app.st.plan.goal_edit = Some(g),
+            // Opened for a goal that is gone: say so and leave, rather than offer a "New goal"
+            // whose Save would make a different one. A draft kept for it goes too.
+            Ok(g) if id.is_some() && g.stored.is_none() => {
+                let _ = app.take_draft();
+                leave_gone(app, "This goal is gone");
+                return true;
+            }
+            Ok(mut g) => {
+                if let Some(Draft::Plan(PlanDraft::Goal(d))) = app.take_draft() {
+                    g.apply(d);
+                }
+                app.st.plan.goal_edit = Some(g);
+            }
             Err(e) => {
                 app.say(e, None);
                 app.pop();
@@ -1855,7 +2173,9 @@ fn goal_form(cx: &mut Ctx, e: &mut GoalEditor, top: f32, fmt: &MoneyFormatter, a
         };
         y += pk::label(cx, y, label);
         let placeholder = fmt.format(0);
-        y += pk::field(cx, GOAL_TARGET, PAD, y, W, Some("coins"), &placeholder, &mut e.target_text, true, errors && target_p.is_some());
+        // A balance goal can aim below zero (a card paid down to -$500): its keyboard has a minus.
+        let kb = if e.kind == GoalKind::Balance { widgets::Kb::Signed } else { widgets::Kb::Number };
+        y += pk::field_kb(cx, GOAL_TARGET, PAD, y, W, Some("coins"), &placeholder, &mut e.target_text, kb, errors && target_p.is_some());
         if errors && let Some(w) = target_p {
             y += pk::hint(cx, y, w, true);
         } else if e.kind == GoalKind::Balance {
@@ -1911,6 +2231,14 @@ fn goal_form(cx: &mut Ctx, e: &mut GoalEditor, top: f32, fmt: &MoneyFormatter, a
 }
 
 // Acting on what was tapped
+
+/// An editor opened for a bill or goal that is gone: say so and leave it.
+fn leave_gone(app: &mut App, words: &str) {
+    if !app.pop() {
+        app.push(Route::Overview);
+    }
+    app.say(words, None);
+}
 
 fn perform(app: &mut App, act: Option<Act>) {
     let Some(act) = act else { return };
@@ -1987,6 +2315,8 @@ fn perform(app: &mut App, act: Option<Act>) {
             match app.store.sql().and_then(|c| store::bill_save(c, id, &input, today)) {
                 Ok(_) => {
                     app.invalidate();
+                    // New, resumed or moved to today or before: due now, it posts now.
+                    app.bills_changed();
                     app.pop();
                 }
                 Err(e) => app.say(e, None),
@@ -2045,6 +2375,14 @@ fn perform(app: &mut App, act: Option<Act>) {
             let Some(page) = app.st.plan.goal.as_mut() else { return };
             let Some(amount) = widgets::parse_minor(&page.amount, fmt.fraction_digits).filter(|a| *a > 0) else { return };
             let (id, note) = (page.id, page.note.clone());
+            if out {
+                // What it holds now, from the ledger rather than the page's last reading.
+                let held = app.store.sql().and_then(|c| store::goal(c, id)).ok().flatten().map_or(0, |g| g.contributed);
+                if let Some(why) = take_out_problem(held, amount, &fmt) {
+                    app.say(why, None);
+                    return;
+                }
+            }
             match app.store.sql().and_then(|c| store::contribute(c, id, if out { -amount } else { amount }, today, &note)) {
                 Ok(_) => {
                     if let Some(page) = app.st.plan.goal.as_mut() {
@@ -2058,15 +2396,40 @@ fn perform(app: &mut App, act: Option<Act>) {
                 Err(e) => app.say(e, None),
             }
         }
-        Act::RemoveContribution(cid) => match app.store.sql().and_then(|c| store::contribution_delete(c, cid)) {
-            Ok(amount) => {
-                if let Some(page) = app.st.plan.goal.as_mut() {
-                    page.selected = None;
+        Act::RemoveContribution(cid) => {
+            // Removing money put in takes it back out: refused if take-outs after it already spent
+            // it ($100 in, $60 out, the $100 removed would leave the pot at -$60).
+            if let Some(gid) = app.st.plan.goal.as_ref().map(|p| p.id) {
+                let read = app.store.sql().and_then(|c| Ok((store::goal(c, gid)?.map_or(0, |g| g.contributed), store::contributions(c, gid)?)));
+                if let Ok((held, rows)) = read
+                    && let Some(row) = rows.iter().find(|r| r.id == cid)
+                    && let Some(why) = remove_problem(held, row.amount)
+                {
+                    app.say(why, None);
+                    return;
                 }
-                app.invalidate();
-                say_undo(app, if amount < 0 { "Withdrawal removed".into() } else { "Contribution removed".into() }, UndoAct::Contribution(cid));
             }
-            Err(e) => app.say(e, None),
-        },
+            remove_contribution(app, cid);
+        }
+    }
+}
+
+/// Why a contribution of `amount` can't be removed from a pot holding `held`, when it can't:
+/// removing money put in must not leave the pot below nothing. Removing a take-out puts the
+/// money back, which is always fine.
+pub fn remove_problem(held: i64, amount: i64) -> Option<&'static str> {
+    (amount > 0 && held - amount < 0).then_some("Remove the take-outs after it first")
+}
+
+fn remove_contribution(app: &mut App, cid: i64) {
+    match app.store.sql().and_then(|c| store::contribution_delete(c, cid)) {
+        Ok(amount) => {
+            if let Some(page) = app.st.plan.goal.as_mut() {
+                page.selected = None;
+            }
+            app.invalidate();
+            say_undo(app, if amount < 0 { "Withdrawal removed".into() } else { "Contribution removed".into() }, UndoAct::Contribution(cid));
+        }
+        Err(e) => app.say(e, None),
     }
 }

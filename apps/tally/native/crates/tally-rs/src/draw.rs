@@ -203,6 +203,29 @@ impl ImageAtlas {
     }
 }
 
+/// An RGBA picture at half its width and height, each pixel the average of the four it stands for.
+fn half_size(w: u32, h: u32, pixels: &[u8]) -> (u32, u32, Vec<u8>) {
+    let (hw, hh) = (w / 2, h / 2);
+    let row = (w * 4) as usize;
+    let mut out = Vec::with_capacity((hw * hh * 4) as usize);
+    for y in 0..hh as usize {
+        let top = &pixels[2 * y * row..];
+        let bottom = &pixels[(2 * y + 1) * row..];
+        for x in 0..hw as usize {
+            let i = 8 * x;
+            for c in 0..4 {
+                let sum = top[i + c] as u32 + top[i + 4 + c] as u32 + bottom[i + c] as u32 + bottom[i + 4 + c] as u32;
+                out.push(((sum + 2) / 4) as u8);
+            }
+        }
+    }
+    (hw, hh, out)
+}
+
+/// Past this shelf, the glyph atlas starts over at the next frame's start: a frame's new glyphs
+/// fit in the quarter left.
+const GLYPHS_START_OVER: u32 = gfx::ATLAS_SIZE * 3 / 4;
+
 /// How many decoded pictures may wait for room in the atlas.
 const MAX_WAITING: usize = 6;
 
@@ -214,7 +237,8 @@ pub struct Canvas {
     images: ImageAtlas,
     /// Decoded pictures with no room yet: placed at the end of a frame that leaves some.
     image_waiting: Vec<(String, u32, u32, Vec<u8>)>,
-    /// A waiting picture was placed after the frame was drawn: draw another.
+    /// A waiting picture was placed after the frame was drawn, or the glyph atlas started over
+    /// mid-frame: draw another.
     image_late: bool,
     fonts: [fontdue::Font; 4],
     glyphs: HashMap<(u8, u16, u16), Glyph>,
@@ -291,6 +315,19 @@ impl Canvas {
         self.fade = 1.0;
         self.globals.screen = [px_w, px_h];
         self.images.frame += 1;
+        // A glyph atlas filling up starts over here, between frames, rather than in the middle of
+        // one: there, what the frame had already queued would point at slots being reused.
+        if self.shelf_y > GLYPHS_START_OVER {
+            self.reset_glyphs();
+        }
+    }
+
+    /// Forget every glyph and icon in the atlas; they are rasterised again as they are asked for.
+    fn reset_glyphs(&mut self) {
+        self.glyphs.clear();
+        self.icons.clear();
+        self.cat_icons.clear();
+        (self.shelf_x, self.shelf_y, self.shelf_h) = (1, 1, 0);
     }
 
     /// Close the last batch. Call once the frame is drawn.
@@ -314,8 +351,9 @@ impl Canvas {
         }
     }
 
-    /// True once after a picture became drawable when the frame was already drawn: the host
-    /// should draw another frame.
+    /// True once after a picture became drawable when the frame was already drawn, or after the
+    /// glyph atlas had to start over in the middle of a frame (text queued before it would show
+    /// garbled): the host should draw another frame.
     pub fn take_late_pictures(&mut self) -> bool {
         std::mem::take(&mut self.image_late)
     }
@@ -425,6 +463,11 @@ impl Canvas {
         if w == 0 || h == 0 || w + 2 > self.images.size || h + 2 > self.images.size || pixels.len() != (w * h * 4) as usize {
             return false;
         }
+        // An atlas smaller than the full one (a GPU that stops at 2048) holds only four
+        // full-size pictures, fewer than Goals shows at once: there each is kept at half size,
+        // so four times as many fit. They are drawn at the same size on screen (by their place
+        // in the atlas, not their pixels), only a little softer.
+        let (w, h, pixels) = if self.images.size < gfx::IMAGES_SIZE && w >= 2 && h >= 2 { half_size(w, h, &pixels) } else { (w, h, pixels) };
         let keep_from = self.images.frame.saturating_sub(1);
         if let Some([x, y, w, h]) = self.images.place(key, w, h, keep_from) {
             self.image_waiting.retain(|(k, ..)| k != key);
@@ -446,6 +489,20 @@ impl Canvas {
     /// Decoded and waiting for room in the atlas (asking for it again would decode it again).
     pub fn image_waiting(&self, key: &str) -> bool {
         self.image_waiting.iter().any(|(k, ..)| k == key)
+    }
+
+    /// The GPU's picture atlas is `size` pixels a side (smaller than [`gfx::IMAGES_SIZE`] on
+    /// some phones): pictures are placed in that much room from now on. Set once the GPU is up,
+    /// before the first frame; a change empties the atlas, and pictures come back as they are
+    /// asked for.
+    pub fn set_images_size(&mut self, size: u32) {
+        if size != self.images.size {
+            let frame = self.images.frame;
+            self.images = ImageAtlas::new(size);
+            self.images.frame = frame;
+            self.image_waiting.clear();
+            self.image_uploads.clear();
+        }
     }
 
     /// Empty the picture atlas; pictures are added again as they are asked for.
@@ -533,11 +590,10 @@ impl Canvas {
             self.shelf_h = 0;
         }
         if self.shelf_y + h + 1 > gfx::ATLAS_SIZE {
-            // Full: start over. What is still on screen is rasterised again as it is asked for.
-            self.glyphs.clear();
-            self.icons.clear();
-            self.cat_icons.clear();
-            (self.shelf_x, self.shelf_y, self.shelf_h) = (1, 1, 0);
+            // Full within one frame (rare: `begin` starts over early): start over. What this frame
+            // queued before now points at reused slots, so one more frame draws it all again.
+            self.reset_glyphs();
+            self.image_late = true;
         }
         let (x, y) = (self.shelf_x, self.shelf_y);
         self.shelf_x += w + 1;
@@ -817,7 +873,31 @@ pub fn ease_out(t: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::ImageAtlas;
+    use super::{Canvas, ImageAtlas, Rgba, Text, GLYPHS_START_OVER};
+    use crate::gfx::ATLAS_SIZE;
+
+    #[test]
+    fn a_filling_glyph_atlas_starts_over_between_frames() {
+        let mut c = Canvas::new(crate::app::FONTS);
+        c.begin(1080.0, 2340.0, 0.0, 0.0);
+        c.text("Tally", 0.0, 0.0, Text::new(16.0, Rgba::WHITE));
+        assert!(!c.glyphs.is_empty());
+        c.shelf_y = GLYPHS_START_OVER + 1;
+        c.begin(1080.0, 2340.0, 0.0, 0.0);
+        assert!(c.glyphs.is_empty(), "started over at the frame's start");
+        assert_eq!(c.shelf_y, 1);
+        assert!(!c.take_late_pictures(), "nothing drawn garbled, so no frame more");
+    }
+
+    #[test]
+    fn a_glyph_atlas_full_mid_frame_asks_for_another_frame() {
+        let mut c = Canvas::new(crate::app::FONTS);
+        c.begin(1080.0, 2340.0, 0.0, 0.0);
+        c.shelf_y = ATLAS_SIZE - 4;
+        c.text("Tally", 0.0, 0.0, Text::new(16.0, Rgba::WHITE));
+        assert!(c.shelf_y < 100, "started over");
+        assert!(c.take_late_pictures(), "text queued before it is drawn again");
+    }
 
     /// The studio pictures' size: twelve fit the 3072 atlas.
     const PW: u32 = 720;
@@ -825,6 +905,25 @@ mod tests {
 
     fn key(i: usize) -> String {
         format!("p{i}")
+    }
+
+    #[test]
+    fn a_smaller_atlas_keeps_pictures_at_half_size_inside_its_bounds() {
+        // A GLES 3.0 phone that stops at 2048: at full size only four would fit, fewer than
+        // Goals shows. At half size twenty do; the rest wait their turn.
+        let mut c = Canvas::new(crate::app::FONTS);
+        c.set_images_size(2048);
+        let px = vec![200u8; (PW * PH * 4) as usize];
+        let placed = (0..24).filter(|i| c.add_image(&key(*i), PW, PH, px.clone())).count();
+        assert_eq!(placed, 20);
+        assert!(c.image_uploads.iter().all(|u| u.x + u.w <= 2048 && u.y + u.h <= 2048));
+        assert!(c.image_uploads.iter().all(|u| (u.w, u.h) == (PW / 2, PH / 2) && u.pixels.len() == (u.w * u.h * 4) as usize));
+        assert!(c.image_uploads[0].pixels.iter().all(|&b| b == 200), "averaged, not darkened");
+        assert!(c.image_waiting(&key(20)));
+        // The full atlas keeps them whole.
+        let mut full = Canvas::new(crate::app::FONTS);
+        assert!(full.add_image("p", PW, PH, px));
+        assert_eq!((full.image_uploads[0].w, full.image_uploads[0].h), (PW, PH));
     }
 
     #[test]

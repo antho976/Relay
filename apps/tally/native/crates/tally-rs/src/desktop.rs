@@ -52,6 +52,7 @@ impl Host for DesktopHost {
     /// For trying the import and the restore by hand: the file named by `TALLY_PICK` is the one
     /// "picked" (there is no file dialog on the desktop). It reaches the page as Android's does.
     fn pick_file(&self, mime: &str) {
+        crate::settings_files::begin_pick();
         let Some(path) = std::env::var_os("TALLY_PICK").map(PathBuf::from) else {
             self.log(&format!("pick a file ({mime}): set TALLY_PICK to its path"));
             return;
@@ -119,6 +120,7 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
     let mut gfx = Gfx::headless()?;
     let mut clock = 1_000_000_000u64;
     let mut app = App::new(Arc::new(DesktopHost { data: dir.clone() }), clock);
+    app.canvas.set_images_size(gfx.images_size());
     // Roughly a phone's status bar and gesture bar.
     app.resize(w as f32, h as f32, w as f32 * 0.085, w as f32 * 0.04);
     if screen != "empty" {
@@ -145,7 +147,7 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
         "goal" => Some(Route::Goal { id: id.unwrap_or(1) }),
         "goal-edit" => Some(Route::GoalEdit { id }),
         "accounts" => Some(Route::Accounts),
-        "account-edit" => Some(Route::AccountEdit { id }),
+        "account-edit" => Some(Route::AccountEdit { id, kind: None }),
         "investments" => Some(Route::Investments),
         "room-edit" => Some(Route::RoomEdit { kind: kind.clone().unwrap_or_else(|| "TFSA".into()) }),
         "categories" => Some(Route::Categories),
@@ -244,6 +246,7 @@ impl ApplicationHandler for Windowed {
         let size = window.inner_size();
         let (gfx, screen) = Gfx::with_surface(window.clone(), size.width, size.height).expect("graphics");
         let mut app = App::new(Arc::new(DesktopHost { data: self.data.clone() }), now_ns());
+        app.canvas.set_images_size(gfx.images_size());
         app.resize(size.width as f32, size.height as f32, 0.0, 0.0);
         self.app = Some(app);
         self.gfx = Some((gfx, screen));
@@ -290,7 +293,9 @@ impl ApplicationHandler for Windowed {
                 app.touch(Touch { id: 10 + t.id, phase, x: t.location.x as f32, y: t.location.y as f32, t_ns: now_ns() });
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => match &event.logical_key {
-                Key::Named(NamedKey::Enter) => app.finish_typing(),
+                // Keys typed since the last frame reach the field before it lets go.
+                Key::Named(NamedKey::Enter) => app.done_typing(now_ns()),
+                Key::Named(NamedKey::Escape) if app.focus.id.is_some() => app.done_typing(now_ns()),
                 Key::Named(NamedKey::Escape) => {
                     if !app.back() {
                         event_loop.exit();
@@ -314,13 +319,25 @@ impl ApplicationHandler for Windowed {
                 gfx.upload_glyphs(&mut app.canvas.uploads);
                 gfx.upload_images(&mut app.canvas.image_uploads);
                 let (globals, clear) = (app.canvas.globals, app.clear_colour());
-                screen.frame(gfx, &globals, clear, &app.canvas.insts, &app.canvas.batches);
+                if !screen.frame(gfx, &globals, clear, &app.canvas.insts, &app.canvas.batches) {
+                    // Skipped (lost, out of date, hidden): draw again soon rather than wait for input.
+                    self.next = Next::At(now_ns() + 16_000_000);
+                }
                 return;
             }
             _ => return,
         }
         self.next = Next::Now;
         self.redraw();
+    }
+
+    /// However the window closes: a change still in its debounce syncs, and the sync running
+    /// gets a few seconds to answer, as its thread ends with the process.
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(app) = &mut self.app {
+            crate::sync::flush(app, now_ns());
+            crate::sync::wait_out(app, std::time::Duration::from_secs(10));
+        }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {

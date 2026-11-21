@@ -4,6 +4,8 @@
 //! account with what it reads this month; every month at once by what was typed. A tap on an entry
 //! opens it in the editor, where it can also be deleted.
 
+use std::collections::HashMap;
+
 use relay_money::Date;
 use relay_money::copy;
 use relay_money::model::{AccountType, CategoryKind, TxType};
@@ -49,6 +51,9 @@ pub struct State {
     pub search_filter: Filter,
     search: Option<(SearchKey, Listing)>,
     pub tx_query: String,
+    /// Each open category's or account's page's search, by (depth in `app.nav`, category,
+    /// account): one page opened over another keeps both, the same subject twice on the stack too.
+    tx_queries: HashMap<(usize, Option<i64>, Option<i64>), String>,
     tx: Option<(TxKey, Option<(Subject, Listing)>)>,
     /// The entry an overview shows, read as the editor reads it; `editing` none when it is gone.
     view: Option<((u64, i64), Box<Entry>)>,
@@ -110,9 +115,29 @@ fn open_entry(id: i64) -> Act {
 fn entries(app: &mut App, dt: f32) -> bool {
     let today = model::today();
     let st = &mut app.st.activity;
+    // Opened from the tab or the drawer it starts on this month with everything; back from an
+    // entry it stays on the month and filter it was on.
+    if app.fresh && !app.returned {
+        st.offset = 0;
+        st.filter = Filter::All;
+        st.category = None;
+        st.months = None;
+        st.chips = HScroll::default();
+    }
     let key = (app.ledger_gen, today, st.offset, st.filter, st.category);
     if st.entries.as_ref().is_none_or(|(k, _, _)| *k != key) && st.entries_failed.as_ref() != Some(&key) {
-        match activity_data::period_listing_in(&app.store, today, st.offset, st.filter, st.category) {
+        let read = activity_data::period_listing_in(&app.store, today, st.offset, st.filter, st.category);
+        // The chosen category left the month (its entry deleted or filed elsewhere): it has no
+        // chip to light, so it stops filtering and the month reads whole again.
+        let read = match (read, st.category) {
+            (Ok((_, l)), Some(c)) if !l.categories.iter().any(|(id, _)| *id == c) => {
+                st.category = None;
+                activity_data::period_listing_in(&app.store, today, st.offset, st.filter, None)
+            }
+            (read, _) => read,
+        };
+        let key = (app.ledger_gen, today, st.offset, st.filter, st.category);
+        match read {
             Ok((p, l)) => {
                 st.entries = Some((key, p, l));
                 st.entries_failed = None;
@@ -167,10 +192,13 @@ fn entries(app: &mut App, dt: f32) -> bool {
                 switcher_at = y - 4.0;
 
                 y = reading(&mut cx, y, &l.totals, &fmt) + 10.0;
-                if let Some(pd) = activity_data::per_day(l.totals.spent, period, current, today) {
+                // Only over spending: Income or Transfers (or a month with none) would read "$0 a
+                // day". The days counted are those with an expense, not any entry.
+                if let Some(pd) = activity_data::per_day(l.totals.spent, period, current, today).filter(|_| l.totals.spent > 0) {
                     let mut words = format!("{} a day", fmt.format_whole(pd));
-                    if l.totals.active_days > 0 && st.filter != Filter::Income && st.filter != Filter::Transfers {
-                        words += &format!(" · {} with spending", copy::plural(l.totals.active_days as i64, "day"));
+                    let spending_days = l.days.iter().filter(|d| d.rows.iter().any(|r| r.r#type == TxType::Expense)).count();
+                    if spending_days > 0 {
+                        words += &format!(" · {} with spending", copy::plural(spending_days as i64, "day"));
                     }
                     cx.c.text_fit(&words, PAD, y, W, Text::new(13.0, p.ink3));
                     y += 18.0;
@@ -198,7 +226,7 @@ fn entries(app: &mut App, dt: f32) -> bool {
                 }
                 y += ak::CHIP_H + 8.0;
 
-                let (b, tapped) = ak::days(&mut cx, y, &l.days, today, &fmt, &l.repeats);
+                let (b, tapped) = ak::days(&mut cx, y, &l.days, today, &fmt, &l.repeats, None);
                 y = b;
                 if let Some(id) = tapped {
                     todo = Some(open_entry(id));
@@ -286,11 +314,12 @@ fn month_switcher(cx: &mut Ctx, y: f32, st: &mut State) -> Option<i64> {
 fn search(app: &mut App, dt: f32) -> bool {
     let today = model::today();
     let st = &mut app.st.activity;
-    // Opened from the tab or the drawer it starts empty, with the keyboard; back from a result it
-    // keeps what was typed.
+    // Opened from the tab or the drawer it starts empty (on every kind), with the keyboard; back
+    // from a result it keeps what was typed and the chip picked.
     let opened = app.fresh && !app.returned;
     if opened {
         st.query.clear();
+        st.search_filter = Filter::All;
     }
     if app.focus.is(SEARCH) {
         st.query = app.focus.text.clone();
@@ -417,11 +446,17 @@ fn search(app: &mut App, dt: f32) -> bool {
 
 fn transactions(app: &mut App, dt: f32, category: Option<i64>, account: Option<i64>) -> bool {
     let today = model::today();
+    let depth = app.nav.len() - 1;
     let st = &mut app.st.activity;
-    // A new subject starts with no search; back from one of its entries the search stays.
-    let same = st.tx.as_ref().is_some_and(|(k, _)| k.2 == category && k.3 == account);
-    if app.fresh && !(app.returned && same) {
-        st.tx_query.clear();
+    // A new subject starts with no search; back to one (from one of its entries, or past another
+    // category's or account's page) its own search is back.
+    if app.fresh {
+        // Searches of pages no longer open are let go.
+        st.tx_queries.retain(|(d, c, a), _| matches!(app.nav.get(*d), Some((r, _)) if *r == Route::Transactions { category: *c, account: *a }));
+        if !app.returned {
+            st.tx_queries.remove(&(depth, category, account));
+        }
+        st.tx_query = st.tx_queries.get(&(depth, category, account)).cloned().unwrap_or_default();
     }
     if app.focus.is(TX_SEARCH) {
         st.tx_query = app.focus.text.clone();
@@ -474,7 +509,7 @@ fn transactions(app: &mut App, dt: f32, category: Option<i64>, account: Option<i
             Some((s, l)) => {
                 if edit {
                     todo = Some(Act::Go(match (s.account_type, account) {
-                        (Some(_), Some(id)) => Route::AccountEdit { id: Some(id) },
+                        (Some(_), Some(id)) => Route::AccountEdit { id: Some(id), kind: None },
                         _ => Route::CategoryEdit { id: category, kind: s.kind },
                     }));
                 }
@@ -499,10 +534,18 @@ fn transactions(app: &mut App, dt: f32, category: Option<i64>, account: Option<i
                 cx.c.text(&count, PAD + W, y + (hh - ct.lh()) / 2.0, ct);
                 y += hh + 12.0;
                 y += ak::search_box(&mut cx, TX_SEARCH, PAD, y, W, "Search these entries", &mut st.tx_query) + 6.0;
-                let (b, tapped) = ak::days(&mut cx, y, &l.days, today, &fmt, &l.repeats);
+                // On an account's own page its transfers are signed and count in each day's net.
+                let on = if s.is_account() { account } else { None };
+                let (b, tapped) = ak::days(&mut cx, y, &l.days, today, &fmt, &l.repeats, on);
                 y = b;
                 if let Some(id) = tapped {
                     todo = Some(open_entry(id));
+                }
+                // The page lists at most SEARCH_LIMIT entries; say so rather than look complete.
+                if l.truncated {
+                    let words = format!("Only the newest {} are listed. Search these entries to see older ones.", activity_data::SEARCH_LIMIT);
+                    y += 8.0;
+                    y += cx.c.para(&words, PAD, y, W, Text::new(ty::CAPTION, p.ink3).line(1.4), 3) + 12.0;
                 }
                 if l.days.is_empty() {
                     let searching = !st.tx_query.trim().is_empty();
@@ -517,6 +560,8 @@ fn transactions(app: &mut App, dt: f32, category: Option<i64>, account: Option<i
             }
         }
         bottom = y;
+        // Kept for this subject, so it is still there when Back returns here past another one.
+        st.tx_queries.insert((depth, category, account), st.tx_query.clone());
     }
     app.page_end(&pg, bottom);
     act(app, todo);
@@ -728,11 +773,31 @@ fn view_body(cx: &mut Ctx, mut y: f32, e: &Entry, t: &relay_money::views::Tx, fm
     let note_row = !t.note.trim().is_empty() && name != t.note.trim();
     let repeats = entry_logic::repeats_line(e.bill.as_ref(), e.today);
     let repeat_sub = e.bill.as_ref().filter(|b| b.active).map(|b| if b.auto_post { "Posts itself" } else { "Reminds you to log it" });
+    // The lines under the rows, worked out before the card so its height is the rows' own: a row
+    // is taller exactly when it has a line under it.
+    let account_line = |a: Option<&relay_money::views::AccountView>| a.filter(|a| a.r#type != relay_money::model::AccountType::Cash).map(|a| activity_data::account_type_label(a.r#type));
+    let (from_sub, to_sub) = (account_line(account), account_line(to));
+    let (word, rest) = match repeats.split_once(" · ") {
+        Some((a, b)) => (a.to_string(), Some(b.to_string())),
+        None => (repeats.clone(), None),
+    };
+    // "Repeats" | "Monthly", "Next on December 17 · posts itself".
+    let value = word.strip_prefix("Repeats ").map(|w| {
+        let mut c = w.chars();
+        c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+    });
+    let sub = match (&rest, repeat_sub) {
+        (Some(r), Some(how)) => Some(format!("{}{} · {}", r[..1].to_uppercase(), &r[1..], how.to_lowercase())),
+        (Some(r), None) => Some(format!("{}{}", r[..1].to_uppercase(), &r[1..])),
+        _ => None,
+    };
+    let repeat_has_sub = value.is_some() && e.bill.is_some() && sub.is_some();
+    let row = |has_sub: bool| if has_sub { 68.0 } else { 56.0 };
     let rows_h = 56.0 // when
         + if transfer { 0.0 } else { 56.0 }
-        + if account.is_some_and(|a| a.r#type != relay_money::model::AccountType::Cash) { 68.0 } else { 56.0 }
-        + if transfer { if to.is_some() { 68.0 } else { 56.0 } } else { 0.0 }
-        + if repeat_sub.is_some() { 68.0 } else { 56.0 }
+        + row(from_sub.is_some())
+        + if transfer { row(to_sub.is_some()) } else { 0.0 }
+        + row(repeat_has_sub)
         + if note_row { 56.0 } else { 0.0 };
     let ch = ak::CARD_PAD * 2.0 + rows_h;
     kit::card(cx, PAD, y, W, ch);
@@ -748,39 +813,24 @@ fn view_body(cx: &mut Ctx, mut y: f32, e: &Entry, t: &relay_money::views::Tx, fm
         }
         ry += h;
     }
-    let account_line = |a: Option<&relay_money::views::AccountView>| a.filter(|a| a.r#type != relay_money::model::AccountType::Cash).map(|a| activity_data::account_type_label(a.r#type));
     let label = match t.r#type {
         TxType::Expense => "Paid from",
         TxType::Income => "Paid into",
         TxType::Transfer => "From",
     };
-    let (h, tapped) = ak::detail_row(cx, ry, false, label, &t.account, account_line(account), None, true);
+    let (h, tapped) = ak::detail_row(cx, ry, false, label, &t.account, from_sub, None, true);
     if tapped {
         todo = Some(Act::Go(Route::Transactions { category: None, account: Some(t.account_id) }));
     }
     ry += h;
     if transfer {
         let name = t.to_account.clone().unwrap_or_else(|| "Another account".into());
-        let (h, tapped) = ak::detail_row(cx, ry, false, "To", &name, account_line(to), None, t.to_account_id.is_some());
+        let (h, tapped) = ak::detail_row(cx, ry, false, "To", &name, to_sub, None, t.to_account_id.is_some());
         if tapped {
             todo = Some(Act::Go(Route::Transactions { category: None, account: t.to_account_id }));
         }
         ry += h;
     }
-    let (word, rest) = match repeats.split_once(" · ") {
-        Some((a, b)) => (a.to_string(), Some(b.to_string())),
-        None => (repeats.clone(), None),
-    };
-    // "Repeats" | "Monthly", "Next on December 17 · posts itself".
-    let value = word.strip_prefix("Repeats ").map(|w| {
-        let mut c = w.chars();
-        c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
-    });
-    let sub = match (&rest, repeat_sub) {
-        (Some(r), Some(how)) => Some(format!("{}{} · {}", r[..1].to_uppercase(), &r[1..], how.to_lowercase())),
-        (Some(r), None) => Some(format!("{}{}", r[..1].to_uppercase(), &r[1..])),
-        _ => None,
-    };
     let (h, tapped) = match (&value, &e.bill) {
         (Some(v), Some(b)) => {
             let (h, tapped) = ak::detail_row(cx, ry, false, "Repeats", v, sub.as_deref(), None, true);

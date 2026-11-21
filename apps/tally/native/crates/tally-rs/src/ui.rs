@@ -57,6 +57,9 @@ pub struct Ui {
     landed: Option<(f32, f32)>,
     /// The finger now down stopped a coasting list: lifting it is not a tap.
     caught: std::cell::Cell<bool>,
+    /// A sheet or dialog is over the page this frame ([`Ui::cover`]), and was last frame.
+    covered: bool,
+    covered_last: bool,
 }
 
 impl Ui {
@@ -144,10 +147,23 @@ impl Ui {
         self.fling = None;
         self.fling_x = None;
         self.hzones_last = std::mem::take(&mut self.hzones);
+        self.covered_last = std::mem::take(&mut self.covered);
         if self.id.is_none() {
             self.drag_from = None;
             self.horizontal = false;
         }
+    }
+
+    /// A sheet or dialog is over the page this frame: a drag on it must not scroll the page under
+    /// it. The page has scrolled by the time its sheet draws, so this holds the page still from
+    /// the next frame on (a sheet opens with a tap, never mid-drag).
+    pub fn cover(&mut self) {
+        self.covered = true;
+    }
+
+    /// Something covered the page last frame ([`Ui::cover`]): it stays still under it.
+    pub fn was_covered(&self) -> bool {
+        self.covered_last
     }
 
     /// Drop everything, so a tap that opened a screen cannot also land on it.

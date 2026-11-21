@@ -89,7 +89,7 @@ fn a_draft_survives_making_an_account_and_takes_the_new_one() {
     d.app.entry.category_chosen = true;
     // The account sheet's New account, as its row would.
     d.app.entry.made_for = Some(Pick::From);
-    d.go(Route::AccountEdit { id: None });
+    d.go(Route::AccountEdit { id: None, kind: None });
     let made = d.app.store.ledger.account_add("Market card", AccountType::Credit, 0, None, "").unwrap().id;
     d.app.invalidate();
     assert!(d.app.pop());
@@ -107,6 +107,8 @@ fn a_draft_survives_making_a_category_and_a_transfer_takes_the_new_account_as_it
     let mut d = Driver::new("entry-category");
     d.go(new_entry());
     d.app.entry.amount = d.app.entry.amount.digit(7);
+    // The category sheet's New category, as its row would.
+    d.app.entry.made_category = true;
     d.go(Route::CategoryEdit { id: None, kind: CategoryKind::Expense });
     let made = tally::categories_store::add(&d.app.store, "Plants", CategoryKind::Expense, "dots", 3).unwrap();
     d.app.invalidate();
@@ -118,7 +120,7 @@ fn a_draft_survives_making_a_category_and_a_transfer_takes_the_new_account_as_it
     d.app.entry.kind = TxType::Transfer;
     let from = d.app.entry.account;
     d.app.entry.made_for = Some(Pick::To);
-    d.go(Route::AccountEdit { id: None });
+    d.go(Route::AccountEdit { id: None, kind: None });
     let to = d.app.store.ledger.account_add("Trip fund", AccountType::Savings, 0, None, "").unwrap().id;
     d.app.invalidate();
     d.app.pop();
@@ -185,9 +187,17 @@ fn undo_after_save_and_add_another_is_not_a_second_save() {
     assert_eq!(d.entries(), before + 1, "saved");
     assert_eq!(d.app.route(), &new_entry(), "and ready for the next");
     d.frame();
-    // The notice sits over the keys at the bottom, not on them.
+    // Its Undo waits while the next entry shows, keypad up or folded (folded, it would sit over
+    // the account and day chips, Undo under the day): a tap there undoes nothing.
+    d.app.entry.pad_open = false;
+    d.frame();
     let bottom = d.app.entry.footer_top - 4.0;
-    assert!(bottom <= d.app.entry.footer_top);
+    d.tap_undo(bottom);
+    assert_eq!(d.entries(), before + 1, "nothing undone from the new entry");
+    // Back on the page under it, Undo takes the entry back and saves nothing.
+    d.app.pop();
+    d.frame();
+    let bottom = d.app.canvas.h - d.app.bar_h();
     d.tap_undo(bottom);
     assert_eq!(d.entries(), before, "Undo took the entry back and saved nothing");
 }

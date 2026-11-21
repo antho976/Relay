@@ -56,6 +56,14 @@ enum Act {
 pub fn draw(app: &mut App, dt: f32) -> bool {
     let today = model::today();
     let st = &mut app.st.insights;
+    // Opened from the tab or the drawer it starts on this month; back from a page it opened it
+    // stays on the month it was on.
+    // The picked days go too, even on this month: a fresh open reads the month from the top.
+    if app.fresh && !app.returned {
+        st.offset = 0;
+        st.line_day = None;
+        st.cal_day = None;
+    }
     let key = (app.ledger_gen, today, st.offset);
     if st.cache.as_ref().is_none_or(|(k, _)| *k != key) && st.failed != Some(key) {
         match data::read(&app.store, today, st.offset) {
@@ -193,7 +201,8 @@ fn month(cx: &mut Ctx, mut y: f32, s: &Insights, fmt: &MoneyFormatter, picked: &
         let mut ry = y + 8.0;
         for sl in &s.income_sources {
             let x = PAD + CP;
-            if cx.pressed(PAD, ry, W, rh) && sl.folded == 0 {
+            // Only a row that opens something shows the press: Uncategorized has no page.
+            if cx.pressed(PAD, ry, W, rh) && sl.folded == 0 && sl.category_id.is_some() {
                 let wash = cx.p.wash;
                 cx.c.rect(PAD + 6.0, ry, W - 12.0, rh, 14.0, wash);
             }
@@ -359,7 +368,7 @@ fn where_it_went(cx: &mut Ctx, y: f32, s: &Insights, fmt: &MoneyFormatter, todo:
     let mut ry = y + CP + title_h + 18.0 + size + 22.0;
     for sl in &s.categories {
         let colour = theme::category_color(sl.color);
-        if cx.pressed(PAD, ry, W, rh) && sl.folded == 0 {
+        if cx.pressed(PAD, ry, W, rh) && sl.folded == 0 && sl.category_id.is_some() {
             cx.c.rect(PAD + 6.0, ry, W - 12.0, rh, 14.0, p.wash);
         }
         kit::badge(cx, x, ry + 9.0, 36.0, &sl.icon, colour);

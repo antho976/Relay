@@ -25,11 +25,29 @@ for abi in "${ABIS[@]}"; do
   esac
   var=$(echo "$triple" | tr 'a-z-' 'A-Z_')
   low=${triple//-/_}
+  # 16 KB pages (Android 15+ devices): NDKs before r28 link with 4 KB alignment by default.
   env PATH="$RUST/bin:$PATH" \
       "CARGO_TARGET_${var}_LINKER=$BIN/$triple$API-clang" \
       "CC_$low=$BIN/$triple$API-clang" "CXX_$low=$BIN/$triple$API-clang++" "AR_$low=$BIN/llvm-ar" \
+      "CARGO_TARGET_${var}_RUSTFLAGS=-C link-arg=-Wl,-z,max-page-size=16384" \
       cargo build --release -p tally-rs --lib --target "$triple"
   mkdir -p "android/src/main/jniLibs/$abi"
   cp "target/$triple/release/libtally.so" "android/src/main/jniLibs/$abi/"
   ls -la "android/src/main/jniLibs/$abi/"
+done
+
+# Gradle packs every ABI under jniLibs: a libtally.so left from an earlier run for an ABI not
+# built now would ship stale. Remove those (only the library this script makes), and the folder
+# when that leaves it empty.
+for dir in android/src/main/jniLibs/*/; do
+  [ -d "$dir" ] || continue
+  dir=${dir%/}
+  abi=$(basename "$dir")
+  keep=false
+  for built in "${ABIS[@]}"; do [ "$built" = "$abi" ] && keep=true; done
+  if ! $keep && [ -f "$dir/libtally.so" ]; then
+    echo "removing stale $dir/libtally.so (not built in this run)"
+    rm -f "$dir/libtally.so"
+    rmdir "$dir" 2>/dev/null || true
+  fi
 done

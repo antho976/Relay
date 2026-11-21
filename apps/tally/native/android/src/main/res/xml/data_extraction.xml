@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What Android 12 and later may copy to another phone (and to a cloud backup, which
+     allowBackup="false" already turns off). allowBackup no longer stops a device-to-device
+     transfer for an app targeting Android 12, so the sync key (files/sync-secret.json, sync.rs's
+     SECRET_FILE) is left out here: two phones holding it would sync as one device with one token.
+     The ledger (tally.db) still moves, so nothing is lost; the new phone is simply not paired and
+     connects to the server again, as a new device. Android 11 and earlier read only allowBackup,
+     which keeps everything on this phone. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="sync-secret.json" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="sync-secret.json" />
+    </device-transfer>
+</data-extraction-rules>

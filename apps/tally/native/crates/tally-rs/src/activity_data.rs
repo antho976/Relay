@@ -263,7 +263,8 @@ pub struct Subject {
     pub kind: CategoryKind,
     pub account_type: Option<AccountType>,
     pub balance: i64,
-    /// An account given a balance to start from, or valued: only then does it read what it holds.
+    /// The account's row on the Accounts page shows a figure (`balance`): only then does its page
+    /// read what it holds.
     pub tracks_balance: bool,
     /// Every entry it holds, all time.
     pub entry_count: usize,
@@ -313,10 +314,12 @@ pub fn account_flows(rows: &[Tx], account: i64) -> (i64, i64, usize, usize) {
     (i, o, ic, oc)
 }
 
+/// Matches `AccountRow::tracked`: a card always tracks what is owed on it, even from nothing.
 fn tracks_balance(store: &Store, account: i64) -> bool {
     let Ok(db) = store.sql() else { return false };
     db.query_row(
         "SELECT (SELECT opening_balance FROM accounts WHERE id = ?1) != 0
+             OR (SELECT type FROM accounts WHERE id = ?1) = 'CREDIT'
              OR EXISTS (SELECT 1 FROM account_values WHERE account_id = ?1 AND deleted = 0)",
         [account],
         |r| r.get::<_, bool>(0),
@@ -376,14 +379,23 @@ pub fn subject_listing(store: &Store, today: Date, category: Option<i64>, accoun
             let Some(a) = store.ledger.accounts().map_err(err)?.into_iter().find(|a| a.id == id) else { return Ok(None) };
             let now = store.ledger.tx_list(&in_period(None, Some(id), &period, period.last_day()), today).map_err(err)?.transactions;
             let (mi, mo, ic, oc) = account_flows(&now, id);
+            // The figure the account's row on the Accounts page shows (an investment account at
+            // its holdings, one given nowhere to start by its entries), and "No balance" where
+            // the row says so. An archived account, which has no figure there, reads its balance.
+            let read = crate::accounts_store::worth_now(store, today).ok().and_then(|(rows, now)| {
+                let r = rows.iter().find(|r| r.view.id == id)?;
+                let &(v, priced) = now.get(&id)?;
+                Some((v, crate::accounts_store::counted(r, v, priced)))
+            });
+            let (balance, tracks) = read.unwrap_or_else(|| (a.balance, tracks_balance(store, id)));
             Subject {
                 name: a.name,
                 icon: String::new(),
                 color: None,
                 kind: CategoryKind::Expense,
                 account_type: Some(a.r#type),
-                balance: a.balance,
-                tracks_balance: tracks_balance(store, id),
+                balance,
+                tracks_balance: tracks,
                 entry_count: 0,
                 period_total: 0,
                 period_count: 0,

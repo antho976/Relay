@@ -47,6 +47,9 @@ pub struct Home {
     pub today_in_week: usize,
     pub income_last_same_day: i64,
     pub shares: Vec<Share>,
+    /// The open goals, read as the Plan reads them (a balance goal counts from where it started),
+    /// in the summary's order. Empty for a ledger held in memory.
+    pub goals: Vec<crate::plan_logic::GoalLine>,
 }
 
 impl Home {
@@ -272,6 +275,22 @@ impl Store {
         let categories = self.ledger.categories().map_err(err)?;
         let shares = shares(&period.transactions, &categories);
 
+        // The goal cards: the summary's own goal views read progress from zero, which is wrong for
+        // a balance goal that starts below or above its target, so read them as the Plan does.
+        let goals = match self.sql() {
+            Ok(conn) => {
+                let rows: Vec<_> = crate::plan_store::goals(conn)?.into_iter().filter(|g| !g.archived).collect();
+                if rows.is_empty() {
+                    Vec::new()
+                } else {
+                    let (period, _) = crate::plan_logic::period_of(self, today);
+                    let inputs = crate::plan_logic::goal_inputs(conn, &period, self.ledger.accounts().map_err(err)?, crate::plan_logic::worth_now(self, today))?;
+                    rows.iter().map(|g| crate::plan_logic::goal_line(g, &inputs, today)).collect()
+                }
+            }
+            Err(_) => Vec::new(),
+        };
+
         Ok(Home {
             today,
             s,
@@ -282,6 +301,7 @@ impl Store {
             today_in_week: back as usize,
             income_last_same_day,
             shares,
+            goals,
         })
     }
 

@@ -23,6 +23,8 @@ pub struct State {
 /// What a tap on Overview asks for, done once drawing is over.
 enum Act {
     Go(Route),
+    /// A goal's "Add money": its page opens with the amount field typing, as on the Plan.
+    AddMoney(i64),
     Sample,
 }
 
@@ -33,6 +35,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let mut act = None;
     let bottom;
     let mut moving = pg.moving;
+    // A paired phone gets no sample ledger: loading one turns sync off for good and forgets the
+    // pull bookkeeping, as onboarding knows (it hides its sample key once paired too).
+    let paired = app.st.sync.paired(&app.store);
     {
         let mut cx = cx!(app);
         let st = &mut app.st.overview;
@@ -42,26 +47,38 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 cx.c.text(words, PAD, pg.top, Text::new(ty::UI, p.ink2));
                 pg.top + 40.0
             }
-            Some(h) => content(&mut cx, h, st, pg.top + 8.0, dt, &mut act, &mut moving),
+            Some(h) => content(&mut cx, h, st, paired, pg.top + 8.0, dt, &mut act, &mut moving),
         };
     }
     app.page_end(&pg, bottom);
     match act {
         // "See all" under Recent opens Entries over Overview, with Back.
         Some(Act::Go(r)) => app.push_over(r),
-        Some(Act::Sample) => {
+        Some(Act::AddMoney(id)) => {
+            app.st.plan.add_money = Some(id);
+            app.push_over(Route::Goal { id });
+        }
+        Some(Act::Sample) if !paired => {
             match app.store.load_sample(model::today()) {
-                Ok(n) => app.say(format!("Loaded the sample ledger: {n} rows"), None),
+                Ok(n) => {
+                    // The sample is for trying the app on this phone: it never goes to the server.
+                    app.st.sync.keep_on_phone(&mut app.store);
+                    let _ = app.store.set_pref("onboarded", "1");
+                    // Its bills due today post today.
+                    app.bills_changed();
+                    app.say(format!("Loaded the sample ledger: {n} rows, on this phone only"), None);
+                }
                 Err(e) => app.say(e, None),
             }
             app.invalidate();
         }
-        None => {}
+        Some(Act::Sample) | None => {}
     }
     moving
 }
 
-fn content(cx: &mut Ctx, h: &Home, st: &mut State, top: f32, dt: f32, act: &mut Option<Act>, moving: &mut bool) -> f32 {
+#[allow(clippy::too_many_arguments)]
+fn content(cx: &mut Ctx, h: &Home, st: &mut State, paired: bool, top: f32, dt: f32, act: &mut Option<Act>, moving: &mut bool) -> f32 {
     let s = &h.s;
     let mut y = top;
 
@@ -77,16 +94,21 @@ fn content(cx: &mut Ctx, h: &Home, st: &mut State, top: f32, dt: f32, act: &mut 
             &PicCard {
                 eyebrow: Some("Nothing logged yet"),
                 title: "Every dollar, where you put it",
-                line: Some("Log what you spend with +, or connect your server in Settings. Or look around with the sample ledger."),
+                line: Some(if paired {
+                    "Log what you spend with + to see the month take shape."
+                } else {
+                    "Log what you spend with +, or connect your server in Settings. Or look around with the sample ledger."
+                }),
                 ..Default::default()
             },
         );
         y += ch + 16.0;
-        let kw = (CW - 10.0) / 2.0;
-        if kit::key(cx, PAD, y, kw, 52.0, "Sample ledger", None, KeyKind::Plain) {
+        // Paired: only "Log an entry", full width.
+        let (kx, kw) = if paired { (PAD, CW) } else { (PAD + (CW - 10.0) / 2.0 + 10.0, (CW - 10.0) / 2.0) };
+        if !paired && kit::key(cx, PAD, y, kw, 52.0, "Sample ledger", None, KeyKind::Plain) {
             *act = Some(Act::Sample);
         }
-        if kit::key(cx, PAD + kw + 10.0, y, kw, 52.0, "Log an entry", Some("plus"), KeyKind::Primary) {
+        if kit::key(cx, kx, y, kw, 52.0, "Log an entry", Some("plus"), KeyKind::Primary) {
             *act = Some(Act::Go(Route::Entry { id: None, kind: None, account: None, category: None }));
         }
         return y + 52.0;
@@ -98,7 +120,7 @@ fn content(cx: &mut Ctx, h: &Home, st: &mut State, top: f32, dt: f32, act: &mut 
     if !s.budgets.is_empty() {
         y = budgets(cx, h, y, act) + 30.0;
     }
-    if !s.goals.is_empty() {
+    if !h.goals.is_empty() {
         y = goals(cx, h, st, y, dt, act, moving);
     }
     y
@@ -201,13 +223,15 @@ fn week_and_bill(cx: &mut Ctx, h: &Home, y: f32, act: &mut Option<Act>) -> f32 {
     }
     // The next bill.
     let x = PAD + cw + 12.0;
-    let next = h.s.bills.iter().filter(|b| b.days_until >= 0).min_by_key(|b| b.days_until);
+    // An overdue bill (a reminder not marked paid) comes first: it is the one that wants paying.
+    let next = h.s.bills.iter().min_by_key(|b| b.days_until);
     match next {
         Some(b) => {
             if kit::card_button(cx, x, y, cw, ch) {
                 *act = Some(Act::Go(Route::Bills));
             }
-            cx.c.text("Next bill", x + 18.0, y + 18.0, Text::new(14.0, p.ink2).medium());
+            let overdue = b.days_until < 0;
+            cx.c.text(if overdue { "Overdue bill" } else { "Next bill" }, x + 18.0, y + 18.0, Text::new(14.0, p.ink2).medium());
             cx.c.text_fit(&b.name, x + 18.0, y + 40.0, cw - 36.0, Text::new(17.0, p.ink).medium());
             let amount = match b.r#type {
                 TxType::Income => format!("+{}", fmt.format(b.amount)),
@@ -215,11 +239,12 @@ fn week_and_bill(cx: &mut Ctx, h: &Home, y: f32, act: &mut Option<Act>) -> f32 {
             };
             kit::money(cx, &amount, x + 18.0, y + 64.0, 26.0, if b.r#type == TxType::Income { p.live_text } else { p.ink }, p.ink2);
             let when = match b.days_until {
+                n if n < 0 => b.due_line.clone(),
                 0 => "today".to_string(),
                 1 => "tomorrow".to_string(),
                 n => format!("in {n} days"),
             };
-            cx.c.text(&when, x + 18.0, y + ch - 18.0 - 23.0, Text::new(17.0, p.signal).medium());
+            cx.c.text_fit(&when, x + 18.0, y + ch - 18.0 - 23.0, cw - 36.0, Text::new(17.0, if overdue { p.held_text } else { p.signal }).medium());
         }
         None => {
             if kit::card_button(cx, x, y, cw, ch) {
@@ -356,18 +381,20 @@ fn goals(cx: &mut Ctx, h: &Home, st: &mut State, y: f32, dt: f32, act: &mut Opti
     }
     let y = y + hh + 14.0;
     let (cw, ch, gap) = (300.0, 380.0, 12.0);
-    let n = h.s.goals.len();
+    let n = h.goals.len();
     let content = n as f32 * cw + (n.saturating_sub(1)) as f32 * gap;
     let (x0, m) = kit::carousel(cx, &mut st.goals, y, ch, content, dt);
     *moving |= m;
-    for (i, g) in h.s.goals.iter().enumerate() {
+    for (i, g) in h.goals.iter().enumerate() {
         let x = x0 + i as f32 * (cw + gap);
         if x > WIDTH || x + cw < 0.0 {
             continue;
         }
         let pic = crate::pictures::for_goal(&g.name, g.kind == relay_money::model::GoalKind::Invest);
-        let line = format!("{} of {}", fmt.format_whole(g.saved), fmt.format_whole(g.target));
-        let f = if g.target > 0 { g.saved as f32 / g.target as f32 } else { 0.0 };
+        // Read as the Plan reads it: a balance goal fills from where it started, not from zero.
+        let line = crate::plan_logic::goal_card_line(g, fmt);
+        // Only an open pot takes money by hand; the others fill from the ledger.
+        let pot = g.kind == relay_money::model::GoalKind::Savings && !g.reached();
         let (card, button) = kit::pic_card(
             cx,
             x,
@@ -375,9 +402,11 @@ fn goals(cx: &mut Ctx, h: &Home, st: &mut State, y: f32, dt: f32, act: &mut Opti
             cw,
             ch,
             pic,
-            &PicCard { title: &g.name, line: Some(&line), meter: Some(f), button: Some("Add money"), ..Default::default() },
+            &PicCard { title: &g.name, line: Some(&line), meter: Some(g.fraction()), button: pot.then_some("Add money"), ..Default::default() },
         );
-        if card || button {
+        if button {
+            *act = Some(Act::AddMoney(g.id));
+        } else if card {
             *act = Some(Act::Go(Route::Goal { id: g.id }));
         }
     }
