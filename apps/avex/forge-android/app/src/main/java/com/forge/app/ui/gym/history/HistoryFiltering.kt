@@ -1,0 +1,179 @@
+package com.forge.app.ui.gym.history
+
+import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.data.db.entities.Session
+import com.forge.app.data.db.entities.durationMinutes
+import com.forge.app.domain.cardio.CardioActivity
+import com.forge.app.domain.cardio.CustomCardioType
+import com.forge.app.program.Program
+
+enum class SessionHistoryFilter { SHORT, LONG, HIGH_VOLUME }
+
+/** A session counts as "high volume" at/above this many lb when there is too little history to
+ *  read the user's own heavy days from ([heavyThresholdLb]). */
+const val HIGH_VOLUME_LB = 3000.0
+
+/**
+ * Where "Heavy" starts for THIS user: the top quarter of their own sessions by volume, from four
+ * sessions on. A fixed 3,000 lb let nearly every real session through (4 × 10 × 135 is already
+ * 5,400), so the chip filtered nothing and in practice meant "gym only".
+ */
+internal fun heavyThresholdLb(workouts: List<Session>): Double {
+    val volumes = workouts.mapNotNull { it.totalVolumeLb }.filter { it > 0.0 }.sorted()
+    if (volumes.size < 4) return HIGH_VOLUME_LB
+    return volumes[(volumes.size * 3) / 4]
+}
+
+/** One entry in the unified history — either a finished gym workout or a logged cardio session. */
+sealed interface HistoryItem {
+    val dateMs: Long
+
+    /** Globally-unique LazyColumn key — gym & cardio ids come from different tables and can collide. */
+    val key: String
+
+    data class Workout(val session: Session) : HistoryItem {
+        override val dateMs get() = session.startedAt
+        override val key get() = "w${session.id}"
+    }
+
+    data class Cardio(val entry: CardioEntry) : HistoryItem {
+        override val dateMs get() = entry.date
+        override val key get() = "c${entry.id}"
+    }
+}
+
+/** The user-controlled filter inputs, held off the session list so a filter change doesn't re-query. */
+data class HistoryFilters(
+    val query: String = "",
+    val tag: String? = null,
+    val duration: SessionHistoryFilter? = null,
+    val volume: SessionHistoryFilter? = null,
+    /** The type filter: all, gym, cardio, or sessions with a PR. */
+    val kind: HistoryKind = HistoryKind.ALL
+)
+
+/**
+ * One calendar day of history, and the group a History row sits inside.
+ *
+ * The list used to print the full date on every row, so a seven-session Monday rendered
+ * "AUG 24, 2026" seven times and the eye had to compare seven identical strings to learn there was
+ * only one day on screen. The date is a property of the DAY, so it is stated once, and the rows
+ * under it get their width back for what actually separates them.
+ */
+data class HistoryDay(
+    /** The date, already human ("TODAY", "SAT · AUG 22", "AUG 15, 2026") — never a machine stamp (§11). */
+    val label: String,
+    val items: List<HistoryItem>
+)
+
+/**
+ * What the list currently shows, for the reading under the title. Counts EVERY item on screen;
+ * volume is gym-only, so a cardio-only filter honestly reads zero and the caller drops the clause
+ * rather than printing "0 kg" (§12).
+ */
+data class HistorySummary(val sessions: Int, val volumeLb: Double)
+
+/** Group an already-filtered, newest-first list into its calendar days, order preserved. */
+internal fun groupByDay(items: List<HistoryItem>, label: (Long) -> String): List<HistoryDay> =
+    items.groupBy { label(it.dateMs) }
+        .map { (day, rows) -> HistoryDay(day, rows) }
+
+/** The reading for [items]: how many, and how much of it was lifted. */
+internal fun summarize(items: List<HistoryItem>): HistorySummary =
+    HistorySummary(
+        sessions = items.size,
+        volumeLb = items.filterIsInstance<HistoryItem.Workout>().sumOf { it.session.totalVolumeLb ?: 0.0 }
+    )
+
+/**
+ * Pure: merge gym workouts + cardio, apply the [filters], and return them newest-first. Computed
+ * once per data/filter emission in the ViewModel (NOT a recomposition-time getter), so the History
+ * list reads a ready-made list. [exerciseNamesBySession] is the search index for exercise matches.
+ */
+internal fun buildFilteredHistory(
+    workouts: List<Session>,
+    cardio: List<CardioEntry>,
+    exerciseNamesBySession: Map<Long, List<String>>,
+    filters: HistoryFilters,
+    /** The user's own cardio activities, so search matches the name the row actually shows. */
+    customCardioTypes: List<CustomCardioType> = emptyList(),
+    /** Where "Heavy" starts ([heavyThresholdLb]). */
+    heavyLb: Double = HIGH_VOLUME_LB
+): List<HistoryItem> {
+    val needle = filters.query.trim().lowercase()
+    val gym = workouts.filter { matchesWorkout(it, needle, filters, exerciseNamesBySession, heavyLb) }
+        .map { HistoryItem.Workout(it) }
+    val card = cardio.filter { matchesCardio(it, needle, filters, customCardioTypes) }
+        .map { HistoryItem.Cardio(it) }
+    return (gym + card).filter { filters.kind.admits(it) }.sortedByDescending { it.dateMs }
+}
+
+/** Distinct quick tags across all workouts, alphabetised — the source for the filter chips. */
+internal fun availableTagsOf(workouts: List<Session>): List<String> =
+    workouts.flatMap { it.tags.split(",") }
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+        .sorted()
+
+private fun matchesWorkout(
+    s: Session,
+    needle: String,
+    f: HistoryFilters,
+    names: Map<Long, List<String>>,
+    heavyLb: Double
+): Boolean {
+    if (needle.isNotEmpty() && !workoutMatchesQuery(s, needle, names)) return false
+    f.tag?.let { tag -> if (s.tags.split(",").none { it.trim().equals(tag, ignoreCase = true) }) return false }
+    f.duration?.let { d ->
+        val min = s.durationMinutes()
+        when (d) {
+            SessionHistoryFilter.SHORT -> if ((min ?: Int.MAX_VALUE) >= 45) return false
+            SessionHistoryFilter.LONG -> if ((min ?: 0) <= 60) return false
+            else -> {}
+        }
+    }
+    f.volume?.let { v ->
+        // >=, not >. HIGH_VOLUME_LB's own doc says "at/above this many lb", and the chip label is
+        // rendered from the same constant — so a session at exactly 3,000 lb was excluded by the
+        // filter that named it.
+        if (v == SessionHistoryFilter.HIGH_VOLUME && !(s.totalVolumeLb != null && s.totalVolumeLb >= heavyLb)) return false
+    }
+    return true
+}
+
+private fun matchesCardio(
+    e: CardioEntry,
+    needle: String,
+    f: HistoryFilters,
+    customTypes: List<CustomCardioType>
+): Boolean {
+    // Cardio carries no tags or volume → it drops out when a tag or high-volume filter is on.
+    if (f.tag != null) return false
+    if (f.volume == SessionHistoryFilter.HIGH_VOLUME) return false
+    if (needle.isNotEmpty()) {
+        // CardioActivity.resolve, the same resolver the ROW uses — CardioType.fromCode folds every
+        // custom activity to "Other", so searching for the name printed on screen ("Padel", "Hyrox")
+        // matched nothing at all, while searching "other" matched all of them.
+        val name = CardioActivity.resolve(e.type, customTypes).displayName
+        val hay = (name + " " + (e.note ?: "") + " cardio").lowercase()
+        if (!hay.contains(needle)) return false
+    }
+    f.duration?.let { d ->
+        when (d) {
+            SessionHistoryFilter.SHORT -> if (e.durationMin >= 45) return false
+            SessionHistoryFilter.LONG -> if (e.durationMin <= 60) return false
+            else -> {}
+        }
+    }
+    return true
+}
+
+/** Case-insensitive match against the day name, the session journal, or any logged exercise name. */
+private fun workoutMatchesQuery(s: Session, needle: String, names: Map<Long, List<String>>): Boolean {
+    if (Program.dayDisplayName(s.dayKey).lowercase().contains(needle)) return true
+    if (s.journal.lowercase().contains(needle)) return true
+    // Tags are found by search now that they no longer have chips of their own.
+    if (s.tags.lowercase().contains(needle.removePrefix("#"))) return true
+    return names[s.id].orEmpty().any { it.lowercase().contains(needle) }
+}

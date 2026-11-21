@@ -1,0 +1,200 @@
+package com.forge.app.ui.cardio.components
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.domain.cardio.CardioActivity
+import com.forge.app.domain.cardio.CardioRestReason
+import com.forge.app.domain.cardio.CardioWearableDay
+import com.forge.app.domain.cardio.cardioDetailParts
+import com.forge.app.domain.units.clockPattern
+import com.forge.app.domain.units.formatClockHourShort
+import com.forge.app.ui.cardio.LocalCardioTypes
+import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.ForgeGlyphBadge
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.cardio.CardioChartPanel
+import com.forge.app.ui.theme.LocalForgeSettings
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
+import java.util.Locale
+
+/** One session in a week's timeline — the day, the time-of-day it happened, and a compact line. */
+@Composable
+internal fun SessionTimelineRow(
+    entry: CardioEntry,
+    useMiles: Boolean,
+    zone: ZoneId,
+    onBg: Color,
+    muted: Color,
+    onClick: () -> Unit,
+    /** Outer placement and the member fill, when the row sits in a group. */
+    modifier: Modifier = Modifier
+) {
+    // Resolved through the user's custom activities, as CardioEntryRow and the detail sheet do. The
+    // built-in enum alone maps every `custom_` code to Other, so a custom activity that read "Padel"
+    // in the main list and the detail sheet was renamed Other, with the generic glyph, here.
+    val type = CardioActivity.resolve(entry.type, LocalCardioTypes.current)
+    val dayLabel = remember(entry.date) {
+        Instant.ofEpochMilli(entry.date).atZone(zone).dayOfWeek
+            .getDisplayName(TextStyle.SHORT, Locale.getDefault()).uppercase().take(3)
+    }
+    val use24h = LocalForgeSettings.current.timeFormat24h
+    val timeLabel = remember(entry.date, entry.durationMin, use24h) {
+        sessionTimeLabel(entry.date, if (type.isRest) 0 else entry.durationMin, zone, use24h)
+    }
+    val detail = if (type.isRest) {
+        CardioRestReason.fromCode(entry.restReason)?.displayName ?: "Rest day"
+    } else {
+        cardioDetailParts(entry, useMiles = useMiles).joinToString(" · ")
+    }
+    Row(
+        modifier = modifier.fillMaxWidth().clickableLabeled("View session details", onClick = onClick).padding(horizontal = ROW_H, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(dayLabel, style = MaterialTheme.typography.labelMedium, color = muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.widthIn(min = 32.dp))
+        ForgeGlyphBadge(type.icon, selected = false, size = 34.dp)
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(type.displayName, style = MaterialTheme.typography.bodyMedium, color = onBg)
+                if (timeLabel.isNotBlank()) {
+                    Text(timeLabel, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+                }
+            }
+            if (detail.isNotBlank()) {
+                Text(detail, style = MaterialTheme.typography.labelSmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 10.sp)
+            }
+        }
+        // No trailing `stats →`: the WHOLE row already opens the session, so the link was a second
+        // affordance for the same tap (§2③ — never nested taps, never two ways to say one thing).
+    }
+}
+
+/**
+ * The watch-only "steps through the day" graph. Shows the hourly bars when a wearable actually fed
+ * data; once Avex holds the steps grant ([connected]) but that day has none synced yet, shows a quiet
+ * "no data yet" placeholder so the feature reads as live. When NOT connected it renders nothing — the
+ * invitation to connect lives in the dismissible banner, not here.
+ */
+@Composable
+internal fun StepsByHourSection(
+    wearable: CardioWearableDay?,
+    connected: Boolean,
+    muted: Color,
+    outline: Color,
+    accent: Color
+) {
+    val hasData = wearable != null && wearable.hasData
+    if (!hasData && !connected) return
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
+        EditorialHeader(label = "Steps through the day", muted = muted, accent = accent)
+        Spacer(Modifier.height(12.dp))
+        CardioChartPanel {
+        if (hasData) {
+            HourlyStepsBars(wearable!!, muted = muted, outline = outline, accent = accent)
+        } else {
+            // Connected but nothing synced yet — the section's own mark at zero (§12): ghost hour bars.
+            VerticalBarRow(
+                count = 24,
+                trackHeight = 56.dp,
+                modifier = Modifier.fillMaxWidth(),
+                spacing = 2.dp,
+                corner = 4.dp,
+                bar = { BarGeom(height = 3.dp, fill = outline.copy(alpha = 0.25f)) }
+            )
+            Spacer(Modifier.height(8.dp))
+            // A sentence takes the prose voice (§6: a sentence is never mono), as a caption.
+            Text(
+                "No steps from your watch for this day yet.",
+                style = MaterialTheme.typography.bodySmall, color = muted
+            )
+        }
+        }
+    }
+}
+
+/** 24 thin bars (one per hour) of an active-steps day; the busiest hour is labelled. */
+@Composable
+private fun HourlyStepsBars(
+    wearable: CardioWearableDay,
+    muted: Color,
+    outline: Color,
+    accent: Color
+) {
+    val byHour = remember(wearable) { (0..23).map { h -> wearable.hourlySteps.firstOrNull { it.hour == h }?.steps ?: 0 } }
+    val actualMax = byHour.maxOrNull() ?: 0
+    val max = actualMax.coerceAtLeast(1)
+    val peakHour = byHour.indexOf(actualMax).coerceAtLeast(0)
+    Column {
+        VerticalBarRow(
+            count = 24,
+            trackHeight = 56.dp,
+            modifier = Modifier.fillMaxWidth(),
+            spacing = 2.dp,
+            corner = 4.dp,
+            bar = { i ->
+                val steps = byHour[i]
+                BarGeom(
+                    height = (3 + (steps.toFloat() / max) * 52).dp,
+                    fill = if (steps > 0) accent else outline.copy(alpha = 0.25f)
+                )
+            }
+        )
+        // Four quarter-day ticks so a bar can be read as a time of day without counting bars.
+        val use24h = LocalForgeSettings.current.timeFormat24h
+        Spacer(Modifier.height(4.dp))
+        Row(Modifier.fillMaxWidth()) {
+            listOf(0, 6, 12, 18).forEach { h ->
+                Text(
+                    com.forge.app.domain.units.formatClockHourShort(h, use24h),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "${"%,d".format(wearable.totalSteps)} steps · busiest ${hourRangeLabel(peakHour, LocalForgeSettings.current.timeFormat24h)}",
+            style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
+        )
+    }
+}
+
+/**
+ * "6:30 AM – 7:10 AM" (or "06:30 – 07:10" on a 24h clock) for a timed session, the start alone when
+ * there's no duration. Follows Settings → Format → Clock, which it ignored until the 2026-09-26 audit.
+ */
+private fun sessionTimeLabel(startMs: Long, durationMin: Int, zone: ZoneId, use24h: Boolean): String {
+    val fmt = DateTimeFormatter.ofPattern(clockPattern(use24h), Locale.getDefault())
+    val start = Instant.ofEpochMilli(startMs).atZone(zone)
+    val startStr = start.format(fmt)
+    if (durationMin <= 0) return startStr
+    val end = start.plusMinutes(durationMin.toLong())
+    return "$startStr – ${end.format(fmt)}"
+}
+
+/** "4am–5am" (or "04:00–05:00" on a 24h clock) for the peak step hour. */
+private fun hourRangeLabel(hour: Int, use24h: Boolean): String =
+    "${formatClockHourShort(hour, use24h)}–${formatClockHourShort((hour + 1) % 24, use24h)}"

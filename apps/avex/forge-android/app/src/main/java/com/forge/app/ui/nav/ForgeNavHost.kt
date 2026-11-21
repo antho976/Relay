@@ -1,0 +1,583 @@
+package com.forge.app.ui.nav
+
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.font.FontStyle
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavController
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.forge.app.ui.coach.CoachEntryPoint
+import com.forge.app.ui.coach.CoachScreen
+import com.forge.app.ui.gym.freestyle.FreestyleLogScreen
+import com.forge.app.ui.programbuilder.ProgramBuilderScreen
+import com.forge.app.ui.common.ProgramChangeGuardHost
+import com.forge.app.ui.gym.history.SessionHistoryScreen
+import com.forge.app.ui.gym.session.SessionDetailScreen
+import com.forge.app.ui.gym.notes.NotesSearchScreen
+import com.forge.app.ui.gym.train.DayScreen
+import com.forge.app.ui.goals.GoalEditorScreen
+import com.forge.app.ui.goals.GoalsScreen
+import com.forge.app.security.LocalAppLock
+import com.forge.app.ui.profile.BodyMeasurementsScreen
+import com.forge.app.ui.profile.MirrorTestScreen
+import com.forge.app.ui.profile.ProgressCameraScreen
+import com.forge.app.ui.security.AppLockScreen
+import com.forge.app.ui.recap.RecapScreen
+import com.forge.app.ui.settings.SettingsScreen
+import com.forge.app.ui.theme.ForgeMotion
+import com.forge.app.ui.trophies.TrophiesScreen
+
+/**
+ * Destinations that rise as modals. Top-level so the transition lambdas that read it keep one
+ * identity across recompositions of the nav root (a set built in the body gave them a new one each
+ * time, so the NavHost could never skip).
+ */
+private val ModalRoutes = setOf(Routes.GYM_DAY, Routes.RECAP, Routes.PROGRAM_BUILDER, Routes.COACH_BRIEF, Routes.FREESTYLE_LOG)
+
+@Composable
+fun ForgeNavHost(
+    widgetOpen: com.forge.app.widget.WidgetOpenRequest? = null,
+    /** Called once [widgetOpen] has been routed or rejected against a loaded program (M-30). */
+    onWidgetOpenHandled: () -> Unit = {},
+    privacyPolicyRequest: Int = 0
+) {
+    val nav = rememberNavController()
+    // App-wide "push" navigation (Material shared-axis X): a short directional slide + fade
+    // rather than a full-width slide-and-fade — the eye travels less so it reads snappier.
+    // Incoming content decelerates in; outgoing accelerates away (ForgeMotion easings).
+    //
+    // "Mode" destinations (a focused session, recap, program editor) instead RISE from below
+    // and drop back down, so motion expresses the hierarchy — you enter/exit a mode rather
+    // than stepping sideways between sibling hubs. The screen underneath just fades.
+    val dur = ForgeMotion.DurationEmphasized
+    val slide: (Int) -> Int = { it / 6 }       // horizontal distance — modest, not full width
+    val rise: (Int) -> Int = { it / 4 }        // vertical distance for modal mode screens
+    // The five hubs (Cardio/Stats/Overview/Coach/Academy) are pages of HubScreen's pager, reached by
+    // swipe — they aren't nav destinations. Only the deep "mode" screens remain, and they RISE as modals.
+    val modalRoutes = ModalRoutes
+    // One-shot fade so the first screen eases in on cold launch instead of snapping on.
+    var appeared by remember { mutableStateOf(false) }
+    val rootAlpha by animateFloatAsState(
+        targetValue = if (appeared) 1f else 0f,
+        animationSpec = ForgeMotion.standardTween(dur),
+        label = "cold-start"
+    )
+    LaunchedEffect(Unit) { appeared = true }
+
+    // "I'll make my own" lands on Home, which shows the "No plan yet · Build a plan" state (its program
+    // was cleared in onboarding), rather than jumping straight into the builder.
+    // A deep screen (e.g. PRs → "open cardio") can request a hub tab: set this and pop back to the
+    // hub, which animates to the page then clears it via onPendingConsumed.
+    var pendingHubPage by remember { mutableStateOf<BottomTab?>(null) }
+
+    // The page the hub STARTS on. Only ever read once, when the hub is first composed — which is why
+    // it cannot carry a warm launch on its own; see the effect below.
+    val initialHubPage = if (widgetOpen?.dayKey?.startsWith("cardio") == true) BottomTab.CARDIO else BottomTab.HOME
+
+    // Widget deep-link: a gym day opens on top of the hub (Back returns home). A cardio day instead
+    // selects the hub's Cardio page.
+    // Re-fires whenever the key changes — a fresh launch, or a widget tap routed through onNewIntent
+    // while the app is already running (launchMode=singleTask); a config-change recreate supplies null.
+    //
+    // The cardio half used to ride ONLY on `initialHubPage`, which the hub reads once to seed its
+    // pager. That is exactly the case a cold launch covers and a warm one does not: with the app
+    // already running the hub is long since composed, so tapping the cardio widget landed the user
+    // on whatever page they were already looking at, with nothing to say the tap had been received.
+    // Routed through pendingHubPage instead — the same mechanism every in-app "open cardio" uses.
+    //
+    // Keyed on the REQUEST, not on the day it names (M-30): tapping the same widget twice assigned
+    // the same string, which is no state change, so the second tap ran nothing at all.
+    //
+    // And the program's READINESS is what gates the judgement, not a timer (M-30). `Program` reports
+    // the hard-coded seed split until the database program is loaded into it, so a cold tap for a
+    // custom builder day was validated against a split that had never contained it and rejected.
+    // The four-second poll that replaced that made a slow load indistinguishable from a day the
+    // program does not have: the timeout expired, the key was judged against the seed anyway, and
+    // the tap was discarded. Only a LOADED program may reject a key; a load still in flight is
+    // waited for, and one that has FAILED leaves the request alone rather than answering it wrongly.
+    val programReadiness by com.forge.app.program.Program.readiness.collectAsStateWithLifecycle()
+    // Neither deep link acts under the app lock. This host stays composed beneath the gate, so a
+    // widget tap would open the gym day (and start its session) behind it, and the new screen's
+    // BackHandler, registered after the gate's, would take Back from the lock. Both requests wait
+    // for unlock instead: the widget's until it is marked handled, the policy's by count.
+    val locked = com.forge.app.security.LocalAppLockActive.current
+    LaunchedEffect(widgetOpen, programReadiness, locked) {
+        if (locked) return@LaunchedEffect
+        val request = widgetOpen ?: return@LaunchedEffect
+        val routing = com.forge.app.widget.widgetRoutingFor(
+            programReadiness,
+            request.dayKey,
+            com.forge.app.program.Program.dayKeys
+        )
+        if (routing !is com.forge.app.widget.WidgetRouting.Decided) return@LaunchedEffect
+        when (val destination = routing.destination) {
+            is com.forge.app.widget.WidgetDestination.GymDay -> nav.navigateToGymDay(destination.dayKey)
+            com.forge.app.widget.WidgetDestination.CardioTab -> {
+                nav.popBackStack(Routes.OVERVIEW, false)
+                pendingHubPage = BottomTab.CARDIO
+            }
+            // A day the LOADED program no longer has: the request is spent either way, so the user
+            // stays where they are rather than being re-routed on every recomposition.
+            com.forge.app.widget.WidgetDestination.Unrecognised -> Unit
+        }
+        // Consumed only now — once a real program answered it. Held in the Activity's saved state
+        // until this point, so a recreation mid-wait (a rotation, or the process being rebuilt
+        // behind the launcher) resumes the tap instead of dropping it.
+        onWidgetOpenHandled()
+    }
+    var policyRequestsHandled by remember { mutableIntStateOf(0) }
+    LaunchedEffect(privacyPolicyRequest, locked) {
+        if (!locked && privacyPolicyRequest > policyRequestsHandled) {
+            policyRequestsHandled = privacyPolicyRequest
+            nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.PrivacyPolicy.name))
+        }
+    }
+
+    // Long-pressing the notifications bell anywhere returns Home in one gesture: pop every deep route
+    // back to the hub and select Home. No-op-safe when already on the hub (popBackStack returns false).
+    val goHome: () -> Unit = {
+        pendingHubPage = BottomTab.HOME
+        nav.popBackStack(Routes.OVERVIEW, false)
+    }
+
+    // The bell's tap, from any screen's chrome. Guarded so a double-tap can't stack two copies of the
+    // page on the back stack.
+    val openNotifications: () -> Unit = {
+        if (nav.currentDestination?.route != Routes.NOTIFICATIONS) nav.navigate(Routes.NOTIFICATIONS)
+    }
+
+    // The unread count feeding every bell. Held once here (rather than per screen) so the chrome and
+    // the page read the same feed, and re-polled on resume — the weekly coach pass and the Health
+    // Connect grants can both change while the app is backgrounded.
+    val notificationsVm: com.forge.app.ui.notifications.NotificationsViewModel = hiltViewModel()
+    val notices by notificationsVm.notices.collectAsStateWithLifecycle()
+    val notificationsLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(notificationsLifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) notificationsVm.refresh()
+        }
+        notificationsLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { notificationsLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // User-defined cardio activities, fed once here so every cardio surface can resolve a `custom_`
+    // code to its name + glyph without per-screen plumbing (GYMAP-37).
+    val cardioTypesVm: com.forge.app.ui.cardio.CardioTypesViewModel = hiltViewModel()
+    val cardioTypes by cardioTypesVm.types.collectAsStateWithLifecycle()
+
+    // Where the bell sits, so an arrival banner can fly into it. One anchor for the whole app: the
+    // bell is Home-only (§4.6), so at most one is ever composed.
+    val bellAnchor = remember { com.forge.app.ui.common.BellAnchor() }
+
+    CompositionLocalProvider(
+        com.forge.app.ui.common.LocalGoHome provides goHome,
+        com.forge.app.ui.common.LocalOpenNotifications provides openNotifications,
+        com.forge.app.ui.common.LocalUnreadNotifications provides notices.size,
+        com.forge.app.ui.common.LocalBellAnchor provides bellAnchor,
+        com.forge.app.ui.cardio.LocalCardioTypes provides cardioTypes
+    ) {
+    NavHost(
+        navController = nav,
+        startDestination = Routes.OVERVIEW,
+        modifier = Modifier.fillMaxSize().graphicsLayer { alpha = rootAlpha },
+        enterTransition = {
+            if (targetState.destination.route in modalRoutes)
+                slideInVertically(ForgeMotion.enterTween(dur)) { rise(it) } + fadeIn(ForgeMotion.enterTween(dur))
+            else
+                slideInHorizontally(ForgeMotion.enterTween(dur)) { slide(it) } + fadeIn(ForgeMotion.enterTween(dur))
+        },
+        exitTransition = {
+            if (targetState.destination.route in modalRoutes)
+                fadeOut(ForgeMotion.exitTween(dur))
+            else
+                slideOutHorizontally(ForgeMotion.exitTween(dur)) { -slide(it) } + fadeOut(ForgeMotion.exitTween(dur))
+        },
+        popEnterTransition = {
+            if (initialState.destination.route in modalRoutes)
+                fadeIn(ForgeMotion.enterTween(dur))
+            else
+                slideInHorizontally(ForgeMotion.enterTween(dur)) { -slide(it) } + fadeIn(ForgeMotion.enterTween(dur))
+        },
+        popExitTransition = {
+            if (initialState.destination.route in modalRoutes)
+                slideOutVertically(ForgeMotion.exitTween(dur)) { rise(it) } + fadeOut(ForgeMotion.exitTween(dur))
+            else
+                slideOutHorizontally(ForgeMotion.exitTween(dur)) { slide(it) } + fadeOut(ForgeMotion.exitTween(dur))
+        }
+    ) {
+        composable(Routes.OVERVIEW) {
+            // The swipeable home: Overview · Cardio · Stats · Profile as pager pages under the bar.
+            HubScreen(
+                nav = nav,
+                initialTab = initialHubPage,
+                pendingTab = pendingHubPage,
+                onPendingConsumed = { pendingHubPage = null },
+                // Counted from the same feed the bell reads, so a kind switched off in Settings
+                // drops out of both at once and they can never disagree.
+                academyUnread = com.forge.app.data.repo.NotificationFeed.newLessonCount(notices)
+            )
+        }
+        composable(Routes.FREESTYLE_LOG) {
+            FreestyleLogScreen(onBack = { nav.popBackStack() })
+        }
+        composable(
+            route = Routes.PROGRAM_BUILDER,
+            arguments = listOf(
+                navArgument(Routes.ARG_BLANK) { type = NavType.BoolType; defaultValue = false },
+                navArgument(Routes.ARG_VIEW) { type = NavType.BoolType; defaultValue = false }
+            )
+        ) { entry ->
+            ProgramBuilderScreen(
+                blank = entry.arguments?.getBoolean(Routes.ARG_BLANK) ?: false,
+                startInView = entry.arguments?.getBoolean(Routes.ARG_VIEW) ?: false,
+                onClose = { nav.popBackStack() },
+                // The viewer replaces itself with the workout, so Back from the session lands
+                // where the plan was opened from.
+                onStartDay = { dayKey -> nav.popBackStack(); nav.navigateToGymDay(dayKey) }
+            )
+        }
+        composable(Routes.NUTRITION) {
+            NutritionPlaceholderScreen(onBack = { nav.popBackStack() })
+        }
+        composable(Routes.SESSION_HISTORY) {
+            SessionHistoryScreen(
+                onBack = { nav.popBackStack() },
+                onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },
+                onOpenCardio = { cardioId -> nav.navigate(Routes.cardioSession(cardioId)) }
+            )
+        }
+        composable(
+            route = Routes.SESSION_DETAIL,
+            arguments = listOf(navArgument(Routes.ARG_SESSION_ID) { type = NavType.LongType })
+        ) {
+            SessionDetailScreen(
+                onBack = { nav.popBackStack() },
+                onOpenLiftTrend = { liftId -> nav.navigate(Routes.liftDetail(liftId)) }
+            )
+        }
+        composable(
+            route = Routes.LIFT_DETAIL,
+            arguments = listOf(navArgument(Routes.ARG_LIFT_ID) { type = NavType.StringType })
+        ) {
+            com.forge.app.ui.gym.stats.LiftDetailScreen(
+                onBack = { nav.popBackStack() },
+                onSetGoal = { liftId -> nav.navigate(Routes.goalEditor(exerciseId = liftId)) }
+            )
+        }
+        composable(
+            route = Routes.CARDIO_SESSION,
+            arguments = listOf(navArgument(Routes.ARG_CARDIO_ID) { type = NavType.LongType })
+        ) {
+            com.forge.app.ui.cardio.CardioSessionDetailScreen(onBack = { nav.popBackStack() })
+        }
+        composable(
+            route = Routes.CARDIO_WEEKS,
+            arguments = listOf(
+                navArgument(Routes.ARG_WEEK_START) { type = NavType.LongType; defaultValue = -1L }
+            )
+        ) {
+            com.forge.app.ui.cardio.CardioWeeksScreen(
+                onBack = { nav.popBackStack() },
+                onOpenSession = { cardioId -> nav.navigate(Routes.cardioSession(cardioId)) }
+            )
+        }
+        composable(Routes.NOTES_SEARCH) {
+            NotesSearchScreen(onBack = { nav.popBackStack() })
+        }
+        composable(
+            route = Routes.GYM_DAY,
+            arguments = listOf(
+                navArgument(Routes.ARG_DAY_KEY) { type = NavType.StringType },
+                navArgument(Routes.ARG_SKIP_WARMUP) {
+                    type = NavType.BoolType
+                    defaultValue = false
+                }
+            )
+        ) { entry ->
+            val dayKey = entry.arguments?.getString(Routes.ARG_DAY_KEY).orEmpty()
+            // Pop only while the day screen is still on top: a second PopBack from a double-tapped
+            // exit would otherwise pop the hub and leave nothing to render (audit 2026-09-26).
+            DayScreen(dayKey = dayKey, onBack = { nav.popIfCurrent(entry) })
+        }
+        // Profile left the bottom bar for the Home top bar (2026-07-27), so it is a pushed route
+        // now and brings its own back arrow.
+        composable(Routes.PROFILE) {
+            com.forge.app.ui.profile.ProfileScreen(
+                onBack = { nav.popBackStack() },
+                // Single-top, like the hub's own entry points: a double tap stacked two copies.
+                onOpenPhotoGallery = { nav.navigate(Routes.MIRROR_TEST) { launchSingleTop = true } },
+                // Gated like the gallery (its route shows the last shot as a pose ghost).
+                onOpenCamera = { nav.navigate(Routes.PROGRESS_CAMERA) { launchSingleTop = true } },
+                onOpenMeasurements = { nav.navigate(Routes.BODY_MEASUREMENTS) { launchSingleTop = true } },
+                // Out of the ACTIVITY day sheet, into the same two destinations History opens.
+                onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },
+                onOpenCardio = { cardioId -> nav.navigate(Routes.cardioSession(cardioId)) }
+            )
+        }
+        composable(Routes.TROPHIES) {
+            TrophiesScreen(onBack = { nav.popBackStack() })
+        }
+        composable(
+            route = Routes.SETTINGS,
+            arguments = listOf(navArgument(Routes.ARG_SETTINGS_PAGE) {
+                type = NavType.StringType
+                defaultValue = ""
+            })
+        ) { entry ->
+            val pageArg = entry.arguments?.getString(Routes.ARG_SETTINGS_PAGE).orEmpty()
+            val initialPage = com.forge.app.ui.settings.SettingsPage.entries.firstOrNull { it.name == pageArg }
+            SettingsScreen(
+                onBack = { nav.popBackStack() },
+                onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) { launchSingleTop = true } },
+                onOpenBuilder = { nav.navigate(Routes.programBuilder()) { launchSingleTop = true } },
+                initialPage = initialPage
+            )
+        }
+        composable(Routes.RECAP) {
+            RecapScreen(onBack = { nav.popBackStack() })
+        }
+        composable(Routes.NOTIFICATIONS) {
+            com.forge.app.ui.notifications.NotificationsScreen(
+                // The root-scoped instance held above, so a Clear all or a seen-mark still in flight
+                // survives popping this destination (M-27).
+                viewModel = notificationsVm,
+                onBack = { nav.popBackStack() },
+                // Acting on a notice leaves the feed behind rather than stacking on top of it, so Back
+                // from the session (or the brief) returns to where the user actually was.
+                onResumeSession = { dayKey ->
+                    if (dayKey.startsWith("cardio")) {
+                        // A hub TAB, so go back to the hub itself: the feed can be opened over a deep
+                        // screen (the arrival banner rides over Settings), and a single pop landed
+                        // there with the tab request left pending until some later return to the hub.
+                        nav.popBackStack(Routes.OVERVIEW, false)
+                        pendingHubPage = BottomTab.CARDIO
+                    } else {
+                        nav.popBackStack()
+                        nav.navigateToGymDay(dayKey)
+                    }
+                },
+                onOpenCoachBrief = { nav.popBackStack(Routes.OVERVIEW, false); pendingHubPage = BottomTab.COACH },
+                onConnectWearable = {
+                    nav.popBackStack()
+                    nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name))
+                },
+                // Kept on the stack, not popped: the per-notification toggles live there, so Back
+                // returns to the feed you were just looking at to see the effect.
+                onOpenNotificationSettings = {
+                    nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Notifications.name))
+                },
+                // Popped like the other acting rows, so Back from the lesson returns to where the
+                // user actually was rather than to a feed row that has since cleared itself.
+                onOpenLesson = { lessonId ->
+                    nav.popBackStack()
+                    nav.navigate(Routes.lesson(lessonId))
+                },
+                onOpenAcademy = { nav.popBackStack(Routes.OVERVIEW, false); pendingHubPage = BottomTab.ACADEMY }
+            )
+        }
+        composable(Routes.COACH_BRIEF) {
+            CoachScreen(
+                onBack = { nav.popBackStack() },
+                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
+            )
+        }
+        // The lab and timeline used to be lenses of the Coach page. The page is one column now,
+        // so the routes stay and resolve to a scroll position rather than a tab.
+        composable(Routes.ACADEMY) {
+            com.forge.app.ui.academy.AcademyScreen(
+                onBack = { nav.popBackStack() },
+                onOpenLesson = { nav.navigate(Routes.lesson(it)) }
+            )
+        }
+        composable(
+            route = Routes.LESSON,
+            arguments = listOf(navArgument(Routes.ARG_LESSON_ID) { type = NavType.StringType })
+        ) {
+            // A retired id resolves to null and the screen says so inline (§12) rather than popping
+            // the back stack: a link from an old coach reason should explain itself, not vanish.
+            com.forge.app.ui.academy.LessonScreen(
+                onBack = { nav.popBackStack() },
+                // Reading on from the end of a lesson REPLACES it on the stack, so Back from the
+                // fourth lesson in a row returns to the gallery rather than walking the chain in
+                // reverse. The chain is a way forward, not a history.
+                onOpenLesson = { nav.navigate(Routes.lesson(it)) { popUpTo(Routes.LESSON) { inclusive = true } } }
+            )
+        }
+        composable(Routes.COACH_LAB) {
+            CoachScreen(
+                onBack = { nav.popBackStack() },
+                entryPoint = CoachEntryPoint.WHERE_YOU_STAND,
+                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
+            )
+        }
+        composable(Routes.COACH_TIMELINE) {
+            CoachScreen(
+                onBack = { nav.popBackStack() },
+                entryPoint = CoachEntryPoint.ACCOUNT,
+                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
+            )
+        }
+        composable(Routes.GOALS) {
+            GoalsScreen(
+                onBack = { nav.popBackStack() },
+                onAddGoal = { nav.navigate(Routes.goalEditor()) { launchSingleTop = true } },
+                onEditLift = { id -> nav.navigate(Routes.goalEditor(exerciseId = id)) },
+                onEditCustom = { id -> nav.navigate(Routes.goalEditor(customId = id)) }
+            )
+        }
+        composable(
+            route = Routes.GOAL_EDITOR,
+            arguments = listOf(
+                navArgument(Routes.ARG_GOAL_EXERCISE_ID) { type = NavType.StringType; defaultValue = "" },
+                navArgument(Routes.ARG_GOAL_CUSTOM_ID) { type = NavType.StringType; defaultValue = "" }
+            )
+        ) { entry ->
+            GoalEditorScreen(
+                exerciseId = entry.arguments?.getString(Routes.ARG_GOAL_EXERCISE_ID)?.takeIf { it.isNotBlank() },
+                customId = entry.arguments?.getString(Routes.ARG_GOAL_CUSTOM_ID)?.toLongOrNull(),
+                // Pop only while the editor is still on top, as DayScreen does: a second onDone from
+                // a double tap took the Goals list with it.
+                onDone = { nav.popIfCurrent(entry) }
+            )
+        }
+        composable(Routes.MIRROR_TEST) {
+            // Gallery lock (GYMAP-69): gate the progress photos unless the session is already
+            // authenticated (unlocking the app satisfies this too — no second prompt). Cancel → back.
+            val appLock = LocalAppLock.current
+            val galleryLocked by appLock.galleryLocked.collectAsStateWithLifecycle()
+            if (galleryLocked) {
+                AppLockScreen(
+                    subtitle = "Unlock your progress photos",
+                    promptReady = true,
+                    onUnlocked = { appLock.markAuthenticated() },
+                    onCancel = { nav.popBackStack() }
+                )
+            } else {
+                MirrorTestScreen(
+                    onBack = { nav.popBackStack() },
+                    onOpenCamera = { nav.navigate(Routes.PROGRESS_CAMERA) { launchSingleTop = true } }
+                )
+            }
+        }
+        composable(Routes.PROGRESS_CAMERA) {
+            // The same gate as MIRROR_TEST, for the same photos. The camera screen shows the
+            // previous shot as a translucent pose-alignment ghost, so it displays private imagery
+            // whether or not anything has been captured — and it was reachable with the gallery
+            // locked in two ways: the lock expiring while this route was already on the back stack
+            // (backgrounding the app is exactly what starts that timer), and a return to it from
+            // anywhere the route can be pushed. A gate on the gallery that leaves the camera open
+            // is a gate on one of two doors into the same room.
+            val appLock = LocalAppLock.current
+            val galleryLocked by appLock.galleryLocked.collectAsStateWithLifecycle()
+            if (galleryLocked) {
+                AppLockScreen(
+                    subtitle = "Unlock your progress photos",
+                    promptReady = true,
+                    onUnlocked = { appLock.markAuthenticated() },
+                    onCancel = { nav.popBackStack() }
+                )
+            } else {
+                ProgressCameraScreen(onBack = { nav.popBackStack() })
+            }
+        }
+        composable(Routes.BODY_MEASUREMENTS) {
+            BodyMeasurementsScreen(onBack = { nav.popBackStack() })
+        }
+    }
+
+    // The arrival banner. Inside the provider so it can read the bell's anchor, and drawn AFTER the
+    // nav host so it overlays every screen without joining any of their layouts (§4.6: a notice
+    // belongs in the feed, and this is only the receipt for one landing there).
+    com.forge.app.ui.common.ArrivalBannerHost()
+    }
+
+    // App-wide guard: intercepts any program change that would discard an in-progress workout,
+    // surfacing an inline "discard & continue" confirm over whatever screen triggered it.
+    ProgramChangeGuardHost()
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NutritionPlaceholderScreen(onBack: () -> Unit) {
+    Scaffold(
+        topBar = {
+            // §4.6: back in the chrome, never the screen's own name.
+            com.forge.app.ui.common.ForgeTopBar(onBack = onBack)
+        },
+        containerColor = Color.Transparent
+    ) { inner ->
+        // A real "coming soon" with a short roadmap, so the entry reads as a planned feature rather
+        // than a broken / abandoned link (Nutrition P0s — Cat 22).
+        Column(
+            modifier = Modifier.fillMaxSize().padding(inner).padding(horizontal = 32.dp),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text("Nutrition", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Coming in a future update. Built like the rest of Avex: offline, on your device, no account, and no giant food database to wrestle with.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(20.dp))
+            Text("WHAT'S PLANNED", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            Text("•  Daily protein and calories, tracked simply.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(6.dp))
+            Text("•  A bodyweight trend tied to your training volume.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(6.dp))
+            Text("•  A simple cut / bulk readout from your weight and workload.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(18.dp))
+            Text(
+                "Already here: log your bodyweight any time from Stats → Body.",
+                style = MaterialTheme.typography.bodySmall, fontStyle = FontStyle.Italic,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/**
+ * Pop [entry] only while it is still the top of the back stack; a no-op (false) once it is not.
+ *
+ * A screen's own exit can fire twice (a double tap lands before the first pop animates out), and a
+ * plain popBackStack() pops whatever is on top, so the second call took the hub with it and the
+ * NavHost rendered nothing (audit 2026-09-26, live session).
+ */
+internal fun NavController.popIfCurrent(entry: NavBackStackEntry): Boolean =
+    if (currentBackStackEntry?.id == entry.id) popBackStack() else false

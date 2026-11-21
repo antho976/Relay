@@ -1,0 +1,109 @@
+package com.forge.app.ui.trophies.components
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Filter4
+import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.automirrored.filled.Login
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.WorkspacePremium
+import androidx.compose.animation.core.Animatable
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import com.forge.app.program.TrophyIcon
+import com.forge.app.ui.theme.ForgeMotion
+
+/**
+ * Round badge with a Material icon at its centre. Phase 6 uses stock Material icons —
+ * the React prototype's hand-drawn SVGs are a Phase 8 polish swap (the [TrophyIcon] enum
+ * is the stable interface, this is just one renderer).
+ */
+@Composable
+fun TrophyIconBadge(
+    icon: TrophyIcon,
+    unlocked: Boolean,
+    modifier: Modifier = Modifier,
+    size: Dp = 48.dp,
+    animateEntrance: Boolean = false,
+    iconModifier: Modifier = Modifier,
+    /** Number of small accent pips crowning the badge — distinguishes trophies that share an icon. */
+    variant: Int = 0
+) {
+    val accent = MaterialTheme.colorScheme.primary
+    val bg = if (unlocked) accent.copy(alpha = 0.20f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f)
+    val fg = if (unlocked) accent else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+    // The "just unlocked" moment: the badge pops in with a bouncy scale instead of appearing static.
+    val pop = remember { Animatable(if (animateEntrance) 0.4f else 1f) }
+    LaunchedEffect(Unit) { if (animateEntrance) pop.animateTo(1f, animationSpec = ForgeMotion.bouncy<Float>()) }
+    Box(
+        modifier = modifier
+            .size(size)
+            .graphicsLayer { scaleX = pop.value; scaleY = pop.value },
+        contentAlignment = Alignment.Center
+    ) {
+        // Circular background (clipped); the icon sits on top, UNCLIPPED, so an animated [iconModifier]
+        // (e.g. the swaying flame / spinning recycle in the profile trophy case) can overflow the circle.
+        Box(Modifier.matchParentSize().clip(CircleShape).background(bg))
+        Icon(
+            imageVector = vectorFor(icon),
+            contentDescription = null,
+            tint = fg,
+            modifier = iconModifier.size(size * 0.55f)
+        )
+        // Tier pips crowning the top edge — same icon, distinct count, so siblings never look alike.
+        if (variant > 0) {
+            Row(
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = size * 0.04f),
+                horizontalArrangement = Arrangement.spacedBy(size * 0.05f)
+            ) {
+                repeat(variant) {
+                    Box(Modifier.size(size * 0.1f).clip(CircleShape).background(fg))
+                }
+            }
+        }
+    }
+}
+
+private fun vectorFor(icon: TrophyIcon): ImageVector = when (icon) {
+    TrophyIcon.SPARK -> Icons.Filled.AutoAwesome
+    TrophyIcon.STAR -> Icons.Filled.Star
+    TrophyIcon.FLAME -> Icons.Filled.LocalFireDepartment
+    TrophyIcon.SWAP -> Icons.Filled.SwapHoriz
+    TrophyIcon.CHECK -> Icons.Filled.CheckCircle
+    TrophyIcon.STACK -> Icons.Filled.Layers
+    TrophyIcon.CROWN -> Icons.Filled.WorkspacePremium
+    TrophyIcon.DOOR -> Icons.AutoMirrored.Filled.Login
+    TrophyIcon.FOUR -> Icons.Filled.Filter4
+    TrophyIcon.DUMBBELL -> Icons.Filled.FitnessCenter
+    TrophyIcon.BOLT -> Icons.Filled.Bolt
+    TrophyIcon.CLOCK -> Icons.Filled.Timer
+    TrophyIcon.CALENDAR -> Icons.Filled.CalendarMonth
+    TrophyIcon.REPEAT -> Icons.Filled.Refresh
+    TrophyIcon.HEART -> Icons.Filled.Favorite
+}

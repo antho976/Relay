@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only additions. Merged into the main manifest for the debug variant and absent from release,
+  so nothing here can ship.
+
+  RecipeGalleryActivity gives the six archetype recipes (DESIGN §3) their own launcher icon, so the
+  design system can be looked at on a real device at the real system font scale. The debug variant
+  already carries an applicationId suffix, so this installs alongside the real app rather than
+  replacing it.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- SeedHealthDataReceiver writes fake watch data on an emulator. Debug builds only. -->
+    <uses-permission android:name="android.permission.health.WRITE_SLEEP" />
+    <uses-permission android:name="android.permission.health.WRITE_RESTING_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.WRITE_HEART_RATE_VARIABILITY" />
+    <uses-permission android:name="android.permission.health.WRITE_STEPS" />
+
+    <application>
+        <activity
+            android:name="com.forge.app.ui.recipes.RecipeGalleryActivity"
+            android:exported="true"
+            android:label="Avex Recipes"
+            android:theme="@style/Theme.Forge">
+            <!--
+              Negative priority so this loses the launch-by-package race to MainActivity's icon
+              alias. The debug variant has TWO launcher entry points and the merger puts this one
+              first, so "Run on device" (which resolves by package, not by component) was starting
+              the gallery instead of the app. The drawer icon is unaffected.
+            -->
+            <intent-filter android:priority="-100">
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Sample training history for emulator reviews; see SeedSampleDataReceiver. -->
+        <receiver
+            android:name="com.forge.app.debug.SeedSampleDataReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.forge.app.debug.SEED" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name="com.forge.app.debug.SeedHealthDataReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.forge.app.debug.SEED_HEALTH" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

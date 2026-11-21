@@ -1,0 +1,98 @@
+package com.forge.app.ui.overview.state
+
+import androidx.compose.runtime.Immutable
+
+/** One-shot milestone toast (#56). Shown once and persisted so it never re-fires. */
+data class MilestoneEvent(val id: String, val message: String)
+
+/** A session from N months ago on or near today's date (#106). */
+data class OnThisDayMemory(
+    val monthsAgo: Int,
+    val dayName: String,
+    val totalVolumeLb: Double,
+    val prCount: Int,
+    val sessionDate: Long
+)
+
+/** One row in the overview RECENT section — gym session or cardio entry. */
+data class OverviewRecentItem(
+    val dayLabel: String,
+    val title: String,
+    val subtitle: String,
+    val tag: String,
+    val id: Long = -1L,
+    val timestampMs: Long = 0L,
+    val isGym: Boolean = true,
+    val volumeLb: Double? = null,
+    val prCount: Int = 0,
+    val vsAvgPct: Int? = null,
+    val isBest: Boolean = false,
+    val durationMin: Int? = null,
+    val distanceKm: Double? = null,
+    /** A single status chip (gym only): DELOAD / TEST / TECHNIQUE / first quick tag. Empty = none. */
+    val statusPill: String = "",
+    /** Marquee lift — the session's heaviest set, e.g. "Bench Press 185 × 5". Filled in the VM. */
+    val topLift: String? = null,
+    /**
+     * The stored `cardio_entry.type` code for a cardio row (null for gym). [title] is built from
+     * the built-in types only; a `custom_` code needs the user's definitions, which live in
+     * composition (LocalCardioTypes), so the row resolves its final title there via
+     * [com.forge.app.ui.overview.displayTitle].
+     */
+    val cardioTypeCode: String? = null,
+)
+
+@Immutable
+data class OverviewUiState(
+    /**
+     * Local midnight of the day this state describes (0 before the first read), re-anchored at each
+     * boundary and on any clock or timezone change. Home's goal captions are date-grained readings,
+     * and memoising them on the goal alone let them outlive the day they were computed for (M-32).
+     */
+    val todayStartMs: Long = 0L,
+    /**
+     * Today's one answer (Coach v3 B2). The hero renders THIS rather than a bare next-workout
+     * name: the directive replaces that lead-in (plan M7) instead of stacking beside it.
+     * Null only before the first read lands.
+     */
+    val directive: com.forge.app.domain.coach.TodayDirective.Directive? = null,
+    /** Today's per-exercise targets, when the directive says train. */
+    val brief: com.forge.app.domain.coach.PreSessionBrief.Brief? = null,
+    /** The cold-start lesson the directive is carrying, while the coach is still learning you. */
+    val coldStartLesson: com.forge.app.domain.academy.Lesson? = null,
+    /**
+     * Training days in the generated program — the "of N" denominator, NOT a hardcoded 6
+     * (multi-user). Named for DAYS because that is what it denominates: [weekDaysTrained], the set
+     * the week strip draws. While it was called `weeklyWorkoutTarget`, Home read it as a target for
+     * the week's workout count and printed "4 / 7 target" above a strip with one cell lit — three
+     * sessions on one Monday are four workouts and one day (2026-08-24).
+     */
+    val weeklyTrainingDays: Int = 4,
+    val pendingMilestone: MilestoneEvent? = null,
+    /** Next gym day in the rotation. */
+    val nextUpDayKey: String = "upper-a",
+    /** Day indices in the user's week order (`userWeekDayIndex`) that had a gym session this week. */
+    val weekDaysTrained: Set<Int> = emptySet(),
+    /** Planned rest days this week, same indices as [weekDaysTrained]; empty without fixed weekdays. */
+    val weekRestDays: Set<Int> = emptySet(),
+    /** The planned day's word (PUSH, PULL, LEGS…) per training day, same indices; empty without fixed weekdays. */
+    val weekDayWords: Map<Int, String> = emptyMap(),
+    /**
+     * Days the fixed-weekday schedule plans a training day on, same indices as [weekDaysTrained].
+     * With [weekRestDays] it lets the week dots tell planned, rest and unplanned apart; both are
+     * empty in sequence mode, where every day reads as unplanned.
+     */
+    val weekPlannedDays: Set<Int> = emptySet(),
+    /** Custom name for the next-up day set by the user, or null if using the program default. */
+    val customDayName: String? = null,
+    /** Combined gym + cardio, sorted newest first, capped at 3. */
+    val recentItems: List<OverviewRecentItem> = emptyList(),
+    /** Day key of an in-progress (unfinished) workout, if any — drives the resume banner + CTA. */
+    val activeSessionDayKey: String? = null,
+    /** Lift-target goals + auto-tracked custom goals (achieved-first/closest-first). Home previews the
+     *  top few as progress lines — the ambient motivator that replaced the generic coach entry. */
+    val goals: List<com.forge.app.data.repo.GoalRepository.GoalProgress> = emptyList(),
+    val customGoals: List<com.forge.app.data.repo.ExtendedGoalRepository.Progress> = emptyList(),
+    /** Each lift goal's heaviest set now minus 30 days ago, in lb, by exercise id. Absent: no set then. */
+    val liftGoalChange30dLb: Map<String, Double> = emptyMap()
+)

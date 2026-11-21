@@ -1,0 +1,259 @@
+package com.forge.app.service
+
+import android.app.NotificationManager
+import android.content.Context
+import androidx.hilt.work.HiltWorker
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
+import androidx.work.CoroutineWorker
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
+import com.forge.app.Features
+import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.CoachRepository
+import com.forge.app.data.repo.StatsRepository
+import com.forge.app.data.repo.TrophyRepository
+import com.forge.app.data.repo.VacationRepository
+import com.forge.app.domain.units.formatWeight
+import dagger.assisted.Assisted
+import dagger.assisted.AssistedInject
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
+import java.time.DayOfWeek
+import java.time.Duration
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.temporal.TemporalAdjusters
+import java.util.concurrent.TimeUnit
+
+/**
+ * Fires once a week and carries the three weekly engagement nudges (#31 + #13):
+ *  - the "Your week in numbers" recap (when you trained),
+ *  - a "your coach has an update" push when a new Week Brief is ready and unseen,
+ *  - a gentle, non-guilt-y "come back" when a whole week passed with no sessions (suppressed on holiday).
+ *
+ * Weekly cadence keeps re-engagement from nagging. Anchored to Monday, the day the week's numbers
+ * are complete and the Week Brief is published: a one-shot per Monday that arms the next one, and
+ * re-arming on every app open is idempotent because each Monday has its own unique work name.
+ * All three honour quiet hours; only the recap honours the "Weekly recap" per-type opt-out (the
+ * coach-brief and come-back nudges are separate features with their own channels).
+ */
+@HiltWorker
+class WeeklyRecapWorker @AssistedInject constructor(
+    @Assisted private val ctx: Context,
+    @Assisted params: WorkerParameters,
+    private val statsRepo: StatsRepository,
+    private val settingsRepo: SettingsRepository,
+    private val coachRepo: CoachRepository,
+    private val trophyRepo: TrophyRepository,
+    private val vacationRepo: VacationRepository,
+    private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
+    private val programRepo: com.forge.app.data.repo.ProgramRepository,
+    private val sessionDao: com.forge.app.data.db.dao.SessionDao
+) : CoroutineWorker(ctx, params) {
+
+    override suspend fun doWork(): Result {
+        // Arm next Monday FIRST, under its own name, so a batch that throws or retries can't end
+        // the chain and this run is never the unfinished work a re-arm cancels. Not schedule():
+        // on an upgraded install this run can still BE the legacy periodic that schedule() cancels.
+        // Looked up from a few minutes ahead: a run that fires just before noon (the wall clock
+        // corrected backwards since it was armed) would otherwise name THIS Monday — its own name,
+        // still RUNNING — and KEEP would drop the successor, ending the chain.
+        armNext(ctx, lookAhead = EARLY_RUN_SLACK)
+        if (!com.forge.app.program.Program.isLoaded) programRepo.ensureLoaded()
+        // Quiet hours: defer (retry) the whole batch rather than dropping it. Each nudge below has
+        // its own opt-out: the coach-brief push and the come-back nudge are SEPARATE features with
+        // their own channels, so they are NOT gated by the weekly-recap toggle (that toggle, labelled
+        // "Weekly recap", controls only the "your week in numbers" recap). Users can still mute the
+        // coach / come-back channels individually in Android's per-channel notification settings.
+        if (settingsRepo.isQuietNow()) return Result.retry()
+
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        // The coach pushes (brief + deload) only apply when the user kept the coach AND follows a plan —
+        // a freestyle user has nothing to coach against, and a coach-off user opted out entirely.
+        val freestyle = settingsRepo.freestyleMode.first()
+        val coachActive = settingsRepo.coachEnabled.first() && !freestyle
+
+        // ── Coach-brief push (#13): notify when a NEW week brief is ready and unseen. pendingBanner()
+        // compares the latest pass to lastSeenCoachWeekId, so a brief the user has already opened never
+        // re-pushes. It self-guards on freestyle/coach-off too; the outer gate just avoids the work.
+        if (coachActive) {
+            // Only a week that asks for or reports something pushes: "holding steady" every Monday
+            // of a layoff was a weekly push about nothing (the feed and Home still carry it). The
+            // body drops the "Coach · " prefix the title already says, as the feed does.
+            runCatching { coachRepo.pendingBanner() }.getOrNull()?.takeIf { it.actionable }?.let { banner ->
+                ForgeNotifications.ensureChannel(ctx, COACH_CHANNEL_ID, "Coach updates", "When your weekly coach brief is ready")
+                nm.notify(COACH_NOTIF_ID, ForgeNotifications.build(
+                    ctx, COACH_CHANNEL_ID, "Coach brief",
+                    banner.text.removePrefix("Coach · ").replaceFirstChar { it.uppercase() }
+                ))
+            }
+        }
+
+        // ── Deload suggestion: when accumulated fatigue crosses the deload line (DeloadAdvisor, which
+        // already self-suppresses right after a deload). Its own channel so it's independently mutable;
+        // a fixed id so it never stacks week-over-week. Uses the focused deloadSuggestion() — one
+        // snapshot, no plateau-ladder/arbitration fan-out — so the weekly worker stays inside its window.
+        if (coachActive) {
+            runCatching { adaptationRepo.deloadSuggestion() }.getOrNull()
+                ?.let { rec ->
+                    ForgeNotifications.ensureChannel(ctx, DELOAD_CHANNEL_ID, "Deload suggestions", "When your fatigue suggests a lighter week")
+                    nm.notify(DELOAD_NOTIF_ID, ForgeNotifications.build(
+                        ctx, DELOAD_CHANNEL_ID, "Time for a deload week", rec.reason
+                    ))
+                }
+        }
+
+        // The week that ENDED, not the one in progress. observeWeeklyStats counts from this Monday
+        // 00:00, so a Monday-morning recap read a week a few hours old: a user training three times a
+        // week got "0 workouts", the come-back nudge fired at them every single Monday, and everyone
+        // else got a recap describing a partial week.
+        val stats = statsRepo.lastCompletedWeekStats()
+        val streakDays = statsRepo.currentStreakDays()
+
+        if (stats.workouts == 0) {
+            // ── Re-engagement (#13): a whole week with no sessions = a lapse. Nudge, at a taper and
+            // from the user's own record (ComebackNudge), unless the user is on holiday, where a
+            // "come back" would be guilt-trippy, not helpful.
+            if (!isOnVacationToday()) {
+                val zone = ZoneId.systemDefault()
+                val lastAt = sessionDao.finishedAts().firstOrNull()
+                val daysSinceLast = lastAt?.let {
+                    java.time.temporal.ChronoUnit.DAYS.between(
+                        java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate(), LocalDate.now(zone)
+                    ).toInt()
+                }
+                val lastDayName = if (freestyle) null else sessionDao.lastFinishedDayKey()?.let { key ->
+                    com.forge.app.program.Program.days.firstOrNull { it.key == key }?.defaultName
+                }
+                com.forge.app.domain.notify.ComebackNudge.build(
+                    daysSinceLast = daysSinceLast,
+                    lastDayName = lastDayName,
+                    cardioMinutesLastWeek = stats.cardioMinutes,
+                    freestyle = freestyle
+                )?.let { nudge ->
+                    ForgeNotifications.ensureChannel(ctx, REENGAGE_CHANNEL_ID, "Come-back nudges", "A nudge after a week away")
+                    nm.notify(REENGAGE_NOTIF_ID, ForgeNotifications.build(ctx, REENGAGE_CHANNEL_ID, nudge.title, nudge.body))
+                }
+            }
+            return Result.success()
+        }
+
+        // ── Weekly recap (#31): your week in numbers — gated by the per-type opt-out (N2).
+        if (settingsRepo.weeklyRecapEnabled.first()) {
+            val weightUnit = settingsRepo.weightUnit.first()
+            // A full-week streak milestone turns the recap into a small celebration via its title — so
+            // when it does, the streak is dropped from the body line to avoid stating it twice.
+            val isStreakMilestone = streakDays >= 7 && streakDays % 7 == 0
+            val body = buildString {
+                append("${stats.workouts} workout${if (stats.workouts != 1) "s" else ""}")
+                if (stats.volumeLb > 0) append(" · ${formatWeight(stats.volumeLb, weightUnit)}")
+                if (stats.cardioMinutes > 0) append(" · ${stats.cardioMinutes} min cardio")
+                if (streakDays > 0 && !isStreakMilestone) append(" · $streakDays-day streak")
+                // Retention hooks: the closest trophy you're chasing, and a memory from this date.
+                //
+                // The trophy line is gated on the same flag as every trophy surface in the app.
+                // Without the gate this notification was the ONLY place a trophy still reached the
+                // user while `SHOW_GAMIFICATION` was off: it advertised "Almost: <trophy>" for a
+                // system with no screen to open, no case to browse and no tile on the Overview.
+                // Push is the worst possible place to be the last survivor of a parked feature.
+                if (Features.SHOW_GAMIFICATION) {
+                    trophyRepo.observeNearMisses().firstOrNull()?.firstOrNull()?.let { nmiss ->
+                        append(" · Almost: ${nmiss.trophyName} (${nmiss.progress}/${nmiss.target})")
+                    }
+                }
+                runCatching { statsRepo.findOnThisDayMemory() }.getOrNull()?.let { mem ->
+                    // Words, not "On this day (1yr ago)" shorthand.
+                    val ago = when {
+                        mem.monthsAgo % 12 == 0 && mem.monthsAgo == 12 -> "A year ago"
+                        mem.monthsAgo % 12 == 0 -> "${mem.monthsAgo / 12} years ago"
+                        mem.monthsAgo == 1 -> "A month ago"
+                        else -> "${mem.monthsAgo} months ago"
+                    }
+                    append(" · $ago this week: ${mem.dayName}")
+                }
+            }
+            // DESIGN §11: no exclamation marks in a rendered string.
+            val title = if (isStreakMilestone) "$streakDays-day streak" else "Weekly recap"
+            ForgeNotifications.ensureChannel(ctx, CHANNEL_ID, "Weekly recap", "Your weekly training summary")
+            nm.notify(NOTIF_ID, ForgeNotifications.build(ctx, CHANNEL_ID, title, body))
+        }
+        return Result.success()
+    }
+
+    /** True if today's date falls inside any saved holiday range — the app's one vacation rule
+     *  ([com.forge.app.domain.vacation.VacationCalendar]), which also tolerates a reversed range. */
+    private suspend fun isOnVacationToday(): Boolean {
+        val periods = vacationRepo.observeAll().firstOrNull().orEmpty()
+        return com.forge.app.domain.vacation.VacationCalendar.onVacation(periods)(LocalDate.now(ZoneId.systemDefault()))
+    }
+
+    companion object {
+        private const val CHANNEL_ID = "forge_weekly_recap"
+        private const val COACH_CHANNEL_ID = "forge_coach_brief"
+        private const val REENGAGE_CHANNEL_ID = "forge_reengage"
+        private const val DELOAD_CHANNEL_ID = "forge_deload"
+        /** The periodic this used to be, cancelled on sight so an upgraded install doesn't run both. */
+        private const val LEGACY_PERIODIC_WORK_NAME = "forge_weekly_recap"
+        private const val WORK_NAME_PREFIX = "forge_weekly_recap_"
+        private const val NOTIF_ID = 2001
+        private const val COACH_NOTIF_ID = 2003
+        private const val REENGAGE_NOTIF_ID = 2004
+        private const val DELOAD_NOTIF_ID = 2005
+
+        /** The recap's run time: Monday noon local. Quiet hours and the battery constraint can only
+         *  push it later. */
+        private const val RECAP_HOUR = 12
+
+        /** How far past its own noon a run looks for the NEXT Monday — see [doWork]. */
+        internal val EARLY_RUN_SLACK: Duration = Duration.ofMinutes(5)
+
+        /**
+         * Arm the recap for the next Monday [RECAP_HOUR]:00, keeping one already armed for it.
+         *
+         * This was a 7-day PERIODIC re-enqueued with UPDATE and a to-next-Monday initial delay on
+         * every app open, and that never pinned Monday (2026-09-26 audit, 11 / W08): the first
+         * period also adds interval minus flex, so an install on Saturday first ran the Monday
+         * after next, and UPDATE keeps the original enqueue time while swapping in the new delay,
+         * so reopening on Sunday moved the run to a Sunday. A one-shot per Monday, named for that
+         * Monday and enqueued with KEEP, lands on the day it names however often the app opens.
+         */
+        fun schedule(context: Context) {
+            WorkManager.getInstance(context).cancelUniqueWork(LEGACY_PERIODIC_WORK_NAME)
+            armNext(context)
+        }
+
+        private fun armNext(context: Context, lookAhead: Duration = Duration.ZERO) {
+            val zone = ZoneId.systemDefault()
+            val now = ZonedDateTime.now(zone)
+            val runAt = nextRecapAt(now.plus(lookAhead))
+            val request = OneTimeWorkRequestBuilder<WeeklyRecapWorker>()
+                .setConstraints(Constraints.Builder().setRequiresBatteryNotLow(true).build())
+                // ZonedDateTime, not LocalDateTime, so the delay spans real elapsed time across a
+                // DST transition.
+                .setInitialDelay(Duration.between(now, runAt).toMinutes().coerceAtLeast(1), TimeUnit.MINUTES)
+                // Quiet-hours / transient failures return Result.retry(); back off instead of
+                // hammering the default ~30s-then-immediate cadence.
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.MINUTES)
+                .build()
+            WorkManager.getInstance(context)
+                .enqueueUniqueWork(workNameFor(runAt), ExistingWorkPolicy.KEEP, request)
+        }
+
+        /** The next Monday [RECAP_HOUR]:00 strictly after [now], in [now]'s zone. */
+        internal fun nextRecapAt(now: ZonedDateTime): ZonedDateTime {
+            var next = now.with(TemporalAdjusters.nextOrSame(DayOfWeek.MONDAY))
+                .withHour(RECAP_HOUR).withMinute(0).withSecond(0).withNano(0)
+            if (!next.isAfter(now)) next = next.plusWeeks(1)
+            return next
+        }
+
+        /** One unique name per recap Monday, so re-arming for the same Monday is a no-op and arming
+         *  the next one from inside a run never touches the run itself. */
+        internal fun workNameFor(runAt: ZonedDateTime): String = WORK_NAME_PREFIX + runAt.toLocalDate()
+    }
+}

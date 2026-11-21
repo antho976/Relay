@@ -1,0 +1,42 @@
+package com.forge.app.domain.units
+
+private const val CM_PER_INCH = 2.54
+
+// Length (body measurements) mirrors WeightFormatter: values are stored canonically in cm and
+// converted at the display edge, gated on the user's `use_cm` preference (independent of the kg/lb
+// weight toggle). Number formatting is pinned to Locale.US so the decimal separator is always '.',
+// never a locale ',' — a comma would read wrong and break parseToCm's round-trip.
+
+/** The value in the display unit, UNformatted — for driving figures / raw math. */
+fun toDisplayLength(cm: Double, useCm: Boolean): Double = if (useCm) cm else cm / CM_PER_INCH
+
+/** "cm" / "in" — the display unit label (uppercased at the call site for mono captions). */
+fun lengthUnitLabel(useCm: Boolean): String = if (useCm) "cm" else "in"
+
+/** A stored cm value converted to the display unit and formatted WITH a unit suffix ("81 cm" / "32.5 in"). */
+fun formatLength(cm: Double, useCm: Boolean): String =
+    "${trimDecimal(toDisplayLength(cm, useCm))} ${lengthUnitLabel(useCm)}"
+
+/**
+ * The value in the display unit with NO unit suffix — for seeding an editable measurement field.
+ * Pairs with [parseToCm] so tapping into the log sheet round-trips the stored value exactly.
+ */
+fun lengthInputValue(cm: Double, useCm: Boolean): String = trimDecimal(toDisplayLength(cm, useCm))
+
+/**
+ * Converts a user-entered string in the display unit back to cm for storage. Tolerates a trailing
+ * unit suffix ("81 cm", "81cm", "32 in", "32\"") so it round-trips [formatLength]/[lengthInputValue].
+ */
+fun parseToCm(input: String, useCm: Boolean): Double? {
+    val cleaned = input.trim().lowercase()
+    // The typed suffix wins over the setting. Stripping both and then converting by the preference
+    // read "32 in" as 32 cm for a metric user — a chest measurement 49 cm out.
+    LENGTH_UNIT_REGEX.matchEntire(cleaned)?.let { m ->
+        val v = m.groupValues[1].toDoubleOrNull() ?: return null
+        return if (m.groupValues[2] == "cm") v else v * CM_PER_INCH
+    }
+    val numeric = cleaned.toDoubleOrNull() ?: return null
+    return if (useCm) numeric else numeric * CM_PER_INCH
+}
+
+private val LENGTH_UNIT_REGEX = Regex("""^\s*(\d+(?:\.\d+)?)\s*(cm|in|")\s*$""")

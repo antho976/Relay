@@ -1,0 +1,701 @@
+package com.forge.app.data.repo
+
+import com.forge.app.core.time.Clock
+import com.forge.app.core.time.userWeekDayIndex
+import com.forge.app.core.time.userWeekStartMs
+import com.forge.app.data.db.dao.CardioDao
+import com.forge.app.data.db.dao.LoggedExerciseDao
+import com.forge.app.data.db.dao.LoggedSetDao
+import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.db.projections.SetWithExerciseId
+import com.forge.app.domain.adapt.E1rm
+import com.forge.app.domain.adapt.bestWorkingE1rm
+import com.forge.app.program.Program
+import com.forge.app.data.db.entities.Session
+import com.forge.app.data.db.entities.durationMinutes
+import com.forge.app.ui.gym.stats.state.PeriodComparison
+import com.forge.app.ui.gym.stats.state.PeriodStats
+import com.forge.app.ui.gym.stats.state.BodyweightPoint
+import com.forge.app.ui.gym.stats.state.E1rmLift
+import com.forge.app.ui.gym.stats.state.MuscleSetCount
+import com.forge.app.ui.gym.stats.state.RpeBucket
+import com.forge.app.ui.gym.stats.state.LifetimeMetrics
+import com.forge.app.ui.gym.stats.state.OverloadSummary
+import com.forge.app.ui.gym.stats.state.PatternAxis
+import com.forge.app.ui.gym.stats.state.PrEntry
+import com.forge.app.ui.gym.stats.state.PrRecency
+import com.forge.app.ui.gym.stats.state.PrRecord
+import com.forge.app.ui.gym.stats.state.TrainingTimes
+import com.forge.app.ui.gym.stats.state.WeeklyDuration
+import com.forge.app.ui.gym.stats.state.WeeklyTonnage
+import com.forge.app.ui.gym.session.state.ExerciseDetail
+import com.forge.app.ui.gym.session.state.SessionDetailData
+import com.forge.app.ui.gym.session.state.SetDetail
+import com.forge.app.ui.overview.state.OnThisDayMemory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import javax.inject.Inject
+import javax.inject.Singleton
+import kotlin.math.roundToInt
+
+/**
+ * Aggregates the rolling-window stats that feed the Overview screen.
+ *
+ * "This week" means the current calendar week in the user's week order (Settings → Format → Week
+ * starts), matching the day-dot grid, re-anchored on every day boundary. The
+ * rolling-7-day volume window in [observeGymStats], by contrast, is recomputed on each emission
+ * so it slides while the screen stays open.
+ *
+ * The pure (DAO-free) aggregation helpers used by [observeGymStats] live in sibling
+ * files: StatsStrengthAggregations.kt, StatsVolumeAggregations.kt, and
+ * StatsEffortAggregations.kt. The two comparison helpers below stay here because they
+ * query the DAO.
+ */
+@Singleton
+class StatsRepository @Inject constructor(
+    private val sessionDao: SessionDao,
+    private val cardioDao: CardioDao,
+    private val loggedExerciseDao: LoggedExerciseDao,
+    private val loggedSetDao: LoggedSetDao,
+    private val vacationDao: com.forge.app.data.db.dao.VacationDao,
+    private val bodyweightRepo: BodyweightRepository,
+    private val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
+    private val timeSignals: com.forge.app.core.time.TimeSignals,
+    private val clock: Clock,
+    private val programRepo: ProgramRepository,
+    private val programCustomRepo: ProgramCustomizationRepository
+) {
+
+    data class WeeklyStats(
+        val workouts: Int = 0,
+        val volumeLb: Double = 0.0,
+        val cardioMinutes: Int = 0,
+        val totalFinishedSessions: Int = 0,
+        val streakDays: Int = 0,
+        val firstFinishedSessionMs: Long? = null,
+        /** Highest single-session volume (lb) in the current user week; null when none logged yet. */
+        val bestSessionThisWeekLb: Double? = null,
+        /**
+         * Day indices in the USER's week order ([userWeekDayIndex]: 0=Mon..6=Sun, or 0=Sun..6=Sat
+         * when the week starts on Sunday) that had a finished gym session this week.
+         */
+        val weekDaysTrained: Set<Int> = emptySet(),
+        /**
+         * Day indices (same order as [weekDaysTrained]) the fixed-weekday schedule plans as rest —
+         * past days under the schedule in force then, today and ahead under today's. Empty in
+         * sequence mode, which plans no rest days.
+         */
+        val weekRestDays: Set<Int> = emptySet(),
+        /**
+         * The program day key the same schedule plans on each training day, by the same indices.
+         * Empty in sequence mode, which fixes no day to a weekday.
+         */
+        val weekPlannedDays: Map<Int, String> = emptyMap(),
+        /** Next gym day key in the rotation (Upper A → Lower A → Upper B → Lower B). */
+        val nextUpDayKey: String = Program.UPPER_A,
+        /** Last 5 finished gym sessions for the overview RECENT section. */
+        val recentGymSessions: List<com.forge.app.data.db.entities.Session> = emptyList()
+    )
+
+    /**
+     * "This week" = the current calendar week starting on the user's first day (Settings → Format →
+     * Week starts), so the workout/volume/cardio counts match the day-dot grid. Was a rolling 7×24h
+     * window (now − WEEK_MS), which disagreed with the dots on early weekdays.
+     *
+     * The preference is part of the anchor. Home used to be Monday-first whatever it said, so a
+     * Sunday-first user saw Sunday's session land at the END of a strip labelled M..S and counted
+     * into the week they thought had just finished (2026-09-26 audit). The watch reads this same
+     * flow, so its week count follows the setting too.
+     *
+     * Re-anchored on every day boundary, timezone change and clock change rather than frozen when
+     * the Flow is BUILT. The anchor used to be a `val` captured at subscription while `todayDate`
+     * was recomputed inside the combine, so the two could describe different weeks: a user on the
+     * Overview at 23:50 on a Sunday who finished a set at 00:05 saw Monday's session light Monday
+     * of LAST week's dot row and the workout count stay on last week's total, while "next up" had
+     * already rolled over. Nothing recovered until the screen was left for long enough to
+     * unsubscribe.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun observeWeeklyStats(): Flow<WeeklyStats> =
+        timeSignals.dayStarts()
+            .combine(settingsRepo.firstDayMonday) { _, firstDayMonday -> firstDayMonday }
+            .flatMapLatest { firstDayMonday -> weeklyStatsForNow(firstDayMonday) }
+
+    /** The four session/preference signals the weekly fan-out folds together in one inner combine. */
+    private data class RecentSignals(
+        /** Tracked only — dots, best session, trained-today keys, next-up. */
+        val recent: List<com.forge.app.data.db.entities.Session>,
+        /** Inclusive — the Overview's "recent workouts" list, which is history. */
+        val recentForHistory: List<com.forge.app.data.db.entities.Session>,
+        val scheduleMode: String,
+        val schedule: List<String>,
+        val allFinishedAts: List<Long>
+    )
+
+    private fun weeklyStatsForNow(firstDayMonday: Boolean): Flow<WeeklyStats> {
+        val zone = ZoneId.systemDefault()
+        val weekStartMs = userWeekStartMs(clock.nowMs(), zone, firstDayMonday)
+        val baseFlow = combine(
+            sessionDao.observeFinishedCountSince(weekStartMs),
+            sessionDao.observeVolumeSince(weekStartMs),
+            cardioDao.observeMinutesSince(weekStartMs, excludeType = "rest"),
+            sessionDao.observeFinishedCount(),
+            combine(
+                // TRACKED, because everything derived from it below is a signal: the lit week dots
+                // (which sat above a workout count that was already tracked-only, so a week with
+                // one untracked session lit three dots over the words "2 workouts"), the
+                // best-session tile, today's trained keys and next-up resolution.
+                sessionDao.observeRecentTracked(120),
+                // Inclusive, because the Overview's recent list is history and an untracked
+                // session is still a workout that happened.
+                sessionDao.observeRecent(5),
+                settingsRepo.scheduleMode,
+                settingsRepo.weeklySchedule,
+                // The streak reads EVERY finished instant, not the 120-row window the rest of this
+                // fan-out uses: the walk stops at the end of the window rather than at a real rest
+                // gap, so a twice-a-day lifter's streak froze at whatever fitted in 120 rows.
+                sessionDao.observeFinishedAts()
+            ) { recent, recentForHistory, mode, schedule, allFinishedAts ->
+                RecentSignals(recent, recentForHistory, mode, schedule, allFinishedAts)
+            }
+        ) { workouts, volume, cardio, totalFinished, signals ->
+            val recentSessions = signals.recent
+            val scheduleMode = signals.scheduleMode
+            val schedule = signals.schedule
+            val todayDate = todayLocal(zone)
+            val finishedAts = signals.allFinishedAts
+            // Attribute the weekly summary to session start, matching its count and volume queries.
+            val thisWeekSessions = recentSessions.filter { it.finishedAt != null && it.startedAt >= weekStartMs }
+            // Dots use the SAME week anchor as the workout/volume/cardio counts above, so the count
+            // and the lit dots can never describe different weeks within a view.
+            val weekDaysTrained = thisWeekSessions
+                .map {
+                    val d = Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate()
+                    userWeekDayIndex(d, firstDayMonday)
+                }
+                .toSet()
+            // Open (freestyle) workouts belong to no plan day, so they must not be the "last day trained"
+            // that rotation resolves next-up from.
+            val lastFinished = recentSessions
+                .filter { it.finishedAt != null && it.dayKey != Program.FREESTYLE_DAY_KEY }
+                .maxByOrNull { it.finishedAt!! }
+            // Calendar-aware in weekday mode, legacy day-after-last otherwise (shared resolver).
+            val trainedTodayKeys = recentSessions
+                .filter { it.finishedAt != null && Instant.ofEpochMilli(it.finishedAt!!).atZone(zone).toLocalDate() == todayDate }
+                .map { it.dayKey }.toSet()
+            val nextUpDayKey = com.forge.app.domain.schedule.WeeklySchedule.resolveNextUp(
+                mode = scheduleMode, todayIndex = todayDate.dayOfWeek.value - 1, schedule = schedule,
+                dayKeys = Program.dayKeys, lastFinishedDayKey = lastFinished?.dayKey,
+                trainedTodayKeys = trainedTodayKeys,
+                recoveryDays = com.forge.app.domain.schedule.TrainingRecovery.daysUntilRecovered(
+                    Program.days,
+                    recentSessions.filter { !it.isUntracked }.mapNotNull { session ->
+                        session.finishedAt?.let { session.dayKey to java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+                    }, todayDate
+                )
+            ) ?: (Program.dayKeys.firstOrNull() ?: Program.UPPER_A)
+            // Best single session this week — the heaviest tonnage day, for the StatsTile.
+            val bestSessionThisWeekLb = thisWeekSessions.mapNotNull { it.totalVolumeLb }.maxOrNull()
+            // streakDays is finalized below, once the vacation ranges are known (#135).
+            WeeklyStats(
+                workouts = workouts,
+                volumeLb = volume ?: 0.0,
+                cardioMinutes = cardio ?: 0,
+                totalFinishedSessions = totalFinished,
+                streakDays = 0,
+                bestSessionThisWeekLb = bestSessionThisWeekLb,
+                weekDaysTrained = weekDaysTrained,
+                nextUpDayKey = nextUpDayKey,
+                recentGymSessions = signals.recentForHistory.filter { it.finishedAt != null }.take(5)
+            ) to finishedAts
+        }
+        return baseFlow
+            .combine(sessionDao.observeFirstFinishedSessionStartedAt()) { (stats, ats), firstMs ->
+                stats.copy(firstFinishedSessionMs = firstMs) to ats
+            }
+            .combine(vacationDao.observeAll().combine(settingsRepo.scheduleHistory, ::Pair)) { (stats, ats), (periods, history) ->
+                // Vacation days bridge the streak — a planned holiday doesn't reset it (#135) — and
+                // so do the rest days a fixed-weekday schedule planned: on a Mon/Tue/Thu/Fri week,
+                // Wednesday reset the streak every week, so it could never pass two.
+                val weekStart = Instant.ofEpochMilli(weekStartMs).atZone(zone).toLocalDate()
+                stats.copy(
+                    streakDays = computeStreak(ats, streakBridge(periods, history)),
+                    weekRestDays = (0 until 7).filterTo(mutableSetOf()) { i ->
+                        com.forge.app.domain.schedule.ScheduleHistory.isPlannedRest(history, weekStart.plusDays(i.toLong()))
+                    },
+                    weekPlannedDays = (0 until 7).mapNotNull { i ->
+                        com.forge.app.domain.schedule.ScheduleHistory.plannedDayOn(history, weekStart.plusDays(i.toLong()))
+                            ?.let { i to it }
+                    }.toMap()
+                )
+            }
+            .flowOn(Dispatchers.Default)
+    }
+
+    /**
+     * Today's local date from the injected [Clock].
+     *
+     * `Clock`'s own docstring names streaks as the reason it exists — "so time-dependent logic (PR
+     * detection, weekly windows, streaks, the rest timer) can be unit-tested with a FakeClock" —
+     * and [computeStreak] was reading `LocalDate.now()` directly, so there was no way to assert
+     * that a session at 23:59 on the 3rd and one at 00:01 on the 4th make a two-day streak without
+     * changing the device clock.
+     */
+    private fun todayLocal(zone: ZoneId): LocalDate =
+        Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
+
+    private fun computeStreak(finishedAts: List<Long>, onVacation: (LocalDate) -> Boolean): Int {
+        if (finishedAts.isEmpty()) return 0
+        val zone = ZoneId.systemDefault()
+        val today = todayLocal(zone)
+        val trainingDays = finishedAts.mapTo(mutableSetOf()) {
+            Instant.ofEpochMilli(it).atZone(zone).toLocalDate()
+        }
+        // Skip bridged days (vacation, planned rest) at the tip so being on holiday or resting as
+        // planned *today* doesn't zero an active streak.
+        fun skipBridged(from: LocalDate): LocalDate {
+            var d = from
+            while (onVacation(d) && !trainingDays.contains(d)) d = d.minusDays(1)
+            return d
+        }
+        val tip = skipBridged(today)
+        val anchor = when {
+            trainingDays.contains(tip) -> tip
+            // One grace day (today, not trained YET) — then the bridged days behind it, so a
+            // Thursday morning after a planned Wednesday rest still reads Tuesday's streak.
+            else -> skipBridged(tip.minusDays(1)).takeIf { trainingDays.contains(it) } ?: return 0
+        }
+        var streak = 0
+        var day = anchor
+        while (true) {
+            when {
+                trainingDays.contains(day) -> { streak++; day = day.minusDays(1) }
+                onVacation(day) -> day = day.minusDays(1) // bridge: no break, no increment
+                else -> return streak
+            }
+        }
+    }
+
+    /**
+     * The day-streak as a one-shot read — same logic and data source as [observeWeeklyStats]'s
+     * streakDays, but WITHOUT subscribing the whole weekly fan-out (sessions/volume/cardio/schedule/
+     * vacation flows) just to extract one number. For callers like the Profile hub that only need
+     * the streak: two focused reads (recent finished sessions + vacation periods) instead of nine.
+     */
+    suspend fun currentStreakDays(): Int {
+        val finishedAts = sessionDao.finishedAts()
+        val periods = vacationDao.all()
+        return computeStreak(finishedAts, streakBridge(periods, settingsRepo.scheduleHistory.first()))
+    }
+
+    /** Days that neither extend nor break a streak: vacation, and rest days the schedule planned. */
+    private fun streakBridge(
+        periods: List<com.forge.app.data.db.entities.VacationPeriod>,
+        history: List<com.forge.app.domain.schedule.ScheduleHistory.Entry>
+    ): (LocalDate) -> Boolean {
+        val onVacation = com.forge.app.domain.vacation.VacationCalendar.onVacation(periods)
+        return { d -> onVacation(d) || com.forge.app.domain.schedule.ScheduleHistory.isPlannedRest(history, d) }
+    }
+
+    /**
+     * Workouts, volume and cardio minutes for the LAST COMPLETED calendar week (Monday 00:00 local
+     * to this Monday 00:00 local) — what a Monday recap is about.
+     *
+     * [observeWeeklyStats] deliberately reports the week IN PROGRESS, which is right for the
+     * Overview and wrong for a weekly recap: a recap fired on Monday morning read a week that was
+     * hours old, so it reported zero workouts for a user who trains three times a week and fired the
+     * come-back nudge at them, every Monday.
+     */
+    suspend fun lastCompletedWeekStats(): CompletedWeekStats {
+        val zone = ZoneId.systemDefault()
+        val thisWeekStart = todayLocal(zone).let { it.minusDays(it.dayOfWeek.value.toLong() - 1) }
+        val fromMs = thisWeekStart.minusWeeks(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val toMs = thisWeekStart.atStartOfDay(zone).toInstant().toEpochMilli()
+        val agg = sessionDao.aggregateInRange(fromMs, toMs)
+        val cardioMinutes = cardioDao.between(fromMs, toMs).sumOf { it.durationMin }
+        return CompletedWeekStats(
+            workouts = agg.sessionCount,
+            volumeLb = agg.totalVolume ?: 0.0,
+            cardioMinutes = cardioMinutes
+        )
+    }
+
+    /** The completed-week numbers behind the weekly recap. */
+    data class CompletedWeekStats(
+        val workouts: Int,
+        val volumeLb: Double,
+        val cardioMinutes: Int
+    )
+
+    // ─── History / comparison helpers ─────────────────────────────────────────
+
+    fun observeAllFinishedSessions(): Flow<List<Session>> = sessionDao.observeAllFinishedSessions()
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun observeDayVolumeStats(): Flow<Map<String, SessionDao.DayVolumeStats>> =
+        sessionDao.observeFinishedCount()
+            .flatMapLatest { flow { emit(sessionDao.avgMaxVolumeByDayKey().associateBy { it.dayKey }) } }
+
+    data class SessionExerciseLine(
+        val exerciseName: String,
+        val topWeightLb: Double?,
+        val topReps: Int?,
+        val setCount: Int
+    )
+
+    suspend fun getSessionExerciseLines(sessionId: Long): List<SessionExerciseLine> {
+        val exercises = loggedExerciseDao.forSession(sessionId)
+        val allSets = loggedSetDao.allForSession(sessionId)
+        val setsByExId = allSets.groupBy { it.loggedExerciseId }
+        return exercises.mapNotNull { ex ->
+            if (ex.skipped) return@mapNotNull null
+            val sets = setsByExId[ex.id] ?: emptyList()
+            if (sets.isEmpty()) return@mapNotNull null
+            val topSet = sets.maxByOrNull { it.weightLb ?: 0.0 }
+            // Resolves swap name → active plan → seed split → library, with a humanized last-ditch
+            // fallback so a swapped/rotated-out/removed id never surfaces as a raw kebab key (C3).
+            val name = Program.exerciseDisplayName(ex.exerciseId, ex.swappedName)
+            SessionExerciseLine(
+                exerciseName = name,
+                topWeightLb = topSet?.weightLb,
+                topReps = topSet?.reps,
+                setCount = sets.size
+            )
+        }
+    }
+
+    /** One lift of a session against the last time it was done. */
+    data class LiftDelta(
+        val exerciseName: String,
+        /** Best working e1RM this session vs the previous bout's, in percent. Null: no comparable bout. */
+        val pct: Float?,
+    )
+
+    /**
+     * "Each lift vs last time" for a finished session (the redesign's bar mark on Home): every
+     * non-skipped exercise with sets, in session order, compared on best working e1RM against its own
+     * previous bout before this session started. Bodyweight and timed lifts have no e1RM and come back
+     * null, as does a lift done for the first time. A finished session never changes, so callers
+     * memoise by session id.
+     */
+    suspend fun liftDeltas(sessionId: Long): List<LiftDelta> {
+        val session = sessionDao.get(sessionId) ?: return emptyList()
+        val exercises = loggedExerciseDao.forSession(sessionId).filterNot { it.skipped }
+        val setsByExId = loggedSetDao.allForSession(sessionId).groupBy { it.loggedExerciseId }
+        return exercises.mapNotNull { ex ->
+            val sets = setsByExId[ex.id].orEmpty()
+            if (sets.isEmpty()) return@mapNotNull null
+            val now = com.forge.app.domain.adapt.bestWorkingE1rm(sets)
+            val prev = if (now == null) null else
+                loggedExerciseDao.lastLoggedBeforeTime(ex.exerciseId, session.startedAt)
+                    ?.let { com.forge.app.domain.adapt.bestWorkingE1rm(loggedSetDao.forLoggedExercise(it.id)) }
+            val pct = if (now != null && prev != null && prev > 0.0) ((now - prev) / prev * 100.0).toFloat() else null
+            LiftDelta(Program.exerciseDisplayName(ex.exerciseId, ex.swappedName), pct)
+        }
+    }
+
+    /**
+     * The full per-session breakdown that drives the session-detail page: the session row's
+     * aggregates plus every non-skipped exercise with its sets. Pure read — assembled off the
+     * main thread by the caller. Returns null if the session id no longer exists.
+     */
+    suspend fun getSessionDetail(sessionId: Long): SessionDetailData? {
+        val session = sessionDao.get(sessionId) ?: return null
+        val exercises = loggedExerciseDao.forSession(sessionId)
+        val setsByExId = loggedSetDao.allForSession(sessionId).groupBy { it.loggedExerciseId }
+
+        // Prior-best e1RM per exercise: ONE query for the whole session, restricted to sessions that
+        // STARTED before this one — so an old session reflects what was a best AT THE TIME (not all-time),
+        // and so we don't fire a frontier query per exercise (was an N+1).
+        val priorFrontier = run {
+            val targetIds = exercises.filterNot { it.skipped }.map { it.exerciseId }.distinct()
+            if (targetIds.isEmpty()) emptyMap()
+            else loggedSetDao.repMaxFrontierBeforeSession(targetIds, session.startedAt).groupBy { it.exerciseId }
+        }
+
+        val exerciseDetails = exercises.mapNotNull { ex ->
+            if (ex.skipped) return@mapNotNull null
+            val sets = (setsByExId[ex.id] ?: emptyList()).sortedBy { it.setIndex }
+            if (sets.isEmpty()) return@mapNotNull null
+            val topWeight = sets.mapNotNull { it.weightLb }.maxOrNull()
+            // Mark only ONE set as the top set (the first at the heaviest weight), not the whole
+            // top-weight cluster — straight sets at the same weight shouldn't all read as "the" top.
+            val topIdx = if (topWeight == null) -1 else sets.indexOfFirst { it.weightLb == topWeight }
+            // Resolves swap name → active plan → seed split → library, with a humanized last-ditch
+            // fallback so a swapped/rotated-out/removed id never surfaces as a raw kebab key (C3).
+            val name = Program.exerciseDisplayName(ex.exerciseId, ex.swappedName)
+            val setDetails = sets.mapIndexed { i, s ->
+                SetDetail(
+                    number = i + 1,
+                    weightLb = s.weightLb,
+                    weightText = s.weightText,
+                    reps = s.reps,
+                    rpe = s.rpe,
+                    isTopSet = i == topIdx,
+                    isAmrap = s.isAmrap,
+                    toFailure = s.toFailure,
+                    isAssisted = s.isAssisted,
+                    dropAnnotation = s.dropAnnotation,
+                    setType = s.setType,
+                    durationSeconds = s.durationSeconds
+                )
+            }
+            // Best working e1RM this session, flagged as a new best when it tops every PRIOR session's
+            // best for the same exercise (prior frontier batched above, restricted to earlier sessions).
+            val e1rm = bestWorkingE1rm(sets)
+            val priorBestE1rm = priorFrontier[ex.exerciseId]
+                ?.maxOfOrNull { E1rm.epley(it.weightLb, it.reps) }
+            ExerciseDetail(
+                name = name,
+                exerciseId = ex.exerciseId,
+                isPr = ex.wasPr,
+                effort = ex.difficulty,
+                hitFullTarget = ex.hitFullTarget,
+                note = ex.note?.takeIf { it.isNotBlank() },
+                topWeightLb = topWeight,
+                totalReps = setDetails.sumOf { it.reps },
+                volumeLb = setDetails.sumOf { it.volumeLb },
+                e1rmLb = e1rm,
+                // A best needs something to beat: a lift's first-ever session is not a best.
+                e1rmIsBest = e1rm != null && priorBestE1rm != null && e1rm > priorBestE1rm + 1e-6,
+                sets = setDetails,
+                // The top set last time, for the opened lift's "Top set +5 lb".
+                prevTopWeightLb = if (topWeight == null) null else
+                    loggedExerciseDao.lastLoggedBeforeTime(ex.exerciseId, session.startedAt)
+                        ?.let { prev -> loggedSetDao.forLoggedExercise(prev.id).mapNotNull { it.weightLb }.maxOrNull() }
+            )
+        }
+
+        // Muscle split: fold each exercise's WORKING-set count (assisted sets excluded, matching the
+        // "working sets" label) onto the muscle its library entry maps to. Deliberately NOT the
+        // strength predicate: a set of push-ups and a plank are both real work for the muscle that
+        // did them, even though neither yields a weight × reps number.
+        val muscleSplit = buildSessionMuscleSplit(
+            exercises
+                .filterNot { it.skipped }
+                .mapNotNull { ex -> (setsByExId[ex.id]?.count { !it.isAssisted } ?: 0).takeIf { it > 0 }?.let { ex.exerciseId to it } }
+        )
+
+        val allRpe = exerciseDetails.flatMap { it.sets }.mapNotNull { it.rpe }
+        val durationMin = session.durationMinutes()
+        val title = Program.dayDisplayName(session.dayKey)
+        // Open workouts share one day key but no training identity, so the previous "freestyle" session
+        // is unrelated work; an up/down arrow against it would be meaningless.
+        val prevSession = if (session.dayKey == Program.FREESTYLE_DAY_KEY) null else sessionDao.previousFinishedForDay(
+            session.dayKey, session.id, session.finishedAt ?: Long.MAX_VALUE
+        )
+
+        return SessionDetailData(
+            sessionId = session.id,
+            title = title,
+            dateMs = session.startedAt,
+            tag = session.tags,
+            durationMin = durationMin,
+            volumeLb = session.totalVolumeLb,
+            prCount = session.prCount,
+            setCount = session.setCount,
+            prevVolumeLb = prevSession?.totalVolumeLb,
+            prevSetCount = prevSession?.setCount,
+            intensity = session.intensity,
+            sessionType = session.sessionType,
+            deload = session.deloadMarkedHere,
+            journal = session.journal,
+            avgRpe = if (allRpe.isEmpty()) null else allRpe.average(),
+            muscleSplit = muscleSplit,
+            exercises = exerciseDetails
+        )
+    }
+
+    // ─── Gym stats subtab ──────────────────────────────────────────────────────
+
+    /**
+     * Snapshot feeding the rebuilt Gym → Stats subtab. Trimmed to exactly the fields the four tabs
+     * render — the old long-scroll screen's extra aggregations (hall of fame, week comparison, rep
+     * ranges, lifetime metrics, etc.) were dropped here so they no longer run on the per-emission
+     * hot path. The tested aggregation helpers stay defined for reuse; they're just not called here.
+     */
+    data class GymStats(
+        val recentPrs: List<PrEntry> = emptyList(),
+        val e1rmLifts: List<E1rmLift> = emptyList(),
+        /** Per-exercise load-rep scatter + e1RM for the strength curve (Tier 6). */
+        val strengthCurves: List<com.forge.app.ui.gym.stats.state.StrengthCurve> = emptyList(),
+        val weeklySetsByMuscle: List<MuscleSetCount> = emptyList(),
+        /** Planned weekly sets per muscle from the active program. */
+        val plannedSetsByMuscle: Map<com.forge.app.program.MuscleGroup, Int> = emptyMap(),
+        /** Tonnage per ISO week, deload weeks marked. */
+        val weeklyTonnage: List<WeeklyTonnage> = emptyList(),
+        /** Dated bodyweight points, oldest → newest. */
+        val bodyweightPoints: List<BodyweightPoint> = emptyList(),
+        /** Per-day training load for the adherence calendar + Banister form curves (Tier 7-8). */
+        val dailyActivity: List<com.forge.app.ui.gym.stats.state.DayLoad> = emptyList(),
+        val rpeDistribution: List<RpeBucket> = emptyList(),
+        val avgRpe: Double? = null,
+        /** Sessions per day of week + best training hour. */
+        val trainingTimes: TrainingTimes? = null,
+        val prsByDayOfWeek: List<Int> = List(7) { 0 },
+        /** This-ISO-week vs last-week side-by-side (Overview tab). */
+        val weekComparison: PeriodComparison? = null,
+        /** All-time best set per lift, heaviest first (Overview "records"). */
+        val hallOfFame: List<PrRecord> = emptyList(),
+        /** Lifetime totals for the Overview tiles. */
+        val lifetime: LifetimeMetrics? = null,
+        /**
+         * Every tracked set, oldest session first (holds and assisted sets with their weight nulled).
+         * The redesigned Stats page slices it per range (4W / 12W / 6M / All) on the client, so one
+         * history read serves every range and its "the N before" comparison.
+         */
+        val statSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession> = emptyList(),
+        /** Every finished tracked session's volume and deload mark, oldest first (weekly volume bars). */
+        val sessionVolumes: List<SessionDao.SessionVolumeDeloadRow> = emptyList()
+    )
+
+    /**
+     * Single observable feeding the Gym → Stats subtab. Aggregates several DAO flows
+     * into the snapshot the UI consumes.
+     */
+    fun observeGymStats(): Flow<GymStats> {
+        return combine(
+            // ONE whole-history query for both populations, split in memory below. Deduped: Room
+            // re-runs it on ANY write to its tables, including every set of the workout in progress,
+            // and only a real change to finished history should re-run the ~12 passes below.
+            loggedSetDao.observeAllFinishedStatsSets().distinctUntilChanged(),
+            loggedExerciseDao.observeRecentPrs().distinctUntilChanged(),
+            timeSignals.dayStarts()
+        ) { statsRows, prRows, _ ->
+          coroutineScope {
+            // Strength population (e1RM, PRs, curves, RPE…): unassisted, untimed sets only — the same
+            // rows observeAllFinishedSetsWithSession returns.
+            val allSets = statsRows.mapNotNull { if (it.isStrengthSet) it.set else null }
+            // Activity population keeps timed holds and assisted sets, with their weight nulled so they
+            // add sets but never tonnage (an assisted set's weight is the assistance, not load lifted).
+            val activitySets = statsRows.map { if (it.isStrengthSet) it.set else it.set.copy(weightLb = null) }
+            // Rolling-7-day working sets for the volume-by-muscle read, recomputed per emission so the
+            // window slides while the screen stays open. Derived from activitySets (tracked / non-skipped,
+            // holds and assisted work included so a plank-only day still counts for core) and bucketed
+            // by session start.
+            val volumeStartMs = clock.nowMs() - WEEK_MS
+            val volumeSets = activitySets
+                .filter { it.sessionStartedAt >= volumeStartMs }
+                .map { SetWithExerciseId(it.weightLb, it.reps, it.exerciseId) }
+            // The aggregate queries the trimmed screen still needs, fired concurrently.
+            val prTimesD = async { sessionDao.prSessionStartTimes() }
+            val deloadRowsD = async { sessionDao.allFinishedVolumeDeload() }
+            val weekCompD = async { buildWeekComparison() }
+            val prTimes = prTimesD.await()
+            val deloadRows = deloadRowsD.await()
+            val deloadTrend = buildVolumeDeloadTrend(deloadRows, maxSessions = Int.MAX_VALUE)
+            GymStats(
+                recentPrs = buildPrEntries(prRows, allSets),
+                e1rmLifts = buildE1rmLifts(allSets),
+                strengthCurves = buildStrengthCurves(allSets),
+                weeklySetsByMuscle = buildWeeklySetsByMuscle(volumeSets),
+                plannedSetsByMuscle = emptyMap(),
+                // The in-progress week is left out: a Tuesday's partial total would plot as a collapse.
+                weeklyTonnage = buildWeeklyTonnage(
+                    deloadTrend,
+                    excludeWeekOf = todayLocal(ZoneId.systemDefault())
+                ),
+                dailyActivity = buildDailyActivity(activitySets),
+                rpeDistribution = buildRpeDistribution(allSets),
+                avgRpe = allSets.mapNotNull { it.rpe }.takeIf { it.isNotEmpty() }?.average(),
+                trainingTimes = buildTrainingTimes(allSets),
+                prsByDayOfWeek = buildPrsByDayOfWeek(prTimes),
+                weekComparison = weekCompD.await(),
+                // Heaviest-first so the Overview "records" card leads with the biggest lifts; relative
+                // strength is filled in by the bodyweight combine below.
+                hallOfFame = buildHallOfFame(allSets).sortedByDescending { it.maxWeightLb },
+                lifetime = buildLifetimeMetrics(allSets),
+                statSets = activitySets.sortedBy { it.sessionStartedAt },
+                sessionVolumes = deloadRows
+            )
+          }
+        }.combine(bodyweightRepo.observeRecent(90)) { stats, bw ->
+            // observeRecent is newest-first; reverse to chronological for the trend chart.
+            val points = bw.reversed().map { BodyweightPoint(it.recordedAt, it.weightLb) }
+            // Now that the latest bodyweight is known, fill in each record's relative strength (× BW).
+            // Done here (not in buildHallOfFame) so a bodyweight change re-derives it without re-running
+            // the whole set aggregation. Matches buildHallOfFame's 1-decimal rounding.
+            val latestBwLb = bw.firstOrNull()?.weightLb
+            val hallOfFame = if (latestBwLb != null && latestBwLb > 0)
+                stats.hallOfFame.map {
+                    // Rounded, not truncated, like buildHallOfFame: toInt() rendered 1.99x as "1.9x".
+                    it.copy(relativeStrength = (it.maxWeightLb / latestBwLb * 10).roundToInt() / 10.0)
+                }
+            else stats.hallOfFame
+            stats.copy(bodyweightPoints = points, hallOfFame = hallOfFame)
+        }.combine(combine(programRepo.revision, programCustomRepo.observeAll()) { _, _ ->
+            if (!Program.isLoaded) programRepo.ensureLoaded()
+            val effective = Program.days.map { day ->
+                day.copy(exercises = programCustomRepo.effectivePlanForDay(day.key))
+            }
+            com.forge.app.program.VolumeTargets.plannedWeeklySetsByMuscle(effective)
+        }) { stats, planned -> stats.copy(plannedSetsByMuscle = planned) }
+        .combine(settingsRepo.freestyleMode) { stats, freestyle ->
+            // No fixed plan (freestyle) → no planned volume targets to chart actual sets against. Folded
+            // in last so flipping freestyle only re-runs this cheap copy, not the aggregations above.
+            if (freestyle) stats.copy(plannedSetsByMuscle = emptyMap()) else stats
+        }.flowOn(Dispatchers.Default)
+    }
+
+    /**
+     * Looks for a session from 1, 3, 6, or 12 months ago (±3-day window). Returns the
+     * most distant qualifying match so "1 year ago" takes precedence over "1 month ago". (#106)
+     */
+    suspend fun findOnThisDayMemory(): OnThisDayMemory? {
+        val zone = ZoneId.systemDefault()
+        val today = todayLocal(zone)
+        for (months in listOf(12, 6, 3, 1)) {
+            val target = today.minusMonths(months.toLong())
+            val targetMs = target.atStartOfDay(zone).toInstant().toEpochMilli()
+            val windowMs = 3L * 24 * 60 * 60 * 1000
+            val session = sessionDao.sessionNearDate(
+                targetMs = targetMs + 12 * 60 * 60 * 1000,
+                fromMs = targetMs - windowMs, // ±3 days around the target date (was forward-only)
+                toMs = targetMs + windowMs
+            ) ?: continue
+            val dayName = Program.dayDisplayName(session.dayKey)
+            return OnThisDayMemory(
+                monthsAgo = months,
+                dayName = dayName,
+                totalVolumeLb = session.totalVolumeLb ?: 0.0,
+                prCount = session.prCount,
+                sessionDate = session.startedAt
+            )
+        }
+        return null
+    }
+
+    private suspend fun buildWeekComparison(): PeriodComparison? {
+        val zone = ZoneId.systemDefault()
+        val today = todayLocal(zone)
+        val thisWeekStart = today.minusDays(today.dayOfWeek.value.toLong() - 1)
+        val lastWeekStart = thisWeekStart.minusWeeks(1)
+        val toMs = { d: LocalDate -> d.atStartOfDay(zone).toInstant().toEpochMilli() }
+        val thisW = sessionDao.aggregateInRange(toMs(thisWeekStart), toMs(thisWeekStart.plusWeeks(1)))
+        // Last week only up to the same point in the week. Against the whole of last week, every
+        // figure read "down" until Sunday, which is the week not being over, not a drop.
+        val elapsedMs = clock.nowMs() - toMs(thisWeekStart)
+        val lastW = sessionDao.aggregateInRange(toMs(lastWeekStart), toMs(lastWeekStart) + elapsedMs)
+        if (lastW.sessionCount == 0 && thisW.sessionCount == 0) return null
+        return PeriodComparison(
+            label = "WEEK",
+            current = PeriodStats(thisW.sessionCount, thisW.totalVolume ?: 0.0, thisW.totalPrs, thisW.totalSets),
+            previous = PeriodStats(lastW.sessionCount, lastW.totalVolume ?: 0.0, lastW.totalPrs, lastW.totalSets)
+        )
+    }
+
+    companion object {
+        private const val WEEK_MS: Long = 7L * 24 * 60 * 60 * 1000
+    }
+}

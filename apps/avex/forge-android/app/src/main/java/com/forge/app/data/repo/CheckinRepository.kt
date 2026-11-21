@@ -1,0 +1,79 @@
+package com.forge.app.data.repo
+
+import com.forge.app.core.time.Clock
+import com.forge.app.data.db.dao.CheckinDao
+import com.forge.app.data.db.entities.CheckinEntry
+import com.forge.app.program.MuscleGroup
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * The daily check-in and injury restrictions (Coach v3 B1).
+ *
+ * Owns the one-row-per-calendar-day rule, keyed ISO (`yyyy-MM-dd`), so updating today's answers
+ * corrects the existing row instead of stacking another one.
+ */
+@Singleton
+class CheckinRepository @Inject constructor(
+    private val checkinDao: CheckinDao,
+    private val clock: Clock
+) {
+
+    private val dateFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+
+    /** Serialises [save] so two writers for one day cannot interleave their read and REPLACE. */
+    private val saveMutex = Mutex()
+
+    fun todayKey(zone: ZoneId = ZoneId.systemDefault()): String = dateKeyFor(clock.nowMs(), zone)
+
+    /** The ISO day [atMs] falls on in [zone]. One instant in, one key out, so a save can hold both. */
+    fun dateKeyFor(atMs: Long, zone: ZoneId = ZoneId.systemDefault()): String =
+        Instant.ofEpochMilli(atMs).atZone(zone).toLocalDate().format(dateFmt)
+
+    suspend fun today(): CheckinEntry? = checkinDao.forDate(todayKey())
+
+    fun observeToday(): Flow<CheckinEntry?> = checkinDao.observeForDate(todayKey())
+
+    /**
+     * Save today's answers. Any subset may be null — a partial check-in beats an abandoned one.
+     *
+     * The clock is sampled ONCE. The row's primary key was looked up by one `todayKey()` read and
+     * the entity was stamped by another, and a save that straddled midnight reused yesterday's id
+     * under today's date key. The DAO's REPLACE deletes every conflicting row before it inserts,
+     * so yesterday's check-in moved to today, or yesterday and today collapsed into one row (M-04).
+     * Now the lookup, the date key and the recorded-at instant all come from the same sample, so
+     * whichever side of midnight the save lands on, it corrects exactly that day's row.
+     */
+    suspend fun save(
+        sleepQuality: Int? = null,
+        soreness: Int? = null,
+        stress: Int? = null,
+        motivation: Int? = null,
+        sick: Boolean = false,
+        soreMuscles: Set<MuscleGroup> = emptySet()
+    ) = saveMutex.withLock {
+        val now = clock.nowMs()
+        val dateKey = dateKeyFor(now)
+        checkinDao.upsert(
+            CheckinEntry(
+                id = checkinDao.forDate(dateKey)?.id ?: 0,
+                dateKey = dateKey,
+                sleepQuality = sleepQuality,
+                soreness = soreness,
+                stress = stress,
+                motivation = motivation,
+                sick = sick,
+                soreMuscles = soreMuscles.joinToString(",") { it.code },
+                skipped = false,
+                recordedAt = now
+            )
+        )
+        Unit
+    }
+}

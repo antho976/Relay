@@ -1,0 +1,1092 @@
+package com.forge.app.data.importer
+
+import android.content.Context
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
+import androidx.room.withTransaction
+import com.forge.app.data.db.ForgeDatabase
+import com.forge.app.data.db.dao.LoggedExerciseDao
+import com.forge.app.data.db.dao.LoggedSetDao
+import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.db.entities.BodyweightEntry
+import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.data.db.entities.CoachGoal
+import com.forge.app.data.db.entities.LoggedExercise
+import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.data.db.entities.MoodEntry
+import com.forge.app.data.db.entities.Session
+import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.domain.volume.VolumeCalculator
+import com.forge.app.program.Program
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * Imports training history from other gym apps (#GYMAP-17) — the read-side counterpart of
+ * [com.forge.app.data.repo.BackupRepository]'s exports. A user picks a file (SAF), we auto-detect
+ * which app it came from ([importers], first match wins), parse it to the neutral [ImportedSession]
+ * model, and MERGE the sessions into the DB (never replacing existing data, unlike a .zip restore).
+ *
+ * Exercise names are matched to the catalogue ([ExerciseNameMatcher]); an unmatched name is still
+ * imported under its own label so nothing is dropped. Imported workouts are logged as open/freestyle
+ * sessions ([Program.FREESTYLE_DAY_KEY]) since another app's split doesn't map to ours.
+ */
+@Singleton
+class WorkoutImportRepository @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val db: ForgeDatabase,
+    private val sessionDao: SessionDao,
+    private val loggedExerciseDao: LoggedExerciseDao,
+    private val loggedSetDao: LoggedSetDao,
+    private val moodDao: com.forge.app.data.db.dao.MoodDao,
+    private val cardioDao: com.forge.app.data.db.dao.CardioDao,
+    private val coachGoalDao: com.forge.app.data.db.dao.CoachGoalDao,
+    private val bodyweightDao: com.forge.app.data.db.dao.BodyweightDao,
+    private val settingsRepo: SettingsRepository,
+    private val grants: com.forge.app.data.repo.PersistedTreeGrants,
+    // Defaulted so a test or caller that predates it still builds; Hilt always injects the bound
+    // Clock (Dagger reads the full constructor and ignores Kotlin defaults).
+    private val clock: com.forge.app.core.time.Clock = com.forge.app.core.time.SystemClock()
+) {
+    /** uri → (lastModified, what the scan concluded). Bounded by [MAX_SCAN_FILES] per folder. */
+    private val scanCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, FoundImport?>>()
+
+    // Ordered by specificity: dedicated parsers first, the fuzzy generic CSV last so it only catches
+    // what nothing else recognised.
+    private val importers: List<GymImporter> = listOf(
+        StrongImporter(),
+        HevyImporter(),
+        FitNotesImporter(),
+        ForgeJsonImporter(),
+        ForgeBodyweightCsvImporter(),
+        GenericCsvImporter()
+    )
+
+    suspend fun import(uri: Uri): ImportResult = withContext(Dispatchers.IO) {
+        val text = when (val read = readBounded(uri)) {
+            is Read.Ok -> read.text
+            Read.TooLarge -> return@withContext ImportResult.TooLarge
+            Read.Error -> return@withContext ImportResult.ReadError
+        }
+        if (text.isBlank()) return@withContext ImportResult.NothingToImport
+
+        // Our own PR list reads as a workout CSV, so name it before detection rather than let it
+        // import a fake workout per PR date (or fall through to "not recognised").
+        if (ImportParsing.isAvexPrListHeader(ImportParsing.firstLine(text))) {
+            return@withContext ImportResult.AvexPrList
+        }
+        val importer = importers.firstOrNull { it.canParse(text) }
+            ?: return@withContext ImportResult.UnrecognisedFormat
+        // A file from a FUTURE export format would parse "successfully" against today's key names
+        // and silently drop or misread whatever changed. Refuse it and say why instead.
+        importer.formatVersion(text)?.let { v ->
+            if (v > SUPPORTED_EXPORT_VERSION) return@withContext ImportResult.UnsupportedExportVersion(v)
+        }
+        val assumeKg = settingsRepo.useKg.first()
+        // An OOM building a huge JSON tree is not "nothing to import". runCatching catches Throwable,
+        // so a power user's multi-year export that couldn't fit in memory used to be reported as "No
+        // new workouts found in that file" — they concluded the export was empty and gave up. A
+        // parser that throws on the file is not an empty file either, and says so.
+        //
+        // org.json parses recursively, so a few megabytes of "[[[[" nest deeper than the thread's
+        // stack. That StackOverflowError is an Error, not an Exception, and escaped import()
+        // entirely. It is a malformed file, and is reported as one.
+        val raw = try {
+            importer.read(text, assumeKg)
+        } catch (e: OutOfMemoryError) {
+            return@withContext ImportResult.TooLarge
+        } catch (e: StackOverflowError) {
+            return@withContext ImportResult.ParseFailed(importer.source)
+        } catch (e: Exception) {
+            return@withContext ImportResult.ParseFailed(importer.source)
+        }
+        // Every source's values bounded, and out-of-range dates counted as skipped rows, before
+        // anything below (the duplicate guard included) looks at them. See ImportBounds.
+        val parsed = ImportBounds.apply(raw, clock.nowMs())
+        val sessions = parsed.sessions.filter { it.exercises.isNotEmpty() }
+        // Cardio and coach goals are carried by our own export and used to be read by nobody, so a
+        // JSON migration lost them all silently. A file with no workouts but 400 cardio entries is
+        // not "nothing to import".
+        val extras = parsed.extras
+        if (sessions.isEmpty() && extras.isEmpty) {
+            return@withContext if (parsed.skippedRows > 0) ImportResult.NoReadableRows(importer.source, parsed.skippedRows)
+            else ImportResult.NothingToImport
+        }
+
+        insert(importer.source, sessions, extras, parsed.skippedRows)
+    }
+
+    /**
+     * Everything the Import screen can offer from the folders Avex may read: the import folder and
+     * the backup folder. Each is searched [MAX_SCAN_DEPTH] levels down, because exports rarely sit
+     * at the top: an app that saves into `Download/Strong/`, or a user who files them by month, used
+     * to get "No exports found" for a folder that plainly held them. Avex backup ZIPs are listed
+     * too, as restores, so a backup in Downloads no longer has to be hunted for in a file picker.
+     */
+    suspend fun scanFolders(treeUris: List<Uri>): FolderScan = withContext(Dispatchers.IO) {
+        val files = treeUris.distinct()
+            .mapNotNull { runCatching { DocumentFile.fromTreeUri(context, it) }.getOrNull() }
+            .flatMap { listFilesDeep(it, MAX_SCAN_DEPTH, MAX_SCAN_DIRS) }
+            .distinctBy { it.uri }
+        val backups = files
+            .filter { it.name?.lowercase()?.endsWith(".zip") == true }
+            .newestFirst()
+            .take(MAX_SCAN_FILES)
+            .mapNotNull(::sniffBackup)
+        FolderScan(imports = scanImports(files), backups = backups)
+    }
+
+    /**
+     * An Avex backup, recognised by its first bytes rather than its name: the password-protected
+     * container's magic, or a ZIP whose first entry is `database.db` (the backup writer always puts
+     * the database first). Anything else, including other apps' ZIPs, is not listed.
+     */
+    private fun sniffBackup(doc: DocumentFile): FoundBackup? {
+        val head = runCatching {
+            context.contentResolver.openInputStream(doc.uri)?.use { input ->
+                val buf = ByteArray(64)
+                var n = 0
+                while (n < buf.size) { val r = input.read(buf, n, buf.size - n); if (r < 0) break; n += r }
+                buf.copyOf(n)
+            }
+        }.getOrNull() ?: return null
+        val encrypted = backupHeadKind(head) ?: return null
+        return FoundBackup(doc.uri, doc.name ?: "backup.zip", doc.lastModified(), encrypted)
+    }
+
+    /**
+     * Newest first, reading each file's modification time ONCE. A tree [DocumentFile]'s
+     * `lastModified()` is a content-provider query, and `sortedByDescending { it.lastModified() }`
+     * evaluates its selector on every comparison: a Downloads folder of a few hundred files cost
+     * thousands of provider round trips per scan, on every visit to the Import screen.
+     */
+    private fun List<DocumentFile>.newestFirst(): List<DocumentFile> =
+        map { it to it.lastModified() }.sortedByDescending { it.second }.map { it.first }
+
+    private suspend fun scanImports(files: List<DocumentFile>): List<FoundImport> {
+        val assumeKg = settingsRepo.useKg.first()
+        val candidates = files
+            .filter { it.name?.lowercase()?.let { n -> IMPORTABLE_EXTENSIONS.any(n::endsWith) } == true }
+            .newestFirst()
+            .take(MAX_SCAN_FILES)
+        val found = ArrayList<FoundImport>()
+        for (doc in candidates) {
+            val key = doc.uri.toString()
+            val stamp = doc.lastModified()
+            // An unchanged file gives an unchanged answer. Without this, every visit to the Import
+            // screen — and every return to it after an import — re-read and re-parsed the whole
+            // folder from scratch.
+            val cached = scanCache[key]
+            if (cached != null && cached.first == stamp) {
+                cached.second?.let(found::add)
+                continue
+            }
+            // Sniff on a bounded PREFIX. Detection is a header line (or one JSON key near the front)
+            // for every importer, so pulling a 25 MB bank statement fully into memory to decide it
+            // isn't a workout export was pure waste — and the dominant cost of the scan.
+            val head = readPrefix(doc.uri, SNIFF_BYTES)
+            if (head.isNullOrBlank()) { scanCache[key] = stamp to null; continue }
+            val importer = importers.firstOrNull { it.canParse(head) }
+            if (importer == null) { scanCache[key] = stamp to null; continue }
+            if (importer.formatVersion(head)?.let { it > SUPPORTED_EXPORT_VERSION } == true) {
+                scanCache[key] = stamp to null
+                continue
+            }
+            val text = (readBounded(doc.uri) as? Read.Ok)?.text
+            if (text == null) { scanCache[key] = stamp to null; continue }
+            // A file too big to parse is skipped rather than listed — and never allowed to take the
+            // whole scan down with it.
+            //
+            // The non-workout rows count too (L-01). The scanner asked only how many WORKOUTS a
+            // file held, so a bodyweight CSV — which returns its data through parseExtras by
+            // design — was cached as "nothing here", and so was a cardio- or goals-only Avex JSON.
+            // The same file picked directly imported perfectly, which is what made it a quiet one.
+            //
+            // Bounded the same way import() bounds it, so the count shown is the count imported.
+            val raw = try {
+                importer.read(text, assumeKg)
+            } catch (e: OutOfMemoryError) {
+                ParsedImport(emptyList())
+            } catch (e: StackOverflowError) {
+                // Pathologically nested JSON: skip this file, not the rest of the folder.
+                ParsedImport(emptyList())
+            } catch (e: Exception) {
+                ParsedImport(emptyList())
+            }
+            val parsed = ImportBounds.apply(raw, clock.nowMs())
+            val count = parsed.sessions.count { it.exercises.isNotEmpty() }
+            val extras = parsed.extras
+            val entry = if (count == 0 && extras.isEmpty) null
+            else FoundImport(
+                uri = doc.uri,
+                name = doc.name ?: "export",
+                source = importer.source,
+                sessionCount = count,
+                lastModified = stamp,
+                cardioCount = extras.cardio.size,
+                coachGoalCount = extras.coachGoals.size,
+                bodyweightCount = extras.bodyweight.size
+            )
+            scanCache[key] = stamp to entry
+            entry?.let(found::add)
+        }
+        return found
+    }
+
+    /**
+     * Make sure `Download/Avex` exists, and say whether it does.
+     *
+     * Android 11 and later refuse to grant an app the Downloads folder itself ("Can't use this
+     * folder"), so pointing the picker there, as the grant used to, led straight into a dead end.
+     * Any folder INSIDE Downloads can be granted, so Avex makes one and opens the picker in it: one
+     * tap on "Use this folder". Created through MediaStore, which needs no storage permission on
+     * Android 10+, by saving a short note that says what the folder is for. Older versions can
+     * grant Downloads directly and are left alone.
+     */
+    suspend fun ensureInboxFolder(): Boolean = withContext(Dispatchers.IO) {
+        if (android.os.Build.VERSION.SDK_INT < 29) return@withContext false
+        val downloads = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        if (runCatching { java.io.File(downloads, INBOX_FOLDER).isDirectory }.getOrDefault(false)) return@withContext true
+        runCatching {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, INBOX_NOTE_NAME)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                put(
+                    android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                    "${android.os.Environment.DIRECTORY_DOWNLOADS}/$INBOX_FOLDER"
+                )
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: return@runCatching false
+            resolver.openOutputStream(uri)?.use { it.write(INBOX_NOTE.toByteArray()) }
+            true
+        }.getOrDefault(false)
+    }
+
+    /**
+     * Take a persistable read grant on the picked folder and remember it, so later scans need no
+     * re-pick — and give up the folder this one replaces (M-18).
+     *
+     * Neither half used to happen. The take was best-effort and its failure swallowed, so a folder
+     * that could not be granted was still stored as the connected one and every later scan came
+     * back empty for no stated reason. And the previous tree was never released: point import at a
+     * second folder and Avex kept read access to the first with no setting naming it — the same
+     * invisible retained grant "Remove folder" was fixed for, reached by replacing instead of
+     * removing. Release goes through [PersistedTreeGrants] so a tree the BACKUP folder also names
+     * is left alone; it has another owner.
+     *
+     * @return false when the grant could not be taken; the remembered folder is then unchanged.
+     */
+    suspend fun rememberFolder(treeUri: Uri): Boolean = withContext(Dispatchers.IO) {
+        if (!grants.take(treeUri, write = false)) return@withContext false
+        val previous = settingsRepo.importFolderUri.first()
+        settingsRepo.setImportFolderUri(treeUri.toString())
+        if (previous != null && previous != treeUri.toString()) {
+            grants.releaseUnlessSharedWith(previous, com.forge.app.data.repo.PersistedTreeGrants.Owner.IMPORT)
+        }
+        true
+    }
+
+    private suspend fun insert(
+        source: ImportSource,
+        sessions: List<ImportedSession>,
+        extras: ImportedExtras = ImportedExtras(),
+        skippedRows: Int = 0
+    ): ImportResult {
+        val matchedNames = HashSet<String>()
+        val unmatchedNames = HashSet<String>()
+        var exerciseCount = 0
+        var setCount = 0
+        var duplicates = 0
+        var importedSessions = 0
+        var corrected = 0
+
+        // Date-only sources (FitNotes, a bare spreadsheet, Strong/Generic without a time) stamp every
+        // workout that day at midnight, so two DISTINCT same-day workouts would share a start instant.
+        // Nudge each one after the first at a given instant a few seconds forward — deterministic from
+        // file order, so a genuine re-import reproduces the same instants and the duplicate guard below
+        // still recognises them, while distinct same-day workouts no longer collide and get dropped.
+        //
+        // Memoise name→catalogue-id for this import: the same movement recurs across many sessions and
+        // ExerciseNameMatcher.match scans the whole library, so resolve each distinct name only once.
+        val matchCache = HashMap<String, String?>()
+        // Name → what earlier matcher builds resolved it to; identity only, see incomingIdentityOf.
+        val legacyMatchCache = HashMap<String, String?>()
+        // Unmatched name → the id its rows are stored under; see storedSyntheticId.
+        val syntheticCache = HashMap<String, String>()
+        // A stored session stands in for exactly ONE incoming workout.
+        //
+        // Without this the guard asks "does a session with this content exist?", which cannot tell
+        // a re-import from a second, genuinely identical workout. A date-only source records no time
+        // and this app stores no workout title, so two real sessions of Bench 3x10x100 on the same
+        // day are indistinguishable in the database — and the file that carries both had its second
+        // one dropped, every time, on a path whose promise is that it does not lose anything.
+        //
+        // Counting instead of testing membership resolves it without needing to tell them apart:
+        // the file says how many such workouts there are, the database says how many it already
+        // holds, and only the surplus is new. Ids this run inserts are claimed too, so the first of
+        // two identical workouts cannot make the second look like a duplicate of itself.
+        val claimedStoredIds = HashSet<Long>()
+        // A stored workout's identity does not depend on the incoming one, so read each at most once
+        // per run however many incoming workouts share its window.
+        val storedIdentities = HashMap<Long, WorkoutIdentity?>()
+
+        // ONE transaction for workouts and extras. They used to commit separately, so a failure
+        // writing cardio left every workout committed while the user was told the file could not be
+        // read, and re-importing it then reported them as duplicates. insertExtras' own
+        // withTransaction joins this one. Nothing in here is file or Health Connect I/O: the file
+        // was read and parsed before insert() was called, so only DAO work holds the transaction.
+        val extrasWritten = db.withTransaction {
+            for (session in sessions) {
+                val totalSets = session.exercises.sumOf { it.sets.size }
+                if (totalSets == 0) continue
+
+                // Denormalised volume from lb weights, matching how a real finished session is
+                // stamped — including VolumeCalculator's exclusion of timed holds, whose reps is a
+                // duration, not a count.
+                // From the bounded values the sets are stored with (ImportBounds already applied
+                // them; repeated here because this total is written beside the sets and must
+                // never disagree with them).
+                val volumeLb = session.exercises.sumOf { ex ->
+                    ex.sets.sumOf {
+                        VolumeCalculator.setVolumeLb(ImportBounds.weightLb(it.weightLb), ImportBounds.reps(it.reps), it.durationSeconds)
+                    }
+                }
+
+                // Duplicate guard (#GYMAP-17): a workout already logged at this start time WITH THE
+                // SAME CONTENT is a re-import of the same data — skip it so scanning/importing twice
+                // doesn't double-count. A different workout at the same instant takes the next slot.
+                //
+                // The content test compares exercise by exercise, not set count plus total volume.
+                // Those two agree for workouts that share nothing but arithmetic — Bench 3×10×100
+                // and Row 3×10×100 are three sets and 3,000 lb either way — and a great many sources
+                // record a DATE rather than a time, so every workout they carry starts at midnight
+                // and every one of them is a candidate against every other. The second of two
+                // legitimately different midnight workouts was reported as a duplicate and dropped,
+                // silently, on an import path whose whole promise is that it does not lose anything.
+
+                // EVERY slot this workout could occupy, checked regardless of the order the file
+                // presents its workouts in.
+                //
+                // The search used to begin at a per-run nonce and only move forward, so re-importing
+                // the same file with its workouts reordered started PAST the slot a workout already
+                // held. Import A then B: A lands at midnight, B at midnight+1s. Re-import B then A:
+                // B matches itself at +1s and advances the nonce to +2s, A begins at +2s, never
+                // looks at midnight where it is already stored, and is inserted a second time — on
+                // an import path whose whole promise is that re-running it changes nothing.
+                //
+                // The nonce is gone. Inside this transaction the database already knows which slots
+                // are taken, including the ones this run has just filled, so occupancy is read from
+                // the one source that cannot disagree with itself.
+                val windowEndMs = session.startedAtMs + MAX_START_NUDGES * 1000L
+                val occupied = sessionDao.startRefsInRange(session.startedAtMs, windowEndMs)
+                // Compared on what the SOURCE states, not on everything the row holds: see
+                // WorkoutIdentity for the re-imports an exact print duplicated.
+                val incoming = incomingIdentityOf(session, matchCache, legacyMatchCache)
+                suspend fun storedIdentity(id: Long) = storedIdentities.getOrPut(id) { storedIdentityOf(id) }
+                // The same workout a whole zone offset away, too. A source with no zone in its times
+                // is read in the device's CURRENT zone, so re-importing the same file after a move or
+                // a trip put every workout hours from its stored copy and added all of it again.
+                // Offsets are whole quarter hours, so only starts that sit on this workout's own
+                // slots shifted by one are considered, nearest first.
+                val candidates = occupied + zoneShiftedRefs(session.startedAtMs, windowEndMs)
+                val alreadyStored = candidates.firstOrNull {
+                    it.id !in claimedStoredIds && storedIdentity(it.id)?.sameWorkoutAs(incoming) == true
+                }
+                if (alreadyStored != null) {
+                    claimedStoredIds += alreadyStored.id
+                    duplicates++
+                    continue
+                }
+                // A copy an earlier build's importer wrote with less in it (see WorkoutIdentity.repairs)
+                // is corrected in place, keeping the session row and what the user added to it.
+                val lossyCopy = candidates.firstOrNull {
+                    it.id !in claimedStoredIds && storedIdentity(it.id)?.let { stored -> incoming.repairs(stored) } == true
+                }
+                if (lossyCopy != null) {
+                    val stored = sessionDao.get(lossyCopy.id)
+                    if (stored != null) {
+                        claimedStoredIds += stored.id
+                        storedIdentities.remove(stored.id)
+                        val oldExercises = loggedExerciseDao.forSession(stored.id)
+                        // By id and by name: the old copy may hold the movement under an id the matcher no
+                        // longer picks.
+                        val notes = buildMap {
+                            oldExercises.forEach { le ->
+                                val note = le.note?.takeIf { it.isNotBlank() } ?: return@forEach
+                                put(le.exerciseId, note)
+                                le.swappedName?.let { put("name:" + it.trim().lowercase(), note) }
+                            }
+                        }
+                        oldExercises.forEach { loggedExerciseDao.delete(it) }
+                        insertExercises(
+                            session, stored.id, stored.finishedAt ?: stored.startedAt,
+                            matchCache, syntheticCache, matchedNames, unmatchedNames, notes
+                        ) // Not counted as imported: the result reports these as filled in.
+                        sessionDao.update(stored.copy(totalVolumeLb = volumeLb, setCount = totalSets))
+                        corrected++
+                        continue
+                    }
+                }
+
+                val taken = occupied.mapTo(HashSet(occupied.size)) { it.startedAt }
+                val startedAt = (0 until MAX_START_NUDGES)
+                    .map { session.startedAtMs + it * 1000L }
+                    .firstOrNull { it !in taken }
+                    ?: windowEndMs // Window full: keep the previous behaviour and take the edge.
+
+                // Three separate facts, and conflating them rewrote real training history.
+                //
+                // `finishedAt` is when the workout ENDED — kept verbatim from the source. A session
+                // started Friday evening and resumed Sunday morning legitimately spans two days.
+                // `activeSeconds` is time actually spent training, which the app stores separately
+                // for exactly that reason. Deriving one from the other and then clamping the result
+                // to 6 h turned that 70-minute session into a claimed six-hour one, and clamped a
+                // 45-second finisher UP to a minute.
+                //
+                // Only a SYNTHESISED duration — for a source that records no end time at all — is
+                // clamped, and only into a plausible session length.
+                val timing = timingFor(session, totalSets, startedAt)
+                val finishedAt = timing.finishedAtMs
+                val activeSec = timing.activeSeconds
+
+                // Another app's split doesn't map to ours, so those still land as freestyle — but our
+                // OWN export names the day each workout belonged to, and forcing that to FREESTYLE
+                // turned a migrated program history into 600 indistinguishable open workouts. A key
+                // that isn't in the user's current plan reads fine: every consumer resolves day keys
+                // with firstOrNull, and Program.dayDisplayName humanizes an unknown one by design.
+                val dayKey = session.dayKey ?: Program.FREESTYLE_DAY_KEY
+                val sessionId = sessionDao.insert(
+                    Session(
+                        dayKey = dayKey,
+                        startedAt = startedAt,
+                        finishedAt = finishedAt,
+                        totalVolumeLb = volumeLb,
+                        prCount = session.prCount ?: 0,
+                        setCount = totalSets,
+                        sessionType = session.sessionType ?: "normal",
+                        intensity = session.intensity ?: "normal",
+                        isUntracked = session.isUntracked,
+                        tags = ImportBounds.shortText(session.tags) ?: "",
+                        journal = ImportBounds.longText(session.note) ?: "",
+                        activeSeconds = activeSec
+                    )
+                )
+                // Claimed immediately: a second, identical workout later in this same file must not
+                // match the one just written and be dropped as its duplicate.
+                claimedStoredIds += sessionId
+                // Mood feeds readiness and recovery, and the export has always carried it.
+                session.mood?.let { mood ->
+                    moodDao.insert(
+                        MoodEntry(
+                            sessionId = sessionId,
+                            dayKey = dayKey,
+                            mood = mood,
+                            recordedAt = finishedAt
+                        )
+                    )
+                }
+
+                insertExercises(session, sessionId, finishedAt, matchCache, syntheticCache, matchedNames, unmatchedNames)
+                    .let { counts -> exerciseCount += counts.first; setCount += counts.second }
+                importedSessions++
+            }
+
+            insertExtras(extras)
+        }
+
+        // Everything in the file was already present — say so distinctly, not "imported 0".
+        if (importedSessions == 0 && corrected == 0 && extrasWritten.none) return ImportResult.NothingToImport
+
+        return ImportResult.Success(
+            source = source,
+            sessions = importedSessions,
+            exercises = exerciseCount,
+            sets = setCount,
+            matchedExercises = matchedNames.size,
+            unmatchedExercises = unmatchedNames.size,
+            skippedRows = skippedRows,
+            duplicatesSkipped = duplicates,
+            workoutsCorrected = corrected,
+            phantomWorkoutsRemoved = extrasWritten.phantomsRemoved,
+            cardioEntries = extrasWritten.cardio,
+            coachGoals = extrasWritten.goals,
+            bodyweightEntries = extrasWritten.bodyweight
+        )
+    }
+
+    /**
+     * Writes the non-workout rows an Avex export carries, skipping ones already present so a repeat
+     * import doesn't double them the way a repeat session import doesn't. Returns (cardio, goals).
+     */
+    private suspend fun insertExtras(extras: ImportedExtras): ExtrasWritten {
+        if (extras.isEmpty) return ExtrasWritten()
+        var cardioWritten = 0
+        var goalsWritten = 0
+        var weighInsWritten = 0
+        var phantomsRemoved = 0
+        db.withTransaction {
+            // Counted like workouts: a stored entry stands in for exactly one incoming entry, so
+            // two identical runs in one file both land, and a re-import adds neither.
+            val claimedCardio = HashSet<Long>()
+            val claimedPhantoms = HashSet<Long>()
+            for (c in extras.cardio) {
+                // The same row as an earlier build stored it: a lifting session of one timed hold.
+                // This read is the correct one, so that session goes (see [phantomSessionFor]).
+                phantomSessionFor(c, claimedPhantoms)?.let { sessionId ->
+                    claimedPhantoms += sessionId
+                    sessionDao.get(sessionId)?.let { sessionDao.delete(it) }
+                    phantomsRemoved++
+                }
+                val stored = cardioDao.idsLike(c.dateMs, c.type, c.durationMin, c.distanceKm)
+                    .firstOrNull { it !in claimedCardio }
+                if (stored != null) {
+                    claimedCardio += stored
+                    continue
+                }
+                claimedCardio += cardioDao.insert(
+                    CardioEntry(
+                        date = c.dateMs,
+                        type = c.type,
+                        durationMin = c.durationMin,
+                        distanceKm = c.distanceKm,
+                        effort = c.effort,
+                        restReason = c.restReason,
+                        note = c.note,
+                        inclinePct = c.inclinePct,
+                        laps = c.laps,
+                        elevationM = c.elevationM,
+                        intervalCount = c.intervalCount,
+                        hrZone = c.hrZone,
+                        conditions = c.conditions
+                    )
+                )
+                cardioWritten++
+            }
+            for (g in extras.coachGoals) {
+                if (coachGoalDao.existsLike(g.kind, g.targetKey, g.createdAt)) continue
+                coachGoalDao.insert(
+                    CoachGoal(
+                        kind = g.kind,
+                        targetKey = g.targetKey,
+                        targetValue = g.targetValue,
+                        priority = g.priority,
+                        createdAt = g.createdAt,
+                        completedAt = g.completedAt,
+                        archivedAt = g.archivedAt,
+                        source = g.source,
+                        note = g.note
+                    )
+                )
+                goalsWritten++
+            }
+            for (b in extras.bodyweight) {
+                // An import MERGES; it never overwrites. The DAO's REPLACE upsert would silently
+                // replace a weigh-in the user has since corrected on this device.
+                if (bodyweightDao.byDateKey(b.dateKey) != null) continue
+                bodyweightDao.upsert(
+                    BodyweightEntry(
+                        dateKey = b.dateKey,
+                        weightLb = b.weightLb,
+                        recordedAt = dateKeyToMillis(b.dateKey)
+                    )
+                )
+                weighInsWritten++
+            }
+        }
+        return ExtrasWritten(cardioWritten, goalsWritten, weighInsWritten, phantomsRemoved)
+    }
+
+    /** What [insertExtras] actually wrote. */
+    private data class ExtrasWritten(
+        val cardio: Int = 0,
+        val goals: Int = 0,
+        val bodyweight: Int = 0,
+        val phantomsRemoved: Int = 0
+    ) {
+        val none: Boolean get() = cardio == 0 && goals == 0 && bodyweight == 0 && phantomsRemoved == 0
+    }
+
+    /**
+     * The stored session an earlier build made out of [cardio]'s row, or null.
+     *
+     * Before the cardio fix, Strong and Hevy runs, rides and rows came in as a lifting session of
+     * one weightless timed hold, and a workout that was only cardio produced nothing else. The
+     * repair in [WorkoutIdentity.repairs] only reaches workouts the file still has sets for, so
+     * these stayed in the history as finished strength sessions (inflating workout counts, streaks
+     * and trophies) beside the real cardio entry a re-import now adds.
+     *
+     * Deliberately narrow, since it deletes: an imported freestyle session with no note or tags, at
+     * this row's start slot (or a zone offset from it), holding one exercise whose every set is a
+     * weightless hold, named as this activity, lasting this long to within a minute. A plank never
+     * names an activity, and nothing the user wrote is on the row.
+     */
+    private suspend fun phantomSessionFor(cardio: ImportedCardio, claimed: Set<Long>): Long? {
+        val windowEndMs = cardio.dateMs + MAX_START_NUDGES * 1000L
+        val refs = sessionDao.startRefsInRange(cardio.dateMs, windowEndMs) + zoneShiftedRefs(cardio.dateMs, windowEndMs)
+        return refs.firstOrNull { it.id !in claimed && isPhantomOf(it.id, cardio) }?.id
+    }
+
+    private suspend fun isPhantomOf(sessionId: Long, cardio: ImportedCardio): Boolean {
+        val session = sessionDao.get(sessionId) ?: return false
+        if (session.dayKey != Program.FREESTYLE_DAY_KEY || session.finishedAt == null) return false
+        if (session.journal.isNotBlank() || session.tags.isNotBlank()) return false
+        val exercise = loggedExerciseDao.forSession(sessionId).filterNot { it.skipped }.singleOrNull() ?: return false
+        if (!exercise.note.isNullOrBlank()) return false
+        val sets = loggedSetDao.allForSession(sessionId)
+        if (sets.isEmpty() || sets.any { it.durationSeconds == null || (it.weightLb ?: 0.0) > 0.0 }) return false
+        val name = exercise.swappedName ?: Program.exerciseDisplayName(exercise.exerciseId, null)
+        if ((ImportParsing.cardioTypeFor(name) ?: "other") != cardio.type) return false
+        return kotlin.math.abs(sets.sumOf { it.durationSeconds ?: 0 } - cardio.durationMin * 60) <= 60
+    }
+
+    /** Local midnight of a `yyyy-MM-dd` key — the entry's own date is authoritative, and `date_key`
+     *  is what the unique index and every read are keyed on. */
+    private fun dateKeyToMillis(dateKey: String): Long = runCatching {
+        java.time.LocalDate.parse(dateKey)
+            .atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+    }.getOrDefault(clock.nowMs())
+
+    /** Canonical lb weight string (weightText is always stored in lb); "BW" for a bodyweight set. */
+    private fun weightText(weightLb: Double?): String {
+        if (weightLb == null || weightLb <= 0.0) return "BW"
+        // Same bare-number formatting the log/edit fields use, so imported sets read identically.
+        return com.forge.app.domain.units.weightInputValue(weightLb, useKg = false)
+    }
+
+    /** The export writes `EffortRating.name`; older/other files may carry the storage code. Accept
+     *  either, and ignore anything else rather than failing the row. */
+    private fun effortRating(raw: String?): com.forge.app.data.db.types.EffortRating? {
+        val v = raw?.trim().orEmpty()
+        if (v.isBlank()) return null
+        return com.forge.app.data.db.types.EffortRating.entries
+            .firstOrNull { it.name.equals(v, ignoreCase = true) || it.code.equals(v, ignoreCase = true) }
+    }
+
+    /** What the insert would store for a session's end time and active duration, at [startedAt]. */
+    private data class ImportTiming(val finishedAtMs: Long, val activeSeconds: Int)
+
+    /**
+     * Three separate facts, and conflating them rewrote real training history.
+     *
+     * `finishedAt` is when the workout ENDED — kept verbatim from the source. A session started
+     * Friday evening and resumed Sunday morning legitimately spans two days. `activeSeconds` is
+     * time actually spent training, which the app stores separately for exactly that reason.
+     * Deriving one from the other and then clamping the result to 6 h turned that 70-minute
+     * session into a claimed six-hour one, and clamped a 45-second finisher UP to a minute. Only a
+     * SYNTHESISED duration — for a source that records no end time at all — is clamped, and only
+     * into a plausible session length.
+     */
+    private fun timingFor(session: ImportedSession, totalSets: Int, startedAt: Long): ImportTiming {
+        val sourceActive = session.activeSeconds?.takeIf { it > 0 }
+        val sourceFinished = session.finishedAtMs?.takeIf { it > startedAt }
+        val synthesisedSec = (sourceActive ?: (totalSets * SECONDS_PER_SET))
+            .coerceIn(60, MAX_SYNTHESISED_ACTIVE_SEC)
+        val finishedAt = sourceFinished ?: (startedAt + synthesisedSec * 1000L)
+        val activeSec = sourceActive
+            ?: if (sourceFinished != null) {
+                // A real start/end pair from another app is the best estimate available; bound it
+                // only against nonsense, not down to a "plausible" session length.
+                // Clamped as a Long first: toInt() of a delta past ~68 years wraps, and could
+                // wrap into range as a plausible-looking wrong number.
+                ((finishedAt - startedAt) / 1000L).coerceIn(0L, MAX_WALL_CLOCK_ACTIVE_SEC.toLong()).toInt()
+            } else {
+                synthesisedSec
+            }
+        return ImportTiming(finishedAt, activeSec)
+    }
+
+    /**
+     * The incoming workout as the duplicate guard sees it: see [WorkoutIdentity].
+     *
+     * A movement's keys are every id and name it could have been stored under: the id pinned by the
+     * source, the id the matcher resolves today, the synthetic id an unmatched name folds to, and the
+     * source's own name. An update that WIDENS what the matcher resolves therefore still recognises
+     * the rows an earlier import wrote. One that NARROWS it (a name now unmatched, or matched to a
+     * different id) would not, so the id the earlier matcher resolved ([ExerciseNameMatcher.legacyMatch])
+     * is a key too: without it every past workout holding such a lift was inserted a second time.
+     */
+    private fun incomingIdentityOf(
+        session: ImportedSession,
+        matchCache: HashMap<String, String?>,
+        legacyMatchCache: HashMap<String, String?>
+    ) =
+        WorkoutIdentity(
+            session.exercises.mapIndexed { position, ex ->
+                val matched = matchCache.getOrPut(ex.name) { ExerciseNameMatcher.match(ex.name) }
+                val legacyMatched = legacyMatchCache.getOrPut(ex.name) { ExerciseNameMatcher.legacyMatch(ex.name) }
+                ExerciseIdentity(
+                    orderIndex = ex.orderIndex ?: position,
+                    keys = ExerciseIdentity.keysOf(
+                        ids = listOf(
+                            ex.catalogueId, ex.sourceExerciseId, matched, legacyMatched,
+                            syntheticId(ex.name), legacySyntheticId(ex.name)
+                        ),
+                        names = listOf(ex.name, ex.swappedName)
+                    ),
+                    sets = if (ex.skipped) emptyList() else ex.sets.map { s ->
+                        SetIdentity.of(s.reps, s.weightLb, s.durationSeconds, s.rpe, s.isWarmup || s.setType == "warmup")
+                    }
+                )
+            }
+        )
+
+    /**
+     * Write [session]'s exercises and sets under [sessionId]; returns (exercises with sets, sets).
+     * [carriedNotes] keeps the exercise notes of a copy being corrected in place, by stored id.
+     */
+    private suspend fun insertExercises(
+        session: ImportedSession,
+        sessionId: Long,
+        finishedAt: Long,
+        matchCache: HashMap<String, String?>,
+        syntheticCache: HashMap<String, String>,
+        matchedNames: HashSet<String>,
+        unmatchedNames: HashSet<String>,
+        carriedNotes: Map<String, String> = emptyMap()
+    ): Pair<Int, Int> {
+        var exercises = 0
+        var sets = 0
+        session.exercises.forEachIndexed { orderIndex, ex ->
+            // A source that already knows the catalogue id (our own JSON export) pins it
+            // directly; everything else resolves by name (memoised across sessions).
+            val matchedId = ex.catalogueId ?: matchCache.getOrPut(ex.name) { ExerciseNameMatcher.match(ex.name) }
+            if (matchedId != null) matchedNames.add(ex.name.lowercase())
+            else unmatchedNames.add(ex.name.lowercase())
+
+            val loggedExerciseId = loggedExerciseDao.insert(
+                LoggedExercise(
+                    sessionId = sessionId,
+                    // Matched → canonical catalogue id (stats attribute correctly). Unmatched →
+                    // a stable synthetic id keyed on the name, kept readable via swappedName.
+                    exerciseId = matchedId ?: syntheticCache.getOrPut(ex.name) { storedSyntheticId(ex.name) },
+                    orderIndex = ex.orderIndex ?: orderIndex,
+                    // Names are already capped by ImportBounds; capped again at the write so no
+                    // path into this row can store a label larger than a CursorWindow.
+                    swappedName = ImportBounds.shortText(if (matchedId == null) ex.name else ex.swappedName),
+                    difficulty = effortRating(ex.difficulty),
+                    skipped = ex.skipped,
+                    note = ImportBounds.longText(
+                        ex.note ?: carriedNotes[matchedId ?: syntheticCache[ex.name]]
+                            ?: carriedNotes["name:" + ex.name.trim().lowercase()]
+                    ),
+                    // Our own export carries these; without them every imported PR read 0
+                    // in recent PRs, trophies and milestones while the session said N.
+                    wasPr = ex.wasPr,
+                    hitFullTarget = ex.hitFullTarget,
+                    supersetGroup = ex.supersetGroup
+                )
+            )
+            // One bulk insert per exercise instead of a DB round-trip per set — a multi-year
+            // export can carry thousands of sets.
+            loggedSetDao.insertAll(
+                ex.sets.mapIndexed { setIndex, s ->
+                    // The logging path's clamps (sanitizeWeightLb / sanitizeReps), which this write
+                    // used to bypass. ImportBounds.apply has normally done this already; it is
+                    // idempotent, and this is the boundary the row actually crosses.
+                    val safeLb = ImportBounds.weightLb(s.weightLb)
+                    LoggedSet(
+                        loggedExerciseId = loggedExerciseId,
+                        setIndex = setIndex,
+                        // The source's own text when it has one (our JSON export does), so
+                        // "2 plates" survives the round trip instead of coming back "135". A
+                        // clamped weight takes its text with it, as on the logging path.
+                        weightText = (if (safeLb == s.weightLb) ImportBounds.shortText(s.weightText) else null)
+                            ?: weightText(safeLb),
+                        weightLb = safeLb,
+                        reps = ImportBounds.reps(s.reps),
+                        // The source's own per-set instant when it has one; otherwise the
+                        // session's finish, as before. Stamping every set of a two-hour
+                        // workout at the same millisecond loses the within-session ordering
+                        // that the set detail and HR overlay read.
+                        completedAt = s.completedAtMs ?: finishedAt,
+                        rpe = s.rpe,
+                        // Carried through rather than left at the entity defaults: a timed
+                        // hold whose durationSeconds went missing reads as a rep set, and an
+                        // assisted set that came back as unassisted becomes PR-eligible.
+                        durationSeconds = s.durationSeconds,
+                        isAssisted = s.isAssisted,
+                        isAmrap = s.isAmrap,
+                        toFailure = s.toFailure,
+                        setType = s.setType ?: if (s.isWarmup) "warmup" else null,
+                        difficultyTag = s.difficultyTag,
+                        dropAnnotation = s.dropAnnotation
+                    )
+                }
+            )
+            if (ex.sets.isNotEmpty()) exercises++
+            sets += ex.sets.size
+        }
+        return exercises to sets
+    }
+
+    /**
+     * Stored starts a zone offset away from [startMs]: within [ZONE_SHIFT_MS] either side, outside the
+     * workout's own slots [startMs, windowEndMs), and on one of those slots shifted by whole quarter
+     * hours. Nearest first.
+     */
+    private suspend fun zoneShiftedRefs(startMs: Long, windowEndMs: Long) =
+        sessionDao.startRefsInRange(startMs - ZONE_SHIFT_MS, windowEndMs + ZONE_SHIFT_MS)
+            .filter { it.startedAt < startMs || it.startedAt >= windowEndMs }
+            .filter { Math.floorMod(it.startedAt - startMs, QUARTER_HOUR_MS) < MAX_START_NUDGES * 1000L }
+            .sortedBy { kotlin.math.abs(it.startedAt - startMs) }
+
+    /** [incomingIdentityOf] for a session already in the database. Null when the row has gone. */
+    private suspend fun storedIdentityOf(sessionId: Long): WorkoutIdentity? {
+        sessionDao.get(sessionId) ?: return null
+        val setsByExercise = loggedSetDao.allForSession(sessionId).groupBy { it.loggedExerciseId }
+        return WorkoutIdentity(
+            loggedExerciseDao.forSession(sessionId).map { le ->
+                ExerciseIdentity(
+                    orderIndex = le.orderIndex,
+                    keys = ExerciseIdentity.keysOf(
+                        ids = listOf(le.exerciseId),
+                        names = listOf(le.swappedName, Program.exerciseDisplayName(le.exerciseId, null))
+                    ),
+                    sets = if (le.skipped) emptyList()
+                    else setsByExercise[le.id].orEmpty().sortedBy { it.setIndex }.map { s ->
+                        SetIdentity.of(s.reps, s.weightLb, s.durationSeconds, s.rpe, s.setType == "warmup")
+                    }
+                )
+            }
+        )
+    }
+
+    /**
+     * The id for rows of an unmatched [name]: [syntheticId], unless earlier imports already stored
+     * this exact name under its [legacySyntheticId]. Those rows keep their id, so an old import and
+     * a new one of the same long name stay one movement in stats, PRs and prefill.
+     */
+    private suspend fun storedSyntheticId(name: String): String {
+        val id = syntheticId(name)
+        val legacy = legacySyntheticId(name)
+        return if (legacy != id && loggedExerciseDao.hasEntryNamed(legacy, name)) legacy else id
+    }
+
+    private fun syntheticId(name: String): String = syntheticIdOf(name)
+
+    private fun legacySyntheticId(name: String): String = "ext-" + slugOf(name).take(SYNTHETIC_SLUG_MAX).ifBlank { "exercise" }
+
+
+
+    /** Outcome of a bounded file read — separates "too big" from "couldn't read" without a sentinel. */
+    private sealed interface Read {
+        data class Ok(val text: String) : Read
+        data object TooLarge : Read
+        data object Error : Read
+    }
+
+    /**
+     * The leading [maxBytes] of a URI, decoded with the same charset sniff as [readBounded]. Used by
+     * the folder scan to decide whether a file is worth reading in full. Null on any read failure.
+     */
+    private fun readPrefix(uri: Uri, maxBytes: Int): String? = runCatching {
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            val out = java.io.ByteArrayOutputStream(minOf(maxBytes, READ_CHUNK_BYTES))
+            val chunk = ByteArray(READ_CHUNK_BYTES)
+            while (out.size() < maxBytes) {
+                val n = input.read(chunk, 0, minOf(chunk.size, maxBytes - out.size()))
+                if (n < 0) break
+                out.write(chunk, 0, n)
+            }
+            decode(out.toByteArray())
+        }
+    }.getOrNull()
+
+    /**
+     * Decode file bytes, honouring a byte-order mark instead of assuming UTF-8.
+     *
+     * Excel's "Unicode Text (*.txt)" and several Windows companion tools write UTF-16LE. Read as
+     * UTF-8 those bytes become replacement characters interleaved with NULs, so every `canParse`
+     * failed and the user was told their own export "isn't a recognised gym-app export". The BOM is
+     * consumed as part of the decode — `CsvParser` strips a UTF-8 one too, but that happens after
+     * decoding and so could never have helped a UTF-16 file.
+     */
+    private fun decode(bytes: ByteArray): String = when {
+        bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte() ->
+            String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
+        bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte() ->
+            String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE)
+        bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte() ->
+            String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
+        else -> String(bytes, Charsets.UTF_8)
+    }
+
+    /** Read a URI's text, capped at [MAX_IMPORT_BYTES]; [Read.TooLarge] past the cap, [Read.Error] on I/O failure. */
+    private fun readBounded(uri: Uri): Read = runCatching {
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            // Grow a buffer as we read instead of pre-allocating the 25 MB ceiling for every file —
+            // exports are almost always tiny, and a folder scan reads dozens of them.
+            val out = java.io.ByteArrayOutputStream(READ_CHUNK_BYTES)
+            val chunk = ByteArray(READ_CHUNK_BYTES)
+            while (true) {
+                val n = input.read(chunk)
+                if (n < 0) break
+                if (out.size() + n > MAX_IMPORT_BYTES) return@use Read.TooLarge
+                out.write(chunk, 0, n)
+            }
+            Read.Ok(decode(out.toByteArray()))
+        } ?: Read.Error
+    }.getOrDefault(Read.Error)
+
+    companion object {
+        /**
+         * A stable id for an exercise name the catalogue does not know.
+         *
+         * The slug used to be cut at 40 characters, so "Incline Dumbbell Bench Press (Neutral Grip)"
+         * and "Incline Dumbbell Bench Press (Neutral Grip, Paused)" were one id, and their PRs, prefill
+         * and charts merged. A slug that has to be cut now carries a short digest of the whole name,
+         * as the custom-exercise ids do. Names that fit keep exactly the id they always had.
+         */
+        internal fun syntheticIdOf(name: String): String {
+            val slug = slugOf(name)
+            if (slug.length <= SYNTHETIC_SLUG_MAX) return "ext-" + slug.ifBlank { "exercise" }
+            return "ext-" + slug.take(SYNTHETIC_SLUG_MAX).trimEnd('-') + "-" + digestOf(name.trim().lowercase())
+        }
+
+        private fun slugOf(name: String): String = name.trim().lowercase()
+            .map { if (it.isLetterOrDigit()) it else '-' }
+            .joinToString("")
+            .trim('-')
+            .replace(Regex("-+"), "-")
+
+        /** FNV-1a, eight hex digits: stable across runs and devices, unlike String.hashCode's contract. */
+        private fun digestOf(s: String): String {
+            var h = 0x811C9DC5.toInt()
+            for (c in s) {
+                h = h xor c.code
+                h *= 0x01000193
+            }
+            return String.format(java.util.Locale.US, "%08x", h)
+        }
+
+        private const val SYNTHETIC_SLUG_MAX = 40
+
+        /** Nominal per-set time when the source records no duration, so the session reads as finished. */
+        private const val SECONDS_PER_SET = 150
+        /** Ceiling for a duration we INVENTED (a date-only source with no end time) — a made-up
+         *  figure shouldn't claim a marathon session. Never applied to a source's own numbers. */
+        private const val MAX_SYNTHESISED_ACTIVE_SEC = 6 * 3600
+        /** Sanity bound on a wall-clock delta from a source that gives real start and end times.
+         *  Wide on purpose: clamping this to 6 h is what rewrote resumed sessions. */
+        private const val MAX_WALL_CLOCK_ACTIVE_SEC = 24 * 3600
+        private const val MAX_IMPORT_BYTES = 25 * 1024 * 1024 // 25 MB — generous for a text export
+        private const val READ_CHUNK_BYTES = 64 * 1024 // grow the read buffer in 64 KB chunks
+        /** File extensions worth sniffing during a folder scan. */
+        private val IMPORTABLE_EXTENSIONS = listOf(".csv", ".json", ".txt")
+        /** Cap folder-scan work; Downloads can be large and we only need the recent exports. */
+        private const val MAX_SCAN_FILES = 60
+        /** Folder levels searched below a scanned folder: `Download/Avex/Strong/2026` is depth 2. */
+        private const val MAX_SCAN_DEPTH = 2
+        /** Folders visited per scan at most, across every level. */
+        private const val MAX_SCAN_DIRS = 40
+        /** The grantable folder Avex makes inside Downloads; see [ensureInboxFolder]. */
+        const val INBOX_FOLDER = "Avex"
+        private const val INBOX_NOTE_NAME = "About this folder.txt"
+        private const val INBOX_NOTE =
+            "Save workout exports (Strong, Hevy, FitNotes, CSV) and Avex backups in this folder.\n" +
+                "Avex lists them when you open Import. Subfolders are checked too.\n"
+        /** Highest `exportVersion` this build knows how to read. Bump it with the export format. */
+        private const val SUPPORTED_EXPORT_VERSION = 1
+        /** How much of a file the folder scan reads to decide what it is. Every importer detects
+         *  from a header line or one key near the front, so this is generous. */
+        private const val SNIFF_BYTES = 64 * 1024
+        /** How far the start-instant nudge may walk before giving up and letting the collision stand.
+         *  Nobody logs 60 distinct workouts at one midnight; this only bounds a pathological file. */
+        private const val MAX_START_NUDGES = 60
+
+        /** The widest gap between two zones' offsets the zone-shift search covers. */
+        private const val ZONE_SHIFT_MS = 14L * 60 * 60 * 1000
+
+        private const val QUARTER_HOUR_MS = 15L * 60 * 1000
+    }
+}
+
+/**
+ * Files under [root], down to [maxDepth] folders deep. Hidden folders (`.thumbnails`,
+ * `.trashed-…`) are skipped, and the walk stops after [maxDirs] folders so a tree with thousands
+ * of them cannot stall the Import screen.
+ */
+internal fun listFilesDeep(root: DocumentFile, maxDepth: Int, maxDirs: Int): List<DocumentFile> {
+    val out = ArrayList<DocumentFile>()
+    var level = listOf(root)
+    var visited = 0
+    for (depth in 0..maxDepth) {
+        val nextLevel = ArrayList<DocumentFile>()
+        for (dir in level) {
+            if (visited++ >= maxDirs) return out
+            val children = runCatching { dir.listFiles() }.getOrDefault(emptyArray())
+            for (child in children) {
+                when {
+                    child.isFile -> out += child
+                    child.isDirectory && child.name?.startsWith(".") == false -> nextLevel += child
+                }
+            }
+        }
+        level = nextLevel
+    }
+    return out
+}
+
+/** The backup ZIP's first entry; mirrors BackupRepository's ZIP_DB_ENTRY. */
+private const val BACKUP_DB_ENTRY = "database.db"
+
+/**
+ * What a file's first bytes say about it as an Avex backup: true for a password-protected one,
+ * false for a plain one (a ZIP whose first entry is `database.db`), null for anything else.
+ */
+internal fun backupHeadKind(head: ByteArray): Boolean? {
+    if (com.forge.app.core.crypto.BackupCrypto.hasMagic(head)) return true
+    if (head.size < 30 || head[0] != 0x50.toByte() || head[1] != 0x4B.toByte() ||
+        head[2] != 0x03.toByte() || head[3] != 0x04.toByte()
+    ) return null
+    val nameLen = (head[26].toInt() and 0xFF) or ((head[27].toInt() and 0xFF) shl 8)
+    if (nameLen != BACKUP_DB_ENTRY.length || head.size < 30 + nameLen) return null
+    return if (String(head, 30, nameLen, Charsets.US_ASCII) == BACKUP_DB_ENTRY) false else null
+}
+
+/** What one folder scan found: exports to import and Avex backups to restore. */
+data class FolderScan(val imports: List<FoundImport>, val backups: List<FoundBackup>)
+
+/** An Avex backup found by [WorkoutImportRepository.scanFolders], ready to restore with one tap. */
+data class FoundBackup(val uri: Uri, val name: String, val lastModified: Long, val passwordProtected: Boolean)
+
+/** A gym-app export found by [WorkoutImportRepository.scanFolders], ready to import with one tap. */
+data class FoundImport(
+    val uri: Uri,
+    val name: String,
+    val source: ImportSource,
+    val sessionCount: Int,
+    val lastModified: Long,
+    /** Cardio entries the file carries (Avex JSON export). */
+    val cardioCount: Int = 0,
+    /** Coach goals the file carries (Avex JSON export). */
+    val coachGoalCount: Int = 0,
+    /** Weigh-ins the file carries (Avex JSON export, or an Avex bodyweight CSV). */
+    val bodyweightCount: Int = 0
+)
+
+/**
+ * What a found file is, in one line: what it holds, not just how many workouts (L-01).
+ *
+ * A file with no workouts is a real import — a bodyweight CSV has nothing else in it — and the row
+ * used to be unable to say so, because the scanner had only a workout count to describe it with.
+ * Everything the file actually carries is named, in the same order the result summary uses, and a
+ * file with nothing countable still names its source rather than claiming "0 workouts".
+ */
+fun foundImportSummary(found: FoundImport): String {
+    fun plural(n: Int, one: String, many: String) = "$n ${if (n == 1) one else many}"
+    val parts = buildList {
+        if (found.sessionCount > 0) add(plural(found.sessionCount, "workout", "workouts"))
+        if (found.cardioCount > 0) add(plural(found.cardioCount, "cardio entry", "cardio entries"))
+        if (found.bodyweightCount > 0) add(plural(found.bodyweightCount, "weigh-in", "weigh-ins"))
+        if (found.coachGoalCount > 0) add(plural(found.coachGoalCount, "goal", "goals"))
+    }
+    return if (parts.isEmpty()) found.source.displayName
+    else "${found.source.displayName} · ${parts.joinToString(" · ")}"
+}

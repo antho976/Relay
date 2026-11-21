@@ -1,0 +1,39 @@
+.codegraph/
+.codegraph
+
+# Track .claude project config (DESIGN.md, skills, docs) in git so it moves
+# between machines, but never the ephemeral agent worktrees or the runtime lock.
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+.relay/
+
+# Machine-local state and generated Android release output.
+.env
+.idea/
+**/.kotlin/
+forge-android/app/release/
+
+# Machine-local SDK path. The tree-root copy exists for the ADE's preflight;
+# forge-android/local.properties is what gradle itself reads.
+local.properties
+
+# Secrets. Tracked as an empty file until 2026-08-25, which meant one `git add -A`
+# at the repo root would have committed whatever was in it. Untracked now; the
+# file itself stays on disk. Nothing was ever leaked: no commit in history
+# contains a key, checked with `git log --all -S'sk_' -- .env`.
+.env
+.env.*
+!.env.example
+__pycache__/
+
+# Point-in-time snapshots of files that git already has. `.design-backups/` and
+# `backups/profile-ui-2026-07-03/` were copies made before two redesigns; `.impeccable/` is one
+# review run's screenshots, logs and per-surface notes. 2.7 MB that every clone pays for, that no
+# build reads, and that a `grep` for a symbol answers from twice — once from the live file and once
+# from a stale copy of it. The history has the originals; keep them there.
+/.design-backups/
+/backups/
+/.impeccable/
+
+# A 1.7 MB before/after render that was committed at the repo root and referenced by nothing.
+/forge-before-after.mp4

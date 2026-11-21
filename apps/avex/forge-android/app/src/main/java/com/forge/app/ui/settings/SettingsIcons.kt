@@ -1,0 +1,241 @@
+package com.forge.app.ui.settings
+
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.vector.ImageVector
+import com.forge.app.ui.common.circle
+import com.forge.app.ui.common.fillPath
+import com.forge.app.ui.common.icon
+import com.forge.app.ui.common.roundRect
+import com.forge.app.ui.common.strokePath
+
+/**
+ * Small leading glyphs for the settings nav rows — the SAME matched family and single visual weight
+ * as [com.forge.app.ui.nav.NavIcons] (24dp viewport, filled silhouettes + the odd stroked line),
+ * rendered muted through `Icon(tint = ...)` so they read as quiet wayfinding, not decoration. Drawn
+ * in-house for the same reason the bottom bar is: Material's stock set looks generic and off-family.
+ * The Coach row reuses `NavIcons.Coach` directly, so Settings and the hub speak one glyph.
+ */
+object SettingsIcons {
+
+    /** Appearance — a half-toned disc (light/dark theme): outline ring + a filled right half. */
+    val Appearance: ImageVector by lazy {
+        icon("SetAppearance") {
+            strokePath(1.7f) { circle(12f, 12f, 8.2f) }
+            fillPath {
+                moveTo(12f, 3.8f)
+                arcToRelative(8.2f, 8.2f, 0f, false, true, 0f, 16.4f)
+                close()
+            }
+        }
+    }
+
+    /** Units & format — a ruler: a rounded bar with three descending tick marks. */
+    val Units: ImageVector by lazy {
+        icon("SetUnits") {
+            strokePath(1.7f) {
+                roundRect(3.3f, 8.8f, 20.7f, 15.2f, 2f)
+                moveTo(8f, 8.8f); lineTo(8f, 12f)
+                moveTo(12f, 8.8f); lineTo(12f, 12.8f)
+                moveTo(16f, 8.8f); lineTo(16f, 12f)
+            }
+        }
+    }
+
+    /** Notifications — a bell: filled body with a top knob and a clapper bump fused to the rim
+     *  (a detached clapper dot reads as scuffed at this size). */
+    val Notifications: ImageVector by lazy {
+        icon("SetNotifications") {
+            fillPath { circle(12f, 3.7f, 1.1f) }   // knob
+            fillPath {
+                moveTo(12f, 5f)
+                curveTo(8.6f, 5f, 7.6f, 7.6f, 7.6f, 11.2f)
+                curveTo(7.6f, 14.4f, 6.6f, 15.9f, 5.8f, 16.8f)
+                lineTo(18.2f, 16.8f)
+                curveTo(17.4f, 15.9f, 16.4f, 14.4f, 16.4f, 11.2f)
+                curveTo(16.4f, 7.6f, 15.4f, 5f, 12f, 5f)
+                close()
+            }
+            fillPath {
+                moveTo(10.3f, 16.8f)
+                curveTo(10.3f, 18.8f, 13.7f, 18.8f, 13.7f, 16.8f)
+                close()
+            }
+        }
+    }
+
+    /** Security — a padlock: a stroked shackle rising out of a filled body with a subtracted keyhole. */
+    val Security: ImageVector by lazy {
+        icon("SetSecurity") {
+            // shackle — an inverted U rising out of the lock body
+            strokePath(1.8f) {
+                moveTo(8.2f, 10.6f)
+                lineTo(8.2f, 8.2f)
+                arcToRelative(3.8f, 3.8f, 0f, false, true, 7.6f, 0f)
+                lineTo(15.8f, 10.6f)
+            }
+            // body with a subtracted keyhole (circle + a short stem)
+            fillPath(PathFillType.EvenOdd) {
+                roundRect(5.4f, 10.4f, 18.6f, 20.4f, 2.4f)
+                circle(12f, 14.4f, 1.5f)
+                roundRect(11.35f, 14.4f, 12.65f, 17.6f, 0.6f)
+            }
+        }
+    }
+
+    /** Program & equipment — a clipboard plan: stroked board, filled clip tab, and three plan
+     *  lines (the third shorter, so it reads as a program being written, not a text block). */
+    val Program: ImageVector by lazy {
+        icon("SetProgram") {
+            strokePath(1.7f) { roundRect(5.2f, 4.6f, 18.8f, 20.2f, 2f) }
+            fillPath { roundRect(9.0f, 2.9f, 15.0f, 6.3f, 1.2f) }
+            strokePath(1.7f) {
+                moveTo(8.6f, 10.8f); lineTo(15.4f, 10.8f)
+                moveTo(8.6f, 14.2f); lineTo(15.4f, 14.2f)
+                moveTo(8.6f, 17.6f); lineTo(12.4f, 17.6f)
+            }
+        }
+    }
+
+    /** Session — a clock (rest timer / pacing): a face ring, a hub, and two hands. */
+    val Session: ImageVector by lazy {
+        icon("SetSession") {
+            strokePath(1.8f) { circle(12f, 12.4f, 7.7f) }
+            fillPath { circle(12f, 12.4f, 1.0f) }
+            strokePath(1.8f) {
+                moveTo(12f, 12.4f); lineTo(12f, 7.8f)     // long hand, up
+                moveTo(12f, 12.4f); lineTo(15.0f, 13.4f)  // short hand, ~4 o'clock
+            }
+        }
+    }
+
+    /** Exercise likes — a heart (clean symmetric bezier). */
+    val Likes: ImageVector by lazy {
+        icon("SetLikes") {
+            fillPath {
+                moveTo(12f, 20f)
+                curveTo(6.8f, 15.8f, 3.5f, 12.8f, 3.5f, 9.2f)
+                curveTo(3.5f, 6.9f, 5.4f, 5.2f, 7.6f, 5.2f)
+                curveTo(9.4f, 5.2f, 11.1f, 6.4f, 12f, 8f)
+                curveTo(12.9f, 6.4f, 14.6f, 5.2f, 16.4f, 5.2f)
+                curveTo(18.6f, 5.2f, 20.5f, 6.9f, 20.5f, 9.2f)
+                curveTo(20.5f, 12.8f, 17.2f, 15.8f, 12f, 20f)
+                close()
+            }
+        }
+    }
+
+    /** Wearable — a watch case, straps and crown in the matched settings stroke weight. */
+    val Wearable: ImageVector by lazy {
+        icon("SetWearable") {
+            strokePath(1.8f) {
+                roundRect(6.4f, 7.2f, 17.6f, 16.8f, 2.4f)
+                moveTo(9.2f, 7.2f)
+                lineTo(9.6f, 3.4f)
+                lineTo(14.4f, 3.4f)
+                lineTo(14.8f, 7.2f)
+                moveTo(9.2f, 16.8f)
+                lineTo(9.6f, 20.6f)
+                lineTo(14.4f, 20.6f)
+                lineTo(14.8f, 16.8f)
+            }
+            fillPath { roundRect(17.6f, 10.4f, 19.4f, 13.6f, 0.9f) }
+        }
+    }
+
+    /** Holiday / Vacation — a sun: a filled core with eight rays. */
+    val Holiday: ImageVector by lazy {
+        icon("SetHoliday") {
+            fillPath { circle(12f, 12f, 4f) }
+            strokePath(1.8f) {
+                moveTo(18f, 12f); lineTo(20.6f, 12f)
+                moveTo(6f, 12f); lineTo(3.4f, 12f)
+                moveTo(12f, 6f); lineTo(12f, 3.4f)
+                moveTo(12f, 18f); lineTo(12f, 20.6f)
+                moveTo(16.24f, 7.76f); lineTo(18.08f, 5.92f)
+                moveTo(7.76f, 16.24f); lineTo(5.92f, 18.08f)
+                moveTo(16.24f, 16.24f); lineTo(18.08f, 18.08f)
+                moveTo(7.76f, 7.76f); lineTo(5.92f, 5.92f)
+            }
+        }
+    }
+
+    /** Export data — an arrow saving down into an open tray. */
+    val Export: ImageVector by lazy {
+        icon("SetExport") {
+            strokePath(1.8f) {
+                moveTo(4.6f, 14f); lineTo(4.6f, 19f); lineTo(19.4f, 19f); lineTo(19.4f, 14f)
+                moveTo(12f, 4f); lineTo(12f, 14.6f)
+                moveTo(8f, 10.8f); lineTo(12f, 14.8f); lineTo(16f, 10.8f)
+            }
+        }
+    }
+
+    /** Import data — the mirror of [Export]: an arrow rising UP out of an open tray (data into the app). */
+    val Import: ImageVector by lazy {
+        icon("SetImport") {
+            strokePath(1.8f) {
+                moveTo(4.6f, 14f); lineTo(4.6f, 19f); lineTo(19.4f, 19f); lineTo(19.4f, 14f)
+                moveTo(12f, 15f); lineTo(12f, 4.4f)
+                moveTo(8f, 8.2f); lineTo(12f, 4.2f); lineTo(16f, 8.2f)
+            }
+        }
+    }
+
+    /** Storage — a database cylinder (top rim ellipse + sides + a mid band), the universal "on disk". */
+    val Storage: ImageVector by lazy {
+        icon("SetStorage") {
+            strokePath(1.7f) {
+                // top rim (a full ellipse from two half-arcs)
+                moveTo(4.8f, 6.4f)
+                arcToRelative(7.2f, 2.6f, 0f, false, true, 14.4f, 0f)
+                arcToRelative(7.2f, 2.6f, 0f, false, true, -14.4f, 0f)
+                // left/right sides down to the base + the bottom curve
+                moveTo(4.8f, 6.4f); lineTo(4.8f, 17.6f)
+                arcToRelative(7.2f, 2.6f, 0f, false, false, 14.4f, 0f)
+                lineTo(19.2f, 6.4f)
+                // the mid band that makes it read as a disk stack, not a plain tube
+                moveTo(4.8f, 12f)
+                arcToRelative(7.2f, 2.6f, 0f, false, false, 14.4f, 0f)
+            }
+        }
+    }
+
+    /** Backup — a cloud with a down-arrow (a saved, restorable copy). */
+    val Backup: ImageVector by lazy {
+        icon("SetBackup") {
+            strokePath(1.7f) {
+                // cloud outline
+                moveTo(7.4f, 16.2f)
+                curveTo(5.2f, 16.2f, 3.6f, 14.7f, 3.6f, 12.7f)
+                curveTo(3.6f, 10.9f, 5.0f, 9.4f, 6.8f, 9.2f)
+                curveTo(7.3f, 6.9f, 9.4f, 5.2f, 12f, 5.2f)
+                curveTo(14.9f, 5.2f, 17.2f, 7.4f, 17.4f, 10.2f)
+                curveTo(19.1f, 10.5f, 20.4f, 11.9f, 20.4f, 13.6f)
+                curveTo(20.4f, 15.0f, 19.4f, 16.2f, 17.4f, 16.2f)
+                // down-arrow through the cloud
+                moveTo(12f, 10.4f); lineTo(12f, 18.6f)
+                moveTo(9f, 15.6f); lineTo(12f, 18.6f); lineTo(15f, 15.6f)
+            }
+        }
+    }
+
+    /** What's new — a four-point sparkle (thin concave points) for release notes. */
+    val WhatsNew: ImageVector by lazy {
+        icon("SetWhatsNew") {
+            fillPath {
+                moveTo(12f, 3.5f)
+                lineTo(13.7f, 10.3f)
+                lineTo(20.5f, 12f)
+                lineTo(13.7f, 13.7f)
+                lineTo(12f, 20.5f)
+                lineTo(10.3f, 13.7f)
+                lineTo(3.5f, 12f)
+                lineTo(10.3f, 10.3f)
+                close()
+            }
+        }
+    }
+}
+
+// Vector-builder plumbing (icon/fillPath/strokePath/circle/roundRect) lives in VectorBuilders.kt,
+// shared with the other icon families; the glyphs above stay local so this family evolves on its own.

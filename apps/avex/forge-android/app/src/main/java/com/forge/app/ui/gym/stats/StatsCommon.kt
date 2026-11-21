@@ -1,0 +1,87 @@
+package com.forge.app.ui.gym.stats
+
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.unit.dp
+import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.statsEntrance
+
+/** Theme colors bundled so the per-tier section builders don't each take a fistful of color params. */
+data class StatsColors(
+    val onBg: Color,
+    val muted: Color,
+    val accent: Color,
+    val outline: Color
+)
+
+// ── One spacing/size scale so every tier lines up and nothing reads as "too big / too small" ──
+/**
+ * The screen's horizontal gutter — one place so every section lines up. 24dp, the app-wide page
+ * gutter Home, History and the session screen all sit on (it was 16, which made Stats alone read
+ * as pushed to the edges when you moved between them).
+ */
+internal val STATS_GUTTER = 24.dp
+/** The standard full-width chart height — used by every line/scatter/gauge so they're visually peers. */
+internal val STATS_CHART_H = 132.dp
+
+/**
+ * A chart's reading for a screen reader. A canvas has no text of its own, so without this TalkBack
+ * stepped over every chart in silence and read only the range labels beside it.
+ */
+internal fun Modifier.chartReadout(text: String): Modifier = clearAndSetSemantics { contentDescription = text }
+
+/**
+ * Open editorial section — content sits directly on the near-black page (no card shell, no
+ * background fill). Air + the small-caps [title] eyebrow (kept as a TalkBack heading) anchor the
+ * section (§1/§7 — the old hairline anchor was a §14 defect), then the optional [caption] and the
+ * body. Plays the one-shot staggered [statsEntrance] keyed by [index] so sections settle in on
+ * first open.
+ */
+@Composable
+internal fun StatsCard(
+    c: StatsColors,
+    modifier: Modifier = Modifier,
+    title: String? = null,
+    caption: String? = null,
+    index: Int = 0,
+    /** Makes the whole section tappable (content should carry its own "→" affordance). */
+    onClick: (() -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .statsEntrance(index)
+    ) {
+        // §7 air rhythm: the previous section's trailing 18dp + this 10dp ≈ the 28dp section gap.
+        Spacer(Modifier.height(14.dp))
+        Column(
+            Modifier
+                .padding(horizontal = STATS_GUTTER)
+                .then(if (onClick != null) Modifier.bounceClick { onClick() } else Modifier)
+        ) {
+            // The shared section anchor, so a Stats header is the same size as Home's THIS WEEK /
+            // RECENT rather than a smaller one-off (it was 11sp against Home's 15sp).
+            if (title != null) EditorialHeader(label = title, muted = c.muted, accent = c.accent)
+            if (caption != null) {
+                if (title != null) Spacer(Modifier.height(4.dp))
+                Text(caption, style = MaterialTheme.typography.bodySmall, color = c.muted.copy(alpha = 0.65f))
+            }
+            if (title != null || caption != null) Spacer(Modifier.height(14.dp))
+            content()
+            Spacer(Modifier.height(18.dp))
+        }
+    }
+}

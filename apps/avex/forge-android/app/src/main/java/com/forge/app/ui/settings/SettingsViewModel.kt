@@ -1,0 +1,1086 @@
+package com.forge.app.ui.settings
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.forge.app.data.importer.userMessage
+import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.BackupRepository.RestoreOutcome
+import com.forge.app.data.repo.ResetRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+data class SettingsUiState(
+    val amoledMode: Boolean = false,
+    /** Weight display unit (GYMAP-72) — lb | kg | st. */
+    val weightUnit: com.forge.app.domain.units.WeightUnit = com.forge.app.domain.units.WeightUnit.LB,
+    val useMiles: Boolean = false,
+    val useCm: Boolean = false,
+    val noteTemplates: Set<String> = setOf("form felt: ", "energy: ", "pain/discomfort: ", "focus cue: "),
+    val hiddenOverviewTiles: Set<String> = emptySet(),
+    val timeFormat24h: Boolean = false,
+    val firstDayMonday: Boolean = true,
+    val hapticStrength: String = "strong",
+    /** Hold the screen awake during an active session (GYMAP-74). Default on. */
+    val keepScreenOn: Boolean = true,
+    /** Default rest bases (seconds) per movement type — the Session-settings rest override. */
+    val restCompoundSeconds: Int = com.forge.app.program.SessionEstimate.COMPOUND_REST,
+    val restIsolationSeconds: Int = 90,
+    val quietHoursEnabled: Boolean = false,
+    val quietHoursSchedule: com.forge.app.domain.notify.QuietHoursSchedule =
+        com.forge.app.domain.notify.QuietHoursSchedule.default(),
+    /** Daily training reminder (engagement) — opt-in, default off. */
+    val trainingReminderEnabled: Boolean = false,
+    val trainingReminderHour: Int = 18,
+    /** Per-type notification opt-outs (N2) — both default on. */
+    val weeklyRecapEnabled: Boolean = true,
+    /** `NoticeKind.key`s switched OFF for the notifications feed; empty = every kind shows. */
+    val disabledNoticeKinds: Set<String> = emptySet(),
+    val restTimerAlertEnabled: Boolean = true,
+    val privacyMode: Boolean = false,
+    /** App lock (GYMAP-69): require a biometric / device-credential unlock to open the app. */
+    val appLockEnabled: Boolean = false,
+    /** Gallery lock (GYMAP-69): require an unlock to view the progress-photo gallery. */
+    val galleryLockEnabled: Boolean = false,
+    /** Background grace before the app re-locks, in seconds (0 = immediately). */
+    val appLockTimeoutSec: Int = 0,
+    val availableEquipment: Set<String> = emptySet(),
+    /** Curated/frozen exercise pool (Developer's preset); null = ordinary equipment filtering. */
+    val frozenExerciseIds: Set<String>? = null,
+    val plateWeightLb: Double = 15.0,
+    /** Heaviest dumbbell owned (lb); null = no ceiling (auto-coach Phase 0). */
+    val maxDbWeightLb: Double? = null,
+    val accentColorHex: String = "",
+    /** When false the accent is disabled app-wide — monochrome, neutral highlights. */
+    val accentEnabled: Boolean = true,
+    /** Selected launcher-icon enum name; "" = default emblem. Rings the current choice in the picker. */
+    val appIconKey: String = "",
+    /** Theme the cold-launch Avex intro to the chosen app icon (default off); off = plain B&W Avex. */
+    val themedLaunchIntro: Boolean = false,
+    /** Accent follows the launcher icon's colour (when the icon has one). */
+    val accentFromIcon: Boolean = false,
+    val timezone: String = java.util.TimeZone.getDefault().id,
+    /** IANA zone ids the user has starred — pinned to the top of the timezone picker. */
+    val favoriteTimezones: Set<String> = emptySet(),
+    val daysPerWeek: Int = 4,
+    /** Preferred minutes per session; null = no ceiling. Staged like the day count: used on the next generate. */
+    val sessionMinutes: Int? = null,
+    val liked: Set<String> = emptySet(),
+    val disliked: Set<String> = emptySet(),
+    /** User-created exercises (deduped by name), so they can be liked/disliked on the same screen. */
+    val customExercises: List<com.forge.app.data.repo.CustomExerciseRef> = emptyList(),
+    /** After a "Make default" swap, offer to dislike the swapped-out exercise (default on). */
+    val swapDislikePromptEnabled: Boolean = true,
+    val rotationCadence: String = "never",
+    val rotationEveryN: Int = 4,
+    val cardioWeeklyTargetMin: Int = 0,
+    val userGoal: String = "build_muscle",
+    /** User's sex ("male" | "female" | "") — selects the bodyweight-relative strength bands. */
+    val userSex: String = "",
+    val experience: String = "intermediate",
+    val problemAreas: Set<String> = emptySet(),
+    val priorityMuscles: Set<String> = emptySet(),
+    val pinnedExercises: Set<String> = emptySet(),
+    /** Coarse one-tap volume emphasis: "balanced" | "upper" | "legs" | "arms-shoulders". */
+    val programEmphasis: String = "balanced",
+    /** Coach mode (auto-coach Phase 4): "suggest" | "auto" (earned auto-apply). */
+    val coachMode: String = "suggest",
+    /** Advanced tracking: the Coach page shows its readings, not just its calls. */
+    val coachAdvanced: Boolean = false,
+    /** "Go with the flow": no fixed plan; the home leads with freestyle logging instead of day cards. */
+    val freestyleMode: Boolean = false,
+    /** Whether the Coach feature is surfaced (tab + banners). Off hides it until re-enabled. */
+    val coachEnabled: Boolean = true,
+    /** Current program's weekly sets per muscle (display name → sets), busiest first (Phase 6). */
+    val weeklyVolume: List<Pair<String, Int>> = emptyList()
+)
+
+@HiltViewModel
+class SettingsViewModel @Inject constructor(
+    private val settingsRepo: SettingsRepository,
+    private val appLockManager: com.forge.app.security.AppLockManager,
+    private val protectedSettings: com.forge.app.security.ProtectedSettingsActions,
+    private val resetRepo: ResetRepository,
+    private val backupRepo: com.forge.app.data.repo.BackupRepository,
+    private val storageRepo: com.forge.app.data.repo.StorageRepository,
+    private val importRepo: com.forge.app.data.importer.WorkoutImportRepository,
+    private val photoRepo: com.forge.app.data.repo.ProgressPhotoRepository,
+    private val pdfExport: com.forge.app.data.repo.PdfExportRepository,
+    private val programRepository: com.forge.app.data.repo.ProgramRepository,
+    private val programCustomizationRepo: com.forge.app.data.repo.ProgramCustomizationRepository,
+    private val vacationRepo: com.forge.app.data.repo.VacationRepository,
+    private val coachRepo: com.forge.app.data.repo.CoachRepository,
+    private val reminderScheduler: com.forge.app.service.ReminderScheduler,
+    private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard,
+    // §12: "dialogs only for destructive/irreversible acts", and "no success toasts for what the UI
+    // already shows". Backup / restore / import / generate outcomes used to each open an AlertDialog
+    // the user had to dismiss. They now go to the app's ONE snackbar (§8), already rendered at the
+    // root by SnackbarControllerHost — the same channel every other feature's Undo uses.
+    private val snackbar: com.forge.app.ui.common.SnackbarController,
+    private val backupEncryption: com.forge.app.security.BackupEncryption,
+    private val workoutRepo: com.forge.app.data.repo.WorkoutRepository,
+) : ViewModel() {
+
+    /**
+     * What the rest timer has learned from logged rests, read against the bases being set (the
+     * factor is relative to them), for the Session page's Rest timer footer. Null until enough.
+     */
+    val restPace: StateFlow<String?> = kotlinx.coroutines.flow.combine(
+        settingsRepo.restCompoundSeconds,
+        settingsRepo.restIsolationSeconds
+    ) { c, i -> c to i }
+        .map { (cBase, iBase) ->
+            val tuning = com.forge.app.domain.adapt.RestAdvisor.tuning(
+                com.forge.app.domain.adapt.RestAdvisor.samples(
+                    workoutRepo.recentRestEvents(),
+                    compoundBase = cBase,
+                    isolationBase = iBase
+                ) { com.forge.app.program.Program.exercise(it) }
+            )
+            com.forge.app.domain.adapt.RestAdvisor.paceReading(tuning, cBase, iBase)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /**
+     * Write-only sink that forwards an outcome line to [snackbar].
+     *
+     * The dozen `_statusMessage.value = "…"` sites read exactly as they did when this was a
+     * `MutableStateFlow<String?>` feeding a dialog, so swapping the DELIVERY did not mean editing
+     * every producer — and no site can accidentally leave a stale message sitting in state.
+     */
+    private inner class OutcomeSink {
+        var value: String?
+            get() = null
+            set(v) { if (!v.isNullOrBlank()) snackbar.show(v) }
+    }
+
+    // ─── Coach (auto-coach Phase 4) ───────────────────────────────────────────
+
+    // Trust feeds only the coach-settings "auto isn't active yet" note; the ledger, history and
+    // undo render on the Coach tab (CoachViewModel owns them).
+    private val _coachTrust = MutableStateFlow<List<com.forge.app.domain.coach.TypeTrust>>(emptyList())
+    val coachTrust: StateFlow<List<com.forge.app.domain.coach.TypeTrust>> = _coachTrust.asStateFlow()
+
+    // The coach's input feeds (check-ins, rest flags, sleep, resting HR) with their live/silent
+    // state — the settings page's at-a-glance "is everything it needs switched on".
+    private val _coachSignals = MutableStateFlow<List<com.forge.app.data.repo.RecoverySignal>>(emptyList())
+    val coachSignals: StateFlow<List<com.forge.app.data.repo.RecoverySignal>> = _coachSignals.asStateFlow()
+
+    /** Load the Coach page's data (called when the page opens — not part of the big combine). */
+    fun loadCoachData() = viewModelScope.launch {
+        // Independent reads, so neither waits on the other. The trust assessment is a CPU pass over
+        // the whole decision ledger and is kept off Main; coachLab already moves its own work off.
+        launch { runCatching { _coachTrust.value = withContext(Dispatchers.Default) { coachRepo.trust() } } }
+        launch { runCatching { _coachSignals.value = coachRepo.coachLab().recoverySignals } }
+    }
+
+    /**
+     * Every preference write goes through here, shielded from cancellation.
+     *
+     * A preference is app state, not screen state — but each mutation was a bare
+     * `viewModelScope.launch { … }`, and this ViewModel is scoped to the Settings destination, so
+     * popping that destination cancels an edit still in flight. `DataStore.edit` suspends across an
+     * actor hop plus a file write, fsync and rename, so the window is real: drag "Compound rest" to
+     * 180 s and swipe back immediately and it was still 150 s on the next visit, with nothing to say
+     * the change hadn't taken. `GoalsViewModel` already shields its writes exactly this way.
+     */
+    private fun write(block: suspend () -> Unit) =
+        viewModelScope.launch { withContext(NonCancellable) { block() } }
+
+    fun setCoachMode(mode: String) = write { settingsRepo.setCoachMode(mode) }
+    fun setCoachAdvanced(v: Boolean) = write {
+        settingsRepo.setCoachAdvanced(v)
+        // Turning it on retires the Coach page's offer for good, as from the pop-up itself.
+        if (v) settingsRepo.setCoachAdvancedPromptAfter(Long.MAX_VALUE)
+    }
+
+    // ─── Day-aware scheduling (weekly plan vs sequence) ───────────────────────
+    // Seeded from the last snapshot like [state], so the schedule does not open on its defaults.
+    val scheduleMode: StateFlow<String> = settingsRepo.scheduleMode
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
+            settingsRepo.lastPreferences?.let { settingsRepo.values(it).scheduleMode }
+                ?: com.forge.app.domain.schedule.WeeklySchedule.MODE_SEQUENCE)
+
+    val weeklySchedule: StateFlow<List<String>> = settingsRepo.weeklySchedule
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
+            settingsRepo.lastPreferences?.let { settingsRepo.values(it).weeklySchedule } ?: emptyList())
+
+    fun setScheduleMode(mode: String) = write { settingsRepo.setScheduleMode(mode) }
+
+    /**
+     * Assign [dayKey] ("" = rest) to weekday [weekdayIndex] (0=Mon..6=Sun) in the weekly schedule.
+     *
+     * One slot, one repository edit, through the same cancellation shield as every other preference
+     * write. The read-modify-write used to live here as three suspending steps on a bare launch, so
+     * leaving Settings mid-write cancelled the change and two quick weekday picks could overwrite
+     * each other with the same stale list (M-21).
+     */
+    fun setScheduleDay(weekdayIndex: Int, dayKey: String) =
+        write { settingsRepo.setWeeklyScheduleDay(weekdayIndex, dayKey) }
+
+    // ─── Holiday / vacation (#135) ────────────────────────────────────────────
+    val vacations: StateFlow<List<com.forge.app.data.db.entities.VacationPeriod>> =
+        vacationRepo.observeAll()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    // Through [write], like every other edit on these pages: a holiday added in the dialog and then
+    // Back on the same breath was cancelled with the Settings destination and never landed.
+    fun addVacation(startDate: String, endDate: String, label: String) =
+        write { vacationRepo.add(startDate, endDate, label) }
+
+    /** §12 undo-over-confirm: delete now, re-insert the captured row if the user takes it back.
+     *  A reversible delete never gets a confirm dialog — it gets the app's ONE Undo snackbar. */
+    fun deleteVacation(period: com.forge.app.data.db.entities.VacationPeriod) =
+        viewModelScope.launch {
+            vacationRepo.delete(period)
+            snackbar.showUndo("Holiday removed") {
+                vacationRepo.add(period.startDate, period.endDate, period.label)
+            }
+        }
+
+    // ─── Custom cardio activity types (GYMAP-37) ──────────────────────────────
+    // A standalone StateFlow (not the big combine) — list data managed like vacations above.
+    val customCardioTypes: StateFlow<List<com.forge.app.domain.cardio.CustomCardioType>> =
+        settingsRepo.customCardioTypes
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun addCustomCardioType(type: com.forge.app.domain.cardio.CustomCardioType) =
+        write { settingsRepo.addCustomCardioType(type) }
+
+    fun updateCustomCardioType(type: com.forge.app.domain.cardio.CustomCardioType) =
+        write { settingsRepo.updateCustomCardioType(type) }
+
+    /** §12 undo-over-confirm — the removed activity comes back intact on Undo. */
+    fun deleteCustomCardioType(code: String) =
+        viewModelScope.launch {
+            val removed = customCardioTypes.value.firstOrNull { it.code == code }
+            settingsRepo.deleteCustomCardioType(code)
+            snackbar.showUndo("Activity removed") {
+                removed?.let { settingsRepo.addCustomCardioType(it) }
+            }
+        }
+
+    /**
+     * Every setting on these pages, built from ONE preferences snapshot per write.
+     *
+     * This was 53 separate preference flows through 48 `combine` stages on Main, so one write fanned
+     * out through every read lambda and every stage, and the first frame painted [SettingsUiState]'s
+     * hard-coded defaults before correcting them (subtitles flipped, switch thumbs slid). Now one
+     * snapshot is read on [Dispatchers.Default] through the repository's own per-key readers, and the
+     * first frame is seeded from the last snapshot the process already read.
+     */
+    val state: StateFlow<SettingsUiState> = combine(
+        settingsRepo.preferences.map { settingsFrom(it) }.distinctUntilChanged(),
+        // Program days only change with the revision, not with a settings write.
+        programRepository.revision.map { computeWeeklyVolume() }.distinctUntilChanged(),
+        programCustomizationRepo.observeCustomExercises()
+    ) { s, volume, custom ->
+        s.copy(weeklyVolume = volume, customExercises = custom)
+    }.flowOn(Dispatchers.Default)
+        .stateIn(
+            viewModelScope, SharingStarted.WhileSubscribed(5_000),
+            settingsRepo.lastPreferences?.let { settingsFrom(it).copy(weeklyVolume = computeWeeklyVolume()) }
+                ?: SettingsUiState()
+        )
+
+    /** One snapshot mapped field by field; every default and parse is the matching flow's own. */
+    private fun settingsFrom(prefs: androidx.datastore.preferences.core.Preferences): SettingsUiState {
+        val v = settingsRepo.values(prefs)
+        return SettingsUiState(
+            amoledMode = v.amoledMode,
+            weightUnit = v.weightUnit,
+            useMiles = v.useMiles,
+            useCm = v.useCm,
+            noteTemplates = v.noteTemplates,
+            hiddenOverviewTiles = v.hiddenOverviewTiles,
+            timeFormat24h = v.timeFormat24h,
+            firstDayMonday = v.firstDayMonday,
+            hapticStrength = v.hapticStrength,
+            keepScreenOn = v.keepScreenOn,
+            restCompoundSeconds = v.restCompoundSeconds,
+            restIsolationSeconds = v.restIsolationSeconds,
+            quietHoursEnabled = v.quietHoursEnabled,
+            quietHoursSchedule = v.quietHoursSchedule,
+            trainingReminderEnabled = v.trainingReminderEnabled,
+            trainingReminderHour = v.trainingReminderHour,
+            weeklyRecapEnabled = v.weeklyRecapEnabled,
+            disabledNoticeKinds = v.disabledNoticeKinds,
+            restTimerAlertEnabled = v.restTimerAlertEnabled,
+            privacyMode = v.privacyMode,
+            appLockEnabled = v.appLockEnabled,
+            galleryLockEnabled = v.galleryLockEnabled,
+            appLockTimeoutSec = v.appLockTimeoutSec,
+            availableEquipment = v.availableEquipment,
+            frozenExerciseIds = v.frozenExerciseIds,
+            plateWeightLb = v.plateWeightLb,
+            maxDbWeightLb = v.maxDbWeightLb,
+            accentColorHex = v.accentColorHex,
+            accentEnabled = v.accentEnabled,
+            appIconKey = v.appIcon,
+            themedLaunchIntro = v.themedLaunchIntro,
+            accentFromIcon = v.accentFromIcon,
+            timezone = v.timezone,
+            favoriteTimezones = v.favoriteTimezones,
+            daysPerWeek = v.daysPerWeek,
+            sessionMinutes = v.sessionMinutes,
+            liked = v.likedExercises,
+            disliked = v.dislikedExercises,
+            swapDislikePromptEnabled = v.swapDislikePromptEnabled,
+            rotationCadence = v.rotationCadence,
+            rotationEveryN = v.rotationEveryN,
+            cardioWeeklyTargetMin = v.cardioWeeklyTargetMin,
+            userGoal = v.userGoal.ifBlank { "build_muscle" },
+            userSex = v.userSex,
+            experience = v.programExperience,
+            problemAreas = v.problemAreas,
+            priorityMuscles = v.priorityMuscles,
+            pinnedExercises = v.pinnedExercises,
+            programEmphasis = v.programEmphasis,
+            coachMode = v.coachMode,
+            coachAdvanced = v.coachAdvanced,
+            freestyleMode = v.freestyleMode,
+            coachEnabled = v.coachEnabled
+        )
+    }
+
+    /** Sets-per-muscle across the active program (busiest first) — drives the Program page readout. */
+    private fun computeWeeklyVolume(): List<Pair<String, Int>> =
+        com.forge.app.program.Program.days
+            .flatMap { it.exercises }
+            .groupBy { it.muscle }
+            .map { (muscle, exs) -> muscle to exs.sumOf { it.sets } }
+            .sortedByDescending { it.second }
+            .map { (muscle, sets) -> muscle.displayName to sets }
+
+    fun setAmoledMode(v: Boolean) = write { settingsRepo.setAmoledMode(v) }
+    fun setWeightUnit(u: com.forge.app.domain.units.WeightUnit) =
+        write { settingsRepo.setWeightUnit(u) }
+    fun setUseMiles(v: Boolean) = write { settingsRepo.setUseMiles(v) }
+    fun setUseCm(v: Boolean) = write { settingsRepo.setUseCm(v) }
+    fun setTimeFormat24h(v: Boolean) = write { settingsRepo.setTimeFormat24h(v) }
+    fun setFirstDayMonday(v: Boolean) = write { settingsRepo.setFirstDayMonday(v) }
+    fun setHapticStrength(v: String) = write { settingsRepo.setHapticStrength(v) }
+    fun setKeepScreenOn(v: Boolean) = write { settingsRepo.setKeepScreenOn(v) }
+    fun setRestCompoundSeconds(s: Int) = write { settingsRepo.setRestCompoundSeconds(s) }
+    fun setRestIsolationSeconds(s: Int) = write { settingsRepo.setRestIsolationSeconds(s) }
+    fun addNoteTemplate(t: String) = write { settingsRepo.addNoteTemplate(t) }
+    fun removeNoteTemplate(t: String) = write { settingsRepo.removeNoteTemplate(t) }
+    fun setQuietHoursEnabled(v: Boolean) = write { settingsRepo.setQuietHoursEnabled(v) }
+    fun setQuietWindow(day: java.time.DayOfWeek, start: Int, end: Int) =
+        write { settingsRepo.setQuietWindow(day, start, end) }
+    /** One window for every day, as one write (the uniform "every night" rows). */
+    fun setQuietWindowAllDays(start: Int, end: Int) =
+        write { settingsRepo.setQuietWindowAllDays(start, end) }
+
+    fun setTrainingReminderEnabled(v: Boolean) = write {
+        settingsRepo.setTrainingReminderEnabled(v)
+        reminderScheduler.apply(v, settingsRepo.trainingReminderHour.first())
+    }
+    fun setTrainingReminderHour(h: Int) = write {
+        settingsRepo.setTrainingReminderHour(h)
+        // Re-arm only if reminders are on; otherwise just persist the preferred time for later.
+        if (settingsRepo.trainingReminderEnabled.first()) reminderScheduler.apply(true, h.coerceIn(0, 23))
+    }
+    fun setWeeklyRecapEnabled(v: Boolean) = write { settingsRepo.setWeeklyRecapEnabled(v) }
+    fun setRestTimerAlertEnabled(v: Boolean) = write { settingsRepo.setRestTimerAlertEnabled(v) }
+
+    /** Show or hide one notification KIND in the feed (Settings → Notifications). */
+    fun setNoticeKindEnabled(key: String, enabled: Boolean) =
+        write { settingsRepo.setNoticeKindEnabled(key, enabled) }
+
+    fun setTileHidden(id: String, hidden: Boolean) = write { settingsRepo.setTileHidden(id, hidden) }
+
+    // Resets are shielded like preference writes: the confirm dialog closes with nothing on screen,
+    // so Back straight after it used to cancel a factory reset between `clearAllTables()` and the
+    // preference wipe, leaving an empty database behind ONBOARDING_DONE = true (no program, no
+    // onboarding), or commit a session wipe and skip its Health Connect mirror cleanup.
+    fun resetSessions() = write { resetRepo.resetSessions() }
+    fun resetTrophies() = write { resetRepo.resetTrophies() }
+    fun resetCardio() = write { resetRepo.resetCardio() }
+    fun resetSettings() = write { resetRepo.resetAppSettings() }
+    /** Scoped per-section "reset to defaults" (#544) — clears just this page's preferences. */
+    fun resetSection(section: com.forge.app.data.prefs.SettingsSection) =
+        write { settingsRepo.resetSection(section) }
+    fun factoryReset() = write { resetRepo.factoryReset() }
+    fun setPrivacyMode(v: Boolean) = write { settingsRepo.setPrivacyMode(v) }
+    // App / gallery lock (GYMAP-69). Enabling is gated on an available device credential in the UI
+    // (Security page), so these persist the choice directly.
+    fun protectionAuthenticated() = appLockManager.markAuthenticated()
+    /** A lock action was refused by the system prompt for a reason other than the user backing out
+     *  (lockout, no credential left): say so, or the switch just sits there doing nothing. */
+    fun reportAuthDenied() { _statusMessage.value = "Couldn't confirm it's you, so nothing changed. Check your phone's screen lock and try again." }
+    fun setAppLockEnabled(v: Boolean) = write { protectedSettings.setAppLock(v) }
+    fun setGalleryLockEnabled(v: Boolean) = write { protectedSettings.setGalleryLock(v) }
+    fun setAppLockTimeoutSec(v: Int) = write { settingsRepo.setAppLockTimeoutSec(v) }
+    /** Flip one gear tile against the persisted set (quick taps can't overwrite each other). The last
+     *  piece can't be removed: an empty set would silently mean "all equipment" to the generator. */
+    fun toggleEquipment(code: String) = write {
+        // Hand-editing the equipment set leaves any curated preset — drop the freeze.
+        if (settingsRepo.toggleAvailableEquipment(code)) {
+            settingsRepo.setFrozenExerciseIds(null)
+        } else {
+            _statusMessage.value = "Keep at least one. Pick Bodyweight only if you train without gear."
+        }
+    }
+    /** One-tap preset: fills the equipment set AND applies/clears its curated freeze together. */
+    fun selectEquipmentPreset(preset: com.forge.app.program.EquipmentPreset) = write {
+        settingsRepo.setAvailableEquipment(preset.equipment)
+        settingsRepo.setFrozenExerciseIds(preset.frozenIds)
+    }
+    fun setPlateWeightLb(lb: Double) = write { settingsRepo.setPlateWeightLb(lb) }
+    fun setDaysPerWeek(n: Int) = write { settingsRepo.setDaysPerWeek(n) }
+    fun setSessionMinutes(minutes: Int?) = write { settingsRepo.setSessionMinutes(minutes) }
+    /** Toggle "go with the flow" (no fixed plan; home leads with freestyle logging). */
+    fun setFreestyleMode(v: Boolean) = write { settingsRepo.setFreestyleMode(v) }
+    /** Show/hide the Coach feature (tab + banners). */
+    fun setCoachEnabled(v: Boolean) = write { settingsRepo.setCoachEnabled(v) }
+    /** Weekly cardio-minutes goal for the cardio tab (no effect on the lifting plan). */
+    fun setCardioWeeklyTargetMin(min: Int) = write { settingsRepo.setCardioWeeklyTargetMin(min) }
+    /** All generation inputs read from prefs, through the one shared builder: a copy here left out
+     *  personal caps, so Settings generated a different program than rotation and deload (audit
+     *  2026-09-26, 08). */
+    private suspend fun buildParams(days: Int?) = programRepository.currentParams(days)
+    private suspend fun currentEquipment(): Set<com.forge.app.program.Equipment> =
+        settingsRepo.availableEquipment.first()
+            .mapNotNull { runCatching { com.forge.app.program.Equipment.valueOf(it) }.getOrNull() }.toSet()
+
+    /**
+     * Toggle the like/dislike state for one or more ids at once. A library exercise passes its single
+     * id; a custom exercise passes every `custom_…` id sharing its name so they flip together. The
+     * toggle decision is made against the freshly persisted set inside the DataStore edit (not the UI
+     * snapshot), so a rapid double-tap cycles the chip correctly instead of no-op'ing the second tap.
+     */
+    fun toggleExercisesLiked(ids: Set<String>) = write {
+        settingsRepo.toggleExercisesLiked(ids)
+    }
+    fun toggleExercisesDisliked(ids: Set<String>) = write {
+        settingsRepo.toggleExercisesDisliked(ids)
+    }
+    fun setSwapDislikePromptEnabled(enabled: Boolean) = write {
+        settingsRepo.setSwapDislikePromptEnabled(enabled)
+    }
+    fun setRotationCadence(cadence: String, n: Int) = write {
+        settingsRepo.setRotationCadence(cadence)
+        if (cadence == "every_n") settingsRepo.setRotationEveryN(n)
+        settingsRepo.setRotationCounter(0)
+    }
+    /**
+     * Re-roll every day's exercises, guarded exactly like [generateProgram] and [generateDeloadWeek].
+     *
+     * It was the one program-changing action in Settings that skipped [programChangeGuard], and it
+     * is not a lighter operation than the two beside it: `ProgramRepository.reroll` discards the
+     * active session inside its own transaction, cascading its logged sets away with it. A tap
+     * mid-workout removed the workout permanently, from a row that sits between two actions that do
+     * prompt — with no dialog, no undo, and a success message about fresh exercises.
+     *
+     * The whole operation is inside the guard, status message included, so nothing runs and nothing
+     * is announced until the user has either confirmed or had nothing to lose.
+     */
+    fun rerollProgram() = viewModelScope.launch {
+        // Re-rolling produces a concrete plan, so a "go with the flow" user is now following one —
+        // flip freestyle off, else the fresh plan stays hidden behind the freestyle home.
+        val wasFreestyle = settingsRepo.freestyleMode.first()
+        programChangeGuard.run {
+            programRepository.reroll(
+                // "Same split" has to be true: null keeps the current plan's day count, since the
+                // staged days chip only takes effect through Generate. A freestyle user has no
+                // visible plan, so the chip is the only count they chose: build that.
+                buildParams(if (wasFreestyle) settingsRepo.daysPerWeek.first() else null),
+                currentEquipment(),
+                settingsRepo.likedExercises.first(),
+                settingsRepo.dislikedExercises.first()
+            )
+            if (wasFreestyle) settingsRepo.setFreestyleMode(false)
+            _statusMessage.value = if (wasFreestyle)
+                "Re-rolled. You're now following a plan. Open Gym to see it."
+            else
+                "Re-rolled. Same split, fresh exercises. Open Gym to see it."
+        }
+    }
+
+    // Goal/experience/problem-areas/priority/pins are staged config — applied when the user taps
+    // Generate or Re-roll (avoids reshuffling the whole plan on every chip tap).
+    fun setUserGoal(goal: String) = write { settingsRepo.setUserGoal(goal) }
+    fun setUserSex(sex: String) = write { settingsRepo.setUserSex(sex) }
+    fun setMaxDbWeightLb(lb: Double?) = write { settingsRepo.setMaxDbWeightLb(lb) }
+    fun setExperience(level: String) = write { settingsRepo.setProgramExperience(level) }
+    fun setProgramEmphasis(v: String) = write { settingsRepo.setProgramEmphasis(v) }
+    fun toggleProblemArea(code: String) = write { settingsRepo.toggleProblemArea(code) }
+    fun togglePriorityMuscle(code: String) = write { settingsRepo.togglePriorityMuscle(code) }
+    fun togglePin(libId: String) = write {
+        settingsRepo.togglePinned(libId, libId !in settingsRepo.pinnedExercises.first())
+    }
+
+    /**
+     * Generate a fresh program from the chosen day-count + current equipment/likes/dislikes (Phase 2).
+     * Guarded: regenerating discards any in-progress workout, so confirm before doing it (the whole
+     * change — including the day-count write — only commits past the guard).
+     */
+    fun generateProgram(days: Int) = viewModelScope.launch {
+        // Generating gives the user a real plan — leave freestyle so the home actually surfaces it.
+        val wasFreestyle = settingsRepo.freestyleMode.first()
+        programChangeGuard.run {
+            settingsRepo.setDaysPerWeek(days)
+            programRepository.generate(
+                buildParams(days),
+                currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first()
+            )
+            if (wasFreestyle) settingsRepo.setFreestyleMode(false)
+            _statusMessage.value = if (wasFreestyle)
+                "New $days-day program generated. You're now following a plan. Open Gym to see it."
+            else
+                "New $days-day program generated. Open Gym to see it."
+        }
+    }
+
+    /** Regenerate the current split at reduced volume for a recovery week (Phase 4 periodization). */
+    fun generateDeloadWeek() = viewModelScope.launch {
+        val wasFreestyle = settingsRepo.freestyleMode.first()
+        programChangeGuard.run {
+            programRepository.generate(
+                // null: the CURRENT split's day count (keepPicks replays its seed), not the staged chip.
+                buildParams(null).copy(deload = true),
+                currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first(),
+                // Same movements at lighter volume — the seed of the program being deloaded.
+                keepPicks = true
+            )
+            if (wasFreestyle) settingsRepo.setFreestyleMode(false)
+            _statusMessage.value = "Deload week generated at lighter volume. Open Gym to see it."
+        }
+    }
+    fun setAccentColorHex(hex: String) = write { settingsRepo.setAccentColorHex(hex) }
+    fun setAccentEnabled(enabled: Boolean) = write { settingsRepo.setAccentEnabled(enabled) }
+    fun setAccentFromIcon(enabled: Boolean) = write { settingsRepo.setAccentFromIcon(enabled) }
+
+    /** Persist the pick, which rings it in the picker immediately. The actual launcher-alias swap is
+     *  deferred to a user-initiated app-background by [com.forge.app.MainActivity]'s onStop (gated on
+     *  onUserLeaveHint): toggling the alias here, in the foreground, disables the alias backing the
+     *  current task and closes the app on some OEMs. See [com.forge.app.appicon.AppIconManager]. */
+    fun setAppIcon(icon: com.forge.app.appicon.AppIcon) = write {
+        settingsRepo.setAppIcon(icon.name)
+    }
+    fun setThemedLaunchIntro(v: Boolean) = write { settingsRepo.setThemedLaunchIntro(v) }
+    fun setTimezone(id: String) = write { settingsRepo.setTimezone(id) }
+    fun toggleFavoriteTimezone(id: String) = write { settingsRepo.toggleFavoriteTimezone(id) }
+    fun exportLastSessionPdf() = export { pdfExport.exportLastSessionPdf() }
+
+    /** Run one export and report it: the file to share, "nothing to export", or a failure on the
+     *  snackbar. A full disk used to crash the app from here (2026-09-26 audit, 04). */
+    private fun export(block: suspend () -> java.io.File?) = viewModelScope.launch { report(attemptExport(block)) }
+
+    private fun report(attempt: ExportAttempt) {
+        when (attempt) {
+            is ExportAttempt.Written -> _exportPath.value = attempt.file.absolutePath
+            ExportAttempt.NothingToExport -> _statusMessage.value = "Nothing to export yet. Finish a session first."
+            ExportAttempt.Failed -> _statusMessage.value = "Export failed. Check your free storage and try again."
+        }
+    }
+
+    private val _exportPath = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val exportPath: kotlinx.coroutines.flow.StateFlow<String?> = _exportPath.asStateFlow()
+
+    fun exportWeeklyJson() = export { backupRepo.exportWeeklyJson() }
+    /**
+     * How far the full JSON export has got, as `done / total` sessions — null when none is running
+     * (P-01). A whole training history is minutes of work on an old phone, and it used to report
+     * nothing at all until the file appeared.
+     */
+    private val _exportProgress = kotlinx.coroutines.flow.MutableStateFlow<Pair<Int, Int>?>(null)
+    val exportProgress: kotlinx.coroutines.flow.StateFlow<Pair<Int, Int>?> = _exportProgress.asStateFlow()
+
+    /**
+     * The running export, so the user can stop one (P-01). An ordinary cancellable job: the
+     * repository checks for cancellation between sessions and publishes by rename, so a cancelled
+     * export leaves the previous file rather than a truncated one.
+     */
+    private var exportJob: kotlinx.coroutines.Job? = null
+
+    fun exportFullBackup() {
+        exportJob?.cancel()
+        exportJob = viewModelScope.launch {
+            _exportProgress.value = 0 to 0
+            try {
+                report(attemptExport {
+                    backupRepo.exportFullDataJson { done, total -> _exportProgress.value = done to total }
+                })
+            } finally {
+                _exportProgress.value = null
+            }
+        }
+    }
+
+    /** Stop a running export. No-op when none is running. */
+    fun cancelExport() {
+        exportJob?.cancel()
+        exportJob = null
+    }
+    fun exportSessionsCsv() = export { backupRepo.exportSessionsCsv() }
+    fun exportPrsCsv() = export { backupRepo.exportPrsCsv() }
+    fun exportBodyweightCsv() = export { backupRepo.exportBodyweightCsv() }
+    fun exportCardioCsv() = export { backupRepo.exportCardioCsv() }
+    fun clearExportPath() { _exportPath.value = null }
+
+    // ── Import from another gym app (#GYMAP-17) ────────────────────────────────
+    /** A short message shown after an import finishes (success summary or a reason it didn't). */
+    private val _importResult = OutcomeSink()
+
+    fun importData(uri: android.net.Uri) = viewModelScope.launch {
+        // A cancelled import is not a file that could not be read: rethrow it rather than posting
+        // a read-error message to the app-wide snackbar after the user has left.
+        val result = runCatching { importRepo.import(uri) }
+            .getOrElse {
+                if (it is CancellationException) throw it
+                com.forge.app.data.importer.ImportResult.ReadError
+            }
+        _importResult.value = result.userMessage()
+        // A successful merge changed the data set — refresh the backup nudge / db size readout, and
+        // rescan the folder so its found-file counts reflect what's now imported.
+        if (result is com.forge.app.data.importer.ImportResult.Success) {
+            refreshAutoBackupInfo()
+            scanImportFolder()
+        }
+    }
+
+    /** True once the user has granted a folder (Downloads) for the Import screen to auto-scan. */
+    val importFolderGranted: StateFlow<Boolean> =
+        settingsRepo.importFolderUri.map { it != null }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    /** Gym-app exports found in the granted folder, newest first — the one-tap import list. */
+    private val _foundImports =
+        MutableStateFlow<List<com.forge.app.data.importer.FoundImport>>(emptyList())
+    val foundImports: StateFlow<List<com.forge.app.data.importer.FoundImport>> = _foundImports.asStateFlow()
+
+    private val _scanningImports = MutableStateFlow(false)
+    val scanningImports: StateFlow<Boolean> = _scanningImports.asStateFlow()
+
+    /** Persist the folder the user just granted, then scan it. */
+    fun grantImportFolder(uri: android.net.Uri) = viewModelScope.launch {
+        if (!importRepo.rememberFolder(uri)) {
+            // Stored regardless, the empty scan that followed was the only symptom (M-18).
+            _statusMessage.value = "Avex could not keep access to that folder. Pick it again, or choose another."
+            return@launch
+        }
+        scanImportFolder()
+    }
+
+    /** Avex backups found alongside the exports, newest first: offered as one-tap restores. */
+    private val _foundBackups =
+        MutableStateFlow<List<com.forge.app.data.importer.FoundBackup>>(emptyList())
+    val foundBackups: StateFlow<List<com.forge.app.data.importer.FoundBackup>> = _foundBackups.asStateFlow()
+
+    /**
+     * Scan every folder Avex may read for exports and backups: the import folder, plus the backup
+     * folder the user already granted for auto-backup (no-op when neither is set).
+     */
+    fun scanImportFolder() = viewModelScope.launch {
+        val folders = listOfNotNull(settingsRepo.importFolderUri.first(), settingsRepo.backupFolderUri.first())
+            .map { android.net.Uri.parse(it) }
+        if (folders.isEmpty()) {
+            _foundImports.value = emptyList()
+            _foundBackups.value = emptyList()
+            return@launch
+        }
+        _scanningImports.value = true
+        val scan = runCatching { importRepo.scanFolders(folders) }
+            .getOrDefault(com.forge.app.data.importer.FolderScan(emptyList(), emptyList()))
+        _foundImports.value = scan.imports
+        _foundBackups.value = scan.backups
+        _scanningImports.value = false
+    }
+
+    /**
+     * Make `Download/Avex` before the folder picker opens, then [launch] the picker there (or at
+     * its old Downloads start when the folder can't be made, or isn't needed before Android 10).
+     */
+    fun openImportFolderPicker(launch: (android.net.Uri?) -> Unit) = viewModelScope.launch {
+        val inbox = runCatching { importRepo.ensureInboxFolder() }.getOrDefault(false)
+        launch(
+            if (inbox) android.net.Uri.parse(
+                "content://com.android.externalstorage.documents/document/primary%3ADownload%2F" +
+                    com.forge.app.data.importer.WorkoutImportRepository.INBOX_FOLDER
+            ) else null
+        )
+    }
+
+    // ── Complete DB backup & restore (the real safety net) ─────────────────────
+    private val _statusMessage = OutcomeSink()
+
+
+    fun backupDatabase(uri: android.net.Uri) = viewModelScope.launch {
+        // Rechecked here as well as at the button, like backupNow and setBackupFolder: this was the
+        // one path to a ZIP of the whole gallery that skipped the gallery lock.
+        if (!protectedSettings.canExportPhotos()) {
+            backupRepo.discardBackupTarget(uri)
+            _statusMessage.value = "Unlock your photo gallery before backing up photos."
+            return@launch
+        }
+        runCatching { backupRepo.backupToUri(uri) }
+            .onSuccess {
+                _statusMessage.value = "Backup saved."
+                // backupToUri cleared the failure marker; reflect that in the StateFlow so any
+                // open "last auto-backup failed" notice disappears without reopening the dialog.
+                refreshAutoBackupInfo()
+            }
+            .onFailure {
+                // Leaving Settings is not a failed backup. The snackbar is app-wide, so a swallowed
+                // cancellation surfaced "Backup failed: Job was cancelled" on the next screen.
+                if (it is CancellationException) throw it
+                _statusMessage.value = "Backup failed: ${it.message}"
+            }
+    }
+
+    /** The unlock for a backup was refused: remove the empty file the picker created for it, so an
+     *  "avex_backup" with nothing in it isn't left in Downloads looking like a real backup. */
+    fun discardBackupTarget(uri: android.net.Uri) = viewModelScope.launch { backupRepo.discardBackupTarget(uri) }
+
+    fun restoreDatabase(uri: android.net.Uri) = restore(RestoreSource.File(uri), password = null)
+
+    /** Where a restore reads from, kept so a password prompt can retry the same source. */
+    sealed interface RestoreSource {
+        data class File(val uri: android.net.Uri) : RestoreSource
+        data class AutoBackup(val generation: Int) : RestoreSource
+    }
+
+    /** A password-protected backup is waiting on its password. [wrong] after a failed try. */
+    data class RestorePasswordPrompt(val source: RestoreSource, val wrong: Boolean, val busy: Boolean)
+
+    private val _restorePasswordPrompt = MutableStateFlow<RestorePasswordPrompt?>(null)
+    val restorePasswordPrompt: StateFlow<RestorePasswordPrompt?> = _restorePasswordPrompt.asStateFlow()
+
+    /** Retry the waiting restore with [password]. The array is wiped once the attempt ends. */
+    fun submitRestorePassword(password: CharArray) {
+        val prompt = _restorePasswordPrompt.value ?: return password.fill('\u0000')
+        if (prompt.busy) return password.fill('\u0000')
+        _restorePasswordPrompt.value = prompt.copy(busy = true)
+        restore(prompt.source, password)
+    }
+
+    fun dismissRestorePassword() { _restorePasswordPrompt.value = null }
+
+    /**
+     * Run a restore and report it — and if the user leaves Settings before it finishes, undo it.
+     *
+     * A restore only STAGES files; the swap happens at the next cold start, and it is this screen
+     * that restarts the app on SUCCESS. Leaving mid-restore cancels this ViewModel's scope, so the
+     * outcome can never be shown and the restart never happens. The staging itself doesn't notice
+     * the cancellation and still completes, and `runCatching` used to turn the cancellation into
+     * "Couldn't read that file" while the finished pending set stayed on disk. The next launch,
+     * possibly days later, then replaced everything logged in between with the backup. A restore
+     * the user walked away from is now discarded, and the cancellation is re-thrown.
+     */
+    private fun restore(source: RestoreSource, password: CharArray?) = viewModelScope.launch {
+        val outcome = try {
+            when (source) {
+                is RestoreSource.File -> backupRepo.restoreFromUri(source.uri, password)
+                is RestoreSource.AutoBackup -> backupRepo.restoreFromAutoBackup(password, source.generation)
+            }
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) { backupRepo.discardPendingRestore() }
+            _restorePasswordPrompt.value = null
+            throw e
+        } catch (e: Exception) {
+            RestoreOutcome.IO_ERROR
+        } finally {
+            password?.fill('\u0000')
+        }
+        // A protected backup asks for its password in a dialog, and a wrong one keeps the dialog
+        // open with the field marked, rather than closing it into a snackbar and a second pick.
+        when (outcome) {
+            RestoreOutcome.NEEDS_PASSWORD ->
+                _restorePasswordPrompt.value = RestorePasswordPrompt(source, wrong = false, busy = false)
+            RestoreOutcome.WRONG_PASSWORD ->
+                _restorePasswordPrompt.value = RestorePasswordPrompt(source, wrong = true, busy = false)
+            else -> {
+                _restorePasswordPrompt.value = null
+                // MainActivity restarts on it, whichever screen the user is on by now (RestoreRestart).
+                if (outcome == RestoreOutcome.SUCCESS) RestoreRestart.request()
+                else _statusMessage.value =
+                    if (outcome == RestoreOutcome.CORRUPT && source is RestoreSource.AutoBackup &&
+                        _autoBackupCopies.value.size > 1
+                    ) "That auto-backup copy is damaged. Restore an older one from Data."
+                    else restoreFailureMessage(outcome)
+            }
+        }
+    }
+
+    /** Plain-English reason for a failed restore, so the user knows what to do next (E6). */
+    private fun restoreFailureMessage(outcome: RestoreOutcome): String =
+        when (outcome) {
+            RestoreOutcome.NOT_A_BACKUP ->
+                "That file isn't an Avex backup. Pick the .zip you exported from Avex."
+            RestoreOutcome.NEWER_VERSION ->
+                "That backup was made by a newer version of Avex. Update the app, then restore."
+            RestoreOutcome.TOO_OLD ->
+                "That backup is too old to restore safely (made before this app's schema)."
+            RestoreOutcome.CORRUPT ->
+                "That backup is corrupted or incomplete. Try a different copy or re-export it."
+            RestoreOutcome.TOO_LARGE ->
+                "That file is too large to be an Avex backup."
+            RestoreOutcome.NO_BACKUP_FILE ->
+                "No auto-backup to restore yet."
+            RestoreOutcome.IO_ERROR ->
+                "Couldn't read that file. Try again, or pick a different copy."
+            // Both open the password dialog instead of a message; see [restore].
+            RestoreOutcome.NEEDS_PASSWORD, RestoreOutcome.WRONG_PASSWORD -> ""
+            RestoreOutcome.SUCCESS -> ""
+        }
+
+    /** Formatted date of the weekly auto-backup slot, or null when none exists yet (#86). */
+    private val _autoBackupSavedAt = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val autoBackupSavedAt: StateFlow<String?> = _autoBackupSavedAt.asStateFlow()
+
+    /** True when the weekly auto-backup worker gave up (e.g. storage full) and none has succeeded since. */
+    private val _autoBackupFailed = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val autoBackupFailed: StateFlow<Boolean> = _autoBackupFailed.asStateFlow()
+
+    /** True when there's data worth protecting but no backup exists yet — drives a Settings nudge (#5 P1). */
+    private val _noBackupWarning = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val noBackupWarning: StateFlow<Boolean> = _noBackupWarning.asStateFlow()
+
+    /** Summary of the live data a restore would overwrite, e.g. "12 sessions · 5 progress photos". */
+    private val _restoreImpact = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val restoreImpact: StateFlow<String?> = _restoreImpact.asStateFlow()
+
+    /** On-disk database size, human-readable ("2.4 MB") — the Data dialog readout. */
+    private val _dbSizeLabel = kotlinx.coroutines.flow.MutableStateFlow("")
+    val dbSizeLabel: StateFlow<String> = _dbSizeLabel.asStateFlow()
+
+    // ── Storage breakdown + cache clear (GYMAP-68) ─────────────────────────────
+    /** The per-category on-disk footprint for the Storage page; null until first loaded. */
+    private val _storage = kotlinx.coroutines.flow.MutableStateFlow<com.forge.app.data.repo.StorageBreakdown?>(null)
+    val storage: StateFlow<com.forge.app.data.repo.StorageBreakdown?> = _storage.asStateFlow()
+
+    /** (Re)measure on-disk storage — call when the Storage page opens or after clearing the cache. */
+    fun refreshStorage() = viewModelScope.launch { _storage.value = storageRepo.breakdown() }
+
+    /** Wipe the transient cache, then re-measure so the page reflects the freed space (the shrinking
+     *  Cache row IS the feedback, DESIGN §13 — no success toast). */
+    fun clearCache() = viewModelScope.launch {
+        runCatching { storageRepo.clearCache() }
+        _storage.value = storageRepo.breakdown()
+    }
+
+    /** Refresh the auto-backup date + failure state — call when the data dialog opens (the worker may have run since). */
+    fun refreshAutoBackupInfo() = viewModelScope.launch {
+        // All checks are File / DB reads — keep them off the main thread.
+        data class Info(val savedAtMs: Long?, val failed: Boolean, val noBackup: Boolean, val impact: String, val dbSize: Long)
+        val info = withContext(Dispatchers.IO) {
+            Info(
+                backupRepo.autoBackupSavedAtMs(),
+                backupRepo.autoBackupFailed(),
+                backupRepo.shouldWarnNoBackup(),
+                backupRepo.restoreImpactSummary(),
+                backupRepo.dbSizeBytes()
+            )
+        }
+        _autoBackupSavedAt.value = info.savedAtMs?.let { formatMediumDate(it) }
+        _autoBackupFailed.value = info.failed
+        _noBackupWarning.value = info.noBackup
+        _restoreImpact.value = info.impact
+        _dbSizeLabel.value = formatBytes(info.dbSize)
+        _backupPassword.value = withContext(Dispatchers.IO) { readBackupPasswordState() }
+        _autoBackupCopies.value = withContext(Dispatchers.IO) { backupRepo.autoBackupCopies() }
+            .map { AutoBackupCopyUi(it.generation, formatMediumDate(it.savedAtMs)) }
+    }
+
+    // ── Progress-photo info (tasks 3 + 4: factory-reset warning + data-dialog stake indicator) ──────
+    /** Count of saved progress photos — loaded once per data-dialog open and on VM init. */
+    private val _photoCount = kotlinx.coroutines.flow.MutableStateFlow(0)
+    val photoCount: StateFlow<Int> = _photoCount.asStateFlow()
+
+    /** Timestamp (ms) of the most recently taken progress photo, or null when there are none. */
+    private val _photoLastTakenMs = kotlinx.coroutines.flow.MutableStateFlow<Long?>(null)
+    val photoLastTakenMs: StateFlow<Long?> = _photoLastTakenMs.asStateFlow()
+
+    /** Refresh progress-photo stats — call when the data dialog opens so the count is fresh. */
+    fun refreshPhotoInfo() = viewModelScope.launch {
+        val photos = runCatching { photoRepo.photos() }.getOrDefault(emptyList())
+        _photoCount.value = photos.size
+        _photoLastTakenMs.value = photos.maxOfOrNull { it.takenAtMs }
+    }
+
+    /** In-app restore from the weekly auto-backup slot — the recovery path for the local auto-backup (#86). */
+    /** Restore one of the kept auto-backup copies; [generation] 0 is the newest. */
+    fun restoreAutoBackup(generation: Int = 0) = restore(RestoreSource.AutoBackup(generation), password = null)
+
+    /** A kept auto-backup copy for the restore picker: its generation and human save date. */
+    data class AutoBackupCopyUi(val generation: Int, val savedAt: String)
+
+    private val _autoBackupCopies = MutableStateFlow<List<AutoBackupCopyUi>>(emptyList())
+    val autoBackupCopies: StateFlow<List<AutoBackupCopyUi>> = _autoBackupCopies.asStateFlow()
+
+    // ── Backup password (optional encryption) ─────────────────────────────────
+    enum class BackupPasswordState { OFF, ON, NEEDS_RESET }
+
+    private val _backupPassword = MutableStateFlow(BackupPasswordState.OFF)
+    val backupPassword: StateFlow<BackupPasswordState> = _backupPassword.asStateFlow()
+
+    /** True while a new password is being stretched into a key (about a second, on purpose). */
+    private val _backupPasswordBusy = MutableStateFlow(false)
+    val backupPasswordBusy: StateFlow<Boolean> = _backupPasswordBusy.asStateFlow()
+
+    private fun readBackupPasswordState(): BackupPasswordState =
+        when (val s = backupEncryption.state()) {
+            com.forge.app.security.BackupEncryption.State.Off -> BackupPasswordState.OFF
+            is com.forge.app.security.BackupEncryption.State.On -> { s.key.wipe(); BackupPasswordState.ON }
+            com.forge.app.security.BackupEncryption.State.Unavailable -> BackupPasswordState.NEEDS_RESET
+        }
+
+    /**
+     * Set or replace the backup password, then rewrite the backups this app keeps so the copies on
+     * disk are protected now rather than from next week. [password] is wiped here. Durable (M-22):
+     * leaving Settings mid-derivation must not leave the setting half-changed.
+     */
+    fun setBackupPassword(password: CharArray) = viewModelScope.launch {
+        if (_backupPasswordBusy.value) return@launch password.fill('\u0000')
+        _backupPasswordBusy.value = true
+        val ok = try {
+            withContext(NonCancellable) { runCatching { backupEncryption.setPassword(password) }.isSuccess }
+        } finally {
+            password.fill('\u0000')
+            _backupPasswordBusy.value = false
+        }
+        _backupPassword.value = withContext(Dispatchers.IO) { readBackupPasswordState() }
+        if (!ok) {
+            _statusMessage.value = "Couldn't set the backup password. Try again."
+            return@launch
+        }
+        // Re-seal the weekly slot and the folder copy under the new password. Skipped when the
+        // gallery lock is holding photos back; the weekly run protects them next time.
+        val folder = settingsRepo.backupFolderUri.first()?.let { android.net.Uri.parse(it) }
+        val hasBackups = backupRepo.autoBackupSavedAtMs() != null
+        var resealed = false
+        var folderFailed = false
+        if (hasBackups && protectedSettings.canExportPhotos()) {
+            runCatching { backupRepo.autoBackupWithFolderStatus(folder) }
+                .onSuccess { resealed = true; folderFailed = it.folderFailed }
+                .onFailure { if (it is CancellationException) throw it }
+            refreshAutoBackupInfo()
+        }
+        // Only the copy written just now is sealed; older generations, on this phone and in the
+        // picked folder, stay readable without the password until they rotate out. Say so.
+        val unprotected = runCatching { backupRepo.unprotectedBackupCopies(folder) }.getOrDefault(0)
+        _statusMessage.value = buildString {
+            append(
+                when {
+                    !hasBackups -> "Backups are now password-protected."
+                    resealed && !folderFailed -> "Backups are now password-protected."
+                    resealed -> "Your latest backup is password-protected, but the folder copy could not be updated."
+                    else -> "New backups will need the password."
+                }
+            )
+            if (unprotected > 0) {
+                append(" $unprotected saved ${if (unprotected == 1) "copy is" else "copies are"} still unprotected until newer backups replace ${if (unprotected == 1) "it" else "them"}.")
+            }
+        }
+    }
+
+    /** Stop protecting new backups. Ones already made keep needing their password. */
+    fun clearBackupPassword() = write {
+        backupEncryption.clear()
+        _backupPassword.value = withContext(Dispatchers.IO) { readBackupPasswordState() }
+        _statusMessage.value = "New backups will be saved without a password."
+    }
+
+    // ── Auto-backup config + manual "Back up now" (GYMAP-67) ───────────────────
+    /** Whether the weekly auto-backup is on (default true) — the Backup page toggle. */
+    val autoBackupEnabled: StateFlow<Boolean> = settingsRepo.autoBackupEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    /** The user-picked folder backups also write to, or null when internal-only. */
+    val backupFolderUri: StateFlow<String?> = settingsRepo.backupFolderUri
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun setAutoBackupEnabled(v: Boolean) = write { settingsRepo.setAutoBackupEnabled(v) }
+
+    /** Persist + take a write grant on the picked folder, then seed it with a backup right away so it
+     *  isn't empty until the next weekly run. The grant + preference write is shielded like every
+     *  other preference edit here (M-22); the seeding backup that follows stays an ordinary,
+     *  cancellable job, since a long copy must never become unstoppable just to make the pref durable. */
+    fun setBackupFolder(uri: android.net.Uri) = viewModelScope.launch {
+        if (!protectedSettings.canExportPhotos()) {
+            _statusMessage.value = "Unlock your photo gallery before changing the backup folder."
+            return@launch
+        }
+        val connected = withContext(NonCancellable) { backupRepo.rememberBackupFolder(uri) }
+        // Only seed a folder Avex can actually keep writing to (M-18). The grant failure used to be
+        // swallowed and the backup run anyway — which succeeded on the picker's own transient
+        // permission, so the first sign of trouble was a weekly job silently writing nowhere.
+        if (!connected) {
+            _statusMessage.value = "Avex could not keep access to that folder. Pick it again, or choose another."
+            return@launch
+        }
+        backupNow()
+    }
+    /** Durable for the same reason (M-22): a folder removed just before leaving Settings used to be
+     *  able to survive the pop, and the weekly job would keep writing backups to a target the user
+     *  had watched disappear. */
+    fun clearBackupFolder() = write {
+        if (!backupRepo.forgetBackupFolder()) {
+            // The setting is cleared either way — that is what the user asked for — but access that
+            // outlives every setting naming it is the whole of M-18, so it is said rather than left.
+            _statusMessage.value = "Folder removed, but Avex still has access to it. Revoke it in Android settings."
+        }
+    }
+
+    /** Run a backup right now — to internal storage and the picked folder — the "Back up now" action. */
+    fun backupNow() = viewModelScope.launch {
+        if (!protectedSettings.canExportPhotos()) {
+            _statusMessage.value = "Unlock your photo gallery before backing up photos."
+            return@launch
+        }
+        val folder = settingsRepo.backupFolderUri.first()?.let { android.net.Uri.parse(it) }
+        runCatching { backupRepo.autoBackupWithFolderStatus(folder) }
+            .onSuccess {
+                _statusMessage.value =
+                    if (it.folderFailed) "Saved on this phone, but the copy in your backup folder failed."
+                    else "Backed up."
+                refreshAutoBackupInfo()
+            }
+            .onFailure {
+                if (it is CancellationException) throw it // see backupDatabase
+                _statusMessage.value = "Backup failed: ${it.message}"
+            }
+    }
+
+    fun exportCrashLogs(uri: android.net.Uri) = viewModelScope.launch {
+        runCatching { backupRepo.exportCrashLogsToUri(uri) }
+            .onSuccess { n ->
+                _statusMessage.value =
+                    if (n == 0) "No crash logs yet, nothing to export."
+                    else "Exported $n crash log${if (n == 1) "" else "s"}."
+            }
+            .onFailure {
+                if (it is CancellationException) throw it // see backupDatabase
+                _statusMessage.value = "Crash log export failed: ${it.message}"
+            }
+    }
+
+    // ── In-app crash log viewer ────────────────────────────────────────────────
+    // null = not loaded yet (show "Loading…"); emptyList = loaded, no crashes (show the all-clear).
+    // Distinguishing the two avoids a false "No crashes recorded" flash before the IO read returns.
+    private val _crashLogs = MutableStateFlow<List<Pair<String, String>>?>(null)
+    val crashLogs: StateFlow<List<Pair<String, String>>?> = _crashLogs.asStateFlow()
+
+    /** Load the most recent crash logs from filesDir/crashes — call when the viewer opens. */
+    fun loadCrashLogs() = viewModelScope.launch {
+        _crashLogs.value = withContext(Dispatchers.IO) {
+            backupRepo.readRecentCrashLogs()
+        }
+    }
+}

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Intentionally empty: the splash icon for Android 8 to 11, whose splash is a static window
+    background drawn before any app code runs and so cannot wear the icon the user picked. The app
+    draws that icon from its first frame (LaunchCover, ui/launch/LaunchHandOff.kt). Android 12+ uses
+    values-v31/themes.xml, where the platform shows the picked icon itself.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="1dp"
+    android:height="1dp"
+    android:viewportWidth="1"
+    android:viewportHeight="1" />

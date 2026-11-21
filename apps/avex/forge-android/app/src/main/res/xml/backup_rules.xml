@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 11 (API <= 30) auto-backup. Unlike data_extraction_rules.xml this format is
+    EXCLUDE-ONLY: everything in the app's data directory is backed up unless named here, and there
+    is no separate device-transfer channel to fall back on. So every path that must not reach the
+    user's Google Drive has to be listed explicitly.
+-->
+<full-backup-content>
+    <!--
+        Exclude WAL and shm sidecar files: Android Auto Backup can snapshot these at any moment.
+        Restoring a live WAL alongside a stale main .db corrupts the Room database on next open.
+        Only the main .db is safe to back up (Room keeps it consistent). The pending_restore staging
+        files live in filesDir and must never be cloud-backed — they are transient mid-restore state.
+    -->
+    <exclude domain="database" path="forge.db-wal" />
+    <exclude domain="database" path="forge.db-shm" />
+    <exclude domain="file" path="pending_restore.db" />
+    <exclude domain="file" path="pending_restore_prefs.pb" />
+    <exclude domain="file" path="pending_restore_photos" />
+    <exclude domain="file" path="pending_restore_avatar.jpg" />
+
+    <!--
+        Progress photos and the avatar: see the rationale in data_extraction_rules.xml. On this API
+        level there is no device-transfer channel, so excluding them here means they are not carried
+        to a new phone automatically either — the in-app export is the supported route.
+    -->
+    <exclude domain="file" path="progress_photos" />
+    <exclude domain="file" path="avatar.jpg" />
+
+    <!--
+        Crash reports, and the plaintext exports the share/export flows leave on disk. These are
+        scratch output the user already chose a destination for; re-uploading a copy to Drive is not
+        something they asked for, and the CSV/JSON files hold the same training data in the clear.
+
+        One directory rather than a list of filenames. The list named forge_export.json,
+        forge_rank_card.png and their siblings, none of which had been the real filenames since the
+        rename to avex_*: every plaintext export was reaching Drive on API 30 and below while this
+        file looked like it covered them. A path can drift out of date; a directory the writers all
+        go through (core/io/ExportFiles.kt) cannot.
+    -->
+    <exclude domain="file" path="crashes" />
+    <exclude domain="file" path="exports" />
+    <!-- The auto-backup slot itself: a zip of the database, already covered by the database entry
+         above. Backing it up doubles the payload for no recovery benefit. -->
+    <exclude domain="file" path="forge_auto_backup.zip" />
+    <!-- Older kept copies (BackupRepository.BACKUP_GENERATIONS). -->
+    <exclude domain="file" path="forge_auto_backup.1.zip" />
+    <exclude domain="file" path="forge_auto_backup.2.zip" />
+    <exclude domain="file" path="forge_auto_backup.zip.tmp" />
+    <exclude domain="file" path="forge_auto_backup.json" />
+</full-backup-content>

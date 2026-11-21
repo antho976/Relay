@@ -1,0 +1,1694 @@
+package com.forge.app.data.repo
+
+import android.content.Context
+import android.util.JsonWriter
+import android.net.Uri
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.edit
+import androidx.documentfile.provider.DocumentFile
+import com.forge.app.RestoreManifest
+import com.forge.app.core.crypto.BackupCrypto
+import com.forge.app.core.io.exportFile
+import com.forge.app.core.time.mondayStartMs
+import com.forge.app.data.db.ForgeDatabase
+import com.forge.app.data.db.forgeDatabaseBuilder
+import com.forge.app.data.db.dao.CardioDao
+import com.forge.app.data.db.dao.LoggedExerciseDao
+import com.forge.app.data.db.dao.LoggedSetDao
+import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.prefs.PreferenceKeys
+import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.domain.cardio.CardioActivity
+import com.forge.app.domain.cardio.CardioCondition
+import com.forge.app.security.BackupEncryption
+import dagger.hilt.android.qualifiers.ApplicationContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import javax.inject.Inject
+import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+
+/**
+ * Handles data export and backup operations (#5, #6, #86, #138).
+ * All exports go to app-private files directory — no storage permissions needed.
+ */
+@Singleton
+class BackupRepository @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val sessionDao: SessionDao,
+    private val loggedExerciseDao: LoggedExerciseDao,
+    private val loggedSetDao: LoggedSetDao,
+    private val cardioDao: CardioDao,
+    private val coachGoalDao: com.forge.app.data.db.dao.CoachGoalDao,
+    private val settingsRepo: SettingsRepository,
+    private val photoRepo: ProgressPhotoRepository,
+    private val avatarRepo: AvatarRepository,
+    private val grants: PersistedTreeGrants,
+    private val db: ForgeDatabase,
+    private val clock: com.forge.app.core.time.Clock,
+    private val encryption: BackupEncryption
+) {
+
+    /**
+     * Resolved per read, not captured once.
+     *
+     * This is a @Singleton, so a `val` snapshotted the device's zone for the whole process lifetime.
+     * Fly Auckland → London with the process alive and every export taken afterwards stamped its
+     * `date` column with NEW ZEALAND calendar days while the UI showed London ones — the file and
+     * the app disagreeing about which day each session happened on.
+     */
+    private val zone: ZoneId get() = ZoneId.systemDefault()
+    private val dateFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+
+    /** The outcome of a restore attempt — distinct reasons so the UI can explain a failure (E6). */
+    enum class RestoreOutcome {
+        SUCCESS, NOT_A_BACKUP, NEWER_VERSION, TOO_OLD, CORRUPT, TOO_LARGE, IO_ERROR, NO_BACKUP_FILE,
+        /** The backup is password-protected and this phone has no key for it: ask, then retry. */
+        NEEDS_PASSWORD,
+        /** The password given does not open this backup. */
+        WRONG_PASSWORD
+    }
+
+    /** A backup password is set but its key is unreadable; see [BackupEncryption.State.Unavailable]. */
+    class BackupPasswordUnavailableException :
+        java.io.IOException("Your backup password needs to be set again in Settings")
+
+    /** Stream one of the shared field maps (`exportSessionFields` and friends) into [JsonWriter]. */
+    private fun JsonWriter.fields(fields: Map<String, Any>) {
+        fields.forEach { (key, v) ->
+            name(key)
+            when (v) {
+                is Number -> value(v)
+                is Boolean -> value(v)
+                else -> value(v.toString())
+            }
+        }
+    }
+
+    /**
+     * How many ids go into one `WHERE id IN (…)` (P-01).
+     *
+     * SQLite caps bound variables per statement (999 on the versions Android ships); 900 leaves
+     * room for the rest of the statement and keeps the batching invisible to the caller.
+     */
+    private val SQLITE_BIND_CHUNK = 900
+
+    // ── Active-time helpers (per-sitting timing) ────────────────────────────────
+    /** Real active seconds: the stamped sum of sittings, falling back to wall-clock for old rows. */
+    private fun activeSecondsOf(s: com.forge.app.data.db.entities.Session): Int =
+        if (s.activeSeconds > 0) s.activeSeconds
+        else s.finishedAt?.let { ((it - s.startedAt) / 1000L).toInt().coerceAtLeast(0) } ?: 0
+
+    private fun activeMinutesOf(s: com.forge.app.data.db.entities.Session): Int = activeSecondsOf(s) / 60
+
+    /** Per-sitting breakdown: [{startedAt, durationSec}] so the 13+40 split is preserved in exports. */
+    private fun segmentsJson(segments: List<com.forge.app.data.db.entities.SessionSegment>): JSONArray {
+        val arr = JSONArray()
+        segments.forEach { seg ->
+            arr.put(JSONObject().apply {
+                put("startedAt", seg.startedAt)
+                put("durationSec", seg.endedAt?.let { ((it - seg.startedAt) / 1000L).coerceAtLeast(0) } ?: 0)
+            })
+        }
+        return arr
+    }
+
+    /** Export this week's data as JSON for AI analysis (#5). Returns the file path. */
+    suspend fun exportWeeklyJson(): File = withContext(Dispatchers.IO) {
+        val nowMs = clock.nowMs()
+        // The ISO week the app itself calls "this week" everywhere else, not a rolling 7 x 24 h from
+        // whenever Export was tapped — otherwise the file and the Stats screen describe different
+        // sets of sessions under the same heading.
+        val weekStartMs = mondayStartMs(nowMs, zone)
+        // Window on finish time so a session that started before the boundary but finished this
+        // week is still included in the export.
+        val sessions = sessionDao.finishedByFinishTimeInRange(weekStartMs, nowMs)
+        val cardioEntries = cardioDao.since(weekStartMs)
+
+        // Batched like the full export (P-01): one week is bounded, but the per-row shape was the
+        // same and there is no reason for it to be.
+        val weekIds = sessions.map { it.id }
+        val weekExercises = weekIds.chunked(SQLITE_BIND_CHUNK)
+            .flatMap { loggedExerciseDao.forSessions(it) }
+        val exercisesBySession = weekExercises.groupBy { it.sessionId }
+        val setsByExercise = weekExercises.map { it.id }.chunked(SQLITE_BIND_CHUNK)
+            .flatMap { loggedSetDao.forLoggedExercises(it) }
+            .groupBy { it.loggedExerciseId }
+        val moodBySession = weekIds.chunked(SQLITE_BIND_CHUNK)
+            .flatMap { db.moodDao().forSessions(it) }
+            .associateBy { it.sessionId }
+        val segmentsBySession = weekIds.chunked(SQLITE_BIND_CHUNK)
+            .flatMap { db.sessionSegmentDao().forSessions(it) }
+            .groupBy { it.sessionId }
+
+        val root = JSONObject().apply {
+            put("exportedAt", dateFmt.format(Instant.now().atZone(zone)))
+            // The current ISO week, so the numbers agree with everything the app calls "this week".
+            put("periodStart", dateFmt.format(java.time.Instant.ofEpochMilli(weekStartMs).atZone(zone)))
+            put("periodDays", 7)
+            val sessArr = JSONArray()
+            sessions.forEach { s ->
+                currentCoroutineContext().ensureActive()
+                val exercises = exercisesBySession[s.id].orEmpty()
+                // The exact `startedAt` is in the shared fields, alongside the human date. Without
+                // it a weekly export re-read at local midnight described a DIFFERENT session start
+                // from the full export's, so importing both files inserted every recent workout twice.
+                val sObj = JSONObject(exportSessionFields(s, activeSecondsOf(s), moodBySession[s.id]?.mood ?: "")).apply {
+                    put("date", dateFmt.format(Instant.ofEpochMilli(s.startedAt).atZone(zone)))
+                    put("activeMin", activeMinutesOf(s))
+                    put("segments", segmentsJson(segmentsBySession[s.id].orEmpty()))
+                    val exArr = JSONArray()
+                    exercises.forEach { ex ->
+                        val sets = setsByExercise[ex.id].orEmpty()
+                        exArr.put(JSONObject(exportExerciseFields(ex)).apply {
+                            // The weekly file's original spelling, kept for readers of this file.
+                            put("effort", ex.difficulty?.name ?: "")
+                            val setArr = JSONArray()
+                            sets.forEach { set ->
+                                setArr.put(JSONObject(exportSetFields(set)))
+                            }
+                            put("sets", setArr)
+                        })
+                    }
+                    put("exercises", exArr)
+                }
+                sessArr.put(sObj)
+            }
+            put("sessions", sessArr)
+            val cardioArr = JSONArray()
+            cardioEntries.forEach { c ->
+                cardioArr.put(JSONObject(exportCardioFields(c)).apply {
+                    // The human day beside the exact `date` instant.
+                    put("day", dateFmt.format(Instant.ofEpochMilli(c.date).atZone(zone)))
+                })
+            }
+            put("cardio", cardioArr)
+        }
+
+        // Fixed filename (overwrite) so repeated exports don't accumulate forever (#84).
+        publishExport("avex_weekly_export.json", root.toString(2))
+    }
+
+    /**
+     * Full data dump as JSON — every session + exercise + set + cardio entry + coach goal + a
+     * snapshot of key settings. It is human/AI-readable and `ForgeJsonImporter` MERGES it back in,
+     * so every field written here should be read there (round trip covered by
+     * `ExportImportRoundTripTest`). It is still not a restore source: the whole-DB backup
+     * ([backupToUri] / [restoreFromUri]) is. Named so it doesn't imply recoverability (#70).
+     */
+    suspend fun exportFullDataJson(onProgress: (done: Int, total: Int) -> Unit = { _, _ -> }): File =
+        withContext(Dispatchers.IO) {
+            val allSessions = sessionDao.allFinished()
+            val allCardio = cardioDao.since(0L)
+            val allCoachGoals = coachGoalDao.all()
+
+            // ── Everything the sessions need, in batches rather than per row (P-01) ──
+            //
+            // This used to run `3 + 3S + E` queries for S sessions and E exercises: exercises,
+            // mood and segments per session, then sets per exercise. A year of training is a
+            // thousand round trips through Room while the user waits on a file. Chunked because
+            // SQLite caps the number of bound variables in one statement, and grouped once.
+            val sessionIds = allSessions.map { it.id }
+            val exercises = sessionIds.chunked(SQLITE_BIND_CHUNK)
+                .flatMap { loggedExerciseDao.forSessions(it) }
+            val exercisesBySession = exercises.groupBy { it.sessionId }
+            val setsByExercise = exercises.map { it.id }.chunked(SQLITE_BIND_CHUNK)
+                .flatMap { loggedSetDao.forLoggedExercises(it) }
+                .groupBy { it.loggedExerciseId }
+            val moodBySession = sessionIds.chunked(SQLITE_BIND_CHUNK)
+                .flatMap { db.moodDao().forSessions(it) }
+                .associateBy { it.sessionId }
+            val segmentsBySession = sessionIds.chunked(SQLITE_BIND_CHUNK)
+                .flatMap { db.sessionSegmentDao().forSessions(it) }
+                .groupBy { it.sessionId }
+
+            // Streamed to a scratch file and renamed in, rather than built as one JSONObject tree
+            // and formatted into one String (P-01). Both of those held the entire export in memory
+            // at once — twice over, at the moment of formatting — and a half-written file could be
+            // read as a complete one.
+            val target = exportFile(context, "avex_export.json")
+            val scratch = File(target.parentFile, target.name + ".part")
+            // A cancelled or failed write must not leave a partial dump of the whole history in
+            // exports/, where nothing would ever clean it up.
+            scratch.deleteOnFailure { scratch.bufferedWriter().use { out ->
+                JsonWriter(out).use { w ->
+                    w.setIndent("  ")
+                    w.beginObject()
+                    w.name("exportVersion").value(1L)
+                    w.name("exportedAt").value(dateFmt.format(Instant.now().atZone(zone)))
+                    w.name("appVersion").value(com.forge.app.BuildConfig.VERSION_NAME)
+
+                    // User-facing preferences (the JSON export documents 'settings'). The whole-DB
+                    // VACUUM backup remains the authoritative restore source.
+                    w.name("settings").beginObject()
+                    w.name("useKg").value(settingsRepo.useKg.first())
+                    w.name("weightUnit").value(settingsRepo.weightUnit.first().label)
+                    w.name("userGoal").value(settingsRepo.userGoal.first())
+                    w.name("userName").value(settingsRepo.userName.first())
+                    w.name("daysPerWeek").value(settingsRepo.daysPerWeek.first().toLong())
+                    w.name("firstDayMonday").value(settingsRepo.firstDayMonday.first())
+                    w.endObject()
+
+                    w.name("sessions").beginArray()
+                    allSessions.forEachIndexed { index, s ->
+                        // Cooperative cancellation, per session: the loops below are CPU work, and
+                        // a user who navigates away from a long export was previously waited on.
+                        currentCoroutineContext().ensureActive()
+                        w.beginObject()
+                        w.fields(exportSessionFields(s, activeSecondsOf(s), moodBySession[s.id]?.mood ?: ""))
+                        w.name("segments").beginArray()
+                        segmentsBySession[s.id].orEmpty().forEach { seg ->
+                            w.beginObject()
+                            w.name("startedAt").value(seg.startedAt)
+                            w.name("durationSec")
+                                .value(seg.endedAt?.let { ((it - seg.startedAt) / 1000L).coerceAtLeast(0) } ?: 0L)
+                            w.endObject()
+                        }
+                        w.endArray()
+                        w.name("exercises").beginArray()
+                        exercisesBySession[s.id].orEmpty().forEach { ex ->
+                            w.beginObject()
+                            w.fields(exportExerciseFields(ex))
+                            w.name("sets").beginArray()
+                            setsByExercise[ex.id].orEmpty().forEach { set ->
+                                w.beginObject()
+                                w.fields(exportSetFields(set))
+                                w.endObject()
+                            }
+                            w.endArray()
+                            w.endObject()
+                        }
+                        w.endArray()
+                        w.endObject()
+                        onProgress(index + 1, allSessions.size)
+                    }
+                    w.endArray()
+
+                    w.name("cardio").beginArray()
+                    allCardio.forEach { c ->
+                        w.beginObject()
+                        w.fields(exportCardioFields(c))
+                        w.endObject()
+                    }
+                    w.endArray()
+
+                    // Coach goals (v3 A2). The ZIP backup carries every table automatically; this
+                    // hand-rolled JSON does not, so each coach phase adds its own rows here — goals
+                    // are exactly the kind of thing a user wants out of the app, and they were
+                    // invisible to the JSON export before.
+                    w.name("coachGoals").beginArray()
+                    allCoachGoals.forEach { g ->
+                        w.beginObject()
+                        w.name("kind").value(g.kind)
+                        w.name("targetKey").value(g.targetKey)
+                        g.targetValue?.let { w.name("targetValue").value(it) }
+                        w.name("priority").value(g.priority.toLong())
+                        w.name("createdAt").value(g.createdAt)
+                        g.completedAt?.let { w.name("completedAt").value(it) }
+                        g.archivedAt?.let { w.name("archivedAt").value(it) }
+                        w.name("source").value(g.source)
+                        w.name("note").value(g.note)
+                        w.endObject()
+                    }
+                    w.endArray()
+                    w.endObject()
+                }
+            } }
+            // Published by the rename, so a cancelled or failed export leaves the previous file
+            // rather than a truncated one under the name the user shares.
+            if (!scratch.renameTo(target)) {
+                target.delete()
+                if (!scratch.renameTo(target)) {
+                    scratch.delete()
+                    error("Could not publish ${target.name}")
+                }
+            }
+            target
+        }
+
+    /**
+     * Export a SINGLE finished session as JSON — the per-session "save this workout's data" action on
+     * the session detail page. Same lossy/human-readable shape as one entry of [exportFullDataJson],
+     * with library-resolved exercise names. Returns null when the session id no longer exists.
+     */
+    suspend fun exportSessionJson(sessionId: Long): File? = withContext(Dispatchers.IO) {
+        val s = sessionDao.get(sessionId) ?: return@withContext null
+        val exercises = loggedExerciseDao.forSession(s.id)
+        // One query for every exercise's sets (P-01), ordered by set_index within each exercise.
+        val setsByExercise = if (exercises.isEmpty()) emptyMap()
+        else loggedSetDao.forLoggedExercises(exercises.map { it.id }).groupBy { it.loggedExerciseId }
+        val root = JSONObject().apply {
+            put("exportVersion", 1)
+            put("exportedAt", dateFmt.format(Instant.now().atZone(zone)))
+            put("appVersion", com.forge.app.BuildConfig.VERSION_NAME)
+            put("session", JSONObject(exportSessionFields(s, activeSecondsOf(s), db.moodDao().forSession(s.id)?.mood ?: "")).apply {
+                put("date", dateFmt.format(Instant.ofEpochMilli(s.startedAt).atZone(zone)))
+                put("segments", segmentsJson(db.sessionSegmentDao().forSession(s.id)))
+                val exArr = JSONArray()
+                exercises.forEach { ex ->
+                    val sets = setsByExercise[ex.id].orEmpty()
+                    exArr.put(JSONObject(exportExerciseFields(ex)).apply {
+                        val setArr = JSONArray()
+                        sets.forEach { set ->
+                            setArr.put(JSONObject(exportSetFields(set)))
+                        }
+                        put("sets", setArr)
+                    })
+                }
+                put("exercises", exArr)
+            })
+        }
+        // Session-id in the filename so saving several sessions doesn't overwrite one another (and a
+        // re-export of the same session overwrites its own file rather than accumulating).
+        publishExport("avex_session_${s.id}.json", root.toString(2))
+    }
+
+    /**
+     * RFC 4180 CSV field: quote and double embedded quotes when the value holds a comma/quote/newline.
+     *
+     * Also neutralises spreadsheet formulas (CWE-1236). Every text column here can hold something
+     * the user did not type: an exercise name kept verbatim from a Strong or Hevy import, a day key
+     * from an imported Avex JSON. A cell starting with `=`, `+`, `-`, `@`, tab or CR is evaluated by
+     * Excel, Sheets and LibreOffice when the file is opened, so `=HYPERLINK("http://…?"&A1,"Bench")`
+     * would read the sheet out to a stranger's server. Such a cell gets a leading apostrophe, the
+     * OWASP-recommended escape, which every spreadsheet shows as plain text. Numeric columns are not
+     * written through here, so a negative number is unaffected.
+     */
+    private fun csv(value: String): String {
+        val formula = value.firstOrNull() in FORMULA_TRIGGERS
+        val safe = if (formula) "'$value" else value
+        return if (formula || safe.any { it == ',' || it == '"' || it == '\n' || it == '\r' })
+            "\"" + safe.replace("\"", "\"\"") + "\""
+        else safe
+    }
+
+    /** Run [block], deleting this scratch file if it throws (cancellation included). */
+    private inline fun <T> File.deleteOnFailure(block: () -> T): T =
+        try { block() } catch (e: Throwable) { delete(); throw e }
+
+    /**
+     * Write an export under [name] by writing a scratch file and renaming it in.
+     *
+     * `writeText` truncates the target first, so a second tap on the same export, or a crash or full
+     * disk mid-write, left a half file under the name a share receiver may still be reading. The
+     * rename is atomic within the directory, so a reader sees the old file or the new one, never a
+     * prefix. The scratch never outlives a failure.
+     */
+    private fun publishExport(name: String, text: String): File {
+        val target = exportFile(context, name)
+        val scratch = File(target.parentFile, "$name.part")
+        scratch.deleteOnFailure {
+            scratch.writeText(text)
+            if (!scratch.renameTo(target)) {
+                target.delete()
+                if (!scratch.renameTo(target)) error("Could not publish $name")
+            }
+        }
+        return target
+    }
+
+    /** Export as CSV — sessions summary (#138). */
+    suspend fun exportSessionsCsv(): File = withContext(Dispatchers.IO) {
+        val allSessions = sessionDao.allFinished()
+        val sb = StringBuilder()
+        sb.appendLine("id,dayKey,date,durationMin,volumeLb,prs,sets,intensity,tags")
+        allSessions.forEach { s ->
+            val date = dateFmt.format(Instant.ofEpochMilli(s.startedAt).atZone(zone))
+            // Active (summed-sittings) minutes, NOT wall-clock — a "resume later" session spanning
+            // days must report real training time, matching the JSON/PDF exports.
+            val dur = activeMinutesOf(s)
+            sb.appendLine("${s.id},${csv(s.dayKey)},$date,$dur,${s.totalVolumeLb ?: 0},${s.prCount},${s.setCount},${csv(s.intensity)},${csv(s.tags)}")
+        }
+        // Fixed filename (overwrite) — see #84.
+        publishExport("avex_sessions.csv", sb.toString())
+    }
+
+    /**
+     * All-time best lift per exercise (the "hall of fame") as CSV — PRs are the most personally
+     * motivating records to share or keep (#542). One row per exercise: its heaviest tracked set ever.
+     * Reuses the same tracked/non-assisted set projection the Stats hall of fame is built from.
+     */
+    suspend fun exportPrsCsv(): File = withContext(Dispatchers.IO) {
+        val sets = loggedSetDao.observeAllFinishedSetsWithSession().first()
+        val sb = StringBuilder()
+        sb.appendLine("exercise,muscle,bestWeightLb,reps,date")
+        // Reuse the exact aggregation the Stats hall of fame renders from, so the exported PRs can
+        // never diverge from what the user sees in-app (one place to fix tie-breaking / attribution).
+        buildHallOfFame(sets).forEach { pr ->
+            val date = dateFmt.format(Instant.ofEpochMilli(pr.sessionDate).atZone(zone))
+            sb.appendLine("${csv(pr.exerciseName)},${csv(pr.muscle?.displayName.orEmpty())},${pr.maxWeightLb},${pr.bestReps},$date")
+        }
+        publishExport("avex_prs.csv", sb.toString())
+    }
+
+    /** Every bodyweight weigh-in as CSV (Cat 11). One row per entry, newest first. */
+    suspend fun exportBodyweightCsv(): File = withContext(Dispatchers.IO) {
+        val entries = db.bodyweightDao().all()
+        val sb = StringBuilder()
+        sb.appendLine("date,weightLb")
+        entries.forEach { e -> sb.appendLine("${e.dateKey},${e.weightLb}") }
+        publishExport("avex_bodyweight.csv", sb.toString())
+    }
+
+    /**
+     * Every cardio entry as CSV (GYMAP-43). One row per entry, newest first. The type is resolved to
+     * its display name (custom activities included, GYMAP-37) so the sheet reads as words, not raw
+     * `custom_…` codes; distance stays canonical km like the other exports' canonical-unit columns.
+     */
+    suspend fun exportCardioCsv(): File = withContext(Dispatchers.IO) {
+        val entries = cardioDao.since(0L)
+        val customs = settingsRepo.customCardioTypes.first()
+        val sb = StringBuilder()
+        // Per-type columns (GYMAP-38) trail the note; elevation stays canonical metres like distanceKm.
+        // Conditions (GYMAP-39) trail last, resolved to words (" · " joined) like the type column.
+        sb.appendLine("date,type,durationMin,distanceKm,effort,restReason,intervals,hrZone,note,inclinePct,laps,elevationM,conditions")
+        entries.forEach { e ->
+            val date = dateFmt.format(Instant.ofEpochMilli(e.date).atZone(zone))
+            val typeName = CardioActivity.resolve(e.type, customs).displayName
+            val conditions = CardioCondition.decode(e.conditions).joinToString(" · ") { it.displayName }
+            sb.appendLine(
+                "$date,${csv(typeName)},${e.durationMin},${e.distanceKm ?: ""}," +
+                    "${csv(e.effort ?: "")},${csv(e.restReason ?: "")},${e.intervalCount ?: ""}," +
+                    "${csv(e.hrZone ?: "")},${csv(e.note ?: "")},${e.inclinePct ?: ""},${e.laps ?: ""},${e.elevationM ?: ""}," +
+                    csv(conditions)
+            )
+        }
+        publishExport("avex_cardio.csv", sb.toString())
+    }
+
+    /** Total on-disk database size (main file + WAL + SHM), in bytes — the Data dialog readout. */
+    fun dbSizeBytes(): Long {
+        val base = context.getDatabasePath(DB_NAME)
+        return listOf(base.path, "${base.path}-wal", "${base.path}-shm")
+            .sumOf { p -> File(p).takeIf { it.exists() }?.length() ?: 0L }
+    }
+
+    /**
+     * Auto-backup: runs silently into the weekly auto-backup slots (#86). Writes a real,
+     * RESTORABLE ZIP (DB + prefs + progress photos) — the same format as [backupToUri] — instead of
+     * the lossy JSON export it used to write, which nothing could ever read back in.
+     *
+     * Keeps [BACKUP_GENERATIONS] copies, newest first, instead of one. A single slot meant a copy
+     * that went bad (a flash fault, a bug in the build that wrote it, data the user damaged and
+     * then backed up) had already replaced the last good one. The new copy is read back and checked
+     * end to end ([verifyBackup]) BEFORE anything older moves, so a bad write never costs a good
+     * copy, and copies are kept at least [MIN_GENERATION_SPACING_MS] apart so tapping "Back up now"
+     * a few times refreshes the newest instead of pushing every older one out.
+     */
+    suspend fun autoBackup(folderUri: Uri? = null): File = autoBackupWithFolderStatus(folderUri).file
+
+    /** What one [autoBackupWithFolderStatus] run did: the internal copy always exists, the folder's may not. */
+    data class AutoBackupResult(val file: File, val folderFailed: Boolean)
+
+    /**
+     * [autoBackup], reporting whether the picked-folder mirror failed. The folder write never fails
+     * the backup, since the internal copy already succeeded; but "Back up now" must not tell the
+     * user an off-device copy exists when a revoked grant, a removed card or a full provider meant
+     * none was written. The automatic worker keeps calling [autoBackup] and ignores it.
+     */
+    suspend fun autoBackupWithFolderStatus(folderUri: Uri? = null): AutoBackupResult = withContext(Dispatchers.IO) {
+        var folderFailed = false
+        val file = generationFile(0)
+        val tmp = File(context.filesDir, AUTO_BACKUP_TMP_NAME)
+        // Resolved before the snapshot: with a password set but its key unreadable, this throws
+        // rather than writing the weekly copy unencrypted behind the user's back.
+        val key = backupKeyOrNull()
+        val snap = try { snapshotDatabase() } catch (e: Throwable) { key?.wipe(); throw e }
+        try {
+            // Write to a temp file and rename over the slot, rather than truncating the slot and
+            // writing into it. `File.outputStream()` truncates on open, so the old behaviour
+            // destroyed the previous good backup the instant it started writing — and a failure
+            // part-way (ENOSPC is the likely one, since a full disk is exactly when a backup is
+            // attempted and fails) left a truncated, unrestorable zip. autoBackupSavedAtMs() reads
+            // this file's mtime, so the user was then shown a fresh "last backed up" date for a
+            // backup that could not be restored. rename(2) within a directory is atomic, so the
+            // slot now only ever holds a complete zip.
+            tmp.delete()
+            tmp.outputStream().use { out -> writeBackupZip(out, snap, key) }
+            if (!tmp.inputStream().use { verifyBackup(it, key) }) {
+                throw java.io.IOException("the new backup did not read back correctly")
+            }
+            // A factory reset is running (or was interrupted and will finish at boot). This backup
+            // snapshotted the data the user just asked to erase, and landing it in the slot would
+            // bring a copy of it back after [deleteLocalCopies] ran (2026-09-26 audit, D2). The
+            // worker retries later, by which time the reset is done and the snapshot is the new,
+            // empty state.
+            if (factoryResetPending()) throw java.io.IOException("factory reset in progress")
+            if (file.exists() && isOlderThanSpacing(file.lastModified())) rotateGenerations()
+            if (!tmp.renameTo(file)) {
+                // Same-directory rename should not fail on Android. If it somehow does, keep the
+                // previous backup instead of truncating it for a copy we cannot guarantee; the
+                // worker retries, and records a failure the user can see once retries run out.
+                throw java.io.IOException("could not replace $AUTO_BACKUP_NAME")
+            }
+            // The reset may have started between the check and the rename; if it has, its sweep
+            // may already be past this file, so take the copy back out ourselves.
+            if (factoryResetPending()) {
+                (0 until BACKUP_GENERATIONS).forEach { generationFile(it).delete() }
+                throw java.io.IOException("factory reset in progress")
+            }
+            // Also mirror into a user-picked folder so the backup survives an uninstall (GYMAP-67). A
+            // folder write must not fail the whole backup — the internal copy already succeeded.
+            if (folderUri != null) {
+                folderFailed = !runCatching { writeZipToFolder(folderUri, snap, key) }.getOrDefault(false)
+            }
+        } finally {
+            tmp.delete()
+            snap.delete()
+            key?.wipe()
+        }
+        // Drop the stale lossy JSON slot from earlier builds so it can't mislead a future restore.
+        File(context.filesDir, LEGACY_AUTO_BACKUP_JSON).delete()
+        // A successful write clears any prior "last backup failed" marker.
+        File(context.filesDir, AUTO_BACKUP_FAILED_MARKER).delete()
+        AutoBackupResult(file, folderFailed)
+    }
+
+    /** The internal slot for [generation] copies back; 0 keeps the name the single slot always had. */
+    private fun generationFile(generation: Int): File = File(context.filesDir, generationName(generation))
+
+    /** True when a copy saved at [savedAtMs] is old enough to be kept rather than refreshed. */
+    private fun isOlderThanSpacing(savedAtMs: Long): Boolean =
+        clock.nowMs() - savedAtMs >= MIN_GENERATION_SPACING_MS
+
+    /**
+     * Shift every internal copy back one generation, dropping the oldest, to free slot 0. A rename
+     * that fails leaves that copy where it was; the caller's rename into slot 0 then refuses to
+     * clobber it rather than losing it silently.
+     */
+    private fun rotateGenerations() {
+        for (g in BACKUP_GENERATIONS - 1 downTo 1) {
+            val src = generationFile(g - 1)
+            if (!src.exists()) continue
+            val dst = generationFile(g)
+            dst.delete()
+            src.renameTo(dst)
+        }
+    }
+
+    /**
+     * Read a just-written backup back from the start and check it end to end: every segment
+     * authenticates (password-protected) and every ZIP entry's CRC matches, with the database
+     * entry present. A copy that fails here is never allowed to replace an older one.
+     */
+    private fun verifyBackup(input: java.io.InputStream, key: BackupCrypto.MasterKey?): Boolean = try {
+        val buffered = input.buffered()
+        val plain = if (key == null) buffered else {
+            val header = BackupCrypto.readHeader(buffered) ?: return false
+            BackupCrypto.decryptingStream(header, key, buffered)
+        }
+        var sawDb = false
+        val zin = java.util.zip.ZipInputStream(plain)
+        val sink = ByteArray(64 * 1024)
+        var entry = zin.nextEntry
+        while (entry != null) {
+            if (entry.name == ZIP_DB_ENTRY) sawDb = true
+            while (zin.read(sink) >= 0) Unit // an entry's CRC is checked as its last byte is read
+            entry = zin.nextEntry
+        }
+        // The ZIP reader stops at the central directory; the rest of the file is still ours to
+        // authenticate, so a damaged tail cannot pass.
+        while (plain.read(sink) >= 0) Unit
+        sawDb
+    } catch (e: java.io.IOException) {
+        false
+    }
+
+    /**
+     * Write the full backup zip into a user-granted SAF tree, keeping older copies (GYMAP-67).
+     * Returns false when no verified copy ended up under [AUTO_BACKUP_NAME], so the caller can say so.
+     */
+    private fun writeZipToFolder(folderUri: Uri, snap: File, key: BackupCrypto.MasterKey?): Boolean {
+        val tree = DocumentFile.fromTreeUri(context, folderUri) ?: return false
+        // Write the replacement under a temp name FIRST, then retire the old one. Deleting the
+        // previous backup before creating its replacement (the old order) meant any failure below
+        // left the folder with NO backup: createFile returning null on a revoked grant,
+        // openOutputStream returning null, or the volume filling mid-write. The caller wraps this
+        // in runCatching and clears the "backup failed" marker regardless, so the user was told
+        // the backup succeeded while their off-device copy had just been deleted.
+        tree.findFile(FOLDER_TMP_NAME)?.delete()
+        val tmp = tree.createFile("application/zip", FOLDER_TMP_NAME) ?: return false
+        val wrote = runCatching {
+            val out = context.contentResolver.openOutputStream(tmp.uri) ?: return@runCatching false
+            out.use { writeBackupZip(it, snap, key) }
+            true
+        }.getOrDefault(false)
+        // Read back through the provider, which is the copy that matters: a cloud-synced folder or
+        // an SD card can store something other than what was written.
+        val verified = wrote && runCatching {
+            context.contentResolver.openInputStream(tmp.uri)?.use { verifyBackup(it, key) } ?: false
+        }.getOrDefault(false)
+        if (!verified) { tmp.delete(); return false }
+        // The replacement is complete and checked: only now move the older copies back and take
+        // the newest name. If a rename fails the data is still present under its old name, so
+        // leave it rather than deleting a copy in this folder.
+        val latest = tree.findFile(AUTO_BACKUP_NAME)
+        if (latest != null && isOlderThanSpacing(latest.lastModified())) {
+            for (g in BACKUP_GENERATIONS - 1 downTo 1) {
+                val src = tree.findFile(generationName(g - 1)) ?: continue
+                tree.findFile(generationName(g))?.delete()
+                if (!src.renameTo(generationName(g))) break
+            }
+        }
+        // The old newest copy is set aside rather than deleted, and only removed once the new one
+        // holds its name: a provider whose rename fails would otherwise have lost the old copy for
+        // a verified one stranded under the .part name that restore never offers.
+        val current = tree.findFile(AUTO_BACKUP_NAME)
+        if (current != null) {
+            tree.findFile(FOLDER_OLD_NAME)?.delete()
+            if (!current.renameTo(FOLDER_OLD_NAME)) { tmp.delete(); return false }
+        }
+        if (!tmp.renameTo(AUTO_BACKUP_NAME)) {
+            tree.findFile(FOLDER_OLD_NAME)?.renameTo(AUTO_BACKUP_NAME)
+            tmp.delete()
+            return false
+        }
+        tree.findFile(FOLDER_OLD_NAME)?.delete()
+        return true
+    }
+
+    /**
+     * How many kept auto-backup copies, on this phone and in [folderUri], are NOT password-protected.
+     * Enabling a password only seals the copy written next, so older generations stay readable
+     * without it until they rotate out; the caller says so rather than claim everything is protected.
+     * Never deletes anything: files in the user's folder are theirs.
+     */
+    suspend fun unprotectedBackupCopies(folderUri: Uri?): Int = withContext(Dispatchers.IO) {
+        var count = (0 until BACKUP_GENERATIONS).count { g ->
+            generationFile(g).let { it.exists() && !BackupCrypto.isEncrypted(it) }
+        }
+        val tree = folderUri?.let { runCatching { DocumentFile.fromTreeUri(context, it) }.getOrNull() }
+        if (tree != null) {
+            count += (0 until BACKUP_GENERATIONS).count { g ->
+                runCatching {
+                    val doc = tree.findFile(generationName(g)) ?: return@runCatching false
+                    val head = ByteArray(16) // the container magic is shorter than this
+                    val read = context.contentResolver.openInputStream(doc.uri)?.use { ins ->
+                        java.io.DataInputStream(ins).readFully(head); true
+                    } ?: false
+                    read && !BackupCrypto.hasMagic(head)
+                }.getOrDefault(false)
+            }
+        }
+        count
+    }
+
+    /**
+     * Take a persistable read+write grant on the picked backup folder and remember it (GYMAP-67).
+     *
+     * A folder being REPLACED has its own grant released afterwards (M-18): a persisted grant lives
+     * until it is revoked or released, so choosing folder B while A was connected used to leave
+     * Avex holding A across reboots — read AND write access to a tree the user could no longer see
+     * anywhere in the app. Replaced destinations accumulated one grant each.
+     *
+     * The new grant is taken FIRST and the old one released only after the preference has moved, so
+     * a failure anywhere in between leaves the app with access to the folder it is pointing at
+     * rather than to neither.
+     */
+    suspend fun rememberBackupFolder(treeUri: Uri): Boolean = withContext(Dispatchers.IO) {
+        // Taking the new grant is a PRECONDITION, not a best-effort first step (M-18). Its failure
+        // used to be swallowed: the preference moved to the new folder and the old grant was
+        // released, so once the picker's own transient permission expired Avex could open neither —
+        // and the backup it ran immediately afterwards succeeded, hiding it until the weekly job.
+        if (!grants.take(treeUri, write = true)) return@withContext false
+        val previous = settingsRepo.backupFolderUri.first()
+        settingsRepo.setBackupFolderUri(treeUri.toString())
+        if (previous != null && previous != treeUri.toString()) {
+            grants.releaseUnlessSharedWith(previous, PersistedTreeGrants.Owner.BACKUP)
+        }
+        true
+    }
+
+    /**
+     * Stop mirroring backups to a folder, and give up the access that went with it (M-18).
+     *
+     * Clearing the preference alone left the persisted grant in place: "Remove folder" reported
+     * that Avex was no longer connected to the tree while it kept read and write access to it
+     * indefinitely, surviving reboots. The preference is cleared first — that is what the user
+     * asked for and it must not depend on the release succeeding.
+     */
+    suspend fun forgetBackupFolder(): Boolean = withContext(Dispatchers.IO) {
+        val previous = settingsRepo.backupFolderUri.first()
+        settingsRepo.setBackupFolderUri(null)
+        // Reported rather than swallowed: a release that fails after the preference is cleared
+        // leaves access nothing in Settings names — exactly the invisible retained grant this
+        // finding is about, reached from the other end.
+        previous?.let { grants.releaseUnlessSharedWith(it, PersistedTreeGrants.Owner.BACKUP) } ?: true
+    }
+
+    /** True while a factory reset holds its marker; see [ResetRepository.PENDING_FACTORY_RESET]. */
+    private fun factoryResetPending(): Boolean =
+        File(context.filesDir, ResetRepository.PENDING_FACTORY_RESET).exists()
+
+    /**
+     * Delete every copy of the user's data that backup, export and crash logging keep INSIDE the
+     * app, for a factory reset.
+     *
+     * The reset wiped the tables, photos and preferences and left all of this behind (2026-09-26
+     * audit, D2, open since 2026-09-12): the weekly auto-backup ZIP, which holds the whole database,
+     * the preferences and every progress photo, so Settings offered "Restore last auto-backup" right
+     * after "Deletes ALL data"; the CSV/JSON/PDF exports under `exports/`; and the crash logs under
+     * `crashes/`. The privacy policy promised the lot was erased.
+     *
+     * Also the markers ("last backup failed", "you have a backup"), which would otherwise describe a
+     * backup that no longer exists; a staged restore, which the next boot would otherwise swap in
+     * over the fresh install; and any snapshot or restore scratch in `cacheDir`.
+     *
+     * Copies the user saved to a folder they picked (Downloads, a cloud drive, the auto-backup
+     * folder) are outside the app and are left alone: those are theirs to delete, and the policy
+     * says so. Best effort throughout: a file that won't delete must not stop the rest.
+     */
+    suspend fun deleteLocalCopies() = withContext(Dispatchers.IO) {
+        ((0 until BACKUP_GENERATIONS).map { generationName(it) } + listOf(
+            AUTO_BACKUP_TMP_NAME, LEGACY_AUTO_BACKUP_JSON,
+            AUTO_BACKUP_FAILED_MARKER, MANUAL_BACKUP_MARKER
+        )).forEach { name -> runCatching { File(context.filesDir, name).delete() } }
+        clearPendingRestore()
+        runCatching { File(context.filesDir, com.forge.app.core.io.EXPORTS_DIR).deleteRecursively() }
+        runCatching { File(context.filesDir, CRASH_LOG_DIR).deleteRecursively() }
+        // The backup password is a setting like any other, and the reset clears settings. Backups
+        // already saved outside the app keep needing it, which is what the reset dialog promises.
+        runCatching { encryption.clear() }
+        runCatching {
+            context.cacheDir.listFiles()?.forEach { f ->
+                if (TEMP_PREFIXES.any { f.name.startsWith(it) }) f.deleteRecursively()
+            }
+        }
+        Unit
+    }
+
+    /** When the auto-backup slot was last written, or null if none exists yet (#86 restore affordance). */
+    fun autoBackupSavedAtMs(): Long? = autoBackupCopies().maxOfOrNull { it.savedAtMs }
+
+    /** One kept internal auto-backup: [generation] 0 is the newest. */
+    data class AutoBackupCopy(val generation: Int, val savedAtMs: Long)
+
+    /** Every internal auto-backup copy on disk, newest first, for the restore picker. */
+    fun autoBackupCopies(): List<AutoBackupCopy> =
+        (0 until BACKUP_GENERATIONS).mapNotNull { g ->
+            generationFile(g).takeIf { it.exists() }?.let { AutoBackupCopy(g, it.lastModified()) }
+        }.sortedByDescending { it.savedAtMs }
+
+    /**
+     * The weekly auto-backup worker exhausted its retries (e.g. storage full): record it so Settings can
+     * surface a "last backup failed" notice rather than the user silently losing their periodic backup.
+     * Cleared automatically by the next successful [autoBackup].
+     */
+    fun recordAutoBackupFailure() {
+        runCatching { File(context.filesDir, AUTO_BACKUP_FAILED_MARKER).writeText("1") }
+    }
+
+    /** True when the most recent auto-backup attempt failed and none has succeeded since. */
+    fun autoBackupFailed(): Boolean = File(context.filesDir, AUTO_BACKUP_FAILED_MARKER).exists()
+
+    /** True once any restorable backup exists — the silent weekly auto-slot OR a manual export (#5 P1). */
+    fun hasAnyBackup(): Boolean =
+        autoBackupSavedAtMs() != null || File(context.filesDir, MANUAL_BACKUP_MARKER).exists()
+
+    /** Nudge the user to back up when they have data worth protecting but no backup exists yet. */
+    suspend fun shouldWarnNoBackup(): Boolean = !hasAnyBackup() && sessionDao.finishedCount() > 0
+
+    /** Plain-English summary of the live data a restore would REPLACE — shown in the confirm dialog. */
+    suspend fun restoreImpactSummary(): String {
+        val sessions = sessionDao.finishedCount()
+        val photos = runCatching { photoRepo.photos().size }.getOrDefault(0)
+        return buildList {
+            add("$sessions session${if (sessions == 1) "" else "s"}")
+            if (photos > 0) add("$photos progress photo${if (photos == 1) "" else "s"}")
+        }.joinToString(" · ")
+    }
+
+    // ─── Complete database backup & restore ───────────────────────────────────
+    // Unlike the JSON exports above (lossy + app-private), these capture the *entire*
+    // database file PLUS the DataStore preferences (settings + the whole program-generation
+    // config), zipped together (#14). A backup grabs every table and column — including any
+    // added later — and restore brings both back. The real safety net. Legacy raw-.db
+    // backups (pre-#14) still restore via the format sniff in restoreFromUri.
+
+    /**
+     * Consolidated single-file snapshot of the whole DB. Written to cache; callers stream it to a
+     * user-chosen destination.
+     *
+     * Preferred path is `VACUUM INTO` — one file, no WAL/-shm sidecars, a consistent point-in-time
+     * copy. But `VACUUM INTO` needs SQLite ≥ 3.27, which only ships with Android 11+ (the bundled
+     * SQLite is tied to the OS version); on older devices it fails to compile with
+     * "near 'INTO': syntax error". So we fall back to
+     * reading the source under a transaction into a separate SQLite database. Queries include
+     * committed WAL frames and one pinned snapshot; no live-file copy or checkpoint assumption.
+     */
+    private fun snapshotDatabase(): File {
+        sweepStaleTemps()
+        val temp = File(context.cacheDir, "forge_snapshot_${System.currentTimeMillis()}.db")
+        if (temp.exists()) temp.delete()
+        val writable = db.openHelper.writableDatabase
+        try {
+            val safePath = temp.absolutePath.replace("'", "''")
+            writable.execSQL("VACUUM INTO '$safePath'")
+        } catch (vacuumError: Throwable) {
+            // Old-SQLite fallback. Start from a clean temp in case VACUUM left a partial file.
+            if (temp.exists()) temp.delete()
+            try {
+                com.forge.app.data.db.copySqliteSnapshot(writable, temp)
+            } catch (copyError: Throwable) {
+                temp.delete() // don't leave a half-written snapshot in cache if both paths fail
+                vacuumError.addSuppressed(copyError)
+                throw vacuumError
+            }
+        }
+        return temp
+    }
+
+    /**
+     * Write a complete backup to a user-picked [uri] (e.g. Downloads). Survives uninstall,
+     * unlike the app-private exports. The backup is a ZIP of the DB snapshot + the DataStore
+     * preferences file, so a restore brings settings back too (#14).
+     */
+    suspend fun backupToUri(uri: Uri) = withContext(Dispatchers.IO) {
+        val key = backupKeyOrNull()
+        val snap = try { snapshotDatabase() } catch (e: Throwable) { key?.wipe(); throw e }
+        try {
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                writeBackupZip(out, snap, key)
+            } ?: error("Could not open the chosen destination")
+            // Read it back through the provider before calling it saved. A destination that
+            // won't hand the file back (some cloud providers) is taken on trust, as before.
+            val verified = context.contentResolver.openInputStream(uri)?.use { verifyBackup(it, key) }
+            if (verified == false) {
+                throw java.io.IOException("The backup didn't read back correctly. Try another location")
+            }
+        } finally {
+            snap.delete()
+            key?.wipe()
+        }
+        // Only reached on success: a fresh manual backup clears any stale "auto-backup failed" notice
+        // (the user now has a recent backup, which is exactly what that warning asks them to make).
+        File(context.filesDir, AUTO_BACKUP_FAILED_MARKER).delete()
+        // Record that the user has made a real, user-controlled backup — drives the "no backup yet"
+        // nudge ([shouldWarnNoBackup]). The silent weekly auto-slot also counts (see [hasAnyBackup]).
+        runCatching { File(context.filesDir, MANUAL_BACKUP_MARKER).writeText("1") }
+    }
+
+    /** Delete the document a picker created for a backup that is not going ahead (the unlock for it
+     *  was refused). Best effort: a provider that can't delete leaves an empty file, nothing worse. */
+    suspend fun discardBackupTarget(uri: Uri) = withContext(Dispatchers.IO) {
+        runCatching { android.provider.DocumentsContract.deleteDocument(context.contentResolver, uri) }
+        Unit
+    }
+
+    /**
+     * Writes the backup archive to [out]: the DB snapshot, the DataStore prefs (if present), and
+     * every progress-photo file (under [PHOTOS_PREFIX]). Shared by [backupToUri] and [autoBackup]
+     * so the two formats can never drift. The ZipOutputStream's use{} closes [out].
+     *
+     * With a [key], the ZIP is sealed into the encrypted container ([BackupCrypto]) as it is
+     * written, so no plaintext copy of the archive ever touches the destination.
+     */
+    private fun writeBackupZip(out: java.io.OutputStream, snap: File, key: BackupCrypto.MasterKey?) {
+        val sink = key?.let { BackupCrypto.encryptingStream(out, it) } ?: out
+        java.util.zip.ZipOutputStream(sink).use { zip ->
+            zip.putNextEntry(java.util.zip.ZipEntry(ZIP_DB_ENTRY))
+            snap.inputStream().use { it.copyTo(zip) }
+            zip.closeEntry()
+            // Preferences may not exist yet on a brand-new install — only add if present.
+            val prefs = preferencesFile()
+            if (prefs.exists()) {
+                zip.putNextEntry(java.util.zip.ZipEntry(ZIP_PREFS_ENTRY))
+                prefs.inputStream().use { it.copyTo(zip) }
+                zip.closeEntry()
+            }
+            // Progress photos live as files outside the DB (ProgressPhotoRepository) — fold the
+            // library in so a restore brings the physique photos back too (#138). Flat:
+            // progress_photos/<name>. Only what the index names, plus the index itself: zipping the
+            // folder's whole listing carried every orphaned image an interrupted import had left
+            // behind, hidden from the gallery, into every archive.
+            val library = photoRepo.backupSnapshot()
+            library.metadata.forEach { (name, bytes) ->
+                zip.putNextEntry(java.util.zip.ZipEntry("$PHOTOS_PREFIX$name"))
+                zip.write(bytes)
+                zip.closeEntry()
+            }
+            library.photos.forEach { f ->
+                zip.putNextEntry(java.util.zip.ZipEntry("$PHOTOS_PREFIX${f.name}"))
+                f.inputStream().use { it.copyTo(zip) }
+                zip.closeEntry()
+            }
+            // The profile avatar (single app-private file) — folded in like the photos. exists() is
+            // length-checked, so a stray zero-byte avatar.jpg can't be zipped and later overwrite a good one.
+            if (avatarRepo.exists()) {
+                zip.putNextEntry(java.util.zip.ZipEntry(ZIP_AVATAR_ENTRY))
+                avatarRepo.file.inputStream().use { it.copyTo(zip) }
+                zip.closeEntry()
+            }
+        }
+    }
+
+    /**
+     * The key new backups are sealed with, or null for a plain ZIP. The caller wipes it when done.
+     * Throws when a password is set but its key cannot be read: a backup the user asked to have
+     * protected must fail visibly rather than go out in the clear.
+     */
+    private fun backupKeyOrNull(): BackupCrypto.MasterKey? = when (val s = encryption.state()) {
+        BackupEncryption.State.Off -> null
+        is BackupEncryption.State.On -> s.key
+        BackupEncryption.State.Unavailable -> throw BackupPasswordUnavailableException()
+    }
+
+    /**
+     * Decrypt a password-protected backup in [sealed] into [plain].
+     *
+     * This phone's own key is tried first when the file was made under it (the weekly slot, or a
+     * backup saved from here), so restoring on the same phone needs no typing. Otherwise the key is
+     * re-derived from [password], or [RestoreOutcome.NEEDS_PASSWORD] asks the caller for one.
+     * Returns SUCCESS when [plain] holds the whole, authenticated archive.
+     */
+    private fun decryptBackup(sealed: File, plain: File, password: CharArray?): RestoreOutcome {
+        sealed.inputStream().buffered().use { input ->
+            val header = BackupCrypto.readHeader(input) ?: return RestoreOutcome.CORRUPT
+            val own = (encryption.state() as? BackupEncryption.State.On)?.key
+            val key = when {
+                own != null && own.matches(header) -> own
+                password != null -> { own?.wipe(); BackupCrypto.masterKeyFor(header, password) }
+                else -> { own?.wipe(); return RestoreOutcome.NEEDS_PASSWORD }
+            }
+            try {
+                val result = plain.outputStream().use { out ->
+                    BackupCrypto.decrypt(header, key, input, out, MAX_RESTORE_BYTES)
+                }
+                return when (result) {
+                    BackupCrypto.DecryptResult.Ok -> RestoreOutcome.SUCCESS
+                    BackupCrypto.DecryptResult.WrongPassword ->
+                        if (password == null) RestoreOutcome.NEEDS_PASSWORD else RestoreOutcome.WRONG_PASSWORD
+                    BackupCrypto.DecryptResult.Corrupt -> RestoreOutcome.CORRUPT
+                    BackupCrypto.DecryptResult.TooLarge -> RestoreOutcome.TOO_LARGE
+                }
+            } finally {
+                key.wipe()
+            }
+        }
+    }
+
+    /**
+     * Stream [input] into [dest], stopping once it exceeds [maxBytes] (E3).
+     *
+     * Returns the number of bytes written, or -1 when the cap was hit. The count is what lets the
+     * caller enforce an ARCHIVE-wide budget on top of the per-entry one — see [ExtractionBudget].
+     */
+    private fun copyAtMost(input: java.io.InputStream, dest: File, maxBytes: Long): Long {
+        var total = 0L
+        dest.outputStream().use { out ->
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                total += n
+                if (total > maxBytes) return -1L
+                out.write(buf, 0, n)
+            }
+        }
+        return total
+    }
+
+    /**
+     * Replace the live database with the backup at [uri]. Validates it's a real Avex DB
+     * first; only then stages the swap. Returns a [RestoreOutcome] — on SUCCESS the caller
+     * MUST restart the app afterward (the file is swapped at next boot).
+     */
+    suspend fun restoreFromUri(uri: Uri, password: CharArray? = null): RestoreOutcome = withContext(Dispatchers.IO) {
+        val incoming = File(context.cacheDir, "forge_restore_in_${System.currentTimeMillis()}")
+        if (incoming.exists()) incoming.delete()
+        val copied = try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                copyAtMost(input, incoming, MAX_RESTORE_BYTES) >= 0
+            } ?: return@withContext RestoreOutcome.IO_ERROR
+        } catch (e: java.io.IOException) {
+            // A read/write failure mid-copy (unreadable source, disk full) must not leave the partial
+            // staging temp behind — restoreFromIncoming, which cleans up, is never reached on this path.
+            incoming.delete()
+            return@withContext RestoreOutcome.IO_ERROR
+        }
+        if (!copied) { incoming.delete(); return@withContext RestoreOutcome.TOO_LARGE }
+        restoreFromIncoming(incoming, password)
+    }
+
+    /**
+     * Restore from the weekly auto-backup slot (#86) — the same validation + staging as a user-picked
+     * file, so this is the in-app recovery path for the otherwise write-only auto-backup. Copies the
+     * slot to a cache temp first so [restoreFromIncoming]'s cleanup never deletes the live slot itself.
+     */
+    suspend fun restoreFromAutoBackup(
+        password: CharArray? = null,
+        generation: Int = 0
+    ): RestoreOutcome = withContext(Dispatchers.IO) {
+        if (generation !in 0 until BACKUP_GENERATIONS) return@withContext RestoreOutcome.NO_BACKUP_FILE
+        val auto = generationFile(generation)
+        if (!auto.exists()) return@withContext RestoreOutcome.NO_BACKUP_FILE
+        val incoming = File(context.cacheDir, "forge_restore_in_${System.currentTimeMillis()}")
+        if (incoming.exists()) incoming.delete()
+        // Cap + clean up like restoreFromUri (E3): a corrupt/oversized slot can't fill the cache here either.
+        val copied = try {
+            auto.inputStream().use { copyAtMost(it, incoming, MAX_RESTORE_BYTES) >= 0 }
+        } catch (e: java.io.IOException) {
+            incoming.delete()
+            return@withContext RestoreOutcome.IO_ERROR
+        }
+        if (!copied) { incoming.delete(); return@withContext RestoreOutcome.TOO_LARGE }
+        restoreFromIncoming(incoming, password)
+    }
+
+    /**
+     * Validate [incoming] and, if it's a real Avex backup, STAGE the DB, prefs and progress photos
+     * as pending files that [com.forge.app.ForgeApp.applyPendingRestore] swaps in atomically at next
+     * boot — DB, prefs and photos together, so a kill or copy failure can never leave the live DB and
+     * photo folder from different backups. Returns a [RestoreOutcome]. Deletes [incoming].
+     *
+     * A password-protected backup is decrypted first, into cache scratch that goes with the rest of
+     * [temps]; everything after that reads the decrypted archive exactly as it would a plain one.
+     */
+    private suspend fun restoreFromIncoming(incoming: File, password: CharArray?): RestoreOutcome = withContext(Dispatchers.IO) {
+        sweepStaleTemps(keep = incoming)
+        val temps = mutableListOf(incoming) // cache-dir temp files to clean up before returning
+        // Set true only once EVERY staged component has landed. The finally below uses it to discard
+        // a half-written pending set, which would otherwise be applied at the next cold start.
+        var stagedOk = false
+        var photoStage: File? = null        // extracted progress photos, staged only after validation
+        var avatarStage: File? = null       // extracted avatar temp (in temps), applied after validation
+        try {
+            var source = incoming
+            if (BackupCrypto.isEncrypted(incoming)) {
+                val plain = File(context.cacheDir, "forge_restore_plain_${System.currentTimeMillis()}")
+                    .also { it.delete(); temps.add(it) }
+                val decrypted = decryptBackup(incoming, plain, password)
+                if (decrypted != RestoreOutcome.SUCCESS) return@withContext decrypted
+                source = plain
+            }
+            // Sniff the format: a #14 backup is a ZIP { database.db, settings.preferences_pb };
+            // a pre-#14 backup is the raw SQLite DB. Restore both.
+            var dbFile = source
+            var prefsFile: File? = null
+            if (isZip(source)) {
+                val exDb = File(context.cacheDir, "forge_restore_db_${System.currentTimeMillis()}.db")
+                    .also { it.delete(); temps.add(it) }
+                var sawDb = false
+                // Every extraction below is bounded. The incoming ARCHIVE is capped by
+                // MAX_RESTORE_BYTES, but nothing capped what an entry expanded to, so a small
+                // high-ratio zip could write tens of GB into internal storage mid-restore and fill
+                // the device. An entry over its cap fails the whole restore rather than being
+                // silently truncated into a "valid-looking" half file.
+                var oversized = false
+                // One budget for the WHOLE archive, on top of the per-entry caps below. See
+                // [ExtractionBudget] for why the per-entry cap alone bounds nothing that matters.
+                val budget = ExtractionBudget(MAX_RESTORE_TOTAL_BYTES, MAX_RESTORE_PHOTOS)
+                java.util.zip.ZipInputStream(source.inputStream()).use { zin ->
+                    var entry = zin.nextEntry
+                    while (entry != null && !oversized) {
+                        val name = entry.name
+                        when {
+                            name == ZIP_DB_ENTRY -> {
+                                val written = copyAtMost(zin, exDb, MAX_RESTORE_ENTRY_BYTES)
+                                if (budget.spend(written)) sawDb = true else oversized = true
+                            }
+                            name == ZIP_PREFS_ENTRY -> {
+                                val exPrefs = File(context.cacheDir, "forge_restore_prefs_${System.currentTimeMillis()}.pb")
+                                    .also { it.delete(); temps.add(it) }
+                                val written = copyAtMost(zin, exPrefs, MAX_RESTORE_PREFS_BYTES)
+                                if (budget.spend(written)) prefsFile = exPrefs else oversized = true
+                            }
+                            name.startsWith(PHOTOS_PREFIX) -> {
+                                val photoName = name.removePrefix(PHOTOS_PREFIX)
+                                // Flat basename only — zip-slip guard against path-traversal entries.
+                                if (photoName.isNotBlank() && !photoName.contains('/') && !photoName.contains('\\')) {
+                                    if (!budget.countPhoto()) {
+                                        oversized = true
+                                    } else {
+                                        val stage = photoStage ?: File(
+                                            context.cacheDir, "forge_restore_photos_${System.currentTimeMillis()}"
+                                        ).also { it.deleteRecursively(); it.mkdirs(); photoStage = it }
+                                        val written = copyAtMost(zin, File(stage, photoName), MAX_RESTORE_MEDIA_BYTES)
+                                        if (!budget.spend(written)) oversized = true
+                                    }
+                                }
+                            }
+                            name == ZIP_AVATAR_ENTRY -> {
+                                val a = File(context.cacheDir, "forge_restore_avatar_${System.currentTimeMillis()}.jpg")
+                                    .also { it.delete(); temps.add(it) }
+                                val written = copyAtMost(zin, a, MAX_RESTORE_MEDIA_BYTES)
+                                if (budget.spend(written)) avatarStage = a else oversized = true
+                            }
+                        }
+                        zin.closeEntry()
+                        entry = zin.nextEntry
+                    }
+                }
+                if (oversized) {
+                    // Nothing half-extracted survives the refusal — the staged photo directory is
+                    // the only component that can already hold hundreds of megabytes at this point,
+                    // and `temps` covers the rest in the finally below.
+                    photoStage?.deleteRecursively()
+                    photoStage = null
+                    return@withContext RestoreOutcome.TOO_LARGE
+                }
+                if (!sawDb) return@withContext RestoreOutcome.NOT_A_BACKUP
+                dbFile = exDb
+            }
+
+            if (!isForgeDatabase(dbFile)) {
+                // A file that carries the SQLite header but lacks our schema is a damaged/incomplete DB
+                // (e.g. a backup truncated in transfer) — report CORRUPT so the user re-exports rather
+                // than hunting for "the .zip". A file without the header was never a backup at all.
+                return@withContext if (isSqlite(dbFile)) RestoreOutcome.CORRUPT else RestoreOutcome.NOT_A_BACKUP
+            }
+            // Reject a backup newer than this build's schema: Room has no downgrade path and would
+            // crash on open. Older versions migrate forward normally, so only a strictly-newer
+            // user_version is rejected. (We stage rather than swap live, so nothing is lost on reject.)
+            //
+            // Also reject anything below the migration floor (<12, the pre-lock versions): there is no
+            // migration path for those, so Room's fallbackToDestructiveMigrationFrom(1..11) would DROP
+            // ALL TABLES on open — restoring such a backup would silently wipe it. Refuse instead.
+            val currentVersion = db.openHelper.readableDatabase.version
+            val incomingVersion = databaseUserVersion(dbFile)
+            if (incomingVersion > currentVersion) return@withContext RestoreOutcome.NEWER_VERSION
+            if (incomingVersion < MIN_RESTORABLE_VERSION) return@withContext RestoreOutcome.TOO_OLD
+
+            // Don't close Room and swap the file here — that races with any flow still reading the DB
+            // until the process is killed. Stage the files instead; ForgeApp.applyPendingRestore swaps
+            // them in at next boot, before Room/DataStore open. The caller restarts the app on success.
+            val pendingDb = File(context.filesDir, PENDING_DB_NAME)
+            if (pendingDb.exists()) pendingDb.delete()
+            dbFile.copyTo(pendingDb, overwrite = true)
+
+            // Everything above read the header, three table NAMES, the pages and a version number.
+            // A same-version SQLite file with three empty tables of the right names passed all of
+            // it, replaced the live database at boot, and only then failed Room's own validation,
+            // with the pre-restore snapshot already gone. So the staged file is now opened the way
+            // the app will open it: the production builder, its migrations, Room's identity check
+            // and a read. Refused here, a bad file costs nothing; an old one is migrated forward.
+            if (!opensWithRoom(pendingDb)) return@withContext RestoreOutcome.CORRUPT
+
+            // The prefs half of a backup used to be staged with no validation at all, while the
+            // database half gets a zip sniff, a SQLite magic-byte check, a schema check and two
+            // version floors. Anything whose settings entry is not a Preferences protobuf — a
+            // hand-built zip, a third-party tool, a future format — was swapped into the live
+            // DataStore file at the next boot, before any UI exists. Read it back the way DataStore
+            // will, and simply skip a blob that doesn't parse: the restore proceeds with the
+            // database (the part that holds the training history) and the user keeps their current
+            // settings, instead of the app failing to start.
+            //
+            // The protections are then put back to what this phone has now. Copied verbatim, a
+            // backup made with the gallery lock off switched it off here, behind nothing but an
+            // unauthenticated confirm (Data D1). A restore brings back training data and
+            // preferences; whether this phone is locked stays this phone's decision.
+            val pendingPrefs = File(context.filesDir, PENDING_PREFS_NAME)
+            if (pendingPrefs.exists()) pendingPrefs.delete()
+            prefsFile?.let { stageRestoredPreferences(it, pendingPrefs, context.cacheDir, currentProtections()) }
+
+            // Photos passed validation alongside the DB — stage them as a pending folder rather than
+            // touching the live one. ForgeApp.applyPendingRestore swaps it in at boot in the SAME pass
+            // as the DB, so the two can't end up from different backups (and a refused restore, which
+            // returns before here, never creates the pending folder → existing photos stay put). A
+            // null photoStage (pre-photos backup) leaves the live folder untouched, as before.
+            photoStage?.let { stage ->
+                val pendingPhotos = File(context.filesDir, PENDING_PHOTOS_DIR)
+                pendingPhotos.deleteRecursively()
+                // cacheDir and filesDir share the app's internal filesystem, so the move is atomic and
+                // free; fall back to a copy if a rename across the two is ever refused.
+                if (!stage.renameTo(pendingPhotos)) {
+                    pendingPhotos.mkdirs()
+                    stage.listFiles()?.forEach { it.copyTo(File(pendingPhotos, it.name), overwrite = true) }
+                }
+            }
+            // Avatar staged the same way — swapped in at boot alongside the DB/prefs/photos.
+            avatarStage?.let { a ->
+                val pendingAvatar = File(context.filesDir, PENDING_AVATAR_NAME)
+                if (pendingAvatar.exists()) pendingAvatar.delete()
+                a.copyTo(pendingAvatar, overwrite = true)
+            }
+
+            // The restored dataset is a different set of data — it hasn't been independently backed up
+            // from this install, so drop the "user has backed up" latch. Otherwise the no-backup nudge
+            // ([shouldWarnNoBackup]) would stay permanently suppressed after restoring an old backup,
+            // leaving newly-accumulated data unprotected with no warning (#5 P1). The auto-backup slot,
+            // if present, still counts toward [hasAnyBackup].
+            runCatching { File(context.filesDir, MANUAL_BACKUP_MARKER).delete() }
+
+            // Every staged component landed. Only now is the pending set complete, and only now may
+            // ForgeApp.applyPendingRestore swap it in at boot — which it learns from the manifest,
+            // published last and atomically. A process killed anywhere above leaves components
+            // with no manifest, or ones that no longer match it, and the boot quarantines those
+            // instead of renaming a truncated database live.
+            //
+            // Nothing above suspends, so a caller cancelled mid-extraction still ran to here. Checked
+            // now, the throw lands before the manifest and the finally clears the staged files.
+            currentCoroutineContext().ensureActive()
+            if (!RestoreManifest.publish(context.filesDir)) return@withContext RestoreOutcome.IO_ERROR
+            stagedOk = true
+            return@withContext RestoreOutcome.SUCCESS
+        } catch (e: java.util.zip.ZipException) {
+            // A truncated or malformed ZIP (e.g. a backup that got corrupted in an email / cloud
+            // transfer) fails cleanly with a distinct reason instead of escaping the restore path.
+            return@withContext RestoreOutcome.CORRUPT
+        } catch (e: java.io.IOException) {
+            // Any other read/copy failure mid-restore (unreadable entry, disk full).
+            return@withContext RestoreOutcome.IO_ERROR
+        } finally {
+            temps.forEach { it.delete() }
+            photoStage?.deleteRecursively()
+            // A restore that did not reach SUCCESS must leave NOTHING staged. `temps` only covers
+            // cacheDir scratch files — the pending_restore.* set lives in filesDir and used to
+            // survive a failure. ForgeApp.applyPendingRestore checks only that those files EXIST,
+            // so a half-written set was swapped over the live database at the next cold start,
+            // silently discarding everything logged since the failed attempt.
+            if (!stagedOk) clearPendingRestore()
+        }
+    }
+
+    /**
+     * Delete cache scratch left by a backup or restore that never got to run its `finally`.
+     *
+     * Every temp is named with `System.currentTimeMillis()`, so each attempt allocates a NEW file
+     * rather than reusing a slot. A process killed mid-backup therefore leaves a full copy of the
+     * database in `cacheDir` forever — and the kill that causes it is usually the low-storage one,
+     * so three failed weekly backups on a full phone leave three DB-sized files making the next
+     * attempt likelier to fail too. Android only reclaims `cacheDir` under system-wide pressure.
+     *
+     * Anything older than [TEMP_STALE_MS] cannot belong to a live operation; [keep] protects the
+     * file the caller is working on right now.
+     */
+    private fun sweepStaleTemps(keep: File? = null) {
+        runCatching {
+            val cutoff = System.currentTimeMillis() - TEMP_STALE_MS
+            context.cacheDir.listFiles()?.forEach { f ->
+                val name = f.name
+                if (f.absolutePath == keep?.absolutePath) return@forEach
+                if (!TEMP_PREFIXES.any { name.startsWith(it) }) return@forEach
+                if (f.lastModified() > cutoff) return@forEach
+                if (f.isDirectory) f.deleteRecursively() else f.delete()
+            }
+        }
+    }
+
+    /**
+     * Drop a staged restore so the next boot doesn't apply it: for a caller that was cancelled while
+     * [restoreFromUri] or [restoreFromAutoBackup] ran, and so can't restart the app to apply it now.
+     */
+    suspend fun discardPendingRestore() = withContext(Dispatchers.IO) { clearPendingRestore() }
+
+    /**
+     * Remove every staged component of a pending restore.
+     *
+     * Called when [restoreFromIncoming] ends in anything other than SUCCESS. Clearing a previously
+     * staged (successful but not-yet-rebooted) restore is deliberate: the user's most recent
+     * instruction was the attempt that just failed, so applying the older one at the next boot —
+     * after being told the restore failed — is the confusing outcome this guards against.
+     */
+    private fun clearPendingRestore() {
+        // Marker first: a clear cut short part-way must leave no READY beside a partial set.
+        RestoreManifest.discard(context.filesDir)
+        runCatching { File(context.filesDir, PENDING_DB_NAME).delete() }
+        runCatching { File(context.filesDir, PENDING_PREFS_NAME).delete() }
+        runCatching { File(context.filesDir, PENDING_PHOTOS_DIR).deleteRecursively() }
+        runCatching { File(context.filesDir, PENDING_AVATAR_NAME).delete() }
+    }
+
+    /**
+     * Sanity check that a candidate file is a SQLite DB containing Avex's core tables, and that the
+     * rest of the file is actually readable.
+     * Checking only `session` let any SQLite DB from another app pass validation and get swapped in.
+     * We now require all three tables that every real Avex backup must contain — so picking the wrong
+     * app's DB fails with NOT_A_BACKUP / CORRUPT instead of silently replacing your data.
+     *
+     * The table check reads page 1 and nothing else, so a backup whose DATA pages were damaged in
+     * transit — emailed, synced through a flaky provider, copied off a failing SD card — passed it
+     * with the schema page intact. It was then staged and swapped over the live database at boot, at
+     * which point Room hit the bad page on the first read that touched it and its default
+     * onCorruption handler DELETED the file. The original was already gone, so the user was left
+     * with an empty schema and no way back. [quickCheck] reads every page before we commit to the
+     * swap, which is the only point where refusing still costs nothing.
+     */
+    private fun isForgeDatabase(file: File): Boolean = runCatching {
+        android.database.sqlite.SQLiteDatabase.openDatabase(
+            file.path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY
+        ).use { dbFile ->
+            val hasTables = dbFile.rawQuery(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN " +
+                    "('session','logged_exercise','logged_set')", null
+            ).use { c -> c.moveToFirst() && c.getInt(0) >= 3 }
+            hasTables && quickCheck(dbFile)
+        }
+    }.getOrDefault(false)
+
+    /**
+     * Open a staged database through the production Room configuration, and hand back the file it
+     * leaves behind.
+     *
+     * The file is copied to a probe name under `databases/`, opened with [forgeDatabaseBuilder]
+     * (the same migrations, the same identity check as the app's own open), read once and closed.
+     * Anything Room throws — a schema that only names our tables, a missing `room_master_table`, a
+     * migration that cannot run, a page its error handler decides is corrupt — is a refusal. On
+     * success the MIGRATED probe replaces the staged file, so the boot-time swap opens a database
+     * already at this build's version and the pre-restore snapshot is released the moment that
+     * open succeeds rather than after a migration on the main thread.
+     *
+     * The probe's WAL sidecars are removed after the close: a clean close checkpoints them into the
+     * file, and the staged component is the single file the manifest will describe.
+     */
+    private fun opensWithRoom(staged: File): Boolean {
+        val probe = context.getDatabasePath(PROBE_DB_NAME)
+        val sidecars = listOf("-wal", "-shm", "-journal").map { File(probe.path + it) }
+        fun dropProbe() {
+            runCatching { probe.delete() }
+            sidecars.forEach { runCatching { it.delete() } }
+        }
+        dropProbe()
+        val opened = runCatching {
+            probe.parentFile?.mkdirs()
+            staged.copyTo(probe, overwrite = true)
+            val room = forgeDatabaseBuilder(context, PROBE_DB_NAME).build()
+            try {
+                room.openHelper.writableDatabase.query("SELECT count(*) FROM session").use { it.moveToFirst() }
+            } finally {
+                room.close()
+            }
+        }.isSuccess
+        sidecars.forEach { runCatching { it.delete() } }
+        if (opened && probe.isFile) {
+            // Same filesystem as filesDir, so this is a rename; the copy is the cross-volume fallback.
+            staged.delete()
+            if (!probe.renameTo(staged)) probe.copyTo(staged, overwrite = true)
+        }
+        dropProbe()
+        return opened
+    }
+
+    /**
+     * `PRAGMA quick_check` over the whole file — the per-page structural check, without
+     * integrity_check's much slower cross-index verification. Returns false on anything but "ok",
+     * and on a read that throws part-way through (which is itself corruption). A multi-year Avex
+     * database is a few MB, so this is a one-off read of a file we are about to copy anyway.
+     */
+    private fun quickCheck(dbFile: android.database.sqlite.SQLiteDatabase): Boolean = runCatching {
+        dbFile.rawQuery("PRAGMA quick_check(1)", null).use { c ->
+            c.moveToFirst() && c.getString(0).equals("ok", ignoreCase = true)
+        }
+    }.getOrDefault(false)
+
+    /** This phone's protections and folder grants as they stand. The three protections come through the
+     *  sentinel-backed flows the lock itself uses, so a store that can't be read keeps what the user last
+     *  chose. The folder URIs have no sentinel: a failed read reports them as null, which is not "no folder",
+     *  so they are marked unknown and the restore leaves them as the backup has them instead of removing them. */
+    private suspend fun currentProtections(): KeptProtections {
+        val protections = settingsRepo.protections.first()
+        return KeptProtections(
+            privacyMode = protections.privacyMode,
+            appLockEnabled = protections.appLockEnabled,
+            galleryLockEnabled = protections.galleryLockEnabled,
+            appLockTimeoutSec = settingsRepo.appLockTimeoutSec.first(),
+            backupFolderUri = settingsRepo.backupFolderUri.first(),
+            importFolderUri = settingsRepo.importFolderUri.first(),
+            folderUrisKnown = !protections.fromFailedRead,
+        )
+    }
+
+    /** The SQLite user_version (Room schema version) of a candidate DB file; MAX if unreadable (→ rejected). */
+    private fun databaseUserVersion(file: File): Int = runCatching {
+        android.database.sqlite.SQLiteDatabase.openDatabase(
+            file.path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY
+        ).use { it.version }
+    }.getOrDefault(Int.MAX_VALUE)
+
+    /**
+     * Read the most recent crash log files from filesDir/crashes in-app (newest-first).
+     * Returns a list of (filename, fileText) pairs, capped at [limit] entries.
+     * Each file's text is truncated to 20 KB so the UI string stays sane.
+     */
+    suspend fun readRecentCrashLogs(limit: Int = 10): List<Pair<String, String>> = withContext(Dispatchers.IO) {
+        val dir = File(context.filesDir, CRASH_LOG_DIR)
+        val files = dir.listFiles()
+            ?.filter { it.isFile }
+            ?.sortedByDescending { it.lastModified() }
+            ?.take(limit)
+            ?: emptyList()
+        files.map { f ->
+            val text = runCatching {
+                f.inputStream().use { ins ->
+                    val bytes = ins.readBytes()
+                    val cap = 20 * 1024 // 20 KB
+                    if (bytes.size > cap) {
+                        String(bytes, 0, cap, Charsets.UTF_8) + "\n… [truncated]"
+                    } else {
+                        String(bytes, Charsets.UTF_8)
+                    }
+                }
+            }.getOrElse { "Could not read file: ${it.message}" }
+            f.name to text
+        }
+    }
+
+    /**
+     * Zip the crash logs (ForgeApp writes them to filesDir/crashes) into [uri].
+     * Returns how many logs were included (0 = none yet).
+     */
+    suspend fun exportCrashLogsToUri(uri: Uri): Int = withContext(Dispatchers.IO) {
+        val dir = File(context.filesDir, CRASH_LOG_DIR)
+        val files = dir.listFiles()?.filter { it.isFile }?.sortedByDescending { it.lastModified() } ?: emptyList()
+        context.contentResolver.openOutputStream(uri)?.use { out ->
+            java.util.zip.ZipOutputStream(out).use { zip ->
+                files.forEach { f ->
+                    zip.putNextEntry(java.util.zip.ZipEntry(f.name))
+                    f.inputStream().use { it.copyTo(zip) }
+                    zip.closeEntry()
+                }
+            }
+        } ?: error("Could not open the chosen destination")
+        files.size
+    }
+
+    /** The DataStore preferences file backing [com.forge.app.data.prefs.forgePreferences]. */
+    private fun preferencesFile(): File =
+        File(context.filesDir, "datastore/$PREFS_DATASTORE_NAME.preferences_pb")
+
+    /** True if [file] starts with the SQLite format-3 magic (so a non-zip candidate is at least a DB). */
+    private fun isSqlite(file: File): Boolean = runCatching {
+        val magic = "SQLite format 3".toByteArray(Charsets.US_ASCII) + 0.toByte()
+        file.inputStream().use { ins ->
+            val buf = ByteArray(magic.size)
+            ins.read(buf) == magic.size && buf.contentEquals(magic)
+        }
+    }.getOrDefault(false)
+
+    /** True if [file] starts with the ZIP local-file-header magic (PK signature). */
+    private fun isZip(file: File): Boolean = runCatching {
+        file.inputStream().use { ins ->
+            val sig = ByteArray(4)
+            ins.read(sig) == 4 &&
+                sig[0] == 0x50.toByte() && sig[1] == 0x4B.toByte() &&
+                sig[2] == 0x03.toByte() && sig[3] == 0x04.toByte()
+        }
+    }.getOrDefault(false)
+
+    companion object {
+        /** Must match the name in [com.forge.app.di.DatabaseModule] and ForgeApp.applyPendingRestore. */
+        private const val DB_NAME = "forge.db"
+        /** Must match the name in [com.forge.app.data.prefs.forgePreferences]. */
+        private const val PREFS_DATASTORE_NAME = "forge_settings"
+        private const val ZIP_DB_ENTRY = "database.db"
+        private const val ZIP_PREFS_ENTRY = "settings.preferences_pb"
+        /** Prefix for progress-photo entries in the backup ZIP: progress_photos/<basename>. */
+        private const val PHOTOS_PREFIX = "progress_photos/"
+        /** The weekly auto-backup slot, written by [autoBackup] and read by [restoreFromAutoBackup] (#86). */
+        private const val AUTO_BACKUP_NAME = "forge_auto_backup.zip"
+
+        /** How many auto-backup copies are kept, in the app and in the backup folder alike. */
+        const val BACKUP_GENERATIONS = 3
+
+        /**
+         * Copies closer together than this replace the newest instead of rotating, so the kept
+         * copies span weeks of history rather than the last few taps of "Back up now".
+         */
+        private const val MIN_GENERATION_SPACING_MS = 24L * 60 * 60 * 1000
+
+        /** Slot name for [generation]: `forge_auto_backup.zip`, then `forge_auto_backup.1.zip`, … */
+        internal fun generationName(generation: Int): String =
+            if (generation == 0) AUTO_BACKUP_NAME else "forge_auto_backup.$generation.zip"
+        /** Temp slots written before replacing [AUTO_BACKUP_NAME], so a failed write never destroys
+         *  the previous good backup. Internal storage and the user-picked SAF folder each need one. */
+        private const val AUTO_BACKUP_TMP_NAME = "forge_auto_backup.zip.tmp"
+        private const val FOLDER_TMP_NAME = "forge_auto_backup.zip.part"
+        /** The previous newest folder copy, held aside for the instant its replacement takes the name. */
+        private const val FOLDER_OLD_NAME = "forge_auto_backup.zip.old"
+        /** The lossy JSON slot earlier builds wrote; [autoBackup] and [deleteLocalCopies] remove it. */
+        private const val LEGACY_AUTO_BACKUP_JSON = "forge_auto_backup.json"
+        /** Where ForgeApp's uncaught-exception logger writes, under filesDir. One name for all readers. */
+        internal const val CRASH_LOG_DIR = "crashes"
+        /** Marker written when the auto-backup worker gives up (storage full / corrupt) — see [recordAutoBackupFailure]. */
+        private const val AUTO_BACKUP_FAILED_MARKER = "auto_backup_failed"
+        /** Marker written after a successful user-initiated backup ([backupToUri]) — see [hasAnyBackup]. */
+        private const val MANUAL_BACKUP_MARKER = "manual_backup_done"
+        /** Staged restored photos; ForgeApp.applyPendingRestore swaps this over progress_photos/ at boot. */
+        private const val PENDING_PHOTOS_DIR = "pending_restore_photos"
+        // Staged-restore filenames. Must stay in sync with ForgeApp.applyPendingRestore, which
+        // reads the same four paths out of filesDir at boot.
+        private const val PENDING_DB_NAME = "pending_restore.db"
+        /** Where [opensWithRoom] opens a candidate: a real `databases/` name, so Room needs no path. */
+        private const val PROBE_DB_NAME = "forge_restore_probe.db"
+        private const val PENDING_PREFS_NAME = "pending_restore_prefs.pb"
+        /** Backup-ZIP entry for the profile avatar — derived from AvatarRepository so a rename can't desync. */
+        private const val ZIP_AVATAR_ENTRY = AvatarRepository.FILE_NAME
+        private const val PENDING_AVATAR_NAME = "pending_restore_avatar.jpg"
+        /**
+         * Lowest schema version restore will accept. Below this are the pre-lock versions Room
+         * destructively resets (DatabaseModule.fallbackToDestructiveMigrationFrom(1..11)), so
+         * restoring one would wipe rather than recover. Must stay one above that destructive range.
+         */
+        private const val MIN_RESTORABLE_VERSION = 12
+
+        /**
+         * Cap on the staged restore copy — guards a budget device's cache against an oversized file
+         * (E3). Sized to the largest plausible Avex backup (a decade of training plus a full photo
+         * gallery) rather than to "some big number": the old 2 GiB ceiling was written to disk IN
+         * FULL before being rejected, which on a phone with 3 GB free is itself the outage.
+         */
+        private const val MAX_RESTORE_BYTES = 512L * 1024 * 1024 // 512 MiB
+
+        /**
+         * Cap on a single decompressed ZIP entry. `MAX_RESTORE_BYTES` bounds the archive as it
+         * arrives; nothing bounded what it EXPANDED to. Zip compression of repetitive data runs
+         * past 1000:1, so a 4 MB "backup" from a forum thread could write 40 GB into internal
+         * storage during a restore and fill the device before the outer size check ever mattered.
+         */
+        private const val MAX_RESTORE_ENTRY_BYTES = 512L * 1024 * 1024 // 512 MiB
+
+        /** Cap on one extracted progress photo / avatar — a JPEG, not a database. */
+        private const val MAX_RESTORE_MEDIA_BYTES = 64L * 1024 * 1024 // 64 MiB
+
+        /** Cap on the extracted preferences blob — a few KB of protobuf in practice. */
+        private const val MAX_RESTORE_PREFS_BYTES = 8L * 1024 * 1024 // 8 MiB
+
+        /**
+         * Everything ONE restore may write to disk, across every entry. Generous next to any real
+         * library — a thousand full-resolution photos is a few gigabytes — and finite, which is the
+         * property the per-entry caps did not have between them.
+         */
+        private const val MAX_RESTORE_TOTAL_BYTES = 2L * 1024 * 1024 * 1024 // 2 GiB
+
+        /** How many progress photos one archive may carry. Well past a decade of weekly shots. */
+        private const val MAX_RESTORE_PHOTOS = 5_000
+
+        /** First characters that make a spreadsheet evaluate a cell; see [csv]. */
+        private val FORMULA_TRIGGERS = setOf('=', '+', '-', '@', '\t', '\r')
+
+        /** Cache scratch this class creates, all timestamp-named. Swept by [sweepStaleTemps]. */
+        private val TEMP_PREFIXES = listOf("forge_snapshot_", "forge_restore_")
+        /** Nothing this old can still belong to a running backup or restore. */
+        private const val TEMP_STALE_MS = 6L * 60 * 60 * 1000 // 6 hours
+    }
+}
+
+/**
+ * What one restore is allowed to write to disk in total, and how many photos it may carry.
+ *
+ * The per-entry cap alone bounds nothing that matters. Every recognised photo could expand to
+ * `MAX_RESTORE_MEDIA_BYTES` and there was no limit on how many of them an archive held, so a small,
+ * highly compressible ZIP full of distinct photo entries could write tens of gigabytes
+ * into internal storage before anything objected — and the objection, when it came, would be the
+ * device running out of space mid-restore, with the live database's room gone with it.
+ *
+ * Two numbers because they fail differently: the byte budget stops a compression bomb, and the count
+ * stops an archive of many small entries whose real cost is inodes and time. Top-level and internal
+ * so the rule can be tested without a ZIP, a Context or a database.
+ */
+internal class ExtractionBudget(private val maxTotalBytes: Long, private val maxPhotos: Int) {
+    private var totalBytes = 0L
+    private var photos = 0
+
+    /** Bytes written so far across every entry. */
+    val bytesSpent: Long get() = totalBytes
+
+    /**
+     * Record [bytes] written and report whether the archive is still within budget.
+     *
+     * A negative [bytes] is `copyAtMost`'s "this entry alone blew its own cap" — false either way,
+     * and it deliberately does not add to the total, which would be meaningless.
+     */
+    fun spend(bytes: Long): Boolean {
+        if (bytes < 0) return false
+        totalBytes += bytes
+        return totalBytes <= maxTotalBytes
+    }
+
+    /** Record one more photo entry; false once too many have been seen. */
+    fun countPhoto(): Boolean = ++photos <= maxPhotos
+}
+
+/** The settings a restore never takes from the backup: the four "Reset app settings" keeps, plus the two folder URIs. */
+internal data class KeptProtections(
+    val privacyMode: Boolean,
+    val appLockEnabled: Boolean,
+    val galleryLockEnabled: Boolean,
+    val appLockTimeoutSec: Int,
+    /** Device-local: a folder grant belongs to the install that took it, so a backup's value would
+     *  name a folder this install holds no grant for (and orphan the grant it does hold). */
+    val backupFolderUri: String?,
+    val importFolderUri: String?,
+    /** False when this phone's settings could not be read, so the two URIs above are not real values:
+     *  the backup's own folder keys are then left as they are rather than removed. */
+    val folderUrisKnown: Boolean = true,
+)
+
+/**
+ * Stage the backup's settings blob [incoming] as [dest], with [keep] written over its protection
+ * keys. Returns false, leaving no [dest], when [incoming] is not a Preferences protobuf.
+ *
+ * The blob is opened through DataStore itself over a throwaway copy in [scratch], so "this file
+ * reads" here means "this file reads" at boot, and the file staged is one DataStore wrote. No
+ * corruptionHandler on purpose: an unreadable blob must THROW here, where the restore can decline
+ * it, rather than be quietly replaced with defaults at boot. Top-level and internal so the rule can
+ * be tested without a ZIP, a Context or a database.
+ */
+internal suspend fun stageRestoredPreferences(
+    incoming: File,
+    dest: File,
+    scratch: File,
+    keep: KeptProtections,
+): Boolean {
+    // DataStore refuses a file that doesn't end in `.preferences_pb`.
+    val probe = File(scratch, "restore_prefs_stage.preferences_pb")
+    val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    return try {
+        runCatching {
+            incoming.copyTo(probe, overwrite = true)
+            PreferenceDataStoreFactory.create(scope = scope) { probe }.edit { prefs ->
+                prefs[PreferenceKeys.PRIVACY_MODE] = keep.privacyMode
+                prefs[PreferenceKeys.APP_LOCK_ENABLED] = keep.appLockEnabled
+                prefs[PreferenceKeys.GALLERY_LOCK_ENABLED] = keep.galleryLockEnabled
+                prefs[PreferenceKeys.APP_LOCK_TIMEOUT_SEC] = keep.appLockTimeoutSec
+                if (keep.folderUrisKnown) {
+                    if (keep.backupFolderUri != null) prefs[PreferenceKeys.BACKUP_FOLDER_URI] = keep.backupFolderUri
+                    else prefs.remove(PreferenceKeys.BACKUP_FOLDER_URI)
+                    if (keep.importFolderUri != null) prefs[PreferenceKeys.IMPORT_FOLDER_URI] = keep.importFolderUri
+                    else prefs.remove(PreferenceKeys.IMPORT_FOLDER_URI)
+                }
+            }
+            probe.copyTo(dest, overwrite = true)
+            true
+        }.getOrElse {
+            // A half-copied dest would be swapped in at boot and read as corrupt, i.e. every
+            // setting at its default: keep the current settings instead, as for an unreadable blob.
+            dest.delete()
+            false
+        }
+    } finally {
+        scope.cancel()
+        probe.delete()
+    }
+}

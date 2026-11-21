@@ -1,0 +1,113 @@
+package com.forge.app.ui.nav
+
+import androidx.navigation.NavController
+
+object Routes {
+    const val OVERVIEW = "overview"
+    const val GYM_DAY = "gym/day/{dayKey}?skipWarmup={skipWarmup}"
+    const val CARDIO = "cardio"
+    const val TROPHIES = "trophies"
+    const val NUTRITION = "nutrition"
+    const val SETTINGS = "settings?page={page}"
+    const val SESSION_HISTORY = "gym/session-history"
+    const val SESSION_DETAIL = "gym/session-detail/{sessionId}"
+    const val CARDIO_SESSION = "cardio/session/{cardioId}"
+    const val NOTES_SEARCH = "gym/notes-search"
+    const val RECAP = "recap"
+
+    /** The notifications feed — every strip that used to interrupt Home or Cardio. */
+    const val NOTIFICATIONS = "notifications"
+    const val COACH_BRIEF = "coach-brief"
+    const val COACH_LAB = "coach-lab"
+
+    /** The Academy (Coach v3 B3) — the knowledge layer, and the gallery every piece is reached from. */
+    const val ACADEMY = "academy"
+
+    /**
+     * One lesson, read on its own screen (2026-08-20). It used to be a `?lesson=` argument on the
+     * Academy route that opened a sheet over the gallery; a lesson is a page now, so it is a route
+     * of its own and a feed row lands directly on it. A retired id still works: it resolves to the
+     * lesson that absorbed it.
+     *
+     * [lessonId] is a registry id: lowercase, dots and underscores only, which is why it can sit in
+     * the path un-encoded. `AcademyRegistryTest` pins that id grammar.
+     */
+    const val LESSON = "academy/lesson/{lessonId}"
+    const val ARG_LESSON_ID = "lessonId"
+
+    fun lesson(lessonId: String) = "academy/lesson/$lessonId"
+
+    // The per-track Academy route was removed 2026-08-16. Tracks are section headers in the one
+    // gallery now, so there is no track screen to route to and one level of nesting is gone.
+
+    // The Library's article route was removed 2026-09-26, when its four articles folded into the
+    // Academy's lessons. Their old ids resolve through `AcademyRegistry.aliases` on the lesson route.
+    const val COACH_TIMELINE = "coach-timeline"
+    const val PROFILE = "profile"
+    const val GOALS = "goals"
+    const val GOAL_EDITOR = "goals/editor?exerciseId={exerciseId}&customId={customId}"
+    const val MIRROR_TEST = "mirror-test"
+    const val PROGRESS_CAMERA = "progress-camera"
+    const val BODY_MEASUREMENTS = "body-measurements"
+    const val PROGRAM_BUILDER = "program-builder?blank={blank}&view={view}"
+    const val FREESTYLE_LOG = "freestyle-log"
+
+    const val ARG_BLANK = "blank"
+    const val ARG_VIEW = "view"
+
+    /** The program screen. [view] opens it read-only (the top-bar pencil unlocks editing);
+     *  [blank] starts an empty build-your-own plan and implies editing. */
+    fun programBuilder(blank: Boolean = false, view: Boolean = false) =
+        "program-builder?blank=$blank&view=$view"
+
+    const val ARG_DAY_KEY = "dayKey"
+    const val ARG_SKIP_WARMUP = "skipWarmup"
+    const val ARG_SESSION_ID = "sessionId"
+    const val ARG_CARDIO_ID = "cardioId"
+    const val ARG_SETTINGS_PAGE = "page"
+    const val ARG_GOAL_EXERCISE_ID = "exerciseId"
+    const val ARG_GOAL_CUSTOM_ID = "customId"
+
+    /** The goal editor: pass an exerciseId (lift target) OR a customId (custom goal) to edit one;
+     *  neither = the add-a-goal flow. */
+    fun goalEditor(exerciseId: String? = null, customId: Long? = null) =
+        "goals/editor?exerciseId=${exerciseId.orEmpty()}&customId=${customId?.toString().orEmpty()}"
+
+    /** Settings, optionally deep-linked to a sub-page (pass a [SettingsPage] name; empty = root list). */
+    fun settings(page: String? = null) = "settings?page=${page.orEmpty()}"
+
+    fun gymDay(dayKey: String, skipWarmup: Boolean = false) =
+        "gym/day/$dayKey?skipWarmup=$skipWarmup"
+
+    fun sessionDetail(sessionId: Long) = "gym/session-detail/$sessionId"
+
+    /** One lift's own page from Stats (2026-10-21 redesign). */
+    const val LIFT_DETAIL = "gym/lift/{liftId}"
+    const val ARG_LIFT_ID = "liftId"
+    fun liftDetail(liftId: String) = "gym/lift/${android.net.Uri.encode(liftId)}"
+
+    fun cardioSession(cardioId: Long) = "cardio/session/$cardioId"
+
+    /** The weeks chart — one bar per week (the hero's `weeks →`). An optional `week` argument
+     *  (a Monday's epoch ms) opens straight into that week, which is what tapping the hero's
+     *  Mon–Sun strip does. -1 = no week, land on the chart. */
+    const val CARDIO_WEEKS = "cardio/weeks?week={week}"
+    const val ARG_WEEK_START = "week"
+
+    fun cardioWeeks(weekStartMs: Long = -1L) = "cardio/weeks?week=$weekStartMs"
+}
+
+/**
+ * Opens a gym day, unless that same day is already the current destination. A widget tap routed
+ * through onNewIntent, or a double tap on a Start button during the push animation, otherwise
+ * stacked a second DayScreen (with its own ViewModel) for the session already open, and finishing
+ * the top one revealed the stale twin underneath. Not single-top: that would re-point the open
+ * screen at a different day's arguments, whereas a different day is a genuine new push.
+ */
+fun NavController.navigateToGymDay(dayKey: String, skipWarmup: Boolean = false) {
+    val current = currentBackStackEntry
+    if (current?.destination?.route == Routes.GYM_DAY &&
+        current.arguments?.getString(Routes.ARG_DAY_KEY) == dayKey
+    ) return
+    navigate(Routes.gymDay(dayKey, skipWarmup))
+}

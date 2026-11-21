@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Base theme used by the system before Compose takes over. Once MainActivity calls
+        setContent { ForgeTheme { ... } }, the Compose-side theme governs everything visible.
+        This XML theme only needs to set the window background to avoid a white flash on launch.
+    -->
+    <style name="Theme.Forge" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/forge_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <!--
+        Launch theme for Android 8 to 11 (core-splashscreen): the app's dark ground alone. Before
+        Android 12 the splash is this static window background, drawn before any app code runs, so it
+        cannot wear the icon the user picked; the app draws that icon from its first frame instead
+        (ui/launch/LaunchHandOff.kt). Android 12+ uses values-v31/themes.xml. Set as the activity
+        theme; installSplashScreen() applies postSplashScreenTheme.
+    -->
+    <style name="Theme.Forge.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/forge_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_blank</item>
+        <item name="postSplashScreenTheme">@style/Theme.Forge</item>
+    </style>
+</resources>

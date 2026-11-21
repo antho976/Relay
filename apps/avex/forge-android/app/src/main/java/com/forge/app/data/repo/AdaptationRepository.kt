@@ -1,0 +1,478 @@
+package com.forge.app.data.repo
+
+import com.forge.app.core.time.Clock
+import com.forge.app.data.db.dao.AdviceEventDao
+import com.forge.app.data.db.dao.CardioDao
+import com.forge.app.data.db.dao.LoggedExerciseDao
+import com.forge.app.data.db.dao.LoggedSetDao
+import com.forge.app.data.db.dao.MoodDao
+import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.db.entities.AdviceEvent
+import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.domain.adapt.AdaptThresholds
+import com.forge.app.domain.adapt.AdaptationSnapshot
+import com.forge.app.domain.adapt.DeloadAdvisor
+import com.forge.app.domain.adapt.InsightEngine
+import com.forge.app.domain.adapt.PrefsSnap
+import com.forge.app.domain.adapt.ProgressionAdvisor
+import com.forge.app.domain.adapt.RatioCounts
+import com.forge.app.domain.adapt.ReadinessAdvisor
+import com.forge.app.domain.adapt.Recommendation
+import com.forge.app.domain.adapt.RecommendationArbiter
+import com.forge.app.domain.adapt.RestingHrTrend
+import com.forge.app.domain.adapt.SnapshotAssembler
+import com.forge.app.program.Equipment
+import com.forge.app.program.ExerciseLibrary
+import com.forge.app.program.Program
+import com.forge.app.program.ProgramGenerator
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * The adaptation engine's only impure piece: fetches history + prefs and delegates the
+ * grouping to the pure [SnapshotAssembler] (mirrors how [TrophyRepository.snapshot] feeds
+ * [com.forge.app.domain.trophy.TrophyEvaluator]).
+ *
+ * Call [snapshot] from surface-level entry points (Overview open, session finish) — never
+ * from the per-set logging hot path; the fan-out reads the whole history.
+ */
+@Singleton
+class AdaptationRepository @Inject constructor(
+    private val sessionDao: SessionDao,
+    private val loggedExerciseDao: LoggedExerciseDao,
+    private val loggedSetDao: LoggedSetDao,
+    private val moodDao: MoodDao,
+    private val cardioDao: CardioDao,
+    private val bodyweightDao: com.forge.app.data.db.dao.BodyweightDao,
+    private val checkinDao: com.forge.app.data.db.dao.CheckinDao,
+    private val injuryDao: com.forge.app.data.db.dao.InjuryRestrictionDao,
+    private val adviceEventDao: AdviceEventDao,
+    private val vacationDao: com.forge.app.data.db.dao.VacationDao,
+    private val programRepository: ProgramRepository,
+    private val programCustomizationRepo: ProgramCustomizationRepository,
+    private val customizationRepo: CustomizationRepository,
+    private val settingsRepository: SettingsRepository,
+    private val healthConnectManager: com.forge.app.data.health.HealthConnectManager,
+    private val clock: Clock
+) {
+
+    private companion object {
+        /** How long a snapshot with unchanged inputs is reused: bounds Health Connect staleness. */
+        const val SNAPSHOT_TTL_MS = 3L * 60 * 1000
+    }
+
+    /** Moods/cardio older than this can't influence any current signal — skip loading them. */
+    private val signalWindowMs = 90L * 24 * 60 * 60 * 1000
+
+    /**
+     * How far back to read Health Connect: at least [signalWindowMs], but always enough to cover
+     * DeloadAdvisor's fatigue window PLUS its prior-month baseline (+1 week margin), so widening
+     * either threshold can't leave the resting-HR driver's prior window outside the fetched data.
+     */
+    private val healthLookbackMs: Long = run {
+        val t = AdaptThresholds()
+        val needDays = (t.deloadWindowDays + t.deloadPriorBaselineDays + 7).toLong()
+        maxOf(signalWindowMs, needDays * 24 * 60 * 60 * 1000)
+    }
+
+    /** How far back [readinessScale] reads moods — the advisor's own mood window (A1). */
+    private val readinessMoodWindowMs: Long = AdaptThresholds().readinessMoodHours * 60L * 60 * 1000
+
+    /** Check-in + life-event window (B1): long enough to see a layoff's sick days, still one query. */
+    private val checkinWindowMs: Long = 30L * 24 * 60 * 60 * 1000
+
+    /** Readiness reads only recent health: last night's sleep and a fortnight of resting HR. */
+    private val readinessHealthLookbackMs: Long = 18L * 24 * 60 * 60 * 1000
+
+    /** Dismissing or applying advice mutes that id for this long — no re-nagging. */
+    private val adviceCooldownMs = 14L * 24 * 60 * 60 * 1000
+
+    /**
+     * The full adaptation snapshot. THROWS on a read/assembly failure so error-aware callers can tell a
+     * real failure apart from a genuinely empty pre-baseline history — the Week Brief hides "Last week"
+     * and drops its "N sessions logged" countdown, the weekly pass records STATUS_ERROR, and Stats'
+     * engine read degrades to no pulse/plateaus. Surfaces that fan out from this but have NO error path
+     * of their own use [snapshotOrEmpty] instead.
+     */
+    suspend fun snapshot(): AdaptationSnapshot = snapshotLock.withLock {
+        val key = snapshotKey()
+        val builtAt = clock.nowMs()
+        assembleSnapshot().also { cachedSnapshot = CachedSnapshot(key, builtAt, it) }
+    }
+
+    /**
+     * Crash-safe snapshot for surfaces with no error handling of their own (the Overview coach feed runs
+     * in a bare launch): a single corrupt row degrades to an empty (pre-baseline) snapshot instead of
+     * taking the screen down. Re-throws [CancellationException] so coroutine cancellation still propagates
+     * (a bare runCatching/catch would otherwise swallow it and keep the cancelled coroutine running).
+     */
+    suspend fun snapshotOrEmpty(): AdaptationSnapshot =
+        try {
+            assembleSnapshot()
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            emptySnapshot()
+        }
+
+    /** Empty pre-baseline snapshot used when [assembleSnapshot] fails — pure, can't itself throw. */
+    private fun emptySnapshot(): AdaptationSnapshot = SnapshotAssembler.assemble(
+        nowMs = clock.nowMs(),
+        program = Program.days,
+        swapCandidateIds = { emptyList() },
+        sessions = emptyList(),
+        loggedExercises = emptyList(),
+        loggedSets = emptyList(),
+        prefs = PrefsSnap(),
+        zoneId = java.time.ZoneId.systemDefault()
+    )
+
+    private suspend fun assembleSnapshot(): AdaptationSnapshot = withContext(Dispatchers.Default) {
+        // The DAO queries already exclude unfinished + untracked; the session list must too.
+        val sessions = sessionDao.allFinished().filter { !it.isUntracked }
+        val loggedExercises = loggedExerciseDao.allForFinishedSessions()
+        val loggedSets = loggedSetDao.allForFinishedSessions()
+
+        val equipment = settingsRepository.availableEquipment.first()
+            .mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet()
+        val disliked = settingsRepository.dislikedExercises.first()
+        val frozenIds = settingsRepository.frozenExerciseIds.first()
+        // B1: an injured movement (or anything hitting an injured muscle) is off the table until
+        // cleared, so the coach can never propose swapping INTO it. Treated as an exclusion at the
+        // candidate-pool seam rather than a special case downstream — one rule, one place.
+        val life = lifeEvents(clock.nowMs(), sessions)
+        val restrictedIds = life.restrictedExerciseIds +
+            ExerciseLibrary.all
+                .filter { it.muscle in life.restrictedMuscles }
+                .map { it.id }
+        val prefs = PrefsSnap(
+            plateLb = settingsRepository.plateWeightLb.first(),
+            likedIds = settingsRepository.likedExercises.first(),
+            dislikedIds = disliked,
+            pinnedIds = settingsRepository.pinnedExercises.first(),
+            maxDbLb = settingsRepository.maxDbWeightLb.first(),
+            // 0 = no active deload; lets DeloadAdvisor suppress right after an apply, before the
+            // first deload-week session is even logged (seam fix, finding 18).
+            lastDeloadAppliedMs = settingsRepository.deloadWeekStartMs.first().takeIf { it > 0 },
+            weightUnit = settingsRepository.weightUnit.first()
+        )
+
+        // The engine plans against EFFECTIVE sets (baseline + the user's/coach's per-slot overrides),
+        // not the bare baseline — otherwise the coach re-proposes volume onto a slot it already boosted
+        // and bakes a phantom set at the next regenerate (seam findings 2/15).
+        //
+        // ...and against the EFFECTIVE EXERCISE. Persistent swaps live in their own globally-keyed
+        // table, which effectivePlanForDay doesn't touch, so a swapped slot reached the engine with
+        // the BASE exercise's name and unit while its history was the swapped lift's. The plateau
+        // ladder then priced a dumbbell press in plates — "Barbell Bench Press stalled ... drop ~10%
+        // and build back up: 3 plates" for a lift that is neither. The day screen already resolves
+        // this for the in-session chip (DayViewModelBuilders' effectiveUnit); this is the same
+        // resolution on the snapshot path.
+        val swaps = customizationRepo.allSwaps()
+        val effectiveDays = Program.days.map { day ->
+            day.copy(
+                exercises = programCustomizationRepo.effectivePlanForDay(day.key)
+                    .map { plan -> resolveSwap(plan, swaps[plan.id]) }
+            )
+        }
+
+        val now = clock.nowMs()
+        // What each day trains, by library id (a swapped slot counts as the lift it was swapped
+        // to), so a proposal never duplicates a movement the same day already holds.
+        val dayIdsBySlot = HashMap<String, Set<String>>()
+        effectiveDays.forEach { day ->
+            val ids = day.exercises.map { swaps[it.id]?.swappedExerciseId ?: it.id }.toSet()
+            day.exercises.forEach { dayIdsBySlot[it.id] = ids }
+        }
+        val snap = SnapshotAssembler.assemble(
+            nowMs = now,
+            program = effectiveDays,
+            swapCandidateIds = { plan ->
+                // Never offer the exercise the slot is ALREADY swapped to: it was the deterministic
+                // first candidate, so the coach re-proposed a rotation that was already in effect,
+                // every week, permanently occupying the change budget. Ranked by the generator
+                // (same role, same pattern first, loadable ahead of handheld) and excluding the
+                // rest of the day — library order used to send a stalled back squat to a goblet
+                // squat and a stalled fly to the press the day opened with (2026-09-21).
+                val current = swaps[plan.id]?.swappedExerciseId
+                val performed = current?.let { ExerciseLibrary.byId(it) } ?: ExerciseLibrary.byId(plan.id)
+                val pool = ExerciseLibrary.swapCandidates(plan.muscle, equipment, disliked + restrictedIds, frozenIds)
+                val ranked = if (performed != null)
+                    ProgramGenerator.rankSwapCandidates(performed, pool, dayIdsBySlot[plan.id].orEmpty())
+                else pool
+                ranked.map { it.id }.filter { it != plan.id && it != current }
+            },
+            sessions = sessions,
+            loggedExercises = loggedExercises,
+            loggedSets = loggedSets,
+            prefs = prefs,
+            moods = moodDao.since(now - signalWindowMs),
+            cardio = cardioDao.since(now - signalWindowMs),
+            // Bodyweight over the same signal window (A1): the body series the engine was missing.
+            bodyweight = bodyweightDao.since(now - signalWindowMs),
+            // Off-app recovery signals (sleep, resting HR). Returns empty unless the user has
+            // connected Health Connect AND granted access — so this is a no-op for everyone else.
+            // Fetch back far enough to cover DeloadAdvisor's prior-month baseline (its resting-HR
+            // driver compares the fatigue window against deloadWindowDays + deloadPriorBaselineDays
+            // ago), so widening either threshold can't silently starve that window.
+            health = healthConnectManager.readRecovery(now - healthLookbackMs, now),
+            zoneId = java.time.ZoneId.systemDefault()
+        )
+        snap
+    }
+
+    /**
+     * Overlay a persistent swap onto a plan slot: the swapped lift's name, unit, muscle and tags,
+     * with [ExercisePlan.id] left as the SLOT id — history, goals, coach targeting and the swap
+     * overlay itself are all slot-keyed, so re-keying here would hide the slot's own history.
+     *
+     * Sets and reps stay the slot's prescription: the user trains this slot for 3 x 6-8 whatever
+     * exercise fills it, and the program-customization overlay above owns those numbers.
+     */
+    private fun resolveSwap(
+        plan: com.forge.app.program.ExercisePlan,
+        swap: com.forge.app.data.db.entities.ExerciseCustomization?
+    ): com.forge.app.program.ExercisePlan {
+        // A cleared swap can leave a blank-name row behind (it shares the row with a rest-timer
+        // override / pinned note), and a blank name means "no swap" everywhere (#11).
+        val name = swap?.swappedName?.takeIf { it.isNotBlank() } ?: return plan
+        val swapped = swap.swappedExerciseId?.let { ExerciseLibrary.byId(it) }
+        return plan.copy(
+            name = name,
+            unit = com.forge.app.program.ExerciseUnit.fromCode(swap.swappedUnit)
+                ?: swapped?.unit ?: plan.unit,
+            muscle = swapped?.muscle ?: plan.muscle,
+            tags = swapped?.tags ?: plan.tags,
+            equipment = swapped?.equipment ?: plan.equipment
+        )
+    }
+
+    /**
+     * The snapshot for read-only surfaces (Coach page, Home directive, Academy, Stats, the
+     * notification feed): the last one built, when none of its inputs has changed since, else a
+     * fresh build.
+     *
+     * Never across a mutation. The key is read at call time, synchronously, from the stores the
+     * snapshot itself reads: one-row fingerprints of every input table computed inside SQLite
+     * ([SessionDao.finishedHistoryFingerprint], [SessionDao.engineSideTablesFingerprint]), the
+     * whole preferences value, the loaded program, and the local day and zone. A write that has
+     * returned is therefore always seen (an invalidation-tracker signal would arrive
+     * asynchronously). What the key cannot see — Health Connect, and `nowMs` drifting within the
+     * day — is bounded by [SNAPSHOT_TTL_MS].
+     *
+     * One build at a time: a Coach open used to assemble four whole-history snapshots back to back
+     * (brief, lab, page, academy moments), and Home's resume another two or three alongside the
+     * notification refresh. Concurrent callers now wait for the build in flight and share it.
+     */
+    suspend fun snapshotCached(): AdaptationSnapshot = snapshotLock.withLock {
+        val key = snapshotKey()
+        val now = clock.nowMs()
+        cachedSnapshot
+            ?.takeIf { it.key == key && now - it.builtAtMs in 0 until SNAPSHOT_TTL_MS }
+            ?.let { return@withLock it.snapshot }
+        assembleSnapshot().also { cachedSnapshot = CachedSnapshot(key, now, it) }
+    }
+
+    /** Everything a snapshot is a function of, except Health Connect and the clock within a day. */
+    private data class SnapshotKey(
+        val tables: String,
+        val preferences: androidx.datastore.preferences.core.Preferences,
+        val program: List<com.forge.app.program.DayPlan>,
+        val day: java.time.LocalDate,
+        val zone: java.time.ZoneId
+    )
+
+    private class CachedSnapshot(val key: SnapshotKey, val builtAtMs: Long, val snapshot: AdaptationSnapshot)
+
+    private val snapshotLock = Mutex()
+    private var cachedSnapshot: CachedSnapshot? = null
+
+    /** Read BEFORE assembling, so a write that lands mid-build makes the next call rebuild. */
+    private suspend fun snapshotKey(): SnapshotKey {
+        val zone = java.time.ZoneId.systemDefault()
+        return SnapshotKey(
+            tables = sessionDao.finishedHistoryFingerprint() + "#" + sessionDao.engineSideTablesFingerprint(),
+            preferences = settingsRepository.preferencesSnapshot(),
+            program = Program.days,
+            day = java.time.Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate(),
+            zone = zone
+        )
+    }
+
+    /**
+     * Today's readiness scale (System 6), or null below the data gates / at net zero.
+     * Deliberately lighter than [snapshot] — two small queries, no whole-history set
+     * fan-out — so the day screen can load it at session open.
+     */
+    suspend fun readinessScale(
+        snapshot: AdaptationSnapshot? = null,
+        life: com.forge.app.domain.coach.LifeEvents.State? = null
+    ): Recommendation.ReadinessScale? = withContext(Dispatchers.Default) {
+        val now = snapshot?.nowMs ?: clock.nowMs()
+        val sessions = snapshot?.sessions ?: sessionDao.allFinished().filter { !it.isUntracked }
+        ReadinessAdvisor.evaluate(
+            sessions = sessions,
+            cardio = snapshot?.cardio ?: cardioDao.since(now - signalWindowMs),
+            nowMs = now,
+            zoneId = java.time.ZoneId.systemDefault(),
+            onVacation = com.forge.app.domain.vacation.VacationCalendar.onVacation(vacationDao.all()),
+            // One more small query, in the spirit of this path staying light: how the last session
+            // felt is the cheapest readiness signal there is (A1).
+            moods = snapshot?.moods ?: moodDao.since(now - readinessMoodWindowMs),
+            // B1: this morning's check-in and the athlete's life state. Each is one small query;
+            // the path stays far lighter than a whole-history fan-out.
+            checkins = checkinDao.since(now - checkinWindowMs),
+            health = snapshot?.health ?: healthConnectManager.readRecovery(now - readinessHealthLookbackMs, now),
+            lifeEvents = life ?: lifeEvents(now, sessions)
+        )
+    }
+
+    /**
+     * The athlete's current life state (B1) — illness, a training gap, injury restrictions. Read
+     * here so every consumer (readiness, the watcher, the directive) sees one answer.
+     */
+    suspend fun lifeEvents(
+        nowMs: Long = clock.nowMs(),
+        sessions: List<com.forge.app.data.db.entities.Session>? = null
+    ): com.forge.app.domain.coach.LifeEvents.State = withContext(Dispatchers.Default) {
+        runCatching {
+            com.forge.app.domain.coach.LifeEvents.assess(
+                sessions = sessions ?: sessionDao.allFinished().filter { !it.isUntracked },
+                checkins = checkinDao.since(nowMs - checkinWindowMs),
+                cardio = cardioDao.since(nowMs - checkinWindowMs),
+                restrictions = injuryDao.active(),
+                nowMs = nowMs
+            )
+        }.getOrElse {
+            if (it is kotlinx.coroutines.CancellationException) throw it
+            com.forge.app.domain.coach.LifeEvents.State.NONE
+        }
+    }
+
+    /**
+     * The Overview coach feed off ONE snapshot: actionable arbitrated recommendations (deload +
+     * plateau ladder) PLUS a sub-threshold fatigue read so Overview can show "recovery signals
+     * building" before a deload actually fires (Tier 3). Insights stay on Stats.
+     */
+    data class CoachFeed(
+        val recommendations: List<Recommendation>,
+        /** Fatigue that's building but hasn't crossed the deload line yet, or null. */
+        val fatigueBuilding: DeloadAdvisor.FatigueAssessment?,
+        val fatigueThreshold: Int,
+        /** Resting HR meaningfully above the user's own baseline (Health Connect), or null. */
+        val restingHrSpike: RestingHrTrend.Readout? = null
+    )
+
+    suspend fun coachFeed(): CoachFeed = withContext(Dispatchers.Default) {
+        // Overview calls this from a bare viewModelScope.launch with no error path, so degrade to an
+        // empty snapshot (no recs) rather than crashing the home screen on a corrupt row.
+        val s = snapshotOrEmpty()
+        val t = AdaptThresholds()
+        val recs = ProgressionAdvisor.evaluate(s, t) + listOfNotNull(DeloadAdvisor.evaluate(s, t))
+        val arbitrated = RecommendationArbiter.arbitrate(recs, mutedAdviceIds())
+        // The same "building" band AutoCoachPlanner uses for its consolidation hold — read from the
+        // shared threshold so the Overview nudge and the planner can't describe different ranges.
+        val building = DeloadAdvisor.fatigue(s, t)
+            ?.takeIf { it.score in (t.deloadScoreThreshold - t.consolidateBandPoints) until t.deloadScoreThreshold }
+        // Off-app recovery snapshot: resting HR up vs the user's own baseline (gated; empty when HC
+        // is unconnected). Surfaced separately from the fatigue score for its own Overview card.
+        val restingHrSpike = RestingHrTrend.spike(s.health.restingHr, s.nowMs, t)
+        CoachFeed(arbitrated, building, t.deloadScoreThreshold, restingHrSpike)
+    }
+
+    /**
+     * Just the deload call off ONE snapshot — for the weekly worker, which only needs this and
+     * shouldn't pay for the plateau ladder + arbitration [coachFeed] builds for the Overview.
+     * (DeloadAdvisor still runs ProgressionAdvisor once internally for its plateau driver.)
+     */
+    suspend fun deloadSuggestion(): Recommendation.DeloadSuggestion? = withContext(Dispatchers.Default) { DeloadAdvisor.evaluate(snapshot()) }
+
+    /**
+     * Everything the Stats page reads from the engine, off ONE snapshot fan-out: the fatigue
+     * pulse (System 5), the plateau ladder (System 1), the always-on balance ratios (System 4's
+     * counting, ungated), and the insight observations. Call once per Stats open — surface-level
+     * entry point, never the per-set hot path. (Insights live here, not in StatsRepository's
+     * reactive combine, so Stats open does ONE snapshot instead of two.)
+     */
+    data class EngineStatsRead(
+        val fatigue: DeloadAdvisor.FatigueAssessment?,
+        val deloadScoreThreshold: Int,
+        val plateaus: List<Recommendation>,
+        val ratios: List<RatioCounts>,
+        val insights: List<Recommendation.Insight>
+    )
+
+    suspend fun engineStatsRead(): EngineStatsRead = withContext(Dispatchers.Default) {
+        // Cached: Stats reads this on every open and every input change, and the key rebuilds the
+        // snapshot whenever one of those inputs has actually moved.
+        val s = snapshotCached()
+        val t = AdaptThresholds()
+        EngineStatsRead(
+            fatigue = DeloadAdvisor.fatigue(s, t),
+            deloadScoreThreshold = t.deloadScoreThreshold,
+            plateaus = ProgressionAdvisor.evaluate(s, t),
+            ratios = InsightEngine.balanceRatios(s, t),
+            insights = InsightEngine.evaluate(s)
+        )
+    }
+
+    // ─── Advice feedback (cooldowns + future calibration) ─────────────────────
+
+    suspend fun logAdviceApplied(adviceId: String) = logAdvice(adviceId, "applied")
+    suspend fun logAdviceDismissed(adviceId: String) = logAdvice(adviceId, "dismissed")
+
+    private suspend fun logAdvice(adviceId: String, action: String) {
+        adviceEventDao.insert(AdviceEvent(adviceId = adviceId, action = action, loggedAt = clock.nowMs()))
+    }
+
+    /** Applied OR dismissed inside the cooldown window → the engine shuts up about it. */
+    suspend fun mutedAdviceIds(): Set<String> {
+        val cutoff = clock.nowMs() - adviceCooldownMs
+        return adviceEventDao.recent()
+            .filter { it.loggedAt >= cutoff && (it.action == "dismissed" || it.action == "applied") }
+            .mapTo(mutableSetOf()) { it.adviceId }
+    }
+
+    // ─── Apply paths (always user-initiated; the engine never writes silently) ─
+
+    /**
+     * One-tap apply for [Recommendation.DeloadSuggestion]: regenerate the current split at
+     * deload volume — the same operation as Settings → "Generate deload week", built from the same
+     * [ProgramRepository.currentParams].
+     *
+     * [unlessWorkoutOpen] backs out rather than discard an open workout (see
+     * [ProgramRepository.generate]); the unconfirmed callers pass it. Returns whether the deload
+     * was generated.
+     */
+    suspend fun applyDeloadWeek(unlessWorkoutOpen: Boolean = false): Boolean {
+        // The shared builder (audit 2026-09-26, 08), so this deload and Settings' use the same caps,
+        // pins and dumbbell ceiling as the program being deloaded.
+        val params = programRepository.currentParams().copy(deload = true)
+        // The deload marker is NOT written here any more (M-06). Writing it first meant a generate
+        // that threw — an ordinary failure, not a race — left "you are in a deload week" standing
+        // over the untouched full-volume plan with nothing to clear it. `generate` now settles the
+        // marker itself, after its rows are committed, for this path and Settings' alike.
+        val generated = programRepository.generate(
+            params,
+            settingsRepository.availableEquipment.first()
+                .mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
+            settingsRepository.likedExercises.first(),
+            settingsRepository.dislikedExercises.first(),
+            // Same seed as the program being deloaded: lighter volume on the SAME movements, not a
+            // new program (2026-09-21).
+            keepPicks = true,
+            unlessWorkoutOpen = unlessWorkoutOpen
+        )
+        if (!generated) return false
+        // A deload regenerates a real plan, so a freestyle user who reached this is now following one —
+        // flip freestyle off (mirrors SettingsViewModel.generateDeloadWeek) so the plan actually surfaces.
+        if (settingsRepository.freestyleMode.first()) settingsRepository.setFreestyleMode(false)
+        logAdviceApplied("deload.suggest")
+        return true
+    }
+}

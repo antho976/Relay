@@ -1,0 +1,143 @@
+package com.forge.app.ui.cardio
+
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.CardioRepository
+import com.forge.app.domain.cardio.CardioWeekPoint
+import com.forge.app.domain.cardio.cardioWeekSeries
+import com.forge.app.ui.nav.Routes
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import java.time.Instant
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
+import javax.inject.Inject
+
+/** State for the weeks chart — one bar per week, oldest first. */
+data class CardioWeeksState(
+    val loaded: Boolean = false,
+    /** Oldest→newest, the chart's drawing order. Untrained weeks are kept at zero, so a fallow
+     *  stretch reads as fallow instead of closing up. */
+    val weeks: List<CardioWeekPoint> = emptyList(),
+    /** Every entry, so an opened week can list its own sessions with no second query. */
+    val entries: List<CardioEntry> = emptyList(),
+    val weekTargetMin: Int = 0,
+    val useMiles: Boolean = false,
+    /** Non-null → the week detail is open for the week starting at this Monday. */
+    val openWeekStartMs: Long? = null,
+    /**
+     * Local midnight of the day this state describes (0 before the first load), re-anchored on
+     * every day boundary and on any clock or timezone change (M-15). The screen and the week
+     * detail derive "which week is the current one" and "which cell is today" from it, rather than
+     * from their own `LocalDate.now()` — a composition that reads the clock has nothing to
+     * recompose it, so a chart left open across Sunday night judged the new week as a finished one.
+     */
+    val todayStartMs: Long = 0L,
+    /**
+     * The zone [todayStartMs] and every week boundary in [weeks] were computed in (M-15).
+     *
+     * Carried WITH the anchor rather than re-read where it is used. The screen held its own
+     * remembered system zone, which survives recomposition by definition, so after a
+     * flight the labels, the current-week test and the detail's day ranges all interpreted a
+     * new-zone epoch with the old zone's offset — a day-boundary error that lands sessions in the
+     * wrong week. One zone per emission means the anchor and the arithmetic done on it always agree.
+     */
+    val zone: ZoneId = ZoneId.systemDefault()
+)
+
+/**
+ * Backs the weeks chart — the screen that replaced the swipe-through-weeks overlay (2026-08-23).
+ * The overlay redrew the cardio hero's own marks one page away and could only be walked one week per
+ * swipe; a bar per week compares the whole run at a glance, which is the read weeks were browsed for.
+ *
+ * The series runs from the first logged week to this one with no gaps, and the screen pages a window
+ * of it with the arrows.
+ */
+@HiltViewModel
+class CardioWeeksViewModel @Inject constructor(
+    cardioRepo: CardioRepository,
+    settingsRepo: SettingsRepository,
+    savedState: SavedStateHandle,
+    timeSignals: com.forge.app.core.time.TimeSignals
+) : ViewModel() {
+
+    // Arriving with a week argument (the cardio hero's Mon–Sun strip) opens straight into that week;
+    // arriving without one (`weeks →`) lands on the chart. Backing out of the week shows the chart
+    // either way, so the strip is a shortcut into the same place rather than a separate screen.
+    private val openWeek = MutableStateFlow(
+        savedState.get<Long>(Routes.ARG_WEEK_START)?.takeIf { it > 0L }
+    )
+
+    /**
+     * True when the screen was ENTERED on a week (the hero's strip) rather than on the chart. Backing
+     * out of that week leaves the route entirely — landing on a chart you never asked for would be a
+     * surprise, and the strip is meant to be a shortcut, not a detour.
+     */
+    val arrivedOnWeek: Boolean = openWeek.value != null
+
+    val state: StateFlow<CardioWeeksState> = combine(
+        cardioRepo.observeAll(),
+        settingsRepo.cardioWeeklyTargetMin,
+        settingsRepo.useMiles,
+        openWeek,
+        // The calendar is an INPUT here, not something read on the way past (M-15). The series ran
+        // to `clock.nowMs()` inside this combine, which only re-evaluates when one of the other
+        // four emits — so a chart left open across Sunday night kept the old week as the current
+        // one and never grew the new one. This emits at every local midnight and on any clock or
+        // timezone change, which is exactly when the answer changes.
+        timeSignals.dayStarts()
+    ) { entries, target, useMiles, open, todayStartMs ->
+        val zone = ZoneId.systemDefault()
+        CardioWeeksState(
+            loaded = true,
+            weeks = cardioWeekSeries(entries, todayStartMs, weeksToCover(entries, zone, todayStartMs), zone),
+            entries = entries,
+            weekTargetMin = target,
+            useMiles = useMiles,
+            openWeekStartMs = open,
+            todayStartMs = todayStartMs,
+            zone = zone
+        )
+    }.flowOn(Dispatchers.Default)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
+            initialValue = CardioWeeksState()
+        )
+
+    fun openWeek(weekStartMs: Long) = openWeek.update { weekStartMs }
+    fun closeWeek() = openWeek.update { null }
+
+    /**
+     * How many weeks back the chart reaches: the first logged week, capped so a years-old history
+     * doesn't page forever. Always at least one full window, so the arrows have somewhere to go and
+     * a fresh install still draws a chart at zero rather than a stub.
+     */
+    private fun weeksToCover(entries: List<CardioEntry>, zone: ZoneId, nowMs: Long): Int {
+        val oldest = entries.minByOrNull { it.date } ?: return WEEKS_PER_PAGE
+        val oldestMonday = Instant.ofEpochMilli(oldest.date).atZone(zone).toLocalDate()
+            .with(java.time.DayOfWeek.MONDAY)
+        val currentMonday = Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+            .with(java.time.DayOfWeek.MONDAY)
+        val span = ChronoUnit.WEEKS.between(oldestMonday, currentMonday).toInt() + 1
+        return span.coerceIn(WEEKS_PER_PAGE, MAX_WEEKS)
+    }
+
+    companion object {
+        /** Weeks drawn per page. Eight bars still read across the 24dp page gutter on a small phone. */
+        const val WEEKS_PER_PAGE = 8
+
+        /** Two years of weeks — past this the chart is an archive, not a read. */
+        private const val MAX_WEEKS = 104
+    }
+}

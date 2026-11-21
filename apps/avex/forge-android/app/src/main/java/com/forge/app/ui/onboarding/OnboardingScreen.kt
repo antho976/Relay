@@ -1,0 +1,531 @@
+package com.forge.app.ui.onboarding
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import com.forge.app.ui.common.window.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.forge.app.domain.units.fromDisplayWeight
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.parseToLb
+import com.forge.app.domain.units.weightInputValue
+import com.forge.app.domain.schedule.WeeklySchedule
+import com.forge.app.program.Equipment
+import com.forge.app.program.ProgramGenerator
+import com.forge.app.program.SplitTemplates
+import com.forge.app.ui.theme.OpenIcons
+import com.forge.app.ui.theme.ForgeMotion
+import kotlin.random.Random
+
+/**
+ * First run, rebuilt 2026-08-22 around one idea: **the plan is visible while you answer for it.**
+ *
+ * The old flow asked fifteen questions and showed the result on the last one — five of those
+ * questions (name, units, body, watch, app lock) were settings asked before the product had proved
+ * anything, and the progress bar had to guess its own denominator because the path length wasn't
+ * known until question six. What replaced it:
+ *
+ * - **The fork leads.** Plan mode is the first screen, because it decides how much of the rest runs.
+ * - **Only plan-shaping questions are in the path** — goal, experience, days, gym, gear. Every
+ *   setting moved to one optional closing step ([StepExtras]) that lands *after* the week exists.
+ * - **The week is drawn under the day-count question** ([WeekBars]), and redraws as the day count
+ *   and session length move. The footer's mono "plan so far" line ([planSoFar]) grows with every
+ *   answer on every step (redesign, 2026-10-21).
+ * - **The rail is segmented** ([StepRail]) — one cell per step of the path actually taken, so the
+ *   short custom / freestyle path visibly drops the four cells it will never run.
+ *
+ * Generated: mode → goal → experience → days → weekdays → gym → gear → sore spots → week → extras
+ * (10). Weekdays follows the day count because it is the same question asked concretely: which 4? Sore
+ * spots sits before the week on purpose: it shapes exercise selection, so asking after the week was
+ * approved would have shaped a plan the user had already signed off.
+ * Custom / freestyle: mode → goal → experience → extras (4) — they still pick a goal and an
+ * experience because those steer the coach and Stats, and they have no plan to build here.
+ *
+ * The watch question left the flow entirely on 2026-08-23: its answer changed nothing the user
+ * could see, and Settings → Wearable owns that setup because it needs the Health Connect grants.
+ */
+private const val PAGE_MODE = 0
+private const val PAGE_GOAL = 1
+private const val PAGE_EXPERIENCE = 2
+private const val PAGE_DAYS = 3
+private const val PAGE_GYM = 4
+private const val PAGE_GEAR = 5
+private const val PAGE_SPOTS = 6
+private const val PAGE_WEEK = 7
+private const val PAGE_EXTRAS = 8
+private const val PAGE_WEEKDAYS = 9
+
+private val GENERATED_PATH = listOf(
+    PAGE_MODE, PAGE_GOAL, PAGE_EXPERIENCE, PAGE_DAYS, PAGE_WEEKDAYS, PAGE_GYM, PAGE_GEAR, PAGE_SPOTS, PAGE_WEEK, PAGE_EXTRAS
+)
+private val SHORT_PATH = listOf(PAGE_MODE, PAGE_GOAL, PAGE_EXPERIENCE, PAGE_EXTRAS)
+
+/** The pages this plan mode actually walks. Before a mode is picked the flow can't leave
+ *  [PAGE_MODE], so the generated (longest) path stands in and the rail only ever shortens. */
+private fun pathFor(planMode: String): List<Int> =
+    if (planMode == PLAN_CUSTOM || planMode == PLAN_FREESTYLE) SHORT_PATH else GENERATED_PATH
+
+/** Most of the world lifts in kg; the US (and Liberia / Myanmar) use lb. Seed the onboarding unit
+ *  from the device locale so a non-US user isn't forced to flip a toggle. An empty country (locale
+ *  carries only a language, common on emulators / minimal setups) is uninformative — fall back to
+ *  the app's historical lb default rather than guessing kg. */
+private fun localeDefaultUseKg(): Boolean {
+    val country = java.util.Locale.getDefault().country.uppercase(java.util.Locale.ROOT)
+    if (country.isBlank()) return false
+    return country !in setOf("US", "LR", "MM")
+}
+
+/**
+ * Plausible adult bodyweight range, in lb (~27–454 kg) — guards the relative-strength denominator.
+ * A fat-finger "1" instead of "100" kg would otherwise log a 1-kg bodyweight and render a ~50× ratio
+ * on the Stats strength-standards card. Out-of-range input simply isn't recorded (treated as blank).
+ */
+internal const val MIN_BODYWEIGHT_LB = 60.0
+internal const val MAX_BODYWEIGHT_LB = 1000.0
+
+/** Parse a typed bodyweight (in the user's display unit) to a sane lb value, or null if blank,
+ *  unparseable, or outside the plausible human range. Uses the shared [parseToLb] converter so the
+ *  kg→lb factor can never drift from the rest of the app. Pure + testable. */
+internal fun parseSaneBodyweightLb(input: String, unit: WeightUnit): Double? {
+    val lb = parseToLb(input, unit) ?: return null
+    return if (lb in MIN_BODYWEIGHT_LB..MAX_BODYWEIGHT_LB) lb else null
+}
+
+/** Boolean-unit bridge, matching [parseToLb]'s own legacy overload. Stones has no boolean. */
+internal fun parseSaneBodyweightLb(input: String, useKg: Boolean): Double? =
+    parseSaneBodyweightLb(input, if (useKg) WeightUnit.KG else WeightUnit.LB)
+
+/**
+ * Re-express a typed bodyweight when the unit chip changes, so the NUMBER keeps its meaning and only
+ * its unit moves: "170" under lb becomes "77.1" under kg, "80" under kg becomes "176.4" under lb.
+ * Before this the text stayed put and only the parser's unit changed, so a 170 lb lifter who tapped
+ * kg was logged at 170 kg (≈375 lb) — a factor of 2.2 in the first bodyweight row, feeding the
+ * trend, the strength standards and the coach. Blank stays blank, and text the old unit could not
+ * read stays exactly as typed: it was already flagged as an error under the old unit, and it keeps
+ * that flag under the new one rather than being silently dropped or guessed at. Pure + testable.
+ */
+internal fun convertBodyweightInput(input: String, from: WeightUnit, to: WeightUnit): String {
+    if (from == to || input.isBlank()) return input
+    val lb = parseToLb(input, from) ?: return input
+    return weightInputValue(lb, to)
+}
+
+/** Boolean-unit bridge for the onboarding toggle (true = kg, false = lb). */
+internal fun convertBodyweightInput(input: String, fromKg: Boolean, toKg: Boolean): String =
+    convertBodyweightInput(input, WeightUnit.ofKg(fromKg), WeightUnit.ofKg(toKg))
+
+/**
+ * @param onFinished invoked with the chosen plan mode ([PLAN_GENERATED] / [PLAN_CUSTOM] /
+ *   [PLAN_FREESTYLE]) so the host can route the first screen (e.g. custom → editor, freestyle → home).
+ */
+@Composable
+fun OnboardingScreen(
+    onFinished: (String) -> Unit,
+    viewModel: OnboardingViewModel = hiltViewModel()
+) {
+    // Wait for the one-shot resume-draft read before composing — a fully killed app reopens setup
+    // exactly where it left off. Until then only the theme gradient shows (a frame or two).
+    //
+    // After that first read the ViewModel keeps this current with every answer (see the SideEffect
+    // below), so the `remember` initialisers that follow — which re-run whenever the Activity is
+    // recreated under a retained ViewModel: rotation, multi-window resize — rehydrate every field,
+    // the step cursor and the preview seed from the answers the user last gave, not from defaults.
+    //
+    // The root subscribes only to WHETHER the draft has loaded. Every answer moves the draft, so
+    // observing its value here recomposed the whole flow a second time per tap; the value itself is
+    // read without a subscription, since only the one-time initialisers below use it.
+    val draftLoad = viewModel.draftLoad.collectAsState()
+    // The watch question returned (2026-10-16) as a real connect rather than a brand pick: it now
+    // grants the reads, so the answer changes what Home, Stats and the coach can show from day one.
+    var watchConnected by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+    val watchLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.health.connect.client.PermissionController.createRequestPermissionResultContract()
+    ) { granted -> watchConnected = granted.isNotEmpty() }
+    val loaded by remember { derivedStateOf { draftLoad.value is DraftLoad.Ready } }
+    if (!loaded) return
+    val draft = androidx.compose.runtime.snapshots.Snapshot.withoutReadObservation {
+        (draftLoad.value as? DraftLoad.Ready)?.draft
+    }
+
+    // A draft written by this same schema always points inside its own path, but coerce anyway so a
+    // corrupt cursor restarts the flow instead of indexing off the end.
+    var step by remember { mutableIntStateOf(draft?.let { it.step.coerceIn(0, pathFor(it.planMode).lastIndex) } ?: 0) }
+    // Plan source: generated / custom (self-built) / freestyle (no plan, log freely).
+    var planMode by remember { mutableStateOf(draft?.planMode ?: "") }
+    var name by remember { mutableStateOf(draft?.name ?: "") }
+    var useKg by remember { mutableStateOf(draft?.useKg ?: localeDefaultUseKg()) }
+    // Distance unit tracks the weight unit (lb→miles, kg→km) until the user explicitly taps the
+    // distance selector. Only an explicit pick is persisted, so leaving it untouched ties to the weight unit.
+    var useMilesChoice by remember { mutableStateOf(draft?.useMilesChoice ?: false) }
+    var distanceTouched by remember { mutableStateOf(draft?.distanceTouched ?: false) }
+    // Program-shaping choices start UNSELECTED — the user actively picks them; nothing is pre-highlighted.
+    var goal by remember { mutableStateOf(draft?.goal ?: "") }
+    var experience by remember { mutableStateOf(draft?.experience ?: "") }
+    var bodyweightInput by remember { mutableStateOf(draft?.bodyweightInput ?: "") }
+    // Sex is optional and drives only the Stats strength standards — null until the user picks
+    // (an explicit "Prefer not to say" stores "").
+    var sex by remember { mutableStateOf(draft?.sex) }
+    // App-lock opt-in (GYMAP-69) — advisory; never blocks the CTA.
+    var appLock by remember { mutableStateOf(draft?.appLock ?: false) }
+    // null until the user touches the coach toggle, so the default can follow the plan mode: a
+    // generated plan is what the coach adapts, freestyle has nothing to adapt.
+    var coachChoice by remember { mutableStateOf(draft?.coachChoice) }
+    // Four days is where the slider starts: an empty slider with no answer read as broken (Antho,
+    // 2026-10-21), and 4 sits in the 3-to-5 most people progress on.
+    var daysPerWeek by remember { mutableIntStateOf(draft?.daysPerWeek?.takeIf { it in 1..7 } ?: 4) }
+    // Optional, asked under the day count: null = not answered, 0 = "Any". Either means no ceiling.
+    var sessionMinutes by remember { mutableStateOf(draft?.sessionMinutes) }
+    // Fixed weekdays or "whenever I can": null until answered.
+    var fixedDays by remember { mutableStateOf(draft?.fixedDays) }
+    var weekdays by remember { mutableStateOf(draft?.weekdays ?: emptySet()) }
+    var equipment by remember { mutableStateOf(draft?.equipment ?: emptySet()) }
+    // Non-null when a curated preset (e.g. Developer's) is picked — locks the exercise pool.
+    var frozenIds by remember { mutableStateOf(draft?.frozenIds) }
+    // Locale-aware default: a kg lifter's "not sure" default is a round kg plate (10 kg), an lb
+    // lifter's stays 15 lb. Stored in lb; the extras step shows it in the user's unit.
+    var plateWeightLb by remember {
+        mutableStateOf(draft?.plateWeightLb ?: if (localeDefaultUseKg()) fromDisplayWeight(10.0, true) else 15.0)
+    }
+    var problemAreas by remember { mutableStateOf(draft?.problemAreas ?: emptySet()) }
+    var cadence by remember { mutableStateOf(draft?.cadence ?: "") }
+    var everyN by remember { mutableIntStateOf(draft?.everyN ?: 4) }
+    var previewSeed by remember { mutableLongStateOf(draft?.previewSeed ?: Random.nextLong()) }
+    var showSkipConfirm by remember { mutableStateOf(false) }
+
+    val path = pathFor(planMode)
+    // Changing plan mode is only reachable from step 0, so the cursor can never outrun its path —
+    // getOrElse keeps a hypothetical mismatch on the first page rather than crashing.
+    val page = path.getOrElse(step) { PAGE_MODE }
+    val isLast = step >= path.lastIndex
+    val isGenerated = planMode == PLAN_GENERATED
+    val coachEnabled = coachChoice ?: isGenerated
+
+    // Hand every answer change to the ViewModel the moment it is composed, so its state is the
+    // truth a recreated screen rehydrates from; the ViewModel debounces the disk write behind it
+    // (an unchanged snapshot is a no-op there). Completion removes the draft atomically, so a
+    // finished user never resumes into a stale setup.
+    val snapshot = OnboardingDraft(
+        step, planMode, name, useKg, useMilesChoice, distanceTouched, goal, experience,
+        bodyweightInput, sex, daysPerWeek, equipment, frozenIds, plateWeightLb,
+        problemAreas, cadence, everyN, previewSeed, appLock, coachChoice, sessionMinutes,
+        fixedDays, weekdays
+    )
+    SideEffect { viewModel.saveDraft(snapshot) }
+
+    // The split the day-count implies — known without any gear, which is what lets the ledger draw
+    // its empty tracks a step before the exercises exist.
+    val archetypes = remember(daysPerWeek) {
+        if (daysPerWeek in 1..7) SplitTemplates.forDays(daysPerWeek) else emptyList()
+    }
+    // The volume that split plans to carry, before any gear filter — what lets the ledger draw a
+    // real week one step before the exercises exist.
+    val plannedSets = remember(daysPerWeek, experience, goal, sessionMinutes) {
+        if (daysPerWeek in 1..7) ProgramGenerator.plannedSetsPerDay(
+            daysPerWeek, experience.ifBlank { "intermediate" }, goal.ifBlank { "build_muscle" },
+            sessionMinutes?.takeIf { it > 0 }
+        ) else emptyList()
+    }
+    // The preview week, built by the ViewModel off the main thread. Null until there is gear to
+    // build from: the ledger draws empty tracks rather than inventing a week (§12).
+    val previewInputs = if (equipment.isEmpty() || daysPerWeek !in 1..7) null else PreviewInputs(
+        daysPerWeek, equipment, goal, experience, problemAreas, frozenIds, previewSeed, sessionMinutes
+    )
+    // Asked for only on the pages that draw the week, plus sore spots, the page before it, so the
+    // week page opens on a finished week instead of building one as it arrives.
+    val wantsPreview = page == PAGE_DAYS || page == PAGE_SPOTS || page == PAGE_WEEK
+    LaunchedEffect(previewInputs, wantsPreview) {
+        if (wantsPreview && previewInputs != null) viewModel.requestPreview(previewInputs)
+    }
+    val preview by viewModel.preview.collectAsState()
+    // A week built from other answers is not this week, with one exception: a re-roll keeps the
+    // week on screen until the new one lands, rather than blanking the page between the two.
+    val previewDays = preview?.takeIf { previewInputs != null && it.inputs.copy(seed = previewSeed) == previewInputs }?.days
+
+    fun finish() {
+        val bwLb = parseSaneBodyweightLb(bodyweightInput, useKg)
+        viewModel.complete(
+            planMode = planMode, name = name.trim(), useKg = useKg,
+            useMiles = if (distanceTouched) useMilesChoice else null,
+            sex = sex ?: "", bodyweightLb = bwLb,
+            goal = goal, daysPerWeek = daysPerWeek, equipment = equipment,
+            cadence = cadence.ifEmpty { "never" }, everyN = everyN, experience = experience,
+            problemAreas = problemAreas, seed = previewSeed,
+            plateWeightLb = plateWeightLb, frozenIds = frozenIds, coachEnabled = coachEnabled,
+            appLock = appLock, sessionMinutes = sessionMinutes,
+            trainingWeekdays = weekdays.takeIf { fixedDays == true }
+        )
+        onFinished(planMode)
+    }
+
+    // System Back walks the flow, matching the ← in the chrome (Android: Back always works, and
+    // there is exactly one back affordance per page). At the first step it falls through and leaves.
+    BackHandler(enabled = step > 0) { step-- }
+
+    // Gate the CTA on the answers the generator can't work without.
+    val bodyweightOk = bodyweightInput.isBlank() || parseSaneBodyweightLb(bodyweightInput, useKg) != null
+    val canAdvance = when (page) {
+        PAGE_MODE -> planMode.isNotEmpty()
+        PAGE_GOAL -> goal.isNotEmpty()
+        PAGE_EXPERIENCE -> experience.isNotEmpty()
+        PAGE_DAYS -> daysPerWeek in 1..7
+        PAGE_WEEKDAYS -> fixedDays == false || (fixedDays == true && weekdays.size == daysPerWeek)
+        PAGE_GYM, PAGE_GEAR -> equipment.isNotEmpty()
+        PAGE_EXTRAS -> bodyweightOk
+        else -> true
+    }
+    // Say why the CTA is held rather than leaving a silently greyed button.
+    val gateHint = when {
+        page == PAGE_WEEKDAYS && fixedDays == true && weekdays.size != daysPerWeek -> {
+            val picked = weekdays.size
+            (if (daysPerWeek == 1) "Pick 1 day. " else "Pick $daysPerWeek days. ") + when (picked) {
+                0 -> "None picked yet."
+                1 -> "1 picked so far."
+                else -> "$picked picked so far."
+            }
+        }
+        page == PAGE_GYM && equipment.isEmpty() ->
+            "Pick a setup. Avex can't build your plan without knowing your gear."
+        page == PAGE_GEAR && equipment.isEmpty() ->
+            "Keep at least one piece on. Avex can't build your plan with nothing to train on."
+        else -> null
+    }
+    val ctaLabel = when {
+        !isLast -> "Continue"
+        planMode == PLAN_CUSTOM -> "Build my plan"
+        planMode == PLAN_FREESTYLE -> "Start logging"
+        else -> "Start training"
+    }
+    val onCta: () -> Unit = { if (isLast) finish() else step++ }
+
+    val soFar = planSoFar(
+        soFarPage(page),
+        SoFarAnswers(
+            planMode = planMode, goal = goal, experience = experience, daysPerWeek = daysPerWeek,
+            sessionMinutes = sessionMinutes, fixedDays = fixedDays, weekdays = weekdays,
+            equipment = equipment, problemAreas = problemAreas,
+            dayNames = archetypes.map { it.name },
+            weekSets = weekSets(archetypes, plannedSets, previewDays).sum()
+        )
+    )
+
+    OnboardingScaffold(
+        step = step,
+        total = path.size,
+        onBack = if (step > 0) ({ step-- }) else null,
+        onSkip = if (!isLast) ({ showSkipConfirm = true }) else null,
+        gateHint = gateHint,
+        planSoFar = soFar,
+        bottomBar = {
+            if (page == PAGE_WEEK) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OnbSecondaryButton("Re-roll", OpenIcons.Refresh, onClick = { previewSeed = Random.nextLong() })
+                    OnbPrimaryButton(ctaLabel, onClick = onCta, modifier = Modifier.weight(1f))
+                }
+            } else {
+                OnbPrimaryButton(ctaLabel, onClick = onCta, enabled = canAdvance, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    ) {
+            AnimatedContent(
+                targetState = step,
+                modifier = Modifier.weight(1f),
+                transitionSpec = {
+                    val dir = if (targetState > initialState) 1 else -1
+                    (slideInHorizontally(ForgeMotion.enterTween()) { it * dir } + fadeIn(ForgeMotion.enterTween())) togetherWith
+                        (slideOutHorizontally(ForgeMotion.exitTween()) { -it * dir } + fadeOut(ForgeMotion.exitTween()))
+                },
+                label = "onboarding_page"
+            ) { s ->
+                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                    when (path.getOrElse(s) { PAGE_MODE }) {
+                        PAGE_MODE -> StepPlanMode(selected = planMode, onSelect = { planMode = it })
+                        PAGE_GOAL -> StepGoal(selected = goal, onSelect = { goal = it })
+                        PAGE_EXPERIENCE -> StepExperience(selected = experience, onSelect = { experience = it })
+                        PAGE_DAYS -> StepDays(
+                            days = daysPerWeek, experience = experience, onChange = { daysPerWeek = it },
+                            sessionMinutes = sessionMinutes, onSessionMinutes = { sessionMinutes = it },
+                            archetypes = archetypes, plannedSets = plannedSets, previewDays = previewDays
+                        )
+                        PAGE_WEEKDAYS -> StepWeekdays(
+                            daysPerWeek = daysPerWeek,
+                            fixedDays = fixedDays,
+                            weekdays = weekdays,
+                            onFixedDays = { fixed ->
+                                fixedDays = fixed
+                                // Ring a sensible spread to start from, so most people only confirm.
+                                if (fixed && weekdays.size != daysPerWeek) {
+                                    val keys = (0 until daysPerWeek).map { "$it" }
+                                    weekdays = WeeklySchedule.defaultFor(keys).withIndex()
+                                        .filter { it.value.isNotEmpty() }.map { it.index }.toSet()
+                                }
+                            },
+                            onToggleWeekday = { wd -> weekdays = if (wd in weekdays) weekdays - wd else weekdays + wd }
+                        )
+                        PAGE_GYM -> StepGymPresets(
+                            selected = equipment,
+                            frozenIds = frozenIds,
+                            onSelectPreset = { preset ->
+                                equipment = preset.equipment
+                                frozenIds = preset.frozenIds
+                            }
+                        )
+                        PAGE_GEAR -> StepFineTune(
+                            selected = equipment,
+                            onToggle = { code ->
+                                equipment = if (code in equipment) equipment - code else equipment + code
+                                // Hand-editing equipment leaves any curated preset.
+                                frozenIds = null
+                            }
+                        )
+                        PAGE_SPOTS -> StepSoreSpots(
+                            selected = problemAreas,
+                            equipment = equipment,
+                            frozenIds = frozenIds,
+                            onToggle = { code ->
+                                problemAreas = if (code in problemAreas) problemAreas - code else problemAreas + code
+                            }
+                        )
+                        PAGE_WEEK -> StepWeek(archetypes = archetypes, plannedSets = plannedSets, days = previewDays)
+                        else -> StepExtras(
+                            generated = isGenerated,
+                            // One conversion-aware transition: the typed bodyweight is re-expressed
+                            // in the new unit so it keeps meaning the same weight (H-10).
+                            useKg = useKg, onWeightUnit = { kg ->
+                                if (kg != useKg) {
+                                    bodyweightInput = convertBodyweightInput(bodyweightInput, fromKg = useKg, toKg = kg)
+                                    // The plate is hardware in the new unit too: 15 lb read in kilos is
+                                    // 6.8 kg, which no kilo plate is and no kilo segment shows as picked.
+                                    // Snap to the new unit's nearest denomination.
+                                    plateWeightLb = snapPlateToUnit(plateWeightLb, toKg = kg)
+                                    useKg = kg
+                                }
+                            },
+                            useMiles = if (distanceTouched) useMilesChoice else !useKg,
+                            onDistanceUnit = { useMilesChoice = it; distanceTouched = true },
+                            name = name, onNameChange = { name = it },
+                            bodyweightInput = bodyweightInput, onBodyweightChange = { bodyweightInput = it },
+                            sex = sex, onSexSelect = { sex = it },
+                            coachEnabled = coachEnabled, onCoachToggle = { coachChoice = it },
+                            appLock = appLock, onAppLockToggle = { appLock = it },
+                            plateWeightLb = plateWeightLb, onPlateWeight = { plateWeightLb = it },
+                            cadence = cadence, everyN = everyN,
+                            onCadence = { c, n -> cadence = c; everyN = n },
+                            watchConnectable = viewModel.watchConnectable,
+                            watchConnected = watchConnected,
+                            onConnectWatch = { watchLauncher.launch(viewModel.watchPermissions) }
+                        )
+                    }
+                }
+            }
+    }
+
+    if (showSkipConfirm) {
+        AlertDialog(
+            onDismissRequest = { showSkipConfirm = false },
+            title = { Text("Skip setup?") },
+            text = {
+                Text(
+                    when (planMode) {
+                        PLAN_CUSTOM -> "You'll start with no plan yet. Build your own from the home " +
+                            "screen, or generate one anytime in Settings → Program."
+                        PLAN_FREESTYLE -> "You'll start with no fixed plan, just logging your workouts. " +
+                            "Switch to a plan anytime in Settings → Program."
+                        // Skipping keeps what was already answered, so the promise depends on how far in it is.
+                        else -> if (equipment.isNotEmpty() || goal.isNotEmpty())
+                            "Your plan is built from what you've answered so far, with defaults for the rest. " +
+                                "Change any of it anytime in Settings → Program."
+                        else
+                            "You'll start with a basic bodyweight program and default settings, with " +
+                                "no plan tailored to your gym or goals. Set your equipment and goal, and " +
+                                "generate a personalized program, anytime in Settings → Program."
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSkipConfirm = false
+                    val bwLb = parseSaneBodyweightLb(bodyweightInput, useKg)
+                    // Honor a mode the user already picked; default to generated for the usual
+                    // early skip where nothing was chosen yet.
+                    val effectiveMode = planMode.ifEmpty { PLAN_GENERATED }
+                    // Built from the answers so far, each defaulted only while still blank. Skipping
+                    // on step six used to throw away the goal, experience, day count, gym, sore
+                    // spots, minutes and weekdays already given, and generate a bodyweight plan
+                    // for someone who had just picked a full gym.
+                    viewModel.complete(
+                        planMode = effectiveMode, name = name.trim(), useKg = useKg, sex = sex ?: "",
+                        useMiles = if (distanceTouched) useMilesChoice else null,
+                        bodyweightLb = bwLb,
+                        goal = goal.ifEmpty { "build_muscle" },
+                        daysPerWeek = daysPerWeek.takeIf { it in 1..7 } ?: 4,
+                        equipment = equipment.ifEmpty { setOf(Equipment.BODYWEIGHT_ONLY.name) },
+                        experience = experience.ifEmpty { "intermediate" },
+                        problemAreas = problemAreas, seed = previewSeed,
+                        plateWeightLb = plateWeightLb, frozenIds = frozenIds,
+                        // Skipping never reaches the coach row, so the mode's own default stands.
+                        coachEnabled = coachChoice ?: (effectiveMode == PLAN_GENERATED),
+                        appLock = appLock, sessionMinutes = sessionMinutes,
+                        // Only a complete pick, as Next requires: one weekday per training day. A
+                        // partial set was zipped onto the day keys, and the day left over never
+                        // came up in weekday mode.
+                        trainingWeekdays = weekdays.takeIf {
+                            fixedDays == true && it.size == (daysPerWeek.takeIf { d -> d in 1..7 } ?: 4)
+                        }
+                    )
+                    onFinished(effectiveMode)
+                }) { Text("Skip anyway") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSkipConfirm = false }) { Text("Keep setting up") }
+            }
+        )
+    }
+}
+
+/** Which footer line a page writes. */
+private fun soFarPage(page: Int): SoFarPage = when (page) {
+    PAGE_MODE -> SoFarPage.MODE
+    PAGE_GOAL -> SoFarPage.GOAL
+    PAGE_EXPERIENCE -> SoFarPage.EXPERIENCE
+    PAGE_DAYS -> SoFarPage.DAYS
+    PAGE_WEEKDAYS -> SoFarPage.WEEKDAYS
+    PAGE_GYM -> SoFarPage.GYM
+    PAGE_GEAR -> SoFarPage.GEAR
+    PAGE_SPOTS -> SoFarPage.SPOTS
+    PAGE_WEEK -> SoFarPage.WEEK
+    else -> SoFarPage.EXTRAS
+}
+
+/** [plateLb] as the nearest real plate in the target unit, stored in lb (see the extras step's set). */
+internal fun snapPlateToUnit(plateLb: Double, toKg: Boolean): Double {
+    val denominations = if (toKg) listOf(1.25, 2.5, 5.0, 10.0, 15.0, 20.0, 25.0) else listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0)
+    val target = com.forge.app.domain.units.toDisplayWeight(plateLb, toKg)
+    val nearest = denominations.minBy { kotlin.math.abs(it - target) }
+    return com.forge.app.domain.units.fromDisplayWeight(nearest, toKg)
+}

@@ -1,0 +1,267 @@
+package com.forge.app.ui.onboarding
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.BodyweightRepository
+import com.forge.app.data.repo.ProgramRepository
+import com.forge.app.program.Equipment
+import com.forge.app.program.GeneratedDay
+import com.forge.app.program.GenerationParams
+import com.forge.app.program.ProblemArea
+import com.forge.app.program.ProgramGenerator
+import com.forge.app.program.SplitTemplates
+import com.forge.app.domain.schedule.WeeklySchedule
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import javax.inject.Inject
+
+/** Plan-mode keys chosen on the onboarding plan-mode step. */
+const val PLAN_GENERATED = "generated"
+const val PLAN_CUSTOM = "custom"
+const val PLAN_FREESTYLE = "freestyle"
+
+/** Every answer the week preview is built from, [seed] included, so equal inputs mean an equal week. */
+internal data class PreviewInputs(
+    val daysPerWeek: Int,
+    val equipment: Set<String>,
+    val goal: String,
+    val experience: String,
+    val problemAreas: Set<String>,
+    val frozenIds: Set<String>?,
+    val seed: Long,
+    val sessionMinutes: Int?
+)
+
+/** A built preview week and the answers it was built from. */
+internal class WeekPreview(val inputs: PreviewInputs, val days: List<GeneratedDay>)
+
+@HiltViewModel
+class OnboardingViewModel @Inject constructor(
+    private val settingsRepo: SettingsRepository,
+    private val bodyweightRepo: BodyweightRepository,
+    private val programRepository: ProgramRepository,
+    private val healthConnect: com.forge.app.data.health.HealthConnectManager
+) : ViewModel() {
+
+    /** Health Connect is on this phone, so the last step can offer to connect a watch. */
+    val watchConnectable: Boolean get() = healthConnect.isAvailable
+
+    /** The reads a watch or ring feeds: sleep, resting HR, HRV, steps and its workouts. */
+    val watchPermissions: Set<String>
+        get() = healthConnect.permissions + healthConnect.hrvPermissions + healthConnect.stepsPermissions +
+            healthConnect.watchWorkoutPermissions + healthConnect.exercisePermissions
+
+    // The draft's state of truth lives in the ViewModel, not on disk: a screen recreated by a
+    // configuration change rehydrates from [draftLoad] synchronously, while the DataStore write
+    // trails it by a debounce (see [OnboardingDraftKeeper] for the two rules that make that safe).
+    private val drafts = OnboardingDraftKeeper(
+        scope = viewModelScope,
+        load = { settingsRepo.onboardingDraft()?.let(OnboardingDraft::fromJson) },
+        write = { settingsRepo.saveOnboardingDraft(it.toJson()) }
+    )
+
+    /** [DraftLoad.Loading] until the one-shot disk read lands, then always the latest answers. */
+    internal val draftLoad: StateFlow<DraftLoad> get() = drafts.state
+
+    /** Record the current answers — cheap to call on every recomposition (an unchanged snapshot is
+     *  a no-op). The ViewModel state moves immediately; the disk write is debounced behind it. */
+    internal fun saveDraft(draft: OnboardingDraft) = drafts.update(draft)
+
+    /**
+     * The week preview, built off the main thread. The screen hands over its answers only while a
+     * page that draws the week is up; building it in composition used to run the whole generator on
+     * every gear or sore-spot tap, on pages that never showed it. [mapLatest] drops a week the next
+     * answer has already replaced. Each result carries the answers it was built from, so the screen
+     * can tell a current week from one still catching up.
+     */
+    private val previewInputs = MutableStateFlow<PreviewInputs?>(null)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    internal val preview: StateFlow<WeekPreview?> = previewInputs
+        .filterNotNull()
+        .mapLatest { inputs ->
+            val days = withContext(Dispatchers.Default) {
+                buildPreview(
+                    inputs.daysPerWeek, inputs.equipment, inputs.goal, inputs.experience,
+                    inputs.problemAreas, inputs.frozenIds, inputs.seed, inputs.sessionMinutes
+                )
+            }
+            WeekPreview(inputs, days)
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** Ask for the week these answers build. Repeating the same answers is a no-op. */
+    internal fun requestPreview(inputs: PreviewInputs) {
+        previewInputs.value = inputs
+    }
+
+    /** Pure, side-effect-free week for the preview step — the same [seed] is persisted on finish. */
+    fun buildPreview(
+        daysPerWeek: Int, equipment: Set<String>, goal: String, experience: String,
+        problemAreas: Set<String>, frozenIds: Set<String>?, seed: Long, sessionMinutes: Int? = null
+    ): List<GeneratedDay> = ProgramGenerator.generate(
+        generationParams(daysPerWeek, goal, experience, problemAreas, frozenIds, sessionMinutes),
+        equipmentOf(equipment),
+        emptySet(), emptySet(), seed = seed
+    )
+
+    /**
+     * The generator inputs the preview and the persisted week share. ONE builder, because the saved
+     * week must be the previewed one (same seed + inputs): two hand-kept copies of this could drift
+     * apart without either call site looking wrong.
+     */
+    private fun generationParams(
+        daysPerWeek: Int, goal: String, experience: String,
+        problemAreas: Set<String>, frozenIds: Set<String>?, sessionMinutes: Int?
+    ) = GenerationParams(
+        daysPerWeek = daysPerWeek, goal = goal, experience = experience,
+        problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet(),
+        frozenIds = frozenIds,
+        sessionMinutes = sessionMinutes?.takeIf { it > 0 }
+    )
+
+    private fun equipmentOf(codes: Set<String>): Set<Equipment> =
+        codes.mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet()
+
+    /** Set by the first [complete]; a second tap on the finishing CTA must not run it again. */
+    private var completing = false
+
+    /**
+     * Finish onboarding. [planMode] drives what program (if any) is built:
+     * - [PLAN_GENERATED]: persist the previewed week (all generator inputs supplied).
+     * - [PLAN_CUSTOM]: clear the program so the builder opens blank — the user constructs their days.
+     * - [PLAN_FREESTYLE]: clear the program too (no fixed plan) and flip [setFreestyleMode] so the home
+     *   leads with freestyle logging instead of day cards.
+     */
+    fun complete(
+        planMode: String,
+        name: String,
+        useKg: Boolean,
+        sex: String,
+        bodyweightLb: Double?,
+        /** Explicit cardio distance choice; null = leave tied to the weight unit (lb→miles, kg→km). */
+        useMiles: Boolean? = null,
+        // [goal] + [experience] are collected on EVERY path (they steer the coach's rep-range/volume
+        // suggestions). The rest of these are generated-only; custom/freestyle default them.
+        goal: String = "build_muscle",
+        daysPerWeek: Int = 4,
+        equipment: Set<String> = emptySet(),
+        cadence: String = "never",
+        everyN: Int = 4,
+        experience: String = "intermediate",
+        problemAreas: Set<String> = emptySet(),
+        seed: Long = System.nanoTime(),
+        plateWeightLb: Double = 15.0,
+        frozenIds: Set<String>? = null,
+        coachEnabled: Boolean = true,
+        /** App-lock opt-in from onboarding (GYMAP-69); false leaves it off (the default). */
+        appLock: Boolean = false,
+        /** Minutes per session; null / ≤ 0 = no ceiling. Generated path only, like the day count. */
+        sessionMinutes: Int? = null,
+        /** Weekdays to pin the generated days to (0 = Monday); null = "whenever I can" (sequence). */
+        trainingWeekdays: Set<Int>? = null
+    ) {
+        // The CTA stays tappable until ONBOARDING_DONE flips the UI, which is after the whole
+        // generation below, so a double tap started a second, concurrent completion.
+        if (completing) return
+        completing = true
+        // Stop the resume-draft autosaver before the completion write removes the draft.
+        drafts.stopWrites()
+        viewModelScope.launch {
+            bodyweightLb?.let { bodyweightRepo.logWeightOnly(it) }
+            settingsRepo.setPlateWeightLb(plateWeightLb)
+            settingsRepo.setUserSex(sex)
+            settingsRepo.setFreestyleMode(planMode == PLAN_FREESTYLE)
+            settingsRepo.setCoachEnabled(coachEnabled)
+            // App-lock opt-in (GYMAP-69); leave off unless the user turned it on.
+            if (appLock) settingsRepo.setAppLockEnabled(true)
+
+            val effectiveGoal: String
+            when (planMode) {
+                PLAN_GENERATED -> {
+                    effectiveGoal = goal
+                    settingsRepo.setDaysPerWeek(daysPerWeek)
+                    settingsRepo.setSessionMinutes(sessionMinutes)
+                    settingsRepo.setAvailableEquipment(equipment)
+                    settingsRepo.setFrozenExerciseIds(frozenIds)
+                    settingsRepo.setRotationCadence(cadence)
+                    if (cadence == "every_n") settingsRepo.setRotationEveryN(everyN)
+                    settingsRepo.setProgramExperience(experience)
+                    settingsRepo.setUserGoal(goal)
+                    problemAreas.forEach { settingsRepo.toggleProblemArea(it, true) }
+                    // Persist exactly the week shown in the preview (same seed + inputs).
+                    generateProgram(daysPerWeek, goal, experience, problemAreas, equipment, frozenIds, seed, sessionMinutes)
+                    // The generated days carry their template keys, in template order.
+                    if (!trainingWeekdays.isNullOrEmpty()) {
+                        settingsRepo.setWeeklySchedule(
+                            WeeklySchedule.fromWeekdays(trainingWeekdays, SplitTemplates.forDays(daysPerWeek).map { it.key })
+                        )
+                        settingsRepo.setScheduleMode(WeeklySchedule.MODE_WEEKDAY)
+                    } else {
+                        settingsRepo.setScheduleMode(WeeklySchedule.MODE_SEQUENCE)
+                    }
+                }
+                PLAN_CUSTOM -> {
+                    // Build-your-own starts with a genuinely EMPTY plan — the builder opens blank and
+                    // the user constructs their days/exercises from scratch. Goal + experience ARE
+                    // collected (they steer the coach's rep-range/volume suggestions on the plan you
+                    // build); the rest default so a later Settings → Generate works if you want it.
+                    effectiveGoal = goal.ifBlank { "build_muscle" }
+                    val fullGym = Equipment.entries.map { it.name }.toSet()
+                    settingsRepo.setDaysPerWeek(4)
+                    settingsRepo.setAvailableEquipment(fullGym)
+                    settingsRepo.setFrozenExerciseIds(null)
+                    settingsRepo.setRotationCadence("never")
+                    settingsRepo.setProgramExperience(experience.ifBlank { "intermediate" })
+                    settingsRepo.setUserGoal(effectiveGoal)
+                    programRepository.clearProgram()
+                }
+                else -> {
+                    // freestyle: no fixed plan. Clear the program (same as custom) so there's a genuine
+                    // "no program" state to lead with logging — no hidden split to leak into the home
+                    // counter, coach, reminders or Stats. Goal + experience are still collected so Stats
+                    // and the coach have them if the user later switches to following a plan.
+                    effectiveGoal = goal.ifBlank { "build_muscle" }
+                    val fullGym = Equipment.entries.map { it.name }.toSet()
+                    settingsRepo.setDaysPerWeek(4)
+                    settingsRepo.setAvailableEquipment(fullGym)
+                    settingsRepo.setFrozenExerciseIds(null)
+                    settingsRepo.setRotationCadence("never")
+                    settingsRepo.setProgramExperience(experience.ifBlank { "intermediate" })
+                    settingsRepo.setUserGoal(effectiveGoal)
+                    programRepository.clearProgram()
+                }
+            }
+            // Set ONBOARDING_DONE last — it flips the UI from onboarding to home, so the freshly
+            // generated program is already live when the home screen first composes.
+            settingsRepo.completeOnboarding(
+                name, com.forge.app.domain.units.WeightUnit.ofKg(useKg), effectiveGoal, bodyweightLb, useMiles
+            )
+        }
+    }
+
+    private suspend fun generateProgram(
+        daysPerWeek: Int, goal: String, experience: String,
+        problemAreas: Set<String>, equipment: Set<String>, frozenIds: Set<String>?, seed: Long,
+        sessionMinutes: Int?
+    ) {
+        programRepository.generate(
+            // Onboarding doesn't collect emphasis / priorityMuscles / pinned / dbMaxLb (the dumbbell
+            // ceiling) — they take their no-op defaults (balanced / none / none / no ceiling) and are
+            // refined later in Settings → Program. The same builder as [buildPreview], so the saved
+            // week matches the previewed one (same seed + inputs).
+            generationParams(daysPerWeek, goal, experience, problemAreas, frozenIds, sessionMinutes),
+            equipmentOf(equipment),
+            emptySet(), emptySet(), seed = seed
+        )
+    }
+}

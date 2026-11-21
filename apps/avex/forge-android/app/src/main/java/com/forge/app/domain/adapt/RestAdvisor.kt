@@ -1,0 +1,261 @@
+package com.forge.app.domain.adapt
+
+import com.forge.app.data.db.entities.RestEvent
+import com.forge.app.data.db.types.EffortRating
+import com.forge.app.program.ExercisePlan
+import com.forge.app.program.SessionEstimate
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+/** The two rest-behavior buckets — compounds and isolations rest differently. */
+enum class MovementRole { COMPOUND, ISOLATION }
+
+/** One qualified observation: how long the user actually rested vs the role's base prescription. */
+data class RestSample(val role: MovementRole, val baseSeconds: Int, val realizedSeconds: Int)
+
+/**
+ * Personal rest-correction factors per [MovementRole], learned from [RestSample]s.
+ * A factor of 0.85 means "this user consistently rests ~15% less than the canonical
+ * prescription". Neutral (factor absent / too few samples) means the canonical
+ * [SessionEstimate] values are used untouched.
+ */
+data class RestTuning(
+    val factors: Map<MovementRole, Double> = emptyMap(),
+    val sampleCounts: Map<MovementRole, Int> = emptyMap()
+) {
+    companion object {
+        val NEUTRAL = RestTuning()
+    }
+}
+
+/**
+ * A rest duration plus the always-present explanation of how it was derived. [light] marks a rest
+ * capped because the set was a light / feeler set — such rests are not evidence of the user's pace
+ * and are kept out of [RestAdvisor.samples].
+ */
+data class RestPrescription(val seconds: Int, val reason: String, val light: Boolean = false)
+
+/**
+ * What the set that just ended actually was, so the rest follows the work done rather than the
+ * plan text alone (2026-09-21). [referenceWeightLb] is the heaviest known working weight for the
+ * exercise (the prior-session frontier, or the heaviest set so far this session); null when there
+ * is nothing to compare against, which disables the light-set rule.
+ */
+data class PerformedSet(
+    val reps: Int?,
+    val weightLb: Double?,
+    val referenceWeightLb: Double?,
+    val durationSeconds: Int? = null
+)
+
+/**
+ * System 2 of the adaptation engine: adaptive rest. Pure — both entry points are
+ * deterministic functions of their inputs.
+ *
+ * Base prescription comes from [SessionEstimate.restSeconds] (movement-role + rep-heaviness
+ * aware) with easy/hard/brutal effort adjustments. A per-role personal
+ * correction factor is learned from realized rest behavior ([RestEvent]s) — the median of
+ * realized ÷ base, clamped to ±[AdaptThresholds.maxRestAdjust], applied only once a role
+ * has ≥ [AdaptThresholds.minRestSamples] qualified samples. Only shortening is used in prescriptions;
+ * completion intervals cannot establish a need for longer rest. Realized is compared against
+ * the *base*, not the (possibly already-tuned) planned seconds, so the factor converges
+ * instead of oscillating back to neutral once the user follows the tuned timer.
+ *
+ * A per-exercise manual override (#59) always wins — a user's explicit choice is not a
+ * signal to second-guess.
+ */
+object RestAdvisor {
+
+    /** Prefer the most specific observation, without treating a missing rating as failure. */
+    fun effortForSet(rpe: Double?, tag: String?, exerciseEffort: EffortRating?): EffortRating? = when {
+        rpe != null && rpe.isFinite() && rpe in 6.0..10.0 -> when {
+            rpe >= 10.0 -> EffortRating.BRUTAL
+            rpe >= 9.0 -> EffortRating.HARD
+            rpe <= 7.0 -> EffortRating.EASY
+            else -> EffortRating.JUST_RIGHT
+        }
+        tag == "hard" -> EffortRating.HARD
+        tag == "easy" -> EffortRating.EASY
+        else -> exerciseEffort
+    }
+
+    fun movementRole(plan: ExercisePlan): MovementRole =
+        if (SessionEstimate.isCompound(plan)) MovementRole.COMPOUND else MovementRole.ISOLATION
+
+    /**
+     * Map raw [events] to qualified samples. Drops events outside sanity bounds (sub-15s
+     * intervals are mistaps; 10+ minutes means the user wandered off) and events whose
+     * exercise can't be resolved anymore ([planFor] returns null).
+     */
+    fun samples(
+        events: List<RestEvent>,
+        t: AdaptThresholds = AdaptThresholds(),
+        compoundBase: Int = SessionEstimate.COMPOUND_REST,
+        isolationBase: Int = SessionEstimate.ISOLATION_REST,
+        planFor: (String) -> ExercisePlan?
+    ): List<RestSample> = events.mapNotNull { e ->
+        if (e.realizedSeconds < t.minSaneRestSeconds || e.realizedSeconds > t.maxSaneRestSeconds) return@mapNotNull null
+        val plan = planFor(e.exerciseId) ?: return@mapNotNull null
+        RestSample(
+            role = movementRole(plan),
+            // The factor is realized ÷ base, so this base MUST be the SAME one [restSeconds] later
+            // applies the factor to (the user's Session-settings override), or the learned correction
+            // mis-scales every prescription for anyone whose base isn't the canonical 120/90.
+            baseSeconds = SessionEstimate.restSeconds(plan, compoundBase, isolationBase),
+            realizedSeconds = e.realizedSeconds
+        )
+    }
+
+    /** Learn per-role correction factors: median(realized ÷ base), clamped to ±maxRestAdjust. */
+    fun tuning(samples: List<RestSample>, t: AdaptThresholds = AdaptThresholds()): RestTuning {
+        val byRole = samples.filter { it.baseSeconds > 0 }.groupBy { it.role }
+        val factors = byRole.mapValues { (_, list) ->
+            median(list.map { it.realizedSeconds.toDouble() / it.baseSeconds })
+                .coerceIn(1 - t.maxRestAdjust, 1 + t.maxRestAdjust)
+        }
+        return RestTuning(factors = factors, sampleCounts = byRole.mapValues { it.value.size })
+    }
+
+    /**
+     * The rest the timer should run for after a set of [plan], with its explanation.
+     *
+     * [performed] — the set that just ended — decides two things the plan text can't: the heavy
+     * bonus applies only when the set was actually heavy (≤ [SessionEstimate.HEAVY_MAX_REPS] reps),
+     * and a light / feeler set (≤ [AdaptThresholds.lightSetFraction] of the known working weight)
+     * is capped at [AdaptThresholds.lightSetRestSeconds]. A 4-6 prescription used to start a 3:00
+     * timer after a warm-up-weight set of 12 (2026-09-21).
+     */
+    fun restSeconds(
+        plan: ExercisePlan,
+        lastEffort: EffortRating?,
+        overrideSeconds: Int?,
+        tuning: RestTuning = RestTuning.NEUTRAL,
+        t: AdaptThresholds = AdaptThresholds(),
+        compoundBase: Int = SessionEstimate.COMPOUND_REST,
+        isolationBase: Int = SessionEstimate.ISOLATION_REST,
+        performed: PerformedSet? = null
+    ): RestPrescription {
+        if (overrideSeconds != null) {
+            return RestPrescription(overrideSeconds, "your custom rest for this exercise")
+        }
+        val role = movementRole(plan)
+        val light = isLight(performed, t)
+        // A light set earns neither the heavy bonus nor, below, the full base.
+        val base = SessionEstimate.restSeconds(
+            plan, compoundBase, isolationBase,
+            performedReps = if (light) Int.MAX_VALUE else performed?.reps
+        )
+        val roleLabel = if (role == MovementRole.COMPOUND) "compound" else "isolation"
+        val parts = mutableListOf("$roleLabel base ${mmss(base)}")
+
+        // Completion-to-completion intervals include the next set and equipment setup.
+        // They may support a shorter preference, but cannot prove a need for longer recovery.
+        // Only reported effort may extend the prescription.
+        val factor = tuning.factors[role]?.coerceAtMost(1.0)
+            ?.takeIf { (tuning.sampleCounts[role] ?: 0) >= t.minRestSamples }
+        var seconds = base
+        if (factor != null) {
+            seconds = roundTo(base * factor, t.restRoundSeconds)
+            val pct = ((factor - 1) * 100).roundToInt()
+            if (abs(pct) >= 1 && seconds != base) {
+                // Surface how much evidence the adjustment rests on, so the tuning reads as learned,
+                // not arbitrary.
+                val n = tuning.sampleCounts[role] ?: 0
+                val pctPart = if (pct < 0) "−${-pct}% to match your usual rest" else "+$pct% to match your usual rest"
+                parts += "$pctPart (from $n rest${if (n == 1) "" else "s"} logged)"
+            }
+        }
+        if (light) {
+            seconds = minOf(seconds, t.lightSetRestSeconds)
+            val pct = (t.lightSetFraction * 100).roundToInt()
+            parts += "light set (≤$pct% of your working weight) · capped at ${mmss(t.lightSetRestSeconds)}"
+        }
+        if (lastEffort == EffortRating.EASY) {
+            // Never below a minute, and never ABOVE where it was: `coerceAtLeast(60)` lengthened a
+            // base already under a minute (a 45 s isolation rest became 60 s) under a "−30s" label.
+            val eased = maxOf(seconds - 30, minOf(seconds, 60))
+            if (eased < seconds) {
+                parts += "−${seconds - eased}s after an easy set"
+                seconds = eased
+            }
+        } else if (lastEffort == EffortRating.HARD) {
+            seconds += 15
+            parts += "+15s after a hard set"
+        }
+        if (lastEffort == EffortRating.BRUTAL) {
+            seconds += t.brutalRestBonusSeconds
+            parts += "+${t.brutalRestBonusSeconds}s after a brutal set"
+        }
+        return RestPrescription(seconds, parts.joinToString(" · "), light = light)
+    }
+
+    /**
+     * A set at or below [AdaptThresholds.lightSetFraction] of the exercise's known working weight.
+     * Needs a real weight on both sides: bodyweight work, an unparsed entry, or an exercise with no
+     * history is never judged light.
+     */
+    fun isLight(performed: PerformedSet?, t: AdaptThresholds = AdaptThresholds()): Boolean {
+        val weight = performed?.weightLb ?: return false
+        val reference = performed.referenceWeightLb ?: return false
+        return reference > 0 && weight <= reference * t.lightSetFraction
+    }
+
+    /**
+     * Session-length estimate with the user's realized rest pace folded in. Falls back to
+     * the canonical estimate exactly while tuning is below its sample gates (the rest
+     * prescription itself enforces them via [restSeconds]).
+     */
+    fun estimateMinutes(
+        plan: com.forge.app.program.DayPlan,
+        tuning: RestTuning,
+        t: AdaptThresholds = AdaptThresholds(),
+        compoundBase: Int = SessionEstimate.COMPOUND_REST,
+        isolationBase: Int = SessionEstimate.ISOLATION_REST
+    ): Int = SessionEstimate.estimateMinutes(plan) { ex ->
+        restSeconds(
+            ex, lastEffort = null, overrideSeconds = null, tuning = tuning, t = t,
+            compoundBase = compoundBase, isolationBase = isolationBase
+        ).seconds
+    }
+
+    /**
+     * What the timer has learned, in words, for the Session settings: each role it has enough rests
+     * for, at the time it now prescribes before effort adjusts it. Null until either role has
+     * [AdaptThresholds.minRestSamples]; the settings footer already says the timer learns.
+     */
+    fun paceReading(
+        tuning: RestTuning,
+        compoundBase: Int,
+        isolationBase: Int,
+        t: AdaptThresholds = AdaptThresholds()
+    ): String? {
+        // Each learned role as its phrase and the rests behind it; a role short of samples is left out
+        // of both, so the count matches what the line claims.
+        fun role(r: MovementRole, base: Int, name: String): Pair<String, Int>? {
+            val n = tuning.sampleCounts[r] ?: 0
+            val factor = tuning.factors[r]?.coerceAtMost(1.0) ?: return null
+            if (n < t.minRestSamples) return null
+            val seconds = roundTo(base * factor, t.restRoundSeconds)
+            return (if (seconds < base) "$name about ${mmss(seconds)}" else "$name the full ${mmss(base)}") to n
+        }
+        val parts = listOfNotNull(
+            role(MovementRole.COMPOUND, compoundBase, "compounds"),
+            role(MovementRole.ISOLATION, isolationBase, "isolations")
+        )
+        if (parts.isEmpty()) return null
+        return "Your pace so far: ${parts.joinToString(", ") { it.first }}, from ${parts.sumOf { it.second }} rests."
+    }
+
+    private fun median(values: List<Double>): Double {
+        val sorted = values.sorted()
+        val mid = sorted.size / 2
+        return if (sorted.size % 2 == 1) sorted[mid] else (sorted[mid - 1] + sorted[mid]) / 2
+    }
+
+    private fun roundTo(value: Double, step: Int): Int =
+        ((value / step).roundToInt() * step).coerceAtLeast(step)
+
+    // padStart, not "%02d".format: that formats in the default locale, so an ar/fa/bn device printed
+    // the seconds in its own digits beside ASCII minutes ("2:٠٠").
+    private fun mmss(seconds: Int): String = "${seconds / 60}:" + (seconds % 60).toString().padStart(2, '0')
+}

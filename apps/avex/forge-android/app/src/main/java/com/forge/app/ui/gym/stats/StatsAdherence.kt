@@ -1,0 +1,59 @@
+package com.forge.app.ui.gym.stats
+
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.forge.app.ui.gym.stats.components.CalendarHeatmap
+import com.forge.app.ui.gym.stats.components.rememberToday
+import com.forge.app.ui.gym.stats.state.DayLoad
+import java.time.LocalDate
+
+private const val HEATMAP_WEEKS = 26
+
+/**
+ * Tier 7 — adherence calendar heatmap. "Did I actually show up?" answered instantly by the density of
+ * lit days over the last [HEATMAP_WEEKS] weeks. Lit days are tappable — [onDayTap] opens everything
+ * logged that day.
+ */
+@Composable
+internal fun ColumnScope.AdherenceContent(
+    dailyActivity: List<DayLoad>,
+    c: StatsColors,
+    onDayTap: (LocalDate) -> Unit = {},
+    /** Planned days off (holidays, scheduled rest), drawn apart from a missed day. */
+    restEpochDays: Set<Long> = emptySet()
+) {
+    if (dailyActivity.isEmpty()) return
+    val byDay = remember(dailyActivity) { dailyActivity.associate { it.epochDay to it.sets } }
+    // Count only the days the heatmap actually shows (last HEATMAP_WEEKS weeks), so the label can't
+    // claim "312 training days · last 26 weeks" when most of those days are off-screen history.
+    val today = rememberToday()
+    val windowDays = remember(dailyActivity, today) {
+        val cutoff = today.toEpochDay() - HEATMAP_WEEKS * 7L
+        dailyActivity.count { it.epochDay >= cutoff }
+    }
+    CalendarHeatmap(
+        activityByDay = byDay,
+        weeks = HEATMAP_WEEKS,
+        faint = c.outline.copy(alpha = 0.18f),
+        accent = c.accent,
+        modifier = Modifier.fillMaxWidth(),
+        onDayTap = onDayTap,
+        restDays = restEpochDays,
+        restRing = c.outline.copy(alpha = 0.35f)
+    )
+    Spacer(Modifier.height(8.dp))
+    Text(
+        "$windowDays training days in the last $HEATMAP_WEEKS weeks · tap a lit day to see it" +
+            if (restEpochDays.isEmpty()) "" else " · outlined days were planned off",
+        style = MaterialTheme.typography.labelSmall,
+        color = c.muted
+    )
+}

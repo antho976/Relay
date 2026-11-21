@@ -1,0 +1,585 @@
+package com.forge.app.ui.gym.train
+
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.lazy.itemsIndexed
+import com.forge.app.ui.gym.train.components.GymNoteBox
+import com.forge.app.ui.gym.train.components.groupMember
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ForgeChromeIconButton
+import com.forge.app.ui.common.ForgeChromeButton
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.EditNote
+import com.forge.app.ui.common.window.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import com.forge.app.domain.timer.RestTimerState
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.toStoredWeightText
+import com.forge.app.program.ExerciseUnit
+import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.touchSlop
+import com.forge.app.ui.gym.train.components.CollapsedRow
+import com.forge.app.ui.gym.train.components.ExerciseCard
+import com.forge.app.ui.gym.train.components.ExerciseChartSheet
+import com.forge.app.ui.gym.train.components.UpNextBubble
+import com.forge.app.ui.gym.train.components.WarmupFlow
+import com.forge.app.ui.gym.train.state.DayUiEvent
+import com.forge.app.ui.gym.train.state.DayUiState
+import com.forge.app.ui.gym.train.state.ExerciseUiState
+import com.forge.app.ui.theme.ForgeLastGreen
+import com.forge.app.ui.theme.ForgeMotion
+import com.forge.app.ui.theme.LocalForgeSettings
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/**
+ * Every exercise still needing work other than [currentId] (not complete, not skipped), later ones
+ * first, then wrapping to the ones earlier in the list — paired with each one's list index. The
+ * first entry is where MOVE TO NEXT goes; an empty list means the workout is done.
+ *
+ * One ordering for the Up Next list AND the advance target. The advance used to look only at later,
+ * non-skipped exercises and ignore completion, so jumping to the last slot and logging it offered
+ * FINISH WORKOUT with earlier exercises untouched, and MOVE TO NEXT could land on a finished one
+ * (audit 2026-09-26, still open from gym-ui.md G1).
+ */
+internal fun upcomingExercises(
+    exercises: List<ExerciseUiState>,
+    currentId: String?
+): List<Pair<Int, ExerciseUiState>> {
+    val at = exercises.indexOfFirst { it.plan.id == currentId }
+    val remaining = exercises.withIndex().filter { (_, ex) -> ex.plan.id != currentId && !ex.isComplete }
+    return (remaining.filter { it.index > at } + remaining.filter { it.index < at })
+        .map { it.index to it.value }
+}
+
+/** No rest running — the default for callers with no timer to show. */
+private val NoRestTimer: State<RestTimerState?> = object : State<RestTimerState?> {
+    override val value: RestTimerState? get() = null
+}
+
+/**
+ * @param restTimer the live rest timer, kept OUT of [state]: it ticks every second, and copied into
+ *   the day's state it recomposed this whole screen — list, cards, hero — once a second for most of
+ *   a workout. Passed as a [State] and read only in the slot that draws it.
+ */
+@Composable
+internal fun DayContent(
+    state: DayUiState,
+    onEvent: (DayUiEvent) -> Unit,
+    restTimer: State<RestTimerState?> = NoRestTimer
+) {
+    // §12: loading draws nothing. The session comes from the local database in a frame or two, and
+    // a "Loading session…" line only flashed before the warm-up replaced it.
+    if (state.isLoading) {
+        Box(Modifier.fillMaxSize())
+        return
+    }
+
+    var chartForExerciseId by remember { mutableStateOf<String?>(null) }
+    // rememberSaveable so a rotation while the note editor is open keeps it open (its text is saved too).
+    var showNoteEditor by rememberSaveable { mutableStateOf(false) }
+
+    if (showNoteEditor) {
+        SessionNoteDialog(
+            initial = state.sessionJournal,
+            onSave = { text -> onEvent(DayUiEvent.UpdateJournal(text)); showNoteEditor = false },
+            onDismiss = { showNoteEditor = false }
+        )
+    }
+
+    chartForExerciseId?.let { exId ->
+        val exercise = state.exercises.firstOrNull { it.plan.id == exId }
+        if (exercise != null) {
+            ExerciseChartSheet(
+                exerciseName = exercise.effectiveName,
+                history = exercise.sessionHistory,
+                onDismiss = { chartForExerciseId = null }
+            )
+        }
+    }
+
+
+    val weightUnit = LocalForgeSettings.current.weightUnit
+
+    // Single-exercise focus. The shown exercise is an explicit selection — it does NOT
+    // auto-advance when sets complete. The user advances manually via the "MOVE TO NEXT"
+    // CTA (shown once target sets are met) or by tapping an exercise in the UP NEXT bubble.
+    // Keyed on the exercise list (same reference across rest-timer-tick state copies), so this list
+    // walk doesn't re-run on every per-second recomposition — only when the exercises actually change.
+    val firstIncompleteId = remember(state.exercises) {
+        state.exercises.firstOrNull { !it.isComplete }?.plan?.id
+    }
+    var shownExerciseId by remember { mutableStateOf<String?>(null) }
+    // Initialise the selection (and repair it if the shown exercise disappears), without
+    // re-pointing it as exercises get completed.
+    LaunchedEffect(state.exercises.map { it.plan.id }) {
+        if (shownExerciseId == null || state.exercises.none { it.plan.id == shownExerciseId }) {
+            shownExerciseId = firstIncompleteId ?: state.exercises.firstOrNull()?.plan?.id
+        }
+    }
+    // A time fit can skip the exercise on screen; move off it the way a hand skip does.
+    LaunchedEffect(state.timeFit) {
+        if (state.exercises.firstOrNull { it.plan.id == shownExerciseId }?.skipped == true) {
+            firstIncompleteId?.let { shownExerciseId = it }
+        }
+    }
+    val shownExercise = state.exercises.firstOrNull { it.plan.id == shownExerciseId }
+        ?: state.exercises.firstOrNull()
+
+    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
+        if (!state.isWarmupComplete) {
+            // The warmup opened with no way back and no name: you could not tell which workout you
+            // had started, and only the system gesture left it.
+            item(key = "session-hero", contentType = "session-hero") {
+                SessionHero(
+                    state = state,
+                    onBack = { onEvent(DayUiEvent.RequestBack) },
+                    onFinish = { onEvent(DayUiEvent.FinishWorkout) },
+                    onEditNote = { showNoteEditor = true },
+                    showFinish = false
+                )
+            }
+            item(key = "warmup", contentType = "warmup") {
+                WarmupFlow(
+                    protocol = state.warmupProtocol,
+                    checked = state.warmupChecked,
+                    onToggle = { id -> onEvent(DayUiEvent.ToggleWarmupStep(id)) },
+                    onStart = { onEvent(DayUiEvent.CompleteWarmup) },
+                    onDisableToday = { onEvent(DayUiEvent.DisableWarmupToday) },
+                    onDisableWeek = { onEvent(DayUiEvent.DisableWarmupWeek) }
+                )
+            }
+            // Before the warmup too: "I have 20 minutes" is decided at the door, not after it.
+            if (showTimeFit(state)) {
+                item(key = "time-fit", contentType = "time-fit") { TimeFitRow(state, onEvent) }
+            }
+        } else {
+            item(key = "session-hero", contentType = "session-hero") {
+                SessionHero(
+                    state = state,
+                    onBack = { onEvent(DayUiEvent.RequestBack) },
+                    onFinish = { onEvent(DayUiEvent.FinishWorkout) },
+                    onEditNote = { showNoteEditor = true }
+                )
+            }
+
+            // ── Suggested order (engine System 3) — pre-work only ────────────
+            val ordering = state.orderingSuggestion
+            if (ordering != null && state.exercises.all { it.loggedSets.isEmpty() }) {
+                item(key = "ordering-suggestion", contentType = "ordering") {
+                    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+                    val accent = MaterialTheme.colorScheme.primary
+                    val nameById = state.exercises.associate { it.plan.id to it.effectiveName }
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp)) {
+                        Text("SUGGESTED ORDER", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            ordering.orderedExerciseIds.mapNotNull { nameById[it] }.joinToString("  →  "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(ordering.reason, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.8f))
+                        Spacer(Modifier.height(6.dp))
+                        // Small filled capsules, not bare text links (grouped-surface pass).
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ForgeChromeButton(
+                                onClick = { onEvent(DayUiEvent.ApplyOrderingSuggestion) },
+                                label = "Apply the suggested order"
+                            ) {
+                                Text(
+                                    "Apply",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.padding(horizontal = 16.dp)
+                                )
+                            }
+                            ForgeChromeButton(
+                                onClick = { onEvent(DayUiEvent.DismissOrderingSuggestion) },
+                                label = "Dismiss the suggestion"
+                            ) {
+                                Text(
+                                    "Dismiss",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = muted,
+                                    modifier = Modifier.padding(horizontal = 16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // The offer itself lives in the warm-up (Antho, 2026-10-21: asked at the door, not over
+            // every exercise); once a fit is applied, its line and Undo stay here.
+            if (showTimeFit(state) && state.timeFit != null) {
+                item(key = "time-fit", contentType = "time-fit") { TimeFitRow(state, onEvent) }
+            }
+
+            if (shownExercise != null) {
+                // "Up next" = every OTHER exercise still needing work (not the shown one, not
+                // skipped, not yet at target). Ordered next-after-current first, then any that sit
+                // earlier in the list — so jumping back to a finished exercise can't orphan an
+                // incomplete one (it lands here, not nowhere). Completed/skipped ones go to DONE.
+                val upcoming = upcomingExercises(state.exercises, shownExercise.plan.id)
+                val nextEx = upcoming.firstOrNull()?.second
+
+                item(key = "current-exercise", contentType = "exercise") {
+                    // Shared-axis X keyed on the exercise id (not the whole state) so it only
+                    // animates on an actual exercise switch — not on every set logged. The new
+                    // exercise slides in from the direction of travel (right = later in the list).
+                    AnimatedContent(
+                        targetState = shownExercise.plan.id,
+                        transitionSpec = {
+                            val fromIdx = state.exercises.indexOfFirst { it.plan.id == initialState }
+                            val toIdx = state.exercises.indexOfFirst { it.plan.id == targetState }
+                            val dir = if (toIdx >= fromIdx) 1 else -1
+                            (slideInHorizontally(ForgeMotion.enterTween()) { (it / 4) * dir } +
+                                fadeIn(ForgeMotion.enterTween())) togetherWith
+                                (slideOutHorizontally(ForgeMotion.exitTween()) { -(it / 4) * dir } +
+                                    fadeOut(ForgeMotion.exitTween()))
+                        },
+                        label = "exercise-switch"
+                    ) { id ->
+                        val ex = state.exercises.firstOrNull { it.plan.id == id }
+                        if (ex != null) {
+                            val exIdx = state.exercises.indexOfFirst { it.plan.id == id }
+                            val exIsNow = id == firstIncompleteId
+                            // The same wrapping order as Up Next, so FINISH WORKOUT shows only once
+                            // nothing else needs work. The header's finish control stays the
+                            // deliberate finish-anyway.
+                            val exNextId = upcomingExercises(state.exercises, id).firstOrNull()?.second?.plan?.id
+                            ExerciseCard(
+                                exerciseIndex = exIdx,
+                                // Force-expand: the focused view always shows the full ledger.
+                                state = ex.copy(isExpanded = true),
+                                isNow = exIsNow,
+                                totalExercises = state.exercises.size,
+                                sessionDone = remember(state.exercises) { state.exercises.map { it.isComplete } },
+                                // The rest timer renders inside the card (right under the set log),
+                                // not far below it — passed the live timer so it appears the
+                                // instant a set is logged (plan.id is unchanged → no re-animation).
+                                restTimerState = restTimer,
+                                otherSetTimes = remember(state.exercises, id) {
+                                    state.exercises.filter { it.plan.id != id }
+                                        .flatMap { other -> other.loggedSets.map { it.completedAt } }
+                                },
+                                sessionStartedAtMs = state.elapsedAnchorMs,
+                                easingBack = state.easingBackNote != null,
+                                advanceLabel = if (exNextId != null) "MOVE TO NEXT →" else "FINISH WORKOUT →",
+                                onAdvance = { if (exNextId != null) shownExerciseId = exNextId else onEvent(DayUiEvent.FinishWorkout) },
+                                // Finish an exercise you can't fully complete (AMRAP / gassed out) without
+                                // marking it skipped: record it done, then advance like MOVE TO NEXT.
+                                finishEarlyLabel = if (exNextId != null) "Done with this exercise" else "Done, finish workout",
+                                onFinishEarly = {
+                                    onEvent(DayUiEvent.FinishExerciseEarly(id))
+                                    if (exNextId != null) shownExerciseId = exNextId else onEvent(DayUiEvent.FinishWorkout)
+                                },
+                                onToggle = { },
+                                onLogSet = { weight, reps, durationSeconds ->
+                                    // Plate exercises enter a plate COUNT (not a display-unit weight),
+                                    // so skip the kg→lb conversion — WeightParser turns the count into lb.
+                                    // effectiveUnit, not plan.unit: the field the user just typed into
+                                    // was rendered from the effective unit, so a slot swapped ONTO a
+                                    // plate machine had its plate count run through the kg→lb
+                                    // conversion, and one swapped OFF a plate machine had its kg value
+                                    // stored raw.
+                                    val stored = if (ex.effectiveUnit == ExerciseUnit.PLATES) weight else toStoredWeightText(weight, weightUnit)
+                                    onEvent(DayUiEvent.LogSet(id, stored, reps, durationSeconds))
+                                },
+                                onDeleteSet = { setId -> onEvent(DayUiEvent.DeleteSet(setId)) },
+                                // Same unit handling as logging — plate counts pass through, free weights convert.
+                                onEditSet = { setId, w, r ->
+                                    val stored = if (ex.effectiveUnit == ExerciseUnit.PLATES) w else toStoredWeightText(w, weightUnit)
+                                    onEvent(DayUiEvent.EditSet(setId, stored, r))
+                                },
+                                onLogSameAsLast = { setId -> onEvent(DayUiEvent.LogSameAsLast(id, setId)) },
+                                onRate = { rating -> onEvent(DayUiEvent.RateExercise(id, rating)) },
+                                onNoteChange = { note -> onEvent(DayUiEvent.UpdateNote(id, note)) },
+                                onToggleSkipped = {
+                                    onEvent(DayUiEvent.ToggleSkipped(id))
+                                    // Skipping the focused exercise jumps to the next one — the skipped
+                                    // exercise drops into the DONE / SKIPPED section below. Un-skipping
+                                    // leaves you on it.
+                                    if (!ex.skipped) {
+                                        // exNextId already wraps to earlier incomplete exercises.
+                                        if (exNextId != null) shownExerciseId = exNextId
+                                    }
+                                },
+                                onOpenSwapPicker = { onEvent(DayUiEvent.OpenSwapPicker(id)) },
+                                onOpenGoalSetter = { onEvent(DayUiEvent.OpenGoalSetter(id)) },
+                                onLongPress = { onEvent(DayUiEvent.LongPressExercise(id)) },
+                                // The inline timer opens the LIVE rest controls. It used to open the
+                                // per-exercise default dialog, which saved a permanent override and
+                                // left the running rest untouched; "always rest this long" is now an
+                                // explicit link inside the controls.
+                                onOpenRestTimerSetter = { onEvent(DayUiEvent.RestTimerOpen) },
+                                onSkipRest = { onEvent(DayUiEvent.RestTimerSkip) },
+                                onSetExerciseUnit = { unit -> onEvent(DayUiEvent.SetExerciseUnit(id, unit)) },
+                                onPinNote = { note -> onEvent(DayUiEvent.SetPinnedNote(id, note)) },
+                                onToggleSetDifficultyTag = { setId, tag -> onEvent(DayUiEvent.ToggleSetDifficultyTag(setId, tag)) },
+                                onSetRpe = { setId, rpe -> onEvent(DayUiEvent.SetRpe(setId, rpe)) },
+                                undoableSetId = state.undoableSetId,
+                                onUndoSet = { onEvent(DayUiEvent.UndoLastSet) },
+                                onAddSet = { onEvent(DayUiEvent.AddBonusSet(id)) },
+                                onOpenChart = { chartForExerciseId = id }
+                            )
+                        }
+                    }
+                }
+
+                item(key = "up-next", contentType = "up-next") {
+                    Spacer(Modifier.height(14.dp))
+                    UpNextBubble(
+                        nextName = nextEx?.effectiveName,
+                        nextTarget = nextEx?.let { "${it.plan.sets} × ${it.plan.reps}" },
+                        // The delta of the exercise the pill NAMES: it used to come from the next
+                        // list item, which diverged from nextEx once that item was done.
+                        nextDeltaLb = nextEx?.suggestedDeltaLb,
+                        nextIsPlates = nextEx?.effectiveUnit == ExerciseUnit.PLATES,
+                        upcoming = upcoming,
+                        onSelectExercise = { id -> shownExerciseId = id },
+                        onOpenSwapPicker = { id -> onEvent(DayUiEvent.OpenSwapPicker(id)) },
+                        onAddExercise = { onEvent(DayUiEvent.OpenAddExercisePicker) }
+                    )
+                    Spacer(Modifier.height(16.dp))
+                }
+
+                // ── DONE ─────────────────────────────────────────────────────────
+                // Exercises you've finished or skipped stay here, below Up Next — tap one to
+                // re-open it in the card above and keep editing its sets.
+                val done = state.exercises.withIndex().filter { (_, ex) ->
+                    ex.plan.id != shownExercise.plan.id && ex.isComplete
+                }
+                if (done.isNotEmpty()) {
+                    item(key = "done-header", contentType = "done-header") {
+                        Text(
+                            "DONE / SKIPPED",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 9.sp,
+                            modifier = Modifier.padding(start = 24.dp, top = 14.dp, bottom = 10.dp)
+                        )
+                    }
+                    // Key by position, not exercise id — a day can legitimately hold the same exercise
+                    // twice (a tiny equipment pool), and duplicate keys crash LazyColumn.
+                    // One group of filled members, 2dp seams, instead of rows split by hairlines.
+                    itemsIndexed(done, key = { _, it -> "done-${it.index}" }, contentType = { _, _ -> "done-row" }) { pos, entry ->
+                        val ex = entry.value
+                        Column(Modifier.padding(horizontal = 16.dp)) {
+                            if (pos > 0) Spacer(Modifier.height(GROUP_SEAM))
+                            CollapsedRow(
+                                exerciseIndex = entry.index,
+                                state = ex,
+                                isNow = false,
+                                onToggle = { shownExerciseId = ex.plan.id },
+                                onOpenSwapPicker = { onEvent(DayUiEvent.OpenSwapPicker(ex.plan.id)) },
+                                modifier = Modifier.groupMember(pos, done.size),
+                                horizontalPadding = ROW_H
+                            )
+                        }
+                    }
+                    item(key = "done-bottom", contentType = "done-bottom") { Spacer(Modifier.height(16.dp)) }
+                }
+            }
+        }
+    }
+}
+
+/** Mid-session journal editor opened from the top-bar note icon. Same Session.journal that the
+ *  finish sheet edits — capture a thought now, review or extend it at the end. */
+@Composable
+private fun SessionNoteDialog(initial: String, onSave: (String) -> Unit, onDismiss: () -> Unit) {
+    // rememberSaveable so in-progress text survives a rotation (the dialog is recreated on close, so
+    // a reopen still re-seeds from `initial`).
+    var text by rememberSaveable { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Session note") },
+        text = {
+            GymNoteBox(
+                value = text,
+                onValueChange = { text = it },
+                placeholder = "Anything to remember about today's session…",
+                minLines = 3,
+                // One rung above the dialog's own surface, or the well would vanish into it.
+                fill = MaterialTheme.colorScheme.surfaceContainerHighest
+            )
+        },
+        confirmButton = { TextButton(onClick = { onSave(text) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+internal fun SessionHero(
+    state: DayUiState,
+    onBack: () -> Unit,
+    onFinish: () -> Unit,
+    onEditNote: () -> Unit = {},
+    /** Off during the warmup: nothing is logged yet to finish. */
+    showFinish: Boolean = true
+) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
+    val accent = MaterialTheme.colorScheme.primary
+
+    // The day only when the workout began on another one (resumed from last night; an older one is
+    // closed at launch): today's date said nothing mid-workout and took the room the day's name
+    // needed at large text. The weekday alone, so the pill never crowds out the name or FINISH.
+    val startedMs = state.sessionStartedAt?.takeIf { !sameLocalDay(it, System.currentTimeMillis()) }
+    val datePillText = remember(startedMs) {
+        startedMs?.let { SimpleDateFormat("EEE", Locale.getDefault()).format(Date(it)).uppercase() }
+    }
+    val datePillSpoken = remember(startedMs) {
+        startedMs?.let { "Started " + SimpleDateFormat("EEEE", Locale.getDefault()).format(Date(it)) }
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Left: back, then the day name. Only the name yields space to the pill and FINISH: the
+            // back button inside the weighted part was squeezed to a sliver at large text.
+            // Bare icons and a bare word, as every other page's top bar draws them (Antho,
+            // 2026-10-21): the chrome bubbles behind back, note and Finish are gone, the places kept.
+            com.forge.app.ui.common.OpenTopBarIcon(com.forge.app.ui.theme.OpenIcons.ArrowLeft, "Back", onBack)
+            Spacer(Modifier.width(4.dp))
+            // The user's own day name: it wraps to a second line before it is cut (§14).
+            Text(
+                state.displayName.uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = onBg,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(4.dp))
+            // Quick session note — jot a thought mid-workout; tinted when the journal has content.
+            val noteLabel = if (state.sessionJournal.isBlank()) "Add session note" else "Edit session note"
+            Box(
+                Modifier
+                    .touchSlop(vertical = 13.dp, horizontal = 13.dp)
+                    .clickableLabeled(noteLabel, onClick = onEditNote)
+                    .padding(13.dp)
+            ) {
+                Icon(Icons.Filled.EditNote, contentDescription = noteLabel, tint = if (state.sessionJournal.isNotBlank()) accent else muted, modifier = Modifier.size(22.dp))
+            }
+            // Passive date: a filled capsule, no outline.
+            if (datePillText != null) {
+                Spacer(Modifier.width(4.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .clearAndSetSemantics { contentDescription = datePillSpoken.orEmpty() }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(datePillText, style = MaterialTheme.typography.labelSmall, color = muted)
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            // Outlined until every exercise is done or skipped, then filled. A filled FINISH from the
+            // first second competed with LOG SET, the button you actually press thirty times.
+            val allDone = state.exercises.isNotEmpty() && state.exercises.all { it.isComplete }
+            if (showFinish) Box(
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .clickableLabeled("Finish session") { onFinish() }
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                // The word turns red once every exercise is done or skipped: a nudge, not a second
+                // button competing with Log set.
+                Text(
+                    "Finish",
+                    style = com.forge.app.ui.theme.OpenType.rowTitle,
+                    color = if (allDone) accent else onBg
+                )
+            }
+        }
+        // Back from a break, last session is the one before it and every eased set would score as
+        // a loss to it, the opposite of what the coach asked for. Say what today is instead.
+        if (state.easingBackNote != null) {
+            Text(
+                "EASING BACK IN · ${state.easingBackNote.uppercase()}",
+                style = MaterialTheme.typography.labelSmall,
+                color = muted,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+            )
+        } else if (state.ghostComparable > 0) {
+        // "Beat the ghost" running scoreboard — the duel vs last session, live as you log.
+            val beats = state.ghostBeats
+            val total = state.ghostComparable
+            val winning = beats * 2 >= total
+            // On the content's 24dp gutter, under EXERCISE 01 / 06, not 10dp left of it. One line
+            // that says what the count is: "0 / 1 sets" read as a score with no rule and no plural.
+            Text(
+                ghostScoreLine(beats, total),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (winning) ForgeLastGreen else muted,
+                fontSize = 9.sp,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+            )
+        }
+    }
+}
+
+/**
+ * The live "beat the ghost" line: how many of today's sets so far beat the same set last session.
+ * Winning (half or more) leads with it; otherwise it names the duel and the count still to chase.
+ */
+internal fun ghostScoreLine(beats: Int, total: Int): String {
+    val sets = if (total == 1) "SET" else "SETS"
+    return if (beats * 2 >= total) "BEATING LAST SESSION · $beats OF $total $sets"
+    else "VS LAST SESSION · BEAT $beats OF $total $sets"
+}
+
+/** Whether two instants fall on the same calendar day in the device's zone. */
+internal fun sameLocalDay(aMs: Long, bMs: Long, zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): Boolean =
+    java.time.Instant.ofEpochMilli(aMs).atZone(zone).toLocalDate() == java.time.Instant.ofEpochMilli(bMs).atZone(zone).toLocalDate()

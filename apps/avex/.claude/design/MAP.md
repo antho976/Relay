@@ -1,0 +1,852 @@
+# Forge — screen map
+
+Satellite of `.claude/DESIGN.md`. Read this when you need to know **what already exists**: which
+screen owns a feature, what a section already renders, and why a thing sits where it does. You do
+not need it to know *how* to build — that is the core doctrine.
+
+`§` cross-references point at the core `.claude/DESIGN.md`, whose numbering is unchanged for §1 and §3–§13.
+
+---
+
+## App map
+
+Hub = swipeable 5-tab pager + `ForgeBottomBar`: **Cardio · Stats · Home · Coach · Academy**
+(Academy took Profile's slot 2026-07-27 — it had been a link buried inside Coach, and it is half
+the coach, not a footnote to it. **Profile** moved to the Home top bar and remains a pushed route
+with its own back arrow. **Settings** returned beside it on Home on 2026-08-22, replacing the extra
+hop through Profile). Top bar everywhere = `←` (sub-screens, and every hub tab but Home since 2026-10-17, back to Home) + ≤1 action, **never the screen's own
+name** (no `TopAppBar` title); Home alone carries the bell + Profile + Settings;
+**one back affordance per page — the top-bar `←` alone, never a second in-page back arrow**. The
+notifications bell is **Home only** (2026-07-27): it sat in all ~20 top bars, which made an unread
+badge follow you into every screen you had already navigated away from it to reach. A screen names
+itself with a serif content hero (Stats "Stats", Profile "Athlete") or not at all (Home "Pull B").
+On **Home** the outer bell and Settings glyph are pulled out by `GUTTER_SLACK` (12dp, half the gap between a
+44dp target and its 20dp glyph) so their edges land on the 24dp page gutter, level with the serif
+hero below; centred in their targets they sat 12dp inboard of everything else. Profile sits directly
+beside Settings inside the right action group. This is Home's own
+Row, not a `TopAppBar`, so no Material inset fights it — and with the bell now Home-only there is no
+longer a second alignment to disagree with.
+The bell replaced the `• Avex` wordmark on 2026-07-27; "Avex" now appears only in the cold-launch
+`AvexIntro` beat and on exported artifacts (rank / before-after cards, the PDF footer).
+
+**Privacy policy** is a focused Settings reading page linked from About. Both Health Connect
+privacy actions deep-link to that same page, so Android's rationale surface and the in-app policy
+cannot drift into separate copies.
+
+**Settings → Backup → PASSWORD** (2026-09-27, `SettingsBackupPassword.kt`): an opt-in toggle plus,
+once on, a `Backup password` row in the folder row's whole-row + `ConnectPill` shape (`Change`, or
+`Set` when the phone lost its key). Setting it is a small two-field dialog; turning it off confirms
+and sits behind the gallery lock. A restore that meets a protected backup asks through
+`RestorePasswordDialogHost` at the Settings root, so the prompt outlives the Data dialog.
+Data's auto-restore link names how many copies are kept (three, a day or more apart); with more
+than one it opens a picker of whole-row dates, newest labelled, before the usual confirm.
+
+**Import → found files** (2026-09-27): "Find my exports" makes `Download/Avex` and opens the picker
+in it, because Android 11+ refuses to grant Downloads itself. The scan covers the import folder AND
+the backup folder, two levels deep, and lists Avex backup ZIPs (sniffed by bytes, not name) as
+`RESTORE` rows under the `IMPORT` ones; a restore row goes through the usual restore confirm.
+
+### Notifications — `ui/notifications`
+
+The one feed for everything that used to be a page-level banner, reached from any screen's bell.
+List archetype **minus the search field** (it tops out at a handful of rows, all visible at once — a
+search box that can never earn a tap). Tiny hero + `N WAITING` count, rows ranked live-first (§4.8):
+in-progress session → coach brief → milestones → results (import / backup restored / a resolved
+leftover session) → the two invites (turn on notifications, connect a watch). A row
+that goes somewhere is bordered and bounces; a celebration or housekeeping note is bare and passive
+(§2③). No per-row `×` — that would nest a tap inside the row's own target — so acting on a row
+clears it, and the top bar's ONE action (a gear) opens `NotificationsOptionsSheet`, a bottom sheet
+holding the two page-scoped actions: **Notification settings** and **Clear all notifications** (with
+Undo, §12; both rows render passive when there's nothing to clear). The sheet is the modal archetype
+— `containerColor = surface` — but takes NO divider between its rows: §5 permits a modal one and
+every other sheet in the app took that permission, yet two rows don't need a line to be told apart.
+
+Rows carry **no outline**. §1 earns a border with interactivity, but one bordered box per notice
+stacks into a wall on a page whose whole job is to be scanned; the glyph chip IS the row's mark
+(§12), and boxing a mark is not the same as boxing passive content. With the border gone the accent
+` →` is the only thing separating a row that goes somewhere from one that just happened, so it is
+load-bearing rather than decoration. The mono eyebrow went with the border — the glyph names the
+kind, and says it aloud through its `contentDescription` (§4.3 one home, §14).
+
+Every row leads with a glyph from **`NoticeIcons`** (`ui/notifications/NoticeIcons.kt`) — the fourth
+matched custom family, same 24dp/one-weight house style as `NavIcons` and `SettingsIcons`, built on
+the shared `VectorBuilders` plumbing. Eight glyphs: session, milestone, import, backup,
+housekeeping, bell, watch, and the coach brief which reuses `NavIcons.Coach` outright so a coach row
+speaks one glyph everywhere. Each carries its kind as its `contentDescription`, since the eyebrow
+that used to say it aloud is gone (§14).
+
+**Settings → Notifications** is split by where a thing ARRIVES, not by feature: `ON YOUR PHONE`
+(training reminders · weekly recap · rest timer alerts · silence during quiet hours, with the
+per-day windows) and `IN THE APP` (one `ToggleRow` per `NoticeKind` — unfinished workouts · coach
+briefs · milestones · imports and backups · setup invites). Quiet hours sits INSIDE the phone group
+because it suppresses exactly those three rows and nothing in the app group; trailing it after the
+in-app switches read as though it silenced those too. The two headers are a parallel pair and carry
+the split alone — **no group captions**, which is where the first attempt went wrong (§4.3). Stored
+as the DISABLED set
+(`DISABLED_NOTICE_KINDS`) so any kind added later is on by default, and applied as the LAST filter
+on the feed — a notice stays queued while its kind is off, so switching it back on brings the row
+back rather than having silently dropped it.
+
+Both setup invites are dismissed FOR GOOD and neither has an un-dismiss control (the old cardio
+banner's `×` was a one-way door too), so `SettingsSection.NOTIFICATIONS` now also clears
+`DISABLED_NOTICE_KINDS`, `CARDIO_WEARABLE_HINT_DISMISSED` and `NOTIF_PERM_ASKED` — resetting the
+section is the way back, and covers every switch on the page. `NotificationPrefsTest` pins that,
+plus the round-trip of every write the Undo lambdas make.
+
+`data/repo/NotificationFeed.kt` is the single `@Singleton` source, feeding both the page and every
+bell's unread count through `LocalUnreadNotifications`. Most sources are already observable (active
+session, prefs); the weekly coach pass and the Health Connect grants have no observable, so
+`refresh()` re-polls them at app open and on resume. Milestones and one-shot results are now
+PERSISTED (`UNREAD_MILESTONES`, `SYSTEM_NOTICES`) rather than held in memory — a feed that emptied
+on process death would lose the thing it exists to hold.
+
+Three `MainActivity` dialogs were folded in at the same time: the share-import result, the
+backup-restored confirmation and the POST_NOTIFICATIONS rationale. The first two were pure "here's
+what happened · OK" over whatever screen you were on; the third interrupted a cold launch to ask.
+The permission row now opens the OS app-notification screen rather than re-requesting, so it keeps
+working after any number of denials. `CheckinSheet` left `MainActivity` on 2026-08-31 as well: a
+small once-daily arrival banner flies to Home's bell, where its row waits and opens the sheet when
+tapped. Saving resolves the row for that local day. Daily input does not earn a launch interruption
+or a second entry point in Coach settings. **Still dialogs on purpose**: `ProgramChangeGuardHost`
+(a destructive confirm — it
+must block), `CheckinSheet` and `DislikeSwapPromptDialog` (they ask for input after an explicit or
+contextual action), and Settings → Notifications' `NotificationsBlockedBanner`, which is the
+denied-state of the controls directly beneath it (§12) rather than a notice.
+
+### Academy — `ui/academy`
+
+The knowledge half of the coach, and a hub tab since 2026-07-27. **Rebuilt 2026-09-26 as a contents
+page taught by drawings**, replacing the plates-and-chapters gallery. Antho: *"I hate it ... the
+knowledge given, the UX the UI the design"* and *"it's too many"*.
+
+- **12 lessons, three chapters** (`LessonTrack`: Training 7, Your coach 3, Cardio 2), cut from 35
+  pieces (31 lessons + 4 Library articles). About three quarters is lifting knowledge; articles folded
+  into lessons with their `Source` lists. `AcademyRegistry.aliases` maps every retired id to the
+  lesson that absorbed it, so coach reasons, notices and the ledger keep resolving; `stateFrom` folds
+  old events onto the new ids. The Library (`Article`, `ArticleRegistry`, `LibraryRepository`,
+  `ArticleScreen`, `Routes.ARTICLE`) is deleted; the `article_event` table stays as schema only.
+- **Every lesson is a drawing** (`AcademySketches`): a crisp Canvas diagram of its one idea in a
+  160x110 box, three inks (guide, ink, one accent on the answer), mono labels for measured values,
+  drawing itself over two draw-ins. Thumbnails drop labels and guides. The 35 photo covers are gone.
+- **Page**: serif "Academy" + one meta line, then a large featured drawing that turns every 8s
+  through up to four lessons (coach pokes, then unread in order; holds still under reduced motion or
+  TalkBack), then the whole contents list (thumbnail, title, summary, minutes). Read = muted title.
+- **Reader** (`ReaderScreen`): the drawing, title, italic answer, meta, body, sources, next lesson.
+- Still true: no XP, no streaks, no percentage.
+
+**The Academy never interrupts** (2026-08-15). A newly unlocked lesson is knowledge that became
+relevant, not a decision waiting on you, so it goes to the feed as `NoticeKind.ACADEMY` and waits.
+The row exists exactly while the lesson is unlocked-and-unopened, so opening one clears it with no
+bookkeeping; only a DISMISSAL needs its own record, and it lives in prefs rather than the ledger
+(writing a fake "opened" event to silence a row would corrupt the read history). `NotificationFeed`
+now sorts by `NoticeKind` ordinal, so **declaration order in that enum IS feed rank** (§4.8) rather
+than something emergent from builder order, and `refresh()` runs `syncCoachMoments()` first so a
+lesson can unlock without a visit to the Academy tab.
+
+Its arrival is announced by `ArrivalBannerHost` — a transient overlay that settles over whatever is
+on screen, then flies into the bell and bumps its `CountBadge`. The queue lives in `ArrivalController`,
+a plain singleton with no Compose types, so the ordering and de-dup rules are unit-tested without a
+device. `announcedLessonNotices` (persisted, one-way) is separate from unread, or every app open
+would re-announce everything still unread. Two doctrine rules were narrowed to allow this and both
+carry a stated boundary in `design/SETTLED.md`, 2026-08-15 — read it before deleting either as a
+violation.
+
+### Home — `ui/overview`
+
+TODAY hero + Start session, week strip, goals, recent. Feel reference; defects (`SETTLED.md`) fixed
+when touched. THIS WEEK reads `anchor (n / N days) → week strip → MOVEMENT line`. The anchor counts
+DAYS, the unit the strip draws — it counted sessions until 2026-08-24 and disagreed with its own
+mark (`design/FAILURES.md`, *Two units, one section*). No weekly volume or session figure follows
+the strip: that was tried as `WeekReadout` on 2026-08-24, rendered on device and cut on sight, and
+`SETTLED.md` records why it is not to be attempted a fourth way. It closes with a
+**MOVEMENT line** (W6): today's watch steps as one
+mono reading + a thin today-vs-typical bar (14-day median; bar = the mark, honest at zero), rendered
+only when the steps grant is held (GYMAP-64 rule: connected → honest zero, else hidden) and
+refreshed on resume. Deliberately NOT the removed recovery-snapshot card (2026-07-04) — one line +
+one bar, no card, and the hourly-bars mark stays cardio's (§4.3 one home; Home carries the total +
+typical compare, a reading no other screen has).
+
+### Stats — `ui/gym/stats`
+
+one page: hero figures + muscle map → lens pills Strength/Volume/Body/Days → drill rows → heatmap
+→ records → Banister. **Records** (Strength, 2026-10-17) lead with a 12-week strip of when the standing
+records were set and a "set in the last 30 days" count, then a Newest / Heaviest switch over the rows,
+a ≤14-day record flagged with an accent dot. **Effort** (closing Volume) opens on the share of rated
+sets at RPE 7 to 9, counts each bar, accents only the 7–9 band, and brackets the axis as reps left
+(Easy 4+, In range 1 to 3, All out 0). **Fitness vs fatigue** (Days) opens on the model's read in
+words (Fresh / Balanced / Building / Deep fatigue, form as a share of fitness), draws from the first
+training day with both averages bias-corrected for their cold start, scales to the data, and gives
+form its own band under the chart.
+
+### Cardio — `ui/cardio` — **rebuilt 2026-08-23**
+
+**Hero + one action + two lenses.** The page was an overview whose richest content sat behind a tap
+on the hero (a full-screen week pager) that redrew the hero's own marks one screen away. The pager is
+gone (`SETTLED.md`); week browsing is a ledger, and the page is:
+
+1. **Hero** (`CardioComponents.CardioHero`) — `THIS WEEK · MMM D – MMM D` eyebrow with a `weeks →`
+   action, the week's figures (days · minutes · distance, streak once ≥2), the Mon–Sun accent bars,
+   and the minutes `MeterBar` (a personal target, else the **WHO 150-min/week** reference —
+   GYMAP-42/`WHO_WEEKLY_ACTIVITY_MIN`). The hero is no longer ONE page-wide tap target; it carries
+   two named ways out instead — `weeks →` to the weeks chart, and **the Mon–Sun strip, which opens
+   THIS week's page** (`Routes.cardioWeeks(weekStartMs)`; Antho, 2026-08-23). The strip is a single
+   tap target: seven day-wide ones would each fall under the 48dp minimum and all lead to the same
+   place anyway (§2③). Everything else in the hero stays passive.
+2. **`Log cardio`** — `ForgeHeroAction`, the same accent-filled button Home's Start session is
+   (2026-08-23: a hub tab's primary action reads the same on every tab; Cardio's was the one white
+   capsule in an accent app). Above the fold. Replaced a small white `+` disc that rode the sessions
+   header and was none of §2③'s three levels.
+3. **Lens pills** (`CardioLens`) — `Week` · `Progress`.
+   - **WEEK**: FROM YOUR WATCH (W5 import suggestions, leads because it is the only section still
+     asking for a decision) → SESSIONS (this week's rows; at zero, one line naming your last session
+     and opening it) → `view all N →` (History) → STEPS (the hourly `StepsByHourSection` mark for
+     today). No BY ACTIVITY split (Antho, 2026-08-23) — at the counts a real week has it was one
+     full-width bar restating the minutes figure and the session row beside it.
+   - **PROGRESS**: PACE (`CardioPaceTrendSection`, moved off the old overlay since it was always
+     cross-week data) → RECORDS → GOALS. All three absent → one line naming the unlock, not three
+     empty shells. Deliberately NO weekly-load chart: that is the weeks page's mark, and a visual
+     that only repeats another screen's answer is cut, not copied (§4.3).
+
+**THE WEEKS** (`CardioWeeksScreen` + `CardioWeeksViewModel`, route `Routes.CARDIO_WEEKS`) — the page
+`weeks →` opens, and the one home for comparing weeks. Its route takes an optional `week` argument:
+the cardio strip passes this week's Monday to land straight on that week, and backing out of a week
+arrived at that way leaves the route entirely rather than stranding you on a chart you never asked
+for (`CardioWeeksViewModel.arrivedOnWeek`). **One bar per week, taller the more you did**
+(`CardioWeekBars`): `WEEKS_PER_PAGE` = 8 on screen, `←` / `→` paging a window back through history to
+the first logged week (capped at 104), and **each bar is a tap target opening that week**. The whole
+column is the target, not the drawn bar, so a quiet week is still reachable. The week in progress is a
+dashed slot (a Monday must not read as a collapse), an untrained week keeps a ghost stub, and the
+target/WHO reference is drawn across each track as a dashed rule — per column rather than as an
+overlay, so nothing has to stay in sync with the rows above it. Bar labels are the day of the month
+(eight "18 Aug"s do not fit the gutter); the nav row above carries the full range, and TalkBack gets
+the full date. The tiny hero's two figures read the VISIBLE WINDOW, so paging says something.
+
+The series is `cardioWeekSeries` (`domain/cardio/`): Mon–Sun weeks oldest→newest **with gaps kept at
+zero**, because a chart that drops untrained weeks reads as an unbroken run. `cardioWeeksOnTarget`
+and `cardioLoadDeltaPct` (a week against the median of the completed weeks, null under three of them)
+ride alongside it.
+
+A bar opens **`CardioWeekDetail`** (Detail archetype): serif week name, per-day bars, figures, the
+meter (every week, not just the current one), BY ACTIVITY, and that week's sessions as
+`SessionTimelineRow`s — no dividers between them.
+
+**Session detail** (`CardioSessionDetailSheet`) — was ten `label — value` rows behind hairlines, which
+drew no mark at all: with no watch connected the page was pure text. Now: eyebrow + serif activity
+name → three figures (minutes · distance · pace, the pace figure absent rather than dashed when there
+is no distance) → the descriptive tags (effort · HR zone · intervals · the one per-type field ·
+weather) as ONE mono line, since §2② says a lone categorical state is a caption → **AGAINST YOUR
+{ACTIVITY}**, the `CardioSessionCompare` data drawn as ranked bars (distance as a share of your
+longest; pace inverted so lower-is-faster fills toward your best) with the previous outing as its
+closing line → HEART RATE (W5, matched watch HR + the explicit `use watch stats →` adopt, never a
+silent overwrite) → ROUTE → STEPS → note → Edit/Delete as two outlined capsules at the END, the
+destructive one tinted `error`.
+
+**Log form** (`CardioLogSheet`) — unchanged in shape (date + start-time capsules, activity dropdown,
+duration/distance side by side, everything else behind "More", save actions at the end). Duration now
+carries **quick-picks** (20 · 30 · 45 · 60) because §13 wants hot-path numbers on steppers, not a
+keyboard; the field stays typeable and accepts H:MM (GYMAP-41). The number fields size to their
+content rather than to a fixed 52/64dp box, which clipped at large font scales.
+
+The activity picker lists the built-in `CardioType`s + the user's **custom activities** (GYMAP-37:
+name + a glyph from the shared cardio set), with an inline "+ add custom activity" row →
+`CustomActivityDialog` (a modal reused by the settings manager); custom defs live as a DataStore JSON
+list (NOT the schema-locked DB — a logged session stores only the `custom_` code), resolved to
+name/glyph at every cardio surface via `LocalCardioTypes` (a `CompositionLocal` fed once at the nav
+root, like `LocalGoHome`); a deleted def falls back to "Other". Calories inherit "Other"'s baseline
+(unknown code → `CardioType.OTHER`; kcal unsurfaced anyway, `SETTLED.md`). Managed in Settings →
+**Cardio activities** (rename/glyph/delete). Per-type fields (GYMAP-38: incline on treadmill/
+elliptical, laps on swim, elevation gain on run/walk/hike/cycle) are gated on
+`CardioActivity.optionalFields`, so a value typed then switched away from is never saved; elevation
+rides the distance-unit toggle via `ElevationFormatter`. **Conditions** (GYMAP-39) are the weather a
+session was done in, a multi-select `PillChip` `FlowRow` in "More", stored comma-joined on
+`cardio_entry.conditions` (DB v28) via `CardioCondition.encode`/`decode`, shown in session detail's
+tag line and as a words column in the cardio CSV; descriptive only, never touching a total or pace. A
+**new** entry seeds its activity to the **last-logged** one (GYMAP-40: `last_cardio_type` in
+DataStore, written only on a new non-rest save), not always Run.
+
+Cardio-local shared marks live in `components/CardioBars.kt`: `VerticalBarRow`/`BarGeom`/`BarGeomBox`
+(the bar geometry behind every cardio chart), `MeterBar` (value vs target + mono caption) and
+`RankedBarRow` (name · thin bar · reading). Kept in the feature package rather than promoted, matching how
+`VerticalBarRow` was already shared across four cardio surfaces.
+
+### Coach — `ui/coach` — **TODAY + SECTIONS** (2026-10-17 redesign)
+
+Rebuilt at Antho's call ("needs a tear down and a remake ... I want a full redesign"), replacing the
+2026-08-20 ledger (`SETTLED.md`). Direction chosen from three dealt structures: a Today panel, then
+sections, on the grouped-surface kit (`ForgeGroups`), so Coach reads as the same app as Stats and
+Settings. The direction contract lives in the surface brief under `.impeccable/surfaces/`.
+
+Chrome: `ForgeTopBar` back arrow (to Home as a hub tab), serif `Coach` title, then a
+`ForgeSlidingSegments` **Simple / Detailed** switch that writes `SettingsRepository.coachAdvanced`
+(the same preference as Settings → Coach → Advanced tracking; a view preference only, the weekly
+pass is untouched). The column, every region a file:
+
+1. **TODAY** (`CoachToday.kt`) — one filled panel: readiness as the serif answer ("Targets 3%
+   lighter") with its reason, recovery load against the deload tick (`CoachFatigueMeter`), and two
+   short figures: next brief (with its landing date) and, on Simple, the lift count. Detailed adds
+   the fatigue checks that crossed their line, error-flagged. A pre-baseline account gets the
+   baseline instead: "2 of 4 sessions", the meter, when the first call lands.
+2. **THIS WEEK** (`CoachAccount.kt` `coachThisWeek`) — each open call a panel (`CoachCallTile`):
+   lift + its kind ("VOLUME", `callKind`), the change at the serif rung, the reason, the evidence at
+   full width, Apply + Skip. `Apply all N →` under two or more. Calls already decided this week sit
+   in a row group; a quiet week says so in one row; last week's three figures close it.
+3. **YOUR LIFTS** (Detailed, `CoachStand.kt` `coachLifts`) — a 2-column tile grid (1 column past
+   130%): name, sparkline (red when stalled), estimated max, trend word. Stalled lifts lead; six
+   shown, `All N lifts →` for the rest; forming lifts fold to one line.
+4. **TRAINING BLOCK** (Detailed, `CoachBlock.kt`) — one panel: week figure + purpose, the 4-phase
+   rail (unlit at zero), intent, start / end.
+5. **RECORD** (`coachRecord`) — "10 of 14 held" + its split, then a rail of up to 12 weeks, one mark
+   per week (`weekMark`: filled = held, ring = proving out, error = missed or undone, muted ring =
+   skipped, speck = no change; the worst outcome in a week wins), then the last 3 (Simple) or 6
+   (Detailed) weeks as row groups, each change stamped, its watch bar while its 14 days run, Undo
+   while it can. The rail waits for a second week; one week would only echo THIS WEEK.
+6. **NEXT UNLOCK / WHAT UNLOCKS** (`coachUnlocks`) — one rung, three while the baseline forms.
+7. **WHAT IT READS** and **LEARNED** (Detailed) — inputs as a row group with their charts and
+   Connect pills; autopilot trust in a panel, then biases and measured numbers as row groups.
+
+`humanizeMachineProse` (`CoachUi.kt`) is the ONE place em dashes and paren plurals are translated
+out of stored planner prose. `CoachEntryPoint` survives for the old routes; both open at the top,
+since Today is the live reading the lab link meant. Goldens: `coach-page*.png`
+(`CoachLedgerScreenshotTest`).
+
+Coach content renders ONLY here — Settings→Coach is config alone (on/off switch + mode chips + a
+feeds on/off glance whose silent HC rows tap to Wearable), never a second brief/trust/history home.
+
+### Profile — `ui/profile`
+
+blending cover (**untouchable** compositing approach — the offscreen `DstIn` edge-fade mask itself
+stays frozen; its STOPS are not: the 2026-07-09 retune kept a second text-scrim that PEAKED at 0.85
+black under the name then released, painting a band darker than the page and reading as the very
+seam it was meant to hide, so 2026-07-24 (Antho) **deleted the scrim outright** and eased the mask's
+bottom tail instead (62/72/82/91% ramp, not one linear slope — a straight alpha slope lands as a
+visible edge). The dissolve can now only approach the page background, never overshoot it; name/meta
+keep their own shadow haloes. A random default is seeded on first run so it's never empty, tap →
+`AvatarPickerSheet`), bodyweight-led, **ALL-TIME** = ONE row of shared `EditorialFigure`s, COUNTS
+only (workouts · sets · PRs + their week arrows) — lifted volume is deliberately NOT a figure here,
+it is the **LIFETIME VOLUME** section's own serif reading sitting over its cumulative
+session-by-session curve, so the number has one home (§4.3, 2026-07-24; the old 2×2 grid of 36sp
+figures and its local `StatCell` copy of `EditorialFigure` are both retired) — then the merged
+**BODY** section (2026-07-13, Antho — bodyweight, body fat and measurements folded from three
+separate sections into ONE compact stack, `BodyMetricsSection` in `ProfileBody.kt`, since replaced by
+`ProfileBodyRows` in `ProfileSurfaceSections.kt` and deleted): one mono `BODY`
+header over a row per metric built on exactly TWO RAILS and nothing between them (rebuilt
+2026-07-24, Antho — the old row was a fixed 84dp label column, a figure floating loose in the
+middle, and a bare accent `+ log` / `open →` text link stranded at the far edge): LEFT = the mono
+metric name with its serif reading (`headlineMedium`, matching the ALL-TIME row) glued directly
+beneath it, unit + ~30-day delta on the baseline; RIGHT = the trend mark, then the row's action as a
+compact `ForgeRowPill` (Log · Log · Sync · Open). The WHOLE row is the tap target and the pill is
+drawn only, so a stack of body metrics never becomes a column of accent text links (§8). **WEIGHT**
+= serif figure + ~30-day delta off the 7-day average (a noisy final weigh-in can't flip the arrow) +
+the smoothed spark keeping the dashed goal on-canvas + `+ log`. **BODY FAT** (GYMAP-62) = serif
+figure + ~30-day delta in *points* (direction-only arrow, never a good/bad verdict) + a raw-reading
+spark (logged sparsely, so no smoothing) + `+ log`. **MUSCLE** (W6) = the watch's BIA lean-mass
+reading, import-only (`lean_mass` v30, `LeanMassRepository`, own `LeanMassViewModel` like
+measurements): serif figure in the weight unit + ~30-day delta + raw-reading spark + a `sync →`
+action (no manual log for a watch-authored metric); the row renders only when the HC read is granted
+or data exists — an HC-only metric never shows an unconnected ghost row here. **SIZES** (GYMAP-52) =
+ONE named circumference. Its label reads at the 15sp **anchor** rung, not the 11sp metric-name rung
+its siblings use (2026-07-25, Antho: "SIZES is a separator like BODY"): "SIZES" is not the name of a
+measurement the way WEIGHT and BODY FAT are — it is a GROUP, and the meta line under it names which
+member is showing, so inside its row it does exactly what "BODY" does over the section. The site's
+name therefore sits on the meta line at the metric-name rung, its value as the serif figure, its
+unit and its total change since the FIRST reading, and its spark as the mark (2026-07-25, Antho).
+Coverage pips and an `n OF 5` count were tried first and struck out on two counts: anonymous pips
+cannot say WHICH site they stand for, and **coverage is not a reading** — you do not measure
+yourself once, so `5 OF 5` saturates within a fortnight and then reports the same fact forever,
+occupying the row where every sibling carries a live number. Featured site = WAIST by convention,
+falling back to whichever site was logged most recently. Whole-row `Open` into `BODY_MEASUREMENTS`
+(the full Measurements screen, unchanged, owns the values/trends/logging). Empty is DRAWN (§12) and
+**the rows themselves ARE the zero-shape**: a metric with no readings still renders its name + its
+action pill, so a brand-new profile gets an actionable section. The old all-three-empty collapse to
+ONE `InlineEmptyHint` is GONE (2026-07-24, Antho — it replaced the whole redesigned section with a
+single italic sentence, and a hint is the last resort only where there IS no zero-shape). A metric
+with no readings draws **NO MARK AT ALL** — the slot keeps its width so the marks and pills still
+share one right edge, but nothing is painted in it. Empty TRACKS were tried in between (2026-07-24)
+and struck out a day later: a container with nothing in it is decoration, not an empty state, and on
+device the whole section read as two flat grey dashes and a row of dots that said nothing. The
+zero-shape is the ROW — a named metric with a real action pill — not a drawn stand-in for data that
+doesn't exist. (2026-07-25, after a first-run profile rendered WEIGHT / BODY FAT / SIZES as label +
+pill and nothing else: each mark independently and correctly chose to draw nothing, and with the
+section wholly at zero every mark took that branch at once — locally sound, globally a settings
+page. Any rule worded "only draw X when Y" needs a defined answer for "no Y", and that answer may
+not be "nothing" for every mark in a section simultaneously.) Storage/sync unchanged and separate:
+`bodyweight_entry`, the `body_fat` table (v29, sibling of bodyweight — NOT the cm-bounded
+`body_measurement`, since a % is unitless — fed from a smart scale via Health Connect **or** manual
+entry, mirrored both ways via a Wearable `Body fat sync` row, `BodyFatSync` mirrors
+`BodyweightSync`), and `body_measurement` (v24, local-only, canonical cm); measurements keeps its
+own `BodyMeasurementsViewModel`, read at the section level so ProfileViewModel is untouched. THIS
+YEAR consistency grid (GYMAP-58 — whole calendar year, one ROW per month · day-of-month columns ·
+dots lit by that day's training count across gym + cardio; a PASSIVE glance below the body cluster,
+deliberately NOT the Stats week-column 26-week load heatmap (§4.3): different
+range/layout/metric/interaction, so the two consistency views don't echo; hidden until the year has
+any activity, `buildYearActivity` in `ProfileRepository`), filmstrip.
+
+### Routed — `Routes.kt`
+
+- `GYM_DAY` (`ui/gym/train`, **untouchable**)
+- `SESSION_HISTORY` (gym+cardio. **Rebuilt 2026-08-24.** List archetype: tiny hero = "History" +
+  two `EditorialFigure`s (`Sessions` · `Volume`) that read the CURRENT filter, so tapping a pill is
+  answered by the figures moving rather than by a list you count; then search, then pills. The list
+  GROUPS BY DAY — one mono `labelLarge` date anchor per day (`historyDayLabel`: TODAY / YESTERDAY /
+  `SAT · AUG 22` inside the week / the date, year only when it is not this one), because the flat
+  list printed the full date on every row and a seven-session Monday said "AUG 24, 2026" seven times.
+  Per-row hairlines are GONE (§1: a line is a claim about data, and a row separator is not data) —
+  air and the anchors separate. Rows are the shared `HistoryRow` shape, one geometry for gym and
+  cardio so the rail, the indent and the figure column line up: leading glyph
+  (`SettingsIcons.Session` for a workout, the activity's own for cardio — a per-day-type glyph was
+  tried here and reverted, `SETTLED.md`) ·
+  name over a mono meta line (marker · sets · duration) over the user's own tags · ONE right-hand
+  figure. `formatVolume` already prints the unit, so the stacked "KG" under "149 kg" went (§4.3);
+  duration moved into the meta where a qualifier belongs. A PR is the only thing that earns a second
+  figure line — the exception is flagged, the 0-PR majority is not (§8). The `All` pill is now
+  always drawn: it used to appear only once a user had tagged a session, so everyone else could turn
+  a filter on with no drawn way off. `SessionRow`/`CardioHistoryRow` are shared with the Stats day
+  sheet, which supplies its own day line — hence rows carry no date of their own)
+- `SESSION_DETAIL` (one finished workout's breakdown, read only: header figures + muscle map, metric
+  pills, per-exercise rows that expand in place. The page-end "Log again today" / "Session type"
+  capsules were removed 2026-09-26, see `SETTLED.md`. A single-set exercise draws no per-set chart,
+  its set row is the whole read, §12 "one")
+- `CARDIO_SESSION`
+- `GOALS`/`GOAL_EDITOR` (List archetype. ONE ranked ladder, closest-first, both goal kinds
+  interleaved and each carrying its own glyph; `Live`/`Reached` lens pills instead of
+  kind-sections; tiny hero = title + a `N LIVE · N REACHED` count. The row is the shared
+  `GoalProgressLine` (`ui/goals/GoalsComponents.kt`) that Home, Cardio and the Profile also
+  render — title + mono reading, meter, and ONE optional mono caption carrying whatever the
+  bar cannot draw: days left in a period window, the weigh-in a cut is measured from, or
+  `REACHED`. Adding is a trim filled capsule closing the list — §8 level ① at standard size; a corner
+  cube and a full-width bar were both tried and reverted. Scaled one rung above the List archetype's trim default — see SETTLED before
+  re-tightening. Rebuilt 2026-08-23, `design/SETTLED.md`)
+- `TROPHIES` (frozen)
+- `NUTRITION`
+- `SETTINGS?page=`
+- `RECAP`
+- `NOTES_SEARCH`
+- `PROGRAM_BUILDER?blank&view` (ONE program screen, GYMAP-28: colour-dot + mono `labelLarge` day
+  anchor + "N SETS" meta, hang-indented name / sets×reps rows (meta at muted@0.7) — accent hexes via
+  the shared `parseAccentHex`. Onboarding's week page shared this formula until 2026-08-23 and no
+  longer does: it shows ONE day at a time under a selectable mark, so it has no need of a per-day
+  colour dot and its rows lead with the `ExerciseIcons` equipment glyph instead; `view` = same layout read-only, the top-bar pencil unlocks editing; editor adds
+  tap-into-day + long-press reorder + Save/Add at page end; day detail = rename/type/colour + exercise
+  rows → SetsReps sheet (set stepper + rep-preset pills + in-place swap), duplicate/remove day at page
+  end; removes undo via snackbar, never confirm)
+- `FREESTYLE_LOG` (the "go with the flow" logger, `ui/gym/freestyle/FreestyleLog*`). **Rebuilt
+  set-by-set 2026-09-26.** Empty, it is a start page: a search field (opens the exercise browser),
+  YOUR MOVES (recent moves with last time's top set and when, an accent + adds one), and REPEAT A
+  WORKOUT (the two latest sessions behind a neutral repeat mark; "all ->" opens the picker). With no
+  history it shows a three-step guide instead. In a workout exactly one exercise is open: its logged
+  sets form a ledger (tap one to edit it in the slab; delete offers Undo), a LAST row carries last
+  time's sets (tap to load, "Repeat all" on a fresh exercise), and the entry slab starts filled from
+  the set just logged or last time's first set, so a straight set is one tap on Log set. Every other
+  exercise folds to one line with its top set. The header reads clock, rest since the last set,
+  exercises, sets and volume; the footer is an "Add an exercise" search field over a RECENT rail. The
+  log lives on the ViewModel (survives rotation and font changes); the autosaved draft covers
+  process death and reopens as UNFINISHED WORKOUT with an accent Resume log hero.
+- `MIRROR_TEST` (the photo **Gallery**, `ui/profile/MirrorTest*` + `Gallery*`). **Rebuilt
+  gallery-first 2026-08-22** (Antho: "a full revamp, it should be like a real gallery, with date,
+  tags, compare, muscle tag"). The library leads; the instruments scroll away above it.
+  - **One lazy list.** The whole screen is a single `LazyColumn`; `GalleryLibrary.kt`'s
+    `LazyListScope.galleryLibrary()` emits masthead -> browse bar -> grid -> roll-end, and
+    `galleryGrid()` emits one item per grid ROW under a `stickyHeader` per day. The old screen was a
+    `Column(verticalScroll)` that composed and decoded every photo in the library on entry: fine at
+    twenty shots, a felt stall at three hundred. The gallery is the app's one unbounded screen, so it
+    is the one screen that pages. Day headers pin while their rows pass under them (a page-ground
+    `Brush.verticalGradient` that fades at its foot, not a box, §1/§5).
+  - **Four tag axes.** A photo carries its **date**, its **pose** (where the camera stood, one per
+    photo, unchanged), its **muscle tags** (what the shot documents, MULTI, drawn from the program's
+    own `MuscleGroup` codes, so a photo and a training week share one vocabulary) and its free
+    **tags** (`domain/photo/PhotoTag.kt` normalizes "Week 12" / "#week 12" / "week-12" to one
+    spelling, <=24 chars, <=8 per photo). Both new axes are `List<String>` on `ProgressPhoto`,
+    written to the index JSON **only when non-empty**, so an untagged library's file is
+    byte-identical to what the pre-revamp build wrote. Still off the DB, still no migration.
+  - **Faceted, not modal.** `GalleryFilter` ANDs across axes and ORs within them; search composes
+    with the facets instead of replacing them (it used to silently discard the window and lens you
+    had set). `GalleryFilterBar` draws an always-open search field, the pose lens, then `Filters` +
+    `Compare`; WHEN / MUSCLE / TAGS / VIEW rails live behind Filters, which carries the active-facet
+    COUNT. With the panel shut, every active value stands above the grid as its own removable chip
+    plus `Clear all`, so a filter set three scrolls ago can never quietly eat the library. Sort and
+    density moved INTO the panel: four chips on the top row ran past the screen edge and made two
+    presentation switches look as load-bearing as the filters beside them.
+  - **One muscle is a LENS, not a filter.** With exactly one muscle chip active the progress band
+    re-pairs inside that muscle and names it, so the mark at the top answers "how has my back
+    changed", not only "how have I changed". Its cell badges suppress themselves at the same time,
+    because a word repeated on every visible thumbnail is noise (§8).
+  - **Metadata has one home per level.** The DAY header carries count, titles-or-poses, tags; the
+    CELL carries muscle over date on the scrim it already draws. Muscles were briefly in both and
+    produced headers reading "BACK, BACK" over a row of thumbnails already saying BACK (§4.3).
+    **The per-cell muscle badge is a deliberate exception to the 2026-07-13 removal of per-cell POSE
+    chips**: pose was on nearly every photo so the chip said the same word every time, whereas a
+    muscle tag is optional, varies shot to shot, and is the thing you filter by. It wears no plate of
+    its own (a second dark shape per thumbnail read as a sticker applied to the photo).
+  - **Density follows the busiest DAY on screen**, not the library total: filter to one muscle and
+    every day may hold a single shot, which three across is one speck beside two thirds of nothing
+    (§12 debris). Never below two, because one across is a list.
+  - **Compare** keeps its select-2 -> `CompareSheet` (Slider / Split + share card), and gains
+    **long-press a cell to start a selection with that shot in it**, the phone-gallery idiom. The
+    readout and the shared card now name the muscles the two shots AGREE on; a muscle tagged on one
+    end alone says nothing about a change between them.
+  - **The viewer edits every field the gallery filters on**: date, title, note, pose, muscles, tags,
+    bodyweight, album. Collapsed it is one line stating what the shot is; `edit ->` opens the full
+    form in its own scroll, so five chip rails at 200% font scale cannot push the photo off a photo
+    viewer. Tag entry offers the library's existing tags first so the vocabulary converges instead of
+    sprouting a third spelling of "cut"; a typed-but-unsubmitted tag flushes on swipe.
+  - **Imports inherit the lens you are browsing under** (active pose + narrowed muscles), because
+    that is what you were looking at when you decided to add more of it. Multi-select, as before.
+  - **BODYWEIGHT and SAME WEIGHT close the roll** rather than sitting between you and the photos
+    (§4.8, placement is rank). Bodyweight stays NOT photo-gated: at zero it is still the one live
+    mark beside the band's ghost frames (§12), which the first gallery-first draft regressed.
+  - Zero and one are unchanged and still whole: honest `0 PHOTOS` eyebrow, serif hero, ghost frames
+    keeping their FIRST/NOW tags, one hint, one filled `Add a photo` capsule, the live bodyweight
+    spark. `Albums ->` moved onto the eyebrow line as the library's index action; it was a stranded
+    row under the band, and before that it hung off a TIMELINE header that no longer exists.
+  - **Browse controls are NOT count-gated** (reversed same day, on device, Antho: "then it sucks, I
+    want you to remove the have-photos-in-it limit"). They were: search at >=4 photos, the pose lens
+    at >=2 distinct poses, the muscle and tag rails only once something carried them, on the §4.5
+    reasoning that a control which can only return the same grid does nothing. On a photo library
+    that produced a first-run screen with no search, no lens and no filters, which does not read as a
+    restrained gallery, it reads as an unfinished one. A gallery states its own shape before it holds
+    anything, the same way the band draws ghost frames rather than waiting for a photo to justify
+    itself. **Pose and muscle rails now show their FULL fixed vocabularies**, not just values in use,
+    so the rail doubles as the answer to "what can I even tag a shot with" — the question a new
+    library actually raises. TAGS is the one user-invented vocabulary, so at zero it names where tags
+    come from instead of drawing an empty row. `GALLERY_TOOLS_MIN` and `GalleryFacets` are gone.
+    Only free tags can still go stale (untag the last `#cut` shot), so that is the one filter value
+    the screen drops when its chip leaves the rail. An empty LIBRARY draws no "no results" line (the
+    ghost frames and the capsule already say it); only a grid narrowed to nothing carries its own
+    `Clear filters` chip. `Albums ->` rides the hero line at every count, so there is one door in one
+    place rather than a conditional link inside the zero block.
+  - The pass also PAID DOWN 13 frozen doctrine violations across these files (five off-ladder alphas,
+    eleven inline `fontSize`s, an em dash and an exclamation mark in rendered copy); the one
+    remaining allowlist entry is the search placeholder's `maxLines = 1`, which is chrome.
+- `PROGRESS_CAMERA` (`ui/profile`, CameraX guided capture — live preview + a ~0.3-alpha ghost of
+  your last same-pose shot for alignment, pose chips, rule-of-thirds grid, 3s self-timer, front/rear
+  flip; writes straight to app-private storage; CAMERA permission is optional — deny falls back to
+  import; no INTERNET, never the camera roll)
+- `BODY_MEASUREMENTS` (`ui/profile`, GYMAP-52: the body-measurement tracker reached from the Profile
+  BODY section's SIZES row. Reworked 2026-07-25 — mono `3 OF 5 TRACKED` eyebrow + serif
+  "Measurements" hero whose MARK is a full-width **five-segment coverage rail** (accent where that
+  site has a reading, empty track where it does not), captioned by the names of the sites still
+  missing (`NOT TRACKED · THIGHS · HIPS`; at zero the names alone, at 5-of-5 no caption). Then a
+  `TRACKED` anchor over one row per **tracked** site ONLY, on the same two rails as the Profile BODY
+  row: LEFT = mono site name + open serif value + unit + total change **since the first reading,
+  naming it** (`↓ 1.5 SINCE MAR 3` — a circumference is logged sparsely, so a bare "since last" is a
+  delta over an unknown gap; direction-only arrow, never a verdict); RIGHT = the 140dp trend lane
+  stamped underneath with the last reading's DATE, so a value logged in March never reads as current
+  beside one from last week. One reading draws `SingleReadingMark` — the empty track carrying its
+  single accent dot — because `ProfileSparkline` needs two points and the row otherwise went blank
+  the moment you first used it. **Untracked sites get no rows at all**: they are the rail's hollow
+  segments and its caption (§12 — N rows sharing one empty status collapse to ONE mark; the old
+  screen drew four identical grey dashes for the untracked while the one LIVE row had no mark). At
+  zero: hollow rail + the five names + one filled `Log measurements` capsule, no hint.
+  `statsEntrance` cascade; top-bar `+` opens the same five-field log sheet (mirrors
+  `BodyweightLogSheet`). Stored canonically in cm off a per-type Room table (`body_measurement`, one
+  row per type per day), displayed cm/in via the independent `use_cm` Format toggle; local-only,
+  `BodyMeasurementRepository`).
+
+### Lock — `security`
+
++ `ui/security` (GYMAP-69) — an optional biometric / device-credential lock; no app PIN is stored
+(`BiometricPrompt` with `BIOMETRIC_STRONG or DEVICE_CREDENTIAL`, failing OPEN when the phone has no
+screen lock). Two independent Settings → **Privacy & security** toggles: **App lock** (an opaque
+`AppLockScreen` gate over the nav host at cold start / after a configurable background timeout —
+Immediately·1·5 min — wired in `MainActivity` through the `AppLockManager` singleton +
+`LocalAppLock`, honouring the existing `userLeaving`/`onUserLeaveHint` guard so a
+picker/camera/share return never re-locks) and **Photo gallery lock** (gates `MIRROR_TEST` in
+`ForgeNavHost`). Both share ONE authenticated session — unlocking the app opens the gallery for
+free, no second prompt — and app lock forces `FLAG_SECURE` app-wide (like Privacy mode, so it also
+hides recents/screenshots). The unlock screen is the modal archetype: opaque theme-gradient scrim +
+`• Avex` wordmark + serif "Locked" + one caption + one filled `Unlock` capsule (the OS sheet does
+the credential entry). Offered as one onboarding opt-in step (shared "about you" block). Settings →
+Privacy & security also carries the separate **Privacy mode** FLAG_SECURE toggle (moved from
+Appearance, 2026-09-26).
+
+### Settings redesign (2026-09-26) — `ui/settings/SettingsKit.kt`
+
+Every Settings page is built from one kit, scoped to Settings by `SettingsTheme` (labels in sans):
+`SettingsScaffold` / `SettingsLazyScaffold` give each page a large serif title that collapses into
+the bar; `SettingsGroup` stacks rows as 4dp slabs 2dp apart under a sans header, clipped to 16dp
+outer corners, with one footer note; rows are navigation (icon tile · title · live value ·
+chevron), switch, radio, dropdown (value + menu with a check), stepper (round −/+, rest times),
+hour (a menu of the day's hours: reminder, quiet hours), segmented (sliding accent thumb; a grid of
+cells when a label would break) and action (no chevron). A row's end element goes under its text
+past 1.5x font, or when its title cannot fit. Status is a dot and a word; an action at a row's end
+is a compact tonal button. A denied permission disables the rows it silences, values kept. Root: search pill, then General · Training ·
+Coach & recovery · Data · Reset · About, every row showing its live value; search hits render as
+one group. Appearance and Units & format open on live previews (`SettingsPreviews.kt`). Program's
+choices are radio rows and filter chips, Equipment a tile grid with a check badge. Wearable's
+Signals header carries the n-of-9 count; a connected signal's write-back and imports are rows
+indented under it, each import's result replacing its description. Quiet hours default to one
+every-day window, with "Different hours each day" revealing the seven. Coach opens on a main switch. Export & back up, Import and Reset are bottom sheets (`SettingsSheet`)
+of the same grouped rows; each export row is tagged with its format, found files carry an Import or
+Restore button. Every reset, restore and password change confirms through `SettingsConfirmDialog`
+(icon, question, filled button naming the act; factory reset still types ERASE). Rationale:
+`DECISIONS.md`, 2026-09-26.
+
+### Exercise likes — `ui/settings/SettingsExercisePrefsPage.kt`
+
+The preference list opens on **All exercises**: every public library movement plus the user's custom
+moves, regardless of configured equipment. Its first scope selector adds **Your gear**, which alone
+uses `ExerciseLibrary.availablePool` (including a frozen preset); muscle and Custom scopes remain
+available beside it. Custom moves stay out of Your gear because they store no equipment metadata.
+The title, search, scope/status capsules and the swap-prompt toggle scroll WITH the list (they were
+pinned and took about a third of the screen); an active filter capsule takes the selectable wash.
+
+### Sheets
+
+- SessionSummarySheet (minimal)
+- CardioSessionDetailSheet
+- heatmap "That day"
+- ExerciseLibraryPicker (`singleSelect` = radio-style choose-one for swaps — accent-wash pick, no
+  checkbox)
+- SwapPickerSheet (**rebuilt 2026-08-23**) — the live session's swap picker, a List inside a Modal.
+  Arm-then-confirm: every row carries its own `Today` / `Every week` `SegmentPill` pair (selection,
+  not action), the armed row takes the accent tile wash, and ONE `ForgePrimaryCapsule` at the END
+  commits, naming the move and the scope. Rows are the `ExerciseIcons` equipment glyph + name +
+  `muscleTarget`; a timed hold flags `HOLD`; the lead entry (the library is ordered best-first)
+  carries the sheet's one caption. `hasPersistentSwap` draws the `Back to <plan exercise>` outlined
+  capsule beside the confirm, the only route out of a persistent swap. Body is `SwapPickerContent`
+  (`initialArmed` is its preview/test seam), pinned by `SwapPickerScreenshotTest` at 100% / 200%
+- the program SetsReps sheet
+- AvatarPickerSheet (profile cover — "select your own" + provided default covers by category,
+  `DefaultAvatars`; picked default is baked into `avatar.jpg`)
+
+Check this map + `ui/common/` before inventing; update it when screens change.
+
+---
+
+## Detail relocated from the core doctrine
+
+Verbatim from the pre-split `DESIGN.md`. These are *inventory* — how a shipped feature works — rather
+than rules, so they moved here to keep the always-loaded core small. Nothing was reworded.
+
+### Onboarding — the flow (rebuilt 2026-08-22)
+
+`ui/onboarding/` — `OnboardingScreen.kt` holds the state and the page order;
+`OnboardingScaffold.kt` the shell every step shares (chrome, question slot, ledger slot, one action); `OnboardingPrimitives.kt` the
+shared tile / chip / rail / toggle-row formulas; `OnboardingSteps.kt` the fork and the goal /
+experience / day-count questions; `OnboardingGymSteps.kt` the two gym steps plus the week page;
+`OnboardingSoreSpots.kt` the sore / injured spots page; `OnboardingExtras.kt` the optional closing
+step; `OnboardingWeekMeter.kt` the `PlanLedger` mark;
+`OnboardingDraft.kt` the resume snapshot (schema 4, cursor = an index into the path, not a page id).
+
+Path: **generated** = mode → goal → experience → days → gym → gear → sore spots → week → extras
+(9 steps);
+**custom / freestyle** = mode → goal → experience → extras (4) — they still answer goal and
+experience because those steer the coach and Stats. `pathFor(planMode)` owns this; the rail counts
+its cells from the list, so the short path visibly drops four.
+
+The day-count step warns, never gates, outside 3 to 5 days (2026-09-26): one line under the chips,
+a `ForgeWarning` dot beside onBg `bodySmall` prose (`daysAdvice`), naming what that count costs
+(pace for 1 to 2, rest days for 6 to 7; six reads softer for an experienced lifter). Continue stays live.
+
+`PlanLedger` is the persistent mark: one bar per training day carrying that day's SETS, scaled to
+the heaviest day, sitting below the question and outside the page slider. Before any gear exists it
+draws `ProgramGenerator.plannedSetsPerDay` (the split's own volume allocation, computable from a
+day-count alone); once a gym is picked it draws the generated week, so a sparse setup visibly costs
+sets. Its track is 148dp on the day-count step, where the week IS the answer, and animates down to
+72dp on the gym / gear steps, which need their grids. Bar columns share the width evenly until a day
+name stops fitting under one, past which the mono label clamps at two lines (§14) — an earlier build
+scrolled the row instead and clipped the seventh day on any phone narrower than the dev device. The
+week page shows the same mark at 104dp, where it also NAVIGATES (2026-08-23): pass `selectedIndex` /
+`onSelect` and each bar becomes its own day's tap target, accent for the day being read and
+muted@0.7 for the rest, with that one day's movements listed underneath. Without those two arguments
+nothing is tappable and the mark draws exactly as it does under the questions — one implementation,
+so the two cannot drift into reading as two different weeks. Bar tracks align at their TOPS, not
+their bottoms, so a day name wrapping to two lines cannot float its own bar above its neighbours.
+
+**The week page** (`StepWeek`, rebuilt 2026-08-23) is that selectable mark plus the open day: mono
+day anchor with `N MOVES · N SETS` as right meta, then one row per movement — equipment-class glyph,
+name, `sets × reps`. Both moves it can make crossfade: switching day, and a re-roll dealing fresh
+movements into the day already open (the pick survives a re-roll, since the split is unchanged). It
+replaced a page that redrew the same bars it had shown for three screens and then listed every
+exercise of every day beneath them — ~25 uniform rows over three viewports, which §3 bans for this
+archetype, restating each day's volume three times over. A one-day week gets no tap affordance, no
+line telling the user to use one, and drops the day's set count (at one day it is the week total).
+
+The sore-spot page counts, per joint, how many movements in the pool THIS gym supports load it
+(`ExerciseLibrary.contraindicationsOf` over `availablePool`) — the reason to flag one, and stable
+against a re-roll. The closing step reads down a label-left spine (`ValueRow`) wherever a control
+fits beside its name; `OnboardingIcons` draws every line at `LIMB` = 1.8, the same weight as
+`NavIcons` and `SettingsIcons` (fills are masses and may be thicker); half the family had been
+rendering as solid silhouettes and half as wireframe, and a first correction to 2.2 fixed the
+internal consistency by breaking the match with the rest of the app.
+
+### Onboarding — plan-mode vignettes, signal probes, equipment steps
+
+all three plan-mode cards carry short pre-rendered vignette videos (alpha WebP authored in
+`remotion-vignettes/`, rendered to res/raw) that play twice then FREEZE on the built plan / caught
+log, and REPLAY when you tap that card — the illustration is the answer to the question, so choosing
+an option plays the answer back instead of leaving a frozen frame (`replays` counter, per card, so
+picking one doesn't restart the two you didn't pick). Each is drawn in a mark the app itself uses,
+so the three read as different SHAPES at a glance and each previews real UI rather than a diagram:
+generated is `PlanLedger`'s bar week, Mon to Sun, whose tracks shuffle in muted grey like a solver
+trying weeks and then lock left to right, training days turning accent at their volume and rest days
+dropping to empty (resting is shown being chosen); custom is the same Mon to Sun week as seven
+dashed empty slots, with a finger DRAGGING accent PUSH · PULL · LEGS tiles in from the side onto
+Mon, Wed and Fri (dragging is the gesture no other card has, and the rest stay dashed so it freezes
+as a week you could keep filling); freestyle is a timeline running up to a live NOW point, with an
+accent check popping on each time something is logged (Squat MON, Run THU, Pull-ups FRI, Bench SUN,
+Row WED): checks read as "logged", and the skipping days, the mixed entries and NOW's uneven pace
+read as "no schedule". Redesigned 2026-09-25:
+the set before it drew all three as the same mono label plus a row of accent dashes in a generic
+monospace, so the cards read as three near-identical tables of morse code. A first pass the same day
+tried custom as grey exercise tiles added by a `+` (read as plain, with no colour beside the other two)
+and freestyle as `CalendarHeatmap`'s grid filling in (read as a stats chart, not as "no plan"); the videos now set type in
+vendored Noto faces (`remotion-vignettes/public/fonts`) standing in for the platform's sans and mono.
+Earlier (2026-08-23) the set was a dense grid of unlabelled blocks, and before that a wall of 8dp
+exercise names keyed to the pre-2026-08-16 Navy accent. Glow/bloom was tried and cut on both the
+generated lock and the first-pass freestyle grid: 3x the file size for nothing visible at 72dp (`render.sh`).
+A shared `PlanModeSync` starts
+the videos together so they loop and freeze in lockstep; the live Canvas vignette
+(`PlanModeVignettes`) is the decode / pre-28 / reduce-motion fallback — reduce-motion being the one
+that matters, since those users never see the video at all — and is a deliberate number-for-number
+transcription of the compositions, text included, honouring the same two-loops-then-freeze and replay
+contract; it sizes its type off the canvas width rather than the type scale so the drawing keeps the
+videos' proportions and cannot overflow 72dp at 200% font scale (sanctioned in
+`design-allowlist.txt`). Change one side and you must change the other; equipment/preset/goal tiles use the `OnboardingIcons` matched glyph family.
+The wearable pick (Galaxy · Pixel · no watch, keys + labels + source app from
+`domain/health/WearableBrand`) left onboarding entirely on 2026-08-23 (`design/SETTLED.md`); the enum
+drives Settings → **Wearable**'s equal-width device row + brand-aware source-app/routes explainers;
+Galaxy, Pixel, and no watch/other stay on one line, with no watch directly beside Pixel. The two
+surfaces may not drift, and the brand is advisory only (HC reads stay vendor-neutral). Each granted
+Wearable read-signal row carries a post-connect reading (§9, `probeSignalFlow`): `RECEIVING`
+(onBg) when a record arrived in the last 30d, `NOTHING YET` (muted — quiet nudge, never alarm, since
+absence is ambiguous) when granted-but-silent, plain `ON` while probing or for the write-only
+calorie row. HC exposes data PRESENCE, never capability — so the UI never says "unsupported", and
+grey-out-by-brand is banned (both watches can do every signal on recent versions). Gym setup = TWO
+steps (GYMAP-20): preset grid (big-app lineup, `equipmentPresets`), then a fine-tune page grouped by
+the shared `equipmentGroups` (Settings → Program →
+Equipment groups its chips the same way — the two selectors may not drift.
+
+### Launch intro — per-family mechanics
+
+**The intro themes to the chosen app icon through the WORDMARK itself** (`AvexWordmark`): the name
+has a narrative arc in the icon's palette (`AppIcon.launchPalette`, deep→mid→bright) inside the
+stock envelope — it ENTERS with the family's verb (Metal sheen-sweep · Gem glint + jagged crystal
+chunks GROWING out of the letterforms, stroke-scale, staggered (probe shader, 33+) · Aurora northern
+lights RISING out of the glyph tops, waving + hue-shifting (probe shader, 33+; pre-33 drifting fill)
+· Nebula weightless float · Molten white-hot heat-shimmer (AGSL `RenderEffect`, 33+) · Solid
+plate-colour wipe (Gym the same, drawn in chalk or paint) · Stealth slow HUD flicker-in (~14Hz over ~1s) · Default plain), holds legible,
+then DIES the family's death overlapping the plate fade (Molten MELTS decelerating over 650ms,
+smooth slump + thin drip streams · Nebula is dragged into a BLACK HOLE vortex, modest twist (33+;
+pre-33 spin-shrink) · Solid wipes back out · Metal/Gem/Aurora/Stealth fade). Reduce-motion = settled
+still, plain fade.
+
+**The theming is user-optional** (Appearance → **Custom startup animation**, `themedLaunchIntro`,
+default on): off resolves the intro to `AppIcon.Default` so the plain black-and-white Avex settle
+plays with no family effect/exit — MainActivity reads the flag in the same first-frame prefs pass as
+the icon key so there's no themed flash. Full-screen launch SCENES (`ui/common/LaunchScenes.kt`:
+family→AGSL registry, per-pixel `RuntimeShader`, Aurora/Nebula/Molten/Gem device-approved + Stealth
+radar) are deliberately UNWIRED (2026-07-10 — every-launch spectacle wears out) but kept intact;
+re-wire via `IconLaunchScene` behind the wordmark + the 950ms themed hold. This deliberately spends
+colour off the one-accent rule (§1/§5) for a pre-app moment only. The launcher/adaptive icon
+**defaults** to Avex Pearl (the bone mark on the Pearl plate) but is user-selectable (Appearance → App icon,
+GYMAP-icons). All 23 icons are generated by `forge-android/tools/app-icons` (backdrop + mark +
+shared `ic_launcher_monochrome` layers; see its README): one `.icon.*` `activity-alias` per icon, exactly one enabled at a time via
+`AppIconManager` (`PackageManager` component toggle). A settings row shows the current icon + name
+and opens a `ModalBottomSheet` grid (mirrors `AvatarPickerSheet`: family `EditorialHeader`s, ring
+the current pick, scroll edge-fade); warns it "updates after a moment" (OEM-launcher lag). Family +
+tile order = the `AppIcon` enum declaration order (the picker derives headers from
+`entries…distinct()`), kept in the sequence Avex → Solid → Metal → Stealth → Molten → Nebula →
+Aurora → Gem → Gym; persistence is by enum `name`, so reordering never migrates a pick. Cut icons
+live on as disabled aliases mapped to a survivor (`AppIcon.RETIRED`), because a device whose
+enabled alias leaves the manifest loses its launcher entry.
+
+### Launch intro — mascots (2026-09-26)
+
+Every cold launch, one of four mascots picked at random (Kettle, Mochi, Nori, Momo;
+`ui/launch/LaunchMascot.kt`, colours in `ui/theme/MascotColors.kt`; was one launch in five until
+Antho asked for it always on, 2026-09-26) joins the intro and ACTS ON THE NAME in the icon family's
+style. One routine per family (`MascotChoreography`), reskinned by the
+icon's palette through the wordmark; any mascot plays any routine, and mascots keep their own
+colours. Avex: drops onto the peak of the A as the name settles, wobbles, slides down the A's left
+stroke, hops off and waves · Solid: runs the wipe across, runs it back out · Metal: hops onto the
+lower-case letters and skates them with the sheen, slips off the x, laughs · Stealth: a lever is
+thrown at it (bonk), it is confused (a "?"), then it throws the lever and THAT switches the name on
+(the name stays dark for a 1.6s lead) · Molten: hammers the name three times (sparks); when it
+melts, drops the hammer, hops back, then slumps into tears (timed from the melt's start, not its
+easing) · Nebula: floats in asleep; is dragged feet-first round a tightening spiral into the black
+hole, stretched, with two faint afterimages and star dust going in with it · Aurora: conducts the
+lights eyes closed, ribbons of the icon's light streaming up off its hands, ends in heart eyes ·
+Gem: startled by the crystals, plucks one and holds it high (a gem in the icon's colours) · Gym:
+presses the name overhead from a crouch (chalk puff). The name's family effect is held back by the
+mascot's lead (0.55s, Stealth 1.6s) so every beat lines up, the hold stretches 450ms, and the plate
+stays up 380ms longer through a choreographed death so the reaction reads. Never under
+reduce-motion, never with Custom startup animation off. A tap anywhere skips any intro to the fade.
+Debug builds carry an "Avex Intros" launcher (`IntroLabActivity`) that plays any icon with any
+mascot on demand, since the real one rolls its mascot at random.
+
+### Weight units — stones edge cases
+
+editable single fields hold decimal stones and bodyweight logs stone+lb
+as a two-field pair; the plate calculator has no stone denomination so it falls back to lb.
+
+### SnackbarController — styling
+
+Styled dark: `surface` plate, onBg text, accent Undo.
+
+### Live archetype — timed holds
+
+**Timed holds** (GYMAP-51: plank/dead-hang/wall-sit/side-plank, flagged `ExerciseDef.timed`) log a
+held DURATION not reps — the set-log row's REPS column becomes HOLD and the input swaps in a `m:ss`
+readout + a wall-clock-anchored start/stop stopwatch (live session, `SetInputRow`) or a manual
+`m:ss` field with a start/stop timer (freestyle); a timed set stores `logged_set.duration_seconds`, carries reps 0, and is
+excluded from every weight×reps stat (volume/e1RM/PR) — history/detail read it as "0:45" / "Best
+0:45".
+
+### Launch intro — splash + reduce-motion
+
+The system splash is background-only (`splash_blank`, no icon) so the wordmark is the brand beat;
+honors reduce-motion (short still hold, no fade).
+
+### Warm-up — the pre-session gate and its engine
+
+Rebuilt 2026-08-23. Two halves.
+
+**The engine** (`domain/warmup/`: `WarmupEngine`, `WarmupProtocol`, `MobilityCatalog`) derives the
+warmup from the session rather than from a fixed per-day string list. It emits three ordered phases
+(RAMP protocol, Jeffreys 2006): a pulse **raise** sized to whether the day is lower-body, dynamic
+**mobilise** drills claimed only by the muscle groups actually trained and capped at three, then the
+specific **ramp** for the lift about to start. Ramp depth scales with the working set's intensity
+(`intensityOf` inverts the same Epley relation `E1rm` uses, so warmup and plateau calls agree), reps
+fall as load climbs, the final jump into the working set is the smallest, and loads round to what
+the user can literally load (5 lb dumbbell grid, whole plates, metric steps for a kg user). A muscle
+already worked this session collapses to at most one feeler set; an unknown working load degrades to
+an unloaded rehearsal set rather than inventing a number. Only the FIRST exercise is ramped in the
+gate, because the effect decays in 15 to 20 minutes; later lifts get the same ladder on demand from
+`WarmupSuggesterDialog`, which now shares the engine instead of a fixed 40/60/80%.
+
+**The surface** (`ui/gym/train/components/WarmupFlow.kt`) is ONE screen with ONE button. Prep rows,
+then the ramp rows under a header naming the lift, then an accent-filled `Start lifting` matching
+Home's start CTA (same act, same coat). No stepper and no progress rail: a step-through flow turned a
+two-minute task into a seven-tap marathon.
+
+Rows tick off, but the ticks are the user's own place-keeper, not a checklist the app grades. Nothing
+is gated, nothing is stored, and the button works from the first frame. This is a deliberate,
+owner-approved reading of §4.10: the rows each carry a distinct reading (a duration, a rep count, a
+real weight), and the user asked to be able to see what they had already done.
+
+Two things are conditional. There is no time estimate: it is a number with no decision attached
+(§2①), and it read as a chore. The ramp section is dropped entirely unless it has real loads, because
+without a working weight the engine can only offer an unloaded rehearsal set, and "Bodyweight x 3"
+under a dumbbell lift's name reads as a bug rather than as advice.
+
+`Skip warm-up` is gone as a button: it and `Start lifting` did exactly the same thing. Not-today and
+not-this-week survive as the persistent opt-outs, as does Home's hold-to-skip long press.
+
+## Startup recovery waiting state (2026-09-07)
+
+Before restored storage is safe to open, MainActivity shows a neutral text-only preparing state
+with the existing theme, body typography and 24 dp gutters. It contains no private data or spinner.
+The normal application and its protection settings load after recovery; a failed recovery keeps
+the app on a retry instruction instead of exposing a partially restored dataset.
+
+## Audit behavior corrections (2026-09-07)
+
+Session-detail lenses retain the set table when only timed holds exist. The final exercise expands
+its existing action rail, including adding another exercise. Profile name editing commits only after
+actual focus or Done; photo dates retain the local calendar day. The Health Connect row reads LEAN
+MASS. The export menu calls JSON Training history and points to Backup for a restorable photo copy.
+Settings uses the system credential before weakening protection or manually exporting protected
+photos. Watch glance surfaces label signed recommendations LOAD, not a readiness score. Existing
+layout, typography and neutral activity marks remain the visual authority. Academy covers load
+asynchronously within the existing plate geometry.

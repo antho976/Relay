@@ -1,0 +1,106 @@
+package com.forge.app.domain.coach
+
+import com.forge.app.data.db.entities.CoachDecision
+import com.forge.app.program.ExerciseLibrary
+import com.forge.app.program.MuscleGroup
+
+/** What program (re)generation learns from the coach's record (auto-coach: refresh ties in). */
+data class GenBias(
+    /** Net learned weekly-set adjustment per muscle, clamped to ±[CoachGenBias.VOLUME_CLAMP]. */
+    val volumeBias: Map<MuscleGroup, Int> = emptyMap(),
+    /**
+     * Learned rep-range override per exercise (targetKey → reps string), latest applied/folded
+     * rep_shift wins. Generation applies it to any slot that re-picks that exercise, so a coach
+     * rep_shift survives a refresh the way volume does (seam fix, finding 1 — rep_shift previously
+     * had no survival channel and was silently discarded on every regenerate).
+     *
+     * Keyed by [GenBias.repKey]: a shift read on one day (the heavy day's 10–12 → 8–10) belongs to
+     * that day, and keying by exercise alone rewrote the same lift's light day too. Read it with
+     * [repsFor].
+     */
+    val repBias: Map<String, String> = emptyMap(),
+    /** Rotations the watcher judged "ok" (or folded into the baseline and not judged failed) — boosted like likes. */
+    val prefer: Set<String> = emptySet(),
+    /** Rotations that failed (skipped after the change / user-reverted) — softly avoided. */
+    val avoid: Set<String> = emptySet()
+) {
+    /** The learned rep range for [libId] on [dayKey]; a legacy shift with no day applies to every day. */
+    fun repsFor(dayKey: String, libId: String): String? = repBias[repKey(dayKey, libId)] ?: repBias[libId]
+
+    companion object {
+        val NEUTRAL = GenBias()
+
+        /** "dayKey|libId", or the bare libId for a decision recorded before shifts carried a day. */
+        fun repKey(dayKey: String, libId: String): String = if (dayKey.isEmpty()) libId else "$dayKey|$libId"
+    }
+}
+
+/**
+ * Folds the coach's learned adjustments back into the generation BASELINE, so a re-roll or
+ * regenerate doesn't forget them. Background: applied coach changes live as overlays
+ * (rep/sets overrides, persistent swaps) which a wholesale regeneration deliberately clears
+ * (the Cluster-A reconcile, plus [ExerciseCustomizationDao.clearCoachSwaps] for swaps) — without
+ * this, every "refresh trainings" would silently undo months of coach learning. At regenerate the
+ * cleared deltas are also marked `folded` (a terminal status that keeps feeding this bias but is no
+ * longer per-change undoable), so the bias is the single carrier and undo can't replay stale state.
+ *
+ * Pure function of the coach decision history, recomputed from the SAME rows on every generate —
+ * folding is idempotent, never compounding. Counts both `applied` (live overlay) and `folded`
+ * (already baked) rows, since a row is exactly one of those once accepted:
+ *  - volumeBias: net per muscle of non-failed volume_up/volume_down (reverted/skipped/failed rows
+ *    drop out), clamped to ±[VOLUME_CLAMP] — the same bound as the planner's drift cap (hardening 11).
+ *  - repBias: latest non-failed rep_shift per exercise and day.
+ *  - prefer: swap replacements judged "ok", OR folded into the baseline and not (yet) judged failed.
+ *    Folding keeps a swap preferred for SURVIVAL — carrying its learning forward is independent of
+ *    trust — but an in-window folded swap the watcher later rules failed drops out (CoachDao.pendingOutcome).
+ *  - avoid: swap replacements that failed — the generator steers around them softly (it may still
+ *    pick one if the muscle has nothing else; dislike remains the hard ban).
+ */
+object CoachGenBias {
+
+    const val VOLUME_CLAMP = 2
+
+    private fun CoachDecision.isActive() = status == "applied" || status == "folded"
+
+    /**
+     * Whether this decision's outcome may shape future generation. A failed change obviously
+     * can't — and neither can one the athlete never actually ran (B1's NOT FOLLOWED): an unlived
+     * window is not evidence, and folding it in would teach the generator from a fiction.
+     */
+    private fun CoachDecision.countsForBias() =
+        outcome != "failed" && outcome != CoachDecision.OUTCOME_NOT_FOLLOWED
+
+    fun from(decisions: List<CoachDecision>): GenBias {
+        if (decisions.isEmpty()) return GenBias.NEUTRAL
+
+        val volume = decisions
+            .filter { it.isActive() && it.type.startsWith("volume") && it.countsForBias() }
+            .mapNotNull { d ->
+                ExerciseLibrary.byId(d.targetKey)?.muscle
+                    ?.let { it to if (d.type == "volume_up") 1 else -1 }
+            }
+            .groupBy({ it.first }, { it.second })
+            .mapValues { (_, deltas) -> deltas.sum().coerceIn(-VOLUME_CLAMP, VOLUME_CLAMP) }
+            .filterValues { it != 0 }
+
+        // Latest non-failed rep_shift per exercise wins (associate keeps the last entry; ascending id
+        // order makes "last" the most recent).
+        val repBias = decisions
+            .filter { it.isActive() && it.type == "rep_shift" && it.countsForBias() && it.payload != null }
+            .sortedBy { it.id }
+            .associate { GenBias.repKey(it.dayKey, it.targetKey) to it.payload!! }
+
+        val swaps = decisions.filter { it.type == "swap" && it.payload != null }
+        // A folded swap stays preferred for SURVIVAL (its accepted rotation carries into the new
+        // baseline) as long as it hasn't FAILED — bias survival is independent of trust. Now that the
+        // watcher can still judge an in-window folded swap (CoachDao.pendingOutcome), one it rules
+        // failed must drop out of prefer and into avoid (auto-coach seam audit 2026-06-15, finding P1).
+        val prefer = swaps
+            .filter { (it.status == "folded" && it.countsForBias()) || (it.status == "applied" && it.outcome == "ok") }
+            .mapNotNull { it.payload }.toSet()
+        val avoid = swaps.filter { it.outcome == "failed" }
+            .mapNotNull { it.payload }.toSet() - prefer
+
+        return GenBias(volumeBias = volume, repBias = repBias, prefer = prefer, avoid = avoid)
+    }
+}

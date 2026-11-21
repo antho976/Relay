@@ -1,0 +1,203 @@
+package com.forge.app.ui.gym.stats.components
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.forge.app.ui.common.bounceClick
+import kotlinx.coroutines.delay
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
+/**
+ * Today's local date that stays current while the page is composed: re-read on resume and when the
+ * next local midnight passes. A bare `remember { LocalDate.now() }` froze it at first composition, so a
+ * Stats page left open overnight kept drawing (and windowing its counts) as yesterday.
+ */
+@Composable
+internal fun rememberToday(): LocalDate {
+    var today by remember { mutableStateOf(LocalDate.now()) }
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) today = LocalDate.now()
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
+    }
+    // Loops rather than running once per value of `today`: a delay that ends a few ms early, or a
+    // clock change / NTP correction (delay runs on uptime), can wake while LocalDate.now() is still
+    // the old day. Then `today` would not change, the effect would never relaunch, and the page would
+    // stay on yesterday. Each pass re-arms against the next midnight from the CURRENT date.
+    LaunchedEffect(Unit) {
+        while (true) {
+            val zone = ZoneId.systemDefault()
+            val nextMidnightMs = LocalDate.now(zone).plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+            delay((nextMidnightMs - System.currentTimeMillis()).coerceAtLeast(1_000L))
+            today = LocalDate.now()
+        }
+    }
+    return today
+}
+
+/** How many weeks (columns) one page of the heatmap shows; [HEATMAP_WEEKS] divides evenly by this. */
+private const val WEEKS_PER_PAGE = 13
+
+/**
+ * GitHub-contributions-style adherence grid: one cell per day (weeks as columns, the user's week
+ * down each one),
+ * tinted by that day's set count. Glanceable "did I show up?" — the most-beloved consistency view.
+ * Paged with chevron arrows a page ([WEEKS_PER_PAGE] weeks) at a time rather than free-scrolled — a
+ * horizontal scroll nested in the vertically-scrolling Stats page fought the finger — and opens on
+ * the newest page (the one holding today). When [onDayTap] is set, lit days are tappable and open
+ * that day's detail.
+ */
+@Composable
+internal fun CalendarHeatmap(
+    activityByDay: Map<Long, Int>,
+    weeks: Int,
+    faint: Color,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    onDayTap: ((LocalDate) -> Unit)? = null,
+    /** Epoch days planned off (a holiday, a scheduled rest day): an outline-only cell, not a gap. */
+    restDays: Set<Long> = emptySet(),
+    restRing: Color = faint
+) {
+    val today = rememberToday()
+    // Columns are the user's weeks (Settings → Format → week starts), the same weeks Stats' "This
+    // week" figures count, so a column never splits the week the figures above it describe.
+    val firstDayMonday = com.forge.app.ui.theme.LocalForgeSettings.current.firstDayMonday
+    val startMonday = remember(today, weeks, firstDayMonday) {
+        com.forge.app.core.time.userWeekStart(today, firstDayMonday).minusWeeks((weeks - 1).toLong())
+    }
+    // Normalize intensity against the busiest day IN THE VISIBLE WINDOW, not all-time — otherwise one
+    // huge day from before the window washes every recent day out to near-faint.
+    val maxSets = remember(activityByDay, startMonday, today) {
+        val window = startMonday.toEpochDay()..today.toEpochDay()
+        (activityByDay.entries.filter { it.key in window }.maxOfOrNull { it.value } ?: 1).coerceAtLeast(1)
+    }
+
+    val weeksPerPage = WEEKS_PER_PAGE.coerceAtMost(weeks)
+    val pageCount = (weeks + weeksPerPage - 1) / weeksPerPage
+    // pagesBack: 0 = the newest page (the one containing today); higher = further into the past.
+    var pagesBack by rememberSaveable { mutableStateOf(0) }
+    val safeBack = pagesBack.coerceIn(0, pageCount - 1)
+    val lastWeek = weeks - 1 - safeBack * weeksPerPage
+    val firstWeek = lastWeek - weeksPerPage + 1 // may be < 0 on the oldest page — those columns pad out blank
+    val canGoOlder = safeBack < pageCount - 1
+    val canGoNewer = safeBack > 0
+
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val onBg = MaterialTheme.colorScheme.onBackground
+    // In the configuration's locale, built here: a top-level formatter was fixed to the JVM default
+    // locale at class load and never followed a language change.
+    val locale = com.forge.app.ui.common.currentLocale()
+    val rangeFmt = remember(locale) { DateTimeFormatter.ofPattern("d MMM", locale) }
+    val dayFmt = remember(locale) { DateTimeFormatter.ofPattern("EEEE d MMMM", locale) }
+    val rangeLabel = remember(firstWeek, lastWeek, startMonday, today, rangeFmt) {
+        val start = startMonday.plusWeeks(firstWeek.coerceAtLeast(0).toLong())
+        val end = startMonday.plusWeeks(lastWeek.toLong()).plusDays(6).let { if (it.isAfter(today)) today else it }
+        "${rangeFmt.format(start)} – ${rangeFmt.format(end)}".uppercase()
+    }
+
+    Column(modifier) {
+        // Page navigator — chevrons flank the visible date range; dimmed + inert at the ends.
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            IconButton(onClick = { if (canGoOlder) pagesBack = safeBack + 1 }, enabled = canGoOlder) {
+                Icon(Icons.Filled.ChevronLeft, contentDescription = "Earlier weeks", tint = if (canGoOlder) onBg else faint)
+            }
+            Text(rangeLabel, style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.sp)
+            IconButton(onClick = { if (canGoNewer) pagesBack = safeBack - 1 }, enabled = canGoNewer) {
+                Icon(Icons.Filled.ChevronRight, contentDescription = "Later weeks", tint = if (canGoNewer) onBg else faint)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            for (col in 0 until weeksPerPage) {
+                val weekIdx = firstWeek + col
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (d in 0..6) {
+                        // Cells fill the page width evenly (weight) and stay square, so a page always
+                        // spans the card no matter the screen. Off-range columns pad out invisibly.
+                        val cell = Modifier.fillMaxWidth().aspectRatio(1f)
+                        if (weekIdx < 0) {
+                            Box(cell)
+                        } else {
+                            val date = startMonday.plusWeeks(weekIdx.toLong()).plusDays(d.toLong())
+                            val sets = activityByDay[date.toEpochDay()] ?: 0
+                            // Future days (the rest of the current week) get the same faint fill as a
+                            // rest day rather than rendering as an empty hole — the missing-tile look
+                            // read as a bug. Matches the contributions-grid convention.
+                            val color = if (sets == 0 || date.isAfter(today)) faint
+                                        else lerp(faint, accent, sets.toFloat() / maxSets)
+                            // A day planned off reads as rest, not as a miss: outline only, like Home's
+                            // week strip draws a rest day. A day trained anyway is lit as usual.
+                            val plannedOff = sets == 0 && !date.isAfter(today) && date.toEpochDay() in restDays
+                            Box(
+                                cell
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .then(
+                                        if (plannedOff) Modifier.border(1.dp, restRing, RoundedCornerShape(4.dp))
+                                        else Modifier.background(color)
+                                    )
+                                    .then(
+                                        // A lit day says which day and how much, so TalkBack can open it
+                                        // by name rather than as one of a hundred unlabelled buttons.
+                                        if (onDayTap != null && sets > 0)
+                                            Modifier
+                                                .semantics { contentDescription = "${dayFmt.format(date)}, ${if (sets == 1) "1 set" else "$sets sets"}" }
+                                                .bounceClick(role = Role.Button) { onDayTap(date) }
+                                        else Modifier
+                                    )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,94 @@
+package com.forge.app.program
+
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * JVM unit tests for the unified exercise pool's swap-candidate filtering (program-unlock Phase 4 —
+ * the swap picker and the generator draw from the same [ExerciseLibrary]).
+ */
+class ExerciseLibraryTest {
+
+    @Test
+    fun swapCandidates_dumbbellsAndBench_dropsMachineAndCable() {
+        val available = setOf(Equipment.DUMBBELLS, Equipment.BENCH)
+        val candidates = ExerciseLibrary.swapCandidates(MuscleGroup.CHEST, available, emptySet())
+        assertTrue("should still offer alternatives", candidates.isNotEmpty())
+        assertTrue(
+            "never offers gear the user doesn't have",
+            candidates.none { Equipment.MACHINE in it.equipment || Equipment.CABLE in it.equipment }
+        )
+        // Bodyweight is always allowed even though it's not in the available set.
+        assertTrue("push-up stays available", candidates.any { it.id == "push-up" })
+    }
+
+    @Test
+    fun swapCandidates_excludesDisliked() {
+        val candidates = ExerciseLibrary.swapCandidates(
+            MuscleGroup.CHEST, emptySet(), setOf("db-bench-press")
+        )
+        assertTrue(candidates.none { it.id == "db-bench-press" })
+    }
+
+    @Test
+    fun swapCandidates_emptyEquipmentMeansAllEquippable() {
+        // Empty equipment = no equipment filtering, but owner-only (plate-count) station movements
+        // are still excluded from ordinary pools — general users get the generic lb equivalents.
+        val equippable = ExerciseLibrary.forMuscle(MuscleGroup.CHEST).filter { !it.curatedOnly }
+        val candidates = ExerciseLibrary.swapCandidates(MuscleGroup.CHEST, emptySet(), emptySet())
+        assertTrue("empty equipment = all equippable (curated excluded)", candidates.size == equippable.size)
+    }
+
+    @Test
+    fun mwm989Combo_coversEveryMuscle() {
+        // Antho's real setup: dumbbells + bench + MWM-989 (cable + machine stations). Every muscle
+        // must have at least one option so generated plans are never starved on this combo.
+        val mwm989 = setOf(Equipment.DUMBBELLS, Equipment.BENCH, Equipment.CABLE, Equipment.MACHINE)
+        MuscleGroup.entries.forEach { muscle ->
+            assertTrue(
+                "$muscle has no exercise on the MWM-989 combo",
+                ExerciseLibrary.swapCandidates(muscle, mwm989, emptySet()).isNotEmpty()
+            )
+        }
+    }
+
+    @Test
+    fun mwm989Combo_generatesFullDaysWithNoStarvedSlots() {
+        // Every lift day should fill all its slots (no muscle so thin it drops an exercise).
+        val mwm989 = setOf(Equipment.DUMBBELLS, Equipment.BENCH, Equipment.CABLE, Equipment.MACHINE)
+        (3..6).forEach { days ->
+            val plan = ProgramGenerator.generate(GenerationParams(days), mwm989, emptySet(), emptySet(), seed = 5L)
+            val template = SplitTemplates.forDays(days)
+            plan.filter { !it.key.startsWith("cardio") }.forEachIndexed { i, generated ->
+                assertTrue(
+                    "${generated.key} dropped a slot on MWM-989 (${generated.exercises.size}/${template[i].targets.size})",
+                    generated.exercises.size == template[i].targets.size
+                )
+            }
+        }
+    }
+
+    @Test
+    fun everyCompoundCarriesAMovementPattern() {
+        // A COMPOUND entry with no pattern silently counts as an un-penalized isolation for the
+        // generator's repeat guard AND gets no secondary muscles in the recovery guard. The hip
+        // thrust and upright row had fallen through this way (2026-09-21).
+        val missing = ExerciseLibrary.all
+            .filter { ExerciseTag.COMPOUND in it.tags && ExerciseLibrary.patternOf(it) == MovementPattern.ISOLATION }
+            .map { it.id }
+        assertTrue("compounds without a movement pattern: $missing", missing.isEmpty())
+    }
+
+    @Test
+    fun everyIsolationInAMultiSlotMuscleBelongsToAFamily() {
+        // Muscles that get two slots on one day rely on isolation families to avoid a DB + cable
+        // lateral raise or two skull crushers in the same session. Only bona-fide odd-ones-out
+        // (adduction / abduction stations, wall sit, dead hang, superman) may stay generic.
+        val allowed = setOf("mwm-inner-thigh", "mwm-outer-leg-kick", "wall-sit", "dead-hang", "bw-superman", "side-plank")
+        val generic = ExerciseLibrary.all
+            .filter { ExerciseTag.ISOLATION in it.tags && ExerciseLibrary.patternOf(it) == MovementPattern.ISOLATION }
+            .map { it.id }
+            .filterNot { it in allowed }
+        assertTrue("isolations with no family: $generic", generic.isEmpty())
+    }
+}

@@ -1,0 +1,37 @@
+package com.forge.app.data.db.dao
+
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import com.forge.app.data.db.entities.CoachGoal
+
+/** The Goal Portfolio's rows (Coach v3 A2). Active goals sort by priority, then by age. */
+@Dao
+interface CoachGoalDao {
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(goal: CoachGoal): Long
+
+    @Query("SELECT * FROM coach_goal ORDER BY priority ASC, created_at ASC")
+    suspend fun all(): List<CoachGoal>
+
+    @Query(
+        "SELECT * FROM coach_goal WHERE completed_at IS NULL AND archived_at IS NULL " +
+            "ORDER BY priority ASC, created_at ASC"
+    )
+    suspend fun active(): List<CoachGoal>
+
+    @Query("UPDATE coach_goal SET completed_at = :atMs WHERE id = :id")
+    suspend fun markCompleted(id: Long, atMs: Long)
+
+    @Query("UPDATE coach_goal SET archived_at = :atMs WHERE id = :id")
+    suspend fun markArchived(id: Long, atMs: Long)
+
+    /** Duplicate guard for the importer: a goal is identified by what it targets and when it was set. */
+    @Query("SELECT EXISTS(SELECT 1 FROM coach_goal WHERE kind = :kind AND target_key = :targetKey AND created_at = :createdAt)")
+    suspend fun existsLike(kind: String, targetKey: String, createdAt: Long): Boolean
+
+    @Query("DELETE FROM coach_goal WHERE id = :id")
+    suspend fun delete(id: Long)
+}

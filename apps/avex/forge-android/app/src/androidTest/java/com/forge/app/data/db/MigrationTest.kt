@@ -1,0 +1,425 @@
+package com.forge.app.data.db
+
+import androidx.room.testing.MigrationTestHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
+import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+
+/**
+ * Validates the locked migrations against the exported schemas. Runs on a device/emulator
+ * (`./gradlew connectedAndroidTest`). Add a case here for every new migration.
+ */
+class MigrationTest {
+
+    private val dbName = "migration-test.db"
+
+    @get:Rule
+    val helper = MigrationTestHelper(
+        InstrumentationRegistry.getInstrumentation(),
+        ForgeDatabase::class.java,
+        emptyList(),
+        FrameworkSQLiteOpenHelperFactory()
+    )
+
+    @Test
+    fun migrate12To13_addsExerciseIdIndex() {
+        // Create the v12 schema, then migrate to v13 and validate it matches the v13 schema.
+        helper.createDatabase(dbName, 12).close()
+        val db = helper.runMigrationsAndValidate(dbName, 13, true, MIGRATION_12_13)
+
+        val cursor = db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' " +
+                "AND name='index_logged_exercise_exercise_id'"
+        )
+        cursor.use { assertEquals("exercise_id index should exist after 12→13", 1, it.count) }
+    }
+
+    @Test
+    fun migrate13To14_addsProgramTables() {
+        // Create the v13 schema, then migrate to v14 and validate it matches the v14 schema.
+        helper.createDatabase(dbName, 13).close()
+        val db = helper.runMigrationsAndValidate(dbName, 14, true, MIGRATION_13_14)
+
+        val cursor = db.query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('program_day','program_slot')"
+        )
+        cursor.use { assertEquals("program tables should exist after 13→14", 2, it.count) }
+    }
+
+    @Test
+    fun migrate14To15_dedupesAndAddsBodyweightDateIndex() {
+        // Seed two bodyweight rows for the SAME day at v14 (no unique constraint yet).
+        helper.createDatabase(dbName, 14).apply {
+            execSQL(
+                "INSERT INTO bodyweight_entry (id, date_key, weight_lb, recorded_at) " +
+                    "VALUES (1, '2026-01-01', 180.0, 1000), (2, '2026-01-01', 181.0, 2000)"
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(dbName, 15, true, MIGRATION_14_15)
+
+        // The unique index exists, and only the most recent same-day row survived.
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='index_bodyweight_entry_date_key'"
+        ).use { assertEquals("unique date_key index should exist after 14→15", 1, it.count) }
+
+        db.query("SELECT id FROM bodyweight_entry WHERE date_key = '2026-01-01'").use {
+            assertEquals("only one row should remain for the day", 1, it.count)
+            it.moveToFirst()
+            assertEquals("the most recently inserted row should survive", 2L, it.getLong(0))
+        }
+    }
+
+    @Test
+    fun migrate15To16_addsAdaptationEngineTables() {
+        helper.createDatabase(dbName, 15).close()
+        val db = helper.runMigrationsAndValidate(dbName, 16, true, MIGRATION_15_16)
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('rest_event','advice_event')"
+        ).use { assertEquals("adaptation tables should exist after 15→16", 2, it.count) }
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' " +
+                "AND name IN ('index_rest_event_session_id','index_rest_event_exercise_id','index_advice_event_advice_id')"
+        ).use { assertEquals("adaptation indices should exist after 15→16", 3, it.count) }
+    }
+
+    @Test
+    fun migrate17To18_addsSuggestionOutcomeTable() {
+        helper.createDatabase(dbName, 17).close()
+        val db = helper.runMigrationsAndValidate(dbName, 18, true, MIGRATION_17_18)
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name = 'suggestion_outcome'"
+        ).use { assertEquals("suggestion_outcome should exist after 17→18", 1, it.count) }
+    }
+
+    @Test
+    fun migrate19To20_addsSessionSegmentTableAndActiveSeconds() {
+        helper.createDatabase(dbName, 19).close()
+        val db = helper.runMigrationsAndValidate(dbName, 20, true, MIGRATION_19_20)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'session_segment'")
+            .use { assertEquals("session_segment should exist after 19→20", 1, it.count) }
+        db.query("PRAGMA table_info(`session`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("session.active_seconds should exist after 19→20", true, "active_seconds" in cols)
+        }
+    }
+
+    @Test
+    fun migrate18To19_addsDecisionLifecycleColumns() {
+        helper.createDatabase(dbName, 18).close()
+        val db = helper.runMigrationsAndValidate(dbName, 19, true, MIGRATION_18_19)
+
+        db.query("PRAGMA table_info(`coach_decision`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            listOf("day_key", "payload", "applied_at", "outcome", "undo_data").forEach {
+                assertEquals("column $it should exist after 18→19", true, it in cols)
+            }
+        }
+    }
+
+    @Test
+    fun migrate20To21_addsOverlaySourceColumns() {
+        helper.createDatabase(dbName, 20).close()
+        val db = helper.runMigrationsAndValidate(dbName, 21, true, MIGRATION_20_21)
+
+        listOf("program_customization", "exercise_customization").forEach { table ->
+            db.query("PRAGMA table_info(`$table`)").use { cursor ->
+                val cols = mutableSetOf<String>()
+                while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+                assertEquals("$table.source should exist after 20→21", true, "source" in cols)
+            }
+        }
+    }
+
+    @Test
+    fun migrate21To22_addsSwapReattributionColumns() {
+        helper.createDatabase(dbName, 21).close()
+        val db = helper.runMigrationsAndValidate(dbName, 22, true, MIGRATION_21_22)
+
+        db.query("PRAGMA table_info(`logged_exercise`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("logged_exercise.slot_id should exist after 21→22", true, "slot_id" in cols)
+        }
+        db.query("PRAGMA table_info(`exercise_customization`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("exercise_customization.swapped_exercise_id should exist after 21→22", true, "swapped_exercise_id" in cols)
+        }
+    }
+
+    @Test
+    fun migrate22To23_addsCardioDepthColumns() {
+        helper.createDatabase(dbName, 22).close()
+        val db = helper.runMigrationsAndValidate(dbName, 23, true, MIGRATION_22_23)
+
+        db.query("PRAGMA table_info(`cardio_entry`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("cardio_entry.interval_count should exist after 22→23", true, "interval_count" in cols)
+            assertEquals("cardio_entry.hr_zone should exist after 22→23", true, "hr_zone" in cols)
+        }
+    }
+
+    @Test
+    fun migrate23To24_addsBodyMeasurementTable() {
+        helper.createDatabase(dbName, 23).close()
+        val db = helper.runMigrationsAndValidate(dbName, 24, true, MIGRATION_23_24)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'body_measurement'")
+            .use { assertEquals("body_measurement should exist after 23→24", 1, it.count) }
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' " +
+                "AND name = 'index_body_measurement_type_date_key'"
+        ).use { assertEquals("unique (type, date_key) index should exist after 23→24", 1, it.count) }
+    }
+
+    @Test
+    fun migrate24To25_addsBodyweightNoteColumn() {
+        helper.createDatabase(dbName, 24).close()
+        val db = helper.runMigrationsAndValidate(dbName, 25, true, MIGRATION_24_25)
+
+        db.query("PRAGMA table_info(`bodyweight_entry`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("bodyweight_entry.note should exist after 24→25", true, "note" in cols)
+        }
+    }
+
+    @Test
+    fun migrate25To26_addsDurationSecondsColumn() {
+        helper.createDatabase(dbName, 25).close()
+        val db = helper.runMigrationsAndValidate(dbName, 26, true, MIGRATION_25_26)
+
+        db.query("PRAGMA table_info(`logged_set`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("logged_set.duration_seconds should exist after 25→26", true, "duration_seconds" in cols)
+        }
+    }
+
+    @Test
+    fun migrate26To27_addsPerTypeCardioColumns() {
+        helper.createDatabase(dbName, 26).close()
+        val db = helper.runMigrationsAndValidate(dbName, 27, true, MIGRATION_26_27)
+
+        db.query("PRAGMA table_info(`cardio_entry`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            listOf("incline_pct", "laps", "elevation_m").forEach {
+                assertEquals("cardio_entry.$it should exist after 26→27", true, it in cols)
+            }
+        }
+    }
+
+    @Test
+    fun migrate27To28_addsConditionsColumn() {
+        helper.createDatabase(dbName, 27).close()
+        val db = helper.runMigrationsAndValidate(dbName, 28, true, MIGRATION_27_28)
+
+        db.query("PRAGMA table_info(`cardio_entry`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("cardio_entry.conditions should exist after 27→28", true, "conditions" in cols)
+        }
+    }
+
+    @Test
+    fun migrate28To29_addsBodyFatTable() {
+        helper.createDatabase(dbName, 28).close()
+        val db = helper.runMigrationsAndValidate(dbName, 29, true, MIGRATION_28_29)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'body_fat'")
+            .use { assertEquals("body_fat should exist after 28→29", 1, it.count) }
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name = 'index_body_fat_date_key'"
+        ).use { assertEquals("unique date_key index should exist after 28→29", 1, it.count) }
+    }
+
+    @Test
+    fun migrate29To30_addsLeanMassTable() {
+        helper.createDatabase(dbName, 29).close()
+        val db = helper.runMigrationsAndValidate(dbName, 30, true, MIGRATION_29_30)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'lean_mass'")
+            .use { assertEquals("lean_mass should exist after 29→30", 1, it.count) }
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name = 'index_lean_mass_date_key'"
+        ).use { assertEquals("unique date_key index should exist after 29→30", 1, it.count) }
+    }
+
+    @Test
+    fun migrate30To31_addsSessionHrTable() {
+        helper.createDatabase(dbName, 30).close()
+        val db = helper.runMigrationsAndValidate(dbName, 31, true, MIGRATION_30_31)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'session_hr_sample'")
+            .use { assertEquals("session_hr_sample should exist after 30→31", 1, it.count) }
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name = 'index_session_hr_sample_session_id'"
+        ).use { assertEquals("session index should exist after 30→31", 1, it.count) }
+    }
+
+
+    @Test
+    fun migrate31To32_addsGoalPortfolioAcademyLedgerAndDecisionColumns() {
+        helper.createDatabase(dbName, 31).close()
+        val db = helper.runMigrationsAndValidate(dbName, 32, true, MIGRATION_31_32)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('coach_goal','lesson_event')")
+            .use { assertEquals("A2 tables should exist after 31→32", 2, it.count) }
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name IN " +
+                "('index_coach_goal_kind','index_lesson_event_lesson_id')"
+        ).use { assertEquals("A2 indices should exist after 31→32", 2, it.count) }
+
+        // The four additive coach_decision columns: existing rows must read back as week-scoped
+        // with no lesson and no undo expiry, which is exactly what every pre-A2 decision was.
+        db.query("PRAGMA table_info(`coach_decision`)").use { c ->
+            val names = mutableSetOf<String>()
+            while (c.moveToNext()) names += c.getString(c.getColumnIndexOrThrow("name"))
+            assertEquals("lesson_id column", true, names.contains("lesson_id"))
+            assertEquals("scope column", true, names.contains("scope"))
+            assertEquals("scope_key column", true, names.contains("scope_key"))
+            assertEquals("undo_expires_at column", true, names.contains("undo_expires_at"))
+        }
+    }
+
+
+    @Test
+    fun migrate32To33_addsCheckinAndInjuryTables() {
+        helper.createDatabase(dbName, 32).close()
+        val db = helper.runMigrationsAndValidate(dbName, 33, true, MIGRATION_32_33)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('checkin_entry','injury_restriction')")
+            .use { assertEquals("B1 tables should exist after 32→33", 2, it.count) }
+        // One check-in per calendar day: the unique index is what makes the upsert an upsert.
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name = 'index_checkin_entry_date_key'"
+        ).use { assertEquals("unique date_key index should exist after 32→33", 1, it.count) }
+    }
+
+
+    @Test
+    fun migrate33To34_addsTheTrainingBlock() {
+        helper.createDatabase(dbName, 33).close()
+        val db = helper.runMigrationsAndValidate(dbName, 34, true, MIGRATION_33_34)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'training_block'")
+            .use { assertEquals("training_block should exist after 33→34", 1, it.count) }
+    }
+
+
+    @Test
+    fun migrate34To35_addsProactiveProjects() {
+        helper.createDatabase(dbName, 34).close()
+        val db = helper.runMigrationsAndValidate(dbName, 35, true, MIGRATION_34_35)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'coach_project'")
+            .use { assertEquals("coach_project should exist after 34→35", 1, it.count) }
+    }
+
+    @Test
+    fun migrate35To36_addsTheLibraryReadLedger() {
+        helper.createDatabase(dbName, 35).close()
+        val db = helper.runMigrationsAndValidate(dbName, 36, true, MIGRATION_35_36)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'article_event'")
+            .use { assertEquals("article_event should exist after 35→36", 1, it.count) }
+        // The ledger is read by article id on every index render, so the index is load-bearing.
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name = 'index_article_event_article_id'"
+        ).use { assertEquals("article_event index should exist after 35→36", 1, it.count) }
+    }
+
+    @Test
+    fun migrate36To37_addsAtomicWatchOutcomes() {
+        helper.createDatabase(dbName, 36).close()
+        val db = helper.runMigrationsAndValidate(dbName, 37, true, MIGRATION_36_37)
+        db.query("SELECT * FROM wear_command").use { assertEquals(0, it.count) }
+    }
+
+    @Test
+    fun migrate37To38_addsDraftIdentityAndHistoryIndices() {
+        helper.createDatabase(dbName, 37).close()
+        val db = helper.runMigrationsAndValidate(dbName, 38, true, MIGRATION_37_38)
+        db.query("SELECT draft_id FROM session").use { assertEquals(0, it.count) }
+    }
+
+    @Test
+    fun migrate38To39_addsTheSittingHeartbeat() {
+        // An open workout and its sittings, one closed and one still running, ride through untouched.
+        helper.createDatabase(dbName, 38).use { db ->
+            db.execSQL(
+                "INSERT INTO session (id, day_key, started_at, finished_at, total_volume_lb, pr_count, set_count, " +
+                    "deload_marked_here, tags, session_type, is_untracked, journal, intensity, active_seconds) " +
+                    "VALUES (7, 'upper-a', 1000, NULL, NULL, 0, 0, 0, '', 'normal', 0, '', '', 0)"
+            )
+            db.execSQL("INSERT INTO session_segment (id, session_id, started_at, ended_at) VALUES (1, 7, 1000, 61000)")
+            db.execSQL("INSERT INTO session_segment (id, session_id, started_at, ended_at) VALUES (2, 7, 90000, NULL)")
+        }
+        val db = helper.runMigrationsAndValidate(dbName, 39, true, MIGRATION_38_39)
+        db.query("SELECT id, session_id, started_at, ended_at, last_seen_at FROM session_segment ORDER BY id").use {
+            assertEquals(2, it.count)
+            it.moveToFirst()
+            assertEquals(listOf(1L, 7L, 1000L, 61000L), (0..3).map(it::getLong))
+            assertTrue(it.isNull(4))
+            it.moveToNext()
+            assertEquals(listOf(2L, 7L, 90000L), (0..2).map(it::getLong))
+            assertTrue(it.isNull(3))
+            assertTrue(it.isNull(4))
+        }
+    }
+
+    @Test
+    fun migrate39To40_foldsLegacyDayNamesIntoTheProgram() {
+        helper.createDatabase(dbName, 39).use { db ->
+            db.execSQL("INSERT INTO program_day (id, position, name, word, accent_hex, archetype) VALUES ('upper-a', 0, 'Upper A', 'PUSH', '#FFFFFF', 'upper-a')")
+            db.execSQL("INSERT INTO program_day (id, position, name, word, accent_hex, archetype) VALUES ('lower-a', 1, 'Lower A', 'QUADS', '#000000', 'lower-a')")
+            db.execSQL("INSERT INTO day_name_override (day_key, custom_name) VALUES ('upper-a', 'Chest day')")
+            // A blank override never showed as a name, so it must not blank the day's.
+            db.execSQL("INSERT INTO day_name_override (day_key, custom_name) VALUES ('lower-a', '  ')")
+        }
+        val db = helper.runMigrationsAndValidate(dbName, 40, true, MIGRATION_39_40)
+        db.query("SELECT id, position, name, word, accent_hex, archetype FROM program_day ORDER BY position").use {
+            assertEquals(2, it.count)
+            it.moveToFirst()
+            assertEquals(listOf("upper-a", "0", "Chest day", "PUSH", "#FFFFFF", "upper-a"), (0..5).map(it::getString))
+            it.moveToNext()
+            assertEquals(listOf("lower-a", "1", "Lower A", "QUADS", "#000000", "lower-a"), (0..5).map(it::getString))
+        }
+        db.query("SELECT * FROM day_name_override").use { assertEquals(0, it.count) }
+    }
+
+    @Test
+    fun migrateFullChain12To40_runsEveryStepInOrder() {
+        // The pairwise tests above each validate one hop. This runs the WHOLE locked chain in a
+        // single pass — a real v12 install upgrading straight to today's schema — so a gap or an
+        // out-of-order/incompatible step between any two versions is caught, not just each hop alone.
+        helper.createDatabase(dbName, 12).close()
+        helper.runMigrationsAndValidate(dbName, 40, true, *ALL_MIGRATIONS)
+    }
+
+    @Test
+    fun migrate16To17_addsCoachTables() {
+        helper.createDatabase(dbName, 16).close()
+        val db = helper.runMigrationsAndValidate(dbName, 17, true, MIGRATION_16_17)
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('coach_pass','coach_decision')"
+        ).use { assertEquals("coach tables should exist after 16→17", 2, it.count) }
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name = 'index_coach_decision_week_id'"
+        ).use { assertEquals("coach decision index should exist after 16→17", 1, it.count) }
+    }
+}
