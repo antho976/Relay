@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The owner's own server, over HTTPS and a WebSocket (sync, and bank connections through it).
+         No other host. Without this every connect fails before a request leaves the phone. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="Tally RS"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction"
+        android:theme="@style/Theme.TallyRs">
+        <!-- The whole app is libtally.so; TallyActivity (GameActivity with the file picker's and
+             the share sheet's callbacks) hosts it and its keyboard. Every configuration change
+             the app can follow by itself is listed in configChanges, so the activity is not
+             recreated for them (the app reads the dark theme and the window's size live). -->
+        <activity
+            android:name="com.tally.rs.TallyActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|screenLayout|smallestScreenSize|density|uiMode|navigation|fontScale|fontWeightAdjustment|locale|layoutDirection|colorMode|touchscreen|mcc|mnc|grammaticalGender">
+            <meta-data android:name="android.app.lib_name" android:value="tally" />
+            <!-- Plaid's Hosted Link sends the browser here when a bank is connected
+                 (docs/PLAID.md, completion_redirect_uri), which brings Tally RS back to the front. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="tallyrs" android:host="banks" />
+            </intent-filter>
+        </activity>
+
+        <!-- The home screen icon, two ways: the dark one when the person picks Dark in Appearance,
+             the light one when they pick Light; on System it stays as it is (a launcher deletes
+             the home-screen shortcut of an alias turned off, so it must not switch with the
+             phone's light and dark). TallyActivity.setIcon turns on the one that matches and off
+             the other, once no task the other started is alive (Android removes such a task when
+             its alias goes off). TallyActivity renames the alias in its intent to itself, so it
+             never looks up an alias that is off. -->
+        <activity-alias
+            android:name="com.tally.rs.LauncherDark"
+            android:targetActivity="com.tally.rs.TallyActivity"
+            android:icon="@mipmap/ic_launcher"
+            android:enabled="true"
+            android:exported="true">
+            <!-- GameActivity reads the library's name from the component that launched it. -->
+            <meta-data android:name="android.app.lib_name" android:value="tally" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name="com.tally.rs.LauncherLight"
+            android:targetActivity="com.tally.rs.TallyActivity"
+            android:icon="@mipmap/ic_launcher_light"
+            android:enabled="false"
+            android:exported="true">
+            <!-- GameActivity reads the library's name from the component that launched it. -->
+            <meta-data android:name="android.app.lib_name" android:value="tally" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Lends a backup or an export to the app it is shared with (res/xml/file_paths.xml). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the FileProvider lends to the app a backup or an export is shared with: only the cache's
+     shared/ folder, where Tally RS writes the file it is sharing. -->
+<paths>
+    <cache-path name="shared" path="shared/" />
+</paths>
