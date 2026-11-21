@@ -347,7 +347,7 @@ dependencies {
 
     // WebSocket client for the personal build's uploader only (src/personal/RELAY.md). Never on
     // the release classpath.
-    "personalImplementation"("com.squareup.okhttp3:okhttp:5.5.0")
+    "personalImplementation"("com.squareup.okhttp3:okhttp:5.5.1")
 
     // Test
     testImplementation(libs.junit)

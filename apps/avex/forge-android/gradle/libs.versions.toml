@@ -1,10 +1,10 @@
 [versions]
-guava = "33.7.2-android"
+guava = "33.8.0-android"
 protobuf-lite = "4.36.2"
 # Core toolchain
-agp = "9.4.1"
+agp = "9.5.2"
 kotlin = "2.4.21"
-ksp = "2.3.12"
+ksp = "2.3.14"
 
 # Compose
 compose-bom = "2026.09.00"
@@ -32,7 +32,7 @@ hilt-navigation-compose = "1.4.0"
 
 # Persistence
 room = "2.8.5"
-datastore = "1.2.1"
+datastore = "1.3.0"
 
 # Health Connect (on-device recovery signals — sleep, resting HR — for the coach)
 health-connect = "1.1.0"
@@ -56,7 +56,7 @@ coroutines = "1.11.0"
 # job can see, because it is the only one that opens a database.
 #
 # 1.11.0 wants Kotlin stdlib 2.3.20+, which the Kotlin 2.4 toolchain above satisfies.
-kotlinx-serialization = "1.11.0"
+kotlinx-serialization = "1.13.0"
 
 # Wear OS (W1–W4: watch app, tiles, complications, live HR)
 wear-compose = "1.7.1"
@@ -75,15 +75,15 @@ hilt-work = "1.4.0"
 # Test
 junit = "4.13.2"
 # Screenshot testing (Roborazzi runs on the JVM via Robolectric, so no emulator and no AGP coupling).
-roborazzi = "1.76.0"
-robolectric = "4.17"
+roborazzi = "1.79.0"
+robolectric = "4.18"
 androidx-test-junit = "1.3.0"
 espresso = "3.7.0"
 
 # Startup performance (Baseline Profile + Macrobenchmark — P2)
 profileinstaller = "1.4.1"
 benchmark = "1.5.0"
-uiautomator = "2.4.0"
+uiautomator = "2.4.1"
 
 [libraries]
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
