@@ -48,7 +48,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate Gradle wrapper checksum
-        uses: gradle/actions/wrapper-validation@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
+        uses: gradle/actions/wrapper-validation@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
 
       - name: No signing material or build output in the tree
         run: |
@@ -82,7 +82,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
         with:
           cache-read-only: ${{ github.ref_name != github.event.repository.default_branch }}
       - name: Install the Android platform (configuration needs it)
@@ -106,7 +106,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
         with:
           cache-read-only: ${{ github.ref_name != github.event.repository.default_branch }}
       - name: Install the Android platform
