@@ -314,6 +314,58 @@ impl Remote {
         let hello = move |g: &Greeting| Hello { v: WIRE_V, device: Some(device), proof: Some(wire::proof(&g.challenge, &token)), ..Default::default() };
         Ok(Remote::open(&link.url, hello, HANDSHAKE_TIMEOUT).await?.0)
     }
+
+    /// Connect with the link's credential, following the cloud copy to its owner's server when it
+    /// is no longer where the link points ([`following`]); `link.url` then names the new address,
+    /// which the round saves.
+    pub async fn connect_following(link: &mut Link) -> Result<Remote> {
+        following(link, |l| async move { Remote::connect(&l).await }, |r: &Remote| r.greeting.host_id.clone()).await
+    }
+}
+
+/// Where the link's room would be on the owner's server it connected through:
+/// `wss://<server>/relay/join/<room>`, as the server publishes its rendezvous (docs/CLOUD.md).
+/// `None` when the link names no server, its address has no room, or it already points there.
+fn on_server(link: &Link) -> Option<String> {
+    let server = crate::connect::normalize(link.server.as_deref()?);
+    let room = link.url.rsplit_once("/join/")?.1;
+    if room.is_empty() || room.contains(['/', '?', '#']) {
+        return None;
+    }
+    let base = match server.split_once("://")? {
+        ("http", host) => format!("ws://{host}"),
+        (_, host) => format!("wss://{host}"),
+    };
+    let url = format!("{base}/relay/join/{room}");
+    (url != link.url).then_some(url)
+}
+
+/// Dial the link's address; if that fails and the link has an owner's server, dial the same room
+/// there. The cloud copy moves with the server (it moved off Render on 2026-11-04 and this PC's
+/// link kept dialing the old host for two weeks), so the link follows it, but only to the engine
+/// it paired with: its `host_id` must be the link's, and the credential must be accepted there.
+/// On success `link.url` is the address that answered; any other outcome is the first error.
+async fn following<T, F, Fut>(link: &mut Link, dial: F, host_id: impl Fn(&T) -> String) -> Result<T>
+where
+    F: Fn(Link) -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let first = match dial(link.clone()).await {
+        Ok(remote) => return Ok(remote),
+        Err(e) => e,
+    };
+    let Some(url) = on_server(link) else { return Err(first) };
+    let moved = Link { url: url.clone(), ..link.clone() };
+    let remote = match dial(moved).await {
+        Ok(remote) => remote,
+        Err(e) => return Err(first.context(format!("and the same room on its server ({url}): {e:#}"))),
+    };
+    if host_id(&remote) != link.host_id {
+        return Err(first.context(format!("its server ({url}) answers as another cloud engine ({}), not the one this PC paired with", host_id(&remote))));
+    }
+    tracing::info!(from = %link.url, to = %url, "the cloud copy answers at its server's address; the link follows it");
+    link.url = url;
+    Ok(remote)
 }
 
 /// What the door's refusal codes mean here (`bridge.rs`).
@@ -993,7 +1045,7 @@ pub async fn round(socket: &Path, path: &Path, pc_name: &str) -> Result<Report> 
     };
     let outcome = async {
         let mut pc = Local::connect(socket).await?;
-        let mut cloud = Remote::connect(&link).await?;
+        let mut cloud = Remote::connect_following(&mut link).await?;
         let cloud_name = device_name("Cloud", &link.host);
         let mut save = |l: &Link| if keep(l, path)? { Ok(()) } else { Err(anyhow!("the cloud link was removed during the round")) };
         // The two halves are independent: a held or refused money round must not keep Avex's
@@ -1045,7 +1097,8 @@ fn wakes(line: &str, pc_name: &str) -> bool {
 /// the merging loop for each change, until the connection fails. `reconnected` wakes it once on
 /// connecting too, for what landed while there was no connection.
 async fn listen_once(link: &Link, pc_name: &str, wake: &tokio::sync::mpsc::Sender<()>, reconnected: bool) -> Result<()> {
-    let mut cloud = Remote::connect(link).await?;
+    // A moved address is followed here too; the next round saves it.
+    let mut cloud = Remote::connect_following(&mut link.clone()).await?;
     cloud.call("bus.subscribe", json!({"events": ["money.changed", "gym.changed"]})).await?;
     tracing::debug!("cloud link listening for changes");
     if reconnected {
@@ -1220,6 +1273,64 @@ mod tests {
                 Err(e) => panic!("{e}"),
             }
         }
+    }
+
+    fn on_server_link(url: &str, server: Option<&str>) -> Link {
+        Link { url: url.into(), server: server.map(Into::into), ..link() }
+    }
+
+    #[test]
+    fn the_room_is_looked_for_on_the_server_the_link_connected_through() {
+        let old = "wss://antho-s-bot-8dve.onrender.com/relay/join/0c83";
+        assert_eq!(on_server(&on_server_link(old, Some("https://anthobot.bid"))).as_deref(), Some("wss://anthobot.bid/relay/join/0c83"));
+        assert_eq!(on_server(&on_server_link(old, Some("anthobot.bid/dashboard"))).as_deref(), Some("wss://anthobot.bid/relay/join/0c83"));
+        assert_eq!(on_server(&on_server_link("ws://127.0.0.1:1/join/r", Some("http://127.0.0.1:3901"))).as_deref(), Some("ws://127.0.0.1:3901/relay/join/r"));
+        // Already there, no server, or no room: nothing to follow.
+        assert_eq!(on_server(&on_server_link("wss://anthobot.bid/relay/join/0c83", Some("https://anthobot.bid"))), None);
+        assert_eq!(on_server(&on_server_link(old, None)), None);
+        assert_eq!(on_server(&on_server_link("wss://x/host/r", Some("https://anthobot.bid"))), None);
+        assert_eq!(on_server(&on_server_link("wss://x/join/", Some("https://anthobot.bid"))), None);
+        assert_eq!(on_server(&on_server_link("wss://x/join/r/../y", Some("https://anthobot.bid"))), None);
+    }
+
+    /// A dial that answers, as the cloud engine `host_id`, only at the addresses in `up`.
+    fn dial_up(up: &'static [(&'static str, &'static str)]) -> impl Fn(Link) -> std::future::Ready<Result<String>> {
+        move |l: Link| std::future::ready(up.iter().find(|(u, _)| *u == l.url).map(|(_, h)| h.to_string()).ok_or_else(|| anyhow!("{}: 503", l.url)))
+    }
+
+    #[tokio::test]
+    async fn a_link_follows_its_cloud_copy_to_the_server_only_when_it_is_the_same_engine() {
+        let old = "wss://old.example/relay/join/r";
+        let new = "wss://anthobot.bid/relay/join/r";
+        let base = || Link { host_id: "h".into(), ..on_server_link(old, Some("https://anthobot.bid")) };
+        let id = |h: &String| h.clone();
+
+        // Still where it was: nothing moves.
+        let mut l = base();
+        assert_eq!(following(&mut l, dial_up(&[("wss://old.example/relay/join/r", "h")]), id).await.unwrap(), "h");
+        assert_eq!(l.url, old);
+
+        // Moved with its server: followed, and the link now names the new address.
+        let mut l = base();
+        assert_eq!(following(&mut l, dial_up(&[("wss://anthobot.bid/relay/join/r", "h")]), id).await.unwrap(), "h");
+        assert_eq!(l.url, new);
+
+        // Another engine in that room on the server: refused, and the link keeps its address.
+        let mut l = base();
+        let e = following(&mut l, dial_up(&[("wss://anthobot.bid/relay/join/r", "other")]), id).await.unwrap_err();
+        assert!(format!("{e:#}").contains("another cloud engine"), "{e:#}");
+        assert_eq!(l.url, old);
+
+        // Neither answers: the first error, with the second beside it.
+        let mut l = base();
+        let e = following(&mut l, dial_up(&[]), id).await.unwrap_err();
+        assert!(format!("{e:#}").contains("old.example") && format!("{e:#}").contains("anthobot.bid"), "{e:#}");
+        assert_eq!(l.url, old);
+
+        // A link with no server has nowhere else to look.
+        let mut l = Link { server: None, ..base() };
+        assert!(following(&mut l, dial_up(&[("wss://anthobot.bid/relay/join/r", "h")]), id).await.is_err());
+        assert_eq!(l.url, old);
     }
 
     fn link() -> Link {
