@@ -1,0 +1,19 @@
+{
+  "name": "remotion-vignettes",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "check": "node tools/check-compositions.mjs",
+    "test": "npm run check"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@remotion/cli": "^4.0.536",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "remotion": "^4.0.536"
+  }
+}

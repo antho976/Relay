@@ -1,0 +1,128 @@
+package com.forge.app.ui.programbuilder
+
+import com.forge.app.data.db.entities.ProgramDay
+import com.forge.app.data.db.entities.ProgramSlot
+
+/** One exercise in the in-memory builder. [uid] is a stable UI/list key; [libId] is the persisted
+ *  [com.forge.app.program.ExerciseLibrary] id. */
+data class BuilderExercise(
+    val uid: String,
+    val libId: String,
+    val name: String,
+    val muscle: String,
+    val sets: Int,
+    val reps: String
+)
+
+/** One day in the in-memory builder. [key] is the stable program day id used for persistence + history
+ *  attribution (kept across renames/reorders); [uid] is the transient list key. [word] is the original
+ *  spine word from the loaded plan, kept as a fallback so editing a day whose archetype isn't one of
+ *  the builder's [DAY_TYPES] doesn't blank its word on save. */
+data class BuilderDay(
+    val uid: String,
+    val key: String,
+    val name: String,
+    val archetype: String,
+    val accentHex: String,
+    val exercises: List<BuilderExercise>,
+    val word: String = "",
+    /**
+     * Weekdays this day is trained on (0 = Monday … 6 = Sunday); empty = no fixed day. A set, not
+     * one value, because the schedule allows the same workout twice a week.
+     */
+    val weekdays: Set<Int> = emptySet()
+)
+
+/**
+ * Which of the day editor's dialogs/sheets is open. Held by the ViewModel (not `remember`ed in the
+ * screen) and persisted with the draft, so a rotation or a process kill mid-edit brings back the
+ * sheet the user was in, not just the list behind it. An exercise-scoped dialog names its row by
+ * [BuilderExercise.uid]; the screen closes it itself when that uid is no longer in the day.
+ */
+sealed interface DayDialog {
+    data object None : DayDialog
+    data object Rename : DayDialog
+    data object AddExercises : DayDialog
+    data class SetsReps(val exerciseUid: String) : DayDialog
+    data class Swap(val exerciseUid: String) : DayDialog
+}
+
+/** Day types — drive the spine word + the derived subtitle/warmup (via the repository's archetypeMeta). */
+val DAY_TYPES: List<Triple<String, String, String>> = listOf(
+    Triple("fb", "Full body", "FULL"),
+    Triple("push", "Push", "PUSH"),
+    Triple("pull", "Pull", "PULL"),
+    Triple("legs", "Legs", "LEGS"),
+    Triple("upper", "Upper", "UPPER"),
+    Triple("lower", "Lower", "LOWER"),
+    Triple("arms", "Arms", "ARMS")
+)
+
+/** Default day identity colours, cycled as days are added. */
+val DAY_ACCENTS: List<String> = listOf("#E85D4A", "#D4A017", "#5B9279", "#7B6CB5", "#4A90D9", "#C0567A")
+
+/** Max characters for a day name — keeps the big home/day-card title from overflowing the screen. */
+const val MAX_DAY_NAME = 24
+
+/** Rep-range presets in the sets/reps sheet; any other stored string renders as Custom. */
+val REP_PRESETS: List<String> = listOf("4-6", "6-8", "8-12", "10-15", "12-20")
+
+/** Sets a day plans in total — the day anchor's right meta ("14 SETS"). */
+val BuilderDay.totalSets: Int get() = exercises.sumOf { it.sets }
+
+/** Name for a duplicated day: "Upper A" → "Upper A 2" (then 3…), bumped past [taken] names and
+ *  trimmed so suffix + base always fit [MAX_DAY_NAME]. Pure — testable. */
+fun copyName(base: String, taken: Set<String>): String {
+    var n = 2
+    while (true) {
+        val suffix = " $n"
+        val cand = base.take(MAX_DAY_NAME - suffix.length).trimEnd() + suffix
+        if (cand !in taken) return cand
+        n++
+    }
+}
+
+/** Normalize a stored archetype to its base type — stored keys can carry a split suffix (e.g.
+ *  "upper-a"/"lower-b"), matching how the repository's archetypeMeta strips it. */
+internal fun baseArchetype(archetype: String): String = archetype.substringBefore('-').lowercase()
+
+internal fun wordFor(archetype: String): String =
+    DAY_TYPES.firstOrNull { it.first == baseArchetype(archetype) }?.third ?: ""
+
+/** Pure mapping from the edited model to persistable rows (positions = list order). Testable. */
+fun List<BuilderDay>.toEntities(): Pair<List<ProgramDay>, List<ProgramSlot>> {
+    val days = ArrayList<ProgramDay>(size)
+    val slots = ArrayList<ProgramSlot>()
+    forEachIndexed { i, d ->
+        days += ProgramDay(
+            id = d.key, position = i, name = d.name.trim().take(MAX_DAY_NAME).ifBlank { "Day ${i + 1}" },
+            // Derive the word from the type, but keep the loaded plan's original word for an archetype
+            // outside DAY_TYPES (wordFor returns "") so editing never blanks a day's spine word.
+            word = wordFor(d.archetype).ifBlank { d.word }, accentHex = d.accentHex, archetype = d.archetype
+        )
+        d.exercises.forEachIndexed { j, e ->
+            slots += ProgramSlot(
+                id = "${d.key}-$j", dayId = d.key, position = j,
+                exerciseLibId = e.libId, sets = e.sets, reps = e.reps
+            )
+        }
+    }
+    return days to slots
+}
+
+/**
+ * The weekly schedule the builder's weekday picks describe, or null when no day has one (the plan
+ * then runs in sequence). One weekday holds one day — [ProgramBuilderViewModel.toggleDayWeekday]
+ * keeps that true — so this is a straight placement. Pure — testable.
+ */
+fun List<BuilderDay>.toSchedule(): List<String>? {
+    if (all { it.weekdays.isEmpty() }) return null
+    val slots = MutableList(com.forge.app.domain.schedule.WeeklySchedule.SLOTS) { "" }
+    forEach { d -> d.weekdays.filter { it in slots.indices }.forEach { slots[it] = d.key } }
+    return slots
+}
+
+/** Short weekday list for a day ("Mon · Thu"), or null when it has no fixed day. */
+fun BuilderDay.weekdayLabel(): String? =
+    weekdays.sorted().takeIf { it.isNotEmpty() }
+        ?.joinToString(" · ") { com.forge.app.domain.schedule.WeeklySchedule.WEEKDAY_SHORT[it] }

@@ -1,0 +1,392 @@
+package com.forge.app.ui.gym.train
+
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.forge.app.core.time.Clock
+import com.forge.app.data.repo.CustomizationRepository
+import com.forge.app.data.repo.GoalRepository
+import com.forge.app.data.repo.TrophyRepository
+import com.forge.app.data.repo.WorkoutRepository
+import com.forge.app.program.Equipment
+import com.forge.app.program.Program
+import com.forge.app.service.WorkoutSessionBridge
+import com.forge.app.ui.gym.train.state.CrossDaySessionInfo
+import com.forge.app.ui.gym.train.state.DayUiEvent
+import com.forge.app.ui.gym.train.state.DayUiState
+import com.forge.app.ui.nav.Routes
+import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import android.content.Context
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.debounce
+
+@HiltViewModel
+class DayViewModel @Inject constructor(
+    internal val workoutRepo: WorkoutRepository,
+    internal val customizationRepo: CustomizationRepository,
+    internal val programCustomRepo: com.forge.app.data.repo.ProgramCustomizationRepository,
+    internal val trophyRepo: TrophyRepository,
+    internal val goalRepo: GoalRepository,
+    internal val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
+    internal val warmupRepo: com.forge.app.data.repo.WarmupRepository,
+    internal val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
+    internal val blockRepo: com.forge.app.data.repo.BlockRepository,
+    internal val clock: Clock,
+    @ApplicationContext internal val appContext: Context,
+    internal val bridge: WorkoutSessionBridge,
+    internal val timerHolder: com.forge.app.service.wear.SessionTimerHolder,
+    internal val wearFocusHolder: com.forge.app.service.wear.WearFocusHolder,
+    savedStateHandle: SavedStateHandle
+) : ViewModel() {
+
+    private val requestedDayKey: String = savedStateHandle.get<String>(Routes.ARG_DAY_KEY)
+        ?: error("dayKey missing from SavedStateHandle")
+    internal val dayPlan = Program.day(requestedDayKey)
+    // Use the resolved plan's own key, not the requested one. If the requested key is stale (the
+    // program regenerated since it was issued), Program.day() falls back to a real day — pinning
+    // dayKey to that day keeps the session attribution, warmup lookups and rendered plan in lockstep
+    // instead of logging this session under a key whose plan we never showed.
+    internal val dayKey: String = dayPlan.key
+    internal val skipWarmup: Boolean = savedStateHandle.get<Boolean>(Routes.ARG_SKIP_WARMUP) ?: false
+
+    // The app-scoped shared timer (W1): the wrist mirrors it and wrist skip/+30 commands act on it,
+    // so the day screen CONSUMES the singleton instead of owning a private instance. Cleanup moved
+    // from VM-scope death to the explicit session end (stopSessionService stops it).
+    internal val restTimer = timerHolder.controller
+
+    /**
+     * The running rest, exposed on its own rather than copied into [state]: it ticks every second,
+     * and a copy per tick recomposed the whole day screen once a second for most of a workout.
+     */
+    val restTimerState: kotlinx.coroutines.flow.StateFlow<com.forge.app.domain.timer.RestTimerState?> =
+        restTimer.state
+
+    /** Personal rest-correction factors (engine System 2). Neutral until the init load lands. */
+    internal var restTuning: com.forge.app.domain.adapt.RestTuning =
+        com.forge.app.domain.adapt.RestTuning.NEUTRAL
+
+    /** User's default rest bases (Session settings) — canonical until the init load lands. */
+    internal var restBaseCompound: Int = com.forge.app.program.SessionEstimate.COMPOUND_REST
+    internal var restBaseIsolation: Int = com.forge.app.program.SessionEstimate.ISOLATION_REST
+
+    /** Per-exercise step calibration (auto-coach Phase 2). Neutral until the init load lands. */
+    internal var stepCalibration: com.forge.app.domain.coach.StepCalibration =
+        com.forge.app.domain.coach.StepCalibration.NEUTRAL
+
+    /** Today's readiness scale (engine System 6). Null = neutral / below the data gates. */
+    internal var readiness: com.forge.app.domain.adapt.Recommendation.ReadinessScale? = null
+
+    /**
+     * The active training block's phase, or null when there is no block (H-02).
+     *
+     * The phase reached the plan's set counts and the served deload week and never the weight on
+     * the bar, so the same bout got the same load target in Accumulate, Intensify, Peak and Deload.
+     * Loaded beside readiness and composed with it by [com.forge.app.domain.coach.BlockPhase.composedLoadScale].
+     */
+    internal var blockPhase: com.forge.app.domain.coach.BlockPhase? = null
+
+    /**
+     * The athlete's life state today, for the comeback ramp after a layoff. Loaded beside readiness
+     * (which reads the same state) and composed into every weight suggestion, so the card's "try"
+     * weight carries the same ease as the pre-session brief.
+     */
+    internal var life: com.forge.app.domain.coach.LifeEvents.State =
+        com.forge.app.domain.coach.LifeEvents.State.NONE
+
+    /** The rest interval being measured right now: opened on set log, closed by the next set. */
+    internal var openRestEvent: OpenRestEvent? = null
+
+    /**
+     * Logged-set id → the suggestion-outcome row its logging recorded (first set of an exercise
+     * while a suggestion chip showed). Undoing or deleting that set removes the sample, so a mis-tap
+     * that is then corrected leaves only the corrected set's outcome for the coach's step
+     * calibration. Touched only on the main dispatcher.
+     */
+    internal val suggestionOutcomeBySetId = mutableMapOf<Long, Long>()
+
+    /** "Not this workout" suppression for the post-swap dislike prompt — resets with the VM (i.e. when
+     *  the training screen is left and re-entered), matching a per-session scope without persisting. */
+    internal var dislikePromptSuppressedThisSession = false
+
+    /** Slot ids with a swap currently in flight — dedupes a double-fired swap of either scope, so a
+     *  persistent one can't stack two dislike prompts and neither can insert a second
+     *  logged_exercise row for the slot (see `DaySwapHandlers.applySessionSwap`). Touched only on
+     *  the main dispatcher (event handling). */
+    internal val swapsInFlight = mutableSetOf<String>()
+
+    /** Serialises lazy logged_exercise creation — see [ensureLoggedExercise]. */
+    internal val loggedExerciseMutex = kotlinx.coroutines.sync.Mutex()
+
+    /**
+     * Exercises with a LOG SET write in flight — the UI half of the double-tap guard.
+     *
+     * The write path is now atomic in the database, so a second tap can no longer fork a slot or
+     * duplicate a set index. It would still log a SECOND SET, which is what the user asked for
+     * literally and never means: the CTA stays enabled through a write that takes several round
+     * trips (rest prescription, row creation, insert, PR pass, rebuild), and a firm double tap on a
+     * button that has not visibly changed lands twice. Mirrors `swapsInFlight` above and the
+     * finishJob / exportJob guards elsewhere. Touched only on the main dispatcher.
+     */
+    internal val logSetsInFlight = mutableSetOf<String>()
+
+    internal val _state = MutableStateFlow(
+        DayUiState(dayPlan = dayPlan, displayName = dayPlan.defaultName)
+    )
+    val state: StateFlow<DayUiState> = _state.asStateFlow()
+
+    internal val _navigation = Channel<DayNavigationEffect>(Channel.BUFFERED)
+    val navigationEffects = _navigation.receiveAsFlow()
+
+    /** One-shot transient messages surfaced as a snackbar (e.g. "can't swap after logging sets"). */
+    internal val _messages = Channel<String>(Channel.BUFFERED)
+    val messages = _messages.receiveAsFlow()
+
+    internal var undoClearJob: Job? = null
+
+    /** Stamps this sitting's segment while the screen is open (see [startSegmentHeartbeat]). */
+    internal var segmentHeartbeatJob: Job? = null
+
+    /** The lift the swiped-away set's row was logging, so its Undo can't land under a swap. */
+    internal var deletedSetExerciseId: String? = null
+
+    /** In-flight "I have N minutes" fit or its undo — one at a time, so two quick taps can't
+     *  interleave their skip writes and leave a mix of both fits behind. */
+    internal var timeFitJob: Job? = null
+
+    /** In-flight finish (FINISH WORKOUT / save-and-exit). The controls stay enabled until the
+     *  summary lands, and the finish path is ~8 DB round-trips, so without this a double tap ran the
+     *  whole thing twice — mirroring SessionDetailViewModel's exportJob/reLogJob guards. */
+    internal var finishJob: Job? = null
+
+    /**
+     * Set once an exit (back, discard, resume later, cross-day go back, COMPLETE on the summary)
+     * starts, and never cleared: the ViewModel dies with the screen it is leaving (audit
+     * 2026-09-26, live-session double tap). Every exit trigger stays tappable until its DB writes
+     * finish, so a double tap used to send two PopBacks, and the second one popped the hub and left
+     * a blank screen. Touched only on the main dispatcher.
+     */
+    internal var leaving = false
+
+    /**
+     * The coroutine starting or resuming this day's session (init, or the cross-day "discard and
+     * start"). Held so Back during "Loading session…" can cancel it instead of letting it finish
+     * behind a closed screen and leave an orphan session plus its notification (audit 2026-09-26).
+     */
+    internal var beginJob: Job? = null
+
+    /** What [beginJob]'s start wrote, recorded even when the start is cancelled right after. */
+    internal var startedSession: com.forge.app.data.repo.StartedSession? = null
+
+    init {
+        var prevTimerFinished = false
+        viewModelScope.launch {
+            restTimer.state.collect { timer ->
+                val justFinished = !prevTimerFinished && (timer?.isFinished == true)
+                prevTimerFinished = timer?.isFinished == true
+                if (justFinished) bridge.notifyTimerDone()
+            }
+        }
+        beginJob = viewModelScope.launch {
+            // Only one session is active at a time. If a *different* day's workout is still in
+            // progress, prompt (resume it, or discard & start this one) instead of silently
+            // resuming the wrong day's sets under this plan.
+            //
+            // A workout untouched for half a day is filed to history first, exactly as the start below
+            // would file it. Asked first, the prompt offered "Discard & start" on last night's
+            // session, and discarding deletes its logged sets.
+            workoutRepo.closeStaleSession()
+            val active = workoutRepo.activeSession()
+            if (active != null && active.dayKey != dayKey) {
+                val otherName = Program.days.firstOrNull { it.key == active.dayKey }?.defaultName
+                    ?: active.dayKey
+                _state.update { it.copy(isLoading = false, crossDaySession = CrossDaySessionInfo(active.dayKey, otherName)) }
+                return@launch
+            }
+            beginSessionForThisDay()
+        }
+        // The wrist writes sets straight into Room through SetLogUseCase — it never goes through
+        // this ViewModel. WatchSessionMirror observes Room so the WATCH stays current, but the
+        // phone screen only ever rebuilt from its own actions. So a set logged on the wrist was
+        // invisible here, and the next setIndex was computed from a list that did not contain it.
+        //
+        // Compare complete rows: ratings can change without adding a set. The delayed UI comparison
+        // still avoids rebuilding cards that a local write already reconciled.
+        viewModelScope.launch {
+            var job: Job? = null
+            // Keyed on the session id alone: collecting the whole state re-ran this on every
+            // rest-timer tick just to find the id unchanged.
+            _state.map { it.sessionId }.distinctUntilChanged().collect { sid ->
+                job?.cancel()
+                job = if (sid == null) null else viewModelScope.launch {
+                    workoutRepo.observeSetsForSession(sid)
+                        .distinctUntilChanged()
+                        // Debounced so a LOCAL log does not land here. Logging on the phone writes
+                        // to Room and then refreshes just that card via the fast single-exercise
+                        // path; without the delay this observer would see the write first and fire
+                        // a full rebuild of every card on every set, undoing that optimisation.
+                        // A wrist-written set has no such follow-up, so it is still unreconciled
+                        // when the delay expires and gets the refresh it needs.
+                        .debounce(1_500)
+                        .collect { dbSets ->
+                            val uiSets = _state.value.exercises.flatMap { it.loggedSets }
+                            if (dbSets.toSet() != uiSets.toSet()) refreshExercises()
+                        }
+                }
+            }
+        }
+        viewModelScope.launch {
+            val dbWarmup = warmupRepo.customWarmupForDay(dayKey)
+            if (dbWarmup != null) {
+                _state.update { it.copy(customWarmupItems = dbWarmup) }
+                rebuildWarmupProtocol()
+            } else {
+                settingsRepo.getCustomWarmup(dayKey).collect { custom ->
+                    _state.update { it.copy(customWarmupItems = custom) }
+                    rebuildWarmupProtocol()
+                }
+            }
+        }
+        // The user's default rest bases (Session settings) — kept LIVE (collect, not a one-shot read)
+        // so changing them in Settings mid-session applies without recreating the screen. The cached
+        // vars keep the per-set timer math synchronous (no DB on the set-logging hot path).
+        viewModelScope.launch {
+            settingsRepo.restCompoundSeconds.collect { restBaseCompound = it }
+        }
+        viewModelScope.launch {
+            settingsRepo.restIsolationSeconds.collect { restBaseIsolation = it }
+        }
+        viewModelScope.launch {
+            settingsRepo.coachMode.combine(settingsRepo.coachEnabled) { mode, on ->
+                on && com.forge.app.domain.coach.CoachMode.fillsTargets(mode)
+            }.collect { fills -> _state.update { it.copy(coachFillsTargets = fills) } }
+        }
+        // Live too, so changing when the effort question is asked applies to the session in progress.
+        viewModelScope.launch {
+            settingsRepo.effortPrompt.collect { mode -> _state.update { it.copy(effortPrompt = mode) } }
+        }
+        // Learn the user's realized-rest factors once per screen — calibrated against the user's CURRENT
+        // rest bases so the learned realized÷base factor matches the base the timer prescribes from
+        // (a non-default base would otherwise mis-scale every prescription). Pure/synchronous after.
+        viewModelScope.launch {
+            val cBase = settingsRepo.restCompoundSeconds.first()
+            val iBase = settingsRepo.restIsolationSeconds.first()
+            restTuning = com.forge.app.domain.adapt.RestAdvisor.tuning(
+                com.forge.app.domain.adapt.RestAdvisor.samples(
+                    workoutRepo.recentRestEvents(),
+                    compoundBase = cBase,
+                    isolationBase = iBase
+                ) { Program.exercise(it) }
+            )
+        }
+        // Learn the user's suggestion-outcome calibration once per screen (auto-coach Phase 2) —
+        // same pattern as restTuning: gated/neutral below samples, no DB on the hot path.
+        viewModelScope.launch {
+            stepCalibration = com.forge.app.domain.coach.SuggestionCalibrator.calibrate(
+                workoutRepo.recentSuggestionOutcomes()
+            )
+        }
+        // Today's readiness (engine System 6) — folded into weight suggestions on NORMAL
+        // days; an explicit intensity pick outranks it. Refresh the cards once it lands so
+        // already-built chips pick it up.
+        viewModelScope.launch {
+            life = adaptationRepo.lifeEvents()
+            readiness = adaptationRepo.readinessScale(life = life)
+            blockPhase = runCatching { blockRepo.active() }.getOrNull()
+                ?.let { com.forge.app.domain.coach.BlockPhase.fromCode(it.phase) }
+            val eased = life.loadScale < 1.0
+            if (eased) _state.update { it.copy(easingBackNote = life.rampNote) }
+            if ((readiness != null || blockPhase != null || eased) && _state.value.exercises.isNotEmpty()) {
+                refreshExercises()
+            }
+        }
+        // Equipment + dislikes + curated freeze drive the swap picker's candidate pool (program-unlock
+        // Phase 4 + frozen-preset). A curated preset (Developer's) locks swaps to its pool too.
+        viewModelScope.launch {
+            settingsRepo.availableEquipment
+                .combine(settingsRepo.dislikedExercises) { equip, disliked -> equip to disliked }
+                .combine(settingsRepo.frozenExerciseIds) { (equip, disliked), frozen ->
+                    Triple(equip, disliked, frozen)
+                }
+                .collect { (equip, disliked, frozen) ->
+                    val available = equip.mapNotNull {
+                        runCatching { Equipment.valueOf(it) }.getOrNull()
+                    }.toSet()
+                    _state.update {
+                        it.copy(
+                            swapAvailableEquipment = available,
+                            swapDislikedIds = disliked,
+                            swapFrozenIds = frozen
+                        )
+                    }
+                }
+        }
+    }
+
+    fun onEvent(event: DayUiEvent) {
+        when (event) {
+            is DayUiEvent.ToggleExpanded, is DayUiEvent.LogSet, is DayUiEvent.LogSameAsLast,
+            is DayUiEvent.DeleteSet, is DayUiEvent.RestoreDeletedSet, is DayUiEvent.ForgetDeletedSet,
+            is DayUiEvent.EditSet,
+            is DayUiEvent.UpdateNote, is DayUiEvent.ToggleSkipped, is DayUiEvent.OpenGoalSetter,
+            is DayUiEvent.SetGoal, is DayUiEvent.ClearGoal, is DayUiEvent.DismissGoalSetter,
+            is DayUiEvent.SetExerciseUnit, is DayUiEvent.SetRestTimerOverride,
+            is DayUiEvent.ConfirmWeightJump, is DayUiEvent.DismissWeightJump,
+            is DayUiEvent.UpdateJournal, is DayUiEvent.SetPinnedNote,
+            is DayUiEvent.ToggleSetDifficultyTag, is DayUiEvent.WarmupReaction,
+            is DayUiEvent.MoveExercise, is DayUiEvent.LongPressExercise,
+            is DayUiEvent.DismissQuickActions, is DayUiEvent.OpenAddExercisePicker,
+            is DayUiEvent.CloseAddExercisePicker, is DayUiEvent.AddUnplannedExercise,
+            is DayUiEvent.ToggleAmrap, is DayUiEvent.ToggleAssisted, is DayUiEvent.ToggleFailure,
+            is DayUiEvent.SetSetType, is DayUiEvent.SetDropAnnotation, is DayUiEvent.SetRpe,
+            is DayUiEvent.AddBonusSet, is DayUiEvent.FinishExerciseEarly, is DayUiEvent.SetUseKg,
+            is DayUiEvent.SetSupersetGroup, is DayUiEvent.ShowWarmupSuggester,
+            is DayUiEvent.ShowPlateCalculator, is DayUiEvent.DismissTrainingHelper,
+            is DayUiEvent.LogBreak -> handleExerciseEvent(event)
+
+            is DayUiEvent.OpenSwapPicker, is DayUiEvent.CloseSwapPicker,
+            is DayUiEvent.PickSwapForSession, is DayUiEvent.PickSwapPersistent,
+            is DayUiEvent.ClearPersistentSwap, is DayUiEvent.DislikeSwappedExercise,
+            is DayUiEvent.DismissDislikePrompt, is DayUiEvent.SuppressDislikePromptThisSession,
+            is DayUiEvent.NeverAskDislikePrompt -> handleSwapEvent(event)
+
+            is DayUiEvent.CompleteWarmup, is DayUiEvent.ToggleWarmupStep, is DayUiEvent.SkipWarmup,
+            is DayUiEvent.DisableWarmupToday, is DayUiEvent.DisableWarmupWeek -> handleWarmupEvent(event)
+
+            is DayUiEvent.RestTimerOpen, is DayUiEvent.RestTimerClose,
+            is DayUiEvent.RestTimerPause, is DayUiEvent.RestTimerResume,
+            is DayUiEvent.RestTimerReset, is DayUiEvent.RestTimerSkip,
+            is DayUiEvent.RestTimerAddSeconds, is DayUiEvent.RestTimerSetTo -> handleTimerEvent(event)
+
+            is DayUiEvent.FinishWorkout, is DayUiEvent.DismissSummary,
+            is DayUiEvent.ConfirmFinishUntouched, is DayUiEvent.DismissFinishUntouched,
+            is DayUiEvent.RequestBack, is DayUiEvent.ConfirmDiscard,
+            is DayUiEvent.DismissDiscardConfirm, is DayUiEvent.SaveAndExit,
+            is DayUiEvent.LeaveAndResume, is DayUiEvent.CrossDayDiscardAndStart,
+            is DayUiEvent.CrossDayGoBack,
+            is DayUiEvent.UndoLastSet, is DayUiEvent.SetSessionType,
+            is DayUiEvent.SetUntracked, is DayUiEvent.SetIntensity,
+            is DayUiEvent.ConfirmPreSessionPicker,
+            is DayUiEvent.FitToTime, is DayUiEvent.UndoFitToTime,
+            is DayUiEvent.ApplyOrderingSuggestion,
+            is DayUiEvent.DismissOrderingSuggestion -> handleSessionEvent(event)
+        }
+    }
+}
+
+sealed interface DayNavigationEffect {
+    data object PopBack : DayNavigationEffect
+}

@@ -1,0 +1,130 @@
+import java.util.Properties
+
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
+}
+
+// Same keystore, same guard as :app — an unconfigured machine still builds (release unsigned).
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) keystorePropertiesFile.inputStream().use { load(it) }
+}
+val hasReleaseKeystore = keystorePropertiesFile.exists() &&
+    listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+        .all { !keystoreProperties.getProperty(it).isNullOrBlank() }
+
+android {
+    namespace = "com.forge.wear"
+    compileSdk = 37
+
+    defaultConfig {
+        // SAME applicationId as the phone — required for Play wear-track distribution and for the
+        // Data Layer to pair the two apps. The wear APK is distinguished by its own versionCode
+        // scheme: phone versionCode + 100_000 (Play requires distinct codes per APK on one listing).
+        applicationId = "com.quietsoftware.avex"
+        minSdk = 30 // Wear OS 3+ (every Galaxy Watch since 2021; the plan's locked floor).
+        // Matches :app. Play's annual target-API rule reaches API 36 for updates at the end of
+        // August 2026, and a listing is only as current as its least-current APK — a wear APK
+        // left at 35 would block the whole release. compileSdk is deliberately ahead at 37: it
+        // only widens the APIs available at compile time, and the AndroidX generation this module
+        // depends on requires it. targetSdk is what opts into runtime behaviour, so it moves on
+        // Play's schedule, not on AndroidX's.
+        targetSdk = 36
+        versionCode = 100_091
+        versionName = "0.9"
+    }
+
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                // rootProject.file, not file(...). `file(...)` is MODULE-relative, so one
+                // documented path could not be right for both modules at once: the example says
+                // storeFile is relative to forge-android/, which made it resolve under app/ here and
+                // wear/ next door — and a wrong path fails configuration for EVERY build type,
+                // debug included, because signingConfigs is evaluated at configuration time.
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (hasReleaseKeystore) signingConfig = signingConfigs.getByName("release")
+        }
+        debug {
+            // MUST match the phone's debug suffix — the Data Layer only pairs identical package names.
+            applicationIdSuffix = ".debug"
+            isDebuggable = true
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    buildFeatures { compose = true }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        // No -Xannotation-default-target flag: param-property (KT-73255) is the default from Kotlin
+        // 2.4, which is the behaviour this module was pinned to before, so dropping the flag changes
+        // nothing Hilt, Room or kotlinx-serialization see.
+    }
+}
+
+dependencies {
+    constraints {
+        implementation(libs.protobuf.lite) { because("Patch protobuf parser denial of service (Dependabot 13)") }
+    }
+    implementation(project(":shared"))
+
+    implementation(libs.androidx.core.ktx)
+    // The wearable/ongoing libs pull a pre-1.3 fragment transitively, which trips lint-vital's
+    // InvalidFragmentVersionForActivityResult on registerForActivityResult — pin a modern one.
+    implementation("androidx.fragment:fragment:1.9.1")
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.activity.compose)
+
+    // Compose for Wear OS (round-screen material + foundation) over the shared Compose BOM.
+    implementation(platform(libs.compose.bom))
+    implementation(libs.compose.ui)
+    implementation(libs.compose.ui.graphics)
+    implementation(libs.wear.compose.material)
+    implementation(libs.wear.compose.foundation)
+
+    // Wearable Data Layer (Bluetooth IPC to the phone; no network on either APK).
+    implementation(libs.play.services.wearable)
+    implementation(libs.kotlinx.coroutines.play.services)
+    implementation(libs.kotlinx.coroutines.android)
+
+    // Session presence on the watch face + one-tap return (W1).
+    implementation(libs.wear.ongoing)
+    implementation(libs.androidx.core.splashscreen)
+
+    // Tiles + complications (W4).
+    implementation(libs.wear.tiles)
+    implementation(libs.protolayout)
+    implementation(libs.protolayout.material)
+    implementation(libs.protolayout.expression)
+    implementation(libs.watchface.complications.data.source.ktx)
+    implementation(libs.concurrent.futures.ktx)
+
+    // Live HR during sessions via Health Services (W3). Its API returns Guava ListenableFutures,
+    // so guava-android must be on the classpath for the await() bridge.
+    implementation(libs.health.services.client)
+    implementation(libs.guava)
+
+    testImplementation(libs.junit)
+}

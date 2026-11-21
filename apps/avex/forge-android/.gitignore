@@ -1,0 +1,17 @@
+*.iml
+.gradle/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.keystore
+*.jks
+keystore.properties
+
+# Keep the gradle wrapper jar (will be added by Android Studio on first sync)
+!gradle/wrapper/gradle-wrapper.jar

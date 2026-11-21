@@ -1,0 +1,261 @@
+package com.forge.shared.protocol
+
+import com.forge.shared.weight.ProtocolWeightUnit
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+
+/**
+ * The wear protocol payloads (v1). Every DTO carries its protocol version as `v`; decode through
+ * [WearCodec] so an unknown-newer version is dropped with a surface, never a crash. All fields
+ * the watch renders arrive AUTHORITATIVE from the phone (display-name strings, preformatted
+ * weight text) — the watch never resolves names or units itself.
+ */
+
+/** The active-session mirror ([WearProtocol.PATH_SESSION_LIVE]). Absent DataItem = no session. */
+@Serializable
+data class SessionLiveDto(
+    val v: Int = WearProtocol.VERSION,
+    val sessionId: Long,
+    val dayTitle: String,
+    /** Current exercise (the one the next set belongs to); null between exercises / session done. */
+    val exerciseId: String? = null,
+    val exerciseName: String? = null,
+    /** 1-based position of the current exercise among the session's exercises. */
+    val exerciseIndex: Int = 0,
+    val exerciseCount: Int = 0,
+    /** Next set number (1-based) and the planned set count for the current exercise. */
+    val setIndex: Int = 0,
+    val setTotal: Int = 0,
+    /** Prescribed target, preformatted by the phone ("185 lb", "3 plates"); null = none. */
+    val targetWeightText: String? = null,
+    /** Rep target text (a range like "8-12" or a number); null = none. */
+    val targetRepsText: String? = null,
+    /** Sets already logged for the current exercise — the ticks. */
+    val loggedSets: Int = 0,
+    /** The most recently logged set was a PR — the watch's gold moment. */
+    val lastSetWasPr: Boolean = false,
+    /** Wall-clock anchor the watch derives session-elapsed from locally (never a ticking stream). */
+    val startedAtMs: Long,
+    /** Bezel-adjust metadata: unit + step in display unit + plate mode (shared step table). */
+    val unit: ProtocolWeightUnit = ProtocolWeightUnit.LB,
+    val weightStep: Double = 5.0,
+    val isPlates: Boolean = false,
+    /** Bodyweight exercise — no weight to adjust, the wrist pins its adjust target to reps. */
+    val isBodyweight: Boolean = false
+)
+
+/** Rest-timer state ([WearProtocol.PATH_TIMER_STATE]). The watch renders the countdown locally
+ *  from [endAtMs]; no per-second sync. Absent DataItem = no timer. */
+@Serializable
+data class TimerStateDto(
+    val v: Int = WearProtocol.VERSION,
+    /** Wall-clock instant the countdown reaches zero, on the PHONE's clock. Authoritative while running. */
+    val endAtMs: Long,
+    val totalSeconds: Int,
+    val paused: Boolean = false,
+    /** Remaining seconds AT PAUSE TIME (meaningful only while [paused]). */
+    val pausedRemainingSeconds: Int = 0,
+    /**
+     * The phone's wall clock when this DataItem was published.
+     *
+     * [endAtMs] is an absolute instant on the PHONE's clock, and the watch was rendering it against
+     * its OWN — so any skew between the two was a direct error in the wrist countdown, with nothing
+     * in the payload to correct against. With this the watch can work in durations instead:
+     * `remaining = (endAtMs − publishedAtMs) − (watchNow − watchReceivedAt)`.
+     *
+     * Additive with a default, so an older phone's payload still decodes and the watch falls back
+     * to the raw absolute instant (0 = not carried).
+     */
+    val publishedAtMs: Long = 0L
+)
+
+/** Theme + units ([WearProtocol.PATH_CONFIG]) — the user's single accent, delivered so the watch
+ *  can obey the design doctrine's ladder; monochrome mode maps accent onto near-white. */
+@Serializable
+data class ConfigDto(
+    val v: Int = WearProtocol.VERSION,
+    /** "#RRGGBB" accent hex; empty = the app default accent. */
+    val accentHex: String = "",
+    val accentEnabled: Boolean = true,
+    val unit: ProtocolWeightUnit = ProtocolWeightUnit.LB,
+    val supportsHrAcknowledgements: Boolean = false
+)
+
+/** The tile/idle-home payload ([WearProtocol.PATH_GLANCE_TODAY]), stamped with its data age. */
+@Serializable
+data class GlanceTodayDto(
+    val v: Int = WearProtocol.VERSION,
+    /** Legacy field: signed load adjustment, never a 0-100 readiness score. New phones leave null. */
+    val readinessPercent: Int? = null,
+    /** Suggested load change in percentage points, -5 through +5; null below data gates. */
+    val loadAdjustmentPercent: Int? = null,
+    /** Next planned day's display name; null in freestyle / no-plan mode. */
+    val nextDayTitle: String? = null,
+    /**
+     * Today's directive headline from the phone's coach (Coach v3 B2) — "Push day", "Rest today".
+     * Null on older phone builds, and the tile falls back to [nextDayTitle], so the wrist degrades
+     * to next-planned-day rather than going blank.
+     */
+    val directiveHeadline: String? = null,
+    /** One short line of why, when the phone has one. */
+    val directiveReason: String? = null,
+    val weekSessionsDone: Int = 0,
+    /** Weekly session target; null when no real plan. */
+    val weekSessionsPlanned: Int? = null,
+    /** Preformatted week volume ("12.4k lb"); null until a set lands. */
+    val weekVolumeText: String? = null,
+    /** When the phone computed this — the tile's data-age stamp. */
+    val computedAtMs: Long
+)
+
+/** Log the current set ([WearProtocol.PATH_CMD_LOG_SET]). As-prescribed taps send no overrides;
+ *  bezel-adjusted sets send the final values the wrist showed. */
+@Serializable
+data class LogSetCommand(
+    val v: Int = WearProtocol.VERSION,
+    /** UUID — the phone dedups on it; a re-send after a BT flap can never double-log. */
+    val commandId: String,
+    /** The session the watch believes is active — the phone drops a stale-session command. */
+    val sessionId: Long,
+    /** The exercise the watch showed; the phone validates it's still current. */
+    val exerciseId: String? = null,
+    /** Weight as the display text the wrist showed ("187.5", plate count on plate exercises);
+     *  null = log as prescribed. */
+    val weightText: String? = null,
+    /** Reps override; null = as prescribed. */
+    val reps: Int? = null,
+    /** The user confirm-tapped a big weight jump the phone flagged ([CmdAckDto.needsConfirm]). */
+    val confirmedJump: Boolean = false
+)
+
+/** Rest-timer control ([WearProtocol.PATH_CMD_TIMER]). */
+@Serializable
+data class TimerCommand(
+    val v: Int = WearProtocol.VERSION,
+    val commandId: String,
+    val action: Action
+) {
+    @Serializable
+    enum class Action {
+        // Explicit wire strings — see ProtocolWeightUnit. These cross the Data Layer watch → phone.
+        @SerialName("SKIP") SKIP,
+        @SerialName("ADD_30") ADD_30,
+        @SerialName("START") START
+    }
+}
+
+/**
+ * Undo a just-logged set ([WearProtocol.PATH_CMD_UNDO_SET]).
+ *
+ * [setId] is the set the wrist's undo row was OFFERING to undo, taken from that set's log ack.
+ * Without it the phone resolved the victim itself as "the session's most recent set", so a set
+ * logged on the phone in between — or a second tap on the wrist — deleted a set the user never
+ * pointed at. Null only from an older wrist build, which falls back to the previous behaviour.
+ */
+@Serializable
+data class UndoSetCommand(
+    val v: Int = WearProtocol.VERSION,
+    val commandId: String,
+    val sessionId: Long,
+    val setId: Long? = null
+)
+
+/** Rate a just-logged set ([WearProtocol.PATH_CMD_SET_RPE]). [setId] comes off the log ack, so
+ *  the rating lands on exactly that set — a later set or a finished session can't misdirect it. */
+@Serializable
+data class SetRpeCommand(
+    val v: Int = WearProtocol.VERSION,
+    val commandId: String,
+    val setId: Long,
+    /** The phone's RPE scale: 6.0–10.0 in 0.5 steps. */
+    val rpe: Double
+)
+
+/** A batch of live HR samples during an active session ([WearProtocol.PATH_HR_BATCH], W3). */
+@Serializable
+data class HrBatchDto(
+    val v: Int = WearProtocol.VERSION,
+    val sessionId: Long,
+    val samples: List<Sample>,
+    /** The watch's cumulative measured calories for this exercise so far (Health Services);
+     *  null when the watch isn't reporting them. Replaces the phone's MET estimate at finish. */
+    val totalKcal: Double? = null,
+    /**
+     * The WATCH's wall clock when this batch was sent.
+     *
+     * Samples are stamped on the watch's clock and were filtered on the phone against a PHONE-clock
+     * session start, so a watch running a few seconds behind — routine, since Wear time sync is
+     * periodic — had the first seconds of every trace silently dropped at every session start. With
+     * this the phone can measure the offset and compare like with like. 0 = an older watch build
+     * that doesn't send it; the phone then falls back to a fixed skew tolerance.
+     */
+    val sentAtMs: Long = 0L,
+    val batchId: String? = null
+) {
+    @Serializable
+    data class Sample(val atMs: Long, val bpm: Int)
+}
+
+/** Confirms that a bounded HR batch has been validated and persisted (or terminally discarded). */
+@Serializable
+data class HrBatchAckDto(val v: Int = WearProtocol.VERSION, val sessionId: Long, val batchId: String)
+
+/** Command acknowledgement ([WearProtocol.PATH_CMD_ACK]) — a DataItem so it survives a flap. */
+@Serializable
+data class CmdAckDto(
+    val v: Int = WearProtocol.VERSION,
+    val commandId: String,
+    val ok: Boolean,
+    /** Why a command was refused, for the wrist's quiet error line ("stale session"). */
+    val reason: String? = null,
+    /** The acked set was a PR — the wrist's gold flash + double-tick rides the confirmation. */
+    val pr: Boolean = false,
+    /** Refused pending a confirm tap (big weight jump): resend with [LogSetCommand.confirmedJump]. */
+    val needsConfirm: Boolean = false,
+    /** The logged set's row id on a successful log — the wrist's RPE command targets it. */
+    val setId: Long? = null,
+    val atMs: Long,
+    /**
+     * Which command this answers — one of the `KIND_*` constants below.
+     *
+     * The wrist reads [setId] as "a set was just logged, offer undo and a rating for it". An RPE ack
+     * carries the id of the set that was just RATED, so saving a rating re-armed that same row: the
+     * undo/rate prompt reopened and the set-logged haptic fired for a set logged minutes earlier.
+     * Two different events cannot be told apart by a field they both legitimately fill, so the ack
+     * says which it is.
+     *
+     * Additive with an empty default, which is what an older phone's ack decodes to; the watch
+     * falls back to its own record of what it sent, so an un-upgraded phone is no worse off.
+     */
+    val kind: String = ""
+) {
+    companion object {
+        /** Answering `/cmd/log-set`: [setId] names a NEWLY logged set. */
+        const val KIND_LOG_SET = "log-set"
+        /** Answering `/cmd/set-rpe`: [setId] names the set that was rated, already known to the wrist. */
+        const val KIND_SET_RPE = "set-rpe"
+        /** Answering `/cmd/undo-set`. */
+        const val KIND_UNDO_SET = "undo-set"
+        /** Answering `/cmd/timer`. */
+        const val KIND_TIMER = "timer"
+    }
+}
+
+/** The watch felt the timer-done buzz ([WearProtocol.PATH_HAPTIC_ACK]) — phone stays silent. */
+@Serializable
+data class HapticAckDto(
+    val v: Int = WearProtocol.VERSION,
+    /** The endAtMs of the timer instance that buzzed, so a late ack can't silence a NEW timer. */
+    val timerEndAtMs: Long,
+    val atMs: Long
+)
+
+/** New watches can also read the signed adjustment emitted by older phones. */
+val GlanceTodayDto.loadAdjustment: Int?
+    get() = (loadAdjustmentPercent ?: readinessPercent)?.takeIf { it in -5..5 }
+
+fun loadAdjustmentText(value: Int?): String = when {
+    value == null -> "–"
+    value > 0 -> "+$value%"
+    else -> "$value%"
+}

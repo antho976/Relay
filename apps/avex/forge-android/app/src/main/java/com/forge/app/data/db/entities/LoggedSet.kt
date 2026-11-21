@@ -1,0 +1,76 @@
+package com.forge.app.data.db.entities
+
+import androidx.room.ColumnInfo
+import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
+import androidx.room.PrimaryKey
+
+/**
+ * One performed set within a logged exercise.
+ *
+ * Both `weightText` and `weightLb` are stored:
+ *  - `weightText` is the user's NOTATION, always expressed in POUNDS. It preserves how they
+ *    entered the set ("BW", "2 plates", "45") rather than only its numeric value, and it is what
+ *    the UI shows back after converting to the display unit.
+ *  - `weightLb` is the parsed numeric value used by aggregates (volume, PR detection, strength
+ *    curves). `null` when the input is non-numeric (e.g. "BW") — aggregates should treat that as
+ *    0 lb or skip it.
+ *
+ * **`weightText` is in lb, not in the user's display unit.** Write it through
+ * [com.forge.app.domain.units.toStoredWeightText], which converts a kg/stones entry to its lb
+ * value and passes non-numeric notation through untouched. This is load-bearing rather than a
+ * convention: [com.forge.app.domain.session.SetLogUseCase] reads a stored `weightText` back out of
+ * the database and re-parses it with `WeightParser` as pounds, so a row written in the display
+ * unit does not merely display wrong — it is re-logged at the wrong weight.
+ *
+ * This doc previously said "what the user typed verbatim", which contradicted
+ * `toStoredWeightText`'s own contract and is how the freestyle logger came to store display-unit
+ * text (2026-08-25).
+ */
+@Entity(
+    tableName = "logged_set",
+    foreignKeys = [
+        ForeignKey(
+            entity = LoggedExercise::class,
+            parentColumns = ["id"],
+            childColumns = ["logged_exercise_id"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("logged_exercise_id")]
+)
+data class LoggedSet(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "logged_exercise_id") val loggedExerciseId: Long,
+    @ColumnInfo(name = "set_index") val setIndex: Int,
+    @ColumnInfo(name = "weight_text") val weightText: String,
+    @ColumnInfo(name = "weight_lb") val weightLb: Double? = null,
+    @ColumnInfo(name = "reps") val reps: Int,
+    @ColumnInfo(name = "completed_at") val completedAt: Long,
+    /** Per-set difficulty tag (#68): "easy" | "hard" | null (no tag). */
+    @ColumnInfo(name = "difficulty_tag") val difficultyTag: String? = null,
+    /** AMRAP marker (#140): reps field = achieved count; intent was max reps. */
+    @ColumnInfo(name = "is_amrap") val isAmrap: Boolean = false,
+    /** Assisted set (#141): bands / spotter — excluded from all-time PR comparison. */
+    @ColumnInfo(name = "is_assisted") val isAssisted: Boolean = false,
+    /** Failure marker (#18): set ended at muscular failure. */
+    @ColumnInfo(name = "to_failure") val toFailure: Boolean = false,
+    /**
+     * Advanced set type (#142): null = normal | "warmup" | "drop" | "myo" | "rest_pause"
+     * | "negative" | "paused" | "partial" | "isometric" | "cluster" | "emom".
+     * "warmup" is a label only — warm-up sets still count toward volume/PRs like any set (GYMAP-46).
+     */
+    @ColumnInfo(name = "set_type") val setType: String? = null,
+    /** Mid-set weight drop annotation (#143): "weightLb2/reps2" e.g. "35/4". */
+    @ColumnInfo(name = "drop_annotation") val dropAnnotation: String? = null,
+    /** Per-set RPE (Rate of Perceived Exertion), 1.0–10.0 in 0.5 steps. */
+    @ColumnInfo(name = "rpe") val rpe: Double? = null,
+    /**
+     * Timed-hold duration in whole seconds (GYMAP-51): planks, dead hangs, wall sits, L-sits.
+     * `null` for a normal rep-based set. When set, `reps` is not a meaningful count and this set is
+     * excluded from every weight×reps aggregate (volume, e1RM, PR) so it can't pollute strength
+     * stats — see the timed-hold guards in [com.forge.app.data.db.dao.LoggedSetDao].
+     */
+    @ColumnInfo(name = "duration_seconds") val durationSeconds: Int? = null
+)

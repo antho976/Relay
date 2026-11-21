@@ -1,0 +1,181 @@
+package com.forge.app.ui.profile
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import com.forge.app.ui.common.window.ModalBottomSheet
+import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import com.forge.app.data.db.entities.BodyFatEntry
+import com.forge.app.ui.common.ForgeFieldRow
+import com.forge.app.ui.common.ForgeGroupSection
+import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.ForgeRowGroup
+import com.forge.app.ui.common.ForgeSecondaryCapsule
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
+import java.util.Locale
+import com.forge.app.domain.units.filterDecimalInput
+import com.forge.app.domain.units.storedUnlessEdited
+
+/** Sane manual-entry bounds for a body-fat % (essential-fat floor to severe-obesity ceiling). */
+internal const val MIN_BODY_FAT_PCT = 3.0
+internal const val MAX_BODY_FAT_PCT = 65.0
+
+/** Parse a typed body-fat % to a value inside the sane range, or null if blank / out of range. */
+internal fun parseSaneBodyFat(input: String): Double? =
+    input.trim().toDoubleOrNull()?.takeIf { it in MIN_BODY_FAT_PCT..MAX_BODY_FAT_PCT }
+
+/**
+ * Quick-log sheet for body fat % (GYMAP-62) — the sibling of [BodyweightLogSheet], lives on the
+ * Profile's BODY FAT section. Type a percentage (validated against a sane range), optionally
+ * backdate to any past day (the day's existing reading re-seeds the field so a missed day
+ * round-trips), and when Health Connect is connected AND you're on today, pull the latest reading
+ * with one tap. Saving closes the sheet; importing keeps it open so the result line is visible.
+ *
+ * Shares its surface, field treatment and backdating calendar with [BodyweightLogSheet] — the two
+ * sheets are the same modal and must not drift.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun BodyFatLogSheet(
+    entries: List<BodyFatEntry>,
+    canImport: Boolean,
+    message: String?,
+    onSave: (percent: Double, date: LocalDate) -> Unit,
+    onImport: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    val onBg = cs.onBackground
+    val muted = cs.onSurfaceVariant
+    val sheetState = rememberModalBottomSheetState()
+    val focus = LocalFocusManager.current
+
+    val today = remember { LocalDate.now() }
+    var date by remember { mutableStateOf(today) }
+    var showDatePicker by remember { mutableStateOf(false) }
+
+    // The reading already on the selected day (if any) — editing a past day shows what's there.
+    val entryForDate = remember(entries, date) { entries.lastOrNull { it.dateKey == date.toString() } }
+    // Seed the field from that day's entry, falling back to the latest reading (entries are oldest→newest).
+    val seed = entryForDate?.percent ?: entries.lastOrNull()?.percent
+
+    // Keyed on the day + seed so switching date re-seeds from that day, and a late flow emission still
+    // lands the prefill instead of leaving a stale value that fails validation and locks Save.
+    // Locale.US: this seeds the field below, so it is read back by the same parser. The bare
+    // format used the device locale and opened the sheet already holding "18,5" — a value the
+    // range check then rejected, on a device where the user had typed nothing.
+    val seedText = seed?.let { String.format(Locale.US, "%.1f", it) }
+    var input by remember(seed, date) { mutableStateOf(seedText ?: "") }
+
+    // An untouched field saves the stored reading, not its 0.1 rounding: re-saving an imported
+    // 18.47% rewrote it as 18.5 (the same rule the weigh-in sheet applies).
+    val parsed = storedUnlessEdited(input, seedText, seed?.takeIf { it in MIN_BODY_FAT_PCT..MAX_BODY_FAT_PCT }) {
+        parseSaneBodyFat(it)
+    }
+    val invalid = input.isNotBlank() && parsed == null
+
+    val isToday = date == today
+    val dateLabel = remember(date, today) {
+        val md = date.format(
+            DateTimeFormatter.ofPattern(if (date.year == today.year) "MMM d" else "MMM d, yyyy", Locale.getDefault())
+        ).uppercase()
+        if (isToday) "TODAY · $md"
+        else "${date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault()).uppercase()} · $md"
+    }
+    val supportingLine = when {
+        invalid -> "Enter ${MIN_BODY_FAT_PCT.toInt()}–${MAX_BODY_FAT_PCT.toInt()}%."
+        isToday -> "One entry per day, saving replaces today's."
+        else -> "One entry per day, saving replaces this day's."
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        // §3/§5: a modal is a `surface` fill (#15161B, #080808 on AMOLED). M3's own default is
+        // `surfaceContainerLow` — a tone this theme never defines, so it fell through to the
+        // baseline dark palette's #1D1B20: lighter and purple-leaning, which is exactly the pale
+        // grey slab that read wrong on the near-black page.
+        containerColor = cs.surface
+    ) {
+        Column(
+            Modifier.fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .imePadding()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Log body fat", style = MaterialTheme.typography.headlineSmall, color = onBg)
+                // The day is a filled capsule, the tappable idiom: tap to backdate to any past day.
+                BodyLogDateCapsule(dateLabel) { showDatePicker = true }
+            }
+            // The same group-and-footnote shape as the bodyweight sheet, so the two never drift.
+            ForgeGroupSection(label = null, footer = { BodyLogSupportingLine(supportingLine, invalid) }) {
+                ForgeRowGroup({
+                    ForgeFieldRow(
+                        label = "Body fat",
+                        value = input,
+                        onValueChange = { v -> input = filterDecimalInput(v) },
+                        placeholder = "0",
+                        suffix = "%",
+                        isError = invalid,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { focus.clearFocus() })
+                    )
+                })
+            }
+            // §8: the page's actions group at the END — one filled do-it-now capsule ① and its
+            // filled sidekick ②, nothing else.
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ForgePrimaryCapsule(
+                    label = "Save",
+                    onClick = { parsed?.let { onSave(it, date) } },
+                    enabled = parsed != null,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                // Import pulls the newest HC reading (dated by HC) — only meaningful on today, hidden while backdating.
+                if (canImport && isToday) {
+                    ForgeSecondaryCapsule(
+                        label = "Import latest from Health Connect",
+                        onClick = onImport,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+            message?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
+            }
+        }
+    }
+
+    if (showDatePicker) {
+        BodyLogDatePickerDialog(
+            date = date,
+            onPicked = { date = it },
+            onDismiss = { showDatePicker = false }
+        )
+    }
+}

@@ -1,0 +1,528 @@
+name: Avex
+
+# Everything that must be true before Avex is allowed to ship.
+#
+# Avex lives in apps/avex/ (it moved from antho976/Avex on 2026-11-20). This workflow runs only for
+# changes there, every `run:` step works from apps/avex (defaults below), so its helper scripts in
+# apps/avex/.github/scripts/ and every relative path in them are unchanged; paths given to actions
+# (`with: path:`, hashFiles) start at the repository root and carry the apps/avex/ prefix.
+#
+# Three jobs, cheapest first, each gating the next:
+#
+#   guard        ~30s   Wrapper checksum, no committed signing material, no committed build
+#                       output or tooling artifacts, and test_summary.py's own self check.
+#   verify       ~15m   The whole JVM gate: unit tests (all modules), screenshot goldens, Android
+#                       Lint, and both APK variants including a real R8 release.
+#   instrumented ~20m   The two things only a device can answer: the Room migration chain, and
+#                       whether the minified APK actually launches.
+#
+# Notes specific to this project:
+#  • The Gradle project lives in apps/avex/forge-android/  ->  `-p forge-android` from apps/avex.
+#  • The wrapper IS committed, so CI runs ./gradlew — the exact Gradle contributors run, with no
+#    chance of the two drifting. `guard` verifies its checksum before anything executes it.
+#  • gradle/gradle-daemon-jvm.properties pins the daemon to Java 21. Setting up 21 here is not
+#    cosmetic: with a 17 launcher, Gradle downloads an entire JDK from foojay.io on EVERY run —
+#    a minute of wall clock and a third-party host in the critical path of the build.
+#  • Release builds carry no signing secrets here; that is release.yml's job, and only on a tag.
+#    `verify` builds the release UNSIGNED to exercise R8. `instrumented` re-signs it with the debug
+#    key (-PforgeCiSmokeSigning) purely so it can be installed, because "R8 finished" and "R8
+#    produced something that runs" are different claims.
+#
+# Deliberately ONE job for all the JVM work rather than a fan-out of test/lint/assemble jobs. They
+# all depend on the same expensive :app compile (KSP + Hilt + Compose), so splitting them roughly
+# triples the compute to save wall clock. Split it the day latency costs more than minutes — the
+# steps are already independent of one another.
+
+on:
+  push:
+    branches: [main]
+    # Avex only. NB: apps/avex/.claude/** is deliberately NOT excluded. The design-doctrine parity
+    # suite reads .claude/DESIGN.md, so a doc-only edit there can absolutely turn the build red.
+    #
+    # Root marketing images only: `*` does not match `/`, so apps/avex/*.png is Avex's top level
+    # and nothing else, deliberately NOT `**/*.png`, which once also matched the 44 Roborazzi
+    # goldens under forge-android/: a PR that changed only goldens ran no CI and merged green.
+    # Keep the exclusions in step with IGNORED in apps/avex/.github/scripts/ci_scope.py.
+    paths:
+      - "apps/avex/**"
+      - "!apps/avex/docs/**"
+      - "!apps/avex/backups/**"
+      - "!apps/avex/.design-backups/**"
+      - "!apps/avex/.impeccable/**"
+      - "!apps/avex/remotion-*/**"
+      - "!apps/avex/*.png"
+      - "!apps/avex/*.jpg"
+      - "!apps/avex/*.mp4"
+      - "!apps/avex/PRODUCT.md"
+      - "!apps/avex/README.md"
+      - ".github/workflows/avex.yml"
+  pull_request:
+    branches: [main]
+    # Any change to Avex, docs included: Guard decides (ci_scope.py, the same list as above) whether
+    # the two build jobs have anything to do, and a job skipped by its own `if:` reports as passed,
+    # so a docs-only PR still gets its checks if they are ever made required.
+    paths:
+      - "apps/avex/**"
+      - ".github/workflows/avex.yml"
+  merge_group:
+  workflow_dispatch:
+  # Callable so release.yml gates a tag on this exact pipeline rather than on a copy that drifts.
+  workflow_call:
+    inputs:
+      ref:
+        # WHICH commit to test. A called workflow otherwise checks out the CALLER's ref, which for
+        # release.yml's workflow_dispatch is the branch the dispatch was made from — usually main —
+        # while the signing job checks out the selected tag. The release then tested one tree and
+        # signed another, and both jobs went green saying so. Empty on a push or a merge queue,
+        # where github.ref is already the thing under test.
+        description: "Git ref to check out. Defaults to the caller's ref."
+        required: false
+        type: string
+
+# Read-only, with no exceptions anywhere in this file. That is load-bearing: release.yml CALLS this
+# workflow, and a called workflow may not hold permissions the caller lacks — so the moment one job
+# here wanted contents:write, every release would have to grant it too. Anything needing write lives
+# in its own workflow (see dependency-graph.yml).
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: apps/avex
+
+concurrency:
+  # Supersede an outdated PR run, but never cancel main or a merge queue: those results are what
+  # "main is green" gets claimed from, and a cancelled run reads as a failed one.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  guard:
+    name: Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      build: ${{ steps.scope.outputs.build || 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Two commits so ci_scope.py can diff the PR's merge commit against its base parent.
+          fetch-depth: 2
+          # Pin the RUN's immutable commit. On pull_request this is its synthetic merge commit.
+          # The PR object's merge_commit_sha can still name the previous revision during a push:
+          # run 34670747736 executed a new workflow over the old PR tree and missed its new files.
+          # inputs.ref still wins for a release workflow call that explicitly selects a tag.
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Verify the checkout contains this PR revision
+        if: github.event_name == 'pull_request'
+        env:
+          EXPECTED_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/verify_ci_revision.py "$EXPECTED_PR_HEAD"
+
+      - name: Validate Gradle wrapper checksum
+        # The wrapper jar is a committed BINARY that every later step executes. Without this, a
+        # tampered wrapper reaching main would run with access to the release secrets one workflow
+        # over, and nothing else in the pipeline would notice.
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: No signing material in the tree
+        # keystore.properties and *.jks are gitignored, but gitignore only stops the accident
+        # nobody forced: `git add -f` defeats it silently. The Avex upload key cannot be rotated
+        # without breaking the update path for every existing install, so this is worth a job.
+        run: |
+          found=$(git ls-files -- '*.jks' '*.keystore' '*.p12' \
+                    'keystore.properties' '**/keystore.properties' \
+                    'google-play-service-account*.json' | grep -v '\.example$' || true)
+          if [ -n "$found" ]; then
+            echo "::error::Signing material is committed to the repository:"
+            echo "$found"
+            echo "Remove it, rotate the credential, and purge it from history."
+            exit 1
+          fi
+          echo "No keystores, no service accounts."
+
+      - name: No build output in the tree
+        # A committed build/ directory makes CI results depend on whatever was on someone's laptop.
+        #
+        # .kotlin/ is here for a related but distinct reason: it is where the Kotlin compiler drops
+        # crash logs, and four of them (~70 KB, containing absolute paths from two developer
+        # machines) were tracked in forge-android/ under a .gitignore rule that already excluded
+        # **/.kotlin/. gitignore only ever stops the NEXT one; nothing was enforcing the rule
+        # against files already added, so they survived every review and every green run.
+        run: |
+          found=$(git ls-files | grep -E '(^|/)(build|\.gradle|\.kotlin)/' || true)
+          if [ -n "$found" ]; then
+            echo "::error::Build output or tooling artifacts are committed:"
+            echo "$found"
+            exit 1
+          fi
+          echo "Clean."
+
+      - name: Test-summary self check
+        # test_summary.py is the only thing that turns a thousand XML files into a readable verdict,
+        # and it used to report "Tests — passed" over a suite whose result file it could not parse.
+        # A reporter that can lie about a failure needs its own test, and this one costs a second.
+        run: python3 .github/scripts/test_summary_test.py
+
+      - name: CI helper self checks
+        run: |
+          python3 .github/scripts/emulator_ready_test.py
+          python3 .github/scripts/verify_ci_revision_test.py
+          python3 .github/scripts/ci_scope_test.py
+
+      - name: Decide whether this PR changes anything the build reads
+        id: scope
+        # Only a PR can be docs-only here: push has its own paths-ignore, and a release call, a
+        # merge queue or a manual run always builds (the output defaults to true above).
+        if: github.event_name == 'pull_request'
+        run: python3 .github/scripts/ci_scope.py "$GITHUB_OUTPUT"
+
+  verify:
+    name: Verify (JVM)
+    needs: guard
+    # Skipped (and so passed) only for a PR that touches nothing but docs and root media.
+    if: needs.guard.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Pin the RUN's immutable commit. On pull_request this is its synthetic merge commit.
+          # The PR object's merge_commit_sha can still name the previous revision during a push:
+          # run 34670747736 executed a new workflow over the old PR tree and missed its new files.
+          # inputs.ref still wins for a release workflow call that explicitly selects a tag.
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          # Matches gradle/gradle-daemon-jvm.properties (toolchainVersion=21). The modules still
+          # COMPILE to 17 bytecode via their own jvmTarget — this only picks the JVM Gradle runs on.
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          # Only main writes the shared dependency/build cache, so a PR cannot poison what every
+          # other branch then restores.
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+          add-job-summary: on-failure
+
+      - name: Install the Android platform this build compiles against
+        # compileSdk 37 is newer than the runner image is guaranteed to carry. Installing it turns
+        # "the hosted image happened to have it" into a stated dependency, and keeps the failure
+        # legible on the day it does not.
+        #
+        # `android-37.0`, not `android-37`. Android platforms are minor-versioned now — the
+        # catalogue offers 36, 36.1, 37.0, 37.1 and 37.2 betas, and there is no bare `android-37`
+        # at all. Asking for one fails identically to asking for a version that does not exist.
+        #
+        # On failure it says WHICH platforms the runner can actually see. `sdkmanager` reports a
+        # package it cannot find as a one-line warning and a non-zero exit, which is
+        # indistinguishable from a network blip unless you can compare it against the catalogue —
+        # and the catalogue is the thing that decides whether a compileSdk bump is possible at all.
+        run: |
+          set -o pipefail
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
+          if ! "$sdkmanager" "platforms;android-37.0"; then
+            echo "::group::Platforms this runner can install"
+            "$sdkmanager" --list 2>/dev/null | grep -E "^\s*platforms;android-[0-9]+" | sort -u || true
+            echo "::endgroup::"
+            echo "::error::platforms;android-37.0 could not be installed. See the list above for what exists."
+            exit 1
+          fi
+
+      - name: Cache Robolectric runtime jars
+        # Robolectric fetches its android-all jars at TEST time into ~/.m2, outside Gradle's
+        # dependency resolution — so setup-gradle's cache does not cover them. Without this, every
+        # run re-downloads a few hundred MB and inherits Maven Central's bad days as flaky tests.
+        uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ runner.os }}-${{ hashFiles('apps/avex/forge-android/gradle/libs.versions.toml') }}
+          restore-keys: robolectric-${{ runner.os }}-
+
+      - name: Unit tests + screenshot goldens
+        # ONE invocation, not three, and with --continue: these tasks share the expensive :app
+        # compile, and running them together means a red doctrine rule cannot hide a broken golden,
+        # nor a broken golden a failing domain test. Reporting only whichever failed first makes one
+        # CI round-trip per bug the normal cost of a bad push.
+        #
+        # The steps AFTER this one are a deliberate fail-fast chain rather than more --continue:
+        # lint and assemble are separate task graphs, so running them on an already-red branch buys
+        # information at full price. Inside one graph, finish; between graphs, stop.
+        #
+        #  • testDebugUnitTest covers :app and :wear; :shared is a pure Kotlin/JVM library whose
+        #    task is `test` — without naming it, the protocol and rest-timer suites silently never
+        #    run here.
+        #  • verifyRoborazziDebug renders the archetype recipes at 100% and 200% font scale, on
+        #    Pearl and AMOLED, with and without accent, and diffs them against the goldens in
+        #    app/src/test/screenshots/. It catches what no static rule can: clipping, overlap and
+        #    spacing regressions. Re-record deliberately with :app:recordRoborazziDebug, and LOOK
+        #    at the diff.
+        #  • coverageReport reuses the very same test run to produce a JaCoCo report. It is a
+        #    MEASUREMENT, never a gate — no threshold is enforced, because a coverage number that
+        #    fails a build teaches people to write tests that touch lines rather than tests that
+        #    check behaviour.
+        #
+        # Tee'd to a file (with pipefail, so the pipe cannot swallow Gradle's exit code) so the
+        # "What failed" step below can read it. A COMPILE error produces no test XML at all, so
+        # without the log there is nothing for a reader to go on but a 900-line raw job log whose
+        # last 250 lines are cache bookkeeping.
+        shell: bash
+        run: |
+          set -o pipefail
+          ./forge-android/gradlew -p forge-android --continue \
+            testDebugUnitTest :shared:test :app:verifyRoborazziDebug :app:coverageReport \
+            2>&1 | tee "$RUNNER_TEMP/verify.log"
+
+      - name: Test summary
+        # A CI failure should be readable from the run page. Without this, the only record of WHICH
+        # of a thousand tests failed is a zip you have to download and open.
+        #
+        # It is also a gate, not only a report: the script exits non-zero when anything failed,
+        # which for a normal test failure merely agrees with the Gradle step above, and for an
+        # unreadable result file is the ONLY thing that notices. A test JVM that dies mid-write
+        # leaves a truncated TEST-*.xml behind and can still hand Gradle an exit code it reads as
+        # success; before this, that combination produced a green run and a summary headed
+        # "Tests — passed".
+        if: always()
+        run: python3 .github/scripts/test_summary.py >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test + coverage reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: |
+            apps/avex/forge-android/*/build/reports/tests/**
+            apps/avex/forge-android/*/build/test-results/**
+            apps/avex/forge-android/app/build/reports/jacoco/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload screenshot diffs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: roborazzi-diffs
+          path: apps/avex/forge-android/app/build/outputs/roborazzi/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Android Lint (release variant, phone + wear)
+        # The release variant specifically: lint-vital rules only run there, and those are the ones
+        # that fail a Play upload rather than merely annoying a reviewer.
+        #
+        # Runs even when the tests failed. Lint and the test suite are independent gates over the
+        # same compile, and skipping this one because the other went red means each round trip
+        # answers exactly one question: fix the test, wait fifteen minutes, and only then find out
+        # lint has thirteen errors of its own. The Gradle invocation above already passes
+        # `--continue` for the same reason one level down.
+        if: ${{ !cancelled() }}
+        run: ./forge-android/gradlew -p forge-android --continue :app:lintRelease :wear:lintRelease
+
+      - name: Upload lint reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lint-reports
+          path: apps/avex/forge-android/*/build/reports/lint-results-*.html
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Assemble debug + release
+        # assembleRelease is UNSIGNED here (this workflow holds no secrets) and exists to exercise
+        # R8: shrinking, obfuscation, and the keep rules that stop Room/DataStore enum round-trips
+        # from being renamed out from under the database.
+        #
+        # Also runs on a red job, for the reason lint does: an R8 keep-rule failure is a separate
+        # fact from a failing test, and waiting a cycle to learn it is a cycle spent.
+        if: ${{ !cancelled() }}
+        run: ./forge-android/gradlew -p forge-android assembleDebug assembleRelease
+
+      - name: The public release holds no INTERNET permission
+        # The privacy policy says Avex "physically cannot upload anything", and that is only true
+        # while the merged manifest of the release (the Play build) lacks INTERNET. Only the
+        # `personal` build type adds it. A library can add it through manifest merging without a
+        # line here changing, and since Avex moved into the Relay repository, next to the code that
+        # receives its uploads, a change meant for `personal` can land in main by mistake. Checked
+        # on the built APKs, phone and watch, because the merged manifest is the one that ships.
+        if: ${{ !cancelled() }}
+        run: |
+          aapt2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
+          status=0
+          for apk in forge-android/app/build/outputs/apk/release/*.apk \
+                     forge-android/wear/build/outputs/apk/release/*.apk; do
+            # Fails closed: no APK, or an APK aapt2 cannot read, is a failure, not a pass.
+            if [ ! -f "$apk" ]; then
+              echo "::error::No release APK at $apk to check."
+              status=1
+              continue
+            fi
+            if ! perms=$("$aapt2" dump permissions "$apk"); then
+              echo "::error::aapt2 could not read $apk."
+              status=1
+            elif grep -q "android.permission.INTERNET" <<<"$perms"; then
+              echo "::error::$apk asks for android.permission.INTERNET. The public build must not."
+              status=1
+            else
+              echo "$apk: no INTERNET."
+            fi
+          done
+          exit $status
+
+      - name: Upload debug APKs
+        uses: actions/upload-artifact@v7
+        with:
+          name: avex-debug-apk
+          path: |
+            apps/avex/forge-android/app/build/outputs/apk/debug/*.apk
+            apps/avex/forge-android/wear/build/outputs/apk/debug/*.apk
+          # error, not warn: this runs only after assembleDebug succeeded, so a missing APK means
+          # the output path moved and the artifact quietly stopped being published.
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: What failed
+        # The last thing this job prints, deliberately: everything after it is upload and cache
+        # bookkeeping, so the tail of the log is the answer rather than 250 lines of cache keys.
+        #
+        # Compile errors first (a broken build has no test results to summarise), then the failing
+        # test names, then lint's errors — pipeline order, so the tail of the log is the gate that
+        # actually stopped. All three are already on disk; this only makes them findable without
+        # downloading an artifact.
+        if: failure()
+        shell: bash
+        run: |
+          echo "::group::Compile errors"
+          # -A 4 because a javac error is not self-contained: "cannot find symbol" says nothing
+          # without the `symbol:` and `location:` lines that follow it, and when the file is
+          # generated (Hilt, Room) the digest otherwise names a path that exists on no branch and
+          # stops. Kotlin's "e:" lines already carry their message, so the context costs a few
+          # blank lines there and answers the question here.
+          grep -A 4 -E "^e: |: error: |Unresolved reference|FAILURE: Build failed" "$RUNNER_TEMP/verify.log" \
+            | head -80 || echo "(none — see the test failures below)"
+          echo "::endgroup::"
+          echo "::group::Failing tests"
+          grep -E "FAILED$|^\s+java\.lang\.AssertionError|tests completed," "$RUNNER_TEMP/verify.log" \
+            | head -60 || echo "(none)"
+          echo "::endgroup::"
+          echo "::group::Lint errors"
+          # Gradle prints lint's FIRST failure and stops, so a run with thirteen errors names one
+          # and hides twelve, and the rest exist only inside a zip you have to download. Every
+          # report line already carries the file, the line, the message and the check id, which is
+          # the whole answer. Errors only — the warnings are not what failed the build.
+          find forge-android -name 'lint-results-*.txt' -print0 2>/dev/null \
+            | xargs -0 -r grep -h ": Error: " \
+            | sort -u | head -60 || echo "(none — lint is not what failed)"
+          echo "::endgroup::"
+
+  instrumented:
+    name: Instrumented (emulator)
+    # Gated on verify: an emulator boot is the most expensive thing in this pipeline, and there is
+    # nothing to learn from running it against a branch whose unit tests are already red.
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Pin the RUN's immutable commit. On pull_request this is its synthetic merge commit.
+          # The PR object's merge_commit_sha can still name the previous revision during a push:
+          # run 34670747736 executed a new workflow over the old PR tree and missed its new files.
+          # inputs.ref still wins for a release workflow call that explicitly selects a tag.
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: true
+
+      - name: Install the Android platform this build compiles against
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$sdkmanager" "platforms;android-37.0" > /dev/null
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Build everything the emulator will need
+        # Done BEFORE the emulator exists. R8 on this app takes minutes, and every one of them
+        # spent with a booted emulator idling is a minute of the job's timeout burned for nothing.
+        # -PforgeCiSmokeSigning signs the minified APK with the DEBUG key; it is opt-in and refuses
+        # to apply when a real keystore is configured, so a genuine release can never pick it up.
+        run: >
+          ./forge-android/gradlew -p forge-android
+          :app:assembleDebugAndroidTest :app:assembleDebug
+          :app:assembleRelease -PforgeCiSmokeSigning
+
+      - name: Cache the AVD snapshot
+        # Booting a cold system image is ~4 minutes, every run, forever; a cached snapshot makes it
+        # seconds. Keyed on the image so a bump invalidates it rather than silently testing the old
+        # API level.
+        uses: actions/cache@v6
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-34-google_apis-x86_64
+
+      - name: Create the AVD snapshot
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "AVD snapshot created."
+
+      - name: Room migration test + release smoke launch
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          working-directory: apps/avex
+          script: .github/scripts/instrumented.sh
+
+      - name: Upload instrumented test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: connected-test-report
+          path: |
+            apps/avex/forge-android/app/build/reports/androidTests/**
+            apps/avex/forge-android/app/build/outputs/androidTest-results/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload logcat from the smoke launch
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-logcat
+          path: apps/avex/smoke-logcat.txt
+          if-no-files-found: ignore
+          retention-days: 14

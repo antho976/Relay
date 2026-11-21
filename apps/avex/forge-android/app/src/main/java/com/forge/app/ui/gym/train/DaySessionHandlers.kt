@@ -1,0 +1,478 @@
+package com.forge.app.ui.gym.train
+
+import androidx.lifecycle.viewModelScope
+import com.forge.app.domain.volume.VolumeCalculator
+import com.forge.app.ui.gym.train.state.DayUiEvent
+import com.forge.app.ui.gym.train.state.ExerciseHighlight
+import com.forge.app.ui.gym.train.state.SessionSummary
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+internal fun DayViewModel.handleSessionEvent(event: DayUiEvent) {
+    when (event) {
+        is DayUiEvent.FinishWorkout -> finishWorkout()
+        is DayUiEvent.ConfirmFinishUntouched -> {
+            _state.update { it.copy(finishUntouched = emptyList()) }
+            finishWorkout(untouchedConfirmed = true)
+        }
+        is DayUiEvent.DismissFinishUntouched -> _state.update { it.copy(finishUntouched = emptyList()) }
+        is DayUiEvent.DismissSummary -> dismissSummary(event.mood, event.tags, event.journal)
+        is DayUiEvent.RequestBack -> requestBack()
+        is DayUiEvent.ConfirmDiscard -> discardAndExit()
+        is DayUiEvent.DismissDiscardConfirm -> _state.update { it.copy(showDiscardConfirm = false) }
+        is DayUiEvent.LeaveAndResume -> leaveAndResume()
+        is DayUiEvent.CrossDayDiscardAndStart -> crossDayDiscardAndStart()
+        is DayUiEvent.CrossDayGoBack -> crossDayGoBack()
+        is DayUiEvent.SaveAndExit -> saveAndExit()
+        is DayUiEvent.UndoLastSet -> {
+            val setId = _state.value.undoableSetId ?: return
+            undoClearJob?.cancel()
+            _state.update { it.copy(undoableSetId = null) }
+            viewModelScope.launch {
+                val set = findSet(setId) ?: return@launch
+                val exId = findExerciseIdForSet(setId)
+                cancelRestForRemovedSet(setId)
+                workoutRepo.deleteSet(set)
+                dropSuggestionOutcomeForRemovedSet(setId)
+                if (exId != null) refreshExercise(exId) else refreshExercises()
+            }
+        }
+        is DayUiEvent.SetSessionType -> {
+            _state.update { it.copy(sessionType = event.type) }
+            _state.value.sessionId?.let { id ->
+                viewModelScope.launch { workoutRepo.setSessionType(id, event.type) }
+            }
+        }
+        is DayUiEvent.SetUntracked -> {
+            _state.update { it.copy(isUntracked = event.v) }
+            _state.value.sessionId?.let { id ->
+                viewModelScope.launch { workoutRepo.setUntracked(id, event.v) }
+            }
+        }
+        is DayUiEvent.SetIntensity -> {
+            _state.update { it.copy(sessionIntensity = event.intensity) }
+            _state.value.sessionId?.let { id ->
+                viewModelScope.launch { workoutRepo.setIntensity(id, event.intensity) }
+            }
+        }
+        is DayUiEvent.ConfirmPreSessionPicker -> _state.update { it.copy(showPreSessionPicker = false) }
+        is DayUiEvent.FitToTime -> fitToTime(event.minutes)
+        is DayUiEvent.UndoFitToTime -> undoFitToTime()
+        is DayUiEvent.ApplyOrderingSuggestion -> applyOrderingSuggestion()
+        is DayUiEvent.DismissOrderingSuggestion -> {
+            val suggestion = _state.value.orderingSuggestion
+            _state.update { it.copy(orderingSuggestion = null) }
+            // Logged so the engine mutes this day's suggestion for its cooldown window.
+            if (suggestion != null) viewModelScope.launch { adaptationRepo.logAdviceDismissed(suggestion.id) }
+        }
+        else -> {}
+    }
+}
+
+/**
+ * "I have [minutes] today": skip whatever of the remaining work doesn't fit, through the same
+ * per-exercise skip the user can toggle by hand, so each one is visible, stored with the session and
+ * individually reversible. A second fit first undoes the previous one, so picking 20 and then 45
+ * gives the 45-minute day rather than the 20-minute day with nothing added back.
+ */
+private fun DayViewModel.fitToTime(minutes: Int) {
+    if (timeFitJob?.isActive == true) return
+    timeFitJob = viewModelScope.launch { applyFitToTime(minutes) }
+}
+
+private suspend fun DayViewModel.applyFitToTime(minutes: Int) {
+    restoreFitSkips()
+    val remaining = _state.value.exercises.filter { !it.isComplete }
+    val fit = com.forge.app.domain.coach.SessionAdaptor.fitToTime(
+        remaining.map { ex ->
+            com.forge.app.domain.coach.SessionAdaptor.TimedExercise(
+                id = ex.plan.id,
+                remainingSets = (ex.targetSets - ex.loggedSets.size).coerceAtLeast(1),
+                restSeconds = computeRestPrescription(ex.plan, null, ex.restTimerOverrideSeconds).seconds,
+                compound = com.forge.app.program.SessionEstimate.isCompound(ex.plan),
+                started = ex.loggedSets.isNotEmpty()
+            )
+        },
+        minutes
+    )
+    val skipped = mutableListOf<String>()
+    for (id in fit.dropIds) {
+        val leId = ensureLoggedExercise(id) ?: continue
+        workoutRepo.setSkipped(leId, true)
+        skipped += id
+    }
+    if (skipped.isNotEmpty()) refreshExercises()
+    val names = _state.value.exercises.associate { it.plan.id to it.effectiveName }
+    _state.update {
+        it.copy(timeFit = com.forge.app.ui.gym.train.state.TimeFitApplied(minutes, skipped, skipped.mapNotNull(names::get)))
+    }
+}
+
+private fun DayViewModel.undoFitToTime() {
+    if (timeFitJob?.isActive == true) return
+    timeFitJob = viewModelScope.launch { restoreFitSkips() }
+}
+
+/** Un-skip what the last fit skipped — only those still skipped, so a later hand toggle stands. */
+private suspend fun DayViewModel.restoreFitSkips() {
+    val fit = _state.value.timeFit ?: return
+    val byId = _state.value.exercises.associateBy { it.plan.id }
+    var changed = false
+    for (id in fit.skippedIds) {
+        val ex = byId[id] ?: continue
+        if (!ex.skipped) continue
+        val leId = ex.loggedExerciseId ?: ensureLoggedExercise(id) ?: continue
+        workoutRepo.setSkipped(leId, false)
+        changed = true
+    }
+    _state.update { it.copy(timeFit = null) }
+    if (changed) refreshExercises()
+}
+
+/** Apply the engine's suggested order via the same in-memory mechanism as manual reordering. */
+private fun DayViewModel.applyOrderingSuggestion() {
+    val suggestion = _state.value.orderingSuggestion ?: return
+    applyOrderedExercises(suggestion)
+}
+
+/** Reorder the in-memory exercise list to [suggestion]'s order (the program itself is never touched).
+ *  Shared by the explicit "Apply →" tap and the silent auto-apply for non-custom days (task 3). */
+internal fun DayViewModel.applyOrderedExercises(suggestion: com.forge.app.domain.adapt.Recommendation.SessionOrder) {
+    val byId = _state.value.exercises.associateBy { it.plan.id }
+    val suggested = suggestion.orderedExerciseIds.toSet()
+    val reordered = suggestion.orderedExerciseIds.mapNotNull { byId[it] } +
+        _state.value.exercises.filter { it.plan.id !in suggested }
+    _state.update { it.copy(exercises = reordered, orderingSuggestion = null) }
+}
+
+private fun DayViewModel.finishWorkout(untouchedConfirmed: Boolean = false) {
+    // One finish per session. The FINISH control stays enabled until isFinished lands at the end of
+    // ~8 DB round-trips, so a double tap used to run the whole path twice: two finishSession calls,
+    // two rotation-counter bumps and the session's calories written to Health Connect twice.
+    // Nor does one start once an exit is under way: the screen is already leaving.
+    if (finishJob?.isActive == true || leaving) return
+    finishJob = viewModelScope.launch {
+        val sessionId = _state.value.sessionId ?: return@launch
+        // FINISH on a session with nothing in it would commit an empty workout (it still counts
+        // toward the rotation, first-workout-done, trophies and Health Connect). Ask instead, with
+        // the leave dialog's nothing-logged variant (Discard / Keep going; no "Resume later", which
+        // would park an empty session). Checked against the DATABASE too: a wrist-logged set may
+        // not have reached UI state yet, in which case the screen is brought up to date and the
+        // finish carries on.
+        if (!_state.value.hasUnsavedWork) {
+            if (workoutRepo.allSetsForSession(sessionId).isEmpty()) {
+                _state.update { it.copy(showDiscardConfirm = true) }
+                return@launch
+            }
+            refreshExercises()
+        }
+        // Exercises with no sets that were neither skipped nor ended early: finishing closes the
+        // session for good, so a finish that leaves any of those behind asks once. A day that is
+        // done (or deliberately skipped through) finishes straight away, as before.
+        if (!untouchedConfirmed) {
+            val untouched = _state.value.exercises
+                .filter { !it.skipped && !it.finishedEarly && it.loggedSets.isEmpty() }
+                .map { it.effectiveName }
+            if (untouched.isNotEmpty()) {
+                _state.update { it.copy(finishUntouched = untouched) }
+                return@launch
+            }
+        }
+        val exercises = _state.value.exercises
+        val allSets = exercises.flatMap { it.loggedSets }
+        val totalVolumeLb = VolumeCalculator.sessionVolumeLb(allSets)
+        val prCount = exercises.count { it.wasPr }
+
+        // finishSession closes the open sitting and returns total ACTIVE seconds (summed across
+        // sittings) — the real duration, not wall-clock from the first start. It also derives the
+        // stored totals from the DATABASE; the UI-state figures above are for this screen's recap
+        // only and never reach a persisted column.
+        val activeSeconds = workoutRepo.finishSession(sessionId)
+        // First-touch onboarding cards hide for good once any workout is completed.
+        settingsRepo.setFirstWorkoutDone()
+        // An interval left open didn't lead to another set — drop it, don't write it.
+        openRestEvent = null
+        restTimer.stop()
+        stopSessionService()
+
+        val durationMin = (activeSeconds / 60).coerceAtLeast(0)
+        // The three reads the summary needs are independent, so they run side by side.
+        val lifetimePrCountD = async {
+            // Lifetime PR count AFTER this session (its PRs are already persisted) — drives the milestone push.
+            runCatching { workoutRepo.lifetimePrCount() }.getOrDefault(0)
+        }
+        val prevSessionD = async { workoutRepo.previousSessionForDay(dayKey, sessionId) }
+        val bestPrevVolumeD = async { workoutRepo.bestPreviousVolumeForDay(dayKey, sessionId) }
+        val lifetimePrCount = lifetimePrCountD.await()
+
+        // Recap: only exercises you actually logged this session — a skip isn't "what you worked on".
+        val worked = exercises.filter { it.loggedSets.isNotEmpty() && !it.skipped }
+        // Per-muscle set counts tint the recap's body map.
+        val setsByMuscle = worked
+            .groupBy { it.plan.muscle }
+            .mapValues { (_, exs) -> exs.sumOf { it.loggedSets.size } }
+
+        // Local-only inputs for the coach's one-line read — no longer rendered as their own sections.
+        val prevSession = prevSessionD.await()
+        val vsLastVolumeDelta = prevSession?.totalVolumeLb?.let { totalVolumeLb - it }
+        val bestPrevVolume = bestPrevVolumeD.await() ?: 0.0
+        val isBestSession = prevSession != null && totalVolumeLb > bestPrevVolume
+        val plannedTotal = exercises.filter { !it.skipped }.sumOf { it.plan.sets }
+        val loggedNonSkipped = exercises.filter { !it.skipped }.sumOf { it.loggedSets.size }
+        val honestyPct = if (plannedTotal > 0)
+            ((loggedNonSkipped.toDouble() / plannedTotal) * 100).toInt().coerceIn(0, 100) else null
+
+        val summary = SessionSummary(
+            displayName = _state.value.displayName,
+            dayWord = dayPlan.word,
+            durationMinutes = durationMin,
+            totalVolumeLb = totalVolumeLb,
+            prCount = prCount,
+            setCount = allSets.size,
+            exercisesLogged = worked.size,
+            exercisesSkipped = exercises.count { it.skipped },
+            highlights = worked.map { ex ->
+                ExerciseHighlight(
+                    exerciseName = ex.effectiveName,
+                    setsLogged = ex.loggedSets.size,
+                    volumeLb = VolumeCalculator.sessionVolumeLb(ex.loggedSets),
+                    isPr = ex.wasPr
+                )
+            },
+            setsByMuscle = setsByMuscle,
+            unrated = worked.mapNotNull { ex ->
+                com.forge.app.domain.adapt.EffortPrompt.unratedSet(ex.loggedSets, ex.difficulty)
+                    ?.let { com.forge.app.ui.gym.train.state.UnratedLift(ex.effectiveName, it.id) }
+            },
+            coachOpinion = com.forge.app.domain.coach.SessionOpinion.of(
+                setCount = allSets.size,
+                prCount = prCount,
+                ghostBeats = _state.value.ghostBeats,
+                ghostComparable = _state.value.ghostComparable,
+                vsLastVolumeDelta = vsLastVolumeDelta,
+                isBestSession = isBestSession,
+                honestyPct = honestyPct,
+                easingBack = _state.value.easingBackNote != null
+            ),
+            initialJournal = _state.value.sessionJournal,
+            lifetimePrCount = lifetimePrCount
+        )
+        _state.update { it.copy(isFinished = true, summary = summary) }
+        // Trophies still unlock + persist; the summary no longer lists them (gamification paused).
+        // After the summary is up rather than before it: the evaluation is ~14 aggregate queries
+        // over the whole history, and nothing on this screen waits for it. NonCancellable so leaving
+        // the summary at once cannot drop an unlock half written.
+        withContext(NonCancellable + kotlinx.coroutines.Dispatchers.Default) { trophyRepo.evaluateAndUnlockNew() }
+    }
+}
+
+private fun DayViewModel.saveAndExit() {
+    if (finishJob?.isActive == true || leaving) return
+    leaving = true
+    finishJob = viewModelScope.launch {
+        val sessionId = _state.value.sessionId ?: run {
+            _navigation.send(DayNavigationEffect.PopBack)
+            return@launch
+        }
+        workoutRepo.finishSession(sessionId)
+        openRestEvent = null
+        restTimer.stop()
+        stopSessionService()
+        _state.update { it.copy(isFinished = true) }
+        _navigation.send(DayNavigationEffect.PopBack)
+        // After the pop is sent, not before: nothing on the way out waits for the ~14 aggregate
+        // queries, and NonCancellable keeps the screen's teardown from dropping an unlock.
+        withContext(NonCancellable + kotlinx.coroutines.Dispatchers.Default) { trophyRepo.evaluateAndUnlockNew() }
+    }
+}
+
+private fun DayViewModel.dismissSummary(mood: com.forge.app.domain.mood.Mood?, tags: List<String>, journal: String) {
+    // COMPLETE stays tappable through the journal write: a second tap wrote the journal twice and
+    // sent a second PopBack (audit 2026-09-26).
+    if (leaving) return
+    leaving = true
+    viewModelScope.launch {
+        val sessionId = _state.value.sessionId
+        if (sessionId != null) {
+            if (mood != null) workoutRepo.recordMood(sessionId, dayKey, mood.code)
+            if (tags.isNotEmpty()) workoutRepo.setSessionTags(sessionId, tags)
+            // Persist unconditionally (including an empty string): the field is pre-seeded with any
+            // mid-session note, so a blank value here means the user deliberately cleared it (#111).
+            workoutRepo.setJournal(sessionId, journal)
+        }
+        _state.update { it.copy(summary = null) }
+        _navigation.send(DayNavigationEffect.PopBack)
+    }
+}
+
+private fun DayViewModel.requestBack() {
+    if (leaving || finishJob?.isActive == true) return
+    // Back while "Loading session…": the start is still running and would otherwise finish behind
+    // the closed screen, creating (or resuming) the session and starting its notification with
+    // nothing left to end either (audit 2026-09-26). Stop it, then undo only what it did. Once the
+    // screen has loaded, the normal path below applies (it weighs unsaved work) and the start's
+    // tail skips the notification because `leaving` is set.
+    val start = beginJob
+    if (start?.isActive == true && _state.value.isLoading) {
+        leaving = true
+        viewModelScope.launch {
+            start.cancelAndJoin()
+            startedSession?.let { started ->
+                // A session this start created is empty: drop it. One it resumed holds earlier
+                // sittings' sets: keep it, and bank the segment the start may have opened.
+                if (started.created) workoutRepo.discardSession(started.session.id)
+                else workoutRepo.closeOpenSegments(started.session.id, clock.nowMs())
+            }
+            stopSessionService()
+            _navigation.send(DayNavigationEffect.PopBack)
+        }
+        return
+    }
+    if (_state.value.hasUnsavedWork) {
+        _state.update { it.copy(showDiscardConfirm = true) }
+    } else {
+        leaving = true
+        viewModelScope.launch {
+            val sessionId = _state.value.sessionId
+            // UI state can lag the database: a set logged from the wrist only reaches it after the
+            // observer's debounce and a rebuild. Discarding on that stale view would cascade-delete
+            // the set unasked, so confirm against Room first (OpenSwapPicker does the same).
+            if (sessionId != null && workoutRepo.allSetsForSession(sessionId).isNotEmpty()) {
+                leaving = false
+                refreshExercises()
+                _state.update { it.copy(showDiscardConfirm = true) }
+                return@launch
+            }
+            if (sessionId != null) workoutRepo.discardSession(sessionId)
+            restTimer.stop()
+            stopSessionService()
+            _navigation.send(DayNavigationEffect.PopBack)
+        }
+    }
+}
+
+private fun DayViewModel.discardAndExit() {
+    if (leaving || finishJob?.isActive == true) return
+    leaving = true
+    // Close the dialog now, not after the delete: it stayed tappable through the write.
+    _state.update { it.copy(showDiscardConfirm = false) }
+    viewModelScope.launch {
+        _state.value.sessionId?.let { workoutRepo.discardSession(it) }
+        openRestEvent = null
+        restTimer.stop()
+        stopSessionService()
+        _navigation.send(DayNavigationEffect.PopBack)
+    }
+}
+
+/**
+ * Leave the screen but keep the session ACTIVE — not finished, not discarded. Logged sets are
+ * already persisted, so reopening this day resumes the workout exactly where it was left.
+ */
+private fun DayViewModel.leaveAndResume() {
+    if (leaving || finishJob?.isActive == true) return
+    leaving = true
+    _state.update { it.copy(showDiscardConfirm = false) }
+    viewModelScope.launch {
+        // Close THIS sitting's segment so its active time is banked; reopening the day starts a
+        // fresh segment and the live readout resumes from the running total.
+        segmentHeartbeatJob?.cancel()
+        _state.value.sessionId?.let { workoutRepo.closeOpenSegments(it, clock.nowMs()) }
+        restTimer.stop()
+        stopSessionService()
+        _navigation.send(DayNavigationEffect.PopBack)
+    }
+}
+
+/** Cross-day prompt → discard the other in-progress workout, then start this day fresh. */
+private fun DayViewModel.crossDayDiscardAndStart() {
+    // One start per tap, and none once the screen is leaving. Held as beginJob so Back during the
+    // start cancels it like the first one (audit 2026-09-26); the dialog closes onto the loading
+    // state now rather than staying tappable through the discard.
+    if (leaving || beginJob?.isActive == true) return
+    _state.update { it.copy(crossDaySession = null, isLoading = true) }
+    beginJob = viewModelScope.launch {
+        workoutRepo.activeSession()?.let { workoutRepo.discardSession(it.id) }
+        beginSessionForThisDay()
+    }
+}
+
+/** Cross-day prompt → leave so the other in-progress workout can be resumed from its own day. */
+private fun DayViewModel.crossDayGoBack() {
+    if (leaving) return
+    leaving = true
+    viewModelScope.launch { _navigation.send(DayNavigationEffect.PopBack) }
+}
+
+/** Start a new session for this day (or resume this day's existing one) and hydrate the screen. */
+internal suspend fun DayViewModel.beginSessionForThisDay() {
+    // Not cancellable, and recorded inside the block: once the row is written, Back during loading
+    // must know about it to undo it, and withContext can drop its result on a cancelled caller.
+    val started = withContext(NonCancellable) {
+        workoutRepo.startOrResumeSession(dayKey).also { startedSession = it }
+    }
+    val sessionId = started.session.id
+    // Resuming an existing session (not one freshly created by this call) — you already started this
+    // workout, so skip the warmup gate. The in-memory warmup state is lost when the screen is recreated,
+    // and re-showing the gate would force re-checking boxes you cleared before logging your first set.
+    val resuming = !started.created
+    val resolvedName = dayPlan.defaultName
+    val disabledUntilMs = settingsRepo.warmupDisabledUntilMs.firstOrNull() ?: 0L
+    val warmupAutoSkipped = clock.nowMs() < disabledUntilMs
+
+    // ── Per-sitting active timing ──────────────────────────────────────────────
+    // Close any segment a prior sitting left open (process death), then open THIS sitting's
+    // segment. The live elapsed = prior closed sittings + this one, anchored so (now − anchor)
+    // reads the running total. The date pill still uses the session's REAL first-start.
+    // A just-created session can't have segments yet — skip those queries (screen-open latency).
+    val now = clock.nowMs()
+    val priorActiveMs = if (started.created) {
+        startSegmentHeartbeat(workoutRepo.openSessionSegment(sessionId, now))
+        0L
+    } else {
+        workoutRepo.closeDanglingSegments(sessionId)
+        startSegmentHeartbeat(workoutRepo.openSessionSegment(sessionId, now))
+        workoutRepo.closedSegmentMs(sessionId)
+    }
+
+    _state.update {
+        it.copy(
+            sessionId = sessionId,
+            sessionStartedAt = started.session.startedAt,
+            sessionJournal = started.session.journal,
+            elapsedAnchorMs = now - priorActiveMs,
+            displayName = resolvedName,
+            isWarmupComplete = it.isWarmupComplete || skipWarmup || warmupAutoSkipped || resuming
+        )
+    }
+    refreshExercises()
+    computeOrderingSuggestion()
+    // The notification belongs to a screen that is still open.
+    if (!leaving) startSessionService(resolvedName)
+}
+
+/**
+ * Stamp this sitting's segment every [SEGMENT_HEARTBEAT_MS] while the workout screen's ViewModel
+ * lives. If the process dies, the next launch closes the segment at the later of its last set and
+ * this stamp (WorkoutRepository.closeDanglingSegments), so a kill mid-rest loses at most one beat
+ * instead of everything since the last set. The DAO ignores a beat on a closed segment.
+ */
+internal fun DayViewModel.startSegmentHeartbeat(segmentId: Long) {
+    segmentHeartbeatJob?.cancel()
+    segmentHeartbeatJob = viewModelScope.launch {
+        while (true) {
+            kotlinx.coroutines.delay(SEGMENT_HEARTBEAT_MS)
+            // A failed beat costs one interval of accuracy, nothing more; never take the screen down.
+            runCatching { workoutRepo.touchSessionSegment(segmentId, clock.nowMs()) }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+        }
+    }
+}
+
+/** One row update every 30s while a workout is open: the most time a process death can now drop. */
+internal const val SEGMENT_HEARTBEAT_MS = 30_000L

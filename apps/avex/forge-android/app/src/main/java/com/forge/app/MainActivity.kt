@@ -1,0 +1,787 @@
+package com.forge.app
+
+import com.forge.app.security.ProtectionSentinel
+import android.content.Intent
+import android.database.ContentObserver
+import android.net.Uri
+import android.graphics.drawable.GradientDrawable
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
+import android.app.KeyguardManager
+import android.provider.Settings
+import android.view.WindowManager
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import com.forge.app.ui.common.window.AlertDialog
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
+import androidx.core.content.IntentCompat
+import androidx.fragment.app.FragmentActivity
+import com.forge.app.data.importer.ImportResult
+import com.forge.app.data.repo.NotificationFeed
+import com.forge.app.appicon.AppIcon
+import com.forge.app.appicon.AppIconManager
+import com.forge.app.data.importer.WorkoutImportRepository
+import com.forge.app.data.importer.userMessage
+import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.security.AppLockManager
+import com.forge.app.security.LocalAppLock
+import com.forge.app.security.LocalAppLockActive
+import com.forge.app.service.AutoBackupWorker
+import com.forge.app.ui.common.ProvideTouchExploration
+import com.forge.app.ui.launch.LaunchCover
+import com.forge.app.ui.launch.launchIconFromComponent
+import com.forge.app.ui.launch.playSplashExit
+import com.forge.app.ui.launch.systemSplashDrawsIcon
+import com.forge.app.ui.nav.ForgeNavHost
+import com.forge.app.ui.onboarding.OnboardingScreen
+import com.forge.app.ui.security.AppLockScreen
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import com.forge.app.ui.theme.ForgeMotion
+import com.forge.app.ui.theme.ForgeTheme
+import com.forge.app.ui.theme.ForgeUiSettings
+import com.forge.app.ui.theme.LocalForgeSettings
+import com.forge.app.ui.theme.forgeBackgroundGradient
+import androidx.lifecycle.lifecycleScope
+import dagger.hilt.android.AndroidEntryPoint
+import java.io.File
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import javax.inject.Inject
+
+private const val PENDING_IMPORT_URI_KEY = "pending_import_uri"
+
+/** An unhandled widget tap, kept across a recreation so the deep-link is not lost (M-30). */
+private const val WIDGET_REQUEST_ID_KEY = "widget_request_id"
+private const val WIDGET_REQUEST_DAY_KEY = "widget_request_day_key"
+
+@AndroidEntryPoint
+// FragmentActivity (a superclass of ComponentActivity) is required by androidx.biometric's
+// BiometricPrompt, which drives the app / gallery lock (GYMAP-69). Everything else — Compose,
+// edge-to-edge, Hilt injection, the existing lifecycle callbacks — is unchanged.
+class MainActivity : FragmentActivity() {
+
+    @Inject lateinit var settingsRepo: SettingsRepository
+    // Lazy: only a share-to-app import uses it, and building it (and its dozen dependencies) on the
+    // main thread before the first frame taxed every launch.
+    @Inject lateinit var importRepo: dagger.Lazy<WorkoutImportRepository>
+    @Inject lateinit var appIconManager: AppIconManager
+    @Inject lateinit var appLock: AppLockManager
+
+    /** A shared export waiting for unlock and explicit approval before any import work starts. */
+    private var pendingImportUri by mutableStateOf<Uri?>(null)
+
+    /**
+     * The widget deep-link to open. State (not a local) because `launchMode=singleTask` delivers a
+     * widget tap while the app is already running via [onNewIntent], not a fresh [onCreate] —
+     * updating this recomposes the nav host so it opens the day, instead of the tap silently doing
+     * nothing.
+     *
+     * A sequenced EVENT rather than the day string it used to be (M-30): tapping the same widget
+     * twice assigned the same value, which is no state change at all, so the nav host's effect
+     * never ran a second time and the tap did nothing. [WidgetOpenRequest.id] is what distinguishes
+     * the second tap from the first.
+     */
+    private var widgetOpenRequest by mutableStateOf<com.forge.app.widget.WidgetOpenRequest?>(null)
+    private var widgetRequestSeq = 0L
+
+    /** Record a widget tap as the next event in the sequence. A blank/absent key is not a tap. */
+    private fun requestWidgetOpen(dayKey: String?) {
+        if (dayKey.isNullOrBlank()) return
+        widgetRequestSeq += 1
+        widgetOpenRequest = com.forge.app.widget.WidgetOpenRequest(widgetRequestSeq, dayKey)
+    }
+
+    /**
+     * The nav host has routed the tap, or rejected it against a program that had actually loaded.
+     * Until then the request stays — including across a recreation, see [onSaveInstanceState].
+     */
+    private fun widgetOpenHandled() {
+        widgetOpenRequest = null
+    }
+    private var privacyPolicyRequest by mutableStateOf(0)
+
+    /**
+     * Home's first frame (or onboarding's, or the lock screen's) is composed and laid out, or the
+     * 2 s safety cap ran out. The splash is held until then, and its hand-off starts from it.
+     */
+    private var contentReady by mutableStateOf(false)
+
+    /** The launch hand-off has finished (or there was none: a recreation). Gates the lock prompt
+     *  and the import dialog so neither lands on top of the fade. */
+    private var launchSettled by mutableStateOf(false)
+
+    /** The chosen app-icon key, seeded in onCreate and kept live by a collector so [onStop] never has to
+     *  block on a DataStore read. @Volatile because onStop (main thread) reads what the collector writes.
+     *  Null = not known (no read has landed, or it failed); "" from a real read = Default. */
+    @Volatile private var appIconKey: String? = null
+
+    /** True only when the user themselves sent the app to the background (Home/Recents) — set by
+     *  [onUserLeaveHint], which the framework does NOT call when WE launch a sub-activity (the system
+     *  photo picker, share sheet, export/file picker). [onStop] fires for those overlays too, so gating
+     *  the icon-alias swap on this flag keeps the swap out of the mid-session overlay case that can tear
+     *  the task down on some OEMs (see [AppIconManager]). */
+    private var userLeaving = false
+
+    /** True from the moment WE start another activity (picker, share sheet, file dialog) until we are
+     *  resumed again. [onUserLeaveHint] is not called for Back either, and on Android 12+ Back moves the
+     *  task to the background, so the picked icon was never applied on that exit. Knowing explicitly that
+     *  a sub-activity of ours is what covers us lets [onStop] tell that case from a genuine exit. */
+    private var launchedSubActivity = false
+
+    /**
+     * Stage a CSV/JSON export shared into or opened with Avex. The import starts only after the app is
+     * unlocked and the user confirms it in the foreground.
+     */
+    private fun handleImportIntent(intent: Intent?) {
+        val incoming = intent ?: return
+        val uri: Uri? = when (incoming.action) {
+            Intent.ACTION_SEND -> IntentCompat.getParcelableExtra(incoming, Intent.EXTRA_STREAM, Uri::class.java)
+            Intent.ACTION_VIEW -> incoming.data
+            else -> null
+        }
+        if (uri == null) return
+        pendingImportUri = uri
+        incoming.action = null
+        incoming.data = null
+        incoming.removeExtra(Intent.EXTRA_STREAM)
+    }
+
+    private fun confirmPendingImport() {
+        val uri = pendingImportUri ?: return
+        pendingImportUri = null
+        // App-lifetime scope, not lifecycleScope: the request is already cleared, so a rotation while
+        // the file is read used to cancel the import part way and drop its notice. Locals, so the
+        // coroutine does not hold this Activity.
+        val importer = importRepo
+        val settings = settingsRepo
+        ((application as? ForgeApp)?.appScope ?: lifecycleScope).launch {
+            val result = runCatching { importer.get().import(uri) }
+                .onFailure { if (it is CancellationException) throw it }
+                .getOrDefault(ImportResult.ReadError)
+            // Queued for the notifications feed rather than thrown up as an OK dialog over whatever
+            // screen the share landed on (2026-07-27, DESIGN §4.6).
+            settings.addSystemNotice(NotificationFeed.NOTICE_IMPORT, result.userMessage())
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleImportIntent(intent)
+        // singleTask reuse: a widget tap arrives here, not in onCreate — pick up the day so the nav
+        // host opens it (the deep-link would otherwise be dropped and the tap do nothing).
+        requestWidgetOpen(intent.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY))
+        if (opensHealthConnectPrivacyPolicy(intent.action)) privacyPolicyRequest++
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        pendingImportUri?.let { outState.putString(PENDING_IMPORT_URI_KEY, it.toString()) }
+        // An UNHANDLED widget tap outlives the Activity (M-30). The request lived only in this
+        // field and was read only when `savedInstanceState == null`, so a recreation while the
+        // nav host was still waiting for the program — a rotation, or the process being rebuilt
+        // behind the launcher — cancelled the effect and threw the tap away: the widget's primary
+        // action did nothing, with no way to tell it had been asked for.
+        widgetOpenRequest?.let {
+            outState.putLong(WIDGET_REQUEST_ID_KEY, it.id)
+            outState.putString(WIDGET_REQUEST_DAY_KEY, it.dayKey)
+        }
+        super.onSaveInstanceState(outState)
+    }
+
+    /** The user pressed Home/Recents — the app is genuinely leaving the foreground (not just being
+     *  covered by a sub-activity we launched). This is the safe moment to flip the launcher alias. */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        userLeaving = true
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Re-evaluate the app lock as early as possible on return-to-foreground so a re-lock overlay is
+        // up before the first frame. On a cold start / rotation / picker-return this is a no-op (no
+        // genuine background was recorded), so it never spuriously re-locks.
+        appLock.onForeground()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        userLeaving = false
+        launchedSubActivity = false
+    }
+
+    // Every startActivity funnels through here, as does ActivityResultRegistry's launch.
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
+        launchedSubActivity = true
+        try {
+            super.startActivityForResult(intent, requestCode, options)
+        } catch (t: Throwable) {
+            // Nothing launched (e.g. ActivityNotFoundException, which callers catch), so no pause/resume
+            // will clear the flag; left set, the next Back exit would skip the icon swap.
+            launchedSubActivity = false
+            throw t
+        }
+    }
+
+    /** False while the screen is off or the keyguard is up. onStop fires for the power button, a display
+     *  timeout and a full-screen call or alarm over the lock screen, and in each the task is still the
+     *  user's foreground task, so flipping the launcher alias then risks the OEM teardown. */
+    private fun deviceInUse(): Boolean {
+        val interactive = getSystemService(PowerManager::class.java)?.isInteractive ?: true
+        val locked = getSystemService(KeyguardManager::class.java)?.isKeyguardLocked ?: false
+        return interactive && !locked
+    }
+
+    /**
+     * Swap the home-screen launcher icon to the saved pick now that the USER has backgrounded us — the
+     * only safe time to flip the `.icon.*` aliases. Doing it while the app is still foreground, OR while
+     * a sub-activity WE launched (system photo picker, share sheet, export/file picker) covers us, can
+     * tear the task down on some OEMs (e.g. Samsung) even with DONT_KILL_APP. onStop fires for those
+     * overlays too, so we gate on [userLeaving] ([onUserLeaveHint], which the framework does not call for
+     * self-launched sub-activities) and skip [isChangingConfigurations] (rotation). Done SYNCHRONOUSLY so
+     * the swap lands before the process can be reaped (a swipe-away from recents kills us moments after
+     * onStop); reads the collector-cached [appIconKey] (no blocking DataStore read on the main thread),
+     * and the toggle only runs when the pick actually changed. Wrapped so a failure can't crash onStop.
+     */
+    override fun onStop() {
+        super.onStop()
+        if (isChangingConfigurations) return
+        // The app-lock timer arms on ANY backgrounding. It used to sit behind the userLeaving gate
+        // below, and onUserLeaveHint fires only when the user chooses to leave — Home or Recents.
+        // Android does not call it for the power button, the display timing out, an incoming call or
+        // a notification tap into another app, so in all of those the timer never armed, onForeground
+        // saw no recorded background and left the session valid. A user with "lock immediately" set
+        // could pocket the phone and have anyone past the lock screen open Avex straight into their
+        // training data. One flag was answering two unrelated questions; a picker round-trip
+        // re-locking under a zero-second timeout is what "lock immediately" asks for.
+        appLock.onGenuineBackground()
+        // The icon-alias swap keeps the gate: flipping the alias while a sub-activity WE launched
+        // covers us can tear the task down on some OEMs. Home/Recents is one genuine exit; Back (which
+        // never calls onUserLeaveHint) is the other. Back is inferred: a stop not caused by our own
+        // sub-activity, with the device awake and unlocked (screen-off, a timeout, or a call or alarm
+        // over the lock screen stop us too, while the task stays the foreground one).
+        val leaving = userLeaving || (!launchedSubActivity && deviceInUse())
+        userLeaving = false
+        if (!leaving) return
+        // Null is "not known": the startup read has not landed, or it failed. Reconciling to Default
+        // from it would switch the launcher off the user's real pick, so the aliases wait for a real
+        // read. A real "" IS Default (never picked, or cleared by a reset) and is reconciled.
+        val key = appIconKey ?: return
+        runCatching { appIconManager.reconcileTo(AppIcon.fromKey(key)) }
+    }
+
+    /** The system animation-scale (0 when "Remove animations" is on) — single read used at startup
+     *  and by the live observer below. */
+    private fun readDurationScale(): Float =
+        Settings.Global.getFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+
+    /** Re-reads the system animation-scale into ForgeMotion live, so toggling "Remove animations"
+     *  (a vestibular accessibility need) takes effect without a cold restart (A11y). */
+    private val durationScaleObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) {
+            ForgeMotion.durationScale = readDurationScale()
+        }
+    }
+
+    override fun onDestroy() {
+        contentResolver.unregisterContentObserver(durationScaleObserver)
+        super.onDestroy()
+    }
+
+    private fun applyPrivacyMode(enabled: Boolean) {
+        if (enabled) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
+
+    /**
+     * Paint the activity window with the active theme's background gradient, overriding the static
+     * XML `windowBackground`. This is what shows in the brief "UI not loaded" frame after the splash
+     * and before Compose's first draw — keying it on the live [amoled] setting (via the shared
+     * [forgeBackgroundGradient]) means it always matches the current theme and auto-adapts when the
+     * theme is later changed, with no resource edit.
+     */
+    private fun applyAdaptiveWindowBackground(amoled: Boolean) {
+        val (top, bottom) = forgeBackgroundGradient(amoled)
+        window.setBackgroundDrawable(
+            GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(top.toArgb(), bottom.toArgb())
+            )
+        )
+    }
+
+    /** True exactly once after a boot-time restore swap (ForgeApp wrote the flag), then cleared. */
+    private fun consumeRestoreFlag(): Boolean = consumeBootFlag(ForgeApp.RESTORE_DONE_FLAG)
+
+    /** True exactly once after a landed restore was put back because Room could not open it. */
+    private fun consumeRestoreFailedFlag(): Boolean = consumeBootFlag(ForgeApp.RESTORE_FAILED_FLAG)
+
+    private fun consumeBootFlag(name: String): Boolean {
+        val f = File(filesDir, name)
+        return if (f.exists()) { f.delete(); true } else false
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        val splash = installSplashScreen()
+        super.onCreate(savedInstanceState)
+        pendingImportUri = savedInstanceState?.getString(PENDING_IMPORT_URI_KEY)?.let(Uri::parse)
+        enableEdgeToEdge()
+        // Secure before the first frame, including while recovery or preferences are slow.
+        applyPrivacyMode(true)
+        // The launch (2026-10-21, see ui/launch/LaunchHandOff.kt): the splash is the chosen app icon
+        // on the app's dark, held only until the first screen is ready (2 s cap), then the icon fades
+        // and settles as the screen fades in. A recreation (rotation) has no launch to hand off.
+        launchSettled = savedInstanceState != null
+        // Android 12+ draws the icon itself (the launching alias's own); 8 to 11 draw it here.
+        val coverIcon = if (systemSplashDrawsIcon || savedInstanceState != null) null else {
+            launchIconFromComponent(intent?.component?.className)
+                ?: runCatching { appIconManager.currentIcon() }.getOrDefault(AppIcon.Default)
+        }
+        var startupSlow by mutableStateOf(false)
+        if (systemSplashDrawsIcon) {
+            splash.setKeepOnScreenCondition { !contentReady }
+            splash.setOnExitAnimationListener { provider -> playSplashExit(provider) { launchSettled = true } }
+        }
+        setContent { StartupMessage("Preparing Avex…", coverIcon = coverIcon, showMessage = coverIcon == null || startupSlow) }
+        lifecycleScope.launch { delay(2000); contentReady = true; startupSlow = true }
+        // A staged restore restarts the app as soon as it is in the foreground, from any screen.
+        lifecycleScope.launch {
+            repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                com.forge.app.ui.settings.RestoreRestart.pending.first { it }
+                com.forge.app.ui.settings.RestoreRestart.relaunch(this@MainActivity)
+            }
+        }
+        lifecycleScope.launch {
+            try {
+                applicationContext.awaitStorageReady()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                contentReady = true
+                setContent {
+                    StartupMessage("Avex could not finish restoring your data. Close and reopen the app to retry.")
+                }
+                return@launch
+            }
+        // Consume the restore flag on a fresh launch only (not a config-change recreate) and queue the
+        // confirmation for the notifications feed — the silent boot-swap otherwise gives no sign at all.
+        // The feed holds it until cleared, so rotation no longer needs saveable dialog state.
+        if (savedInstanceState == null && consumeRestoreFlag()) {
+            lifecycleScope.launch {
+                settingsRepo.addSystemNotice(
+                    NotificationFeed.NOTICE_RESTORE,
+                    "Your backup was restored. Everything in it is back on this device."
+                )
+            }
+        } else if (savedInstanceState == null && consumeRestoreFailedFlag()) {
+            // The swap landed but the restored database would not open, so the boot put every
+            // component back. Said plainly: nothing was lost, and the file is the thing to replace.
+            lifecycleScope.launch {
+                settingsRepo.addSystemNotice(
+                    NotificationFeed.NOTICE_RESTORE,
+                    "That backup could not be opened, so your previous data was kept. Try again with a fresh backup file."
+                )
+            }
+        }
+
+        // Widget deep-link: a home-screen widget tap carries the day to open (the next-up day, or the
+        // active session's day when one is in progress). Read it once on a fresh launch and hand it to
+        // the nav host, which opens it on top of Overview so Back returns home.
+        if (savedInstanceState == null) {
+            requestWidgetOpen(intent?.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY))
+        } else {
+            // A tap the previous instance had not finished routing yet. Restored with its ORIGINAL
+            // id, so it stays the same event rather than becoming a second one.
+            val dayKey = savedInstanceState.getString(WIDGET_REQUEST_DAY_KEY)
+            val id = savedInstanceState.getLong(WIDGET_REQUEST_ID_KEY)
+            if (!dayKey.isNullOrBlank() && id > 0L) {
+                widgetRequestSeq = id
+                widgetOpenRequest = com.forge.app.widget.WidgetOpenRequest(id, dayKey)
+            }
+        }
+        if (savedInstanceState == null && opensHealthConnectPrivacyPolicy(intent?.action)) privacyPolicyRequest++
+
+        // A cold-start share/open of an export file (#GYMAP-17) — import it once, not again on a
+        // config-change recreate (the queued notice carries the result across rotation).
+        if (savedInstanceState == null) handleImportIntent(intent)
+
+
+        // Honor the system "Remove animations" preference so ForgeMotion gates every transition,
+        // and keep honoring it LIVE: register an observer so toggling it mid-session takes effect
+        // on the next animation instead of needing a cold restart (vestibular accessibility need).
+        ForgeMotion.durationScale = readDurationScale()
+        contentResolver.registerContentObserver(
+            Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE), false, durationScaleObserver
+        )
+
+        // POST_NOTIFICATIONS is never requested from here. It was a one-time explained dialog (N1);
+        // since 2026-07-27 it is a row in the notifications feed that opens the OS app-notification
+        // screen — which keeps working however many times the permission was already denied, unlike
+        // a re-request. Nothing interrupts a cold launch to ask.
+
+        // Off Main and not awaited: the first WorkManager.getInstance() builds its database and
+        // schedulers, and doing that here held the splash. Both are KEEP, so order doesn't matter.
+        lifecycleScope.launch(Dispatchers.IO) {
+            AutoBackupWorker.schedule(applicationContext)
+            // The widget rolls over at local midnight from here (KEEP under a per-midnight name, so
+            // re-arming on each launch is a no-op in the same zone rather than stacking work).
+            com.forge.app.service.WidgetMidnightWorker.schedule(applicationContext)
+        }
+
+        // Read off Main with a bounded wait. A failed/stalled read uses the remembered privacy
+        // protections; no real app content is composed before these flags and gates are primed.
+        var startupReadFailed = false
+        val startup = withContext(Dispatchers.IO) {
+            runCatching { withTimeout(2000) { settingsRepo.startupPreferences() } }
+                .onSuccess { ok ->
+                    ProtectionSentinel.remember(
+                        this@MainActivity,
+                        ProtectionSentinel.Protections(
+                            privacyMode = ok.privacyMode,
+                            appLockEnabled = ok.appLockEnabled,
+                            galleryLockEnabled = ok.galleryLockEnabled
+                        )
+                    )
+                }
+                .getOrElse {
+                    if (it is CancellationException && it !is TimeoutCancellationException) throw it
+                    startupReadFailed = true
+                    val known = ProtectionSentinel.fallback(this@MainActivity)
+                    SettingsRepository.StartupPreferences(
+                        privacyMode = known.privacyMode,
+                        appLockEnabled = known.appLockEnabled,
+                        galleryLockEnabled = known.galleryLockEnabled,
+                        // The rest are cosmetic: a wrong theme for one frame is not a privacy event.
+                        amoledMode = false,
+                        appIcon = "",
+                        themedLaunchIntro = false
+                    )
+                }
+        }
+        // Secure the window on the very first frame when privacy mode or EITHER lock is on, and
+        // seed the lock state synchronously so a locked cold start never flashes the content behind
+        // the gate (GYMAP-69).
+        //
+        // Any lock the user turned on implies keeping Avex out of the Recents preview and out of
+        // screenshots, as every app-lock feature does. The gallery lock was missing from that
+        // expression even though the rule was already written in the comment above: a user who
+        // wanted the app open but their physique photos protected unlocked the gallery, pressed
+        // Home, and the Recents thumbnail showed the photo grid — with screenshots and screen
+        // recording working normally on it. The lock guarded the door and left the window open.
+        applyPrivacyMode(startup.privacyMode || startup.appLockEnabled || startup.galleryLockEnabled)
+        appLock.primeEnabled(startup.appLockEnabled, startup.galleryLockEnabled)
+        applyAdaptiveWindowBackground(startup.amoledMode)
+        // The fallback's "" is not a real read, so the key stays unknown until the collector sees one.
+        // (startup.themedLaunchIntro is still read and stored, but nothing plays it any more: the
+        // custom launch animation was removed on 2026-10-21.)
+        if (!startupReadFailed) appIconKey = startup.appIcon
+        lifecycleScope.launch {
+            // FLAG_SECURE follows privacy mode OR the app lock — turning on a lock implies keeping the
+            // app out of the recents preview / screenshots, as every app-lock feature does.
+            settingsRepo.protections.collect { p ->
+                // Keep the sentinel current, so the next failed startup read falls back to what the
+                // user chose most recently rather than to what they chose at some earlier launch.
+                //
+                // Only on a REAL read. On a failed one these values ARE the sentinel's fallback, so
+                // writing them back would promote "privacy on because we could not tell" into "the
+                // user asked for privacy on", and overwrite the very record being fallen back to.
+                if (!p.fromFailedRead) {
+                    ProtectionSentinel.remember(
+                        this@MainActivity,
+                        ProtectionSentinel.Protections(
+                            p.privacyMode, p.appLockEnabled, p.galleryLockEnabled
+                        )
+                    )
+                }
+                applyPrivacyMode(p.privacyMode || p.appLockEnabled || p.galleryLockEnabled)
+            }
+        }
+        // Keep the icon pick live so onStop can read it without blocking on DataStore (and never stale).
+        lifecycleScope.launch {
+            settingsRepo.appIconOrUnknown.collect { if (it != null) appIconKey = it }
+        }
+
+        setContent {
+            val uiSettingsFlow = remember {
+                // Date format and Compact set logging are no longer plumbed: nothing read them, and
+                // their controls left Settings (2026-09-26 audit, `design/SETTLED.md`).
+                combine(
+                    settingsRepo.amoledMode,
+                    settingsRepo.weightUnit,
+                    settingsRepo.timeFormat24h,
+                    settingsRepo.firstDayMonday,
+                    settingsRepo.hapticStrength
+                ) { amoled, weightUnit, timeFormat24h, firstDayMonday, haptic ->
+                    ForgeUiSettings(
+                        amoledMode = amoled,
+                        weightUnit = weightUnit,
+                        timeFormat24h = timeFormat24h,
+                        firstDayMonday = firstDayMonday,
+                        hapticStrength = haptic
+                    )
+                }.combine(settingsRepo.hiddenOverviewTiles) { s, hidden ->
+                    s.copy(hiddenOverviewTiles = hidden)
+                }.combine(settingsRepo.keepScreenOn) { s, v ->
+                    s.copy(keepScreenOn = v)
+                }.combine(settingsRepo.overviewTileOrder) { s, order ->
+                    s.copy(overviewTileOrder = order)
+                }.combine(settingsRepo.pinnedGoals) { s, keys ->
+                    s.copy(pinnedGoalKeys = keys)
+                }.combine(settingsRepo.effectiveAccentHex) { s, v ->
+                    s.copy(accentColorHex = v)
+                }.combine(settingsRepo.accentEnabled) { s, v ->
+                    s.copy(accentEnabled = v)
+                }.combine(settingsRepo.plateWeightLb) { s, v ->
+                    s.copy(plateWeightLb = v)
+                }.combine(settingsRepo.firstWorkoutDone) { s, v ->
+                    s.copy(firstWorkoutDone = v)
+                }.combine(settingsRepo.useMiles) { s, v ->
+                    s.copy(useMiles = v)
+                }
+            }
+            val uiSettings by uiSettingsFlow.collectAsState(initial = ForgeUiSettings())
+            // A failed read emits null and the flow ENDS (allPreferences catches, emits once, completes),
+            // so the gate would sit on the empty null branch for the whole process. Collected here so its
+            // end is visible: ending on null means the read failed, and Retry re-collects.
+            var prefsAttempt by remember { mutableIntStateOf(0) }
+            var prefsReadFailed by remember { mutableStateOf(false) }
+            val onboardingDone by produceState<Boolean?>(initialValue = null, prefsAttempt) {
+                prefsReadFailed = false
+                settingsRepo.onboardingDoneOrUnknown.collect { value = it }
+                if (value == null) prefsReadFailed = true
+            }
+            // Each pass through onboarding gets its own ViewModel. A factory reset brings onboarding
+            // back inside this same Activity, and the last pass's model still held "completing" (its
+            // finish button silently did nothing) and the old answers. The pass moves on whenever
+            // onboarding completes, so the next one starts clean; a rotation keeps the current pass.
+            var onboardingPass by rememberSaveable { mutableIntStateOf(0) }
+            LaunchedEffect(onboardingDone) { if (onboardingDone == true) onboardingPass++ }
+            // The first screen is composed once the gate knows which one it is; one frame later it
+            // is laid out under the splash, and that is when the splash may go.
+            LaunchedEffect(onboardingDone) {
+                if (onboardingDone != null) {
+                    withFrameNanos { }
+                    contentReady = true
+                }
+            }
+            // A launch the system showed no splash for never calls the exit listener, so the
+            // hand-off also settles by itself once its fade would have finished.
+            LaunchedEffect(contentReady) {
+                if (contentReady && !launchSettled) {
+                    delay(ForgeMotion.nominalDuration(ForgeMotion.DurationStandard) + 150L)
+                    launchSettled = true
+                }
+            }
+
+            CompositionLocalProvider(LocalForgeSettings provides uiSettings) {
+                ForgeTheme(
+                    amoledMode     = uiSettings.amoledMode,
+                    accentColorHex = uiSettings.accentColorHex,
+                    accentEnabled  = uiSettings.accentEnabled
+                ) {
+                    // One app-level touch-exploration observer feeds every bounceClick (A11y).
+                    ProvideTouchExploration {
+                        // The app lock is provided here so both this top-level gate and the gallery
+                        // gate (ForgeNavHost) share one session (GYMAP-69).
+                        CompositionLocalProvider(LocalAppLock provides appLock) {
+                        // The lock state is read HERE so the nav host beneath can be hidden from the
+                        // accessibility tree while it applies. FLAG_SECURE blocks pixels; it does not
+                        // block semantics, and the gate was a sibling drawn OVER a still-composed
+                        // ForgeNavHost — so TalkBack (an ordinary configuration for a low-vision
+                        // user, not only an attacker's tool) could swipe through the locked screen
+                        // and read out the overview behind it: session names, volumes, bodyweight.
+                        // The gallery gate at ForgeNavHost never had this problem because it
+                        // REPLACES its screen rather than covering it.
+                        val locked by appLock.appLocked.collectAsState()
+                        val lockActive = onboardingDone == true && locked
+                        // Hiding the nav host's semantics does nothing for a dialog, sheet or popup:
+                        // each is its own window ABOVE this one, so the lock overlay below can't
+                        // cover it. The lock-aware versions in ui.common.window read this and draw no
+                        // window while it holds (R1).
+                        CompositionLocalProvider(LocalAppLockActive provides lockActive) {
+                        Box(Modifier.fillMaxSize()) {
+                            when (onboardingDone) {
+                                false -> OnboardingScreen(onFinished = {}, viewModel = hiltViewModel(key = "onboarding-$onboardingPass"))
+                                true -> {
+                                    Box(
+                                        Modifier
+                                            .fillMaxSize()
+                                            // Keeping it composed preserves the back stack and the
+                                            // screens' state; clearing its semantics keeps it unread.
+                                            .then(if (lockActive) Modifier.clearAndSetSemantics {} else Modifier)
+                                            // The gate swallows touches only. A field or button that
+                                            // held focus before locking still took hardware-key input,
+                                            // so keys are dropped here too (Back excepted: it belongs
+                                            // to the lock screen) and focus is cleared as it locks.
+                                            .then(
+                                                if (lockActive) Modifier.onPreviewKeyEvent {
+                                                    it.key != androidx.compose.ui.input.key.Key.Back
+                                                } else Modifier
+                                            )
+                                    ) {
+                                        val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+                                        LaunchedEffect(lockActive) { if (lockActive) focusManager.clearFocus(force = true) }
+                                        ForgeNavHost(
+                                            widgetOpen = widgetOpenRequest,
+                                            onWidgetOpenHandled = ::widgetOpenHandled,
+                                            privacyPolicyRequest = privacyPolicyRequest
+                                        )
+                                    }
+                                }
+                                // DataStore still loading (the theme's gradient shows briefly), or failed.
+                                null -> if (prefsReadFailed) PreferencesUnavailableMessage(onRetry = { prefsAttempt++ })
+                            }
+                            // App-lock gate — an opaque overlay above the nav host (whose state is
+                            // preserved underneath), below the launch cover. The prompt waits for the
+                            // launch hand-off to settle. Never over onboarding (the lock is set up there).
+                            if (lockActive) {
+                                AppLockScreen(
+                                    subtitle = "Unlock with your fingerprint, face, or phone PIN",
+                                    promptReady = launchSettled,
+                                    onUnlocked = { appLock.markAuthenticated() }
+                                )
+                            }
+                            // Android 8 to 11 only: the icon cover the app draws in place of a splash
+                            // that could not wear the chosen icon (see LaunchHandOff.kt).
+                            if (coverIcon != null && !launchSettled) {
+                                LaunchCover(coverIcon, ready = contentReady, onGone = { launchSettled = true })
+                            }
+                            // The app's one Undo snackbar (§13) — hosted here so a "deleted · Undo"
+                            // message rides over any screen, including one popped back to after a delete.
+                            // Not while locked: it is drawn after the gate, so its Undo stayed live over
+                            // it. Leaving composition is not an outcome for the controller, so an event
+                            // still inside its window is shown again after unlock (R1).
+                            if (!lockActive) com.forge.app.ui.common.SnackbarControllerHost()
+                            val showImportConfirmation = shouldShowImportConfirmation(
+                                onboardingDone = onboardingDone,
+                                appLocked = locked,
+                                showIntro = !launchSettled,
+                                hasPendingImport = pendingImportUri != null,
+                            )
+                            if (showImportConfirmation) {
+                                ImportConfirmationDialog(
+                                    onConfirm = ::confirmPendingImport,
+                                    onDismiss = { pendingImportUri = null },
+                                )
+                            }
+                        }
+                        }
+                        }
+                    }
+                }
+            }
+        }
+        }
+    }
+}
+
+internal fun shouldShowImportConfirmation(
+    onboardingDone: Boolean?,
+    appLocked: Boolean,
+    showIntro: Boolean,
+    hasPendingImport: Boolean,
+): Boolean = onboardingDone == true && !appLocked && !showIntro && hasPendingImport
+
+@Composable
+private fun ImportConfirmationDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        containerColor = MaterialTheme.colorScheme.surface,
+        onDismissRequest = onDismiss,
+        title = { Text("Import workout history?") },
+        text = { Text("Avex will add every recognized workout in this file. Existing workouts are kept.") },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text("Import") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+internal fun opensHealthConnectPrivacyPolicy(action: String?): Boolean =
+    action == "androidx.health.connect.action.SHOW_PERMISSIONS_RATIONALE" ||
+        action == "android.intent.action.VIEW_PERMISSION_USAGE"
+
+/** The first-screen gate could not read the settings file. Nothing private is composed behind it. */
+@Composable
+private fun PreferencesUnavailableMessage(onRetry: () -> Unit) {
+    Box(
+        Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                "Avex couldn't read its settings. Your training data is safe.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            TextButton(onClick = onRetry) { Text("Retry") }
+        }
+    }
+}
+
+/**
+ * Only visible during real startup latency or failed recovery, before private content exists. On
+ * Android 8 to 11 it carries the launch's icon cover from the app's first frame ([coverIcon]), with
+ * the message under it only once the start is slow.
+ */
+@Composable
+private fun StartupMessage(message: String, coverIcon: AppIcon? = null, showMessage: Boolean = true) {
+    ForgeTheme {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+            if (coverIcon != null) LaunchCover(coverIcon, ready = false)
+            if (showMessage) {
+                Box(
+                    Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
+                    contentAlignment = if (coverIcon != null) Alignment.BottomCenter else Alignment.Center
+                ) {
+                    Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+                }
+            }
+        }
+    }
+}

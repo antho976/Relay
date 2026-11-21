@@ -1,0 +1,184 @@
+package com.forge.app.ui.gym.train.components
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.forge.app.ui.common.ForgeChromeButton
+import com.forge.app.ui.common.GROUP_OUTER
+import com.forge.app.ui.common.ROW_H
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberUpdatedState
+
+/**
+ * Multiline note field for an exercise. Includes quick-insert template chips (#113)
+ * and a "Pin as cue" button (#112). Local state with 500ms commit debounce.
+ *
+ * Template behavior: each template starts its own line in the note with the cursor parked
+ * right after it, ready to type the answer; a chip disappears once its prompt is already
+ * in the note, so templates can't double-insert or mash together.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+fun NoteField(
+    initialNote: String?,
+    onCommit: (String) -> Unit,
+    onPinNote: (String) -> Unit = {},
+    currentPinnedNote: String = "",
+    showTemplates: Boolean = true,
+    modifier: Modifier = Modifier,
+    /**
+     * The user's quick-insert prompts, passed in by a caller that already has them.
+     *
+     * This used to default to `hiltViewModel<SettingsViewModel>()`, resolved against the DAY
+     * screen's back-stack entry — so opening an exercise card's NOTE panel mid-workout constructed
+     * the whole 793-line Settings graph there and started its collection of some fifteen DataStore
+     * flows plus DB flows, on the one screen that has to stay responsive between sets. The single
+     * call site passes `showTemplates = false` and never rendered a chip from any of it.
+     */
+    noteTemplates: Set<String> = emptySet()
+) {
+    var field by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(initialNote.orEmpty(), TextRange(initialNote.orEmpty().length)))
+    }
+    // What the database is known to hold. Starts at the incoming note and advances on each commit,
+    // so the dispose commit below can tell "unsaved" from "already written".
+    val committed = remember { mutableStateOf(initialNote.orEmpty()) }
+    val latestText = rememberUpdatedState(field.text)
+    val latestCommit = rememberUpdatedState(onCommit)
+    val templates = remember(noteTemplates, field.text) {
+        noteTemplates
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase() }
+            .filterNot { field.text.contains(it, ignoreCase = true) }
+            .sortedBy { it.lowercase() }
+    }
+
+    LaunchedEffect(field.text) {
+        if (field.text != committed.value) {
+            delay(500)
+            latestCommit.value(field.text)
+            committed.value = field.text
+        }
+    }
+
+    // The debounce above was the ONLY commit path, so anything typed in the last 500ms died with
+    // the composition — and this field's composition ends routinely, not exceptionally: the card
+    // auto-collapses when the final set is logged, and "move to next" unmounts it outright. Typing
+    // a note and immediately logging the last set therefore discarded the note, which is precisely
+    // when a note is most likely to be written.
+    DisposableEffect(Unit) {
+        onDispose {
+            val text = latestText.value
+            if (text != committed.value) latestCommit.value(text)
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (showTemplates && templates.isNotEmpty()) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                templates.forEach { template ->
+                    // An insert action, so a small filled capsule rather than a filter chip.
+                    ForgeChromeButton(
+                        onClick = {
+                            val next =
+                                if (field.text.isBlank()) "$template "
+                                else field.text.trimEnd() + "\n" + template + " "
+                            field = TextFieldValue(next, TextRange(next.length))
+                        },
+                        label = "Insert $template"
+                    ) {
+                        Text(
+                            template,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // The filled notes well (grouped-surface pass, 2026-09-27): no outline, the raised fill and
+        // its mono label say what it is.
+        val onBg = MaterialTheme.colorScheme.onBackground
+        val muted = MaterialTheme.colorScheme.onSurfaceVariant
+        BasicTextField(
+            value = field,
+            onValueChange = { field = it },
+            modifier = modifier.fillMaxWidth().semantics { contentDescription = "Notes" },
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = onBg),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            minLines = 1,
+            maxLines = 4,
+            decorationBox = { inner ->
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 56.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .padding(horizontal = ROW_H, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("NOTES", style = MaterialTheme.typography.labelSmall, color = muted)
+                    Box {
+                        if (field.text.isEmpty()) {
+                            Text(
+                                "Form cues, how it felt, what to try next time…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = muted.copy(alpha = 0.6f)
+                            )
+                        }
+                        inner()
+                    }
+                }
+            }
+        )
+
+        if (field.text.isNotBlank()) {
+            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                val pinned = currentPinnedNote == field.text.trim()
+                ForgeChromeButton(
+                    onClick = { onPinNote(if (pinned) "" else field.text.trim()) },
+                    label = if (pinned) "Unpin cue" else "Pin as cue"
+                ) {
+                    Text(
+                        if (pinned) "Unpin cue" else "Pin as cue",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
+                }
+            }
+        }
+    }
+}

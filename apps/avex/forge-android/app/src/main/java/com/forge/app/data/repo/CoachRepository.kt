@@ -1,0 +1,1156 @@
+package com.forge.app.data.repo
+
+import androidx.room.withTransaction
+import com.forge.app.domain.adapt.isWorkingStrengthSet
+import com.forge.app.core.time.Clock
+import com.forge.app.data.db.ForgeDatabase
+import com.forge.app.data.db.dao.CoachDao
+import com.forge.app.data.db.dao.ExerciseCustomizationDao
+import com.forge.app.data.db.dao.ProgramCustomizationDao
+import com.forge.app.data.db.dao.VacationDao
+import com.forge.app.data.db.entities.CoachDecision
+import com.forge.app.data.db.entities.CoachPass
+import com.forge.app.data.db.entities.OverlaySource
+import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.domain.adapt.AdaptThresholds
+import com.forge.app.domain.adapt.AdaptationSnapshot
+import com.forge.app.domain.adapt.DeloadAdvisor
+import com.forge.app.domain.adapt.ProgressionAdvisor
+import com.forge.app.domain.adapt.Recommendation
+import com.forge.app.domain.coach.AutoCoachPlanner
+import com.forge.app.domain.coach.BlockPlanner
+import com.forge.app.domain.coach.CoachGenBias
+import com.forge.app.domain.coach.CoachPassInputs
+import com.forge.app.domain.coach.CoachPassStatus
+import com.forge.app.domain.coach.OutcomeWatcher
+import com.forge.app.domain.coach.TrustLedger
+import com.forge.app.domain.coach.TypeTrust
+import com.forge.app.domain.coach.WeeklyReview
+import com.forge.app.domain.coach.WeeklyReviewData
+import com.forge.app.domain.vacation.VacationCalendar
+import com.forge.app.program.ExerciseLibrary
+import com.forge.app.program.ExercisePlan
+import com.forge.app.program.MuscleGroup
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.time.DayOfWeek
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.temporal.TemporalAdjusters
+import javax.inject.Inject
+import javax.inject.Singleton
+import com.forge.app.program.Program
+
+/** Home's COACH row: open calls this week, and applied changes still inside their watch window. */
+data class CoachHomeSummary(val open: List<CoachDecision>, val watching: List<CoachDecision>)
+
+/** The one-line "new report ready" banner shown on Overview until the brief is seen. */
+data class CoachBanner(
+    val weekId: String,
+    val text: String,
+    /**
+     * The week asks for or reports something: a proposal, an applied change, or a failed pass. A
+     * "holding steady" or observations-only week is still a banner and a feed row, but not a push.
+     */
+    val actionable: Boolean = true
+)
+
+/** Everything the Week Brief screen renders: the pass, its decisions, and the review numbers. */
+data class CoachBrief(
+    val pass: CoachPass,
+    val decisions: List<CoachDecision>,
+    /** Null when the review itself failed to assemble — the Brief still renders the pass. */
+    val review: WeeklyReviewData?,
+    /** Finished tracked sessions so far — drives the "still learning, N to go" subtitle (CO1). */
+    val sessionsLogged: Int = 0,
+    /** Sessions needed before the weekly pass starts calling adjustments. */
+    val minSessions: Int = 0,
+    /**
+     * Changes applied from the PREVIOUS brief (last week's pass) — shown as a "what changed"
+     * delta so the user can see whether a past change is now in effect. Empty for the very first
+     * brief or when nothing was applied last week.
+     */
+    val previousApplied: List<CoachDecision> = emptyList()
+) {
+    /** Sessions remaining before the coach activates; 0 once it's calling weekly adjustments. */
+    val sessionsToGo: Int get() = (minSessions - sessionsLogged).coerceAtLeast(0)
+}
+
+/**
+ * The "Coach lab" read-out (finding #5): a plain-language portrait of what the coach is
+ * currently watching and how far along its learning is — surfaced so a quiet coach reads as
+ * "still gathering data", not broken. Nothing here is a verdict; it's the inputs, labelled.
+ */
+data class CoachWatch(
+    val sessionsLogged: Int,
+    /** Finished sessions needed before the weekly pass starts calling adjustments. */
+    val minSessions: Int,
+    /** max(0, minSessions − sessionsLogged) — 0 once the coach is active. */
+    val sessionsToGo: Int,
+    /** True when earned changes apply themselves (Settings → coach mode "auto"). */
+    val autopilot: Boolean,
+    /** Current accumulated-fatigue score, or null below the deload data gates. */
+    val fatigueScore: Int?,
+    val fatigueThreshold: Int,
+    /** The advisor's own session gate for a recovery read (NOT the coach's activation gate). */
+    val recoveryGateSessions: Int = 0,
+    /** Days of training history on record — the advisor also needs one full window of it. */
+    val historyDays: Int = 0,
+    /** The advisor's window length in days; a read needs [historyDays] to reach it. */
+    val recoveryWindowDays: Int = 0,
+    /** The advisor's full instrument panel — every fatigue check with its live reading,
+     *  fired or quiet. Empty until the advisor's data gates are met. */
+    val fatigueChecks: List<DeloadAdvisor.FatigueCheck> = emptyList(),
+    /** Lifts with logged history, "concrete" once they clear the judge-it gate. */
+    val trackedLifts: List<TrackedLift>,
+    /** Recovery inputs the coach reads — each active or "still forming". */
+    val recoverySignals: List<RecoverySignal>,
+    /** What the coach has learned from changes you've accepted (empty when it hasn't yet). */
+    val learnedBiases: List<LearnedBias>
+)
+
+data class TrackedLift(
+    val name: String,
+    val bouts: Int,
+    val concrete: Boolean,
+    val stalling: Boolean = false,
+    /** The program-slot key the engine tracks this lift under — lets the UI join chart series. */
+    val slotId: String = ""
+)
+data class RecoverySignal(val label: String, val detail: String, val active: Boolean)
+data class LearnedBias(val label: String, val detail: String)
+
+/**
+ * The "Coach learning timeline" (Tier 6 narrative surface): how the coach has grown over time —
+ * its earned trust per change type, the journey milestones it's hit (and the ones still ahead),
+ * and the week-by-week record. Read-only; everything here is derived from the coach's own ledger.
+ */
+data class CoachTimeline(
+    val trust: List<TypeTrust>,
+    val milestones: List<CoachMilestone>,
+    val weeks: List<CoachRepository.CoachHistoryEntry>,
+    /** Every change ever applied and what became of it, over the whole ledger (not just [weeks]). */
+    val record: CoachRecord = CoachRecord()
+)
+
+/**
+ * The coach's track record in four counts. [applied] counts everything that crossed the apply line
+ * (folded and reverted included, as the milestones count it); the other four split it by verdict,
+ * so they sum to at most [applied]. A "not_followed" verdict sits in none of them: skipping the
+ * work is the user's call, not a miss by the coach. It is counted on its own ([notJudged]) so the
+ * line can say where the rest went: after a break, "1 of 4 held · 1 missed" left two unexplained,
+ * which read as the coach failing.
+ */
+data class CoachRecord(
+    val applied: Int = 0,
+    val held: Int = 0,
+    val missed: Int = 0,
+    /** Applied and still inside its two-week window. */
+    val watching: Int = 0,
+    /** Taken back with Undo before the watcher reached a verdict. */
+    val undone: Int = 0,
+    /** Applied, but no verdict was possible: the work wasn't done, or a break or illness covered the window. */
+    val notJudged: Int = 0,
+    /** True once the coach has proposed anything at all, applied or not. */
+    val anyProposed: Boolean = false
+)
+
+/** One step of the coach's journey — a named achievement, [reached] or still ahead. */
+data class CoachMilestone(val label: String, val detail: String, val reached: Boolean)
+
+/**
+ * The Weekly Coach Pass trigger + Week Brief assembly + the propose/apply lifecycle
+ * (auto-coach Phase 3).
+ *
+ * The pass is idempotent by ISO week id (hardening 10) and every pass writes a row —
+ * proposed, hold, vacation-hold, or error (hardening 4 + 13). Before planning, the watcher
+ * judges previously applied changes (hardening 5); failed ones come back as revert proposals.
+ *
+ * Applying NEVER rebuilds the program: every decision routes through the same write paths
+ * user actions use (persistent swap, rep/sets overlay, the existing deload apply), each
+ * recording its before-state for single-change undo (hardening 6 + 8). Slots the user has
+ * customized are never targeted (hardening 9 — filtered at planning time).
+ */
+@Singleton
+class CoachRepository @Inject constructor(
+    private val coachDao: CoachDao,
+    private val adaptationRepository: AdaptationRepository,
+    private val blockRepository: BlockRepository,
+    private val settings: SettingsRepository,
+    private val vacationDao: VacationDao,
+    private val customizationRepo: CustomizationRepository,
+    private val programCustomizationRepo: ProgramCustomizationRepository,
+    private val programCustomizationDao: ProgramCustomizationDao,
+    private val exerciseCustomizationDao: ExerciseCustomizationDao,
+    /** The apply/undo lifecycle commits its overlay write and ledger stamp as one transaction (H-03). */
+    private val database: ForgeDatabase,
+    private val clock: Clock
+) {
+    companion object {
+        const val STATUS_SHADOW = "shadow"
+        const val STATUS_PROPOSED = "proposed"
+        const val STATUS_APPLIED = "applied"
+        const val STATUS_SKIPPED = "skipped"
+        const val STATUS_HOLD = "hold"
+        const val STATUS_ERROR = "error"
+        /** A delta a regenerate has baked into the baseline: still feeds the bias, no longer undoable. */
+        const val STATUS_FOLDED = "folded"
+
+        /** undo_data sentinel: there was no prior override/swap — undo removes, not restores. */
+        private const val NONE = "∅"
+
+        /** Autopilot won't fire twice inside this much real time, however the week ids fall. */
+        private const val MIN_AUTO_APPLY_GAP_MS = 20L * 60 * 60 * 1000
+
+        /** How long a one-tap undo stays on an applied change. See [markAppliedNow]. */
+        internal const val UNDO_WINDOW_MS = 7L * 24 * 60 * 60 * 1000
+    }
+
+    // Serialises the weekly pass so two concurrent callers (e.g. Overview load + Week Brief) can't
+    // both clear-and-regenerate a shadow pass: the loser waits, then sees the finished pass and
+    // returns it. Separate from lifecycleMutex — this path calls autoApplyEarnedTypes → applyDecision,
+    // which takes lifecycleMutex, so sharing one lock would self-deadlock.
+    private val weeklyPassMutex = Mutex()
+
+    /** Run this week's pass if it hasn't run yet; return the (existing or fresh) record. */
+    suspend fun ensureWeeklyPass(): CoachPass = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+        ensureWeeklyPassOnWorker()
+    }
+
+    private suspend fun ensureWeeklyPassOnWorker(): CoachPass = weeklyPassMutex.withLock {
+        // Before the once-a-week early return below: a block deload an open workout held back is
+        // retried on every resume until it is served (BlockRepository.serveOwedDeload).
+        runCatching { blockRepository.serveOwedDeload() }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+        val zone = ZoneId.systemDefault()
+        val today = Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
+        val weekId = weekId(today)
+        val coachOff = !settings.coachEnabled.first()
+
+        // A pass already ran this ISO week — normally we're done (the week runs once). Two exceptions.
+        //
+        // 1. The pass was recorded while the coach was OFF and the coach is now ON. Re-enabling
+        //    mid-week must not serve an inert result for the rest of the week. Matching on
+        //    STATUS_SHADOW alone missed most of them: only the planner's PROPOSE branch writes
+        //    shadow — a HOLD reached while the coach was off is written STATUS_HOLD, and so is a
+        //    vacation pass, so "All 5 tracked lifts are progressing" from Monday was cached until
+        //    the following Monday however much the history changed in between. The week id of the
+        //    last off-pass is recorded below so the two cases can be told apart.
+        // 2. The pass ERRORED. An error is not a result; it should be retried, not cached for a week.
+        // 3. The pass was the pre-baseline hold and the tally it quoted is out of date. It is the one
+        //    hold whose reason is a live count ("0 of 4 sessions logged"), so caching it left a lifter
+        //    who logged their fourth session on Wednesday reading "0 of 4" under four sessions until
+        //    Monday, with the first calls held back as long. Only a learning hold pays for the count.
+        //
+        // Regenerating deletes the week's decisions, so it never happens to a week the user has
+        // already acted on. The off-pass marker used to stay set all week (nothing cleared it), so
+        // once the coach was back on, EVERY later resume re-ran the week: an applied "Bench 3→4
+        // sets" lost its row and undo data while its overlay stayed live, was proposed again, and
+        // re-applied as 4→5 — on every resume, in auto mode.
+        val offPassWeekId = settings.coachOffPassWeekId.first()
+        coachDao.pass(weekId)?.let { existing ->
+            val recordedWhileOff = existing.status == STATUS_SHADOW || offPassWeekId == weekId
+            val staleBaseline = existing.status == STATUS_HOLD &&
+                AutoCoachPlanner.learningHoldCount(existing.holdReason)
+                    ?.let { it != database.sessionDao().trackedFinishedCount() } == true
+            val regenerate = ((recordedWhileOff && !coachOff) || existing.status == STATUS_ERROR || staleBaseline) &&
+                coachDao.decisionsFor(weekId).all { it.status == STATUS_SHADOW || it.status == STATUS_PROPOSED }
+            if (!regenerate) {
+                if (!coachOff && offPassWeekId == weekId) runCatching { settings.setCoachOffPassWeekId("") }
+                return@withLock existing
+            }
+            coachDao.clearPass(weekId)
+        }
+
+        // When the last pass ran, before this one is written. The pass is keyed to the ISO week but
+        // triggered by any app open, so a Sunday-night lifter who opens the app at 23:30 and reloads
+        // Overview at 00:20 crosses into a new week 50 minutes later and runs a second full pass. The
+        // pass itself is harmless — but auto-applying a second round of coach changes inside one
+        // workout is not, so autopilot waits out MIN_AUTO_APPLY_GAP_MS. The proposals are still there
+        // to tap in the meantime.
+        val previousPassRanAt = coachDao.latestPass()?.ranAt
+
+        // Switched OFF, the coach keeps *watching* but goes silent: a weekly pass still runs and is
+        // recorded so the history stays continuous — a user who parks the coach for two months and
+        // turns it back on resumes a record with no gap — but it proposes, applies, and notifies
+        // nothing. Its would-be proposals are written inert (STATUS_SHADOW: never actionable, ignored
+        // by TrustLedger / CoachGenBias / the outcome watcher / the LIFO-undo guards) and the earned
+        // auto-apply step is skipped. Surfacing stays gated at the call sites (pendingBanner, the hub
+        // tab, the Overview sections). Freestyle bails before ever reaching here (its own gate).
+        val proposeStatus = if (coachOff) STATUS_SHADOW else STATUS_PROPOSED
+
+        // Coach v3 C: the weekly pass is the block's clock. Advancing is idempotent per ISO week,
+        // so a second pass in the same week moves nothing, and a high fatigue score can still pull
+        // the planned deload forward.
+        runCatching { blockRepository.advanceForWeek(weekId) }
+
+        var decisions: List<CoachDecision> = emptyList()
+        val pass = runCatching {
+            if (VacationCalendar.onVacation(vacationDao.all())(today)) {
+                CoachPass(weekId, clock.nowMs(), STATUS_HOLD,
+                    "On holiday. The coach is paused until you're back.")
+            } else {
+                val snapshot = adaptationRepository.snapshot()
+                val inputs = assembleInputs(snapshot)
+                val result = AutoCoachPlanner.evaluate(snapshot, inputs)
+                when (result.status) {
+                    CoachPassStatus.SHADOW -> {
+                        decisions = result.decisions.map {
+                            CoachDecision(
+                                weekId = weekId, type = it.type, targetKey = it.targetKey,
+                                targetName = it.targetName, summary = it.summary,
+                                reason = it.reason, status = proposeStatus,
+                                dayKey = it.dayKey, payload = it.payload,
+                                // The scope's key, left empty since the column was added. Every
+                                // decision here belongs to the weekly cadence (scope defaults to
+                                // "week"), so its key is the ISO week id — without it the column
+                                // the day/session cadences will sort and group on has nothing in it
+                                // for the rows that already exist.
+                                scopeKey = weekId
+                            )
+                        }
+                        CoachPass(weekId, clock.nowMs(), proposeStatus, null)
+                    }
+                    else -> CoachPass(weekId, clock.nowMs(), STATUS_HOLD, result.holdReason)
+                }
+            }
+        }.getOrElse { e ->
+            // Don't launder a cancelled scope into a persisted STATUS_ERROR pass — let cancellation unwind.
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            // Fail loud: an errored pass is its own status, never a silent hold.
+            CoachPass(weekId, clock.nowMs(), STATUS_ERROR,
+                "Couldn't evaluate this week (${e.message ?: e.javaClass.simpleName}), so no changes were considered.")
+        }
+
+        // Atomic + idempotent (seam fix, finding 14): pass + decisions commit in ONE transaction, so
+        // process death can't leave a permanently empty "proposed" pass; the pass PK uses IGNORE, so a
+        // concurrent caller that lost the race no-ops (no crash, no doubled decisions) and reads the
+        // winner's row below instead.
+        val won = coachDao.insertPassWithDecisions(pass, decisions)
+        // A new week's pass supersedes every proposal left un-tapped in an earlier one.
+        if (won) runCatching { coachDao.expireProposalsBefore(weekId) }
+        // Remember that THIS week's pass ran with the coach off, whatever status it landed on, so
+        // turning the coach back on mid-week can regenerate it rather than serve the inert result.
+        if (won && coachOff) runCatching { settings.setCoachOffPassWeekId(weekId) }
+        // And forget it once a pass has run with the coach on: that pass is the real one now.
+        if (won && !coachOff && offPassWeekId == weekId) runCatching { settings.setCoachOffPassWeekId("") }
+        // A switched-off coach records but never acts — shadow decisions aren't proposals, so there is
+        // nothing to auto-apply (and autoApplyEarnedTypes only touches STATUS_PROPOSED rows anyway).
+        val autoApplyTooSoon = previousPassRanAt != null &&
+            clock.nowMs() - previousPassRanAt < MIN_AUTO_APPLY_GAP_MS
+        if (won && decisions.isNotEmpty() && !coachOff && !autoApplyTooSoon) autoApplyEarnedTypes(weekId)
+        coachDao.pass(weekId) ?: pass
+    }
+
+    /**
+     * Autopilot (Phase 4): in "auto" mode, decisions whose TYPE has earned trust (TrustLedger —
+     * consecutive accepted proposals, demoted on any bad outcome) apply themselves; everything
+     * else still waits for a tap. Trust is judged on history BEFORE this week's fresh rows
+     * (undecided proposals never count), and an errored pass has no decisions, so the
+     * no-auto-apply-on-error rule (hardening 13) holds by construction.
+     */
+    private suspend fun autoApplyEarnedTypes(weekId: String) {
+        val mode = settings.coachMode.first()
+        if (!com.forge.app.domain.coach.CoachMode.appliesItself(mode)) return
+        // Hands-off has nothing to earn: every type applies itself from the first week. Its safety is
+        // what happens AFTER the apply (the reason, the two-week watch, Undo), not a gate before it.
+        val handsOff = mode == com.forge.app.domain.coach.CoachMode.HANDS_OFF
+        val earned = if (handsOff) emptySet()
+        else TrustLedger.earnedTypes(coachDao.allDecisions().filter { it.weekId != weekId })
+        if (!handsOff && earned.isEmpty()) return
+        // A deload regenerates the program, which discards the in-progress workout. Autopilot runs
+        // on an app resume, so with a workout open it leaves the deload proposed, to be applied
+        // from the UI behind its confirm, instead of deleting the workout unasked.
+        val workoutOpen = database.sessionDao().getActiveSession() != null
+        coachDao.decisionsFor(weekId)
+            .filter { it.status == STATUS_PROPOSED && (handsOff || it.type in earned) }
+            .filterNot { it.type == "deload" && workoutOpen }
+            .forEach { d ->
+                // One bad decision must not stop the rest, but a cancelled scope must unwind — swallowing
+                // CancellationException here would keep auto-applying inside a cancelled coroutine.
+                runCatching { lifecycleMutex.withLock { applyDecisionLocked(d.id, unconfirmed = true) } }
+                    .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+            }
+    }
+
+    /** Per-type earned-trust readout for the Settings → Coach page. */
+    suspend fun trust(): List<TypeTrust> = TrustLedger.assess(coachDao.allDecisions())
+
+    /** Coach history: recent passes with their decisions, newest first. */
+    data class CoachHistoryEntry(val pass: CoachPass, val decisions: List<CoachDecision>)
+
+    /**
+     * The Coach learning timeline (Tier 6): earned trust + journey milestones + the week-by-week
+     * record, all from the coach's own ledger. One read for the whole narrative screen.
+     */
+    suspend fun timeline(limit: Int = 26): CoachTimeline {
+        val passes = coachDao.recentPasses(limit)
+        val all = coachDao.allDecisions()
+        val trust = TrustLedger.assess(all)
+        // Group the decisions we already loaded by week instead of a per-pass query (was 1 + N).
+        val byWeek = all.groupBy { it.weekId }
+        val weeks = passes.map { CoachHistoryEntry(it, byWeek[it.weekId].orEmpty().sortedBy { d -> d.id }) }
+        return CoachTimeline(
+            trust = trust,
+            milestones = coachMilestones(passes, all, trust),
+            weeks = weeks,
+            record = coachRecord(all)
+        )
+    }
+
+    /** The whole ledger's applied changes, split by what became of them. */
+    private fun coachRecord(all: List<CoachDecision>): CoachRecord {
+        val applied = all.filter {
+            it.status == STATUS_APPLIED || it.status == STATUS_FOLDED || it.status == "reverted"
+        }
+        return CoachRecord(
+            applied = applied.size,
+            held = applied.count { it.outcome == "ok" },
+            missed = applied.count { it.outcome == "failed" },
+            watching = applied.count {
+                it.outcome == "pending" && (it.status == STATUS_APPLIED || it.status == STATUS_FOLDED)
+            },
+            undone = applied.count { it.status == "reverted" && it.outcome == "pending" },
+            notJudged = applied.count { it.outcome == CoachDecision.OUTCOME_NOT_FOLLOWED },
+            anyProposed = all.any { it.status != STATUS_SHADOW }
+        )
+    }
+
+    /** Fixed achievement ladder, each marked reached/ahead from the pass + decision ledger. */
+    private fun coachMilestones(
+        passes: List<CoachPass>,
+        all: List<CoachDecision>,
+        trust: List<TypeTrust>
+    ): List<CoachMilestone> {
+        // "Applied" includes folded (baked into the baseline) and reverted (applied, then undone) —
+        // both crossed the apply line once. "Wins" are changes the watcher later judged ok.
+        val applied = all.count { it.status == "applied" || it.status == "folded" || it.status == "reverted" }
+        val wins = all.count { it.outcome == "ok" }
+        val misses = all.count { it.outcome == "failed" }
+        val deloads = all.count { it.type == "deload" }
+        val earned = trust.filter { it.earned }
+        val proposed = all.isNotEmpty()
+        // Lessons come off the same ledger the generator reads its biases from.
+        val bias = CoachGenBias.from(all)
+        val lessons = bias.volumeBias.size + bias.repBias.size + bias.prefer.size + bias.avoid.size
+        return listOf(
+            CoachMilestone(
+                "First weekly report",
+                if (passes.isNotEmpty()) "${passes.size} week${if (passes.size == 1) "" else "s"} on record" else "After your first full week",
+                passes.isNotEmpty()
+            ),
+            CoachMilestone(
+                "First suggestion",
+                if (proposed) "The coach has started calling changes" else "Unlocks once the coach has a baseline",
+                proposed
+            ),
+            CoachMilestone(
+                "First change",
+                if (applied > 0) "$applied accepted so far" else "When you apply a weekly suggestion",
+                applied > 0
+            ),
+            CoachMilestone(
+                "First win",
+                if (wins > 0) "$wins change${if (wins == 1) "" else "s"} stuck after the watch window" else "When an applied change proves out",
+                wins > 0
+            ),
+            CoachMilestone(
+                "First correction",
+                if (misses > 0) "$misses caught by the two-week watch and walked back" else "When an applied change fails its watch",
+                misses > 0
+            ),
+            CoachMilestone(
+                "First deload",
+                if (deloads > 0) "$deloads called so far" else "When recovery load crosses the line",
+                deloads > 0
+            ),
+            CoachMilestone(
+                "First lesson",
+                if (lessons > 0) "$lessons on the books" else "The changes you keep become rules",
+                lessons > 0
+            ),
+            CoachMilestone(
+                "Autopilot",
+                if (earned.isNotEmpty()) earned.joinToString(", ") { it.label } else "Accept a change type a few weeks running",
+                earned.isNotEmpty()
+            ),
+            CoachMilestone(
+                "Ten weeks coached",
+                if (passes.size >= 10) "${passes.size} weeks in" else "${passes.size} of 10 weeks on record",
+                passes.size >= 10
+            )
+        )
+    }
+
+    /**
+     * Watcher pre-pass + planner inputs. Runs only when a fresh weekly pass is being created,
+     * so outcome verdicts land on a weekly cadence (the watcher's window math handles the rest).
+     */
+    private suspend fun assembleInputs(snapshot: AdaptationSnapshot): CoachPassInputs {
+        // 1. Judge previously applied changes (hardening 5) — including in-window folds, so a refresh
+        // that baked a change in before its window can't shield it from an ok/failed verdict (finding
+        // P1). Then re-derive revert proposals from the durable outcome column — every still-applied
+        // FAILED change owes a revert, even if a prior pass's proposal was dropped by deload-supersession
+        // / the cap / an error (seam fix, finding 4). A folded-then-failed change isn't revertable in
+        // place (the overlay is gone); it self-heals by dropping out of the bias at the next generate.
+        val pending = coachDao.pendingOutcome()
+        val verdicts = OutcomeWatcher.evaluate(
+            pending,
+            snapshot,
+            life = runCatching { adaptationRepository.lifeEvents(snapshot.nowMs) }
+                .getOrDefault(com.forge.app.domain.coach.LifeEvents.State.NONE)
+        )
+        verdicts.forEach { coachDao.setOutcome(it.decisionId, it.outcome) }
+        val reverts = OutcomeWatcher.revertProposalsFor(coachDao.appliedFailed())
+
+        val allDecisions = coachDao.allDecisions()
+
+        // 2. Coach-locked slots (hardening 9): a USER customization locks its slot. Keyed off the
+        // overlay's origin tag, NOT an all-time "coach-touched" subtraction — that hack both stripped
+        // protection from genuine user edits on coach-touched slots and let inert coach residue count
+        // as a user lock (seam findings 5/6). A live coach overlay (source=coach) simply isn't a lock,
+        // so the coach can still revert its own change without self-locking. Targets of pending revert
+        // proposals are also locked so a NEW structural change can't stack on a slot mid-revert (#8).
+        val locked = (
+            programCustomizationDao.all()
+                .filter {
+                    it.source == OverlaySource.USER &&
+                        (it.setsOverride > 0 || it.repRangeOverride != null || it.removed ||
+                            it.exerciseId.startsWith("custom_"))
+                }
+                .map { it.exerciseId } +
+                exerciseCustomizationDao.all()
+                    .filter { it.source == OverlaySource.USER && it.swappedName.isNotBlank() }
+                    .map { it.exerciseId } +
+                reverts.map { it.targetKey }
+            ).toSet()
+
+        // 3. Anti-oscillation (hardening 11): muscles with a volume change still in (or just
+        // failing) its outcome window are locked; net drift per muscle is capped.
+        val slotMuscle = snapshot.program.flatMap { it.slots }.associate { it.exerciseId to it.muscle }
+        fun muscleOf(d: CoachDecision): MuscleGroup? = slotMuscle[d.targetKey]
+        val stillPending = pending.filter { p -> verdicts.none { it.decisionId == p.id } }
+        val volumeLocked = (stillPending + pending.filter { p ->
+            verdicts.any { it.decisionId == p.id && it.outcome == "failed" }
+        }).filter { it.type.startsWith("volume") }.mapNotNull(::muscleOf).toSet()
+        // The drift cap reads the SAME derivation the baseline is folded from (CoachGenBias) — one
+        // source of truth, so the planner can never re-add volume it already donated to the baseline.
+        // (Previously a 56-day/current-slot window that decayed while the baked bias did not — the
+        // ratchet-past-cap bug, seam finding 16.)
+        val net = CoachGenBias.from(allDecisions).volumeBias
+
+        // 4. Structural decline memory (finding 19): a swap/rep_shift whose MOST RECENT decision was
+        // skipped or reverted is "declined" — the planner won't re-propose that identical change, so a
+        // rejected rotation stops reappearing every week. A later applied decision clears the decline.
+        val declined = allDecisions
+            .filter { it.type == "swap" || it.type == "rep_shift" }
+            .filter { it.payload != null }
+            .groupBy { "${it.type}:${it.targetKey}:${it.payload}" }
+            .filterValues { rows -> rows.maxByOrNull { it.id }!!.status in setOf(STATUS_SKIPPED, "reverted") }
+            .keys
+
+        return CoachPassInputs(
+            experience = settings.programExperience.first(),
+            sessionsTarget = settings.daysPerWeek.first(),
+            lockedExerciseIds = locked,
+            volumeLockedMuscles = volumeLocked,
+            volumeNetByMuscle = net,
+            revertProposals = reverts,
+            declinedStructural = declined,
+            blockPhase = runCatching { blockRepository.phase() }.getOrNull(),
+            // E: initiative earned on this coach's own record.
+            changesPerWeek = runCatching {
+                com.forge.app.domain.coach.TrustLadder.assess(
+                    decisions = coachDao.allDecisions(),
+                    weeksCoached = coachDao.recentPasses(52).size
+                ).changesPerWeek
+            }.getOrNull()
+        )
+    }
+
+    // ─── Apply / skip / undo (every write is an existing user path) ──────────
+
+    /**
+     * Serializes the lifecycle mutations. The Brief/Settings fire one coroutine per tap with no
+     * in-flight guard, so a double-tap Apply (or Apply+Skip) could otherwise interleave read-then-
+     * write across the suspend DAO calls and corrupt undo_data or orphan a live overlay (seam #12).
+     */
+    private val lifecycleMutex = Mutex()
+
+    /** True if the slot the decision targets now carries the USER's own customization (finding 7). */
+    private suspend fun userOwnsSlot(d: CoachDecision): Boolean = when (d.type) {
+        "swap" -> customizationRepo.getSwap(d.targetKey)
+            ?.let { it.source == OverlaySource.USER && it.swappedName.isNotBlank() } ?: false
+        "rep_shift", "volume_up", "volume_down" -> programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)
+            ?.let { it.source == OverlaySource.USER && (it.setsOverride > 0 || it.repRangeOverride != null || it.removed) }
+            ?: false
+        else -> false
+    }
+
+    /** True if a newer still-active coach decision owns this slot's overlay field (LIFO undo, #9). */
+    private suspend fun newerCoachDecisionOwnsSlot(d: CoachDecision): Boolean {
+        val newer = coachDao.activeOnTargetAfter(d.targetKey, d.id)
+        return when (d.type) {
+            "swap" -> newer.any { it.type == "swap" }
+            "rep_shift" -> newer.any { it.type == "rep_shift" && it.dayKey == d.dayKey }
+            "volume_up", "volume_down" -> newer.any { it.type.startsWith("volume") && it.dayKey == d.dayKey }
+            else -> false
+        }
+    }
+
+    /** One-tap apply for a proposed decision; records the before-state for undo. */
+    suspend fun applyDecision(id: Long) = lifecycleMutex.withLock { applyDecisionLocked(id) }
+
+    /**
+     * Retire a decision that can never be applied, rather than leaving it `proposed`.
+     *
+     * Every branch below used to bail with a bare `return` on a payload that no longer resolves —
+     * a swap naming a library id an app update retired, a decision restored from a backup taken on
+     * another build. The row stayed proposed, so it came back in the Brief every week, "Apply all"
+     * stepped over it, and tapping Apply did nothing at all with no error. There was no way to
+     * clear it from the UI.
+     */
+    private suspend fun retireUnresolvable(id: Long) = coachDao.setStatus(id, STATUS_SKIPPED)
+
+    /**
+     * Retire a swap / rep shift that performed nothing — its slot has left the program, or the slot
+     * already sits at the proposed value (audit M-08). Recorded like a skip so the Brief stops
+     * offering it and the planner's decline memory won't re-mint the identical change, but with a
+     * NOT FOLLOWED outcome so TrustLedger ignores the row entirely: a change that never happened must
+     * neither extend nor break the type's auto-apply streak, and the watcher (which only reads
+     * applied/folded rows) can never later score it as a win.
+     */
+    private suspend fun retireUnperformed(id: Long) {
+        coachDao.setStatus(id, STATUS_SKIPPED)
+        coachDao.setOutcome(id, CoachDecision.OUTCOME_NOT_FOLLOWED)
+    }
+
+    /**
+     * The live program slot a swap / rep shift targets, or null when there is nothing to change: the
+     * slot is no longer in the active program (a regenerate, reroll or deload since the pass ran) or
+     * the user removed it from its day. The planner's own day key is used when it has one; a swap
+     * minted without one is looked up across days (swaps are keyed per slot, not per day).
+     */
+    private suspend fun liveSlot(d: CoachDecision): ExercisePlan? {
+        val day = if (d.dayKey.isBlank()) {
+            Program.days.firstOrNull { day -> day.exercises.any { it.id == d.targetKey } }
+        } else {
+            Program.days.firstOrNull { it.key == d.dayKey }
+        } ?: return null
+        val slot = day.exercises.firstOrNull { it.id == d.targetKey } ?: return null
+        if (programCustomizationRepo.overrideFor(day.key, d.targetKey)?.removed == true) return null
+        return slot
+    }
+
+    /** [unconfirmed]: autopilot, which must never discard an open workout (see applyDeloadLocked). */
+    private suspend fun applyDecisionLocked(id: Long, unconfirmed: Boolean = false) {
+        val d = coachDao.decision(id) ?: return
+        if (d.status != STATUS_PROPOSED) return
+        // The one cross-store apply (DataStore marker + program regenerate) can't sit inside a Room
+        // transaction — see applyDeloadLocked for how its retry is kept from applying twice.
+        if (d.type == "deload") return applyDeloadLocked(d, unconfirmed)
+        // Revalidate, mutate the overlay and stamp the ledger in ONE Room transaction (audit H-03).
+        // These used to be separate autocommits, so a failure, cancellation or process death between
+        // the overlay write and markApplied left the row proposed with the overlay already moved: a
+        // retry then re-derived against the mutated slot (3 → 4 → 5 sets) and recorded the mutated
+        // value as its undo state. The row is re-read INSIDE the transaction so the status check and
+        // the writes see one consistent snapshot, and any throw — cancellation included — rolls the
+        // overlay back together with the ledger, leaving a clean retry.
+        database.withTransaction {
+            val current = coachDao.decision(id) ?: return@withTransaction
+            if (current.status != STATUS_PROPOSED) return@withTransaction
+            applyOverlayInTransaction(current)
+        }
+    }
+
+    /**
+     * Deload — the only apply that crosses stores, so it cannot be one Room transaction.
+     *
+     * A deload has TWO entry points — this decision and the Overview "deload.suggest" card, which
+     * calls applyDeloadWeek directly — and neither used to know about the other. Apply on Overview
+     * on Tuesday, then Apply in the Brief on Wednesday, and the program was regenerated a second
+     * time from a fresh seed (different exercise picks), the in-progress workout discarded again,
+     * and the deload window pushed out a day. A deload already running means this proposal has been
+     * served; retire it.
+     *
+     * That same check is what makes a RETRY safe: [AdaptationRepository.applyDeloadWeek] persists
+     * the DataStore deload marker BEFORE regenerating (its own Room transaction), and the ledger is
+     * stamped only after both — so a failure or process death at any point past the marker leaves a
+     * running deload, and the retried proposal is retired instead of regenerating a second time.
+     * What stays non-atomic: a crash between the marker and the regenerate leaves a deload marker
+     * over an un-regenerated program (closing that needs a durable pending state reconciled at boot,
+     * out of scope here), and a proposal retried after such a crash reads "skipped", not "applied".
+     */
+    private suspend fun applyDeloadLocked(d: CoachDecision, unconfirmed: Boolean = false) {
+        if (deloadAlreadyRunning()) { coachDao.setStatus(d.id, STATUS_SKIPPED); return }
+        // Not undoable — regenerating again is the way back; its reconcile also clears overlay rows.
+        // Autopilot backs out if a workout opened after its check; the deload stays proposed.
+        if (!adaptationRepository.applyDeloadWeek(unlessWorkoutOpen = unconfirmed)) return
+        // A new week's pass expires stale proposals outside lifecycleMutex, so re-check before stamping.
+        database.withTransaction {
+            if (coachDao.decision(d.id)?.status == STATUS_PROPOSED) markAppliedNow(d.id, null)
+        }
+    }
+
+    /**
+     * The Room-only apply branches. Must run inside `database.withTransaction`: every read and write
+     * here goes to DAOs on the same database (the customization repos are thin wrappers over them),
+     * so the before-state read, the overlay write and [markAppliedNow] commit or roll back as one.
+     */
+    private suspend fun applyOverlayInTransaction(d: CoachDecision) {
+        val id = d.id
+        // Re-validate against the CURRENT program (locks were computed at pass time): if the user has
+        // customized this slot since the pass ran, applying would silently clobber their edit — skip
+        // it instead (seam fix, finding 7). revert isn't slot-scoped, so it's exempt.
+        if (userOwnsSlot(d)) { coachDao.setStatus(id, STATUS_SKIPPED); return }
+        when (d.type) {
+            "swap" -> {
+                val def = d.payload?.let { ExerciseLibrary.byId(it) } ?: return retireUnresolvable(id)
+                // Capture the before-state if the row carries a swap OR a bare unit override — a
+                // unit-only row (blank name, non-blank unit) was previously recorded as "nothing" and
+                // its unit destroyed on undo (seam fix, finding 11). undo splits "name|unit" back, so a
+                // blank name restores the unit-only override cleanly.
+                val prev = customizationRepo.getSwap(d.targetKey)
+                    ?.takeIf { it.swappedName.isNotBlank() || it.swappedUnit.isNotBlank() }
+                // The slot must still be in the live program, and the swap must actually change what
+                // the athlete will train — a slot that left the program, or one already showing this
+                // exercise (a regenerate or an earlier decision put it there), performs nothing and
+                // must not be recorded as applied: it would earn auto-apply trust on nothing (M-08).
+                val slot = liveSlot(d) ?: return retireUnperformed(id)
+                val swapped = prev?.takeIf { it.swappedName.isNotBlank() }
+                val alreadyThere =
+                    if (swapped != null) swapped.swappedExerciseId == def.id || swapped.swappedName == def.name
+                    else slot.id == def.id || slot.name == def.name
+                if (alreadyThere) return retireUnperformed(id)
+                customizationRepo.setSwap(d.targetKey, def.name, def.unit.code, source = OverlaySource.COACH, swappedExerciseId = def.id)
+                // Record name|unit|swapId so undo restores the exact prior swap — including its
+                // re-attribution id (#11). Without the id, undo would strand the coach's id on the
+                // restored row and mis-attribute every PR/stat. Old 2-part rows parse with a null id.
+                markAppliedNow(id, prev?.let { encodeSwapUndo(it.swappedName, it.swappedUnit, it.swappedExerciseId) } ?: NONE)
+            }
+            "rep_shift" -> {
+                val to = d.payload ?: return retireUnresolvable(id)
+                val slot = liveSlot(d) ?: return retireUnperformed(id)
+                val prev = programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.repRangeOverride
+                // Already at the proposed range (the program moved to meet the decision): a no-op
+                // performs nothing and must not read as an accepted change (M-08).
+                if ((prev ?: slot.reps) == to) return retireUnperformed(id)
+                programCustomizationRepo.setRepRange(d.dayKey, d.targetKey, to, source = OverlaySource.COACH)
+                markAppliedNow(id, prev ?: NONE)
+            }
+            "volume_up", "volume_down" -> {
+                // payload is an ABSOLUTE set count, minted while Monday's pass ran. Anything that
+                // moves the slot between the pass and this tap — a regenerate, a reroll, a deload
+                // week — makes that number describe a program that no longer exists. Applying it
+                // verbatim then adds sets back during a deload, or silently drops sets the user
+                // gained in between, while the Brief row still reads "3 → 4".
+                //
+                // The decision means one set, up or down; its type already says which. Re-derive
+                // that against the slot as it stands NOW instead of trusting the stale absolute.
+                val prev = programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.setsOverride ?: 0
+                // setsOverride 0 means "use the plan's own count", so the plan is the anchor when
+                // no override is present. With neither, the slot has left the program entirely and
+                // there is nothing coherent to adjust.
+                val planSets = Program.dayOrNull(d.dayKey)?.exercises?.firstOrNull { it.id == d.targetKey }?.sets
+                val current = if (prev > 0) prev else planSets ?: return retireUnresolvable(id)
+                val delta = if (d.type == "volume_up") 1 else -1
+                val newSets = (current + delta).coerceIn(1, AutoCoachPlanner.MAX_SLOT_SETS)
+                // Re-deriving can land on the count the slot already has (the program moved to meet
+                // the decision, or the bound clamped it). Writing it is still correct — the overlay
+                // records the coach's intent for the slot — but there is nothing to undo back to.
+                programCustomizationRepo.setSetsOverride(d.dayKey, d.targetKey, newSets, source = OverlaySource.COACH)
+                markAppliedNow(id, prev.toString())
+            }
+            "revert" -> {
+                val originalId = d.payload?.toLongOrNull() ?: return retireUnresolvable(id)
+                // An evaluated forward correction is not constrained by the user's short undo
+                // window. It still verifies live ownership before touching the original overlay.
+                if (undoDecisionLocked(originalId, corrective = true)) {
+                    markAppliedNow(id, null)
+                } else {
+                    coachDao.setStatus(id, STATUS_SKIPPED)
+                }
+            }
+            else -> return retireUnresolvable(id)
+        }
+    }
+
+    /** True when a deload week applied through EITHER entry point is still governing today. */
+    private suspend fun deloadAlreadyRunning(): Boolean {
+        val startedAt = settings.deloadWeekStartMs.first()
+        if (startedAt <= 0L) return false
+        return clock.nowMs() < com.forge.app.core.time.deloadWeekEndMs(startedAt)
+    }
+
+    /** Apply every still-proposed decision of [weekId], in order. */
+    suspend fun applyAll(weekId: String) =
+        coachDao.decisionsFor(weekId).filter { it.status == STATUS_PROPOSED }.forEach { applyDecision(it.id) }
+
+    suspend fun skipDecision(id: Long) = lifecycleMutex.withLock {
+        val d = coachDao.decision(id) ?: return@withLock
+        if (d.status == STATUS_PROPOSED) coachDao.setStatus(id, STATUS_SKIPPED)
+    }
+
+    /**
+     * Single-change undo (hardening 6): restore the recorded before-state through the same write
+     * path, mark reverted + failed (a user undo IS a failed outcome).
+     *
+     * Compare-and-restore: the overlay is rewritten ONLY while it still holds the coach's own write
+     * (source=coach). If the user has since edited the slot, or a regenerate already cleared/folded
+     * the overlay, a blind restore would destroy the user's edit (finding 10) or write a stale
+     * absolute onto a fresh program (finding 0) — in those cases the decision is just retired (the
+     * baseline/overlay already moved on; folded volume drops out of the bias at the next generate).
+     * A restored before-state belongs to the user again, so it's written back as source=user.
+     */
+    suspend fun undoDecision(id: Long) = lifecycleMutex.withLock {
+        // Same contract as apply (H-03): the overlay restore and markReverted land together or not at all.
+        database.withTransaction { undoDecisionLocked(id) }
+    }
+
+    /**
+     * Stamp a decision applied, with the moment its one-tap undo stops being offered.
+     *
+     * `undo_expires_at` is documented on the column as the gate for "past this stamp the coach
+     * offers revert forward instead of one-tap undo", and nothing wrote it — so the gate didn't
+     * exist and LIFO undo reached back indefinitely. [UNDO_WINDOW_MS] is a week, matching that
+     * docstring's own reasoning: undo can't unwind a structural change the user has already trained
+     * under. Past the window the change is still reversible — the coach proposes a revert when the
+     * watcher rules against it, and the program is directly editable — it just isn't one tap on a
+     * months-old row any more.
+     *
+     * Only ever called inside the apply transaction, after the overlay write it certifies (H-03).
+     */
+    private suspend fun markAppliedNow(id: Long, undoData: String?) {
+        val now = clock.nowMs()
+        coachDao.markApplied(id, now, undoData, undoExpiresAt = now + UNDO_WINDOW_MS)
+    }
+
+    /** Serialize a swap's prior state for undo as JSON — robust to '|' or any char in the name (#11). */
+    private fun encodeSwapUndo(name: String, unit: String, swapId: String?): String =
+        org.json.JSONObject().apply {
+            put("name", name); put("unit", unit); put("swapId", swapId ?: "")
+        }.toString()
+
+    /** Parse a swap undo record: JSON for new rows, legacy "name|unit[|swapId]" for old ones (#11). */
+    private fun decodeSwapUndo(raw: String): Triple<String, String, String?> {
+        if (raw.startsWith("{")) runCatching {
+            val o = org.json.JSONObject(raw)
+            return Triple(o.optString("name"), o.optString("unit"), o.optString("swapId").ifBlank { null })
+        }
+        // A corrupt/empty legacy record ("" or "|" — possible after a failed restore or migration edge)
+        // splits to a blank name; surface it explicitly so the caller can avoid writing it into a slot.
+        if (raw.isBlank()) return Triple("", "", null)
+        return raw.split("|").let {
+            Triple(it[0], it.getOrElse(1) { "" }, it.getOrNull(2)?.ifBlank { null })
+        }
+    }
+
+    /** @return true when the undo actually ran; false when it was refused (already retired, or a
+     *  newer decision owns the slot). Callers that need to know — the revert path — must not treat
+     *  a refusal as success. */
+    private suspend fun undoDecisionLocked(id: Long, corrective: Boolean = false): Boolean {
+        val d = coachDao.decision(id) ?: return false
+        if (d.status != STATUS_APPLIED) return false
+        // Past its window, a change is no longer one-tap undoable — see [markAppliedNow]. Rows
+        // applied before the stamp existed carry null and keep the old unbounded behaviour rather
+        // than having a window retro-fitted onto them.
+        if (!corrective) d.undoExpiresAt?.let { if (clock.nowMs() > it) return false }
+        if (corrective && (liveSlot(d) == null || userOwnsSlot(d))) return false
+        // Per-slot LIFO: if a newer still-active coach decision owns this slot's overlay, refuse —
+        // restoring the older before-state would silently wipe the newer change, and the watcher's
+        // own revert pipeline reverts newest-first so the chain unwinds cleanly (seam fix, finding 9).
+        if (newerCoachDecisionOwnsSlot(d)) return false
+        when (d.type) {
+            "swap" -> {
+                if (customizationRepo.getSwap(d.targetKey)?.source == OverlaySource.COACH) {
+                    val prev = d.undoData
+                    if (prev == null || prev == NONE) customizationRepo.clearSwap(d.targetKey)
+                    else {
+                        // restoreSwap (not setSwap) force-sets the id, so a prior swap with no
+                        // re-attribution id clears the coach's instead of inheriting it (#11).
+                        val (name, unit, swapId) = decodeSwapUndo(prev)
+                        // A corrupt/blank undo record would otherwise restore a BLANK exercise name into
+                        // the slot (renders as an empty name on the session screen). Drop the coach overlay
+                        // entirely instead, so the slot falls back to the real base-program exercise (#11).
+                        //
+                        // Only when the UNIT is blank too. A blank name with a unit is the unit-only
+                        // override the apply path deliberately records (finding 11) — blank name means
+                        // "no swap" everywhere — and clearing it destroyed the very override that
+                        // record exists to put back.
+                        if (name.isBlank() && unit.isBlank()) customizationRepo.clearSwap(d.targetKey)
+                        else customizationRepo.restoreSwap(
+                            d.targetKey, name, unit,
+                            // A restored NAMED swap can only be an earlier coach swap: applying over a
+                            // user's named swap is refused by userOwnsSlot. Tagging it USER would lock
+                            // the slot and detach it from clearCoachSwaps and its own decision's undo.
+                            source = if (name.isNotBlank()) OverlaySource.COACH else OverlaySource.USER,
+                            swappedExerciseId = swapId
+                        )
+                    }
+                }
+            }
+            // Both branches below KEEP source = COACH rather than flipping it to USER.
+            //
+            // program_customization holds ONE row per (day, exercise) carrying repRangeOverride,
+            // setsOverride, removed and orderOverride, with a single `source` column for all of
+            // them. Writing USER here therefore relabelled the whole row, not the field being
+            // undone: a coach rep-range override sitting on the same slot stayed applied but was
+            // now tagged as the user's, and the coach-lock scan below (`source == USER && (…)`)
+            // then treated the slot as user-owned and never touched it again. Undoing one coach
+            // decision permanently locked the coach out of a slot it owned.
+            //
+            // COACH is also the honest tag. Both branches only run when the row is already
+            // coach-owned, and the coach can only have written it because the slot was NOT
+            // user-locked — so the value being restored is the coach's own prior state or none at
+            // all, never a user edit. The user rejecting a proposal is recorded where it belongs,
+            // in the decision ledger (markReverted, which TrustLadder's revert cap reads), rather
+            // than by falsifying authorship of the overlay row.
+            "rep_shift" -> {
+                if (programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.source == OverlaySource.COACH) {
+                    if (d.undoData == null || d.undoData == NONE)
+                        programCustomizationRepo.clearRepRange(d.dayKey, d.targetKey)
+                    else programCustomizationRepo.setRepRange(d.dayKey, d.targetKey, d.undoData, source = OverlaySource.COACH)
+                }
+            }
+            "volume_up", "volume_down" -> {
+                if (programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.source == OverlaySource.COACH)
+                    programCustomizationRepo.setSetsOverride(
+                        d.dayKey, d.targetKey, d.undoData?.toIntOrNull() ?: 0, source = OverlaySource.COACH
+                    )
+            }
+            else -> return false // deload / revert aren't mechanically undoable
+        }
+        coachDao.markReverted(id)
+        return true
+    }
+
+    // ─── Brief assembly ────────────────────────────────────────────────────────
+
+    /** The full Week Brief: ensures the pass exists, then assembles review + decisions. */
+    suspend fun brief(): CoachBrief {
+        val pass = ensureWeeklyPass()
+        return briefFor(pass)
+    }
+
+    /** Re-read the Brief without re-running the pass — after an apply/skip/undo tap. */
+    suspend fun refreshBrief(): CoachBrief? = coachDao.latestPass()?.let { briefFor(it) }
+
+    private suspend fun briefFor(pass: CoachPass): CoachBrief {
+        val decisions = coachDao.decisionsFor(pass.weekId)
+        // Snapshot once and reuse: feeds the review AND the activation-progress subtitle (CO1). The
+        // cached read: the Coach page asks for the same snapshot right after (lab, readiness,
+        // academy moments), and it is rebuilt whenever an input has changed.
+        val snapshot = runCatching { adaptationRepository.snapshotCached() }.getOrNull()
+        val review = snapshot?.let { snap ->
+            runCatching {
+                WeeklyReview.assemble(
+                    s = snap,
+                    weekStartMs = weekStartMs(),
+                    sessionsTarget = settings.daysPerWeek.first(),
+                    // Exclude inert SHADOW rows (recorded while the coach was off): they were never
+                    // proposed, so they mustn't make the review think a deload already exists and
+                    // suppress the real recommendation.
+                    hasDeloadShadow = decisions.any { it.type == "deload" && it.status != STATUS_SHADOW },
+                    // A real block, when one is running, replaces the inferred mesocycle copy (C).
+                    block = runCatching { blockRepository.active() }.getOrNull()
+                )
+            }.getOrNull()
+        }
+        // Previous brief's applied changes — the "what changed" delta for the user. Reads the two most
+        // recent passes and takes decisions from the one BEFORE this week's pass that were actually applied
+        // (applied, folded, or reverted all crossed the apply line). Falls back silently on any error.
+        val previousApplied = runCatching {
+            val recent = coachDao.recentPasses(2)
+            val prevWeekId = recent.firstOrNull { it.weekId != pass.weekId }?.weekId
+            if (prevWeekId != null) {
+                coachDao.decisionsFor(prevWeekId)
+                    .filter { it.status == STATUS_APPLIED || it.status == STATUS_FOLDED || it.status == "reverted" }
+            } else emptyList()
+        }.getOrDefault(emptyList())
+        return CoachBrief(
+            pass, decisions, review,
+            sessionsLogged = snapshot?.sessions?.size ?: 0,
+            // When the snapshot failed (null) we DON'T know the real session count — leave minSessions 0
+            // so sessionsToGo is 0 and the Brief shows the neutral "watching and learning" line instead
+            // of telling an established user "Still learning — 0 of N sessions logged" (a failed read is
+            // not a fresh account). The "Last week" section is already hidden because review is null.
+            minSessions = if (snapshot != null) AutoCoachPlanner.MIN_SESSIONS else 0,
+            previousApplied = previousApplied
+        )
+    }
+
+    /**
+     * The "Coach lab" portrait (finding #5): what the coach is tracking, right now, in plain
+     * words — tracked lifts, the recovery inputs it reads, and what it has learned so far. Pure
+     * read off ONE snapshot + the decision history; never writes. Call on screen open only.
+     */
+    suspend fun coachLab(): CoachWatch =
+        // The advisors below are CPU passes over the whole history; callers reach this from
+        // viewModelScope (Main), so the work is moved off it here rather than at every call site.
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { assembleCoachLab() }
+
+    private suspend fun assembleCoachLab(): CoachWatch {
+        // Read-only display: reuse a recent snapshot (e.g. the Week Brief's) rather than re-running the
+        // whole-history fan-out again when Coach Lab is opened straight from it.
+        val s = adaptationRepository.snapshotCached()
+        val t = AdaptThresholds()
+        val bias = CoachGenBias.from(coachDao.allDecisions())
+        val dayMs = 24L * 60 * 60 * 1000
+        val windowStart = s.nowMs - t.deloadWindowDays * dayMs
+
+        // Lifts the plateau ladder (System 1) currently flags as stalling — same source the weekly
+        // pass uses, so the lab shows exactly what the coach is acting on.
+        val stalledIds = ProgressionAdvisor.evaluate(s, t).mapNotNull { rec ->
+            when (rec) {
+                is Recommendation.VariationSwap -> rec.exerciseId
+                is Recommendation.RepRangeShift -> rec.exerciseId
+                is Recommendation.WeightChange -> rec.exerciseId
+                else -> null
+            }
+        }.toSet()
+
+        // Tracked lifts: anything with non-skipped history; "concrete" once it clears the same
+        // weighted-bout gate the planner uses to judge progress (AutoCoachPlanner.trackedLiftIds).
+        val tracked = s.exerciseHistory.mapNotNull { (slotId, bouts) ->
+            val nonSkipped = bouts.count { !it.skipped }
+            if (nonSkipped == 0) return@mapNotNull null
+            val weighted = bouts.count { b -> !b.skipped && b.sets.any { it.isWorkingStrengthSet() } }
+            val name = ExerciseLibrary.byId(slotId)?.name
+                ?: bouts.lastOrNull { !it.swappedName.isNullOrBlank() }?.swappedName
+                ?: slotId
+            TrackedLift(
+                name = name, bouts = nonSkipped,
+                concrete = weighted > t.plateauMinBouts, stalling = slotId in stalledIds,
+                slotId = slotId
+            )
+        }.sortedWith(
+            compareByDescending<TrackedLift> { it.stalling }
+                .thenByDescending { it.concrete }.thenByDescending { it.bouts }
+        )
+
+        val moodCount = s.moods.count { it.recordedAt >= windowStart }
+        val restFlags = s.cardio.count { it.date >= windowStart && (it.restReason == "sore" || it.restReason == "sick") }
+        val sleepNights = s.health.sleepNights.count { it.endedAtMs >= windowStart }
+        val hrReadings = s.health.restingHr.count { it.timeMs >= windowStart }
+        val recovery = listOf(
+            RecoverySignal("Effort check-ins",
+                if (moodCount > 0) "$moodCount in the last two weeks" else "none yet", moodCount > 0),
+            RecoverySignal("Rest-day flags",
+                if (restFlags > 0) "$restFlags sore or sick day${if (restFlags == 1) "" else "s"} noted" else "none flagged", restFlags > 0),
+            RecoverySignal("Sleep",
+                if (sleepNights > 0) "$sleepNights night${if (sleepNights == 1) "" else "s"} via Health Connect" else "not connected", sleepNights > 0),
+            RecoverySignal("Resting heart rate",
+                if (hrReadings > 0) "$hrReadings reading${if (hrReadings == 1) "" else "s"} via Health Connect" else "not connected", hrReadings > 0)
+        )
+
+        // Plurals resolved here (§11 bans "set(s)"): these lines render as they are in Learned.
+        fun n(count: Int, one: String, many: String = one + "s") = "$count ${if (count == 1) one else many}"
+        val learned = buildList {
+            bias.volumeBias.forEach { (muscle, delta) ->
+                val detail = when {
+                    delta > 0 -> "${n(delta, "set")} more, carried forward"
+                    else -> "${n(-delta, "set")} fewer, carried forward"
+                }
+                add(LearnedBias("${muscle.displayName} volume", detail))
+            }
+            if (bias.repBias.isNotEmpty()) add(LearnedBias("Rep ranges", "${n(bias.repBias.size, "lift")} re-ranged"))
+            if (bias.prefer.isNotEmpty()) add(LearnedBias("Preferred rotations", "${n(bias.prefer.size, "swap")} kept"))
+            if (bias.avoid.isNotEmpty()) add(LearnedBias("Avoided rotations", "${n(bias.avoid.size, "swap")} steered around"))
+        }
+
+        val fatigue = DeloadAdvisor.fatigue(s, t)
+        return CoachWatch(
+            sessionsLogged = s.sessions.size,
+            minSessions = AutoCoachPlanner.MIN_SESSIONS,
+            sessionsToGo = (AutoCoachPlanner.MIN_SESSIONS - s.sessions.size).coerceAtLeast(0),
+            autopilot = com.forge.app.domain.coach.CoachMode.appliesItself(settings.coachMode.first()),
+            fatigueScore = fatigue?.score,
+            fatigueThreshold = t.deloadScoreThreshold,
+            recoveryGateSessions = t.deloadMinSessions,
+            historyDays = s.sessions.minOfOrNull { it.startedAt }
+                ?.let { ((s.nowMs - it) / dayMs).toInt() } ?: 0,
+            recoveryWindowDays = t.deloadWindowDays,
+            // Surface the checks from session one (§4.9): when the advisor is gated, show the same
+            // readings with nothing fired — a live panel, not a lone "building a baseline" bar.
+            fatigueChecks = fatigue?.checks ?: DeloadAdvisor.checks(s, t).map { it.copy(fired = false) },
+            trackedLifts = tracked,
+            recoverySignals = recovery,
+            learnedBiases = learned
+        )
+    }
+
+    /**
+     * What Home's COACH row reads (2026-10-21 redesign): this week's open calls and the applied
+     * changes the watcher has not ruled on yet. Null when there is nothing to coach (freestyle, or the
+     * coach switched off), which hides the row rather than printing "holding steady" for a coach
+     * that is not running.
+     */
+    suspend fun homeSummary(): CoachHomeSummary? {
+        if (settings.freestyleMode.first() || !settings.coachEnabled.first()) return null
+        val pass = ensureWeeklyPass()
+        val open = coachDao.decisionsFor(pass.weekId).filter { it.status == STATUS_PROPOSED }
+        val watching = coachDao.pendingOutcome().filter { it.status == STATUS_APPLIED || it.status == STATUS_FOLDED }
+        return CoachHomeSummary(open = open, watching = watching)
+    }
+
+    /** One-line summary of where [pass] landed (Overview banner + Settings entry). */
+    suspend fun summaryFor(pass: CoachPass): String {
+        if (pass.status == STATUS_ERROR) return "Coach · couldn't run this week"
+        val ds = coachDao.decisionsFor(pass.weekId)
+        val applied = ds.count { it.status == STATUS_APPLIED }
+        val open = ds.count { it.status == STATUS_PROPOSED }
+        // Plurals are resolved here, not left as "proposal(s)" — this line renders in the
+        // notifications feed, Settings and the weekly push (DESIGN §11: no paren-plurals).
+        return when {
+            open > 0 -> "Coach · $open ${if (open == 1) "proposal" else "proposals"} for this week"
+            applied > 0 -> "Coach · $applied ${if (applied == 1) "change" else "changes"} applied this week"
+            pass.status == STATUS_SHADOW -> "Coach · observations ready for this week"
+            else -> "Coach · holding steady this week"
+        }
+    }
+
+    /**
+     * The "new report" banner for Overview (auto-coach Phase 1 entry-point rework): ensures
+     * this week's pass, then returns its summary ONLY if the user hasn't seen it yet. Null once
+     * the brief has been opened or the banner dismissed (both call [markSeen]).
+     */
+    suspend fun pendingBanner(): CoachBanner? {
+        // Nothing to coach without a plan (freestyle) — bail before ensureWeeklyPass so no pass runs.
+        if (settings.freestyleMode.first()) return null
+        // Run the weekly pass unconditionally so the coach's history keeps building in the background
+        // even while it's switched OFF (ensureWeeklyPass records those weeks observe-only — no
+        // proposals, no auto-apply). Only the passive Overview banner + weekly coach-brief push are
+        // gated on coach-enabled: a disabled coach records silently and surfaces nothing.
+        val pass = ensureWeeklyPass()
+        if (!settings.coachEnabled.first()) return null
+        if (pass.weekId == settings.lastSeenCoachWeekId.first()) return null
+        // Stay silent while the coach is still pre-baseline (the first ~week after onboarding). The
+        // brief is only a "still learning — N of M sessions" countdown then, so announcing it as
+        // "holding steady this week" — on Overview AND as a push — is misleading. Only a HOLD pass can
+        // be pre-baseline (a proposal clears MIN_SESSIONS by construction), so we skip the count read
+        // otherwise; ensureWeeklyPass just warmed the snapshot cache on the non-vacation path, so the
+        // read is cheap there. A failed read defaults to "established" (fail-open), matching briefFor.
+        if (pass.status == STATUS_HOLD &&
+            runCatching { adaptationRepository.snapshotCached().sessions.size }
+                .getOrDefault(AutoCoachPlanner.MIN_SESSIONS) < AutoCoachPlanner.MIN_SESSIONS
+        ) return null
+        val actionable = pass.status == STATUS_ERROR ||
+            coachDao.decisionsFor(pass.weekId).any { it.status == STATUS_PROPOSED || it.status == STATUS_APPLIED }
+        return CoachBanner(pass.weekId, summaryFor(pass), actionable)
+    }
+
+    /** Mark a week's brief as seen — clears the Overview banner (opened or dismissed). */
+    suspend fun markSeen(weekId: String) = settings.setLastSeenCoachWeekId(weekId)
+
+    /** ASCII digits in every locale; see [BlockPlanner.weekIdOf] (audit 2026-09-26, 10). */
+    private fun weekId(date: LocalDate): String = BlockPlanner.weekIdOf(date)
+
+    private fun weekStartMs(): Long {
+        val zone = ZoneId.systemDefault()
+        return Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
+            .with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+            .atStartOfDay(zone).toInstant().toEpochMilli()
+    }
+}

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    PERSONAL BUILD ONLY (`personal` build type; see RELAY.md beside this file). Merged over
+    src/main/AndroidManifest.xml in that build alone. The public build never holds INTERNET: its
+    promise that "Avex physically cannot upload anything" stays true for every APK on the Play Store.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Only for sending the training history to Antho's own Relay server. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application>
+        <!-- A second launcher entry, so the pairing screen is reachable without touching shared UI. -->
+        <activity
+            android:name="com.forge.app.relay.RelaySyncActivity"
+            android:exported="true"
+            android:label="Avex → Relay"
+            android:taskAffinity="com.forge.app.relay">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Starts watching for finished workouts once the app is up (RelayUploadStarter). -->
+        <provider
+            android:name="com.forge.app.relay.RelayUploadStarter"
+            android:authorities="${applicationId}.relay-upload"
+            android:exported="false" />
+    </application>
+</manifest>

@@ -1,0 +1,115 @@
+package com.forge.app.ui.gym.session
+
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.forge.app.data.repo.BackupRepository
+import com.forge.app.data.repo.StatsRepository
+import com.forge.app.data.repo.WorkoutRepository
+import com.forge.app.ui.gym.session.state.SessionDetailUiState
+import com.forge.app.ui.nav.Routes
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+/**
+ * Loads one finished session's full breakdown for the detail page. The session id arrives via the
+ * route argument ([Routes.ARG_SESSION_ID]); a session is immutable history, so one load is enough —
+ * no flows to observe. Chart Metric/Style toggles are pure UI state and live in the screen.
+ */
+@HiltViewModel
+class SessionDetailViewModel @Inject constructor(
+    private val statsRepo: StatsRepository,
+    private val backupRepo: BackupRepository,
+    private val workoutRepo: WorkoutRepository,
+    private val snackbar: com.forge.app.ui.common.SnackbarController,
+    savedStateHandle: SavedStateHandle
+) : ViewModel() {
+
+    private val sessionId: Long = savedStateHandle.get<Long>(Routes.ARG_SESSION_ID) ?: -1L
+
+    private val _state = MutableStateFlow(SessionDetailUiState())
+    val state: StateFlow<SessionDetailUiState> = _state.asStateFlow()
+
+    /** Path of the just-written per-session JSON export — the screen opens the share sheet on it. */
+    private val _exportPath = MutableStateFlow<String?>(null)
+    val exportPath: StateFlow<String?> = _exportPath.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            val data = if (sessionId >= 0) statsRepo.getSessionDetail(sessionId) else null
+            _state.value = SessionDetailUiState(isLoading = false, data = data)
+            // The watch's HR trace (W3), analyzed AFTER the page renders — additive: no watch, no
+            // section. Sets attribute samples to exercises; rest events power the HRR read.
+            if (sessionId >= 0) {
+                val samples = workoutRepo.hrSamplesForSession(sessionId)
+                    .map { com.forge.app.domain.health.HrPoint(timeMs = it.atMs, bpm = it.bpm) }
+                if (samples.isNotEmpty()) {
+                    val exercises = workoutRepo.loggedExercisesForSession(sessionId)
+                    val nameByLoggedId = exercises.associate { le ->
+                        le.id to com.forge.app.program.Program.exerciseDisplayName(le.exerciseId, le.swappedName)
+                    }
+                    val sets = workoutRepo.allSetsForSession(sessionId).map {
+                        com.forge.app.domain.health.HrSetRef(
+                            completedAtMs = it.completedAt,
+                            exerciseName = nameByLoggedId[it.loggedExerciseId] ?: ""
+                        )
+                    }
+                    val rests = workoutRepo.restEventsForSession(sessionId).map {
+                        com.forge.app.domain.health.HrRestRef(
+                            endedAtMs = it.loggedAt,
+                            realizedSeconds = it.realizedSeconds
+                        )
+                    }
+                    // Default: the analysis walks every sample against every set and rest span.
+                    val hrView = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                        com.forge.app.domain.health.buildSessionHrView(samples, sets, rests)
+                    }
+                    _state.update { it.copy(hrView = hrView) }
+                }
+            }
+            _state.update { it.copy(hrChecked = true) }
+        }
+    }
+
+    /**
+     * Rate a set of this finished session: the effort that was forgotten on the day, or one worth
+     * correcting. The page is re-read so its Effort readings and chart follow at once.
+     */
+    fun rateSet(setId: Long, rpe: Double) {
+        if (sessionId < 0 || setId <= 0) return
+        viewModelScope.launch {
+            workoutRepo.setRpe(setId, rpe)
+            val data = statsRepo.getSessionDetail(sessionId)
+            _state.update { it.copy(data = data) }
+        }
+    }
+
+    /** In-flight export so a double-tap doesn't launch two concurrent writers of the same file. */
+    private var exportJob: Job? = null
+
+    /** Write this session's data to a JSON file, then surface its path so the screen can share it. */
+    fun exportSession() {
+        if (sessionId < 0 || exportJob?.isActive == true) return
+        // Classified like the Settings exports: a full disk used to throw out of this launch and
+        // take the app down with it. Cancellation still propagates (see attemptExport).
+        exportJob = viewModelScope.launch {
+            when (val r = com.forge.app.ui.settings.attemptExport { backupRepo.exportSessionJson(sessionId) }) {
+                is com.forge.app.ui.settings.ExportAttempt.Written -> _exportPath.value = r.file.absolutePath
+                com.forge.app.ui.settings.ExportAttempt.NothingToExport -> Unit
+                com.forge.app.ui.settings.ExportAttempt.Failed ->
+                    snackbar.show("Export failed. Check your free storage and try again.")
+            }
+        }
+    }
+
+    /** A plain transient line on the app's snackbar. */
+    fun showMessage(text: String) = snackbar.show(text)
+
+    fun clearExportPath() { _exportPath.value = null }
+}

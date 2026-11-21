@@ -1,0 +1,151 @@
+package com.forge.app.domain.adapt
+
+import com.forge.app.data.db.entities.BodyweightEntry
+import com.forge.app.data.db.entities.LoggedExercise
+import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.data.db.entities.Session
+import com.forge.app.data.db.types.EffortRating
+import com.forge.app.program.Program
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class SnapshotAssemblerTest {
+
+    private fun session(id: Long, startedAt: Long) =
+        Session(id = id, dayKey = "upper-a", startedAt = startedAt, finishedAt = startedAt + 1)
+
+    private fun le(id: Long, sessionId: Long, exerciseId: String = "ua1") =
+        LoggedExercise(id = id, sessionId = sessionId, exerciseId = exerciseId, orderIndex = 0,
+            difficulty = EffortRating.JUST_RIGHT)
+
+    private fun set(leId: Long, idx: Int, weight: Double = 45.0) =
+        LoggedSet(id = leId * 10 + idx, loggedExerciseId = leId, setIndex = idx,
+            weightText = "$weight", weightLb = weight, reps = 10, completedAt = 0L)
+
+    private fun assemble(
+        sessions: List<Session>,
+        les: List<LoggedExercise>,
+        sets: List<LoggedSet>
+    ) = SnapshotAssembler.assemble(
+        nowMs = 1_000L,
+        program = Program.seedDays,
+        swapCandidateIds = { plan -> listOf("swap-for-${plan.id}") },
+        sessions = sessions,
+        loggedExercises = les,
+        loggedSets = sets,
+        prefs = PrefsSnap(),
+        zoneId = java.time.ZoneId.of("UTC")
+    )
+
+    @Test
+    fun boutsAreGroupedPerExerciseAndOrderedBySessionDate() {
+        // Sessions deliberately passed newest-first; bouts must come out oldest-first.
+        val snap = assemble(
+            sessions = listOf(session(2, startedAt = 200), session(1, startedAt = 100)),
+            les = listOf(le(20, sessionId = 2), le(10, sessionId = 1)),
+            sets = listOf(set(20, 0), set(10, 1), set(10, 0))
+        )
+        val bouts = snap.exerciseHistory.getValue("ua1")
+        assertEquals(2, bouts.size)
+        assertEquals(100L, bouts[0].sessionStartedAt)
+        assertEquals(200L, bouts[1].sessionStartedAt)
+        // Sets within a bout are in performed (setIndex) order.
+        assertEquals(listOf(0, 1), bouts[0].sets.map { it.setIndex })
+        assertEquals(EffortRating.JUST_RIGHT, bouts[0].effort)
+        // Sessions list itself is re-sorted oldest-first.
+        assertEquals(listOf(1L, 2L), snap.sessions.map { it.id })
+    }
+
+    @Test
+    fun rowsFromSessionsOutsideTheListAreDropped() {
+        // An exercise whose parent session isn't in the (finished, tracked) list — e.g. an
+        // unfinished or untracked session — must not produce a bout.
+        val snap = assemble(
+            sessions = listOf(session(1, startedAt = 100)),
+            les = listOf(le(10, sessionId = 1), le(99, sessionId = 99)),
+            sets = listOf(set(10, 0), set(99, 0))
+        )
+        assertEquals(1, snap.exerciseHistory.getValue("ua1").size)
+    }
+
+    @Test
+    fun swappedRowIsKeyedUnderItsSlotNotTheSwappedExercise() {
+        // #11: a pre-sets swap re-keys exercise_id to the swapped exercise and stores the original
+        // slot in slot_id. Every engine consumer looks history up by the program slot id, so the
+        // bout must land under the slot ("ua6") — NOT the swapped exercise's id — or the coach goes
+        // blind to the slot the moment it's swapped.
+        val swapped = LoggedExercise(
+            id = 10, sessionId = 1, exerciseId = "db-incline-curl", orderIndex = 0,
+            slotId = "ua6", swappedName = "DB Incline Curl", difficulty = EffortRating.JUST_RIGHT
+        )
+        val snap = assemble(
+            sessions = listOf(session(1, startedAt = 100)),
+            les = listOf(swapped),
+            sets = listOf(set(10, 0))
+        )
+        assertEquals(1, snap.exerciseHistory.getValue("ua6").size)
+        assertEquals("DB Incline Curl", snap.exerciseHistory.getValue("ua6").first().swappedName)
+        assertTrue("db-incline-curl" !in snap.exerciseHistory)
+    }
+
+    @Test
+    fun programSlotsCarryTheirSwapCandidates() {
+        val snap = assemble(emptyList(), emptyList(), emptyList())
+        val firstSlot = snap.program.first().slots.first()
+        assertEquals(listOf("swap-for-${firstSlot.exerciseId}"), firstSlot.swapCandidateIds)
+        assertTrue(snap.exerciseHistory.isEmpty())
+    }
+
+    // ── A1: session type on the bout, bodyweight series ────────────────────────
+
+    @Test
+    fun boutsCarryTheirParentSessionType() {
+        val typed = Session(id = 3, dayKey = "upper-a", startedAt = 300, finishedAt = 301, sessionType = "test")
+        val snap = assemble(
+            sessions = listOf(session(1, startedAt = 100), typed),
+            les = listOf(le(10, sessionId = 1), le(30, sessionId = 3)),
+            sets = listOf(set(10, 0), set(30, 0))
+        )
+        val bouts = snap.exerciseHistory.getValue("ua1")
+        assertEquals("normal", bouts[0].sessionType)
+        assertEquals("test", bouts[1].sessionType)
+        assertTrue(bouts[0].countsForProgression)
+        assertTrue(!bouts[1].countsForProgression)
+    }
+
+    @Test
+    fun preA1Rows_defaultToNormalTraining() {
+        val snap = assemble(
+            sessions = listOf(session(1, startedAt = 100)),
+            les = listOf(le(10, sessionId = 1)),
+            sets = listOf(set(10, 0))
+        )
+        assertTrue(snap.exerciseHistory.getValue("ua1").single().countsForProgression)
+    }
+
+    @Test
+    fun bodyweightSeriesIsCarriedNewestFirst() {
+        val snap = SnapshotAssembler.assemble(
+            nowMs = 1_000L,
+            program = Program.seedDays,
+            swapCandidateIds = { emptyList() },
+            sessions = emptyList(),
+            loggedExercises = emptyList(),
+            loggedSets = emptyList(),
+            prefs = PrefsSnap(),
+            bodyweight = listOf(
+                BodyweightEntry(dateKey = "2026-07-01", weightLb = 180.0, recordedAt = 100),
+                BodyweightEntry(dateKey = "2026-07-03", weightLb = 178.0, recordedAt = 300),
+                BodyweightEntry(dateKey = "2026-07-02", weightLb = 179.0, recordedAt = 200)
+            ),
+            zoneId = java.time.ZoneId.of("UTC")
+        )
+        assertEquals(listOf(300L, 200L, 100L), snap.bodyweight.map { it.recordedAt })
+    }
+
+    @Test
+    fun bodyweightDefaultsEmpty_forUsersWhoNeverWeighIn() {
+        assertTrue(assemble(emptyList(), emptyList(), emptyList()).bodyweight.isEmpty())
+    }
+}

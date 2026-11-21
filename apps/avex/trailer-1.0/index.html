@@ -1,0 +1,1595 @@
+<title>Avex 1.0 Trailer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,300..700,0..100;1,9..144,300..700,0..100&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;1,400&display=swap">
+<style>
+  /*
+   * Avex 1.0 — launch film. 1920×1080, 108 s, driven entirely by render(t): every frame is a pure
+   * function of time, so the page plays in a browser and renders frame-by-frame to video
+   * (tools/render.mjs) and the two can never disagree. The score (tools/music.py) is written on
+   * the same grid: 100 BPM, a beat is 0.6 s = 36 frames, a bar is 2.4 s = 144 frames.
+   *
+   * Single dark look on purpose: it is the app's own page colour.
+   */
+  :root {
+    color-scheme: dark;
+    --page: #110F0C;
+    --page-deep: #0A0806;
+    --surface: #1A1613;
+    --tile: #221C16;
+    --line: #38302A;
+    --ink: #F2EFEA;
+    --muted: #BFB6AA;
+    --accent: #E23D3D;
+    --gold: #E3B341;
+    --serif: "Fraunces", Georgia, "Times New Roman", serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  html, body { background: var(--page-deep); color: var(--ink); }
+  body { font-family: var(--sans); font-size: 15px; line-height: 1.5; }
+
+  .viewer { max-width: 1280px; margin: 0 auto; padding-inline: 16px; padding-block: 28px 40px; display: grid; gap: 14px; }
+  .intro { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .intro h1 { font-family: var(--serif); font-weight: 400; font-size: 28px; margin: 0; }
+  .intro span { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+  .frame { position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 10px; background: var(--page); }
+  #stage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; overflow: hidden; background: var(--page); }
+
+  .controls { display: flex; align-items: center; gap: 14px; }
+  .controls button { appearance: none; border: 0; background: var(--accent); color: #110F0C; font-family: var(--mono); font-weight: 500;
+                     font-size: 12px; letter-spacing: .12em; text-transform: uppercase; padding: 10px 18px; border-radius: 999px; cursor: pointer; min-width: 92px; }
+  .controls button:focus-visible, .controls input:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+  .controls input[type=range] { flex: 1; accent-color: var(--accent); min-width: 0; }
+  .controls output { font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 92px; text-align: right; }
+  .hint { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 0; }
+
+  body.render .viewer { padding: 0; max-width: none; display: block; }
+  body.render .frame { border-radius: 0; width: 1920px; height: 1080px; aspect-ratio: auto; }
+  body.render .controls, body.render .intro, body.render .hint { display: none; }
+
+  /* ── film ─────────────────────────────────────────────── */
+  .scene { position: absolute; inset: 0; display: none; }
+  .cam { position: absolute; inset: 0; transform-origin: 50% 50%; }
+  .abs { position: absolute; }
+  .char { position: absolute; left: 0; top: 0; }
+  .char svg { display: block; width: 100%; height: 100%; overflow: visible; }
+
+  .serif { font-family: var(--serif); font-weight: 400; font-variation-settings: "SOFT" 60; letter-spacing: -0.025em; line-height: 1; white-space: nowrap; }
+  .serif em, .red { font-style: italic; color: var(--accent); }
+  .muted { color: var(--muted); }
+  .gold { color: var(--gold); }
+  .mono { font-family: var(--mono); font-size: 22px; font-weight: 500; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+  .sans { font-family: var(--sans); }
+  .mask { display: inline-block; overflow: hidden; vertical-align: top; padding-bottom: .14em; margin-bottom: -.14em; padding-right: .08em; margin-right: -.08em; }
+  .mask > span { display: inline-block; }
+  .tab { font-variant-numeric: tabular-nums; }
+
+  .rail { position: absolute; left: 0; top: 0; display: none; }
+  .rail .d { position: absolute; top: 112px; font-family: var(--mono); font-size: 22px; font-weight: 500; letter-spacing: .18em; text-transform: uppercase; width: 110px; text-align: center; }
+  .rail .u { position: absolute; top: 146px; height: 4px; width: 56px; border-radius: 2px; background: var(--accent); }
+
+  .pill { position: absolute; height: 76px; padding-inline: 38px; border-radius: 999px; display: flex; align-items: center; font-family: var(--mono);
+          font-size: 22px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; white-space: nowrap; }
+  .pill.fill { background: var(--accent); color: #110F0C; }
+  .pill.line { border: 2px solid var(--line); color: var(--ink); }
+  .dot { position: absolute; border-radius: 50%; }
+
+  /* The phone: a portrait body with a status bar, drawn at 1:1 of a 352 px wide screen. */
+  .phone { position: absolute; width: 380px; height: 780px; border-radius: 62px; background: #1C1714; box-shadow: inset 0 0 0 3px #3A322B; }
+  .phone .scr { position: absolute; left: 14px; top: 14px; width: 352px; height: 752px; border-radius: 50px; background: var(--page); overflow: hidden; }
+  .phone .isl { position: absolute; left: 136px; top: 12px; width: 80px; height: 24px; border-radius: 12px; background: #000; }
+  .phone .sb { position: absolute; left: 30px; top: 14px; font-family: var(--sans); font-size: 14px; font-weight: 500; color: var(--ink); }
+  .pg { position: absolute; left: 0; top: 0; width: 352px; height: 752px; }
+  .pg .h { position: absolute; left: 22px; top: 96px; font-family: var(--serif); font-size: 32px; line-height: 1.05; letter-spacing: -.02em; }
+  .pg .rail9 { position: absolute; left: 60px; top: 62px; width: 270px; height: 4px; display: flex; gap: 4px; }
+  .pg .rail9 i { flex: 1; border-radius: 2px; background: var(--line); }
+  .pg .rail9 i.on { background: var(--ink); }
+  .pg .back { position: absolute; left: 22px; top: 50px; font-size: 22px; color: var(--muted); }
+  .pg .cta { position: absolute; left: 20px; right: 20px; bottom: 34px; height: 54px; border-radius: 12px; background: var(--accent); color: #110F0C;
+             display: flex; align-items: center; justify-content: center; font-family: var(--sans); font-weight: 500; font-size: 17px; }
+  .chip { position: absolute; width: 40px; height: 40px; border-radius: 50%; border: 1.5px solid var(--line); display: flex; align-items: center;
+          justify-content: center; font-family: var(--sans); font-size: 16px; color: var(--ink); }
+  .gtile { position: absolute; width: 150px; height: 84px; border-radius: 14px; background: var(--tile); border: 2px solid transparent; }
+  .gtile svg { position: absolute; left: 14px; top: 12px; width: 30px; height: 30px; overflow: visible; }
+  .gtile span { position: absolute; left: 14px; bottom: 11px; font-family: var(--sans); font-size: 14px; color: var(--ink); white-space: nowrap; }
+
+  /* The coach's proposed-change tile: the one filled card on its page. */
+  .ctile { position: absolute; left: 0; width: 820px; border-radius: 18px; background: var(--tile); padding: 22px 28px; box-sizing: border-box; }
+  .ctile .tt { font-family: var(--sans); font-size: 19px; color: var(--muted); }
+  .ctile .big { font-family: var(--serif); font-size: 44px; letter-spacing: -.02em; margin-top: 6px; }
+  .ctile .why { font-family: var(--sans); font-size: 18px; color: var(--muted); margin-top: 10px; white-space: nowrap; }
+  .ctile .acts { display: flex; align-items: center; gap: 22px; margin-top: 16px; height: 44px; }
+  .ctile .acts b { background: var(--accent); color: #110F0C; font-family: var(--sans); font-weight: 500; font-size: 16px; padding: 10px 22px; border-radius: 999px; }
+  .ctile .acts span { font-family: var(--sans); font-size: 16px; color: var(--muted); }
+  .ctile .stamp { position: absolute; right: 26px; top: 24px; font-family: var(--mono); font-size: 16px; letter-spacing: .16em; text-transform: uppercase; color: var(--accent);
+                  border: 2px solid var(--accent); border-radius: 999px; padding: 6px 14px; }
+
+  .stp { position: absolute; width: 34px; height: 34px; border-radius: 50%; background: var(--tile); color: var(--ink); display: flex;
+         align-items: center; justify-content: center; font-family: var(--sans); font-size: 20px; }
+  .glyph { position: absolute; left: 0; top: 2px; width: 30px; height: 30px; border-radius: 8px; background: var(--tile); }
+  .glyph svg { position: absolute; left: 6px; top: 6px; width: 18px; height: 18px; overflow: visible; }
+  .qr { position: absolute; border-radius: 28px; background: #F4F1EA; }
+  .grain { position: absolute; inset: 0; pointer-events: none; opacity: .07; mix-blend-mode: overlay;
+           background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .9 0'/></filter><rect width='240' height='240' filter='url(%23n)'/></svg>"); }
+  .vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(120% 90% at 50% 45%, transparent 55%, rgba(0,0,0,.55) 100%); }
+  .flash { position: absolute; inset: 0; pointer-events: none; opacity: 0; }
+  .fade { position: absolute; inset: 0; pointer-events: none; background: #000; opacity: 0; }
+</style>
+
+<div class="viewer">
+  <div class="intro">
+    <h1>Avex 1.0</h1>
+    <span>Launch trailer · 1:48 · 1920×1080</span>
+  </div>
+  <div class="frame" id="frame"><div id="stage"></div></div>
+  <div class="controls">
+    <button type="button" id="v-play">Play</button>
+    <input type="range" id="v-scrub" min="0" max="108" step="0.01" value="0" aria-label="Scrub the trailer">
+    <output id="v-clock">0:00.0</output>
+  </div>
+  <p class="hint">Sound on. Space plays and pauses, arrow keys step one frame.</p>
+</div>
+
+<script>
+/* ═══ Time ═════════════════════════════════════════════════════════════════════════════════════
+ * 100 BPM. Bar n starts at bar(n); b is the beat inside it. 45 bars; tools/music.py is written on
+ * exactly this grid.
+ */
+const W = 1920, H = 1080;
+const BPM = 100, BEAT = 60 / BPM, BAR = 4 * BEAT, NBARS = 45, DUR = NBARS * BAR, FPS = 60;
+const bar = (n, b = 0) => (n - 1) * BAR + b * BEAT;
+
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, k) => a + (b - a) * k;
+const prog = (t, a, d) => clamp((t - a) / d);
+const E = {
+  in: k => k * k * k,
+  out: k => 1 - Math.pow(1 - k, 3),
+  inOut: k => k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2,
+  expo: k => k >= 1 ? 1 : 1 - Math.pow(2, -10 * k),
+  back: k => { const c1 = 1.9, c3 = c1 + 1; return 1 + c3 * Math.pow(k - 1, 3) + c1 * Math.pow(k - 1, 2); },
+};
+const spring = (s, f = 1.9, z = 7) => s <= 0 ? 0 : 1 - Math.exp(-z * s) * Math.cos(f * 2 * Math.PI * s);
+const beatPhase = t => (((t / BEAT) % 1) + 1) % 1;
+
+/* ═══ Sound cues ═══════════════════════════════════════════════════════════════════════════════
+ * On the grid, and each has something on screen making the noise. Entrances start LEAD seconds
+ * before their cue so the thing is there when the sound says it landed. tools/mix.py reads this.
+ */
+const LEAD = .1;
+const CUES = [];
+const cue = (t, sfx, gain = 1) => CUES.push({ t: +t.toFixed(4), sfx, gain });
+
+/* ═══ Helpers ══════════════════════════════════════════════════════════════════════════════════ */
+const stage = document.getElementById('stage');
+function html(s) { const d = document.createElement('div'); d.innerHTML = s.trim(); return d.firstElementChild; }
+function words(text) {
+  // _word_ marks the red italic word.
+  return text.split(' ').map(w => {
+    const red = /^_.*_[.,?]?$/.test(w);
+    const inner = red ? `<em>${w.replace(/_/g, '')}</em>` : w;
+    return `<span class="mask"><span>${inner}</span></span>`;
+  }).join(' ');
+}
+const lines = (arr, gap = 6) => arr.map((l, i) => `<div class="l${i}"${i ? ` style="margin-top:${gap}px"` : ''}>${words(l)}</div>`).join('');
+/* Words rise out of a mask on the way in and leave upwards on the way out. */
+function io(root, t, tin, tout = 1e9, stagger = .05, dur = .65) {
+  root.querySelectorAll('.mask > span').forEach((s, i) => {
+    const kin = E.expo(prog(t, tin + i * stagger, dur)), kout = E.in(prog(t, tout, .3));
+    s.style.transform = `translateY(${((1 - kin) - kout) * 112}%)`;
+  });
+}
+/* Each line of a block comes in on its own beat. */
+function ioLines(root, t, times, tout = 1e9) {
+  times.forEach((tin, i) => { const l = root.querySelector('.l' + i); if (l) io(l, t, tin, tout); });
+}
+const px = (e, x, y, s = 1, r = 0) => { e.style.transform = `translate(${x}px, ${y}px) rotate(${r}deg) scale(${s})`; };
+const show = (e, o) => { e.style.opacity = o; e.style.visibility = o <= 0.001 ? 'hidden' : 'visible'; };
+/* Two states sharing one slot: the old leaves before the new arrives. */
+const handOut = k => clamp((0.44 - k) / 0.44), handIn = k => clamp((k - 0.56) / 0.44);
+const fmtClock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+const CH = {
+  nori: {
+    ink: '#2B2320', cheek: '#F4A3A8', heart: '#E23D3D', tongue: '#F27C88',
+    top: 64, eyeY: 118, eyeDX: 16, mouthY: 132, cheekY: 128, cheekDX: 29,
+    shoulder: [40, 144], arm: { len: 20, width: 12, color: '#E6DFD1' },
+    hip: [18, 164], leg: { len: 12, width: 12, color: '#D4CCBB' },
+    back: () => '',
+    body: () => `<path d="M100 64 C 114 64, 156 130, 154 150 C 152 168, 136 170, 100 170 C 64 170, 48 168, 46 150 C 44 130, 86 64, 100 64 Z" fill="#F6F3EC" stroke="#F6F3EC" stroke-width="4" stroke-linejoin="round"/>
+      <g fill="#E4DDD0"><ellipse cx="84" cy="96" rx="2.5" ry="1.5" transform="rotate(-30 84 96)"/><ellipse cx="118" cy="104" rx="2.5" ry="1.5" transform="rotate(25 118 104)"/><ellipse cx="66" cy="140" rx="2.5" ry="1.5"/><ellipse cx="136" cy="136" rx="2.5" ry="1.5" transform="rotate(-20 136 136)"/></g>
+      <path d="M80 148 L120 148 L120 171 L80 171 Z" fill="#26332C" stroke="#26332C" stroke-width="4" stroke-linejoin="round"/>
+      <ellipse cx="86" cy="86" rx="6" ry="10" transform="rotate(35 86 86)" fill="#FFFFFF" opacity=".7"/>`,
+  },
+  mochi: {
+    ink: '#2B2320', cheek: '#F4A3A8', heart: '#E23D3D', tongue: '#F27C88',
+    top: 48, eyeY: 120, eyeDX: 18, mouthY: 136, cheekY: 130, cheekDX: 32,
+    shoulder: [44, 132], arm: { len: 20, width: 13, color: '#E3D5BF' },
+    hip: [20, 162], leg: { len: 13, width: 13, color: '#D6C6AE' },
+    back: (w, s = {}) => `<g transform="rotate(${w} 100 72) translate(100 74) scale(${s.grow || 1}) translate(-100 -74)">
+        <path d="M100 74 C 100 64, 100 60, 102 54" fill="none" stroke="#7DB074" stroke-width="3.5" stroke-linecap="round"/>
+        <ellipse cx="92" cy="54" rx="9" ry="5" transform="rotate(-25 92 54)" fill="#8CC084"/>
+        <ellipse cx="111" cy="50" rx="10" ry="5.5" transform="rotate(20 111 50)" fill="#8CC084"/></g>`,
+    body: () => `<path d="M50 162 C 44 108, 64 70, 100 70 C 136 70, 156 108, 150 162 C 130 172, 70 172, 50 162 Z" fill="#F4ECDF"/>
+      <ellipse cx="76" cy="92" rx="8" ry="12" transform="rotate(35 76 92)" fill="#FFFFFF" opacity=".6"/>`,
+  },
+  kettle: {
+    ink: '#2A0E0E', cheek: '#FFB3B3', heart: '#FFE3E3', tongue: '#FF8F9A',
+    top: 50, eyeY: 116, eyeDX: 19, mouthY: 134, cheekY: 128, cheekDX: 34,
+    shoulder: [46, 126], arm: { len: 24, width: 12, color: '#C22F2F' },
+    hip: [18, 160], leg: { len: 14, width: 11, color: '#A62B2B' },
+    back: () => `<path d="M74 92 C 68 38, 132 38, 126 92" fill="none" stroke="#E23D3D" stroke-width="14" stroke-linecap="round"/>`,
+    body: () => `<rect x="70" y="156" width="60" height="12" rx="6" fill="#A62B2B"/>
+      <ellipse cx="100" cy="120" rx="52" ry="46" fill="#E23D3D"/>
+      <ellipse cx="74" cy="100" rx="7" ry="12" transform="rotate(35 74 100)" fill="#FFFFFF" opacity=".35"/>`,
+  },
+  momo: {
+    ink: '#3A1A14', cheek: '#EE6F62', heart: '#E23D3D', tongue: '#E8616A',
+    top: 56, eyeY: 122, eyeDX: 18, mouthY: 138, cheekY: 132, cheekDX: 32,
+    shoulder: [44, 134], arm: { len: 20, width: 12, color: '#EE937D' },
+    hip: [18, 162], leg: { len: 13, width: 12, color: '#DE806B' },
+    back: w => `<g transform="rotate(${w} 100 82)">
+        <path d="M100 82 C 100 74, 101 68, 104 62" fill="none" stroke="#6E8F4E" stroke-width="4" stroke-linecap="round"/>
+        <ellipse cx="116" cy="62" rx="13" ry="6" transform="rotate(-18 116 62)" fill="#86B05E"/></g>`,
+    body: () => `<path d="M100 82 C 86 66, 50 72, 50 120 C 50 152, 72 170, 100 170 C 128 170, 150 152, 150 120 C 150 72, 114 66, 100 82 Z" fill="#F7A58F"/>
+      <path d="M100 82 C 97 88, 97 94, 99 100" fill="none" stroke="#E4846E" stroke-width="3" stroke-linecap="round"/>
+      <ellipse cx="74" cy="98" rx="8" ry="13" transform="rotate(35 74 98)" fill="#FFFFFF" opacity=".35"/>`,
+  },
+};
+
+const MOOD = {
+  happy:  { eyes: 'open',   mouth: 'smile',  blush: .45 },
+  cheer:  { eyes: 'happy',  mouth: 'grin',   blush: .8 },
+  love:   { eyes: 'heart',  mouth: 'smile',  blush: .9 },
+  sleepy: { eyes: 'closed', mouth: 'osmall', blush: .35 },
+  sad:    { eyes: 'sad',    mouth: 'frown',  blush: .2 },
+  shock:  { eyes: 'wide',   mouth: 'o',      blush: .2 },
+  calm:   { eyes: 'open',   mouth: 'osmall', blush: .35 },
+  dizzy:  { eyes: 'dizzy',  mouth: 'o',      blush: .25 },
+  strain: { eyes: 'squeeze', mouth: 'grit',  blush: .95 },
+};
+
+const sk = (c, w) => `fill="none" stroke="${c}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"`;
+const HEART = 'M0 7 C -12 -1, -9 -13, 0 -6 C 9 -13, 12 -1, 0 7 Z';
+const STAR = 'M0 -7 L1.8 -1.8 L7 0 L1.8 1.8 L0 7 L-1.8 1.8 L-7 0 L-1.8 -1.8 Z';
+
+function eyesSVG(c, type, s) {
+  const [lx, ly] = s.look || [0, 0], bl = s.blink || 0;
+  return [-1, 1].map(side => {
+    let g = '';
+    switch (type) {
+      case 'open':   g = `<ellipse rx="6.5" ry="8.5" fill="${c.ink}"/><circle cx="2" cy="-3.2" r="2.3" fill="#fff"/>`; break;
+      case 'happy':  g = `<path d="M-7 3 Q0 -7 7 3" ${sk(c.ink, 3.8)}/>`; break;
+      case 'closed': g = `<path d="M-7 -1 Q0 5 7 -1" ${sk(c.ink, 3.4)}/>`; break;
+      case 'sad':    g = `<ellipse cy="2" rx="5.5" ry="7" fill="${c.ink}"/><circle cx="1.8" cy="-1" r="2" fill="#fff"/><path d="${side < 0 ? 'M-8 -9 L7 -14' : 'M8 -9 L-7 -14'}" ${sk(c.ink, 3)}/>`; break;
+      case 'wide':   g = `<circle r="9" fill="${c.ink}"/><circle cx="3" cy="-3" r="3.4" fill="#fff"/><circle cx="-3" cy="3.5" r="1.4" fill="#fff"/><path d="M-7 -16 Q0 -20 7 -16" ${sk(c.ink, 3)}/>`; break;
+      case 'dizzy':  g = `<g transform="rotate(${((s.time || 0) * 540 * side).toFixed(1)})"><path d="M0 0 m-1 0 a1 1 0 1 1 2 0 a2.5 2.5 0 1 1 -5 0 a4 4 0 1 1 8 0 a5.5 5.5 0 1 1 -11 0" ${sk(c.ink, 2.2)}/></g>`; break;
+      case 'squeeze': g = `<path d="${side < 0 ? 'M-6 -5 L5 0 L-6 5' : 'M6 -5 L-5 0 L6 5'}" ${sk(c.ink, 3.4)}/>`; break;
+      case 'heart':  g = `<g transform="scale(${1.1 + .12 * Math.abs(Math.sin((s.time || 0) * 5))})"><path d="${HEART}" fill="${c.heart}"/></g>`; break;
+    }
+    const blinkable = type === 'open' || type === 'wide' || type === 'sad';
+    const ky = blinkable ? Math.max(.08, 1 - bl) : 1;
+    const moveEyes = blinkable ? `${lx} ${ly}` : '0 0';
+    return `<g transform="translate(${100 + side * c.eyeDX} ${c.eyeY}) translate(${moveEyes}) scale(1 ${ky})">${g}</g>`;
+  }).join('');
+}
+function mouthSVG(c, type) {
+  const m = {
+    smile:  `<path d="M-7 -2 Q0 6 7 -2" ${sk(c.ink, 3.5)}/>`,
+    grin:   `<path d="M-10 -3 L10 -3 Q10 10 0 10 Q-10 10 -10 -3 Z" fill="${c.ink}" stroke="${c.ink}" stroke-width="1.5" stroke-linejoin="round"/><ellipse cy="6" rx="5" ry="3" fill="${c.tongue}"/>`,
+    o:      `<ellipse rx="5" ry="6.5" fill="${c.ink}"/>`,
+    osmall: `<ellipse cy="1" rx="3" ry="3.5" fill="${c.ink}"/>`,
+    frown:  `<path d="M-7 3 Q0 -4 7 3" ${sk(c.ink, 3.5)}/>`,
+    grit:   `<rect x="-9" y="-5" width="18" height="10" rx="3" fill="#fff" stroke="${c.ink}" stroke-width="2.5"/><path d="M-3 -5 V5 M3 -5 V5" stroke="${c.ink}" stroke-width="1.8"/>`,
+  }[type];
+  return `<g transform="translate(100 ${c.mouthY})">${m}</g>`;
+}
+function fxSVG(c, kind, t) {
+  switch (kind) {
+    case 'sparkles': return [[34, 72, 0], [166, 58, .3], [156, 112, .6], [46, 122, .15]].map(([x, y, d], i) => {
+      const k = .55 + .55 * Math.abs(Math.sin(2 * Math.PI * (t * 1.4 + d)));
+      return `<g transform="translate(${x} ${y}) rotate(${t * 90 + i * 30}) scale(${k})"><path d="${STAR}" fill="#FFE08A"/></g>`;
+    }).join('');
+    case 'hearts': return [[150, 70], [50, 84], [138, 44]].map(([x, y], i) => {
+      const p = (t * .55 + i / 3) % 1;
+      return `<g transform="translate(${x} ${y - p * 34}) scale(.8)" opacity="${Math.sin(Math.PI * p).toFixed(3)}"><path d="${HEART}" fill="#E23D3D"/></g>`;
+    }).join('');
+    case 'zzz': return [[136, 72, 13], [150, 58, 16], [165, 42, 19]].map(([x, y, s], i) => {
+      const p = (t * .5 + i / 3) % 1;
+      return `<text x="${x + p * 10}" y="${y - p * 24}" opacity="${Math.sin(Math.PI * p).toFixed(3)}" font-family="IBM Plex Mono, monospace" font-weight="500" font-size="${s}" fill="#BFB6AA">z</text>`;
+    }).join('');
+    case 'shock': return `<g transform="translate(${100 + c.eyeDX + 30} ${c.eyeY - 30})"><path d="M0 0 C -5 7, -5 12, 0 12 C 5 12, 5 7, 0 0 Z" fill="#8FC7F2"/></g>
+      <g ${sk('#F2EFEA', 3)} opacity=".85"><path d="M100 ${c.top - 10} L100 ${c.top - 22} M84 ${c.top - 6} L77 ${c.top - 16} M116 ${c.top - 6} L123 ${c.top - 16}"/></g>`;
+    case 'sweat': return [[-1, 0], [1, .5]].map(([side, off]) => {
+      const p = (t * 1.6 + off) % 1;
+      return `<g transform="translate(${100 + side * (52 + p * 26)} ${c.eyeY - 30 + p * p * 40})" opacity="${(1 - p).toFixed(3)}"><path d="M0 0 C -4 6, -4 10, 0 10 C 4 10, 4 6, 0 0 Z" fill="#8FC7F2"/></g>`;
+    }).join('');
+    case 'stars': return [0, 1, 2].map(i => {
+      const a = (t * 4 + i * 2.09), x = 100 + Math.cos(a) * 34, y = c.top - 6 + Math.sin(a) * 9;
+      return `<g transform="translate(${x.toFixed(1)} ${y.toFixed(1)}) scale(.9)"><path d="${STAR}" fill="#FFE08A"/></g>`;
+    }).join('');
+    default: return '';
+  }
+}
+function drawChar(c, s) {
+  const m = MOOD[s.mood || 'happy'];
+  const sx = s.sx ?? 1, sy = s.sy ?? 1, dy = s.dy ?? 0, rot = s.rot ?? 0;
+  const lift = clamp(1 + dy / 90, .45, 1);
+  const rig = `translate(0 ${dy.toFixed(2)}) translate(100 182) rotate(${rot.toFixed(2)}) scale(${sx.toFixed(4)} ${sy.toFixed(4)}) translate(-100 -182)`;
+  if (s.eyesOnly) return `<svg viewBox="0 0 200 200"><g transform="${rig}">${eyesSVG(c, 'open', s)}</g></svg>`;
+  const arm = c.arm, leg = c.leg;
+  // Arms can be lengthened and thickened for a prop, and end in fists that grip it.
+  const aL = arm.len * (s.armK || 1), aW = arm.width * (s.armW || 1);
+  const fist = s.fists ? `<circle cx="0" cy="${aL}" r="${(aW * .74).toFixed(2)}" fill="${arm.color}" stroke="${c.ink}" stroke-opacity=".28" stroke-width="1.6"/>` : '';
+  const arms = [[1, s.armR ?? 18], [-1, s.armL ?? 18]].map(([side, a]) =>
+    `<g transform="translate(${100 + side * c.shoulder[0]} ${c.shoulder[1]}) scale(${side} 1) rotate(${(-a).toFixed(2)})"><line x1="0" y1="0" x2="0" y2="${aL}" stroke="${arm.color}" stroke-width="${aW}" stroke-linecap="round"/>${fist}</g>`).join('');
+  const legs = [[1, s.legR || 0], [-1, s.legL || 0]].map(([side, a]) =>
+    `<g transform="translate(${100 + side * c.hip[0]} ${c.hip[1]}) rotate(${a.toFixed(2)})"><line x1="0" y1="0" x2="0" y2="${leg.len}" stroke="${leg.color}" stroke-width="${leg.width}" stroke-linecap="round"/></g>`).join('');
+  const cheeks = [-1, 1].map(d => `<ellipse cx="${100 + d * c.cheekDX}" cy="${c.cheekY}" rx="7" ry="4" fill="${c.cheek}" opacity="${m.blush}"/>`).join('');
+  const w = s.wig || 0;
+  const glasses = s.glasses ? `<g stroke="${c.ink}" stroke-width="2.4" fill="rgba(255,255,255,.2)"><circle cx="${100 - c.eyeDX}" cy="${c.eyeY}" r="11"/><circle cx="${100 + c.eyeDX}" cy="${c.eyeY}" r="11"/><path d="M${100 - c.eyeDX + 11} ${c.eyeY - 1} Q 100 ${c.eyeY - 5} ${100 + c.eyeDX - 11} ${c.eyeY - 1}" fill="none"/></g>` : '';
+  return `<svg viewBox="0 0 200 200">
+    <ellipse cx="100" cy="184" rx="${(42 * lift).toFixed(2)}" ry="${(5 * lift).toFixed(2)}" fill="#000" opacity="${(.45 * lift * (s.shadow ?? 1)).toFixed(3)}"/>
+    <g transform="${rig}">${c.back(w, s)}${legs}${c.body(w, s)}${cheeks}${eyesSVG(c, m.eyes, s)}${glasses}${mouthSVG(c, m.mouth)}${s.prop || ''}${arms}${s.front || ''}</g>
+    ${s.fx ? `<g transform="translate(0 ${dy.toFixed(2)})">${fxSVG(c, s.fx, s.time || 0)}</g>` : ''}</svg>`;
+}
+
+/* Motion vocabulary. Each returns part of a character state; scenes merge them. */
+const Act = {
+  blink: (t, seed = 0) => { const p = (t + seed) % 3.7; return p < .16 ? Math.sin(Math.PI * p / .16) : 0; },
+  breathe: (t, amp = .018) => { const k = Math.sin(2 * Math.PI * t / BAR); return { sx: 1 - amp * .6 * k, sy: 1 + amp * k }; },
+  bounce: (t, amp = 5) => {
+    const p = beatPhase(t), land = p < .16 ? 1 - p / .16 : 0;
+    return { dy: -Math.sin(Math.PI * p) * amp, sx: 1 + .05 * land, sy: 1 - .06 * land };
+  },
+  // Jump once every two beats: squash, fly, land, settle.
+  cheer: (t, h = 30, off = 0) => {
+    const p = ((((t + off) / (2 * BEAT)) % 1) + 1) % 1;
+    let dy = 0, sx = 1, sy = 1;
+    if (p < .1) { const k = p / .1; sx = 1 + .1 * k; sy = 1 - .12 * k; }
+    else if (p < .7) { const k = (p - .1) / .6; dy = -4 * h * k * (1 - k); sx = 1 - .06 * Math.sin(Math.PI * k); sy = 1 + .1 * Math.sin(Math.PI * k); }
+    else if (p < .85) { const k = (p - .7) / .15; sx = 1 + .1 * Math.sin(Math.PI * k); sy = 1 - .12 * Math.sin(Math.PI * k); }
+    const pump = 145 + 14 * Math.sin(2 * Math.PI * (t + off) * 2);
+    return { dy, sx, sy, armR: pump, armL: pump };
+  },
+  wave: t => ({ armR: 140 + 24 * Math.sin(2 * Math.PI * t * 2.2) }),
+  walk: (t, rate = 2) => {
+    const ph = 2 * Math.PI * t * rate / 2;
+    return { legR: 24 * Math.sin(ph), legL: -24 * Math.sin(ph), dy: -Math.abs(Math.sin(ph)) * 5, armR: 20 - 18 * Math.sin(ph), armL: 20 + 18 * Math.sin(ph), rot: 2.5 * Math.sin(ph) };
+  },
+  // One arc from the ground, for arrivals and hops.
+  hop: (s, dur = .55, h = 30) => {
+    if (s < 0 || s > dur + .2) return {};
+    if (s > dur) { const k = (s - dur) / .2; return { sx: 1 + .08 * Math.sin(Math.PI * k), sy: 1 - .1 * Math.sin(Math.PI * k) }; }
+    const k = s / dur; return { dy: -4 * h * k * (1 - k), sx: 1 - .05 * Math.sin(Math.PI * k), sy: 1 + .08 * Math.sin(Math.PI * k) };
+  },
+};
+const wig = (t, speed = 1.6, amp = 7) => amp * Math.sin(2 * Math.PI * t * speed / 2);
+
+function mkChar(parent, def, size) {
+  const d = document.createElement('div');
+  d.className = 'char';
+  d.style.width = d.style.height = size + 'px';
+  parent.appendChild(d);
+  return {
+    d,
+    set(x, y, s = {}, o = 1, scale = 1) {
+      if (o <= 0) { d.style.display = 'none'; return; }
+      d.style.display = 'block';
+      d.style.opacity = o;
+      d.style.transform = `translate(${x - size / 2}px, ${y - size * .91}px) scale(${scale})`;
+      d.style.transformOrigin = `50% 91%`;
+      d.innerHTML = drawChar(def, s);
+    },
+  };
+}
+
+/* ═══ The mark ═════════════════════════════════════════════════════════════════════════════════
+ * Traced from play-store-icon-512.png: the A and the two bands that cross inside it and break out
+ * past its legs. Coordinates are in that icon's 512 space.
+ */
+const MARK = [
+  '255.5,164 371,349 342,333 255.5,194.4 169,333 140,349',
+  '176,246 205,251 360.2,331.7 371,349 349,344.4 195,264.3',
+  '335,246 306,251 150.8,331.7 140,349 162,344.4 316,264.3',
+];
+function markSVG(fill = 'var(--ink)') {
+  return `<svg viewBox="130 150 252 212" style="overflow:visible;width:100%;height:100%;display:block">
+    ${MARK.map(p => `<polygon class="mk-fill" points="${p}" fill="${fill}"/>`).join('')}
+    ${MARK.map(p => `<polygon class="mk-line" points="${p}" fill="none" stroke="${fill}" stroke-width="2.4" stroke-linejoin="round" pathLength="1" stroke-dasharray="1 1"/>`).join('')}
+  </svg>`;
+}
+function drawMark(root, draw, fill) {
+  root.querySelectorAll('.mk-line').forEach((l, i) => {
+    const k = E.inOut(clamp(draw * 1.35 - i * .18));
+    l.style.strokeDashoffset = 1 - k;
+    l.style.opacity = 1 - fill;
+  });
+  root.querySelectorAll('.mk-fill').forEach(f => { f.style.opacity = fill; });
+}
+
+/* ═══ Scenes ═══════════════════════════════════════════════════════════════════════════════════ */
+const SCENES = [];
+function scene(from, to, build, update, opts = {}) {
+  const root = document.createElement('div');
+  root.className = 'scene';
+  const cam = document.createElement('div');
+  cam.className = 'cam';
+  root.appendChild(cam);
+  stage.appendChild(root);
+  const sc = { from: bar(from), to: bar(to), root, cam, zoom: opts.zoom ?? [1, 1.035] };
+  sc.refs = build(cam, sc) || {};
+  sc.update = update;
+  SCENES.push(sc);
+  return sc;
+}
+/* Pushes: both frames travel together and the new one lands exactly on the downbeat. */
+const PUSH_AT = [11, 15, 17, 19, 21, 23, 28, 30].map(n => bar(n));
+const PUSH_LEN = .36;
+const pulse = (t, at, w = .09) => Math.exp(-(((t - at) / w) ** 2));
+const press = (t, at) => Math.abs(t - at) < .12 ? 1 - .07 * Math.cos(Math.PI * (t - at) / .24) : 1;
+
+/* ── 1 · Open: eyes in the dark; the light comes on with the music ────────────────────────────── */
+scene(1, 5, cam => {
+  cam.innerHTML = `
+    <div class="abs" id="glow" style="left:0;top:0;width:1920px;height:1080px;background:radial-gradient(900px 640px at 36% 66%, rgba(242,239,234,.09), transparent 70%)"></div>
+    <div class="abs serif" id="a" style="left:880px;top:380px;font-size:150px">${lines(["Hi. I'm _Nori._"])}</div>
+    <div class="abs serif" id="b" style="left:880px;top:330px;font-size:112px">${lines(['I want you to meet', 'your new _coach._'], 10)}</div>
+    <div class="phone" id="ph" style="left:770px;top:150px"><div class="scr"><div class="abs" id="pm" style="left:106px;top:290px;width:140px;height:118px"></div><div class="abs mono" style="left:0;right:0;top:446px;text-align:center;font-size:15px">Avex 1.0</div></div><div class="isl"></div></div>
+    <div class="abs serif" id="c" style="left:1236px;top:380px;font-size:104px">${lines(['It lives on', 'your _phone._'], 8)}</div>`;
+  const pm = cam.querySelector('#pm'); pm.innerHTML = markSVG(); drawMark(pm, 1, 1);
+  return { glow: cam.querySelector('#glow'), a: cam.querySelector('#a'), b: cam.querySelector('#b'), c: cam.querySelector('#c'), ph: cam.querySelector('#ph'),
+           nori: mkChar(cam, CH.nori, 420), mochi: mkChar(cam, CH.mochi, 300), kettle: mkChar(cam, CH.kettle, 320) };
+}, (t, r) => {
+  const lit = t >= bar(2);
+  show(r.glow, lit ? 1 : 0);
+  const x = lerp(960, 470, E.inOut(prog(t, bar(2, 1.6), .9)));
+  if (!lit) {
+    const open = E.out(prog(t, bar(1, 2) - .05, .3));
+    const bl = Math.max(1 - open, Math.abs(t - bar(1, 3.3)) < .09 ? Math.cos(Math.PI * (t - bar(1, 3.3)) / .18) : 0);
+    r.nori.set(x, 820, { eyesOnly: true, blink: bl, look: [0, -1] });
+  } else {
+    const pop = 1 - spring(t - bar(2), 2.2, 6);
+    const pointing = t >= bar(4, 0.5);
+    r.nori.set(x, 820, {
+      mood: 'happy', ...Act.breathe(t), ...Act.bounce(t, 3),
+      ...(t < bar(3) ? Act.wave(t) : {}), ...(pointing ? { armR: lerp(18, 96, E.out(prog(t, bar(4, .5), .3))) } : {}),
+      sy: 1 + .16 * pop, sx: 1 - .1 * pop, blink: Act.blink(t, .4), look: t > bar(2, 2) ? [4, 0] : [0, 0],
+    });
+  }
+  ioLines(r.a, t, [bar(2, 3) - LEAD], bar(3, 1) - .42);
+  ioLines(r.b, t, [bar(3, 1) - LEAD, bar(3, 2) - LEAD], bar(4) - .42);
+  ioLines(r.c, t, [bar(4, 1) - LEAD, bar(4, 2) - LEAD]);
+  const pk = spring(t - (bar(4) - LEAD), 1.5, 6);
+  r.ph.style.transform = `translateY(${(1 - pk) * 900}px)`;
+  r.ph.style.display = t >= bar(4) - LEAD ? 'block' : 'none';
+  const pm = spring(t - (bar(4, 2) - LEAD), 1.6, 6), pkt = spring(t - (bar(4, 3) - LEAD), 1.6, 6);
+  r.mochi.set(1330, lerp(1400, 1135, pm), { mood: 'happy', look: [-3, 0], blink: Act.blink(t, 1.2), wig: wig(t), ...Act.breathe(t) }, t > bar(4, 2) - LEAD ? 1 : 0);
+  r.kettle.set(1760, lerp(1400, 1150, pkt), { mood: 'happy', look: [-3, 0], rot: -8, blink: Act.blink(t, 2.1), ...Act.breathe(t) }, t > bar(4, 3) - LEAD ? 1 : 0);
+}, { zoom: [1.06, 1] });
+
+/* ── 2 · The plan: onboarding, on the same phone ──────────────────────────────────────────────── */
+const ICON = {
+  bld: '<path d="M4 27 V9 L15 3 L26 9 V27 Z M11 27 V20 H19 V27 M9 12 H11 M14 12 H16 M19 12 H21"/>',
+  house: '<path d="M4 27 V14 L15 5 L26 14 V27 Z M12 27 V19 H18 V27"/>',
+  db: '<path d="M3 15 H27 M6 10 V20 M9 7 V23 M21 7 V23 M24 10 V20"/>',
+  band: '<path d="M9 25 C 3 18, 6 5, 15 5 C 24 5, 27 18, 21 25"/><circle cx="9" cy="26" r="2"/><circle cx="21" cy="26" r="2"/>',
+  bw: '<circle cx="15" cy="6" r="3"/><path d="M15 10 V19 M8 13 H22 M15 19 L10 27 M15 19 L20 27"/>',
+  bar: '<path d="M1 15 H29 M5 8 V22 M8.5 10 V20 M25 8 V22 M21.5 10 V20"/>',
+  cable: '<circle cx="15" cy="5" r="3"/><path d="M15 8 V20 M9 20 H21 M11 20 L10 25 M19 20 L20 25"/>',
+};
+const GYMS = [['Everything gym', 'bld'], ['Basic gym', 'bld'], ['Home gym · big', 'house'], ['Home gym · small', 'house'],
+              ['Home machine gym', 'house'], ['Dumbbells only', 'db'], ['Bands & bodyweight', 'band'], ['Bodyweight only', 'bw']];
+const UPPER_A = [['Bench Press', 'bar'], ['Barbell Row', 'bar'], ['Overhead Press', 'bar'], ['Lat Pulldown', 'cable'], ['Incline DB Press', 'db'], ['Cable Curl', 'cable']];
+const glyph = ic => `<div class="glyph"><svg viewBox="0 0 30 30" fill="none" stroke="#F2EFEA" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${ICON[ic]}</svg></div>`;
+const rail9 = n => `<div class="rail9">${Array.from({ length: 9 }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</div>`;
+scene(5, 8, cam => {
+  cam.innerHTML = `
+    <div class="abs mono" style="left:160px;top:300px">Getting started</div>
+    <div class="abs serif" id="a" style="left:156px;top:350px;font-size:104px">${lines(['Tell it when', 'you can _train._'], 8)}</div>
+    <div class="abs serif" id="b" style="left:156px;top:350px;font-size:104px">${lines(['Tell it what', 'you’ve _got._'], 8)}</div>
+    <div class="abs serif" id="c" style="left:156px;top:350px;font-size:104px">${lines(['Your week', 'is _ready._'], 8)}</div>
+    <div class="phone" id="ph" style="left:0;top:150px"><div class="scr"><div class="sb">9:41</div>
+      <div class="pg" id="p1"><div class="back">←</div>${rail9(4)}<div class="h">How many days<br>a week?</div>
+        ${[1, 2, 3, 4, 5, 6, 7].map(i => `<div class="chip" style="left:${22 + (i - 1) * 46}px;top:200px">${i}</div>`).join('')}
+        <div class="abs mono" style="left:22px;top:278px;font-size:12px;letter-spacing:.14em">Your week · <span id="sets" style="color:var(--ink)">0</span> sets</div>
+        <div class="abs" id="wb" style="left:22px;top:310px;width:308px;height:190px"></div>
+        <div class="cta">Continue</div></div>
+      <div class="pg" id="p2"><div class="back">←</div>${rail9(5)}<div class="h">What’s in<br>your gym?</div>
+        ${GYMS.map(([n, ic], i) => `<div class="gtile" style="left:${22 + (i % 2) * 160}px;top:${190 + Math.floor(i / 2) * 94}px"><svg viewBox="0 0 30 30" fill="none" stroke="#F2EFEA" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICON[ic]}</svg><span>${n}</span></div>`).join('')}
+        <div class="cta">Continue</div></div>
+      <div class="pg" id="p3"><div class="back">←</div>${rail9(8)}<div class="h">Here’s<br>your week</div>
+        <div class="abs" id="db" style="left:22px;top:180px;width:308px;height:120px"></div>
+        <div class="abs mono" style="left:22px;top:318px;font-size:12px;letter-spacing:.14em;color:var(--ink)">Upper A · 6 moves · 18 sets</div>
+        ${UPPER_A.map(([n, ic], i) => `<div class="abs ex" style="left:22px;top:${348 + i * 46}px;width:308px;height:34px">${glyph(ic)}
+            <div class="abs sans" style="left:44px;top:5px;font-size:15px">${n}</div>
+            <div class="abs mono" style="right:0;top:9px;font-size:11px;letter-spacing:.1em">3 × 8-12</div></div>`).join('')}
+        <div class="abs" style="left:20px;bottom:34px;width:112px;height:54px;border-radius:12px;border:1.5px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:16px">Re-roll</div>
+        <div class="abs" id="go" style="left:142px;right:20px;bottom:34px;height:54px;border-radius:12px;background:var(--accent);color:#110F0C;display:flex;align-items:center;justify-content:center;font-weight:500;font-size:16px">Start training</div></div>
+    </div><div class="isl"></div></div>`;
+  const wb = cam.querySelector('#wb');
+  ['Mon', 'Tue', 'Thu', 'Fri'].forEach((d, i) => wb.appendChild(html(`<div class="abs" style="left:${i * 82}px;bottom:26px;width:62px;height:${140 + (i % 2) * 14}px;border-radius:8px 8px 3px 3px;background:var(--ink);opacity:.85;transform-origin:50% 100%"></div>`)));
+  ['Mon', 'Tue', 'Thu', 'Fri'].forEach((d, i) => wb.appendChild(html(`<div class="abs mono" style="left:${i * 82}px;bottom:0;width:62px;text-align:center;font-size:11px">${d}</div>`)));
+  const db = cam.querySelector('#db');
+  [['Upper A', 18], ['Lower A', 20], ['Upper B', 18], ['Lower B', 20]].forEach(([n, s], i) => {
+    db.appendChild(html(`<div class="abs" style="left:${i * 80}px;bottom:24px;width:64px;height:${s * 4}px;border-radius:8px 8px 3px 3px;background:${i === 0 ? 'var(--accent)' : 'rgba(242,239,234,.25)'}"></div>`));
+    db.appendChild(html(`<div class="abs mono" style="left:${i * 80 - 8}px;bottom:0;width:80px;text-align:center;font-size:10px;letter-spacing:.1em;color:${i === 0 ? 'var(--ink)' : 'var(--muted)'}">${n}</div>`));
+  });
+  return { a: cam.querySelector('#a'), b: cam.querySelector('#b'), c: cam.querySelector('#c'), ph: cam.querySelector('#ph'),
+           p: [cam.querySelector('#p1'), cam.querySelector('#p2'), cam.querySelector('#p3')], chips: [...cam.querySelectorAll('.chip')],
+           sets: cam.querySelector('#sets'), wbars: [...wb.children].slice(0, 4), tiles: [...cam.querySelectorAll('.gtile')],
+           ex: [...cam.querySelectorAll('.ex')], go: cam.querySelector('#go'), nori: mkChar(cam, CH.nori, 230) };
+}, (t, r) => {
+  r.ph.style.transform = `translateX(${lerp(770, 1200, E.inOut(prog(t, bar(5), .8)))}px)`;
+  ioLines(r.a, t, [bar(5, 1) - LEAD, bar(5, 2) - LEAD], bar(6) - .42);
+  ioLines(r.b, t, [bar(6) - LEAD, bar(6, 1) - LEAD], bar(7) - .42);
+  ioLines(r.c, t, [bar(7) - LEAD, bar(7, 1) - LEAD]);
+  r.p.forEach((pg, i) => {
+    const inK = i === 0 ? 1 : E.inOut(prog(t, bar(6 + i - 1) - .32, .32));
+    const outK = i === 2 ? 0 : E.inOut(prog(t, bar(6 + i) - .32, .32));
+    pg.style.transform = `translateX(${(1 - inK) * 352 - outK * 352}px)`;
+  });
+  const tap4 = t >= bar(5, 2);
+  r.chips.forEach((c, i) => {
+    const on = tap4 && i === 3;
+    c.style.background = on ? 'var(--accent)' : 'transparent';
+    c.style.color = on ? '#110F0C' : 'var(--ink)';
+    c.style.borderColor = on ? 'var(--accent)' : 'var(--line)';
+    c.style.transform = `scale(${on ? 1 + .12 * Math.exp(-(t - bar(5, 2)) * 10) : 1})`;
+  });
+  r.wbars.forEach((b, i) => { b.style.transform = `scaleY(${E.expo(prog(t, bar(5, 2) + i * BEAT / 4, .5))})`; });
+  r.sets.textContent = Math.round(72 * E.out(prog(t, bar(5, 2), .8)));
+  const tapG = t >= bar(6, 2);
+  r.tiles.forEach((g, i) => {
+    const on = tapG && i === 1;
+    g.style.borderColor = on ? 'var(--accent)' : 'transparent';
+    g.querySelector('svg').setAttribute('stroke', on ? '#E23D3D' : '#F2EFEA');
+    g.style.transform = `scale(${on ? 1 - .05 * Math.exp(-(t - bar(6, 2)) * 12) : 1})`;
+  });
+  r.ex.forEach((e, i) => { const k = E.expo(prog(t, bar(7) + i * BEAT / 4 - LEAD, .4)); e.style.opacity = k; e.style.transform = `translateX(${(1 - k) * 24}px)`; });
+  r.go.style.transform = `scale(${press(t, bar(7, 3))})`;
+  const done = t >= bar(7, 3);
+  r.nori.set(360, 1000, done ? { mood: 'cheer', ...Act.cheer(t - bar(7, 3), 24), fx: 'sparkles', time: t }
+    : { mood: 'happy', ...Act.bounce(t, 3), ...Act.breathe(t), look: [4, -1], blink: Act.blink(t, .9) });
+});
+
+/* ── 3 · Monday: the coach's calls ────────────────────────────────────────────────────────────────
+ * Wording follows the Coach page: a lift, one big line for the change, the reason, Apply / Skip.
+ */
+const CALLS = [
+  ['Back Squat', '3 → 4 sets', 'Legs are responding but climbing slowest · an extra set puts the work where it lags.', true],
+  ['Bench Press', 'Move to 6-8 reps', 'Stalled for 4 sessions · changing the rep range changes the stimulus.', false],
+  ['DB Row', 'Rotate to Wide Lat Pulldown', 'Back work has gone flat · a fresh movement for the same muscles.', false],
+];
+scene(8, 11, cam => {
+  cam.innerHTML = `
+    <div class="abs mono" style="left:160px;top:236px">Monday · Your coach</div>
+    <div class="abs serif" id="a" style="left:156px;top:300px;font-size:84px">${lines(['Every Monday,', 'it looks back at', 'your _week._'], 8)}</div>
+    <div class="abs serif" id="b" style="left:156px;top:300px;font-size:84px">${lines(['Every change', 'comes with', 'a _reason._'], 8)}</div>
+    <div class="abs serif" id="c" style="left:156px;top:300px;font-size:84px">${lines(['Nothing changes', 'until you', 'say _so._'], 8)}</div>
+    <div class="abs mono" style="left:940px;top:196px;color:var(--ink)">This week</div>
+    <div class="abs" id="tiles" style="left:940px;top:240px;width:820px;height:700px">
+      ${CALLS.map(([a, b, c, chart]) => `<div class="ctile"><div class="tt">${a}</div><div class="big">${b}</div><div class="why">${c}</div>
+        ${chart ? `<div class="mono" style="font-size:13px;margin-top:12px;letter-spacing:.14em">Estimated 1RM · last 9 sessions</div>
+          <svg viewBox="0 0 360 44" preserveAspectRatio="none" style="width:360px;height:32px;margin-top:6px;display:block"><polyline points="0,38 45,36 90,33 135,31 180,27 225,25 270,20 315,17 360,14" fill="none" stroke="#F2EFEA" stroke-width="2.5" stroke-linejoin="round"/><circle cx="360" cy="14" r="4.5" fill="#E23D3D"/></svg>` : ''}
+        <div class="acts"><b>Apply</b><span>Skip</span></div><div class="stamp">Applied</div></div>`).join('')}
+      <svg class="abs" style="left:0;top:0;width:820px;height:700px;overflow:visible"><rect id="rr" rx="10" fill="none" stroke="#E23D3D" stroke-width="3" pathLength="1" stroke-dasharray="1 1"/></svg>
+      <div class="abs sans" id="all" style="left:0;top:0;font-size:24px;color:var(--accent);font-weight:500">Apply all 3 →</div>
+    </div>`;
+  return { a: cam.querySelector('#a'), b: cam.querySelector('#b'), c: cam.querySelector('#c'), tiles: [...cam.querySelectorAll('.ctile')],
+           rr: cam.querySelector('#rr'), all: cam.querySelector('#all'), nori: mkChar(cam, CH.nori, 230) };
+}, (t, r) => {
+  ioLines(r.a, t, [bar(8) - LEAD, bar(8, .5) - LEAD, bar(8, 1) - LEAD], bar(9) - .42);
+  ioLines(r.b, t, [bar(9) - LEAD, bar(9, .5) - LEAD, bar(9, 1) - LEAD], bar(10) - .42);
+  ioLines(r.c, t, [bar(10) - LEAD, bar(10, .5) - LEAD, bar(10, 1) - LEAD]);
+  let y = 0;
+  r.tiles.forEach((tile, i) => {
+    tile.style.top = `${y}px`;
+    const h = tile.offsetHeight;
+    const k = E.expo(prog(t, bar(8, 1 + i) - LEAD, .55));
+    tile.style.opacity = k; tile.style.transform = `translateY(${(1 - k) * 50}px)`;
+    const sk = prog(t, bar(10, 1 + i * .5) - .04, .22);
+    const stamp = tile.querySelector('.stamp');
+    stamp.style.opacity = sk > 0 ? 1 : 0;
+    stamp.style.transform = `scale(${lerp(1.7, 1, E.out(sk))}) rotate(-4deg)`;
+    tile.querySelector('.acts').style.opacity = 1 - E.out(prog(t, bar(10, 1 + i * .5) - .1, .2));
+    if (i === 0) {
+      const why = tile.querySelector('.why'), pad = 10;
+      r.rr.setAttribute('x', why.offsetLeft - pad); r.rr.setAttribute('y', y + why.offsetTop - pad);
+      r.rr.setAttribute('width', why.offsetWidth + pad * 2); r.rr.setAttribute('height', why.offsetHeight + pad * 2);
+      r.rr.style.strokeDashoffset = 1 - E.inOut(prog(t, bar(9, 1) - LEAD, .55));
+      r.rr.style.opacity = 1 - prog(t, bar(10) - .3, .25);
+    }
+    y += h + 20;
+  });
+  r.all.style.top = `${y + 10}px`;
+  const ak = E.expo(prog(t, bar(9, 3), .5));
+  r.all.style.opacity = ak * (t > bar(10, 2.5) ? 1 - prog(t, bar(10, 2.5), .3) : 1);
+  r.all.style.transform = `translateY(${(1 - ak) * 20}px) scale(${press(t, bar(10))})`;
+  r.all.style.transformOrigin = '0 50%';
+  const cheer = t >= bar(10, 1);
+  r.nori.set(340, 1000, cheer ? { mood: 'cheer', ...Act.cheer(t - bar(10, 1), 22), fx: 'sparkles', time: t }
+    : { mood: t > bar(9) ? 'calm' : 'happy', ...Act.bounce(t, 3), ...Act.breathe(t), look: [4, -1], blink: Act.blink(t, .9) });
+});
+
+/* ── 4 · Tuesday: the session, on the phone ───────────────────────────────────────────────────────
+ * The day screen as the app draws it: EXERCISE 02 / 06, the plan line with its "try", the set table,
+ * the steppers, LOG SET 3 and the rest-timer sheet. Momo naps through the rest; Mochi logs the set.
+ */
+const TCOL = [0, 40, 122, 176, 226];
+scene(11, 15, cam => {
+  const rowsHTML = [['01', '82.5', '8', '8', '+1 rep'], ['02', '82.5', '7', '8.5', '='], ['03', '—', '—', '—', '']].map((r, j) => `
+    <div class="abs trow" style="left:0;top:${18 + j * 34}px;width:312px;height:34px">
+      ${r.map((v, i) => `<div class="abs c${i} ${i === 0 ? 'mono' : i < 3 ? 'serif tab' : 'sans'}" style="left:${TCOL[i]}px;top:${i === 0 ? 11 : i < 3 ? 3 : 8}px;font-size:${i === 0 ? 10 : i < 3 ? 22 : 14}px;${i > 2 ? 'color:var(--muted)' : ''}">${v}</div>`).join('')}
+      <div class="abs" style="left:0;right:0;bottom:0;height:1px;background:var(--line)"></div></div>`).join('');
+  cam.innerHTML = `
+    <div class="abs flash" id="gw" style="background:radial-gradient(900px 700px at 62% 52%, rgba(227,179,65,.38), transparent 70%)"></div>
+    <div class="phone" id="ph" style="left:420px;top:150px"><div class="scr">
+      <div class="sb">9:41</div>
+      <div class="abs mono" style="left:20px;top:54px;font-size:11px;letter-spacing:.14em">Exercise 02 / 06</div>
+      <div class="abs mono" id="pc" style="right:20px;top:54px;font-size:11px;letter-spacing:.12em;color:var(--ink)">2 / 3</div>
+      <div class="abs mono gold" id="pcpr" style="right:20px;top:54px;font-size:11px;letter-spacing:.12em">3 / 3 · PR</div>
+      <div class="abs" style="left:20px;top:74px;width:150px;height:3px;display:flex;gap:3px">${[0, 1, 2, 3, 4, 5].map(i => `<i style="flex:1;border-radius:2px;background:${i < 2 ? 'var(--ink)' : 'var(--line)'}"></i>`).join('')}</div>
+      <div class="abs serif" style="left:18px;top:90px;font-size:44px">Bench Press</div>
+      <div class="abs serif" id="plan" style="left:20px;top:148px;font-size:17px;font-style:italic;color:var(--muted)">3 × 6-8 · last 80 kg × 7 · <span id="try" style="color:var(--accent)">try 82.5 kg</span></div>
+      <div class="abs" id="tbl" style="left:20px;top:188px;width:312px;height:130px">
+        ${['Set', 'Weight', 'Reps', 'RPE', 'Δ Last'].map((h, i) => `<div class="abs mono" style="left:${TCOL[i]}px;top:0;font-size:9px;letter-spacing:.12em">${h}</div>`).join('')}
+        ${rowsHTML}
+      </div>
+      <div class="abs" style="left:20px;top:328px;width:312px;height:116px">
+        <div class="abs mono" style="left:0;top:0;font-size:10px;letter-spacing:.12em">Weight · kg</div>
+        <div class="stp" style="left:0;top:26px">−</div><div class="abs serif tab" style="left:36px;width:100px;top:22px;text-align:center;font-size:40px">82.5</div><div class="stp" style="left:136px;top:26px">+</div>
+        <div class="abs mono" style="left:0;top:96px;font-size:10px;letter-spacing:.12em;color:var(--accent)">8 for PR</div>
+        <div class="abs mono" style="left:188px;top:0;font-size:10px;letter-spacing:.12em">Reps</div>
+        <div class="stp" style="left:188px;top:26px">−</div><div class="abs serif tab" style="left:222px;width:56px;top:22px;text-align:center;font-size:40px">8</div><div class="stp" style="left:278px;top:26px">+</div>
+      </div>
+      <div class="abs" id="logb" style="left:20px;top:456px;width:312px;height:58px;border-radius:12px;background:var(--accent);color:#110F0C;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:500;font-size:16px;letter-spacing:.16em;text-transform:uppercase">Log set 3</div>
+      <div class="abs mono" style="left:0;right:0;top:526px;text-align:center;font-size:10px;letter-spacing:.1em">Hold to repeat your last set</div>
+      <div class="abs" style="left:20px;top:562px;display:flex;gap:8px">${['Note', 'Video', 'Swap', 'Skip'].map(c => `<span class="mono" style="font-size:10px;letter-spacing:.12em;padding:6px 10px;border:1.5px solid var(--line);border-radius:999px">${c}</span>`).join('')}</div>
+      <div class="abs" style="left:20px;top:680px;right:20px;height:44px;border-radius:22px;background:var(--tile);display:flex;align-items:center;padding-inline:16px;gap:12px"><span class="mono" style="font-size:10px;letter-spacing:.12em">Up next</span><span class="sans" style="font-size:14px">Cable Row · 3 × 10</span></div>
+      <div class="abs" id="sheet" style="left:0;top:330px;width:352px;height:422px;border-radius:26px 26px 0 0;background:#1E1915;box-shadow:0 -1px 0 var(--line)">
+        <div class="abs" style="left:156px;top:10px;width:40px;height:4px;border-radius:2px;background:var(--line)"></div>
+        <div class="abs mono" style="left:24px;top:30px;font-size:11px;letter-spacing:.14em">Rest timer</div>
+        <div class="abs serif tab" id="rclock" style="left:22px;top:58px;font-size:92px">2:00</div>
+        <div class="abs serif muted" id="rof" style="left:26px;top:166px;font-size:24px">of 2:00</div>
+        <div class="abs" style="left:22px;top:214px;display:flex;gap:8px">${['−30s', '+1 min', '+2 min'].map(c => `<span class="sans" style="font-size:14px;padding:8px 14px;border-radius:999px;background:var(--tile)">${c}</span>`).join('')}</div>
+        <div class="abs mono" style="left:24px;top:276px;font-size:11px;letter-spacing:.14em">reset · done · pause →</div>
+      </div>
+      <div class="abs" id="sgold" style="left:0;top:0;right:0;bottom:0;background:rgba(227,179,65,.3);opacity:0"></div>
+    </div><div class="isl"></div></div>
+    <svg class="abs" style="left:0;top:0;width:1920px;height:1080px;overflow:visible;pointer-events:none">
+      <ellipse id="ring" fill="none" stroke="#E23D3D" stroke-width="3" pathLength="1" stroke-dasharray="1 1"/>
+      <path id="lead" fill="none" stroke="#E23D3D" stroke-width="2.5" pathLength="1" stroke-dasharray="1 1"/></svg>
+    <div class="abs serif" id="big" style="left:1100px;top:500px;font-size:96px;font-style:italic;color:var(--accent)">${lines(['try 82.5 kg'])}</div>
+    <div class="abs serif" id="a" style="left:1100px;top:250px;font-size:92px">${lines(['It tells you', 'what to _lift._'], 8)}</div>
+    <div class="abs serif" id="b" style="left:1100px;top:250px;font-size:92px">${lines(['It times', 'your _rest._'], 8)}</div>
+    <div class="abs serif" id="c" style="left:1100px;top:250px;font-size:92px">${lines(['One tap', 'to _log_ _it._'], 8)}</div>
+    <div class="abs serif" id="d" style="left:1100px;top:250px;font-size:92px">${lines(['And it spots', 'every _record._'], 8)}</div>
+    <div class="abs serif gold" id="pr" style="left:1090px;top:560px;font-size:150px;font-style:italic">New PR</div>
+    <div class="abs mono" id="prl" style="left:1102px;top:740px;color:var(--ink)">Bench press · 82.5 kg × 8</div>`;
+  return { gw: cam.querySelector('#gw'), ph: cam.querySelector('#ph'), pc: cam.querySelector('#pc'), pcpr: cam.querySelector('#pcpr'), plan: cam.querySelector('#plan'),
+           tryEl: cam.querySelector('#try'), rows: [...cam.querySelectorAll('.trow')], logb: cam.querySelector('#logb'), sheet: cam.querySelector('#sheet'),
+           rclock: cam.querySelector('#rclock'), rof: cam.querySelector('#rof'), sgold: cam.querySelector('#sgold'), ring: cam.querySelector('#ring'), lead: cam.querySelector('#lead'),
+           big: cam.querySelector('#big'), a: cam.querySelector('#a'), b: cam.querySelector('#b'), c: cam.querySelector('#c'), d: cam.querySelector('#d'),
+           pr: cam.querySelector('#pr'), prl: cam.querySelector('#prl'),
+           momo: mkChar(cam, CH.momo, 200), mochi: mkChar(cam, CH.mochi, 150), kettle: mkChar(cam, CH.kettle, 310) };
+}, (t, r, sc) => {
+  const PR = bar(14);
+  ioLines(r.a, t, [bar(11) - LEAD, bar(11, 1) - LEAD], bar(12) - .42);
+  ioLines(r.b, t, [bar(12) - LEAD, bar(12, 1) - LEAD], bar(13) - .42);
+  ioLines(r.c, t, [bar(13) - LEAD, bar(13, 1) - LEAD], PR - .42);
+  ioLines(r.d, t, [PR - LEAD, bar(14, 1) - LEAD]);
+  // Bar 11: circle the "try" on the phone and pull it out big beside it.
+  const X0 = 420 + 14, Y0 = 150 + 14;
+  const tx = X0 + r.plan.offsetLeft + r.tryEl.offsetLeft, ty = Y0 + r.plan.offsetTop + r.tryEl.offsetTop;
+  const tw = r.tryEl.offsetWidth, th = r.tryEl.offsetHeight;
+  const cx0 = tx + tw / 2, cy0 = ty + th / 2, rx = tw / 2 + 18, ry = th / 2 + 12;
+  r.ring.setAttribute('cx', cx0); r.ring.setAttribute('cy', cy0); r.ring.setAttribute('rx', rx); r.ring.setAttribute('ry', ry);
+  r.lead.setAttribute('d', `M ${cx0 + rx} ${cy0} C ${cx0 + rx + 120} ${cy0}, 1000 560, 1086 560`);
+  const callout = E.inOut(prog(t, bar(11, 1) - LEAD, .45)), gone = prog(t, bar(12) - .4, .3);
+  r.ring.style.strokeDashoffset = 1 - callout; r.lead.style.strokeDashoffset = 1 - E.inOut(prog(t, bar(11, 1.4) - LEAD, .4));
+  r.ring.style.opacity = r.lead.style.opacity = 1 - gone;
+  io(r.big.querySelector('.l0'), t, bar(11, 2) - LEAD, bar(12) - .42);
+  // Bar 12: the rest sheet rises and counts two minutes down to "done." on bar 13.
+  const up = E.expo(prog(t, bar(12) - LEAD, .5)), down = E.inOut(prog(t, bar(13, 1.5), .45));
+  r.sheet.style.transform = `translateY(${(1 - up + down) * 440}px)`;
+  const rk = prog(t, bar(12), BAR);
+  r.rclock.textContent = rk >= 1 ? 'done.' : fmtClock(120 * (1 - rk));
+  r.rof.style.opacity = rk >= 1 ? 0 : 1;
+  // Bar 14: Mochi lands on LOG SET 3 and it is a record.
+  const s = t - PR, logged = s >= 0;
+  const r3 = r.rows[2];
+  [['.c1', logged ? '<span class="gold">★ 82.5</span>' : '—'], ['.c2', logged ? '8' : '—'], ['.c3', logged ? '9' : '—'], ['.c4', logged ? '+1 rep ↑' : '']]
+    .forEach(([q, v]) => { r3.querySelector(q).innerHTML = v; });
+  r3.querySelector('.c4').style.color = logged ? 'var(--gold)' : 'var(--muted)';
+  show(r.pc, logged ? 0 : 1); show(r.pcpr, logged ? 1 : 0);
+  r.logb.style.transform = `scale(${logged && s < .25 ? .94 + .06 * (s / .25) : 1})`;
+  r.logb.style.filter = logged && s < .2 ? 'brightness(.8)' : 'none';
+  show(r.sgold, logged ? Math.exp(-s * 2.5) : 0);
+  show(r.gw, logged ? .85 * Math.exp(-s * 2.4) + .18 : 0);
+  const pk = logged ? E.out(prog(t, PR, .2)) : 0;
+  show(r.pr, logged ? 1 : 0);
+  r.pr.style.transform = `scale(${lerp(1.6, 1, pk)}) rotate(${lerp(-6, -3, pk)}deg)`; r.pr.style.transformOrigin = '25% 60%';
+  show(r.prl, E.out(prog(t, PR + BEAT, .4)));
+  const shake = logged ? 18 * Math.exp(-s * 9) : 0;
+  sc.shake = [shake * Math.sin(s * 71), shake * Math.cos(s * 57)];
+  // Momo watches, nods off through the rest, and jolts awake when it is done.
+  const wake = bar(13), sw = t - wake;
+  const momo = t < bar(12, 1) ? { mood: 'happy', ...Act.bounce(t, 3), look: [4, -2], blink: Act.blink(t, .5), wig: wig(t) }
+    : sw < 0 ? { mood: 'sleepy', ...Act.breathe(t, .05), rot: -10 * E.out(prog(t, bar(12, 1), 1.2)), fx: 'zzz', time: t, armR: 5, armL: 5, wig: wig(t, .6, 4) }
+    : sw < .5 ? { mood: 'shock', ...Act.hop(sw, .45, 30), armR: 110, armL: 110, fx: 'shock', time: t, wig: wig(t, 6, 14) }
+    : s < 0 ? { mood: 'calm', ...Act.breathe(t), look: [4, -3], blink: Act.blink(t, 1.3), wig: wig(t, 2, 6) }
+    : { mood: 'cheer', ...Act.cheer(s, 22), fx: 'sparkles', time: t, wig: wig(t, 3, 10) };
+  r.momo.set(250, 1000, momo);
+  // Mochi: winds up on beat 1.5 of bar 13 and cannonballs onto the button, landing on bar 14.
+  const jump0 = bar(13, 2), land = PR;
+  const jk = prog(t, jump0, land - jump0);
+  const bx = 610, by = 150 + 14 + 456 + 4;
+  let mochi;
+  if (t < bar(13, 1.5)) mochi = { mood: 'happy', ...Act.bounce(t + BEAT, 3), look: [-4, -2], blink: Act.blink(t, 2.2), wig: wig(t) };
+  else if (t < jump0) mochi = { mood: 'strain', sy: .84, sx: 1.12, armR: -20, armL: -20, look: [-4, -3], wig: wig(t, 4, 10) };
+  else if (t < land) mochi = { mood: 'cheer', sy: 1.12, sx: .9, armR: 160, armL: 160, rot: -360 * E.inOut(jk), wig: -20 };
+  else mochi = { mood: 'cheer', ...Act.cheer(s, 16), fx: 'sparkles', time: t, wig: wig(t, 3, 12), ...(s < .2 ? { sy: .8, sx: 1.18 } : {}) };
+  const mx = t < jump0 ? 930 : t < land ? lerp(930, bx, E.inOut(jk)) : bx;
+  const my = t < jump0 ? 1000 : t < land ? lerp(1000, by, jk) - 300 * 4 * jk * (1 - jk) : by;
+  r.mochi.set(mx, my, mochi);
+  const kIn = spring(s + .06, 1.4, 5.5);
+  r.kettle.set(1740, lerp(1500, 1010, kIn), { mood: 'cheer', ...Act.cheer(s, 28), fx: 'sparkles', time: t }, s > -.06 ? 1 : 0);
+}, { zoom: [1, 1.04] });
+
+/* ── 5 · Wednesday: a run ─────────────────────────────────────────────────────────────────────── */
+scene(15, 17, cam => {
+  cam.innerHTML = `
+    <svg class="abs" style="left:0;top:0;width:1920px;height:1080px;overflow:visible" viewBox="0 0 1920 1080">
+      <path d="M 110 930 C 400 760, 560 1010, 820 850 S 1180 620, 1400 760 S 1720 880, 1830 650" fill="none" stroke="var(--line)" stroke-width="6" stroke-linecap="round" stroke-dasharray="2 18"/>
+      <path id="route" d="M 110 930 C 400 760, 560 1010, 820 850 S 1180 620, 1400 760 S 1720 880, 1830 650" fill="none" stroke="var(--accent)" stroke-width="8" stroke-linecap="round"/>
+      <circle id="halo" r="34" fill="var(--accent)" opacity=".18"/><circle id="head" r="12" fill="var(--accent)"/>
+    </svg>
+    <div class="abs mono" style="left:160px;top:236px">Wednesday · Run</div>
+    <div class="abs serif tab" id="km" style="left:150px;top:268px;font-size:240px;letter-spacing:-.04em">0.0<span class="muted" style="font-size:90px;letter-spacing:0"> km</span></div>
+    <div class="abs mono" style="left:160px;top:530px;color:var(--ink)">28:40 · 5:31 / km</div>
+    <div class="abs serif" id="a" style="right:160px;top:250px;font-size:84px;text-align:right">${lines(['Cardio counts _too._'])}</div>
+    <div class="abs serif" id="b" style="right:160px;top:250px;font-size:84px;text-align:right">${lines(['Every run lands', 'in your _week._'], 8)}</div>
+    <div class="abs mono" style="right:160px;top:470px;text-align:right">This week · <span class="tab" id="mins" style="color:var(--ink)">89</span> of 150 min</div>
+    <div class="abs" style="right:160px;top:516px;width:560px;height:10px;border-radius:5px;background:var(--line)"><div id="meter" style="height:100%;border-radius:5px;background:var(--ink);width:0"></div></div>`;
+  const route = cam.querySelector('#route');
+  const len = route.getTotalLength();
+  route.style.strokeDasharray = `${len} ${len}`;
+  return { route, len, head: cam.querySelector('#head'), halo: cam.querySelector('#halo'), km: cam.querySelector('#km'), a: cam.querySelector('#a'), b: cam.querySelector('#b'),
+           mins: cam.querySelector('#mins'), meter: cam.querySelector('#meter'), momo: mkChar(cam, CH.momo, 200) };
+}, (t, r) => {
+  const B = 15;
+  const k = E.inOut(prog(t, bar(B), BAR * 1.85));
+  r.route.style.strokeDashoffset = r.len * (1 - k);
+  const p = r.route.getPointAtLength(r.len * k);
+  r.head.setAttribute('cx', p.x); r.head.setAttribute('cy', p.y);
+  r.halo.setAttribute('cx', p.x); r.halo.setAttribute('cy', p.y); r.halo.setAttribute('r', 30 + 8 * Math.sin(t * 9));
+  r.km.firstChild.textContent = (5.2 * k).toFixed(1);
+  ioLines(r.a, t, [bar(B, 1) - LEAD], bar(B + 1) - .42);
+  ioLines(r.b, t, [bar(B + 1) - LEAD, bar(B + 1, 1) - LEAD]);
+  r.mins.textContent = Math.round(89 + 29 * k);
+  r.meter.style.width = `${((89 + 29 * k) / 150) * 100}%`;
+  const q = r.route.getPointAtLength(Math.max(0, r.len * k - 40));
+  r.momo.set(q.x, q.y + 10, k < 1 ? { mood: 'happy', ...Act.walk(t, 2), wig: wig(t, 3, 10), blink: Act.blink(t, .7), look: [3, 0] }
+    : { mood: 'cheer', ...Act.cheer(t - bar(B + 1, 3), 20), fx: 'sparkles', time: t, wig: wig(t, 3, 10) });
+});
+
+/* ── 6 · Thursday: a bad night, a lighter day ─────────────────────────────────────────────────── */
+const SLEEP = [7.4, 7.1, 6.8, 8.0, 7.6, 7.2, 5.2];
+scene(17, 19, cam => {
+  cam.innerHTML = `
+    <div class="abs mono" style="left:160px;top:236px">Thursday · Recovery</div>
+    <div class="abs serif" id="a" style="left:156px;top:300px;font-size:104px">${lines(['Slept _badly?_'])}</div>
+    <div class="abs serif" id="b" style="left:156px;top:300px;font-size:96px">${lines(['Today’s load', 'drops a _little._'], 8)}</div>
+    <div class="abs mono" style="left:900px;top:236px">Sleep · last 7 nights</div>
+    <div class="abs serif tab" style="left:894px;top:282px;font-size:130px;letter-spacing:-.03em">5h 12m</div>
+    <div class="abs mono" style="left:900px;top:430px;font-size:18px;color:var(--ink)">HRV 41 ms · baseline 48 ms</div>
+    <div class="abs" id="bars" style="left:900px;top:480px;width:860px;height:300px"></div>
+    <div class="abs mono" style="left:900px;top:800px;font-size:16px">From Health Connect</div>
+    <div class="abs" id="load" style="left:1240px;top:860px;width:520px;text-align:right">
+      <div class="mono">Today · Bench press</div>
+      <div class="serif tab" style="font-size:84px;margin-top:10px"><span class="muted">82.5 →</span> <span class="red" style="font-style:normal">77.5 kg</span></div></div>`;
+  const bars = cam.querySelector('#bars');
+  SLEEP.forEach((h, i) => bars.appendChild(html(`<div class="abs" style="left:${i * 124}px;bottom:0;width:84px;height:${(h / 8.4) * 300}px;border-radius:10px 10px 4px 4px;background:${i === 6 ? 'var(--accent)' : 'rgba(242,239,234,.2)'};transform-origin:50% 100%"></div>`)));
+  return { a: cam.querySelector('#a'), b: cam.querySelector('#b'), bars: [...bars.children], load: cam.querySelector('#load'), mochi: mkChar(cam, CH.mochi, 320) };
+}, (t, r) => {
+  const B = 17;
+  ioLines(r.a, t, [bar(B, 1) - LEAD], bar(B + 1) - .42);
+  ioLines(r.b, t, [bar(B + 1) - LEAD, bar(B + 1, 1) - LEAD]);
+  r.bars.forEach((b, i) => { b.style.transform = `scaleY(${E.expo(prog(t, bar(B) + i * BEAT / 4, .5))})`; });
+  const li = E.expo(prog(t, bar(B + 1, 1) - LEAD, .55));
+  show(r.load, li); px(r.load, 0, (1 - li) * 30);
+  const wake = bar(B + 1), s = t - wake;
+  const state = s < 0 ? { mood: 'sleepy', ...Act.breathe(t, .045), fx: 'zzz', time: t, armR: 6, armL: 6, wig: wig(t, .8, 4) }
+    : s < .45 ? { mood: 'shock', ...Act.hop(s, .4, 24), armR: 100, armL: 100, fx: 'shock', time: t, wig: wig(t, 5, 12) }
+    : s < BAR * .6 ? { mood: 'calm', ...Act.breathe(t, .02), look: [4, 0], blink: Act.blink(t, .2), wig: wig(t, 1.5, 6) }
+    : { mood: 'happy', ...Act.bounce(t, 3), look: [4, -1], blink: Act.blink(t), wig: wig(t, 2, 8) };
+  r.mochi.set(430, 960, state);
+});
+
+/* ── 7 · Friday: twelve weeks of volume ───────────────────────────────────────────────────────── */
+const VOL = [31.2, 31.9, 33.0, 32.4, 33.8, 34.9, 34.3, 35.6, 36.1, 35.4, 36.4, 36.8];
+const cx = i => 160 + i * (1600 / 11), cy = v => 900 - (v - 30) / 8 * 470;
+scene(19, 21, cam => {
+  const pts = VOL.map((v, i) => [cx(i), cy(v)]);
+  let d = `M ${pts[0][0]} ${pts[0][1]}`;
+  for (let i = 1; i < pts.length; i++) { const [x0, y0] = pts[i - 1], [x1, y1] = pts[i], mx = (x0 + x1) / 2; d += ` C ${mx} ${y0}, ${mx} ${y1}, ${x1} ${y1}`; }
+  const area = `${d} L ${cx(11)} 920 L ${cx(0)} 920 Z`;
+  cam.innerHTML = `
+    <svg class="abs" style="left:0;top:0;width:1920px;height:1080px;overflow:visible" viewBox="0 0 1920 1080">
+      <defs><linearGradient id="ga" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#E23D3D" stop-opacity=".32"/><stop offset="1" stop-color="#E23D3D" stop-opacity="0"/></linearGradient>
+        <clipPath id="gc"><rect id="gcr" x="0" y="0" width="0" height="1080"/></clipPath></defs>
+      ${[32, 35, 38].map(v => `<line x1="160" x2="1760" y1="${cy(v)}" y2="${cy(v)}" stroke="var(--line)" stroke-width="1.5"/><text x="1780" y="${cy(v) + 7}" font-family="IBM Plex Mono, monospace" font-size="18" letter-spacing="2" fill="#BFB6AA">${v}K</text>`).join('')}
+      <g clip-path="url(#gc)"><path d="${area}" fill="url(#ga)"/><path d="${d}" fill="none" stroke="var(--accent)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/></g>
+      <circle id="end" cx="${cx(11)}" cy="${cy(36.8)}" r="13" fill="var(--accent)"/>
+      ${VOL.map((v, i) => `<text x="${cx(i)}" y="966" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="17" letter-spacing="2" fill="#BFB6AA">W${i + 1}</text>`).join('')}
+    </svg>
+    <div class="abs mono" style="left:160px;top:236px">Friday · Total volume, 12 weeks</div>
+    <div class="abs serif tab" id="pct" style="left:150px;top:270px;font-size:220px;letter-spacing:-.04em">+0%</div>
+    <div class="abs serif" id="a" style="left:160px;top:510px;font-size:76px">${lines(['Watch yourself', 'get _stronger._'], 6)}</div>`;
+  return { gcr: cam.querySelector('#gcr'), end: cam.querySelector('#end'), pct: cam.querySelector('#pct'), a: cam.querySelector('#a'), nori: mkChar(cam, CH.nori, 190) };
+}, (t, r) => {
+  const B = 19, land = bar(B + 1);
+  const k = E.inOut(prog(t, bar(B), land - bar(B) - .05));
+  r.gcr.setAttribute('width', 160 + 1620 * k);
+  r.end.setAttribute('r', 13 * E.back(prog(t, land - .1, .3)));
+  r.pct.textContent = `+${Math.round(18 * E.out(k))}%`;
+  ioLines(r.a, t, [bar(B, 1) - LEAD, bar(B, 2) - LEAD]);
+  const s = t - (land - .3);
+  const y = lerp(-200, cy(36.8) - 8, E.in(clamp(s / .3)));
+  r.nori.set(cx(11) - 40, y, s < .3 ? { mood: 'shock', armR: 150, armL: 150, sy: 1.08, sx: .94 }
+    : { mood: 'cheer', ...Act.cheer(t - land, 18), time: t, fx: 'sparkles' }, s > 0 ? 1 : 0);
+});
+
+/* ── 8 · Saturday: the watch (and Nori turns the crown a little too hard) ─────────────────────── */
+scene(21, 23, cam => {
+  cam.innerHTML = `
+    <div class="abs" id="ripples" style="left:620px;top:560px"></div>
+    <div class="abs" style="left:492px;top:110px;width:256px;height:860px;border-radius:70px;background:linear-gradient(90deg,#15110E,#221C17 50%,#15110E)"></div>
+    <div class="abs" id="crown" style="left:880px;top:520px;width:34px;height:80px;border-radius:10px;background:linear-gradient(90deg,#2C2520,#4A4038);overflow:hidden">
+      <div id="grooves" class="abs" style="left:0;top:-40px;width:34px;height:160px;background:repeating-linear-gradient(0deg,rgba(0,0,0,.35) 0 3px,transparent 3px 8px)"></div></div>
+    <div class="abs" id="watch" style="left:350px;top:290px;width:540px;height:540px;border-radius:50%;background:radial-gradient(circle at 40% 30%, #3A322B, #1D1814 70%)">
+      <div class="abs" style="left:30px;top:30px;width:480px;height:480px;border-radius:50%;background:#000;overflow:hidden">
+        <svg class="abs" viewBox="0 0 480 480" style="left:0;top:0;width:480px;height:480px"><defs><path id="tarc" d="M 80 240 A 160 160 0 0 1 400 240"/></defs>
+          <text font-family="IBM Plex Sans, sans-serif" font-size="22" fill="#F2EFEA" text-anchor="middle"><textPath href="#tarc" startOffset="50%">10:42</textPath></text>
+          <circle id="rtrack" cx="240" cy="240" r="232" fill="none" stroke="#2A2420" stroke-width="8"/>
+          <circle id="rarc" cx="240" cy="240" r="232" fill="none" stroke="#E23D3D" stroke-width="8" stroke-linecap="round" pathLength="1" stroke-dasharray="1 1" transform="rotate(-90 240 240)"/></svg>
+        <div class="abs" id="set" style="left:0;top:0;width:480px;height:480px">
+          <div class="abs mono" style="left:0;right:0;top:96px;text-align:center;font-size:14px">Push A · 12 min</div>
+          <div class="abs mono" style="left:0;right:0;top:120px;text-align:center;font-size:17px;color:var(--ink)">Bench press</div>
+          <div class="abs" style="left:62px;top:168px;width:62px;height:62px;border-radius:50%;background:#1E1A17;color:var(--ink);font-size:32px;display:flex;align-items:center;justify-content:center">−</div>
+          <div class="abs serif tab" id="wt" style="left:120px;width:240px;top:156px;text-align:center;font-size:92px">77.5</div>
+          <div class="abs" style="left:356px;top:168px;width:62px;height:62px;border-radius:50%;background:#1E1A17;color:var(--ink);font-size:32px;display:flex;align-items:center;justify-content:center">+</div>
+          <div class="abs mono" style="left:0;right:0;top:262px;text-align:center;font-size:16px;color:var(--ink)">kg · × 8</div>
+          <div class="abs mono" id="hr" style="left:0;right:0;top:294px;text-align:center;font-size:14px">Set 3 of 5 · 142 bpm</div>
+          <div class="abs" id="sd" style="left:180px;top:326px;width:120px;height:14px"></div>
+          <div class="abs" id="log" style="left:140px;top:356px;width:200px;height:58px;border-radius:29px;background:#F2EFEA;color:#110F0C;font-family:var(--sans);font-weight:500;font-size:21px;display:flex;align-items:center;justify-content:center">Log set</div>
+        </div>
+        <div class="abs" id="rest" style="left:0;top:0;width:480px;height:480px">
+          <div class="abs mono" style="left:0;right:0;top:130px;text-align:center;font-size:17px">Rest</div>
+          <div class="abs serif tab" id="wclock" style="left:0;right:0;top:158px;text-align:center;font-size:120px">2:30</div>
+          <div class="abs" style="left:112px;top:320px;width:118px;height:54px;border-radius:27px;background:#2A2420;display:flex;align-items:center;justify-content:center;font-family:var(--sans);font-size:19px">+30</div>
+          <div class="abs" style="left:250px;top:320px;width:118px;height:54px;border-radius:27px;background:#2A2420;display:flex;align-items:center;justify-content:center;font-family:var(--sans);font-size:19px">Skip</div>
+          <div class="abs mono" style="left:0;right:0;top:396px;text-align:center;font-size:14px;color:var(--accent)">undo · rate →</div>
+        </div>
+      </div>
+    </div>
+    <div class="abs mono" style="left:1180px;top:300px">Saturday · Wear OS</div>
+    <div class="abs serif" id="a" style="left:1174px;top:352px;font-size:92px">${lines(['Leave the phone', 'in your _bag._'], 8)}</div>
+    <div class="abs serif" id="b" style="left:1174px;top:352px;font-size:92px">${lines(['Log sets from', 'your _wrist._'], 8)}</div>`;
+  const rp = cam.querySelector('#ripples');
+  for (let i = 0; i < 2; i++) rp.appendChild(html(`<div class="abs" style="left:0;top:0;width:10px;height:10px;border-radius:50%;border:3px solid var(--accent)"></div>`));
+  const sd = cam.querySelector('#sd');
+  for (let i = 0; i < 5; i++) sd.appendChild(html(`<div class="dot" style="left:${i * 26}px;top:0;width:13px;height:13px"></div>`));
+  return { rip: [...rp.children], set: cam.querySelector('#set'), rest: cam.querySelector('#rest'), wclock: cam.querySelector('#wclock'), log: cam.querySelector('#log'),
+           wt: cam.querySelector('#wt'), hr: cam.querySelector('#hr'), dots: [...sd.children], rarc: cam.querySelector('#rarc'), rtrack: cam.querySelector('#rtrack'),
+           grooves: cam.querySelector('#grooves'), watch: cam.querySelector('#watch'), a: cam.querySelector('#a'), b: cam.querySelector('#b'), nori: mkChar(cam, CH.nori, 170) };
+}, (t, r) => {
+  const B = 21;
+  ioLines(r.a, t, [bar(B) - LEAD, bar(B, 1) - LEAD], bar(B + 1) - .42);
+  ioLines(r.b, t, [bar(B + 1) - LEAD, bar(B + 1, 1) - LEAD]);
+  // Nori pushes the crown on beats 1 and 2: two detents, 2.5 kg each.
+  const d1 = bar(B, 1), d2 = bar(B, 2), spin0 = bar(B, 2.25), spin1 = spin0 + .55;
+  const steps = (t >= d1 ? 1 : 0) + (t >= d2 ? 1 : 0);
+  r.wt.textContent = (77.5 + 2.5 * steps).toFixed(1);
+  const spinK = E.inOut(prog(t, spin0, spin1 - spin0));
+  const turn = E.out(prog(t, d1 - .08, .2)) + E.out(prog(t, d2 - .08, .2)) + spinK * 14;
+  r.grooves.style.transform = `translateY(${(turn * 16) % 16}px)`;
+  const tap = bar(B, 3);
+  r.hr.textContent = `Set ${t >= tap ? 4 : 3} of 5 · ${141 + Math.round(2 * Math.sin(t * 1.7) + 1)} bpm`;
+  r.dots.forEach((d, i) => { const on = i < (t >= tap ? 3 : 2); d.style.background = on ? 'var(--accent)' : 'transparent'; d.style.border = on ? '0' : '2px solid #5A524B'; });
+  r.log.style.transform = `scale(${press(t, tap)})`;
+  const hk = prog(t, bar(B + 1) - .3, .3);
+  show(r.set, handOut(hk)); show(r.rest, handIn(hk));
+  const rk = prog(t, bar(B + 1), BAR);
+  r.wclock.textContent = fmtClock(150 - Math.floor(rk * 2.9));
+  const ringOn = t >= bar(B + 1) - .1;
+  r.rarc.style.strokeDashoffset = ringOn ? lerp(0, .02, rk) : 1;
+  r.rtrack.style.opacity = ringOn ? 1 : 0;
+  r.rip.forEach((c, i) => {
+    const s = t - tap - i * .07, k = clamp(s / .6);
+    const rad = lerp(270, 430, E.out(k));
+    c.style.width = c.style.height = `${rad * 2}px`; c.style.transform = `translate(${-rad}px, ${-rad}px)`;
+    c.style.opacity = s > 0 ? (1 - k) * .7 : 0;
+  });
+  const buzz = t > tap && t < tap + .12 ? 3 * Math.sin((t - tap) * 200) : 0;
+  r.watch.style.transform = `translate(${buzz}px, 0)`;
+  // Nori: push, push, then the crown takes Nori round with it.
+  let st;
+  if (t < spin0) st = { mood: 'happy', look: [-4, 0], blink: Act.blink(t, 2), ...Act.breathe(t), armL: 70 + 40 * (pulse(t, d1) + pulse(t, d2)), armR: 20 };
+  else if (t < spin1) st = { mood: 'shock', rot: 360 * spinK, armL: 120, armR: 120, dy: -30 * Math.sin(Math.PI * spinK) };
+  else if (t < bar(B + 1, 1)) st = { mood: 'dizzy', fx: 'stars', time: t, rot: 9 * Math.sin((t - spin1) * 10), armL: 40, armR: 40 };
+  else st = { mood: 'happy', ...Act.bounce(t, 3), ...Act.wave(t), blink: Act.blink(t, 2), look: [-3, -1] };
+  const wob = t >= spin1 && t < bar(B + 1, 1) ? 10 * Math.sin((t - spin1) * 7) : 0;
+  r.nori.set(1010 + wob, 660, st);
+});
+
+/* ── 9 · Sunday: the Academy ──────────────────────────────────────────────────────────────────────
+ * The lesson, its summary, its drawing, the contents and the pull quote are the Academy's own.
+ */
+const REPS = [8, 8, 9, 9, 10, 10, 8, 8];
+const ax = i => 70 + i * 100, ay = rp => 390 - (rp - 7) * 72;
+const THUMB = {
+  reps: '<path d="M8 50 V20 M22 50 V26 M36 50 V33 M50 50 V40"/><path d="M64 50 V44" stroke="#E23D3D"/>',
+  volume: '<path d="M6 50 C 20 20, 40 12, 76 10"/><rect x="28" y="6" width="22" height="46" fill="#E23D3D" fill-opacity=".18" stroke="none"/>',
+  rest: '<path d="M6 30 H18 C 26 30, 26 48, 36 48 C 48 48, 50 18, 62 18 H76"/><circle cx="76" cy="18" r="3.5" fill="#E23D3D" stroke="none"/>',
+  ready: '<path d="M6 22 H76 M6 36 H76" stroke-dasharray="3 5"/><path d="M6 29 C 30 26, 50 30, 64 42"/><circle cx="64" cy="44" r="3.5" fill="#E23D3D" stroke="none"/>',
+  block: '<path d="M6 46 C 30 36, 50 26, 76 18"/><path d="M6 48 C 30 34, 50 20, 60 20 C 66 20, 70 40, 76 44" stroke-dasharray="3 5"/>',
+  zone2: '<path d="M6 36 Q 12 30 18 36 T 30 36 T 42 36 T 54 36 T 66 36 T 78 36"/><path d="M6 26 H78 M6 46 H78" stroke="#E23D3D" stroke-opacity=".5"/>',
+};
+const LESSONS = [
+  ['reps', 'How hard a set should be', 'Training'], ['volume', 'How much work a muscle needs', 'Training'], ['rest', 'Rest is where you grow', 'Training'],
+  ['ready', 'What readiness means', 'Your coach'], ['block', 'Blocks, deloads and one goal at a time', 'Your coach'], ['zone2', 'Easy cardio, and why lifters need it', 'Cardio'],
+];
+scene(23, 26, cam => {
+  let d = `M ${ax(0)} ${ay(REPS[0])}`;
+  for (let i = 1; i < REPS.length; i++) d += ` H ${ax(i)} V ${ay(REPS[i])}`;
+  d += ` H ${ax(7) + 60}`;
+  cam.innerHTML = `
+    <div class="abs mono" style="left:160px;top:236px">Sunday · Academy</div>
+    <div class="abs serif" style="left:150px;top:276px;font-size:150px">Academy</div>
+    <div class="abs sans muted" style="left:160px;top:450px;font-size:28px">12 lessons in three chapters</div>
+    <div class="abs serif" id="a" style="left:156px;top:560px;font-size:96px">${lines(['Learn why', 'it _works._'], 8)}</div>
+    <div class="abs" id="feat" style="left:900px;top:220px;width:860px;height:760px">
+      <svg class="abs" viewBox="0 0 860 440" style="left:0;top:0;width:860px;height:440px;overflow:visible">
+        ${[1, 2, 3].map(i => `<line x1="70" x2="820" y1="${ay(7 + i)}" y2="${ay(7 + i)}" stroke="#BFB6AA" stroke-opacity=".35" stroke-width="1.5" stroke-dasharray="2 8"/>`).join('')}
+        <line id="axx" x1="70" x2="820" y1="390" y2="390" stroke="#BFB6AA" stroke-width="2" pathLength="1" stroke-dasharray="1 1"/>
+        <line id="axy" x1="70" x2="70" y1="390" y2="40" stroke="#BFB6AA" stroke-width="2" pathLength="1" stroke-dasharray="1 1"/>
+        ${[8, 9, 10].map(v => `<text x="52" y="${ay(v) + 6}" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="15" fill="#BFB6AA">${v}</text>`).join('')}
+        ${REPS.map((v, i) => `<text x="${ax(i)}" y="420" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="14" fill="#BFB6AA">${i + 1}</text>`).join('')}
+        <path d="${d}" fill="none" stroke="#F2EFEA" stroke-opacity=".12" stroke-width="18" stroke-linejoin="round"/>
+        <path id="ink" d="${d}" fill="none" stroke="#F2EFEA" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+        <circle id="pen" r="7" fill="#F2EFEA"/>
+        <circle id="halo" cx="${ax(6)}" cy="${ay(8)}" r="10" fill="none" stroke="#E23D3D" stroke-width="3"/>
+        <circle id="acc" cx="${ax(6)}" cy="${ay(8)}" r="9" fill="#E23D3D"/>
+        <text id="plus" x="${ax(6) - 10}" y="${ay(10) - 46}" font-family="Fraunces, serif" font-size="54" fill="#E23D3D">+2.5 kg</text>
+        <text id="cap" x="70" y="24" font-family="IBM Plex Mono, monospace" font-size="15" letter-spacing="3" fill="#BFB6AA">REPS FIRST, THEN WEIGHT</text>
+      </svg>
+      <div class="abs" id="lesson" style="left:0;top:490px;width:860px">
+        <div class="mono" style="font-size:16px">Training · Lesson 1</div>
+        <div class="serif" style="font-size:54px;margin-top:14px">How you actually get stronger</div>
+        <div class="sans muted" style="font-size:24px;font-style:italic;margin-top:14px;line-height:1.4">Repeat the same lifts and ask for a little more each time.<br>Reps first, then weight.</div></div>
+    </div>
+    <div class="abs" id="list" style="left:900px;top:220px;width:860px">
+      ${LESSONS.map(([th, n, ch]) => `<div class="abs les" style="left:0;top:0;width:860px;height:96px">
+        <div class="abs" style="left:0;top:4px;width:120px;height:84px;border-radius:14px;background:var(--tile)">
+          <svg viewBox="0 0 84 58" style="position:absolute;left:14px;top:12px;width:92px;height:62px;overflow:visible" fill="none" stroke="#F2EFEA" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">${THUMB[th]}</svg></div>
+        <div class="abs serif" style="left:148px;top:14px;font-size:38px">${n}</div>
+        <div class="abs mono" style="left:150px;top:62px;font-size:14px">${ch}</div></div>`).join('')}
+    </div>
+    <div class="abs" id="quote" style="left:900px;top:330px;width:860px">
+      <div class="serif" style="font-size:66px;font-style:italic;line-height:1.1">You do not grow in the gym.<br>You grow in the days <em>after it.</em></div>
+      <div class="mono" style="font-size:16px;margin-top:26px">From “Rest is where you grow”</div></div>`;
+  const ink = cam.querySelector('#ink');
+  const len = ink.getTotalLength();
+  ink.style.strokeDasharray = `${len} ${len}`;
+  return { a: cam.querySelector('#a'), ink, len, pen: cam.querySelector('#pen'), halo: cam.querySelector('#halo'), acc: cam.querySelector('#acc'), plus: cam.querySelector('#plus'),
+           cap: cam.querySelector('#cap'), axx: cam.querySelector('#axx'), axy: cam.querySelector('#axy'), lesson: cam.querySelector('#lesson'), feat: cam.querySelector('#feat'),
+           les: [...cam.querySelectorAll('.les')], list: cam.querySelector('#list'), quote: cam.querySelector('#quote'),
+           mochi: mkChar(cam, CH.mochi, 210), momo: mkChar(cam, CH.momo, 200) };
+}, (t, r) => {
+  const B = 23;
+  ioLines(r.a, t, [bar(B, 1) - LEAD, bar(B, 2) - LEAD]);
+  // Bar 23: the featured lesson draws itself.
+  const axk = E.inOut(prog(t, bar(B), .5));
+  r.axx.style.strokeDashoffset = 1 - axk; r.axy.style.strokeDashoffset = 1 - axk;
+  const k = E.inOut(prog(t, bar(B) + .35, bar(B, 3) - bar(B) - .35));
+  r.ink.style.strokeDashoffset = r.len * (1 - k);
+  const p = r.ink.getPointAtLength(r.len * k);
+  r.pen.setAttribute('cx', p.x); r.pen.setAttribute('cy', p.y); r.pen.style.opacity = k > 0 && k < 1 ? 1 : 0;
+  const land = bar(B, 3), s = t - land;
+  r.acc.setAttribute('r', s > 0 ? 9 * E.back(clamp(s / .3)) : 0);
+  r.halo.setAttribute('r', s > 0 ? 10 + 40 * E.out(clamp(s / .9)) : 0); r.halo.style.opacity = s > 0 ? 1 - clamp(s / .9) : 0;
+  r.plus.style.opacity = E.out(prog(t, land, .4));
+  r.plus.textContent = `+${(2.5 * E.out(prog(t, land, .6))).toFixed(1)} kg`;
+  r.cap.style.opacity = E.out(prog(t, land + .2, .5));
+  show(r.lesson, E.expo(prog(t, bar(B, 1), .6)));
+  // Bar 24: the page turns to the contents; six lessons land on eighths, drawings and all.
+  const toList = prog(t, bar(B + 1) - .3, .3), toQuote = prog(t, bar(B + 2) - .3, .3);
+  show(r.feat, handOut(toList));
+  r.list.style.visibility = t >= bar(B + 1) - .2 && t < bar(B + 2) ? 'visible' : 'hidden';
+  r.list.style.opacity = handOut(toQuote);
+  r.les.forEach((el, i) => {
+    const kk = E.expo(prog(t, bar(B + 1) + i * BEAT / 2 - LEAD, .45));
+    el.style.opacity = kk; el.style.transform = `translate(${(1 - kk) * 60}px, ${i * 118}px)`;
+    const svg = el.querySelector('svg');
+    svg.style.clipPath = `inset(0 ${(1 - E.inOut(prog(t, bar(B + 1) + i * BEAT / 2, .5))) * 100}% 0 0)`;
+  });
+  // Bar 25: a line from another lesson. Mochi reads it and its sprout grows on "after it".
+  show(r.quote, handIn(toQuote)); r.quote.style.transform = `translateY(${(1 - handIn(toQuote)) * 24}px)`;
+  const grow = 1 + .55 * E.back(prog(t, bar(B + 2, 2), .5));
+  r.mochi.set(300, 1010, { mood: t > bar(B + 2, 2) ? 'happy' : 'calm', glasses: true, grow, ...Act.breathe(t, .02), look: [4, -2], blink: Act.blink(t, .3),
+                          wig: wig(t, 1, 5), ...(t > bar(B + 2, 2) ? Act.hop(t - bar(B + 2, 2), .4, 16) : {}), fx: t > bar(B + 2, 2) ? 'sparkles' : undefined, time: t });
+  r.momo.set(520, 1010, { mood: t > land ? 'happy' : 'calm', ...Act.breathe(t + .6, .02), look: [4, -2], blink: Act.blink(t, 1.9), wig: wig(t, 1, 5) });
+});
+
+/* ── Day rail: Monday to Sunday across the top ────────────────────────────────────────────────── */
+const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const DAY_AT = [8, 11, 15, 17, 19, 21, 23].map(n => bar(n));
+const railX = i => 1000 + i * 118;
+const rail = html(`<div class="rail">${DAYS.map((d, i) => `<div class="d" style="left:${railX(i)}px">${d}</div>`).join('')}<div class="u"></div></div>`);
+stage.appendChild(rail);
+const railDays = [...rail.querySelectorAll('.d')], railU = rail.querySelector('.u');
+function updateRail(t) {
+  const on = t >= bar(8) - .3 && t < bar(26);
+  rail.style.display = on ? 'block' : 'none';
+  if (!on) return;
+  let pos = 0;
+  DAY_AT.forEach((at, i) => { if (i > 0) pos += E.inOut(prog(t, at - PUSH_LEN, PUSH_LEN)); });
+  const cur = Math.round(pos);
+  railDays.forEach((d, i) => {
+    const k = E.expo(prog(t, bar(8) - .3 + i * .04, .6));
+    d.style.opacity = k * (i === cur ? 1 : .38);
+    d.style.color = i === cur ? 'var(--ink)' : 'var(--muted)';
+    d.style.transform = `translateY(${(1 - k) * -20}px)`;
+  });
+  railU.style.transform = `translateX(${railX(0) + 27 + pos * 118}px)`;
+  railU.style.opacity = E.out(prog(t, bar(8) - .1, .4));
+}
+
+/* ── 10 · The break: the week closes into a loop ──────────────────────────────────────────────── */
+scene(26, 27, cam => {
+  cam.innerHTML = `
+    <svg class="abs" style="left:0;top:0;width:1920px;height:1080px" viewBox="0 0 1920 1080"><circle id="ring" cx="960" cy="520" r="300" fill="none" stroke="var(--line)" stroke-width="2" pathLength="1" stroke-dasharray="1 1"/></svg>
+    ${DAYS.map(d => `<div class="abs mono wd" style="left:0;top:0;width:110px;text-align:center;color:var(--ink)">${d}</div>`).join('')}
+    <div class="abs serif" id="a" style="left:0;width:1920px;top:880px;font-size:104px;text-align:center">${lines(['Then it _learns._'])}</div>`;
+  return { ring: cam.querySelector('#ring'), wd: [...cam.querySelectorAll('.wd')], a: cam.querySelector('#a'), nori: mkChar(cam, CH.nori, 260) };
+}, (t, r) => {
+  const B = 26;
+  const k = E.inOut(prog(t, bar(B), .8));
+  r.ring.style.strokeDashoffset = 1 - E.inOut(prog(t, bar(B) + .2, 1.3));
+  r.wd.forEach((d, i) => {
+    const a = -Math.PI / 2 + i * 2 * Math.PI / 7 + (t - bar(B)) * .35;
+    d.style.transform = `translate(${lerp(railX(i), 960 + Math.cos(a) * 300 - 55, k)}px, ${lerp(112, 520 + Math.sin(a) * 300 - 14, k)}px)`;
+    d.style.opacity = i === 6 ? 1 : lerp(.38, .9, k);
+  });
+  ioLines(r.a, t, [bar(B, 1) - LEAD]);
+  const crouch = E.inOut(prog(t, bar(B, 3), .5));
+  r.nori.set(960, 640, { mood: 'calm', look: [0, -3], blink: Act.blink(t, 3), ...Act.breathe(t, .012), sy: 1 - .14 * crouch, sx: 1 + .1 * crouch, armR: lerp(18, -10, crouch), armL: lerp(18, -10, crouch) });
+}, { zoom: [1, 1.08] });
+
+/* ── 11 · The drop: next time, it says "try 85 kg" ────────────────────────────────────────────── */
+scene(27, 28, cam => {
+  cam.innerHTML = `
+    <div class="abs mono" id="lab" style="left:0;width:1920px;top:200px;text-align:center">Bench press · Next session</div>
+    <div class="abs serif tab" id="n0" style="left:0;top:252px;font-size:250px;letter-spacing:-.04em;color:var(--muted)">82.5</div>
+    <svg class="abs" viewBox="0 0 200 60" style="left:900px;top:382px;width:200px;height:60px"><path id="arrow" d="M8 30 H 178 M 150 8 L 184 30 L 150 52" fill="none" stroke="var(--ink)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" pathLength="1" stroke-dasharray="1 1"/></svg>
+    <div class="abs serif tab" id="n1" style="left:1140px;top:252px;font-size:250px;letter-spacing:-.04em;color:var(--accent)">85<span style="font-size:96px;letter-spacing:0"> kg</span></div>
+    <div class="abs serif" id="try" style="left:1150px;top:522px;font-size:40px;font-style:italic;color:var(--accent)">try 85 kg</div>
+    <div class="abs serif" id="a" style="left:0;width:1920px;top:626px;font-size:64px;text-align:center;color:var(--muted)">${lines(['Every week builds on the _last._'])}</div>
+    <div class="abs flash" id="fl" style="background:var(--accent)"></div>`;
+  return { n0: cam.querySelector('#n0'), arrow: cam.querySelector('#arrow'), n1: cam.querySelector('#n1'), tr: cam.querySelector('#try'), a: cam.querySelector('#a'),
+           fl: cam.querySelector('#fl'), lab: cam.querySelector('#lab'),
+           cast: [mkChar(cam, CH.mochi, 250), mkChar(cam, CH.nori, 280), mkChar(cam, CH.kettle, 260), mkChar(cam, CH.momo, 250)] };
+}, (t, r) => {
+  const B = 27, s = t - bar(B);
+  r.fl.style.opacity = s < 0 ? 0 : Math.max(0, 1 - s / .22) * .95;
+  const n0k = E.expo(prog(t, bar(B) - .02, .5));
+  px(r.n0, 350 + (1 - n0k) * -120, 0); show(r.n0, n0k);
+  r.arrow.style.strokeDashoffset = 1 - E.out(prog(t, bar(B, 1) - LEAD, .35));
+  const n1k = E.expo(prog(t, bar(B, 2) - LEAD, .55));
+  r.n1.style.transform = `translateY(${(1 - n1k) * 120}px)`; show(r.n1, n1k);
+  show(r.tr, E.out(prog(t, bar(B, 2) + .15, .4)));
+  show(r.lab, E.out(prog(t, bar(B), .3)));
+  ioLines(r.a, t, [bar(B, 3) - LEAD]);
+  const xs = [560, 840, 1100, 1370];
+  r.cast.forEach((c, i) => {
+    const up = spring(s + .08 - i * .06, 1.3, 5);
+    c.set(xs[i], lerp(1500, 1010, up), { mood: 'cheer', ...Act.cheer(s + i * .12, 34), fx: 'sparkles', time: t + i, wig: wig(t, 3, 12) }, s > -.1 + i * .06 ? 1 : 0);
+  });
+}, { zoom: [1.1, 1] });
+
+/* ── 12 · The block: the hard weeks (Nori under a heavy bar) and the easy one ─────────────────── */
+const PHASES = ['Accumulate', 'Intensify', 'Peak', 'Deload'];
+scene(28, 30, cam => {
+  const X0 = 160, X1 = 1300, Y0 = 520, Y1 = 840;
+  const fx = u => X0 + u * (X1 - X0);
+  const fit = u => Y1 - (Y1 - Y0) * (.15 + .7 * (1 - Math.exp(-2.2 * u)) + .12 * clamp((u - .75) / .25));
+  const fat = u => Y1 - (Y1 - Y0) * (u < .75 ? .1 + .75 * Math.pow(u / .75, 1.3) : .85 - .7 * E.out((u - .75) / .25));
+  const path = f => Array.from({ length: 101 }, (_, i) => `${i ? 'L' : 'M'} ${fx(i / 100).toFixed(1)} ${f(i / 100).toFixed(1)}`).join(' ');
+  // The bar lives inside Nori's drawing (the 200-unit box) so it sits in the fists and squashes and
+  // hops with Nori. Only the plates that fly off on Deload are drawn out here, in stage pixels.
+  const SZ = 1.25, NX = 1570, NY = 930;
+  const SX = bx => NX + (bx - 100) * SZ, SY = by => NY + (by - 182) * SZ;
+  const flyPlate = (bx, by, w, h, fill) => `<rect x="${SX(bx)}" y="${SY(by)}" width="${w * SZ}" height="${h * SZ}" rx="${3 * SZ}" fill="${fill}"/>`;
+  cam.innerHTML = `
+    <div class="abs mono" style="left:160px;top:236px">Your block</div>
+    ${PHASES.map((p, i) => `<div class="abs mono ph" style="left:${160 + i * 290}px;top:340px">${p}</div>
+      <div class="abs seg" style="left:${160 + i * 290}px;top:386px;width:270px;height:14px;border-radius:7px;background:var(--line)"><div style="height:100%;width:0;border-radius:7px;background:var(--accent)"></div></div>`).join('')}
+    <svg class="abs" style="left:0;top:0;width:1920px;height:1080px;overflow:visible" viewBox="0 0 1920 1080">
+      <defs><clipPath id="bc"><rect id="bcr" x="0" y="0" width="0" height="1080"/></clipPath></defs>
+      <g clip-path="url(#bc)"><path d="${path(fit)}" fill="none" stroke="#F2EFEA" stroke-width="6" stroke-linecap="round"/>
+        <path d="${path(fat)}" fill="none" stroke="#BFB6AA" stroke-width="4" stroke-dasharray="3 12" stroke-linecap="round"/></g>
+      <text x="1316" y="${fit(1) + 6}" font-family="IBM Plex Mono, monospace" font-size="16" letter-spacing="2" fill="#F2EFEA">FITNESS</text>
+      <text x="1316" y="${fat(1) + 6}" font-family="IBM Plex Mono, monospace" font-size="16" letter-spacing="2" fill="#BFB6AA">FATIGUE</text>
+      <line id="mk" x1="0" x2="0" y1="${Y0 - 30}" y2="${Y1 + 10}" stroke="#E23D3D" stroke-width="2"/>
+    </svg>
+    <div class="abs serif" id="a" style="left:156px;top:880px;font-size:88px">${lines(['It plans the hard _weeks._'])}</div>
+    <div class="abs serif" id="b" style="left:156px;top:880px;font-size:88px">${lines(['And the easy _ones._'])}</div>
+    <svg class="abs" style="left:0;top:0;width:1920px;height:1080px;overflow:visible" viewBox="0 0 1920 1080">
+      <g id="plL">${flyPlate(-40, 132, 18, 56, '#E23D3D')}${flyPlate(-20, 140, 12, 40, '#A62B2B')}</g>
+      <g id="plR">${flyPlate(222, 132, 18, 56, '#E23D3D')}${flyPlate(208, 140, 12, 40, '#A62B2B')}</g></svg>`;
+  return { ph: [...cam.querySelectorAll('.ph')], seg: [...cam.querySelectorAll('.seg > div')], bcr: cam.querySelector('#bcr'), mk: cam.querySelector('#mk'),
+           a: cam.querySelector('#a'), b: cam.querySelector('#b'), fx, plL: cam.querySelector('#plL'), plR: cam.querySelector('#plR'), NX, NY, SX, SY,
+           nori: mkChar(cam, CH.nori, 250) };
+}, (t, r) => {
+  const B = 28;
+  const u = clamp((t - bar(B)) / (2 * BAR - BEAT));
+  r.bcr.setAttribute('width', r.fx(u));
+  r.mk.setAttribute('x1', r.fx(u)); r.mk.setAttribute('x2', r.fx(u));
+  r.seg.forEach((sg, i) => { sg.style.width = `${clamp((u - i / 4) * 4) * 100}%`; r.ph[i].style.color = t >= bar(B, 2 * i) - .05 ? 'var(--ink)' : 'var(--muted)'; });
+  ioLines(r.a, t, [bar(B) - LEAD], bar(B + 1, 2) - .42);
+  ioLines(r.b, t, [bar(B + 1, 2) - LEAD]);
+  // Nori grips the loaded bar and strains through the hard weeks; on Deload the plates fly off.
+  // Arms 1.7× long at 62° put the fists exactly on the bar at y 160 in Nori's box.
+  const easy = bar(B + 1, 2), se = t - easy;
+  const grip = { armR: 62, armL: 62, armK: 1.7, armW: 1.15, fists: true };
+  const plates = '<rect x="-40" y="132" width="18" height="56" rx="3" fill="#E23D3D"/><rect x="-20" y="140" width="12" height="40" rx="3" fill="#A62B2B"/>'
+    + '<rect x="222" y="132" width="18" height="56" rx="3" fill="#E23D3D"/><rect x="208" y="140" width="12" height="40" rx="3" fill="#A62B2B"/>';
+  const barProp = loaded => `<rect x="-48" y="156.5" width="296" height="7" rx="3.5" fill="#BFB6AA"/>${loaded ? plates : ''}`;
+  const st = se < 0
+    ? { mood: 'strain', fx: 'sweat', time: t, ...grip, prop: barProp(true), sy: .94 + .02 * Math.sin(t * 5), sx: 1.05, rot: 2 * Math.sin(t * 2.3) }
+    : { mood: 'cheer', ...Act.cheer(se, 30), ...grip, prop: barProp(false), fx: 'sparkles', time: t };
+  r.nori.set(r.NX + (se < 0 ? 3 * Math.sin(t * 60) : 0), r.NY, st);
+  const fly = clamp(se / .9);
+  [[r.plL, -1], [r.plR, 1]].forEach(([g, side]) => {
+    g.style.display = se < 0 ? 'none' : 'inline';
+    const cx0 = r.SX(side < 0 ? -25 : 225), cy0 = r.SY(160);
+    g.setAttribute('transform', `translate(${side * 520 * E.out(fly)} ${-260 * Math.sin(Math.PI * fly) + 520 * fly * fly}) rotate(${side * 540 * fly} ${cx0} ${cy0})`);
+    g.style.opacity = 1 - clamp((fly - .7) / .3);
+  });
+});
+
+/* ── 13 · What it learned ─────────────────────────────────────────────────────────────────────── */
+const LEDGER = [['Back Squat', '3 → 4 sets', 'worked', true], ['Bench Press', 'Move to 6-8 reps', 'worked', true],
+                ['Lateral Raise', '3 → 4 sets', 'didn’t stick', false], ['Leg Press', 'Rotate to Hack Squat', 'skipped', false]];
+scene(30, 31, cam => {
+  cam.innerHTML = `
+    <div class="abs serif" id="a" style="left:156px;top:200px;font-size:88px">${lines(['It checks whether its advice _worked._'])}</div>
+    <div class="abs mono" style="left:160px;top:360px">Learned</div>
+    ${LEDGER.map(([n, c, v, ok]) => `<div class="abs lrow" style="left:160px;top:0;width:1600px;height:104px">
+      <div class="abs sans" style="left:0;top:30px;font-size:36px">${n} <span class="muted">· ${c}</span></div>
+      <div class="abs mono stp2" style="right:0;top:28px;padding:10px 20px;border-radius:999px;border:2px solid ${ok ? 'var(--accent)' : 'var(--line)'};color:${ok ? 'var(--accent)' : 'var(--muted)'}">${v}</div>
+      <div class="abs" style="left:0;right:0;bottom:0;height:1px;background:var(--line)"></div></div>`).join('')}
+    <div class="abs" id="auto" style="left:160px;top:860px"><span class="mono" style="color:var(--ink)">Autopilot</span><span class="mono" style="margin-left:24px">1 of 3 earned</span>
+      <div style="display:flex;gap:8px;margin-top:18px">${[0, 1, 2].map(i => `<i style="display:block;width:120px;height:10px;border-radius:5px;background:${i === 0 ? 'var(--accent)' : 'var(--line)'}"></i>`).join('')}</div></div>`;
+  return { a: cam.querySelector('#a'), rows: [...cam.querySelectorAll('.lrow')], auto: cam.querySelector('#auto') };
+}, (t, r) => {
+  const B = 30;
+  ioLines(r.a, t, [bar(B) - LEAD]);
+  r.rows.forEach((row, i) => {
+    const k = E.expo(prog(t, bar(B) + i * BEAT / 4 - LEAD, .45));
+    row.style.opacity = k; row.style.transform = `translateY(${410 + i * 104 + (1 - k) * 24}px)`;
+    const s = prog(t, bar(B, .5 + i * .5) - .03, .2);
+    const st = row.querySelector('.stp2');
+    st.style.opacity = s > 0 ? 1 : 0; st.style.transform = `scale(${lerp(1.7, 1, E.out(s))}) rotate(-3deg)`;
+  });
+  const ak = E.expo(prog(t, bar(B, 3) - LEAD, .5));
+  show(r.auto, ak); px(r.auto, 0, (1 - ak) * 20);
+});
+
+/* ── 14 · New in 1.0: the four that stand out ─────────────────────────────────────────────────────
+ * Each is a user-facing change from the commits since Aug 26, checked in the code at HEAD.
+ */
+const NEW = [
+  ['One-tap set logging', 'Your numbers are already filled in.', 'log'],
+  ['Lessons that draw themselves', 'The Academy, rewritten as twelve animated lessons.', 'draw'],
+  ['Rest that fits the set', 'Heavy sets rest longer. Light ones don’t.', 'rest'],
+  ['Smarter plans', 'No repeated movements. The right lift leads each day.', 'plan'],
+];
+scene(31, 33, cam => {
+  cam.innerHTML = `
+    <div class="abs mono" style="left:160px;top:236px;color:var(--ink)">New in 1.0</div>
+    <div class="abs mono" style="right:160px;top:236px;text-align:right">177 commits since Aug 26</div>
+    ${NEW.map(([a, b]) => `<div class="abs item" style="left:156px;top:300px"><div class="serif" style="font-size:118px">${words(a)}</div>
+      <div class="sans muted" style="font-size:32px;margin-top:22px">${words(b)}</div></div>`).join('')}
+    <div class="abs vis" id="v0" style="left:160px;top:540px;width:900px;height:300px">
+      <div class="abs mono" style="left:0;top:0;font-size:18px">Weight · kg <span style="margin-left:120px">Reps</span></div>
+      <div class="abs serif tab" style="left:0;top:34px;font-size:84px">82.5 <span style="margin-left:74px">8</span></div>
+      <div class="abs" id="lb" style="left:0;top:160px;width:520px;height:84px;border-radius:16px;background:var(--accent);color:#110F0C;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:24px;font-weight:500;letter-spacing:.16em;text-transform:uppercase">Log set 3</div>
+      <div class="abs" id="tapr" style="left:260px;top:202px;width:10px;height:10px;border-radius:50%;border:3px solid #F2EFEA"></div>
+      <div class="abs mono" id="ok" style="left:560px;top:190px;font-size:24px;color:var(--ink)">✓ Logged</div></div>
+    <svg class="abs vis" id="v1" viewBox="0 0 520 260" style="left:160px;top:540px;width:520px;height:260px;overflow:visible">
+      <path d="M20 230 H500 M20 230 V20" stroke="#BFB6AA" stroke-width="2" fill="none"/>
+      <path id="v1ink" d="M20 200 H80 V170 H140 V140 H200 V110 H260 V200 H320 V170 H380 V140 H440 V110 H500" stroke="#F2EFEA" stroke-width="5" fill="none" stroke-linejoin="round"/>
+      <circle id="v1acc" cx="260" cy="200" r="0" fill="#E23D3D"/></svg>
+    <div class="abs vis" id="v2" style="left:160px;top:540px;width:900px;height:300px">
+      ${[['3:00', 'Heavy · 5 reps', 1], ['1:00', 'Light · 15 reps', .33]].map(([c, l, f], i) => `<div class="abs" style="left:${i * 380}px;top:0;width:260px;height:260px">
+        <svg viewBox="0 0 260 260" style="width:260px;height:260px"><circle cx="130" cy="130" r="112" fill="none" stroke="var(--line)" stroke-width="10"/>
+          <circle class="rr" data-f="${f}" cx="130" cy="130" r="112" fill="none" stroke="var(--accent)" stroke-width="10" stroke-linecap="round" pathLength="1" stroke-dasharray="1 1" transform="rotate(-90 130 130)"/></svg>
+        <div class="abs serif tab" style="left:0;right:0;top:78px;text-align:center;font-size:72px">${c}</div>
+        <div class="abs mono" style="left:0;right:0;top:282px;text-align:center;font-size:17px">${l}</div></div>`).join('')}</div>
+    <div class="abs vis" id="v3" style="left:160px;top:560px;width:900px;height:280px">
+      ${[['Push', 18], ['Pull', 20], ['Legs', 22], ['Upper', 16]].map(([n, h], i) => `<div class="abs dayb" style="left:0;bottom:30px;width:150px;height:${h * 9}px;border-radius:14px 14px 5px 5px;background:${i === 0 ? 'var(--accent)' : 'rgba(242,239,234,.25)'}"></div>
+        <div class="abs mono dayl" style="left:0;bottom:0;width:150px;text-align:center;font-size:16px">${n}</div>`).join('')}</div>
+    <div class="abs" style="left:160px;top:920px;width:580px;height:8px;display:flex;gap:10px">${NEW.map(() => '<i class="seg" style="flex:1;border-radius:4px;background:var(--line)"></i>').join('')}</div>`;
+  return { items: [...cam.querySelectorAll('.item')], vis: [...cam.querySelectorAll('.vis')], segs: [...cam.querySelectorAll('.seg')], lb: cam.querySelector('#lb'),
+           tapr: cam.querySelector('#tapr'), ok: cam.querySelector('#ok'), v1ink: cam.querySelector('#v1ink'), v1acc: cam.querySelector('#v1acc'),
+           rr: [...cam.querySelectorAll('.rr')], dayb: [...cam.querySelectorAll('.dayb')], dayl: [...cam.querySelectorAll('.dayl')],
+           nori: mkChar(cam, CH.nori, 280), kettle: mkChar(cam, CH.kettle, 240) };
+}, (t, r) => {
+  const B = 31;
+  const at = i => bar(B + Math.floor(i / 2), (i % 2) * 2);
+  r.items.forEach((it, i) => {
+    const tin = at(i) - LEAD, tout = i < NEW.length - 1 ? at(i + 1) - .42 : 1e9;
+    io(it.firstElementChild, t, tin, tout, .04);
+    io(it.lastElementChild, t, tin + .12, tout, .015, .5);
+    it.style.visibility = t >= tin - .05 && t < tout + .35 ? 'visible' : 'hidden';
+    const v = r.vis[i];
+    const vk = t < at(i) ? E.expo(prog(t, tin, .5)) : 1 - E.in(prog(t, tout, .3));
+    v.style.opacity = t >= tin ? vk : 0; v.style.transform = `translateY(${(1 - Math.min(1, E.expo(prog(t, tin, .5)))) * 30}px)`;
+  });
+  // 1 · the tap.
+  const tp = at(0) + BEAT, ts = t - tp;
+  r.lb.style.transform = `scale(${press(t, tp)})`;
+  const rk = clamp(ts / .5);
+  r.tapr.style.transform = `translate(-50%, -50%) scale(${ts > 0 ? 1 + rk * 16 : 0})`; r.tapr.style.opacity = ts > 0 ? 1 - rk : 0;
+  r.ok.style.opacity = E.out(prog(t, tp + .05, .3));
+  // 2 · the drawing.
+  r.v1ink.style.strokeDasharray = '1400 1400'; r.v1ink.style.strokeDashoffset = 1400 * (1 - E.inOut(prog(t, at(1), 1)));
+  r.v1acc.setAttribute('r', 10 * E.back(prog(t, at(1) + .95, .3)));
+  // 3 · two rests: a long one for a heavy set, a short one for a light set.
+  r.rr.forEach(c => { c.style.strokeDashoffset = 1 - E.inOut(prog(t, at(2), .9)) * +c.dataset.f; });
+  // 4 · the week sorting itself: the bars slide into order.
+  const order = [[2, 0, 3, 1], [0, 1, 2, 3]];
+  const sk = E.inOut(prog(t, at(3) + BEAT * .5, .6));
+  r.dayb.forEach((d, i) => {
+    const x = lerp(order[0][i] * 180, order[1][i] * 180, sk);
+    d.style.left = `${x}px`; r.dayl[i].style.left = `${x}px`;
+  });
+  r.segs.forEach((s, i) => { s.style.background = t >= at(i) - .05 ? 'var(--accent)' : 'var(--line)'; });
+  const idx = Math.max(0, NEW.findIndex((_, i) => t < at(i + 1)));
+  const since = t - at(idx < 0 ? NEW.length - 1 : idx);
+  r.nori.set(1500, 1000, { mood: 'cheer', ...Act.hop(since, .45, 26), armR: 150, armL: 30 + 120 * (idx % 2), fx: 'sparkles', time: t, blink: Act.blink(t) });
+  r.kettle.set(1720, 1000, { mood: 'happy', ...Act.bounce(t, 5), look: [-3, -1], blink: Act.blink(t, 1.1) });
+});
+
+/* ── 15 · Also inside, one per beat, and a ta-da that Mochi is late for ───────────────────────── */
+const EXTRAS = [
+  ['Plate calculator', 'Which plates go on the bar'],
+  ['Warm-up sets', 'Built for every lift'],
+  ['Exercise swaps', 'Mid-session, one tap'],
+  ['Plateau detection', 'It sees a stall coming'],
+  ['Progress photos', 'They never leave your phone'],
+  ['Home screen widget', 'Today at a glance'],
+];
+scene(33, 35, cam => {
+  cam.innerHTML = `
+    <div class="abs mono" style="left:160px;top:236px">Also inside</div>
+    <div class="abs" id="list" style="left:0;top:0">
+      ${EXTRAS.map(([a, b]) => `<div class="abs li" style="left:0;top:0;transform-origin:0 50%"><div class="serif" style="font-size:128px">${a}</div><div class="mono sub" style="margin-top:12px;font-size:20px">${b}</div></div>`).join('')}
+    </div>
+    <div class="abs" id="mark" style="left:520px;top:0;width:12px;height:12px;border-radius:50%;background:var(--accent)"></div>`;
+  return { items: [...cam.querySelectorAll('.li')], mark: cam.querySelector('#mark'),
+           cast: [mkChar(cam, CH.nori, 190), mkChar(cam, CH.mochi, 170), mkChar(cam, CH.kettle, 180), mkChar(cam, CH.momo, 170)] };
+}, (t, r) => {
+  const B = 33;
+  let pos = 0;
+  for (let i = 1; i < EXTRAS.length; i++) pos += E.expo(prog(t, bar(B, i) - LEAD, .3));
+  const base = 480;
+  r.items.forEach((el, i) => {
+    const d = i - pos, ad = Math.abs(d);
+    const sc = ad < 1 ? lerp(1, .42, ad) : .42;
+    const y = base + d * 150 + (d > 0 ? 70 : 0) * clamp(ad);
+    el.style.transform = `translate(580px, ${y}px) scale(${sc})`;
+    el.style.opacity = clamp(1 - Math.max(0, ad - .3) * .42) * (i === 0 ? E.out(prog(t, bar(B) - .05, .3)) : 1);
+    el.querySelector('.sub').style.opacity = clamp(1 - ad * 2);
+    el.firstElementChild.style.color = ad < .5 ? 'var(--ink)' : 'var(--muted)';
+  });
+  r.mark.style.transform = `translateY(${base + 58}px) scale(${1 + .5 * Math.exp(-beatPhase(t) * 8)})`;
+  // They dance on the beat, then all strike the pose on beat 6. Mochi strikes it on beat 7.
+  const tada = bar(B + 1, 2), late = bar(B + 1, 3);
+  const xs = [220, 400, 1560, 1740];
+  r.cast.forEach((c, i) => {
+    const off = (i % 2) * BEAT;
+    const poseAt = i === 1 ? late : tada;
+    let st;
+    if (t < poseAt) {
+      const arms = (Math.floor((t + off) / BEAT) % 2) ? [150, 30] : [30, 150];
+      st = { mood: i % 2 ? 'cheer' : 'happy', ...Act.bounce(t + off, 16), armR: arms[0], armL: arms[1], rot: 6 * Math.sin(2 * Math.PI * (t + off) / (2 * BEAT)),
+             blink: Act.blink(t, i), wig: wig(t, 4, 12), look: [i < 2 ? 3 : -3, -1] };
+      if (i === 1 && t >= tada) st = { ...st, look: [-4, -1], mood: 'happy' };
+    } else {
+      const k = E.back(prog(t, poseAt, .25));
+      st = { mood: 'cheer', armR: lerp(20, 160, k), armL: lerp(20, 160, k), sy: 1 + .06 * k, rot: i < 2 ? 4 : -4, fx: 'sparkles', time: t };
+      if (i === 1 && t > late + .3) st = { ...st, mood: 'happy', fx: 'sweat', look: [3, 0] };
+    }
+    c.set(xs[i], 1000, st);
+  });
+});
+
+/* ── 16 · Offline, and free ───────────────────────────────────────────────────────────────────── */
+const GLYPHS = [
+  { at: bar(35, 1), from: [2000, 180], hit: [1560, 330], d: 'wifi' },
+  { at: bar(35, 2), from: [2000, 900], hit: [1580, 760], d: 'cloud' },
+  { at: bar(35, 3), from: [760, -140], hit: [1060, 300], d: 'ad', bonk: [930, 960] },
+];
+const glyphSVG = {
+  wifi: `<path d="M8 22 C 26 6, 54 6, 72 22 M18 34 C 30 24, 50 24, 62 34 M29 46 C 35 41, 45 41, 51 46" ${sk('#BFB6AA', 6)}/><circle cx="40" cy="58" r="5" fill="#BFB6AA"/>`,
+  cloud: `<path d="M22 58 H 62 C 72 58, 78 50, 76 42 C 74 34, 66 30, 60 32 C 58 20, 46 14, 36 18 C 28 21, 24 28, 24 34 C 14 34, 8 42, 10 50 C 12 55, 16 58, 22 58 Z" ${sk('#BFB6AA', 6)}/>`,
+  ad: `<rect x="6" y="14" width="68" height="46" rx="10" ${sk('#BFB6AA', 6)}/><text x="40" y="47" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-weight="500" font-size="24" fill="#BFB6AA">AD</text>`,
+};
+scene(35, 37, cam => {
+  cam.innerHTML = `
+    <svg class="abs" style="left:0;top:0;width:1920px;height:1080px" viewBox="0 0 1920 1080">
+      <ellipse id="shield" cx="1300" cy="540" rx="400" ry="430" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="3 12" opacity=".5"/><g id="hits"></g></svg>
+    <div class="phone" id="ph" style="left:1110px;top:150px"><div class="scr"><div class="abs" id="pm" style="left:106px;top:290px;width:140px;height:118px"></div>
+      <div class="abs mono" style="left:0;right:0;top:446px;text-align:center;font-size:15px">Offline</div></div><div class="isl"></div></div>
+    ${GLYPHS.map(() => `<svg class="abs gl" viewBox="0 0 80 72" style="left:0;top:0;width:110px;height:99px;overflow:visible"></svg>`).join('')}
+    <div class="abs mono" id="lab1" style="left:160px;top:236px">Your data</div>
+    <div class="abs mono" id="lab2" style="left:160px;top:236px">What it costs</div>
+    <div class="abs serif" id="c1" style="left:156px;top:286px;font-size:104px">${lines(['Everything stays', 'on your _phone._'], 6)}</div>
+    <div class="abs" id="c3" style="left:160px;top:580px">
+      <div class="serif" style="font-size:52px;line-height:1.12">${lines(['It doesn’t even ask', 'for internet access.'], 4)}</div>
+      <div class="mono" id="c3m" style="margin-top:22px;font-size:18px">No internet permission</div></div>
+    <div class="abs serif" id="free" style="left:152px;top:290px;font-size:200px;letter-spacing:-.035em">${lines(['_Free._'])}</div>
+    <div class="abs mono" id="chips" style="left:166px;top:540px;color:var(--ink);font-size:24px">No account · No ads · No subscription</div>
+    <div class="abs sans muted" id="pack" style="left:166px;top:604px;font-size:28px;line-height:1.4">The watch app and a few extras<br>come in an optional pack.</div>`;
+  const pm = cam.querySelector('#pm'); pm.innerHTML = markSVG(); drawMark(pm, 1, 1);
+  const gls = [...cam.querySelectorAll('.gl')];
+  GLYPHS.forEach((g, i) => { gls[i].innerHTML = glyphSVG[g.d]; });
+  const hits = cam.querySelector('#hits');
+  GLYPHS.forEach(() => hits.appendChild(document.createElementNS('http://www.w3.org/2000/svg', 'circle')));
+  return { gl: gls, hits: [...hits.children], c1: cam.querySelector('#c1'), c3: cam.querySelector('#c3'), c3m: cam.querySelector('#c3m'),
+           lab1: cam.querySelector('#lab1'), lab2: cam.querySelector('#lab2'), free: cam.querySelector('#free'), chips: cam.querySelector('#chips'), pack: cam.querySelector('#pack'),
+           ph: cam.querySelector('#ph'), shield: cam.querySelector('#shield'), nori: mkChar(cam, CH.nori, 250), kettle: mkChar(cam, CH.kettle, 200) };
+}, (t, r) => {
+  const B = 35, F = bar(B + 1);
+  ioLines(r.c1, t, [bar(B) - LEAD, bar(B, .5) - LEAD], F - .42);
+  ioLines(r.c3.firstElementChild, t, [bar(B, 2) - LEAD, bar(B, 2.5) - LEAD], F - .42);
+  show(r.c3m, E.out(prog(t, bar(B, 3), .4)) * (1 - prog(t, F - .42, .3)));
+  // Bar 36: Free. The label hands over with it.
+  const lk = prog(t, F - .35, .35);
+  show(r.lab1, handOut(lk)); show(r.lab2, handIn(lk));
+  ioLines(r.free, t, [F - LEAD]);
+  show(r.chips, E.out(prog(t, bar(B + 1, 1) - LEAD, .4)));
+  show(r.pack, E.out(prog(t, bar(B + 1, 2) - LEAD, .5)));
+  GLYPHS.forEach((g, i) => {
+    const el = r.gl[i], s = t - g.at;
+    const [fx, fy] = g.from, [hx, hy] = g.hit;
+    let x, y, o = 1, rot = 0;
+    if (s < 0) { const k = clamp(1 + s / .8); x = lerp(fx, hx, E.in(k)); y = lerp(fy, hy, E.in(k)); o = k > 0 ? 1 : 0; }
+    else if (g.bonk) {
+      // The ad bounces off the shield and lands on Kettle's head.
+      const k = clamp(s / .35), k2 = clamp((s - .35) / .8);
+      if (s < .35) { x = lerp(hx, g.bonk[0], k); y = lerp(hy, g.bonk[1] - 120, k) - 60 * Math.sin(Math.PI * k); rot = -120 * k; }
+      else { x = g.bonk[0] - 260 * k2; y = g.bonk[1] - 120 - 200 * Math.sin(Math.PI * k2 * .7) + 300 * k2 * k2; rot = -120 - 400 * k2; o = 1 - k2; }
+    } else { const k = E.out(clamp(s / .9)); x = lerp(hx, fx, k * .9); y = lerp(hy, fy, k * .9) - 90 * Math.sin(Math.PI * k); rot = 220 * k * (i % 2 ? -1 : 1); o = 1 - k; }
+    el.style.transform = `translate(${x - 55}px, ${y - 50}px) rotate(${rot}deg)`; el.style.opacity = o;
+    const c = r.hits[i], hk = clamp(s / .5);
+    c.setAttribute('cx', hx); c.setAttribute('cy', hy); c.setAttribute('r', 20 + 90 * E.out(hk));
+    c.setAttribute('fill', 'none'); c.setAttribute('stroke', '#E23D3D'); c.setAttribute('stroke-width', 4);
+    c.setAttribute('opacity', s >= 0 && s < .5 ? (1 - hk) * .9 : 0);
+  });
+  const pi = E.expo(prog(t, bar(B) - .02, .7));
+  r.ph.style.transform = `translateY(${(1 - pi) * 60}px)`; r.ph.style.opacity = pi;
+  r.shield.setAttribute('opacity', .15 + .35 * E.out(prog(t, bar(B, 1), .6)));
+  const hug = t >= F;
+  r.nori.set(1070, 1010, hug ? { mood: 'love', ...Act.breathe(t, .03), armR: 150, armL: 40, rot: 6, fx: 'hearts', time: t - F }
+    : { mood: 'happy', ...Act.bounce(t, 3), look: [3, -2], blink: Act.blink(t, 1.7) });
+  const bonk = GLYPHS[2].at + .35, sb = t - bonk;
+  r.kettle.set(930, 1010, sb < 0 ? { mood: 'happy', ...Act.bounce(t, 3), look: [4, -2], blink: Act.blink(t, 2.4) }
+    : sb < 1.2 ? { mood: 'dizzy', fx: 'stars', time: t, rot: 10 * Math.sin(sb * 12) * (1 - sb / 1.2), sy: sb < .15 ? .82 : 1, sx: sb < .15 ? 1.15 : 1, armR: 40, armL: 40 }
+    : { mood: 'happy', ...Act.bounce(t, 3), look: [4, -1], blink: Act.blink(t, 2.4) });
+});
+
+/* ── 17 · Finale: the mark, the name, the cast. Then the call for testers ─────────────────────── */
+const QR = '11111110001001001100001111111,10000010110100111101101000001,10111010000001101001101011101,10111010010101110010001011101,10111010111000100000001011101,10000010011111000011001000001,11111110101010101010101111111,00000000001011101110000000000,10101010000100110001100010010,11100100010110110110111001001,01000111101011000010110100111,11000001101000010100001100010,11101011010010001001011001011,10110000101111011110101001001,01100111011000111000001101011,01000101100001101110111101010,01000111101000110111111101011,01010001101100110110011001101,10111011110001000110011110011,01000100000110010110110111010,10110011110100001100111110000,00000000111011011111100010111,11111110001100111111101011011,10000010000101101100100011010,10111010111100110010111110010,10111010001010110000110110100,10111010110101000101100111001,10000010001001010001101100010,11111110110001001001100110011'.split(',');
+const qrSVG = (m, px) => `<svg viewBox="0 0 ${m.length + 8} ${m.length + 8}" style="width:${px}px;height:${px}px;display:block" shape-rendering="crispEdges">
+  <rect width="${m.length + 8}" height="${m.length + 8}" fill="#F4F1EA"/>
+  ${m.map((row, y) => [...row].map((c, x) => c === '1' ? `<rect x="${x + 4}" y="${y + 4}" width="1.02" height="1.02" fill="#110F0C"/>` : '').join('')).join('')}</svg>`;
+scene(37, 46, cam => {
+  cam.innerHTML = `
+    <div class="abs" id="glow" style="left:0;top:0;width:1920px;height:1080px;background:radial-gradient(1000px 600px at 50% 40%, rgba(226,61,61,.14), transparent 70%)"></div>
+    <div class="abs" id="lock" style="left:0;top:0;width:1920px;height:1080px;transform-origin:960px 330px">
+      <div class="abs" id="mark" style="left:0;top:0;width:300px;height:252px;transform-origin:0 0"></div>
+      <div class="abs serif" id="word" style="left:0;top:0;font-size:230px;letter-spacing:-.04em;font-variation-settings:'SOFT' 100, 'opsz' 144;font-weight:500">${words('Avex')}</div>
+      <div class="abs serif red" id="ver" style="left:0;top:0;font-size:96px">1.0</div>
+    </div>
+    <div class="abs serif" id="tag" style="left:0;width:1920px;top:560px;font-size:64px;text-align:center">${lines(['Your gym coach. Fully _offline._'])}</div>
+    <div class="abs mono" id="plat" style="left:0;width:1920px;top:660px;text-align:center">Android · Wear OS</div>
+    <div class="abs mono" id="test" style="left:160px;top:380px;color:var(--ink)">Avex 1.0 · Now in testing</div>
+    <div class="abs serif" id="ask" style="left:156px;top:430px;font-size:108px">${lines(['We’re looking', 'for _testers._'], 8)}</div>
+    <div class="abs sans muted" id="join" style="left:160px;top:690px;font-size:30px;line-height:1.45">Join the Discord, try it on your phone,<br>and tell us what breaks.</div>
+    <div class="abs qr" id="qr" style="left:1290px;top:292px;width:400px;height:400px;padding:0;overflow:hidden">${qrSVG(QR, 400)}</div>
+    <div class="abs" id="inv" style="left:1230px;top:720px;width:520px;height:132px;border-radius:22px;background:#1E1A17;box-shadow:inset 0 0 0 1.5px var(--line)">
+      <div class="abs" id="invicon" style="left:18px;top:18px;width:96px;height:96px;border-radius:28px;background:var(--page);box-shadow:inset 0 0 0 1.5px var(--line)"><div class="abs" id="invmark" style="left:16px;top:21px;width:64px;height:54px"></div></div>
+      <div class="abs mono" style="left:134px;top:22px;font-size:13px;letter-spacing:.14em">Discord · You’re invited</div>
+      <div class="abs serif" style="left:132px;top:40px;font-size:48px">Avex</div>
+      <div class="abs mono" style="left:134px;top:100px;font-size:13px;letter-spacing:.12em;color:var(--accent)">● Now in testing</div>
+      <div class="abs" id="joinb" style="right:18px;top:40px;width:108px;height:52px;border-radius:12px;background:var(--accent);color:#110F0C;display:flex;align-items:center;justify-content:center;font-family:var(--sans);font-weight:500;font-size:20px">Join</div>
+    </div>
+    <div class="abs mono" id="link" style="left:1230px;width:520px;top:878px;text-align:center;color:var(--ink);font-size:24px;letter-spacing:.08em;text-transform:none">discord.gg/zjKYwPU3r</div>
+    <div class="abs mono" id="freeline" style="left:1230px;width:520px;top:922px;text-align:center;font-size:16px">Free on Android</div>`;
+  const mk = cam.querySelector('#mark'); mk.innerHTML = markSVG();
+  const im = cam.querySelector('#invmark'); im.innerHTML = markSVG();
+  return { inv: cam.querySelector('#inv'), invicon: cam.querySelector('#invicon'), invmark: im, joinb: cam.querySelector('#joinb'), glow: cam.querySelector('#glow'), lock: cam.querySelector('#lock'), mark: mk, word: cam.querySelector('#word'), ver: cam.querySelector('#ver'),
+           tag: cam.querySelector('#tag'), plat: cam.querySelector('#plat'), test: cam.querySelector('#test'), ask: cam.querySelector('#ask'), join: cam.querySelector('#join'),
+           qr: cam.querySelector('#qr'), link: cam.querySelector('#link'), freeline: cam.querySelector('#freeline'),
+           cast: [mkChar(cam, CH.mochi, 230), mkChar(cam, CH.nori, 270), mkChar(cam, CH.kettle, 240), mkChar(cam, CH.momo, 230)] };
+}, (t, r) => {
+  const B = 37;
+  // The mark draws itself on the hit, fills, and moves into the lockup beside the name.
+  const draw = prog(t, bar(B) - .05, 1.5), fill = E.out(prog(t, bar(B, 3) - .05, .3));
+  drawMark(r.mark, draw, fill);
+  const lock = E.inOut(prog(t, bar(B + 1) - .4, .7));
+  const bigS = 2.0, bigX = 960 - 150 * bigS, bigY = 520 - 126 * bigS - 40;
+  r.mark.style.transform = `translate(${lerp(bigX, 520, lock)}px, ${lerp(bigY, 250, lock)}px) scale(${lerp(bigS, .92, lock)})`;
+  r.word.style.transform = 'translate(830px, 214px)';
+  io(r.word, t, bar(B + 1) - LEAD, 1e9, .05, .8);
+  show(r.word, t >= bar(B + 1) - LEAD ? 1 : 0);
+  const vk = E.back(prog(t, bar(B + 1, 2) - LEAD, .45));
+  r.ver.style.transform = `translate(1318px, 262px) scale(${vk})`; show(r.ver, vk > 0 ? 1 : 0);
+  // Bar 41 onwards: the lockup rises and shrinks, and the call for testers takes the stage.
+  const T0 = bar(41), up = E.inOut(prog(t, T0 - .4, .8));
+  r.lock.style.transform = `translate(${lerp(0, 0, up)}px, ${lerp(0, -190, up)}px) scale(${lerp(1, .52, up)})`;
+  ioLines(r.tag, t, [bar(B + 2, 2) - LEAD], T0 - .5);
+  show(r.plat, E.out(prog(t, bar(B + 2, 3), .6)) * (1 - prog(t, T0 - .5, .3)));
+  show(r.glow, E.out(prog(t, bar(B), 1.5)));
+  show(r.test, E.out(prog(t, T0, .5)));
+  ioLines(r.ask, t, [T0 + BEAT - LEAD, T0 + 2 * BEAT - LEAD]);
+  show(r.join, E.out(prog(t, bar(42) - LEAD, .6)));
+  const qk = E.back(prog(t, bar(42, 1) - LEAD, .5));
+  r.qr.style.transform = `scale(${qk})`; show(r.qr, qk > 0 ? 1 : 0);
+  // The invite card slides up, its icon draws the mark (the animated logo), and Join pulses on the beat.
+  const ik = E.expo(prog(t, bar(42, 2) - LEAD, .6));
+  show(r.inv, ik); r.inv.style.transform = `translateY(${(1 - ik) * 40}px)`;
+  drawMark(r.invmark, prog(t, bar(42, 2), 1.3), E.out(prog(t, bar(43) - .1, .35)));
+  const pulseB = t >= bar(43) ? Math.exp(-beatPhase(t) * 7) : 0;
+  r.joinb.style.transform = `scale(${1 + .05 * pulseB})`;
+  r.invicon.style.boxShadow = `inset 0 0 0 1.5px var(--line), 0 0 ${(26 * pulseB).toFixed(1)}px rgba(226,61,61,${(.5 * pulseB).toFixed(3)})`;
+  show(r.link, E.out(prog(t, bar(42, 3) - LEAD, .5)));
+  show(r.freeline, E.out(prog(t, bar(43) - LEAD, .5)));
+  // The cast: walk in on bar 39, jump on the final chord on bar 40, then gather under the words.
+  const party = bar(40);
+  const rowX = [560, 820, 1100, 1360], from = [-200, -420, 2120, 2340], endX = [230, 420, 640, 860];
+  r.cast.forEach((c, i) => {
+    const k = E.out(prog(t, bar(B + 2) - LEAD + i * .08, 1.4));
+    const g = E.inOut(prog(t, T0 - .2 + i * .06, .9));
+    const base = { blink: Act.blink(t, i * .9), wig: wig(t, 2, 9), time: t + i };
+    let st;
+    if (k < 1) st = { ...base, mood: 'happy', ...Act.walk(t + i * .1, 2), look: [i < 2 ? 3 : -3, 0] };
+    else if (t >= party && t < bar(41)) st = { ...base, mood: 'cheer', ...Act.cheer(t - party + i * .07, 30), fx: 'sparkles' };
+    else if (g > 0 && g < 1) st = { ...base, mood: 'happy', ...Act.walk(t + i * .1, 2), look: [-3, 0] };
+    else st = { ...base, mood: 'happy', ...Act.bounce(t + i * BEAT * .5, 3), look: [4, -2] };
+    // Nori points at the code; Mochi holds up a tiny phone and scans it on bar 43.
+    if (g >= 1 && i === 1) st = { ...st, armR: 90 + 20 * Math.sin(t * 4) };
+    if (g >= 1 && i === 0) {
+      // The phone is drawn in Mochi's raised hand (arm at 150°, tip at 154,115 in its box), so it
+      // moves with every hop; the scan's flash comes from the phone itself.
+      const scan = bar(43, 2), ss = t - scan;
+      st = { ...st, look: [4, -3], ...(ss > 0 && ss < .5 ? { mood: 'shock', ...Act.hop(ss, .4, 22) } : {}), ...(ss >= .5 ? { mood: 'cheer', ...Act.cheer(ss, 14), fx: 'sparkles' } : {}) };
+      const fl = ss > 0 ? 1 - clamp(ss / .35) : 0;
+      st = { ...st, armR: 150, front: `<g transform="rotate(-12 154 115)"><rect x="144" y="79" width="20" height="36" rx="4" fill="#1C1714" stroke="#3A322B" stroke-width="2"/><rect x="147" y="83" width="14" height="27" rx="2" fill="#2E2621"/></g>`
+        + (fl > 0 ? `<circle cx="150" cy="84" r="${(6 + 44 * (1 - fl)).toFixed(1)}" fill="#fff" opacity="${(fl * .9).toFixed(3)}"/>` : '') };
+    }
+    const x = g > 0 ? lerp(rowX[i], endX[i], g) : lerp(from[i], rowX[i], k);
+    c.set(x, 990, st, t > bar(B + 2) - LEAD ? 1 : 0, lerp(1, .85, g));
+  });
+}, { zoom: [1.05, 1] });
+
+/* ═══ Cues, on the grid ════════════════════════════════════════════════════════════════════════ */
+PUSH_AT.forEach(at => cue(at - .3, 'whoosh', .8));                                   // camera pushes peak on the bar
+cue(bar(5, 2), 'tap'); cue(bar(6, 2), 'tap');                                         // tap 4 days, tap Basic gym
+UPPER_A.forEach((_, i) => cue(bar(7) + i * BEAT / 4, 'tick', .6));                    // the day's moves land
+cue(bar(7, 3), 'tap', 1.1);                                                           // Start training
+[1, 2, 3].forEach(i => cue(bar(8, i), 'pop'));                                        // the coach's calls settle
+cue(bar(10), 'tap', 1.1);                                                             // Apply all
+[0, 1, 2].forEach(i => cue(bar(10, 1 + i * .5), 'stamp'));                            // applied × 3
+cue(bar(11, 1), 'tick', .7);                                                          // the "try" gets circled
+cue(bar(12), 'tick');                                                                 // rest sheet up
+cue(bar(13), 'chime', .9);                                                            // rest done (Momo jolts)
+cue(bar(13, 2), 'whoosh', .7);                                                        // Mochi takes off
+cue(bar(14), 'tap', 1.2); cue(bar(14), 'confirm'); cue(bar(14), 'hit');               // lands on LOG SET 3: the record
+cue(bar(18), 'pop', .8);                                                              // Mochi wakes up
+cue(bar(20), 'pop');                                                                  // Nori lands on the line
+cue(bar(21, 1), 'tick'); cue(bar(21, 2), 'tick');                                     // crown detents
+cue(bar(21, 2.25), 'whoosh', .6);                                                     // the crown spins Nori round
+cue(bar(21, 3), 'buzz'); cue(bar(21, 3), 'confirm', .7);                              // Log set, wrist tick
+cue(bar(23, 3), 'chime', .7);                                                         // the lesson's accent lands
+cue(bar(24) - .1, 'page');                                                            // to the contents
+LESSONS.forEach((_, i) => cue(bar(24) + i * BEAT / 2, 'tick', .5));                   // each lesson lands
+cue(bar(25) - .1, 'page');                                                            // to the quote
+cue(bar(25, 2), 'pop', .8);                                                           // the sprout grows
+[0, 1, 2, 3].forEach(i => cue(bar(28, 2 * i), 'tick', .9));                           // each phase lights
+cue(bar(29, 2), 'whoosh', .8);                                                        // the plates fly off
+[0, 1, 2, 3].forEach(i => cue(bar(30, .5 + i * .5), 'stamp'));                        // verdicts
+NEW.forEach((_, i) => cue(bar(31 + Math.floor(i / 2), (i % 2) * 2), 'pop', .9));      // new in 1.0
+cue(bar(31, 1), 'tap');                                                               // the one tap
+for (let i = 1; i < EXTRAS.length; i++) cue(bar(33, i), 'tap', .6);                   // each row lands
+cue(bar(34, 2), 'pop'); cue(bar(34, 3), 'tick', .9);                                  // ta-da, and Mochi's late one
+GLYPHS.forEach(g => cue(g.at, 'pop', .9));                                            // thrown off the shield
+cue(GLYPHS[2].at + .35, 'stamp', .9);                                                 // bonk
+cue(bar(42, 1), 'pop');                                                               // the code arrives
+cue(bar(42, 2), 'pop', .7);                                                           // the invite card
+cue(bar(43), 'chime', .55);                                                           // its icon fills in
+cue(bar(43, 2), 'tick');                                                              // Mochi scans it
+
+/* ═══ Render ═══════════════════════════════════════════════════════════════════════════════════ */
+const overlay = html(`<div class="abs" style="inset:0;pointer-events:none"><div class="vignette"></div><div class="grain"></div><div class="fade"></div></div>`);
+stage.appendChild(overlay);
+const fadeEl = overlay.querySelector('.fade');
+
+function render(t) {
+  t = clamp(t, 0, DUR - 1e-4);
+  for (const sc of SCENES) {
+    let vis = t >= sc.from && t < sc.to, x = 0;
+    if (PUSH_AT.includes(sc.from) && t >= sc.from - PUSH_LEN && t < sc.from) { vis = true; x = W * (1 - E.inOut(prog(t, sc.from - PUSH_LEN, PUSH_LEN))); }
+    if (PUSH_AT.includes(sc.to) && t >= sc.to - PUSH_LEN && t < sc.to) { x = -W * E.inOut(prog(t, sc.to - PUSH_LEN, PUSH_LEN)); }
+    sc.root.style.display = vis ? 'block' : 'none';
+    if (!vis) continue;
+    sc.shake = [0, 0];
+    sc.update(t, sc.refs, sc);
+    const z = lerp(sc.zoom[0], sc.zoom[1], E.inOut(prog(t, sc.from, Math.min(sc.to, bar(41)) - sc.from)));
+    sc.cam.style.transform = `translate(${x + sc.shake[0]}px, ${sc.shake[1]}px) scale(${z})`;
+  }
+  updateRail(t);
+  // Only the first frame fades up and the last fades down; every join inside is a full picture.
+  fadeEl.style.opacity = Math.max(1 - clamp(t / .25), clamp((t - (DUR - 1.2)) / 1.2));
+}
+
+window.__seek = t => { render(t); return true; };
+window.__meta = { DUR, FPS, W, H, CUES, BAR, CUTS: SCENES.map(s => s.from) };
+
+/* ═══ Viewer ═══════════════════════════════════════════════════════════════════════════════════ */
+const params = new URLSearchParams(location.search);
+if (params.has('render')) document.body.classList.add('render');
+const frameEl = document.getElementById('frame');
+function fit() { const s = document.body.classList.contains('render') ? 1 : frameEl.clientWidth / W; stage.style.transform = `scale(${s})`; }
+addEventListener('resize', fit); fit();
+
+const playBtn = document.getElementById('v-play'), scrub = document.getElementById('v-scrub'), clockEl = document.getElementById('v-clock');
+scrub.max = DUR.toFixed(2);
+const audio = new Audio('audio/trailer-mix.mp3');
+audio.preload = 'auto';
+let playing = false, t0 = 0, clock0 = 0, cur = 0;
+const fmt = t => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
+function setT(t) { cur = clamp(t, 0, DUR); render(cur); scrub.value = cur; clockEl.textContent = fmt(cur); }
+function tick() {
+  if (!playing) return;
+  const t = audio.paused || audio.readyState < 2 ? clock0 + (performance.now() - t0) / 1000 : audio.currentTime;
+  if (t >= DUR) { pause(); setT(DUR - .001); return; }
+  setT(t);
+  requestAnimationFrame(tick);
+}
+function play() {
+  if (cur >= DUR - .05) cur = 0;
+  playing = true; playBtn.textContent = 'Pause';
+  clock0 = cur; t0 = performance.now();
+  try { audio.currentTime = cur; audio.play().catch(() => {}); } catch (e) {}
+  requestAnimationFrame(tick);
+}
+function pause() { playing = false; playBtn.textContent = 'Play'; try { audio.pause(); } catch (e) {} }
+playBtn.addEventListener('click', () => playing ? pause() : play());
+scrub.addEventListener('input', () => { if (playing) pause(); setT(+scrub.value); });
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' && e.code !== 'Space') return;
+  if (e.code === 'Space') { e.preventDefault(); playing ? pause() : play(); }
+  if (e.code === 'ArrowRight') { pause(); setT(cur + 1 / FPS); }
+  if (e.code === 'ArrowLeft') { pause(); setT(cur - 1 / FPS); }
+});
+// At rest the page shows the tester card, so the first frame anyone sees says how to join.
+setT(params.has('t') ? +params.get('t') : bar(44));
+</script>

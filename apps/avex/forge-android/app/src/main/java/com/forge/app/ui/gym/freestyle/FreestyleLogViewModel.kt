@@ -1,0 +1,233 @@
+package com.forge.app.ui.gym.freestyle
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.CustomizationRepository
+import com.forge.app.data.repo.WorkoutRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.mutableStateOf
+import kotlinx.coroutines.withContext
+import javax.inject.Inject
+
+/**
+ * One persisted set: the raw display text the user typed, its lb value (null = bodyweight), reps, and
+ * its set-type tags (GYMAP-46). [setType] is the mutually-exclusive shape (null | "warmup" | "drop");
+ * [isAmrap]/[toFailure] are independent flags; [rpe] is 1.0–10.0 in 0.5 steps or null.
+ */
+data class FreestyleSetInput(
+    val weightText: String,
+    val weightLb: Double?,
+    val reps: Int,
+    val setType: String? = null,
+    val isAmrap: Boolean = false,
+    val toFailure: Boolean = false,
+    val rpe: Double? = null,
+    /** Held time in seconds for a timed-hold set (GYMAP-51); null for a rep set (reps is then the count). */
+    val durationSeconds: Int? = null
+)
+
+/**
+ * One persisted exercise: a library id and its sets. [customName] is set only for a user-created
+ * move, which has no library row to resolve a name from — it's stored on the logged row so every
+ * display surface (history, PRs, stats, export) reads it through
+ * [com.forge.app.program.Program.exerciseDisplayName] instead of humanizing the raw id.
+ */
+data class FreestyleExerciseInput(
+    val libId: String,
+    val sets: List<FreestyleSetInput>,
+    val customName: String? = null,
+    /**
+     * [com.forge.app.program.MuscleGroup.code] the user picked for a custom move; null for a library
+     * one. The logged row has no muscle column, so saving used to drop it: muscle stats and the
+     * anatomy figure skipped the move's sets and reusing the workout reset it to Chest. It is
+     * written to the custom-exercise registry on save instead.
+     */
+    val customMuscleCode: String? = null
+)
+
+/**
+ * Backs the dedicated freestyle ("go with the flow") logger — a log-after-the-fact workout with no
+ * fixed plan. The screen owns the editable in-memory state; this VM only exposes the unit preference
+ * and persists the finished workout into the normal session store (so it shows in history/stats and
+ * its sets feed PR detection like any other workout).
+ */
+@HiltViewModel
+class FreestyleLogViewModel @Inject constructor(
+    private val workoutRepo: WorkoutRepository,
+    private val settingsRepo: SettingsRepository,
+    private val customizationRepo: CustomizationRepository,
+    private val snackbar: com.forge.app.ui.common.SnackbarController
+) : ViewModel() {
+
+    /**
+     * The app's one Undo snackbar, for a removed set or exercise. The removal already happened on
+     * screen; [restore] puts it back if the user taps Undo inside the window.
+     */
+    fun offerUndo(message: String, restore: suspend () -> Unit) {
+        snackbar.showUndo(message) { restore() }
+    }
+
+    /** The in-progress log. Compose state, held here so it outlives a configuration change. */
+    internal val log = FsLogState()
+
+    val weightUnit: StateFlow<com.forge.app.domain.units.WeightUnit> =
+        settingsRepo.weightUnit.stateIn(
+            viewModelScope, SharingStarted.WhileSubscribed(5_000), com.forge.app.domain.units.WeightUnit.LB
+        )
+
+    /** The most recent other performance's sets for an exercise — the "copy last time" panel. */
+    suspend fun lastSets(exerciseId: String): List<com.forge.app.data.db.entities.LoggedSet> =
+        workoutRepo.lastPerformanceSets(exerciseId)
+
+    /**
+     * The always-visible pinned cue (#112) the user attached to this exercise, or "" if none. Surfaced
+     * read-only while freestyle-logging so a cue pinned on the exercise in the program shows here too
+     * (GYMAP-49). Keyed by library id — the same key the Train flow writes under (getSwap(plan.id),
+     * where plan.id == ExerciseDef.id). Caveat: a cue pinned while another exercise was swapped into a
+     * program slot is stored under that slot's base id, so it surfaces for the slot's base move here,
+     * not the swapped-in one — matches how the swap system already keys the shared row.
+     */
+    suspend fun pinnedNote(libId: String): String =
+        customizationRepo.getSwap(libId)?.pinnedNote?.takeIf { it.isNotBlank() }.orEmpty()
+
+    /**
+     * Remember a custom move's identity the moment it is created, so its name and picked muscle are
+     * known to stats/recap/template reuse even before (or without) a save. NonCancellable for the
+     * same reason [saveDraft] is: the browser closes on the very next line.
+     */
+    fun registerCustomExercise(id: String, name: String, muscle: com.forge.app.program.MuscleGroup) {
+        viewModelScope.launch {
+            withContext(NonCancellable) {
+                settingsRepo.registerCustomExercise(com.forge.app.program.CustomExerciseDef(id, name, muscle.code))
+            }
+        }
+    }
+
+    // ─── Draft persistence (autosave + resume) ───────────────────────────────
+
+    /** Read + parse the saved in-progress draft, or null when there is none / it can't be parsed. */
+    internal suspend fun loadDraft(): FreestyleDraft? =
+        settingsRepo.freestyleDraft()?.let { FreestyleDraft.fromJson(it) }?.takeUnless {
+            workoutRepo.isFreestyleDraftSaved(it.draftId)
+        }
+
+    /**
+     * Autosave the current in-progress log (fire-and-forget; the screen debounces the calls).
+     *
+     * NonCancellable because the screen's last-chance flush calls this and then navigates on the very
+     * next line: the pop clears the ViewModel and cancels its scope, so the DataStore write raced the
+     * teardown and usually lost — losing exactly the sub-600 ms edits the flush exists to protect.
+     * The house rule GoalsViewModel documents: any write whose caller immediately navigates.
+     */
+    internal fun saveDraft(draft: FreestyleDraft) {
+        viewModelScope.launch { restoreDraft(draft) }
+    }
+
+    /**
+     * [saveDraft] in the caller's own coroutine, for an Undo. The undo runs on the app's snackbar
+     * scope and outlives this screen: launched on [viewModelScope], an Undo tapped after leaving
+     * landed on a cleared scope and never ran, and the discarded workout was gone for good.
+     */
+    internal suspend fun restoreDraft(draft: FreestyleDraft) {
+        withContext(NonCancellable) { settingsRepo.saveFreestyleDraft(draft.toJson()) }
+    }
+
+    /** Drop the saved draft — used for "start fresh" and once the log is empty. */
+    fun clearDraft() {
+        viewModelScope.launch {
+            withContext(NonCancellable) { settingsRepo.clearFreestyleDraft() }
+        }
+    }
+
+    /** In-flight save, so a double-tapped "Save workout" can't write the workout twice. */
+    private var saveJob: Job? = null
+
+    /**
+     * Persist the workout as a finished freestyle session, then invoke [onSaved] on the main thread.
+     * [startedAtMs] is when the logger was opened — it becomes the session start so the recorded
+     * duration reflects the real time spent logging instead of ~0.
+     */
+    fun save(items: List<FreestyleExerciseInput>, startedAtMs: Long, draftId: String, onSaved: () -> Unit) {
+        // One save per tap-storm: the button stays enabled through a multi-exercise write, and a
+        // second run inserts the whole workout again as a separate session.
+        if (saveJob?.isActive == true) return
+        saveJob = viewModelScope.launch {
+            // NonCancellable + one transaction: this used to write a session, then its exercises,
+            // then each set as separate suspending calls on a scope the back-press cancels, so
+            // leaving mid-loop left a half-written workout in history — a session with two of five
+            // exercises, its totals stamped from what happened to land.
+            withContext(NonCancellable) {
+                // A custom move's muscle has no column on the logged row, so it is committed to the
+                // registry here, before the rows land, so every consumer of the finished session
+                // (stats, anatomy, recap, template reuse) can already resolve the id.
+                items.forEach { ex ->
+                    // Only a user-created id belongs in the registry: an imported id written there
+                    // is read as that muscle by every aggregation (audit 2026-09-26, 02).
+                    if (!isCustomExerciseId(ex.libId)) return@forEach
+                    val name = ex.customName?.takeIf { it.isNotBlank() } ?: return@forEach
+                    val muscle = ex.customMuscleCode?.takeIf { it.isNotBlank() } ?: return@forEach
+                    settingsRepo.registerCustomExercise(com.forge.app.program.CustomExerciseDef(ex.libId, name, muscle))
+                }
+                workoutRepo.saveFreestyleDraft(draftId, startedAtMs) { sessionId ->
+                    items.forEachIndexed { exIdx, ex ->
+                        val loggedExerciseId =
+                            workoutRepo.addExerciseToSession(sessionId, ex.libId, exIdx, swappedName = ex.customName)
+                        ex.sets.forEach { s ->
+                            val setId = workoutRepo.logSet(loggedExerciseId, s.weightText, s.weightLb, s.reps, s.durationSeconds)
+                            // Persist the set-type tags via the existing per-field setters — only when set, so an
+                            // untagged set writes exactly as before. Warm-ups still count toward volume/PRs (label
+                            // only), matching the structured flow's set model (GYMAP-46).
+                            if (s.setType != null) workoutRepo.setSetType(setId, s.setType)
+                            if (s.isAmrap) workoutRepo.setAmrap(setId, true)
+                            if (s.toFailure) workoutRepo.setToFailure(setId, true)
+                            if (s.rpe != null) workoutRepo.setRpe(setId, s.rpe)
+                        }
+                        // Flag wasPr the same way the live day screen does, so a PR logged after the fact still
+                        // counts toward the lifetime PR total + the PRs list (not just the raw max-weight stats).
+                        workoutRepo.flagPrForLoggedExercise(loggedExerciseId, ex.libId)
+                    }
+                }
+                // The log is now a real finished session — drop its resume draft so it can't be re-offered.
+                settingsRepo.clearFreestyleDraft()
+            }
+            onSaved()
+        }
+    }
+}
+
+/**
+ * Everything the freestyle logger is holding for the workout in progress. Plain snapshot state, read
+ * and written by the screen, kept on the ViewModel only so it survives activity recreation; process
+ * death is covered separately by the autosaved [FreestyleDraft].
+ */
+internal class FsLogState {
+    val items = mutableStateOf<List<FsExercise>>(emptyList())
+    /** The one exercise whose entry slab is showing; null folds everything. */
+    val activeId = mutableStateOf<String?>(null)
+    /** Entry-slab state per exercise, present only once touched. Absent means "show the seed". */
+    val entries = mutableStateOf<Map<String, FsEntry>>(emptyMap())
+    val tagsOpenFor = mutableStateOf<String?>(null)
+    val lastTime = mutableStateOf<Map<String, List<com.forge.app.data.db.entities.LoggedSet>>>(emptyMap())
+    val pinnedNotes = mutableStateOf<Map<String, String>>(emptyMap())
+    /** A running hold timer: which exercise and when it started. */
+    val stopwatch = mutableStateOf<Pair<String, Long>?>(null)
+    val lastLoggedAtMs = mutableStateOf<Long?>(null)
+    val showBrowser = mutableStateOf(false)
+    val showTemplates = mutableStateOf(false)
+    /** When the logger was opened: the saved session's start, so its duration isn't ~0. A resumed
+     *  draft can rewind it (bounded on resume). */
+    val openedAtMs = mutableStateOf(System.currentTimeMillis())
+    val draftId = mutableStateOf(java.util.UUID.randomUUID().toString())
+    val pendingDraft = mutableStateOf<FreestyleDraft?>(null)
+    val draftChecked = mutableStateOf(false)
+    /** Set the moment the screen commits to leaving (save or back), which stops the debounced
+     *  autosave from resurrecting a resume offer for a workout that was just saved. */
+    val leaving = mutableStateOf(false)
+}

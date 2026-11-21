@@ -1,0 +1,297 @@
+package com.forge.app.domain.coach
+
+import com.forge.app.data.db.entities.TrainingBlock
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/** Phase C's state machine: scheduled, idempotent, and still interruptible by real fatigue. */
+class BlockPlannerTest {
+
+    private val now = 1_000_000L
+
+    private fun start(weeks: Int = BlockPlanner.DEFAULT_WEEKS) =
+        BlockPlanner.start(nowMs = now, weekId = "2026-W01", plannedWeeks = weeks)
+
+    /** Walk the block forward [n] weeks, one ISO week at a time. */
+    private fun walk(block: TrainingBlock, n: Int, fatigue: Int = 0): TrainingBlock {
+        var b = block
+        for (i in 2..(n + 1)) {
+            b = BlockPlanner.advance(b, "2026-W%02d".format(i), now + i * 1000L, fatigue)
+        }
+        return b
+    }
+
+    // ── Starting ───────────────────────────────────────────────────────────────
+
+    @Test
+    fun aNewBlockStartsAccumulatingAtWeekOne() {
+        val b = start()
+        assertEquals(BlockPhase.ACCUMULATE.code, b.phase)
+        assertEquals(1, b.weekIndex)
+        assertTrue(b.isActive)
+    }
+
+    @Test
+    fun anAbsurdlyShortBlockIsClampedToSomethingExpressible() {
+        assertEquals(BlockPlanner.MIN_WEEKS, start(weeks = 1).plannedWeeks)
+    }
+
+    // ── Advancing ──────────────────────────────────────────────────────────────
+
+    @Test
+    fun advancingTwiceInOneWeekMovesNothing() {
+        val b = start()
+        val once = BlockPlanner.advance(b, "2026-W02", now)
+        val twice = BlockPlanner.advance(once, "2026-W02", now)
+        assertEquals(once, twice)
+    }
+
+    @Test
+    fun aFiveWeekBlockRunsBuildIntensifyPeakDeload() {
+        var b = start(weeks = 5)
+        assertEquals(BlockPhase.ACCUMULATE.code, b.phase)
+        b = BlockPlanner.advance(b, "2026-W02", now)
+        assertEquals(BlockPhase.ACCUMULATE.code, b.phase) // week 2
+        b = BlockPlanner.advance(b, "2026-W03", now)
+        assertEquals(BlockPhase.INTENSIFY.code, b.phase)  // week 3
+        b = BlockPlanner.advance(b, "2026-W04", now)
+        assertEquals(BlockPhase.PEAK.code, b.phase)       // week 4
+        b = BlockPlanner.advance(b, "2026-W05", now)
+        assertEquals(BlockPhase.DELOAD.code, b.phase)     // week 5
+    }
+
+    @Test
+    fun theBlockEndsAfterItsDeloadWeek() {
+        val deloaded = walk(start(weeks = 5), 4)
+        assertEquals(BlockPhase.DELOAD.code, deloaded.phase)
+        val ended = BlockPlanner.advance(deloaded, "2026-W07", now)
+        assertFalse(ended.isActive)
+        assertNotNull(ended.endedAt)
+    }
+
+    @Test
+    fun weeksAwayAreCaughtUp_notCollapsedIntoOne() {
+        // Three unopened weeks used to advance the block by one, so "Deload in N weeks" was wrong by
+        // however long the user was away.
+        val b = BlockPlanner.advance(start(weeks = 6), "2026-W04", now)
+        assertEquals(4, b.weekIndex)
+    }
+
+    @Test
+    fun weeksWithNoTrainingHoldTheBlock() {
+        // Trained W01, then away W02 and W03, back in W04. Only W01 was a training week, so the
+        // block moves one step, not three: coming back must not land on the test week.
+        val monW01 = java.time.LocalDate.of(2025, 12, 29)
+        val b = BlockPlanner.advance(
+            start(weeks = 5), "2026-W04", now,
+            trainedInWeek = { it == monW01 }
+        )
+        assertEquals(2, b.weekIndex)
+        assertEquals(BlockPhase.ACCUMULATE.code, b.phase)
+        assertEquals("2026-W04", b.lastAdvancedWeek)
+        // And the held weeks are not re-counted on the next pass.
+        assertEquals(b, BlockPlanner.advance(b, "2026-W04", now, trainedInWeek = { false }))
+    }
+
+    @Test
+    fun aLayoffPastAccumulateStartsTheBuildOverInsteadOfReturningOnTheTestWeek() {
+        // In Intensify (week 3), one session that week steps the block to Peak; then three weeks
+        // away. Holding alone would open the first week back on "Test week".
+        val intensifying = walk(start(weeks = 5), 2)
+        assertEquals(BlockPhase.INTENSIFY.code, intensifying.phase)
+        val monW03 = java.time.LocalDate.of(2026, 1, 12)
+        val back = BlockPlanner.advance(intensifying, "2026-W07", now, trainedInWeek = { it == monW03 })
+        assertTrue(back.isActive)
+        assertEquals(BlockPhase.ACCUMULATE.code, back.phase)
+        assertEquals(1, back.weekIndex)
+        assertEquals("2026-W07", back.lastAdvancedWeek)
+        // A single missed week is a week off, not a layoff: the block holds where it was.
+        val oneOff = BlockPlanner.advance(intensifying, "2026-W05", now, trainedInWeek = { it == monW03 })
+        assertEquals(BlockPhase.PEAK.code, oneOff.phase)
+    }
+
+    @Test
+    fun aMissedDeloadWeekStillServesTheDeload() {
+        // Rest is what a deload week asks for, so missing it does not hold the block in it forever.
+        val deloading = walk(start(weeks = 5), 4)
+        assertEquals(BlockPhase.DELOAD.code, deloading.phase)
+        val ended = BlockPlanner.advance(deloading, "2026-W06", now, trainedInWeek = { false })
+        assertFalse(ended.isActive)
+    }
+
+    @Test
+    fun anEarlierWeekNeverRewindsTheBlock() {
+        val b = BlockPlanner.advance(start(weeks = 5), "2026-W03", now)
+        assertEquals(b, BlockPlanner.advance(b, "2026-W02", now))
+    }
+
+    // ── Fatigue still speaks ───────────────────────────────────────────────────
+
+    @Test
+    fun realFatiguePullsTheDeloadForward() {
+        // Week 3 of 6 with a fatigue score over the threshold: the schedule bends to the body.
+        val b = walk(start(weeks = 6), 1)
+        val early = BlockPlanner.advance(b, "2026-W04", now, fatigueScore = 6)
+        assertEquals(BlockPhase.DELOAD.code, early.phase)
+    }
+
+    @Test
+    fun fatigueCannotDeloadTheFirstWeeks() {
+        // A block that deloads in week two isn't a block; the tripwire waits for real history.
+        val early = BlockPlanner.advance(start(weeks = 6), "2026-W02", now, fatigueScore = 9)
+        assertEquals(BlockPhase.ACCUMULATE.code, early.phase)
+    }
+
+    @Test
+    fun quietFatigueLetsTheScheduleRun() {
+        val b = walk(start(weeks = 6), 2, fatigue = 1)
+        assertEquals(BlockPhase.ACCUMULATE.code, b.phase)
+    }
+
+    // ── Readouts ───────────────────────────────────────────────────────────────
+
+    @Test
+    fun weeksToDeloadCountsDown_andBottomsOutAtZero() {
+        assertEquals(4, BlockPlanner.weeksToDeload(start(weeks = 5)))
+        assertEquals(0, BlockPlanner.weeksToDeload(walk(start(weeks = 5), 4)))
+    }
+
+    @Test
+    fun everyPhaseDescribesItselfInPlainWords() {
+        var b = start(weeks = 5)
+        val seen = mutableSetOf<String>()
+        repeat(5) {
+            seen += BlockPlanner.describe(b)
+            b = BlockPlanner.advance(b, "2026-W%02d".format(it + 2), now)
+        }
+        // Five distinct lines from five weeks: the phase changes AND the deload countdown moves,
+        // so no two weeks read identically.
+        assertEquals("every week reads differently", 5, seen.size)
+        assertTrue(seen.all { it.isNotBlank() && !it.contains("null") })
+        assertTrue("the deload week says so", seen.any { it.contains("Deload week") })
+        assertTrue("the countdown is stated", seen.any { it.contains("Deload in") })
+    }
+
+    @Test
+    fun peakIsTheTestWeek() {
+        val peak = walk(start(weeks = 5), 3)
+        assertEquals(BlockPhase.PEAK.code, peak.phase)
+        assertTrue(BlockPlanner.isTestWeek(peak))
+        assertFalse(BlockPlanner.isTestWeek(start()))
+    }
+
+    @Test
+    fun phasesCarryTheirOwnAmbition() {
+        assertTrue(BlockPhase.DELOAD.progressionScale < 1.0)
+        assertTrue(BlockPhase.PEAK.progressionScale > 1.0)
+        assertTrue(BlockPhase.ACCUMULATE.volumeDelta > 0)
+        assertTrue(BlockPhase.DELOAD.volumeDelta < 0)
+    }
+
+    // ── Determinism ────────────────────────────────────────────────────────────
+
+    @Test
+    fun deterministic() {
+        val b = start()
+        assertEquals(
+            BlockPlanner.advance(b, "2026-W02", now),
+            BlockPlanner.advance(b, "2026-W02", now)
+        )
+    }
+
+    // ── Entering the deload week is the moment the deload is served ───────────
+
+    @Test
+    fun steppingIntoTheDeloadWeekEntersDeload() {
+        val peak = walk(start(weeks = 5), 3)
+        assertEquals(BlockPhase.PEAK.code, peak.phase)
+        val deload = BlockPlanner.advance(peak, "2026-W05", now)
+        assertEquals(BlockPhase.DELOAD.code, deload.phase)
+        assertTrue(BlockPlanner.entersDeload(peak, deload))
+    }
+
+    @Test
+    fun aBuildingWeekOrAWeekAlreadyDeloadingEntersNothing() {
+        val b = start(weeks = 5)
+        assertFalse(BlockPlanner.entersDeload(b, BlockPlanner.advance(b, "2026-W02", now)))
+        val deloading = walk(start(weeks = 5), 4)
+        assertFalse(BlockPlanner.entersDeload(deloading, deloading))
+    }
+
+    @Test
+    fun catchingUpPastTheDeloadWeekMissesIt() {
+        // A long absence steps through the deload week and ends the block in one advance: the week
+        // is gone, so generating a deload for it now would be a deload nobody scheduled.
+        val peak = walk(start(weeks = 5), 3)
+        val ended = BlockPlanner.advance(peak, "2026-W09", now)
+        assertFalse(ended.isActive)
+        assertFalse(BlockPlanner.entersDeload(peak, ended))
+    }
+
+    // ── H-02: the phase reaching the weight on the bar ───────────────────────
+
+    /**
+     * `progressionScale` existed and nothing read it, so a phase changed the plan's set counts and
+     * the served deload week and never the load: the same bout got the same target in Accumulate,
+     * Intensify, Peak and Deload. This is the composition both the per-set suggestion and the
+     * pre-session brief now scale by.
+     */
+    @Test
+    fun noBlockLeavesTodaysScaleExactlyAsItWas() {
+        // The majority case, and the one that must not move: most sessions have no block.
+        assertEquals(1.0, BlockPhase.composedLoadScale(null, 1.0), 1e-9)
+        assertEquals(0.94, BlockPhase.composedLoadScale(null, 0.94), 1e-9)
+        assertEquals(1.06, BlockPhase.composedLoadScale(null, 1.06), 1e-9)
+    }
+
+    @Test
+    fun thePhaseMovesTheLoadEvenOnAnOtherwiseNeutralDay() {
+        assertTrue(BlockPhase.composedLoadScale(BlockPhase.DELOAD, 1.0) < 1.0)
+        assertTrue(BlockPhase.composedLoadScale(BlockPhase.PEAK, 1.0) > 1.0)
+        assertEquals(
+            "accumulate is the baseline, not a nudge",
+            1.0, BlockPhase.composedLoadScale(BlockPhase.ACCUMULATE, 1.0), 1e-9
+        )
+    }
+
+    @Test
+    fun theTwoSignalsCannotCompoundIntoACutOrJumpNeitherAskedFor() {
+        // A deload week met by low readiness, and a peak week met by high readiness.
+        assertEquals(
+            BlockPhase.MIN_COMPOSED_SCALE,
+            BlockPhase.composedLoadScale(BlockPhase.DELOAD, 0.90), 1e-9
+        )
+        assertEquals(
+            BlockPhase.MAX_COMPOSED_SCALE,
+            BlockPhase.composedLoadScale(BlockPhase.PEAK, 1.10), 1e-9
+        )
+        // Inside the band both signals still count.
+        assertEquals(0.85 * 1.05, BlockPhase.composedLoadScale(BlockPhase.DELOAD, 1.05), 1e-9)
+    }
+
+    // ── Locale digits (audit 2026-09-26, 10) ───────────────────────────────────
+
+    @Test
+    fun weekIdsAreAsciiInEveryLocale() {
+        val saved = java.util.Locale.getDefault()
+        try {
+            for (tag in listOf("ar-EG", "fa-IR", "bn-BD", "mr-IN", "hi-IN-u-nu-deva")) {
+                java.util.Locale.setDefault(java.util.Locale.forLanguageTag(tag))
+                assertEquals(tag, "2026-W27", BlockPlanner.weekIdOf(java.time.LocalDate.of(2026, 6, 29)))
+            }
+        } finally {
+            java.util.Locale.setDefault(saved)
+        }
+    }
+
+    @Test
+    fun aBlockStoredWithLocaleDigitsStillAdvances() {
+        // What an ar-EG build wrote: "٢٠٢٦-W٠١". It used to parse as nothing, so no week ever elapsed.
+        val stored = BlockPlanner.start(nowMs = now, weekId = "\u0662\u0660\u0662\u0666-W\u0660\u0661")
+        val b = BlockPlanner.advance(stored, "2026-W03", now + 1)
+        assertEquals(3, b.weekIndex)
+    }
+}

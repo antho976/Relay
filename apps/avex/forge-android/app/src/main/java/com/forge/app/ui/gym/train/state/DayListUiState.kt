@@ -1,0 +1,29 @@
+package com.forge.app.ui.gym.train.state
+
+import com.forge.app.data.db.entities.Session
+import com.forge.app.program.DayPlan
+
+data class DayListUiState(
+    val days: List<DayListItem> = emptyList(),
+    val activeSession: Session? = null,
+    /** "Go with the flow" — when on, the Train tab offers freestyle logging; plan modes hide it. */
+    val freestyleMode: Boolean = false,
+    /** False only for the placeholder before the first real emission — no "No plan yet" flash. */
+    val loaded: Boolean = false
+)
+
+data class DayListItem(
+    val plan: DayPlan,
+    val displayName: String,
+    val lastFinishedAt: Long? = null,
+    val isActive: Boolean = false,
+    val isNextUp: Boolean = false,
+    val exerciseCount: Int = 0,
+    /** User-set accent hex override (#65). Null = use plan.accentHex. */
+    val customAccentHex: String? = null,
+    /**
+     * "~min" estimate tuned to the user's realized rest pace (engine System 2).
+     * Null = tuning not loaded yet; cards fall back to the canonical SessionEstimate.
+     */
+    val estimatedMinutes: Int? = null
+)

@@ -1,0 +1,280 @@
+package com.forge.app.ui.gym.train
+
+import com.forge.app.data.db.entities.LoggedExercise
+import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.data.db.types.EffortRating
+import com.forge.app.domain.adapt.IntensityIntent
+import com.forge.app.domain.adapt.ProgressionAdvisor
+import com.forge.app.domain.adapt.RestAdvisor
+import com.forge.app.domain.adapt.RestPrescription
+import com.forge.app.domain.pr.PrDetector
+import com.forge.app.program.ExercisePlan
+import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
+import com.forge.app.ui.gym.train.state.ExerciseUiState
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.formatWeight
+import com.forge.app.domain.units.weightInputValue
+
+internal suspend fun DayViewModel.buildExerciseUi(
+    plan: ExercisePlan,
+    logged: LoggedExercise?,
+    expandedDefault: Boolean,
+    expandedOverride: Boolean?,
+    plateLb: Double,
+    dbMaxLb: Double?,
+    weightUnit: WeightUnit,
+    bonusSets: Int = 0,
+    finishedEarly: Boolean = false
+): ExerciseUiState = coroutineScope {
+    val sessionId = _state.value.sessionId ?: error("sessionId required")
+    // The swap id drives attribution: every history/PR/stats read below keys on the EXERCISE ACTUALLY
+    // PERFORMED (#11) — the swapped exercise when this slot is swapped, else the slot id. UI matching
+    // still keys on plan.id (the slot) — see DayViewModelRefresh.
+    //
+    // Reads that DON'T need the swap id (sets, goal) start immediately and overlap the swap lookup;
+    // only effectiveExerciseId and the reads that use it wait on getSwap. (Runs per exercise on
+    // session open and on every set log, so the overlap matters.)
+    val setsDeferred = async { logged?.let { workoutRepo.setsFor(it.id) }.orEmpty() }
+    // Goals stay slot-keyed (the goal-setter opens per slot), so they survive a swap.
+    val goalDeferred = async { goalRepo.get(plan.id)?.targetWeightLb }
+    val persistent = customizationRepo.getSwap(plan.id)
+    // Guard on a non-blank swap name: a cleared swap can leave a blank-name row behind (it shares the
+    // row with a rest-timer override / pinned note), and its swappedExerciseId must NOT re-attribute
+    // stats once the swap is gone (#11).
+    val effectiveExerciseId = logged?.exerciseId
+        ?: persistent?.takeIf { it.swappedName.isNotBlank() }?.swappedExerciseId
+        ?: plan.id
+
+    // Swap-aware unit: a swapped slot logs + progresses in the swapped exercise's unit, not the
+    // base plan's, so a bodyweight→weighted swap suggests a weight (not more reps) and vice-versa.
+    // Mirrors ExerciseUiState.effectiveUnit's precedence (session swap → persistent → base).
+    val effectiveUnit = when {
+        !logged?.swappedName.isNullOrBlank() -> logged?.swappedUnit
+        !persistent?.swappedName.isNullOrBlank() -> persistent?.swappedUnit
+        else -> null
+    }?.let { com.forge.app.program.ExerciseUnit.fromCode(it) } ?: plan.unit
+
+    // The remaining reads key on effectiveExerciseId; fan them out concurrently.
+    val prevDeferred = async {
+        val prevLE = workoutRepo.lastLoggedExerciseBefore(effectiveExerciseId, sessionId)
+        prevLE to prevLE?.let { workoutRepo.setsFor(it.id) }.orEmpty()
+    }
+    // When that bout was trained: a comeback ramp eases a lift not trained since the return (see
+    // loadScaleFrom), and a lift left alone for weeks is eased on its own (see staleLiftScale).
+    val prevStartedAtDeferred = async {
+        prevDeferred.await().first?.let { workoutRepo.session(it.sessionId)?.startedAt }
+    }
+    // Bounded stand-ins for "every set ever logged" (which grew without limit): the per-rep
+    // max-weight frontier answers PR questions identically, and the PB is a single LIMIT 1 row.
+    val frontierDeferred = async {
+        workoutRepo.repMaxFrontierForExercise(effectiveExerciseId, logged?.id).map { row ->
+            // Wrapped as synthetic sets so PrDetector / the SetInputRow PR hint consume the
+            // frontier through the same code path as real history (only weightLb/reps are read).
+            LoggedSet(
+                loggedExerciseId = 0L, setIndex = 0, weightText = "",
+                weightLb = row.weightLb, reps = row.reps, completedAt = 0L
+            )
+        }
+    }
+    val hasHistoryDeferred = async { workoutRepo.hasHistoryForExercise(effectiveExerciseId, logged?.id) }
+    val pbDeferred = async { workoutRepo.personalBestSet(effectiveExerciseId) }
+    val aggregatesDeferred = async { workoutRepo.sessionAggregatesForExercise(effectiveExerciseId, limit = 8) }
+
+    val sets = setsDeferred.await()
+    val (prevLE, prevSets) = prevDeferred.await()
+    val prevFirstSet = prevSets.firstOrNull()
+    // No prior-session set → first time on this exercise: prompt a baseline instead of a blank helper.
+    // Stored weights are lb (see LoggedSet). Everything below renders in the user's unit rather
+    // than printing the raw stored text, which showed a kg user "Last: 220.5 × 5" for their 100 kg.
+    // PLATES is the exception: its text is a plate COUNT, which is unit-independent already.
+    val isPlates = effectiveUnit == com.forge.app.program.ExerciseUnit.PLATES
+    fun displayWeight(set: LoggedSet): String {
+        val lb = set.weightLb
+        return if (isPlates || lb == null) set.weightText else formatWeight(lb, weightUnit)
+    }
+    val preview = prevFirstSet?.let { "Last: ${displayWeight(it)} × ${it.reps}" }
+        ?: "First time, set your baseline"
+
+    val priorFrontier = frontierDeferred.await()
+    val (prSetIds, wasPr) = computePrFlags(priorFrontier, hasHistoryDeferred.await(), sets)
+    // Only the single best PR set carries the gold ★ + gold text (heaviest → most reps → latest),
+    // so a string of ascending PRs doesn't paint every row gold (#3/#4/#7). prSetIds still drives
+    // the PR count + confetti, so each new PR still celebrates.
+    val bestPrSetId = sets.filter { it.id in prSetIds }
+        .maxWithOrNull(compareBy({ it.weightLb ?: Double.NEGATIVE_INFINITY }, { it.reps }, { it.setIndex }))
+        ?.id
+
+    // One column, not a whole row rebuilt from a snapshot this pass read earlier. The rebuild is
+    // asynchronous, so a rating, note, skip, swap or target change landing while it was in flight
+    // was reverted by the stale copy this used to write back.
+    if (logged != null && logged.wasPr != wasPr) {
+        workoutRepo.setWasPr(logged.id, wasPr)
+    }
+
+    // Double-progression suggestion (#12/#13) — pure rules in the adaptation engine; the
+    // VM only assembles inputs. inputText is unit-correct (plate count on PLATES exercises).
+    val stepMode = stepCalibration.modeFor(effectiveExerciseId, effectiveUnit.code)
+    val prevStartedAt = prevStartedAtDeferred.await()
+    val layoffScale = life.loadScaleFrom(prevStartedAt.takeIf { life.layoff?.returnedAtMs != null })
+    val staleScale = com.forge.app.domain.coach.LifeEvents.staleLiftScale(prevStartedAt, clock.nowMs())
+    // One ease, not two: a lift that is both stale and inside a comeback takes the ramp once.
+    val lifeScale = minOf(layoffScale, staleScale)
+    val suggestion = ProgressionAdvisor.suggestNextLoad(
+        exerciseId = effectiveExerciseId,
+        exerciseName = plan.name,
+        prevSets = prevSets,
+        prevEffort = prevLE?.difficulty,
+        repsText = plan.reps,
+        unit = effectiveUnit,
+        plateLb = plateLb,
+        intensity = IntensityIntent.fromCode(_state.value.sessionIntensity),
+        readiness = readiness,
+        // The block's phase, composed with today's scale rather than left to shape only the plan's
+        // set counts (H-02).
+        phase = blockPhase,
+        // Targets snap to the user's own grid; a pound grid read back in kilos is never loadable.
+        weightUnit = weightUnit,
+        dbMaxLb = dbMaxLb,
+        // Doubling the step only makes sense on the DB grid; PLATES move whole plates anyway.
+        fastStep = stepMode == com.forge.app.domain.coach.StepMode.FASTER && effectiveUnit == com.forge.app.program.ExerciseUnit.DUMBBELL,
+        consolidate = stepMode == com.forge.app.domain.coach.StepMode.CONSOLIDATE,
+        lifeScale = lifeScale,
+        lifeNote = life.rampNote.takeIf { layoffScale < 1.0 }
+            ?: com.forge.app.domain.coach.LifeEvents.staleLiftNote(prevStartedAt, clock.nowMs()).takeIf { staleScale < 1.0 }
+    )
+
+    // Bodyweight movements have no weight to suggest, so they get a rep-progression cue instead (CO5).
+    val repSuggestion = if (effectiveUnit == com.forge.app.program.ExerciseUnit.BODYWEIGHT)
+        ProgressionAdvisor.suggestNextReps(effectiveExerciseId, plan.name, prevSets, prevLE?.difficulty, plan.reps)
+    else null
+
+    val allTimePbLb = pbDeferred.await()?.weightLb
+    val goalWeightLb = goalDeferred.await()
+
+    val sessionHistory = aggregatesDeferred.await()
+        .map { agg ->
+            ExerciseSessionPoint(
+                sessionStartedAt = agg.sessionStartedAt,
+                durationMin = com.forge.app.data.db.entities.sessionDurationMinutes(
+                    agg.sessionStartedAt, agg.sessionFinishedAt, agg.activeSeconds
+                ),
+                volumeLb = agg.volumeLb,
+                topWeightLb = agg.topWeightLb
+            )
+        }
+
+    // inputText is lb (or, on a PLATES exercise, a plate count). It seeds the weight FIELD, which
+    // is labelled in the display unit — so an unconverted lb number invited a kg user to log
+    // "Suggested next → 222.5" as 222.5 kg, i.e. 490 lb.
+    val displaySuggested = suggestion?.let { s ->
+        if (isPlates) s.inputText else weightInputValue(s.targetWeightLb, weightUnit)
+    }
+    // Tier 3 — make the invisible weight calibration visible: append the SuggestionCalibrator's
+    // StepMode to the suggestion reason, so it shows wherever the reason renders (card + input row).
+    val stepModeNote = when (stepMode) {
+        com.forge.app.domain.coach.StepMode.FASTER -> "bigger jumps fit you"
+        com.forge.app.domain.coach.StepMode.CONSOLIDATE -> "holding to consolidate"
+        else -> null
+    }
+    val baseReason = suggestion?.reason
+    val displayReason = if (displaySuggested != null)
+        listOfNotNull(baseReason, stepModeNote).joinToString(" · ").ifBlank { null }
+    else baseReason
+
+
+    // A blank name is "no swap" (the effectiveUnit precedence above already reads it that way): a
+    // customization row that only holds a rest override or pinned note, or a cleared swap, stores "".
+    // Passed through, it made effectiveName blank and isSwapped true, so the card lost its title and
+    // form cue.
+    val sessionSwapName = logged?.swappedName?.takeIf { it.isNotBlank() }
+    val persistentSwapName = persistent?.swappedName?.takeIf { it.isNotBlank() }
+
+    ExerciseUiState(
+        plan = plan,
+        effectiveExerciseId = effectiveExerciseId,
+        loggedExerciseId = logged?.id,
+        loggedSets = sets,
+        lastSessionPreviewText = preview,
+        prefillWeight = prevFirstSet?.let {
+            val lb = it.weightLb
+            if (isPlates || lb == null) it.weightText else weightInputValue(lb, weightUnit)
+        },
+        difficulty = logged?.difficulty,
+        note = logged?.note,
+        skipped = logged?.skipped ?: false,
+        isExpanded = expandedOverride ?: expandedDefault,
+        wasPr = wasPr,
+        prSetIds = prSetIds,
+        bestPrSetId = bestPrSetId,
+        sessionSwapName = sessionSwapName,
+        sessionSwapUnit = logged?.swappedUnit?.takeIf { sessionSwapName != null },
+        persistentSwapName = persistentSwapName,
+        persistentSwapUnit = persistent?.swappedUnit?.takeIf { persistentSwapName != null },
+        suggestedWeight = displaySuggested,
+        suggestionReason = displayReason,
+        suggestedDeltaLb = suggestion?.deltaLb,
+        suggestedTargetLb = suggestion?.targetWeightLb,
+        suggestedReps = repSuggestion?.targetReps,
+        priorSets = prevSets,
+        priorFrontier = priorFrontier,
+        allTimePbLb = allTimePbLb,
+        goalWeightLb = goalWeightLb,
+        restTimerOverrideSeconds = persistent?.restTimerOverrideSeconds,
+        pinnedNote = persistent?.pinnedNote ?: "",
+        supersetGroup = logged?.supersetGroup,
+        sessionHistory = sessionHistory,
+        bonusSets = bonusSets,
+        finishedEarly = finishedEarly
+    )
+}
+
+/**
+ * Rest duration + explanation for the timer started after a set. Delegates to the
+ * adaptation engine's RestAdvisor: manual override → canonical SessionEstimate base
+ * (+30s after brutal) → personal tuning from realized rest behavior ([DayViewModel.restTuning]).
+ */
+internal fun DayViewModel.computeRestPrescription(
+    plan: ExercisePlan,
+    effortRating: EffortRating?,
+    overrideSeconds: Int? = null,
+    performed: com.forge.app.domain.adapt.PerformedSet? = null
+): RestPrescription = RestAdvisor.restSeconds(
+    plan, effortRating, overrideSeconds, restTuning,
+    compoundBase = restBaseCompound, isolationBase = restBaseIsolation,
+    performed = performed
+)
+
+internal fun computePrFlags(
+    priorFrontier: List<LoggedSet>,
+    hasPriorHistory: Boolean,
+    currentSets: List<LoggedSet>
+): Pair<Set<Long>, Boolean> {
+    if (currentSets.isEmpty()) return emptySet<Long>() to false
+    // No prior history → first-ever time on this exercise; there's no record to beat, so
+    // nothing flags gold. (This intentionally diverges from PrDetector.isPr's documented
+    // "empty history = PR" rule — that rule is about a single proposed set, whereas here an
+    // entire first session shouldn't paint every set gold.) Checked against ALL prior sets:
+    // a bodyweight/assisted-only history still counts as history even though it contributes
+    // nothing to the weighted frontier.
+    if (!hasPriorHistory) return emptySet<Long>() to false
+    // Judge each set against prior sessions AND the earlier sets of THIS session: once a
+    // heavier set beats the record, a later lighter set in the same session must not also
+    // flag as a PR. Walk sets in performed order, growing the comparison history as we go.
+    // isPr only reads (weightLb, reps, isAssisted), so the frontier substitutes exactly for
+    // the full prior-set list it used to receive.
+    val running = priorFrontier.toMutableList()
+    val prIds = mutableSetOf<Long>()
+    for (set in currentSets.sortedBy { it.setIndex }) {
+        // An assisted set is never itself a PR (and assisted history is excluded inside isPr).
+        // The duration goes in too: a timed hold's `reps` is a hold length, and without saying so
+        // every weighted plank painted itself gold and then sat in `running` as a rep count no
+        // real set could reach.
+        if (!set.isAssisted && PrDetector.isPr(running, set.weightLb, set.reps, set.durationSeconds)) {
+            prIds.add(set.id)
+        }
+        running.add(set)
+    }
+    return prIds to prIds.isNotEmpty()
+}

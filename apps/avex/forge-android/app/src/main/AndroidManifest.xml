@@ -1,0 +1,720 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Notification alert (Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Foreground service (required API 28+) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Foreground service type: specialUse — keeps the rest timer alive during a workout (required API 34+) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Timer vibration -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Biometric / device-credential app & gallery lock (GYMAP-69). The androidx.biometric library
+         folds in the pre-28 USE_FINGERPRINT alias; no app PIN is stored, the OS owns the credential. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
+    <!-- In-app guided progress-photo camera. Captured shots are written straight to app-private
+         storage (never the camera roll); no INTERNET permission, so they never leave the device.
+         The camera is optional — the gallery still imports from the photo picker without it. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+
+    <!-- Health Connect: read-only recovery signals (sleep, resting HR) feed the coach. These are
+         on-device permissions granted via the Health Connect app; Forge holds NO internet permission,
+         so the data never leaves the device. -->
+    <uses-permission android:name="android.permission.health.READ_SLEEP" />
+    <uses-permission android:name="android.permission.health.READ_RESTING_HEART_RATE" />
+    <!-- Bodyweight sync (HC-2/HC-3): read a smart-scale value INTO Forge, write a Forge weigh-in
+         BACK. Both opt-in and granted in the Health Connect app; still no internet permission. -->
+    <uses-permission android:name="android.permission.health.READ_WEIGHT" />
+    <uses-permission android:name="android.permission.health.WRITE_WEIGHT" />
+    <!-- Weight history (H-05): an ordinary weight read only reaches the 30 days before the first
+         grant. This lets the one-time first-connect backfill pull a scale's older weigh-ins too.
+         Read-only, opt-in, granted in the Health Connect app; still no internet permission. -->
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_HISTORY" />
+    <!-- Body-fat sync (GYMAP-62): read a smart-scale body-fat % INTO Forge, write a Forge entry BACK.
+         Both opt-in and granted in the Health Connect app; still no internet permission. Without
+         these the body-fat grant could never be given, so the row was a permanent no-op (H-04). -->
+    <uses-permission android:name="android.permission.health.READ_BODY_FAT" />
+    <uses-permission android:name="android.permission.health.WRITE_BODY_FAT" />
+    <!-- Steps: read a watch/ring's daily step counts INTO Forge for the cardio screen's hourly-steps
+         graph. Read-only, opt-in, granted in the Health Connect app; still no internet permission. -->
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <!-- Exercise sessions: read a watch's recorded outdoor sessions so Forge can find the GPS route
+         that matches a cardio entry. The route data itself is released per-session via Health Connect's
+         own consent screen (ExerciseRouteRequestContract) — there is no blanket route-read permission.
+         Read-only, opt-in; still no internet permission. -->
+    <uses-permission android:name="android.permission.health.READ_EXERCISE" />
+    <!-- Workout calories (HC-4): write a finished session's estimated active calories OUT to Health
+         Connect's daily energy total. Without this the write permission can never be granted. -->
+    <uses-permission android:name="android.permission.health.WRITE_ACTIVE_CALORIES_BURNED" />
+
+    <!-- W0: write finished gym + cardio sessions to Health Connect (opt-in, Settings → Recovery). -->
+    <uses-permission android:name="android.permission.health.WRITE_EXERCISE" />
+    <!-- W3: the watch's live HR trace attaches to the written session as an HR series. -->
+    <uses-permission android:name="android.permission.health.WRITE_HEART_RATE" />
+
+    <!-- W5: read watch workouts' HR series + measured distance/calories (opt-in, Settings → Recovery). -->
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_DISTANCE" />
+    <uses-permission android:name="android.permission.health.READ_TOTAL_CALORIES_BURNED" />
+
+    <!-- W6: overnight HRV (readiness input) + the watch's BIA lean-mass reading (opt-in, Recovery). -->
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE_VARIABILITY" />
+    <uses-permission android:name="android.permission.health.READ_LEAN_BODY_MASS" />
+
+    <!-- Lets us detect / launch the Health Connect provider to check availability + manage grants. -->
+    <queries>
+        <package android:name="com.google.android.apps.healthdata" />
+    </queries>
+
+    <!--
+        Android Auto Backup is OFF, and that is a privacy decision rather than a technical one.
+
+        Settings → About states four claims the user can check against this manifest, and the first
+        is "No Internet permission — Avex physically cannot upload anything." The absence of INTERNET
+        stops the APP from uploading; it does nothing about Android's own backup transport, which
+        copies forge.db, SharedPreferences and the DataStore to the user's Google Drive on a schedule
+        nobody in this app chose and with no in-app prompt. The fourth claim — "your data moves only
+        when you move it" — was false in exactly the same way, as was the privacy policy's "your data
+        stays on your devices unless you export or share it".
+
+        A false privacy claim is worse than a missing convenience, and Avex has the convenience
+        covered: BackupRepository writes a complete archive (database, preferences, photos, avatar)
+        wherever the user points Android's picker, which IS them moving it.
+
+        The cost is real and worth stating: this also disables Android 12+ device-to-device transfer,
+        which data_extraction_rules.xml deliberately used to carry the progress photos a new phone
+        would otherwise lose. Moving to a new phone now means taking a backup and restoring it. Both
+        rules files are kept, and both attributes stay wired, so re-enabling is one word here — but
+        it is a decision about what the About screen is allowed to say, not a config tweak.
+    -->
+    <application
+        android:name=".ForgeApp"
+        android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Forge">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.Forge.Splash">
+            <!-- The MAIN/LAUNCHER filter lives on the .icon.* activity-aliases below (selectable app
+                 icon), not here, so switching the enabled alias swaps the home-screen icon. -->
+            <!-- Health Connect permission rationale (Android 13 and below): MainActivity routes
+                 this action directly to the complete in-app privacy policy. -->
+            <intent-filter>
+                <action android:name="androidx.health.connect.action.SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+            <!-- Import from another gym app (#GYMAP-17): accept a shared/opened CSV or JSON export so
+                 "Export → Share → Avex" imports directly, no file browsing. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/csv" />
+                <data android:mimeType="text/comma-separated-values" />
+                <data android:mimeType="application/json" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:mimeType="text/csv" />
+                <data android:mimeType="text/comma-separated-values" />
+                <data android:mimeType="application/json" />
+            </intent-filter>
+        </activity>
+
+        <!-- ── Selectable launcher icons (Appearance → App icon) ─────────────────────────
+             One activity-alias per icon, all targeting MainActivity. Exactly one is enabled
+             at a time via PackageManager (AppIconManager); "Default" ships enabled. The MAIN/
+             LAUNCHER filter lives on these aliases, NOT on MainActivity, so switching the
+             enabled alias swaps the home-screen icon without a second launcher entry.
+             Order and names follow the AppIcon enum; the art is generated by tools/app-icons. -->
+        <activity-alias
+            android:name=".icon.Default"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.AvexSignal"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_avex_signal"
+            android:roundIcon="@mipmap/ic_launcher_avex_signal"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.SolidRed"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_solid_red"
+            android:roundIcon="@mipmap/ic_launcher_solid_red"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.SolidEmber"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_solid_ember"
+            android:roundIcon="@mipmap/ic_launcher_solid_ember"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.SolidGold"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_solid_gold"
+            android:roundIcon="@mipmap/ic_launcher_solid_gold"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.SolidOlive"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_solid_olive"
+            android:roundIcon="@mipmap/ic_launcher_solid_olive"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.SolidNavy"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_solid_navy"
+            android:roundIcon="@mipmap/ic_launcher_solid_navy"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.SolidPaper"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_solid_paper"
+            android:roundIcon="@mipmap/ic_launcher_solid_paper"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.MetalGold"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_metal_gold"
+            android:roundIcon="@mipmap/ic_launcher_metal_gold"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.MetalChrome"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_metal_chrome"
+            android:roundIcon="@mipmap/ic_launcher_metal_chrome"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.MetalCopper"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_metal_copper"
+            android:roundIcon="@mipmap/ic_launcher_metal_copper"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.StealthCrimson"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_stealth_crimson"
+            android:roundIcon="@mipmap/ic_launcher_stealth_crimson"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.StealthCyan"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_stealth_cyan"
+            android:roundIcon="@mipmap/ic_launcher_stealth_cyan"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.MoltenEmber"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_molten_ember"
+            android:roundIcon="@mipmap/ic_launcher_molten_ember"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.MoltenPlasma"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_molten_plasma"
+            android:roundIcon="@mipmap/ic_launcher_molten_plasma"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.NebulaViolet"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_nebula_violet"
+            android:roundIcon="@mipmap/ic_launcher_nebula_violet"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.NebulaTeal"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_nebula_teal"
+            android:roundIcon="@mipmap/ic_launcher_nebula_teal"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.AuroraNorthern"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_aurora_northern"
+            android:roundIcon="@mipmap/ic_launcher_aurora_northern"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.AuroraDusk"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_aurora_dusk"
+            android:roundIcon="@mipmap/ic_launcher_aurora_dusk"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.GemEmerald"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_gem_emerald"
+            android:roundIcon="@mipmap/ic_launcher_gem_emerald"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.GemHolo"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_gem_holo"
+            android:roundIcon="@mipmap/ic_launcher_gem_holo"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.GymChalk"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_gym_chalk"
+            android:roundIcon="@mipmap/ic_launcher_gym_chalk"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.GymIron"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_gym_iron"
+            android:roundIcon="@mipmap/ic_launcher_gym_iron"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <!-- Retired icons (AppIcon.RETIRED). Never delete these: an alias that was ENABLED on a
+             device and then disappears from the manifest leaves the app with no launcher entry.
+             Each keeps its name and wears its replacement's art until AppIconManager swaps it. -->
+        <activity-alias
+            android:name=".icon.SolidAmber"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_solid_ember"
+            android:roundIcon="@mipmap/ic_launcher_solid_ember"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.SolidPrism"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_solid_navy"
+            android:roundIcon="@mipmap/ic_launcher_solid_navy"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.MetalRosegold"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_metal_copper"
+            android:roundIcon="@mipmap/ic_launcher_metal_copper"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.MetalGunmetal"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_metal_chrome"
+            android:roundIcon="@mipmap/ic_launcher_metal_chrome"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.StealthAmber"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_stealth_crimson"
+            android:roundIcon="@mipmap/ic_launcher_stealth_crimson"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.StealthViolet"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_stealth_cyan"
+            android:roundIcon="@mipmap/ic_launcher_stealth_cyan"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.MoltenCrimson"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_molten_ember"
+            android:roundIcon="@mipmap/ic_launcher_molten_ember"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.MoltenOcean"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_molten_plasma"
+            android:roundIcon="@mipmap/ic_launcher_molten_plasma"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.NebulaCrimson"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_nebula_violet"
+            android:roundIcon="@mipmap/ic_launcher_nebula_violet"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.NebulaAmber"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_nebula_violet"
+            android:roundIcon="@mipmap/ic_launcher_nebula_violet"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.AuroraClassic"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_aurora_dusk"
+            android:roundIcon="@mipmap/ic_launcher_aurora_dusk"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.AuroraDawn"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_aurora_dusk"
+            android:roundIcon="@mipmap/ic_launcher_aurora_dusk"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".icon.GemFrost"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_gem_emerald"
+            android:roundIcon="@mipmap/ic_launcher_gem_emerald"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Health Connect permission rationale (Android 14+): same policy, framework-routed. -->
+        <activity-alias
+            android:name="ViewPermissionUsageActivity"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
+
+        <service
+            android:name=".service.WorkoutSessionService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <!--
+              "specialUse": this FGS only keeps the process alive so the rest-timer alert fires
+              reliably during an active workout. It is not a health/sensor service; the "health"
+              type additionally requires a runtime health permission we do not hold, which throws
+              SecurityException on Android 14+.
+            -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the rest timer reliable during an active workout session" />
+        </service>
+
+        <!-- W1: the phone's ear for wrist commands. The Data Layer wakes this even when the app
+             was killed — commands still land in Room (the plan's phone-in-the-bag guarantee). -->
+        <!-- Constrained to Google Play services, the documented hardening for a
+             WearableListenerService. Without it any app on the device could bind this and replay
+             crafted /cmd messages: what sits behind it is not read-only — /cmd/log-set and
+             /cmd/undo-set write to and delete from the user's training history, and the service is
+             declared to wake the process while Avex is closed. -->
+        <service
+            android:name=".service.wear.WearSyncService"
+            android:exported="true"
+            android:permission="com.google.android.gms.permission.BIND_WEARABLE_LISTENER">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/cmd" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/haptic" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/hr" />
+            </intent-filter>
+        </service>
+
+        <!-- Shares exported files (JSON/CSV/PDF) out of app storage via the system share sheet. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- Disable default WorkManager auto-init so we can use HiltWorkerFactory (#31). -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
+        <!-- Today widget (#146) -->
+        <!-- Day / clock / timezone changes: re-anchor every "today" and "this week" flow, refresh
+             the widget, and re-arm the daily reminder (a 24 h periodic is elapsed time, so it
+             drifts an hour at each DST transition and never recovers on its own). Not exported —
+             these are system broadcasts, which reach a non-exported manifest receiver. -->
+        <receiver
+            android:name=".service.TimeChangeReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.DATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".widget.ForgeWidgetReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/forge_widget_info" />
+        </receiver>
+    </application>
+
+</manifest>

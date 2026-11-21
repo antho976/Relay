@@ -1,0 +1,558 @@
+package com.forge.app.ui.programbuilder
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.forge.app.data.db.entities.ProgramCustomization
+import com.forge.app.data.db.entities.ProgramDay
+import com.forge.app.data.db.entities.ProgramSlot
+import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.BlockRepository
+import com.forge.app.data.repo.ProgramRepository
+import com.forge.app.data.repo.WorkoutRepository
+import com.forge.app.domain.adapt.ProgressionAdvisor
+import com.forge.app.program.ExerciseUnit
+import com.forge.app.domain.schedule.WeeklySchedule
+import com.forge.app.program.ExerciseLibrary
+import com.forge.app.ui.common.ProgramChangeGuard
+import com.forge.app.ui.common.moved
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import java.util.UUID
+import javax.inject.Inject
+
+/**
+ * The slice of the data layer the builder touches. An interface so a test can stand in a fake and
+ * construct the real ViewModel (the repositories are final and need Room, DataStore and Health
+ * Connect behind them); production binds [RepositoryProgramBuilderStore] in the @Inject constructor.
+ */
+internal interface ProgramBuilderStore {
+    val freestyleMode: Flow<Boolean>
+    suspend fun currentDayRows(): List<ProgramDay>
+    suspend fun slotRowsForDay(dayId: String): List<ProgramSlot>
+    suspend fun saveCustomProgram(days: List<ProgramDay>, slots: List<ProgramSlot>)
+    suspend fun setFreestyleMode(v: Boolean)
+    /** Run [action] through the shared program-change guard (confirm first when a workout is active). */
+    suspend fun guardProgramChange(action: suspend () -> Unit)
+    /** Weekdays each day key is scheduled on, when the plan runs on fixed weekdays; empty otherwise. */
+    suspend fun scheduledWeekdays(): Map<String, Set<Int>> = emptyMap()
+    /** Make [schedule] the weekly schedule and switch to fixed weekdays; null = run in sequence. */
+    suspend fun saveSchedule(schedule: List<String>?) {}
+    /** A deload week is running, so the loaded rows carry its reduced set counts. */
+    suspend fun deloadWeekRunning(): Boolean = false
+    /** The overlay rows the live plan merges over [dayId]'s base slots. */
+    suspend fun overlaysForDay(dayId: String): List<ProgramCustomization> = emptyList()
+    /** Coach-applied swaps: base library id to the exercise swapped in. */
+    suspend fun coachSwapTargets(): Map<String, String> = emptyMap()
+    /** The user's "every week" swaps: base library id to the swapped lift's name and id. */
+    suspend fun userSwapTargets(): Map<String, Pair<String, String?>> = emptyMap()
+    /** The running training block's week, length and phase; null when none runs. */
+    suspend fun blockReading(): BlockReading? = null
+    /** Today's load for [libId] planned at [reps]: the coach's next target, else last time's top. */
+    suspend fun plannedLoad(libId: String, reps: String): PlannedLoad? = null
+}
+
+internal class RepositoryProgramBuilderStore(
+    private val programRepository: ProgramRepository,
+    private val settingsRepo: SettingsRepository,
+    private val programChangeGuard: ProgramChangeGuard,
+    private val workoutRepository: WorkoutRepository? = null,
+    private val blockRepository: BlockRepository? = null
+) : ProgramBuilderStore {
+    override suspend fun blockReading(): BlockReading? = blockRepository?.active()?.let { b ->
+        val phase = com.forge.app.domain.coach.BlockPhase.fromCode(b.phase)?.displayName ?: return@let null
+        BlockReading(week = b.weekIndex, weeks = b.plannedWeeks, phase = phase)
+    }
+
+    override suspend fun plannedLoad(libId: String, reps: String): PlannedLoad? {
+        val workouts = workoutRepository ?: return null
+        val def = ExerciseLibrary.byId(libId)
+        val unit = def?.unit ?: com.forge.app.program.Program.exercise(libId)?.unit ?: ExerciseUnit.WEIGHT
+        val prevLE = workouts.lastLoggedExerciseBefore(libId, -1L) ?: return null
+        val prevSets = workouts.setsFor(prevLE.id).filter { it.setType != "warmup" }
+        val lastTop = prevSets.filter { !it.isAssisted }.mapNotNull { it.weightLb }.maxOrNull()
+        if (unit == ExerciseUnit.BODYWEIGHT) return PlannedLoad(lastTop, bodyweight = true)
+        val target = ProgressionAdvisor.suggestNextLoad(
+            exerciseId = libId,
+            exerciseName = def?.name ?: libId,
+            prevSets = prevSets,
+            prevEffort = prevLE.difficulty,
+            repsText = reps,
+            unit = unit,
+            plateLb = settingsRepo.plateWeightLb.first(),
+            phase = blockRepository?.phase(),
+            weightUnit = settingsRepo.weightUnit.first()
+        )?.targetWeightLb
+        return PlannedLoad(target ?: lastTop, bodyweight = false)
+    }
+
+    override val freestyleMode: Flow<Boolean> get() = settingsRepo.freestyleMode
+    override suspend fun currentDayRows(): List<ProgramDay> = programRepository.currentDayRows()
+    override suspend fun slotRowsForDay(dayId: String): List<ProgramSlot> = programRepository.slotRowsForDay(dayId)
+    override suspend fun saveCustomProgram(days: List<ProgramDay>, slots: List<ProgramSlot>) {
+        programRepository.saveCustomProgram(days, slots)
+    }
+    override suspend fun setFreestyleMode(v: Boolean) {
+        settingsRepo.setFreestyleMode(v)
+    }
+    override suspend fun guardProgramChange(action: suspend () -> Unit) {
+        programChangeGuard.run(action = action)
+    }
+    override suspend fun scheduledWeekdays(): Map<String, Set<Int>> {
+        if (settingsRepo.scheduleMode.first() != WeeklySchedule.MODE_WEEKDAY) return emptyMap()
+        return settingsRepo.weeklySchedule.first().withIndex()
+            .filter { it.value.isNotBlank() }
+            .groupBy({ it.value }, { it.index })
+            .mapValues { it.value.toSet() }
+    }
+    override suspend fun deloadWeekRunning(): Boolean = programRepository.deloadWeekRunning()
+    override suspend fun overlaysForDay(dayId: String): List<ProgramCustomization> =
+        programRepository.overlaysForDay(dayId)
+    override suspend fun coachSwapTargets(): Map<String, String> = programRepository.coachSwapTargets()
+    override suspend fun userSwapTargets(): Map<String, Pair<String, String?>> = programRepository.userSwapTargets()
+    override suspend fun saveSchedule(schedule: List<String>?) {
+        if (schedule == null) {
+            settingsRepo.setScheduleMode(WeeklySchedule.MODE_SEQUENCE)
+        } else {
+            settingsRepo.setWeeklySchedule(schedule)
+            settingsRepo.setScheduleMode(WeeklySchedule.MODE_WEEKDAY)
+        }
+    }
+}
+
+/**
+ * In-memory routine builder. The user edits days/exercises freely (add, rename, reorder, remove, set
+ * sets/reps); nothing persists until [save], which writes the whole plan as the base program
+ * ([ProgramRepository.saveCustomProgram]) — no overlay. Launched blank (build-your-own from
+ * onboarding) or pre-loaded from the current program (edit existing).
+ *
+ * "In-memory" survives the process: every edit and every editor move (open a day, open its sheet)
+ * writes the whole draft into [SavedStateHandle] as one small JSON string, and a ViewModel recreated
+ * after Android killed the process behind a retained task restores from it in `init`, before
+ * [loadIfNeeded] can reload the saved program over it. Before this, that recreation quietly produced
+ * an empty, non-dirty builder, so every unsaved day and exercise was gone and no discard warning
+ * appeared. The draft is cleared only by [save] and [discardEdits].
+ */
+@HiltViewModel
+class ProgramBuilderViewModel internal constructor(
+    private val store: ProgramBuilderStore,
+    private val savedStateHandle: SavedStateHandle
+) : ViewModel() {
+
+    @Inject
+    constructor(
+        programRepository: ProgramRepository,
+        settingsRepo: SettingsRepository,
+        programChangeGuard: ProgramChangeGuard,
+        workoutRepository: WorkoutRepository,
+        blockRepository: BlockRepository,
+        savedStateHandle: SavedStateHandle
+    ) : this(
+        RepositoryProgramBuilderStore(programRepository, settingsRepo, programChangeGuard, workoutRepository, blockRepository),
+        savedStateHandle
+    )
+
+    /** The running training block, for the line under the title ([programMeta]). */
+    var block by mutableStateOf<BlockReading?>(null)
+        private set
+
+    /** "dayKey|libId" to the coach's change on that lift this week ("↑ 1 rep"). */
+    var coachChanges by mutableStateOf<Map<String, String>>(emptyMap())
+        private set
+
+    /** Library id (of the lift trained) to today's load, filled after the plan lands. */
+    var loads by mutableStateOf<Map<String, PlannedLoad?>>(emptyMap())
+        private set
+
+    var days by mutableStateOf<List<BuilderDay>>(emptyList())
+        private set
+    var dirty by mutableStateOf(false)
+        private set
+    var saving by mutableStateOf(false)
+        private set
+
+    /** The day open in [ProgramBuilderDayDetail], or null on the plan overview. */
+    var openDayUid by mutableStateOf<String?>(null)
+        private set
+
+    /** The dialog/sheet open inside the day editor. */
+    var dayDialog by mutableStateOf<DayDialog>(DayDialog.None)
+        private set
+
+    /**
+     * The initial load has finished (or was never needed). Editing and Save wait on it.
+     *
+     * `loadIfNeeded` set a flag and launched, so the screen rendered an EMPTY builder while the rows
+     * were still coming back from Room. Two things followed from that. An edit made in the gap was
+     * overwritten wholesale when `days = loadDays()` landed — the user's change simply vanished, and
+     * the plan they were looking at was replaced by the one on disk. And Save was enabled over that
+     * same empty list, which does not save nothing: it writes an empty program over the real one.
+     */
+    var loadComplete by mutableStateOf(false)
+        private set
+
+    /**
+     * A deload week is running over the program being edited. Its reduced set counts are the rows
+     * loaded here, and a save ends the deload's automatic restore, so saving without raising them
+     * would make the recovery week the plan. The screen says so while editing.
+     */
+    var deloadWeekRunning by mutableStateOf(false)
+        private set
+
+    /**
+     * The user's "every week" swaps, base library id to (name, id) of the lift trained instead. The
+     * viewer draws the lift actually trained: a swap made from the workout lives in its own overlay,
+     * so "Your program" said Cable Fly while every session trained DB Fly. The editor keeps editing
+     * the base slot, which is what a save writes and what the swap is attached to.
+     */
+    var userSwaps by mutableStateOf<Map<String, Pair<String, String?>>>(emptyMap())
+        private set
+
+    /** Currently "go with the flow" — saving a plan switches to follow-a-plan, so the screen confirms
+     *  first (see [save], which performs the flip). */
+    val freestyleMode: StateFlow<Boolean> =
+        store.freestyleMode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    private var loaded = false
+
+    init {
+        // Restore BEFORE the screen's loadIfNeeded runs: a restored draft counts as loaded, so the
+        // saved program is never fetched over the top of it. A blob this build cannot read (older
+        // schema, corrupt) is ignored and the builder loads the saved program as it always did.
+        savedStateHandle.get<String>(KEY_DRAFT)?.let { ProgramBuilderDraft.fromJson(it) }?.let { draft ->
+            days = draft.days
+            dirty = draft.dirty
+            openDayUid = draft.openDayUid
+            dayDialog = draft.dialog
+            loaded = true
+            loadComplete = true
+        }
+    }
+
+    /** Inverse of the last destructive remove — re-inserts just that item at its original slot, so a
+     *  snackbar Undo never rolls back edits made in between (§13: undo over confirm). */
+    /**
+     * Inverse of the LAST destructive remove — newest wins, and the caller is told when it has
+     * replaced one, so the earlier snackbar can be dismissed rather than left on screen offering an
+     * Undo that no longer means what it says.
+     *
+     * Remove A, remove B before A's snackbar times out, tap Undo on A's snackbar: one global closure
+     * had already been overwritten, so B came back and A stayed gone. Two removals and one action,
+     * and the action undid the wrong one.
+     */
+    private var undoRemoval: (() -> Unit)? = null
+
+    private fun uid() = UUID.randomUUID().toString().take(8)
+
+    /** Load once: blank for build-your-own, or the current program's rows for editing. */
+    fun loadIfNeeded(blank: Boolean) {
+        // Read on every entry, draft-restored or not: a blank plan carries no deload rows, while a
+        // restored edit of the saved program still does.
+        if (!blank) viewModelScope.launch {
+            deloadWeekRunning = store.deloadWeekRunning()
+            userSwaps = store.userSwapTargets()
+            block = store.blockReading()
+        }
+        if (loaded) return
+        loaded = true
+        if (blank) { days = emptyList(); loadComplete = true; return }
+        viewModelScope.launch {
+            val rows = loadDays()
+            // `dirty` cannot be true yet — the screen gates editing on loadComplete — but the check
+            // states the rule rather than relying on the gate one layer up: a late snapshot never
+            // overwrites edits the user has already made.
+            if (!dirty) days = rows
+            loadComplete = true
+            refreshLoads()
+        }
+    }
+
+    /** Drop unsaved edits and reload the persisted program — Back out of a pen-edit into view mode. */
+    fun discardEdits() {
+        dirty = false
+        undoRemoval = null
+        openDayUid = null
+        dayDialog = DayDialog.None
+        clearDraft()
+        loadComplete = false
+        viewModelScope.launch {
+            days = loadDays()
+            loadComplete = true
+            refreshLoads()
+        }
+    }
+
+    /** Open [dayUid] in the day editor (a stale uid simply renders the overview — see [day]). */
+    fun openDay(dayUid: String) {
+        openDayUid = dayUid
+        dayDialog = DayDialog.None
+        persistDraft()
+    }
+
+    /** Back out of the day editor to the plan overview. */
+    fun closeDay() {
+        openDayUid = null
+        dayDialog = DayDialog.None
+        persistDraft()
+    }
+
+    /** Open (or, with [DayDialog.None], close) a dialog/sheet inside the day editor. */
+    // Not setDayDialog: `var dayDialog` already compiles its (private) setter to
+    // setDayDialog(DayDialog), and two declarations cannot share a JVM signature. Named for
+    // what it does, like openDay/closeDay above.
+    fun showDayDialog(dialog: DayDialog) {
+        dayDialog = dialog
+        persistDraft()
+    }
+
+    /**
+     * Snapshot the whole draft into the handle. Only once the initial load has landed: a draft
+     * persisted over the empty pre-load list would restore as an empty, "loaded" plan.
+     */
+    private fun persistDraft() {
+        if (!loadComplete) return
+        savedStateHandle[KEY_DRAFT] = ProgramBuilderDraft(days, dirty, openDayUid, dayDialog).toJson()
+    }
+
+    private fun clearDraft() {
+        savedStateHandle.remove<String>(KEY_DRAFT)
+    }
+
+    /**
+     * The plan as it is TRAINED: base slots with the live overlay merged in, the same way
+     * ProgramCustomizationRepository.editablePlanForDay merges it for the day screen.
+     *
+     * Base rows alone showed the plan from before the coach's applied set and rep changes, brought
+     * back exercises the user had removed, and lost coach swaps. A save then wrote those stale rows
+     * as the program and dropped the overlay, so every applied coach change was reverted while its
+     * decision was stamped "folded". Merged here, a save bakes the overlay into the base rows and
+     * "folded" is true. Legacy custom_ add-rows have no library id and stay out, as before.
+     */
+    private suspend fun loadDays(): List<BuilderDay> = loadDaysWithChanges().also { coachChanges = it.second }.first
+
+    private suspend fun loadDaysWithChanges(): Pair<List<BuilderDay>, Map<String, String>> {
+        val weekdays = store.scheduledWeekdays()
+        val coachSwaps = store.coachSwapTargets()
+        val changes = HashMap<String, String>()
+        val rows = store.currentDayRows().map { pd ->
+            val slots = store.slotRowsForDay(pd.id)
+            val overlay = store.overlaysForDay(pd.id).associateBy { it.exerciseId }
+            val exercises = slots.mapIndexedNotNull { i, s ->
+                val c = overlay[s.exerciseLibId]
+                if (c?.removed == true) return@mapIndexedNotNull null
+                val libId = coachSwaps[s.exerciseLibId] ?: s.exerciseLibId
+                coachChangeTag(s.sets, s.reps, c)?.let { changes["${pd.id}|$libId"] = it }
+                val def = ExerciseLibrary.byId(libId)
+                val order = c?.orderOverride?.takeIf { it != UNSET_ORDER } ?: (i * 10)
+                // An id the library doesn't know (a seed slot, an import, a movement since removed)
+                // reads through the app's one display-name rule, never as its raw slug.
+                order to BuilderExercise(
+                    uid(), libId, def?.name ?: com.forge.app.program.Program.exerciseDisplayName(libId),
+                    def?.muscle?.displayName ?: com.forge.app.program.Program.exercise(libId)?.muscle?.displayName.orEmpty(),
+                    c?.setsOverride?.takeIf { it > 0 } ?: s.sets,
+                    c?.repRangeOverride ?: s.reps
+                )
+            }.sortedBy { it.first }.map { it.second }
+            BuilderDay(
+                uid = uid(), key = pd.id, name = pd.name, archetype = pd.archetype,
+                accentHex = pd.accentHex, word = pd.word, weekdays = weekdays[pd.id].orEmpty(),
+                exercises = exercises
+            )
+        }
+        return rows to changes
+    }
+
+    /**
+     * Today's load for every lift in the plan, read once per lift actually trained (the user's
+     * "every week" swap when there is one). Filled after the plan lands; the page shows the lifts
+     * meanwhile and the loads appear under them.
+     */
+    private fun refreshLoads() {
+        val plan = days
+        if (plan.isEmpty()) return
+        viewModelScope.launch {
+            // Read here rather than from [userSwaps], whose own read may not have landed yet.
+            val swaps = runCatching { store.userSwapTargets() }.getOrDefault(userSwaps)
+            val wanted = plan.flatMap { d -> d.exercises.map { e -> (swaps[e.libId]?.second ?: e.libId) to e.reps } }
+                .distinctBy { it.first }
+            val out = HashMap<String, PlannedLoad?>()
+            wanted.forEach { (id, reps) -> out[id] = runCatching { store.plannedLoad(id, reps) }.getOrNull() }
+            loads = out
+        }
+    }
+
+    private fun mutate(block: (List<BuilderDay>) -> List<BuilderDay>) {
+        days = block(days)
+        dirty = true
+        persistDraft()
+    }
+
+    private fun mutateDay(dayUid: String, block: (BuilderDay) -> BuilderDay) =
+        mutate { list -> list.map { if (it.uid == dayUid) block(it) else it } }
+
+    fun addDay() = mutate { list ->
+        list + BuilderDay(
+            uid = uid(), key = "day-${uid()}", name = "Day ${list.size + 1}",
+            archetype = "fb", accentHex = DAY_ACCENTS[list.size % DAY_ACCENTS.size], exercises = emptyList()
+        )
+    }
+
+    fun removeDay(dayUid: String) {
+        val index = days.indexOfFirst { it.uid == dayUid }
+        if (index < 0) return
+        val removed = days[index]
+        mutate { it.filterNot { d -> d.uid == dayUid } }
+        // Undo re-inserts only this day at its old slot, so edits made while the snackbar showed survive.
+        // Weekdays another day claimed in the meantime stay with that day: a weekday holds one workout.
+        stageUndo {
+            mutate { list ->
+                val taken = list.flatMapTo(HashSet()) { it.weekdays }
+                val restored = removed.copy(weekdays = removed.weekdays - taken)
+                list.toMutableList().apply { add(index.coerceAtMost(size), restored) }
+            }
+        }
+    }
+
+    /**
+     * Stage [inverse] as the one thing Undo will do — newest wins.
+     *
+     * The screen dismisses the snackbar for any earlier removal at the same moment (see
+     * `removedWithUndo`), so there is never a visible Undo whose action belongs to a different
+     * removal than the message beside it.
+     */
+    private fun stageUndo(inverse: () -> Unit) { undoRemoval = inverse }
+
+    /** Insert a copy of the day (fresh uids/key, "Name 2") right after the original. */
+    fun duplicateDay(dayUid: String) = mutate { list ->
+        val i = list.indexOfFirst { it.uid == dayUid }
+        if (i < 0) return@mutate list
+        val src = list[i]
+        val copy = src.copy(
+            uid = uid(), key = "day-${uid()}",
+            name = copyName(src.name, list.map { it.name }.toSet()),
+            // A weekday holds one workout, so the copy starts without the original's days.
+            weekdays = emptySet(),
+            exercises = src.exercises.map { it.copy(uid = uid()) }
+        )
+        list.toMutableList().apply { add(i + 1, copy) }
+    }
+
+    fun renameDay(dayUid: String, name: String) = mutateDay(dayUid) { it.copy(name = name) }
+    fun setDayType(dayUid: String, archetype: String) = mutateDay(dayUid) { it.copy(archetype = archetype) }
+    fun setDayAccent(dayUid: String, hex: String) = mutateDay(dayUid) { it.copy(accentHex = hex) }
+    fun moveDay(from: Int, to: Int) = mutate { it.moved(from, to) }
+
+    /**
+     * Put [dayUid] on [weekday] (0 = Monday), or take it off if it's already there. A weekday holds
+     * one workout, so claiming it moves it off whichever day had it.
+     */
+    fun toggleDayWeekday(dayUid: String, weekday: Int) = mutate { list ->
+        if (weekday !in 0 until WeeklySchedule.SLOTS) return@mutate list
+        val on = list.firstOrNull { it.uid == dayUid }?.let { weekday in it.weekdays } ?: return@mutate list
+        list.map { d ->
+            when {
+                d.uid == dayUid -> d.copy(weekdays = if (on) d.weekdays - weekday else d.weekdays + weekday)
+                !on -> d.copy(weekdays = d.weekdays - weekday)
+                else -> d
+            }
+        }
+    }
+
+    /** Clear [dayUid]'s fixed weekdays: it runs whenever it comes up. */
+    fun clearDayWeekdays(dayUid: String) = mutateDay(dayUid) { it.copy(weekdays = emptySet()) }
+
+    fun addExercises(dayUid: String, libIds: Collection<String>) = mutateDay(dayUid) { day ->
+        val added = libIds.mapNotNull { id ->
+            val def = ExerciseLibrary.byId(id) ?: return@mapNotNull null
+            BuilderExercise(uid(), def.id, def.name, def.muscle.displayName, def.defaultSets, def.defaultReps)
+        }
+        day.copy(exercises = day.exercises + added)
+    }
+
+    fun removeExercise(dayUid: String, exUid: String) {
+        val day = days.firstOrNull { it.uid == dayUid } ?: return
+        val index = day.exercises.indexOfFirst { it.uid == exUid }
+        if (index < 0) return
+        val removed = day.exercises[index]
+        mutateDay(dayUid) { it.copy(exercises = it.exercises.filterNot { e -> e.uid == exUid }) }
+        // Undo re-inserts only this exercise at its old slot, leaving any later edits intact.
+        stageUndo {
+            mutateDay(dayUid) { d ->
+                d.copy(exercises = d.exercises.toMutableList().apply { add(index.coerceAtMost(size), removed) })
+            }
+        }
+    }
+
+    /** Re-apply the last remove's inverse (snackbar Undo); a no-op once consumed or superseded. */
+    fun undoRemove() {
+        undoRemoval?.invoke()
+        undoRemoval = null
+    }
+
+    fun setExercise(dayUid: String, exUid: String, sets: Int, reps: String) = mutateDay(dayUid) { day ->
+        day.copy(exercises = day.exercises.map { if (it.uid == exUid) it.copy(sets = sets, reps = reps) else it })
+    }
+
+    /** Replace the exercise in place — same slot, same sets × reps, new movement. */
+    fun swapExercise(dayUid: String, exUid: String, newLibId: String) = mutateDay(dayUid) { day ->
+        val def = ExerciseLibrary.byId(newLibId) ?: return@mutateDay day
+        day.copy(exercises = day.exercises.map {
+            if (it.uid == exUid) it.copy(libId = def.id, name = def.name, muscle = def.muscle.displayName) else it
+        })
+    }
+
+    fun moveExercise(dayUid: String, from: Int, to: Int) =
+        mutateDay(dayUid) { it.copy(exercises = it.exercises.moved(from, to)) }
+
+    fun day(dayUid: String): BuilderDay? = days.firstOrNull { it.uid == dayUid }
+
+    /** Persist the built plan and make it live, then invoke [onSaved] on the main thread. */
+    fun save(onSaved: () -> Unit) {
+        if (saving) return
+        saving = true
+        viewModelScope.launch {
+            // finally so a throw from saveCustomProgram / setFreestyleMode (DB or DataStore failure) —
+            // or the guard cancelling — always releases the flag; otherwise saving stays true and the
+            // Save button is permanently locked for this screen's lifetime.
+            try {
+                val (dayRows, slotRows) = days.toEntities()
+                // saveCustomProgram rewrites the base program and discards any in-progress workout
+                // (CASCADE-deleting its logged sets). Route through the shared guard so an active session
+                // raises the same "discard & continue?" confirm the generate / deload / re-roll paths use
+                // instead of silently wiping logged work; on cancel the staged save is dropped and the
+                // builder stays open (dirty), so nothing is lost.
+                store.guardProgramChange {
+                    store.saveCustomProgram(dayRows, slotRows)
+                    // After the rows, so the schedule never names a day the program doesn't have yet.
+                    store.saveSchedule(days.toSchedule())
+                    store.setFreestyleMode(false)
+                    dirty = false
+                    // The removal it would undo is already baked into the saved rows; an Undo now
+                    // would re-insert it into the viewer only, unsaved and unprompted.
+                    undoRemoval = null
+                    // The saved program IS the document now; a recreation reloads it from Room.
+                    clearDraft()
+                    onSaved()
+                }
+            } finally {
+                saving = false
+            }
+        }
+    }
+
+    companion object {
+        /** SavedStateHandle key for the JSON draft — see [ProgramBuilderDraft]. */
+        internal const val KEY_DRAFT = "programBuilderDraft"
+    }
+}
+
+/** ProgramCustomization.orderOverride's "no explicit position" default. */
+private const val UNSET_ORDER = 999

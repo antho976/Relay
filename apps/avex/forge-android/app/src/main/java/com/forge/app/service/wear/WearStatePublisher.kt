@@ -1,0 +1,313 @@
+package com.forge.app.service.wear
+
+import android.content.Context
+import com.forge.app.core.time.Clock
+import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.StatsRepository
+import com.forge.app.domain.timer.RestTimerState
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.formatVolumeCompact
+import com.forge.app.program.Program
+import com.forge.shared.protocol.CmdAckDto
+import com.forge.shared.protocol.ConfigDto
+import com.forge.shared.protocol.GlanceTodayDto
+import com.forge.shared.protocol.TimerStateDto
+import com.forge.shared.protocol.WearCodec
+import com.forge.shared.protocol.WearProtocol
+import com.google.android.gms.wearable.DataClient
+import com.google.android.gms.wearable.PutDataRequest
+import com.google.android.gms.wearable.Wearable
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import javax.inject.Inject
+import javax.inject.Singleton
+import kotlin.math.abs
+
+/**
+ * Publishes phone state to the wrist as DataItems (W1): /session/live off the repository-side
+ * [WatchSessionMirror], /timer/state off the app-scoped [SessionTimerHolder], /config off the
+ * settings flows, and /glance/today at the existing surface points (app open, session finish) —
+ * never a hot path, never a ticking stream. All writes are fail-soft: no watch or no Play
+ * services just means the DataItems sit unread.
+ */
+@Singleton
+class WearStatePublisher @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val mirror: WatchSessionMirror,
+    private val timerHolder: SessionTimerHolder,
+    private val settingsRepo: SettingsRepository,
+    private val directiveRepo: com.forge.app.data.repo.DirectiveRepository,
+    private val statsRepo: StatsRepository,
+    private val connection: WearConnection,
+    private val clock: Clock
+) {
+    private val dataClient by lazy { Wearable.getDataClient(context) }
+
+    /**
+     * `endAtMs` of the rest as last published RUNNING to the wrist, or 0 when there is none.
+     *
+     * [com.forge.app.service.WorkoutSessionService] compares the wrist's haptic ack against this so
+     * an ack for a finished rest cannot silence the next one. It outlives the rest's expiry on
+     * purpose: the wrist acks with the instant it counted down to, and the service reads this only
+     * after the expiry has been published, so clearing it there meant no ack ever matched (see
+     * [hapticIdentityAfter]). A stop, a manual pause or the next start replaces it.
+     */
+    @Volatile
+    var lastPublishedTimerEndAtMs: Long = 0L
+        private set
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun start(scope: CoroutineScope) {
+        scope.launch {
+            var sawLiveSession = false
+            // Only while a watch app is paired. The mirror rebuilds its DTO — plan, swap and
+            // last-time reads — on every set logged, then writes a Data Layer item: work on the
+            // set-logging path that most phones, with no watch, did for nothing. A watch arriving
+            // mid-session starts the mirror, which publishes the live session straight away.
+            connection.pairedWearApp()
+                .distinctUntilChanged()
+                .flatMapLatest { paired -> if (paired) mirror.sessionLive else emptyFlow() }
+                .distinctUntilChanged().collect { dto ->
+                if (dto == null) {
+                    deleteItem(WearProtocol.PATH_SESSION_LIVE)
+                    // Only a session that WAS live and is now gone is a session END (P-02). The
+                    // first emission on a phone with no session in progress is null too, and
+                    // treating that as an ending meant every launch built the glance twice: once
+                    // here and once from the startup publish below, each walking every finished
+                    // session, its exercises and its sets.
+                    if (sawLiveSession) publishGlanceNow()
+                    sawLiveSession = false
+                } else {
+                    sawLiveSession = true
+                    putItem(WearProtocol.PATH_SESSION_LIVE, WearCodec.encode(dto))
+                }
+            }
+        }
+        scope.launch {
+            // Before the persisted rest is restored the controller reads null even when a live rest
+            // is about to come back; clearing on that would make the wrist drop and re-add it.
+            timerHolder.awaitRestore()
+            var last: TimerStateDto? = null
+            var firstEmission = true
+            timerHolder.controller.state.collect { state ->
+                val dto = state?.toDto()
+                val prev = last
+                // A RUNNING /timer/state left by a phone process that died mid-rest outlives it, and
+                // a rest that expired during the downtime restores as null: without this the first
+                // null looked like "still nothing" and the wrist stayed wedged on a dead 0:00 rest.
+                val startupClear = firstEmission && dto == null
+                firstEmission = false
+                // The controller re-emits every tick; the wrist derives its own countdown from
+                // endAtMs, so only STRUCTURAL changes republish (start/pause/resume/±30/stop —
+                // detected as a shifted end instant or a mode flip), never the 1 Hz decrement.
+                val structural = when {
+                    startupClear -> true
+                    (dto == null) != (prev == null) -> true
+                    dto == null || prev == null -> false
+                    dto.paused != prev.paused || dto.totalSeconds != prev.totalSeconds -> true
+                    !dto.paused && abs(dto.endAtMs - prev.endAtMs) > TIMER_REPUBLISH_SLOP_MS -> true
+                    dto.paused && dto.pausedRemainingSeconds != prev.pausedRemainingSeconds -> true
+                    else -> false
+                }
+                if (structural) {
+                    last = dto
+                    // The identity the wrist will quote back in its haptic ack. Held here because
+                    // this is the only place that knows what was actually PUBLISHED — the
+                    // controller's own state is recomputed every tick and would not match.
+                    lastPublishedTimerEndAtMs = hapticIdentityAfter(lastPublishedTimerEndAtMs, dto)
+                    if (dto == null) deleteItem(WearProtocol.PATH_TIMER_STATE)
+                    else putItem(WearProtocol.PATH_TIMER_STATE, WearCodec.encode(dto))
+                }
+            }
+        }
+        scope.launch {
+            combine(
+                settingsRepo.effectiveAccentHex,
+                settingsRepo.accentEnabled,
+                settingsRepo.weightUnit
+            ) { hex, enabled, unit: WeightUnit ->
+                ConfigDto(accentHex = hex, accentEnabled = enabled, unit = unit.toProtocol(), supportsHrAcknowledgements = true)
+            }.distinctUntilChanged().collect { putItem(WearProtocol.PATH_CONFIG, WearCodec.encode(it)) }
+        }
+        // App open is a glance surface point — and so is a watch ARRIVING (P-02). The one-shot gate
+        // inside publishGlanceNow closed the common no-watch case and opened a new one: a wear app
+        // installed or re-paired while this process is alive had its startup publish skipped, and
+        // nothing published the tile again until a session ended or the app restarted. This flow is
+        // seeded with the current answer, so it also serves as that startup publish.
+        scope.launch {
+            connection.pairedWearApp().collect { paired -> if (paired) publishGlanceNow() }
+        }
+    }
+
+    /**
+     * One-shot /glance/today refresh — stamped with its compute time.
+     *
+     * Gated on a watch existing at all (P-02). The reads below are not cheap: readiness alone walks
+     * every finished session, its exercises and its sets, and the directive walks them again, so
+     * every cold start on a phone with no paired watch paid for a tile nothing would ever render —
+     * and only discovered there was no consumer at the Data Layer write on the far side of it.
+     */
+    suspend fun publishGlanceNow() {
+        if (!connection.hasPairedWearApp()) return
+        // The wrist shows the SAME answer the phone does (B2) — the tile consumes the directive
+        // verbatim rather than re-deriving "what now?" from next-up, which is how two surfaces
+        // start disagreeing. Null-safe: an unavailable directive falls back to next-planned-day.
+        //
+        // Its readiness comes with it (P-02). `readinessScale()` was called separately here, and it
+        // walks every finished session, its exercises and its sets — the same walk `today()` had
+        // just done to compute the number it was about to be asked for again. One assembly, and the
+        // headline and the percentage beside it cannot come from two different reads.
+        val answer = runCatching { directiveRepo.today() }.getOrNull()
+        val readiness = answer?.readiness
+        val week = runCatching { statsRepo.observeWeeklyStats().first() }.getOrNull()
+        val freestyle = settingsRepo.freestyleMode.first()
+        val unit = settingsRepo.weightUnit.first()
+        val nextDayTitle = week?.nextUpDayKey
+            ?.takeIf { !freestyle && Program.days.isNotEmpty() }
+            ?.let { Program.dayDisplayName(it) }
+        val dto = GlanceTodayDto(
+            loadAdjustmentPercent = readiness?.percent,
+            nextDayTitle = nextDayTitle,
+            directiveHeadline = answer?.directive?.headline,
+            directiveReason = answer?.directive?.reason,
+            weekSessionsDone = week?.workouts ?: 0,
+            // The weekly target only means something with a real plan — freestyle shows the bare count.
+            weekSessionsPlanned = settingsRepo.daysPerWeek.first()
+                .takeIf { it > 0 && !freestyle && Program.days.isNotEmpty() },
+            // The phone's own compact formatter, in the user's unit. A private lb-only helper here
+            // meant a kg user's Week tile read "12.4k LB" while the phone beside it read "5.6k kg".
+            weekVolumeText = week?.volumeLb?.takeIf { it > 0 }?.let { formatVolumeCompact(it, unit) },
+            computedAtMs = clock.nowMs()
+        )
+        putItem(WearProtocol.PATH_GLANCE_TODAY, WearCodec.encode(dto))
+    }
+
+    /** Confirm an HR batch reached Room (or was terminally discarded), so the wrist can drop it. */
+    suspend fun publishHrAck(ack: com.forge.shared.protocol.HrBatchAckDto) {
+        putItem(WearProtocol.PATH_HR_ACK, WearCodec.encode(ack))
+    }
+
+    /**
+     * Ack a wrist command, at that command's OWN path so a later ack can never supersede an
+     * unsynced earlier one (see [WearProtocol.PATH_CMD_ACK]).
+     *
+     * Per-path items would otherwise accumulate in the Data Layer forever, so the oldest is dropped
+     * once [ACK_HISTORY] newer ones exist — long past any plausible sync delay, and never the item
+     * just written.
+     */
+    suspend fun publishAck(ack: CmdAckDto) {
+        val path = WearProtocol.ackPath(ack.commandId)
+        putItem(path, WearCodec.encode(ack))
+        pruneAcks(keep = path)
+    }
+
+    /**
+     * Delete every ack DataItem beyond the newest [ACK_HISTORY], reading the live set rather than a
+     * list of what THIS process wrote.
+     *
+     * The bound used to be an in-memory queue of recently written paths, which meant it only ever
+     * bounded one process lifetime. DataItems outlive the process by design — that is why acks live
+     * on the Data Layer at all — so every restart began remembering nothing and the items from
+     * previous runs were never deleted by anyone. They accumulate one per wrist command, for the
+     * life of the install, and the watch's tiles and complications each read the FULL item set on
+     * every render (WearGlanceStore has no path-scoped query), so the cost lands on the surface
+     * that has to be fastest.
+     *
+     * Ordered by the ack's own [CmdAckDto.atMs] rather than the item's
+     * URI, which carries no time. An item that cannot be decoded sorts oldest: it is unreadable to
+     * the watch too, so it has nothing to lose by going first.
+     */
+    private suspend fun pruneAcks(keep: String) {
+        runCatching {
+            val prefix = android.net.Uri.Builder()
+                .scheme(PutDataRequest.WEAR_URI_SCHEME)
+                .path(WearProtocol.PATH_CMD_ACK)
+                .build()
+            val buffer = dataClient.getDataItems(prefix, DataClient.FILTER_PREFIX).await()
+            val stale = try {
+                buffer
+                    .map { it.freeze() }
+                    .filter { it.uri.path != keep }
+                    .sortedByDescending { ackTimeOf(it.data) }
+                    .drop(ACK_HISTORY - 1) // -1: `keep` was just written and holds one of the slots.
+                    .mapNotNull { it.uri.path }
+            } finally {
+                buffer.release()
+            }
+            stale.forEach { deleteItem(it) }
+        }
+    }
+
+    /** When an ack DataItem's payload says it was written, or [Long.MIN_VALUE] if it can't say. */
+    private fun ackTimeOf(bytes: ByteArray?): Long {
+        if (bytes == null) return Long.MIN_VALUE
+        return when (val decoded = WearCodec.decode<CmdAckDto>(bytes)) {
+            is WearCodec.DecodeResult.Ok -> decoded.value.atMs
+            else -> Long.MIN_VALUE
+        }
+    }
+
+    private fun RestTimerState.toDto(): TimerStateDto {
+        val now = clock.nowMs()
+        return TimerStateDto(
+            endAtMs = if (isPaused) 0L else now + secondsRemaining * 1000L,
+            totalSeconds = totalSeconds,
+            paused = isPaused,
+            pausedRemainingSeconds = if (isPaused) secondsRemaining else 0,
+            // Stamped from the SAME reading as endAtMs, so the watch can turn an absolute instant on
+            // this phone's clock into a duration and cancel the skew between the two devices.
+            publishedAtMs = now
+        )
+    }
+
+    private suspend fun putItem(path: String, bytes: ByteArray) {
+        runCatching {
+            val request = PutDataRequest.create(path).apply {
+                data = bytes
+                setUrgent()
+            }
+            dataClient.putDataItem(request).await()
+        }
+    }
+
+    private suspend fun deleteItem(path: String) {
+        runCatching {
+            dataClient.deleteDataItems(
+                android.net.Uri.parse("wear://*$path")
+            ).await()
+        }
+    }
+
+    internal companion object {
+        /**
+         * The haptic-ack identity to hold once [dto] has been published, given the one held before.
+         *
+         * A rest that runs out is republished as paused-at-zero, and that publish used to clear the
+         * identity to 0. It lands within milliseconds on this collector, while the service only reads
+         * the identity after the day screen's `notifyTimerDone` and two Main-thread hops, so it
+         * almost always read 0, `hapticAckedFor(0, …)` never matched, and the phone buzzed and posted
+         * a heads-up on top of the wrist at every rest (2026-09-26 audit, 11-domain-services-core).
+         * The expired rest's end instant is what the wrist quotes back, so it is kept until the next
+         * start (a new instant) or stop (0). A manual pause still clears it: a paused timer cannot
+         * expire, and resuming publishes a fresh instant.
+         */
+        fun hapticIdentityAfter(previous: Long, dto: TimerStateDto?): Long = when {
+            dto == null -> 0L
+            !dto.paused -> dto.endAtMs
+            dto.pausedRemainingSeconds <= 0 -> previous
+            else -> 0L
+        }
+
+        /** endAtMs jitter tolerated between tick-derived recomputes before it counts as a restart. */
+        private const val TIMER_REPUBLISH_SLOP_MS = 1_500L
+        /** How many per-command acks stay live before the oldest is deleted. */
+        private const val ACK_HISTORY = 10
+    }
+}

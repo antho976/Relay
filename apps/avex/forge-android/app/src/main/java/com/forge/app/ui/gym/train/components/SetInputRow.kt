@@ -1,0 +1,906 @@
+@file:OptIn(
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class
+)
+
+package com.forge.app.ui.gym.train.components
+
+import androidx.compose.ui.graphics.Color
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.GROUP_OUTER
+import com.forge.app.ui.common.bounceClick
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import java.util.Locale
+import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.domain.pr.PrDetector
+import com.forge.app.domain.units.MAX_REPS_DIGITS
+import com.forge.app.domain.units.MAX_HOLD_SECONDS
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.service.wear.toProtocol
+import com.forge.app.domain.units.formatHold
+import com.forge.app.domain.parser.WeightParser
+import com.forge.app.program.ExerciseUnit
+import com.forge.app.domain.units.normalizeDecimalInput
+import com.forge.app.domain.units.parseToLb
+import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.unitLabel
+import com.forge.app.domain.units.weightInputValue
+import com.forge.app.ui.theme.LocalForgeSettings
+import com.forge.app.ui.common.forgeHaptic
+import com.forge.app.ui.common.forgeLongPress
+
+/** "PR at 9 reps": the reps that make the typed weight a record. "1 for PR" read as a score. */
+internal fun prAtRepsLabel(reps: Int): String = if (reps == 1) "PR at 1 rep" else "PR at $reps reps"
+
+/** A value pushed into the next set's fields; [nonce] makes a repeat tap a new request. */
+@androidx.compose.runtime.Immutable
+data class SetFill(val nonce: Int, val weight: String?, val reps: String?)
+
+/**
+ * The weight (lb) the next set's field opens on. Before today's first set it is last session's set
+ * in the same position. After it, today's last set moved by last session's step between the same
+ * two positions, so a change made today carries through the sets while a pyramid keeps its shape.
+ * Null when there is no weight to seed (bodyweight, or nothing to go on).
+ */
+internal fun nextSetSeedLb(
+    todayLast: LoggedSet?,
+    priorForRow: LoggedSet?,
+    priorBefore: LoggedSet?,
+    /**
+     * The coach's eased target while easing back in after a break. It caps the first set's seed:
+     * last session is from before the break, and opening on its weight put a tap of LOG SET on the
+     * load the coach had just said to come in under. Never raises a lighter prior set.
+     */
+    rampLb: Double? = null,
+    /**
+     * The coach's target for this lift, when the coach is trusted to fill the field (hands-off
+     * mode). It replaces last session's weight on the first set, so logging the coach's number is
+     * one tap instead of a tap on the "try" line first. Today's own sets still lead after that.
+     */
+    coachLb: Double? = null
+): Double? {
+    if (todayLast?.weightLb?.takeIf { !todayLast.isAssisted } == null && coachLb != null) return coachLb
+    val todayLb = todayLast?.weightLb?.takeIf { !todayLast.isAssisted } ?: return firstSetSeed(priorForRow?.weightLb, rampLb)
+    val rowLb = priorForRow?.weightLb
+    val beforeLb = priorBefore?.weightLb
+    return if (rowLb != null && beforeLb != null) (todayLb + (rowLb - beforeLb)).takeIf { it > 0.0 } ?: todayLb
+    else todayLb
+}
+
+private fun firstSetSeed(priorLb: Double?, rampLb: Double?): Double? =
+    if (priorLb != null && rampLb != null) minOf(priorLb, rampLb) else priorLb ?: rampLb
+
+// Hoisted so it isn't recompiled on every weight keystroke. Matches a full "WxR"
+// entry (e.g. a pasted "45x10" or "22,5x10") so it splits into both fields at once.
+private val WEIGHT_REPS_REGEX = Regex("""^([0-9]*[.,]?[0-9]+)\s*[xX]\s*([0-9]+)$""")
+
+/**
+ * Input row for the next set, laid out on the set table's columns with the LOG SET button
+ * full-width below.
+ * Weight/reps use the system keyboard (tap a field); type "BW" in weight for bodyweight.
+ */
+@Composable
+fun SetInputRow(
+    prefillWeight: String?,
+    suggestedWeight: String? = null,
+    suggestionReason: String? = null,
+    priorSets: List<LoggedSet> = emptyList(),
+    /** The set the row logs next, 1-based. The row is the set table's ledger layout; the compact
+     *  legacy layout (hard-coded "lb", a stock Button) had no caller left and is gone. */
+    nextSetNumber: Int,
+    /** The exercise actually being performed (the swapped one after a swap). Keys the seeded
+     *  weight/reps so a swap re-seeds them: a swap only happens at zero sets, so [nextSetNumber]
+     *  never changes across one. */
+    exerciseKey: String = "",
+    priorSetForActiveRow: LoggedSet? = null,
+    /** Last session's set BEFORE the active row's, for carrying today's change through the sets. */
+    priorSetBeforeActiveRow: LoggedSet? = null,
+    /** This session's most recent logged set, null before the first. */
+    todayLastSet: LoggedSet? = null,
+    /** A value pushed into the fields from outside (the coach's cue on the plan line). */
+    fill: SetFill? = null,
+    /** The eased target to open the first set on while easing back in (see [nextSetSeedLb]). */
+    rampSeedLb: Double? = null,
+    /** The coach's target to open the first set on, in hands-off mode (see [nextSetSeedLb]). */
+    coachSeedLb: Double? = null,
+    /** The day asks for less than last session (easing back in after a break, or a lighter
+     *  target): last session's set is shown as "last", not as one to beat. */
+    easingBack: Boolean = false,
+    targetsMet: Boolean = false,
+    advanceLabel: String = "",
+    /** Full-width outlined button shown above LOG SET when [onFinishEarly] is set — ends the
+     *  exercise with the sets already logged (AMRAP / gassed out) instead of forcing SKIP.
+     *  Rendered uppercased to match the screen's button voice. */
+    finishEarlyLabel: String = "",
+    /** Null hides the finish-early button (zero sets logged, or targets already met). */
+    onFinishEarly: (() -> Unit)? = null,
+    /** Bodyweight exercise (push-ups, planks…) — no weight field; logs reps only as "BW". */
+    isBodyweight: Boolean = false,
+    /** Plate-loaded machine/cable exercise — the weight field is a plate COUNT, labelled "PLATES". */
+    isPlates: Boolean = false,
+    /** Timed-hold exercise (GYMAP-51) — the reps/RPE/Δ columns become a HOLD readout + stopwatch, and
+     *  the set logs a duration (seconds) instead of reps. Every non-timed exercise is unchanged. */
+    isTimed: Boolean = false,
+    /** Recommended reps from the plan (e.g. 12 from "8-12") — pre-filled into the reps field. */
+    targetReps: Int? = null,
+    /** Greyed hint shown in the empty reps field — the recommended rep even for AMRAP (e.g. 12). */
+    repsPlaceholder: Int? = null,
+    onAdvance: () -> Unit = {},
+    /** [durationSeconds] non-null = a timed-hold set (GYMAP-51); reps is then 0. */
+    onSubmit: (weightText: String, reps: Int, durationSeconds: Int?) -> Unit,
+    onAddSet: (() -> Unit)? = null,
+    /** Logs a duplicate of this session's last set immediately (long-press on LOG SET). Null until
+     *  at least one set is logged this session; null disables the gesture. */
+    onRepeatLastSet: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val weightUnit = LocalForgeSettings.current.weightUnit
+    val plateLb = LocalForgeSettings.current.plateWeightLb
+    val hapticStrength = LocalForgeSettings.current.hapticStrength
+    val view = androidx.compose.ui.platform.LocalView.current
+    // Prefill weight + reps with what you did on THIS set last time (#8) — your previous numbers,
+    // not the plan target. Plate exercises seed a plate count. First time on the exercise → empty
+    // weight + the plan's target reps. Re-seeds per set (keyed on the set number + the seed value).
+    //
+    // From the second set on, TODAY leads: the weight is today's last set moved by however much
+    // last session moved between these two sets. Straight sets carry today's weight, a pyramid or
+    // back-off keeps its shape, and a session that went up 2.5 on set one stays up on every set
+    // instead of re-seeding last time's lighter number, which took a +2.5 tap per set.
+    val seedLb = nextSetSeedLb(todayLastSet, priorSetForActiveRow, priorSetBeforeActiveRow, rampSeedLb, coachSeedLb)
+    val seedWeight = seedLb?.let { lb -> if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, weightUnit) }
+        ?: priorSetForActiveRow?.weightText
+        ?: prefillWeight.orEmpty()
+    // A weight the coach moved asks for the plan's reps, not the count last session reached at the
+    // old weight; an unchanged weight keeps last session's reps as the mark to beat.
+    val coachMovedLoad = coachSeedLb != null && todayLastSet == null && priorSetForActiveRow?.weightLb != coachSeedLb
+    val seedReps = (if (coachMovedLoad) targetReps?.toString() else null)
+        ?: priorSetForActiveRow?.reps?.toString() ?: targetReps?.toString().orEmpty()
+    // Re-seed only when the SET NUMBER changes (a new set), not when the derived seed value shifts —
+    // keying on the volatile seed would wipe a half-typed entry if the prior baseline changed (#11).
+    var weight by rememberSaveable(nextSetNumber, exerciseKey) { mutableStateOf(seedWeight) }
+    var reps by rememberSaveable(nextSetNumber, exerciseKey) { mutableStateOf(seedReps) }
+    // Except the comeback target, which loads beside the cards: the first card could compose on last
+    // time's weight before its eased target arrived, and the field kept the pre-break number. An
+    // untouched field (still holding the seed it was given) follows it; a typed one is left alone.
+    var seededWeight by rememberSaveable(nextSetNumber, exerciseKey) { mutableStateOf(seedWeight) }
+    LaunchedEffect(rampSeedLb, coachSeedLb) {
+        if (weight == seededWeight) weight = seedWeight
+        seededWeight = seedWeight
+    }
+    // Each tap applies once. The card keeps its last fill while this row comes and goes (skip, then
+    // unskip), and applying it again on the way back in overwrote the seed or what had been typed.
+    var appliedFill by rememberSaveable(exerciseKey) { mutableStateOf(fill?.nonce ?: 0) }
+    LaunchedEffect(fill) {
+        val f = fill ?: return@LaunchedEffect
+        if (f.nonce <= appliedFill) return@LaunchedEffect
+        appliedFill = f.nonce
+        f.weight?.let { weight = it }
+        f.reps?.let { reps = it }
+    }
+    val repsFocus = remember { FocusRequester() }
+    val haptic = LocalHapticFeedback.current
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    /**
+     * A logged set starts a rest, and the rest timer draws right where the keyboard sits: with the
+     * app edge-to-edge, a keyboard left open after typing the first set's numbers covered both the
+     * floating bubble and the inline timer, so the timer seemed to appear only from the second set
+     * (the first one you didn't have to type). Nothing is being typed during a rest, so put it away.
+     */
+    fun doneTyping() {
+        focusManager.clearFocus()
+        keyboard?.hide()
+    }
+
+    // ── Timed-hold state (GYMAP-51) — only exercised when isTimed ────────────────
+    // durationSec is the held time in seconds; it's driven by a clock-anchored count-up stopwatch
+    // (so it stays accurate across a backgrounded app, like RestTimerController) and by a ±5s
+    // manual stepper. Everything re-seeds to zero on a new set (keyed on nextSetNumber).
+    var durationSec by rememberSaveable(nextSetNumber) { mutableStateOf(0) }
+    var swRunning by rememberSaveable(nextSetNumber) { mutableStateOf(false) }
+    var swAnchorMs by rememberSaveable(nextSetNumber) { mutableStateOf(0L) }
+    var swBaseSec by rememberSaveable(nextSetNumber) { mutableStateOf(0) }
+    // These are rememberSaveable, so they survive PROCESS DEATH — and nothing bounded the gap
+    // between the anchor and the resumed read except the one-hour ceiling. Start a plank, take a
+    // call, let Android kill the app, reopen two hours later on the same set: the stopwatch
+    // restored as RUNNING, elapsed clamped to 3600, and the field read 60:00. One tap on LOG SET
+    // wrote a 3600-second hold, permanently, as the all-time best for that exercise. An implausible
+    // gap means the user is no longer mid-hold, so stop the clock and keep only what was really
+    // held before the app went away.
+    LaunchedEffect(Unit) {
+        if (swRunning && System.currentTimeMillis() - swAnchorMs > MAX_UNATTENDED_HOLD_MS) {
+            swRunning = false
+            durationSec = swBaseSec.coerceIn(0, MAX_HOLD_SECONDS)
+        }
+    }
+    LaunchedEffect(swRunning) {
+        while (swRunning) {
+            val elapsed = ((System.currentTimeMillis() - swAnchorMs) / 1000L).toInt()
+            durationSec = (swBaseSec + elapsed).coerceIn(0, MAX_HOLD_SECONDS)
+            delay(200)
+        }
+    }
+    fun toggleStopwatch() {
+        if (swRunning) {
+            swRunning = false
+        } else {
+            swBaseSec = durationSec
+            swAnchorMs = System.currentTimeMillis()
+            swRunning = true
+        }
+        view.forgeHaptic(com.forge.app.ui.common.ForgeHapticType.COUNTDOWN_TICK, hapticStrength)
+    }
+    fun stepHold(delta: Int) {
+        swRunning = false // a manual nudge stops the running clock so the two inputs never fight
+        durationSec = (durationSec + delta).coerceIn(0, MAX_HOLD_SECONDS)
+    }
+
+    fun onWeightChange(new: String) {
+        // Typing "x"/"X" after a number (e.g. "45x") commits the weight and jumps to the
+        // reps field, so the rest of "45x10" is typed as reps — never truncated mid-entry.
+        if (new.endsWith("x") || new.endsWith("X")) {
+            val numPart = new.dropLast(1)
+            if (numPart.isNotEmpty() && normalizeDecimalInput(numPart).toDoubleOrNull() != null) {
+                weight = numPart
+                repsFocus.requestFocus()
+                return
+            }
+        }
+        // A complete "WxR" (e.g. pasted) splits into both fields at once.
+        val match = WEIGHT_REPS_REGEX.matchEntire(new.trim())
+        if (match != null) { weight = match.groupValues[1]; reps = match.groupValues[2] }
+        else weight = new
+    }
+
+    // Single log path used by the LOG SET button and the reps field's "done" action. Validates the
+    // weight too (the keyboard's Done bypassed the disabled-button guard, logging a weightless set).
+    // Bodyweight exercises log "BW" and skip the weight requirement.
+    /**
+     * The weight to log: the user's text, unless they never touched the seeded value — in which case
+     * hand back the prior set's FULL-PRECISION display weight instead of the rounded seed.
+     *
+     * `weightInputValue` renders one decimal, which in STONES is a granularity of 0.1 st = 1.4 lb.
+     * "Repeat last set" on a 135 lb lift seeded "9.6" and logged 9.6 × 14 = 134.4 lb — 0.6 lb light,
+     * past the 0.5 lb epsilon, so the row painted a phantom "−0.6 lb" drop for a set the user had
+     * deliberately not changed. [SetRow]'s edit path has carried this guard for a while; the log
+     * path did not. LB and plate counts need no conversion, so they pass straight through.
+     */
+    fun untouchedSeedOrTyped(): String {
+        val typed = weight.trim()
+        return if (!isPlates && weightUnit != WeightUnit.LB && seedLb != null && typed == seedWeight)
+            toDisplayWeight(seedLb, weightUnit).toString()
+        else typed
+    }
+
+    fun submitSet() {
+        if (isTimed) {
+            val d = durationSec.takeIf { it > 0 } ?: return
+            swRunning = false
+            // Weight is optional on a hold (weighted plank/hang); bodyweight or blank logs "BW".
+            val wt = if (isBodyweight || weight.isBlank()) "BW" else untouchedSeedOrTyped()
+            onSubmit(wt, 0, d)
+            doneTyping()
+            return
+        }
+        val r = reps.toIntOrNull()?.takeIf { it > 0 } ?: return
+        if (isBodyweight) {
+            onSubmit("BW", r, null)
+        } else {
+            if (weight.isBlank()) return
+            onSubmit(untouchedSeedOrTyped(), r, null)
+        }
+        doneTyping()
+        // Fields re-seed from the next set's prior automatically (keyed on the set number) (#8).
+    }
+
+    // ── +/- steppers — nudge the field without opening the keyboard ──────────────
+    // Weight steps in the DISPLAY unit (kg/lb) or by half-plates on PLATES exercises; the field
+    // already holds a display-unit value, so we step the parsed number and re-format it.
+    fun stepWeight(delta: Double) {
+        val base = normalizeDecimalInput(weight).toDoubleOrNull() ?: 0.0
+        val next = (base + delta).coerceAtLeast(0.0)
+        // Format/parse pinned to Locale.US so the field always uses a '.' decimal — a comma-decimal
+        // locale would otherwise write "2,5" and the next toDoubleOrNull() would fail (matches WeightFormatter).
+        weight = if (next % 1.0 == 0.0) next.toInt().toString() else String.format(Locale.US, "%.1f", next)
+    }
+    fun stepReps(delta: Int) {
+        val base = reps.toIntOrNull() ?: targetReps ?: repsPlaceholder ?: 0
+        reps = (base + delta).coerceAtLeast(0).toString()
+    }
+
+    val canSubmit = remember(weight, reps, isBodyweight, isTimed, durationSec) {
+        if (isTimed) durationSec > 0
+        else reps.toIntOrNull()?.let { it > 0 } == true && (isBodyweight || weight.isNotBlank())
+    }
+
+    val prRepsHint = remember(weight, priorSets, weightUnit, isPlates, plateLb) {
+        // A PLATES field holds a plate COUNT, not a display-unit weight — so parseToLb read "3" as
+        // three pounds, which is under every prior set, and the hint claimed a PR was one rep away
+        // on every set of every plate machine. The table layout hides the hint for plates; the
+        // big-number layout does not, which is where it was visible. Converted through the same
+        // helper the write path uses, so the two can never disagree about what "3" means.
+        val weightLb = if (isPlates) WeightParser.parse(weight, ExerciseUnit.PLATES, plateLb)
+        else parseToLb(weight, weightUnit)
+        weightLb?.let { repsNeededForPr(priorSets, it) }
+    }
+
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val bg = MaterialTheme.colorScheme.background
+    val outline = MaterialTheme.colorScheme.outline
+
+    // ── Ledger-style table input row ─────────────────────────────────────
+    // §8 — every do-it-now action in the app is a CAPSULE (ForgePrimaryCapsule /
+    // ForgeOutlineCapsule / the top bar's FINISH). This slot used to be a 16dp rounded
+    // rectangle, which is M3's stock button corner and read as another app's button
+    // sitting inside ours.
+    val ctaShape = RoundedCornerShape(4.dp)
+    val stacked = SetTable.stacked()
+    Column(modifier = modifier.fillMaxWidth()) {
+        // Active input row — hidden once the target sets are met (then the CTA
+        // becomes "MOVE TO NEXT"; tap "+ ADD A SET" to log a bonus set).
+        // Timed holds take the parallel HOLD/stopwatch body below; every other exercise is unchanged.
+        if (!targetsMet && !isTimed) {
+            val repsField: @Composable (Modifier) -> Unit = { m ->
+            // Reps input
+            Box(modifier = m.padding(start = 4.dp)) {
+                Column {
+                    Text("REPS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+                    Spacer(Modifier.height(2.dp))
+                    BigNumberField(
+                        value = reps,
+                        onValueChange = { new -> if (new.all { it.isDigit() }) reps = new.take(MAX_REPS_DIGITS) },
+                        placeholder = repsPlaceholder?.toString() ?: "0",
+                        keyboardType = KeyboardType.Number,
+                        imeAction = ImeAction.Done,
+                        focusRequester = repsFocus,
+                        keyboardActions = KeyboardActions(onDone = { submitSet() })
+                    )
+                }
+            }
+            }
+            val ghostHint: @Composable (Modifier) -> Unit = { m ->
+            // Prior set hint ("try 45 × 10") — tap to autofill the inputs.
+            Box(modifier = m, contentAlignment = Alignment.BottomEnd) {
+                priorSetForActiveRow?.let { prior ->
+                    // Plate exercises read as a plate count, never the lb equivalent (#9) — so
+                    // tapping autofills the plate COUNT into the plate field, not its poundage.
+                    // Free weights drop the unit: the WEIGHT · LB header above already names it,
+                    // and "28.6 lb" wrapped the hint to two lines in its 72dp column.
+                    val priorDisplay = prior.weightLb?.let { lb ->
+                        if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else weightInputValue(lb, weightUnit)
+                    } ?: prior.weightText
+                    // The ghost to beat — tap to autofill the weight only so the user
+                    // pushes for one extra rep rather than copying the exact same set.
+                    // Back from a break that set is from before it, and the coach asked for
+                    // less: it reads as where you were, not as the number to beat.
+                    // Two lines by design: on one, the mono "beat 28.6 × 8" broke wherever the
+                    // 72dp column ran out, which was usually just before the reps.
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.Bottom,
+                        modifier = Modifier
+                            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                            .clickableLabeled(
+                                "Autofill last session's weight"
+                            ) {
+                                weight = prior.weightLb?.let { lb ->
+                                    if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, weightUnit)
+                                } ?: prior.weightText
+                                // Reps intentionally left for the user — aim for one more.
+                            }
+                    ) {
+                        val caption = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp)
+                        Text(if (easingBack) "last" else "beat", style = caption, color = muted)
+                        Text(
+                            "$priorDisplay × ${prior.reps}",
+                            style = caption,
+                            color = onBg.copy(alpha = 0.7f),
+                            textAlign = TextAlign.End
+                        )
+                    }
+                }
+            }
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(4.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+            Row(verticalAlignment = Alignment.Bottom) {
+                // Set number
+                Box(modifier = Modifier.width(SetTable.SET_COL_W).padding(bottom = 4.dp)) {
+                    Text(
+                        "%02d".format(nextSetNumber),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted,
+                        fontSize = 9.sp
+                    )
+                }
+
+                // Weight input — tapping the "· LB/KG" label offers a unit switch. Bodyweight
+                // exercises have no weight to enter, so we show a static "BW" instead of a field.
+                if (isBodyweight) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("BODYWEIGHT", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+                        Spacer(Modifier.height(2.dp))
+                        Text("BW", style = MaterialTheme.typography.headlineMedium, color = onBg)
+                    }
+                } else {
+                    Column(modifier = Modifier.weight(1f)) {
+                        // Plate exercises show "PLATES" (the value is a plate count); free weights
+                        // show "WEIGHT · LB/KG". (Unit is changed in Settings, not by tapping here — #5.)
+                        Text(
+                            if (isPlates) "PLATES" else "WEIGHT · ${unitLabel(weightUnit).uppercase()}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = muted,
+                            fontSize = 9.sp
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        BigNumberField(
+                            value = weight,
+                            onValueChange = ::onWeightChange,
+                            placeholder = "0",
+                            keyboardType = KeyboardType.Text,
+                            imeAction = ImeAction.Next,
+                            supportingText = if (isPlates) null else prRepsHint?.let(::prAtRepsLabel)
+                        )
+                    }
+                }
+
+                if (!stacked) {
+                    repsField(Modifier.width(SetTable.REPS_COL_W).padding(start = 4.dp))
+                    Box(modifier = Modifier.width(SetTable.RPE_COL_W), contentAlignment = Alignment.BottomCenter) {
+                        Text("—", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.3f), fontSize = 11.sp)
+                    }
+                    ghostHint(Modifier.width(SetTable.DELTA_COL_W))
+                }
+            }
+            if (stacked) {
+                // Reps and the ghost drop below the weight field rather than sharing its line:
+                // a headlineMedium field cannot live in a 48dp column at 2x (§14, see SetTable).
+                // The RPE placeholder is gone with the column it was holding open.
+                Row(
+                    modifier = Modifier.padding(start = SetTable.SET_COL_W, top = 12.dp),
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    repsField(Modifier.weight(1f))
+                    ghostHint(Modifier)
+                }
+            }
+            }
+
+            // ── Quick-adjust row — +/- steppers + inline "+ SET" (repeat-last-set is
+            // hold-LOG-SET). "Add a set" rides here as a compact pill so the prominent
+            // full-width slot below can carry the exercise-finish action instead.
+            Spacer(Modifier.height(10.dp))
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                // The step table lives in :shared (W1) so the phone's ± and the watch's bezel
+                // adjust can never drift; the unit mapping is the wear publisher's.
+                val weightStep = com.forge.shared.weight.WeightSteps.weightStep(weightUnit.toProtocol(), isPlates)
+                if (!isBodyweight) {
+                    StepperPill(
+                        label = if (isPlates) "PL" else unitLabel(weightUnit).uppercase(),
+                        onMinus = { stepWeight(-weightStep) },
+                        onPlus = { stepWeight(weightStep) }
+                    )
+                }
+                StepperPill(label = "REPS", onMinus = { stepReps(-1) }, onPlus = { stepReps(1) })
+                // Extends the planned set count; sized/shaped to match the stepper pills.
+                AddSetPill(onAdd = onAddSet)
+            }
+
+            Spacer(Modifier.height(12.dp))
+        }
+
+        // ── Timed-hold input (GYMAP-51) — HOLD readout + stopwatch, replacing weight/reps ──
+        if (!targetsMet && isTimed) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(4.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                Box(modifier = Modifier.width(SetTable.SET_COL_W).padding(bottom = 4.dp)) {
+                    Text(
+                        "%02d".format(nextSetNumber),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted,
+                        fontSize = 9.sp
+                    )
+                }
+                // HOLD readout — the big mm:ss, accent while the stopwatch is running.
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("HOLD", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        formatHold(durationSec),
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = if (swRunning) MaterialTheme.colorScheme.primary else onBg
+                    )
+                }
+                // The hold to beat — tap to autofill last session's time.
+                Box(modifier = Modifier.width(SetTable.DELTA_COL_W), contentAlignment = Alignment.BottomEnd) {
+                    priorSetForActiveRow?.durationSeconds?.let { priorSec ->
+                        Text(
+                            "${if (easingBack) "last" else "beat"} ${formatHold(priorSec)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = onBg.copy(alpha = 0.7f),
+                            fontSize = 9.sp,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier
+                                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                                .clickableLabeled("Autofill last session's hold time") {
+                                    swRunning = false
+                                    durationSec = priorSec.coerceIn(0, MAX_HOLD_SECONDS)
+                                }
+                        )
+                    }
+                }
+            }
+
+            // Stopwatch + ±5s adjust — the timed analogue of the weight/reps steppers,
+            // carrying the same inline "+ SET" pill so timed holds can add a set too.
+            Spacer(Modifier.height(10.dp))
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                StopwatchButton(running = swRunning, onToggle = { toggleStopwatch() })
+                StepperPill(label = "5 SEC", onMinus = { stepHold(-5) }, onPlus = { stepHold(5) })
+                AddSetPill(onAdd = onAddSet)
+            }
+
+            Spacer(Modifier.height(12.dp))
+        }
+
+        if (targetsMet) {
+            // Targets hit — the input row (with its inline "+ SET") is gone, so
+            // "add a bonus set" takes the full-width slot, then the filled advance
+            // CTA moves to the next exercise.
+            // Filled secondary capsule, the same height the outlined one had.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(ctaShape)
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .then(if (onAddSet != null) Modifier.bounceClick { onAddSet() } else Modifier)
+                    .padding(vertical = 14.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("+ ADD A SET", style = MaterialTheme.typography.labelMedium, color = muted)
+            }
+            Spacer(Modifier.height(10.dp))
+            FilledCta(
+                label = advanceLabel,
+                shape = ctaShape,
+                onClickLabel = advanceLabel,
+                onClick = onAdvance
+            )
+        } else {
+            // "Done with this exercise" — end the exercise with what you logged (files it
+            // under DONE, not skipped) and move on. It's the sidekick to LOG SET, so it's a
+            // full-width OUTLINED button in the prominent slot (§8 ②) — not a stretched text
+            // link. Sits where "+ ADD A SET" used to. Shown only once ≥1 set is logged.
+            // Filled secondary capsule (grouped-surface pass, 2026-09-27), same height.
+            if (onFinishEarly != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(ctaShape)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .clickableLabeled(finishEarlyLabel) { onFinishEarly() }
+                        .padding(vertical = 14.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        finishEarlyLabel.uppercase(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = onBg
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+
+            // Tap the weight/reps fields to use the system keyboard; tapping this logs the set.
+            // A Material Button can't take a long-press, so this is a styled Box with
+            // combinedClickable: tap = log the typed set, long-press = repeat your last set.
+            val canRepeat = onRepeatLastSet != null
+            // Three visual states: ready-to-log (solid), hold-to-repeat-only (mid, clearly still
+            // interactive — not the fully-dimmed look that reads as "disabled"), and inert.
+            // combinedClickable(enabled = …) carries the disabled state to TalkBack for the inert case.
+            val bgAlpha = when { canSubmit -> 1f; canRepeat -> 0.55f; else -> 0.3f }
+            val fgAlpha = when { canSubmit -> 1f; canRepeat -> 0.75f; else -> 0.5f }
+            FilledCta(
+                label = "LOG SET $nextSetNumber",
+                shape = ctaShape,
+                enabled = canSubmit || canRepeat,
+                bgAlpha = bgAlpha,
+                fgAlpha = fgAlpha,
+                onClickLabel = if (canSubmit) "Log set $nextSetNumber" else null,
+                onLongClickLabel = if (canRepeat) "Repeat last set" else null,
+                onLongClick = if (canRepeat) {
+                    {
+                        haptic.forgeLongPress(hapticStrength)
+                        onRepeatLastSet?.invoke()
+                    }
+                } else null,
+                onClick = { if (canSubmit) submitSet() }
+            )
+            if (canRepeat) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Hold to repeat your last set",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted.copy(alpha = 0.7f),
+                    fontSize = 10.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The one filled action in the input row's prominent slot — LOG SET while sets remain, then
+ * MOVE TO NEXT / FINISH WORKOUT once the targets are met. They are the same button in two states, so
+ * they share one definition rather than two that drift.
+ *
+ * Accent-filled, on Antho's call (2026-08-23): §8 reserves the accent ground for a hub tab's one
+ * primary action, but the session screen is where the app is actually used and it was spending no
+ * accent at all, so the rule now reads "the screen's one do-it-now action" here too. Same treatment
+ * as [com.forge.app.ui.common.ForgeHeroAction] — accent ground, `onPrimary` label (which flips to
+ * the background tone above luminance 0.18, so a mid-tone warm accent still gets dark text and a
+ * monochrome accent still reads), bold mono — so this and Home's CTA are visibly one button.
+ *
+ * A Box rather than [com.forge.app.ui.common.ForgePrimaryCapsule] because LOG SET carries a
+ * long-press (hold to repeat your last set), which a Material Button can't take and the shared
+ * capsule has no slot for; [bgAlpha]/[fgAlpha] carry its three states (ready / hold-to-repeat-only /
+ * inert).
+ */
+@Composable
+private fun FilledCta(
+    label: String,
+    shape: Shape,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    bgAlpha: Float = 1f,
+    fgAlpha: Float = 1f,
+    onClickLabel: String? = null,
+    onLongClickLabel: String? = null,
+    onLongClick: (() -> Unit)? = null
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = bgAlpha))
+            .combinedClickable(
+                enabled = enabled,
+                onClickLabel = onClickLabel,
+                onLongClickLabel = onLongClickLabel,
+                onLongClick = onLongClick,
+                onClick = onClick
+            )
+            .padding(vertical = 16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = fgAlpha)
+        )
+    }
+}
+
+/** A compact pill that rides the quick-adjust row and appends one set to the plan.
+ *  Sized/shaped to sit flush with the +/- stepper pills beside it. */
+@Composable
+private fun AddSetPill(onAdd: (() -> Unit)?) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
+    Box(
+        modifier = Modifier
+            .sizeIn(minHeight = 48.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .then(if (onAdd != null) Modifier.clickableLabeled("Add a set") { onAdd() } else Modifier)
+            .padding(horizontal = 18.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text("+ SET", style = MaterialTheme.typography.labelMedium, color = muted)
+    }
+}
+
+/**
+ * Start/Stop control for a timed hold (GYMAP-51) — a 44dp capsule in the row's own language: the
+ * raised fill when idle ("Start hold"), the accent wash + ring + accent label while the count-up
+ * runs ("Stop"). The whole capsule is the tap target with a spoken a11y label.
+ */
+@Composable
+private fun StopwatchButton(
+    running: Boolean,
+    onToggle: () -> Unit
+) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val accent = MaterialTheme.colorScheme.primary
+    val outline = MaterialTheme.colorScheme.outline
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .then(if (running) Modifier.background(accent.copy(alpha = 0.15f)) else Modifier)
+            .border(1.dp, if (running) accent else Color.Transparent, RoundedCornerShape(4.dp))
+            .clickableLabeled(if (running) "Stop the hold timer" else "Start the hold timer") { onToggle() }
+            .sizeIn(minWidth = 96.dp, minHeight = 44.dp)
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            if (running) "Stop" else "Start hold",
+            style = MaterialTheme.typography.labelLarge,
+            color = if (running) accent else onBg
+        )
+    }
+}
+
+/** A compact rounded "−  LABEL  +" control that nudges a field without opening the keyboard.
+ *  Each arrow is a ≥44dp touch target with a spoken a11y label. */
+@Composable
+private fun StepperPill(
+    label: String,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit
+) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+    ) {
+        Box(
+            modifier = Modifier
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                .clickableLabeled("Decrease $label") { onMinus() },
+            contentAlignment = Alignment.Center
+        ) { Text("−", style = MaterialTheme.typography.titleMedium, color = onBg) }
+        Text(label, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+        Box(
+            modifier = Modifier
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                .clickableLabeled("Increase $label") { onPlus() },
+            contentAlignment = Alignment.Center
+        ) { Text("+", style = MaterialTheme.typography.titleMedium, color = onBg) }
+    }
+}
+
+/**
+ * The set-input number field. No rule under it: the row's own surface fill and the +/- steppers
+ * already say the number is editable, so a line there would be decoration, and a line is a claim
+ * about data (DESIGN 1).
+ */
+@Composable
+private fun BigNumberField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    keyboardType: KeyboardType,
+    imeAction: ImeAction,
+    modifier: Modifier = Modifier,
+    supportingText: String? = null,
+    focusRequester: FocusRequester? = null,
+    keyboardActions: KeyboardActions = KeyboardActions.Default
+) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val accent = MaterialTheme.colorScheme.primary
+
+    Column(modifier = modifier) {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            textStyle = MaterialTheme.typography.headlineMedium.copy(color = onBg),
+            singleLine = true,
+            cursorBrush = SolidColor(accent),
+            keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = imeAction),
+            keyboardActions = keyboardActions,
+            modifier = focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier,
+            decorationBox = { inner ->
+                Box {
+                    if (value.isEmpty()) {
+                        Text(placeholder, style = MaterialTheme.typography.headlineMedium, color = muted.copy(alpha = 0.4f))
+                    }
+                    inner()
+                }
+            }
+        )
+        if (supportingText != null) {
+            Text(supportingText, style = MaterialTheme.typography.labelSmall, color = accent, modifier = Modifier.padding(top = 2.dp))
+        }
+    }
+}
+
+/**
+ * The lowest rep count at which this weight would be a record — asked of [PrDetector] itself rather
+ * than re-derived.
+ *
+ * The hint used to run its own rule: it thresholded the wrong dimension and dropped the `isAssisted`
+ * filter entirely. A pull-up history of one BAND-ASSISTED 100 lb x 10 made it print "11 for PR" at
+ * 100 lb, while `PrDetector` — which ignores assisted sets — would have flagged a record at ONE rep.
+ * Two answers to the same question, on the same screen.
+ *
+ * Null when the weight is never a record here, or when the answer is far enough out that showing it
+ * is discouraging rather than useful.
+ */
+private fun repsNeededForPr(history: List<LoggedSet>, weightLb: Double): Int? {
+    for (n in 1..MAX_PR_HINT_REPS) {
+        if (PrDetector.isPr(history, weightLb, n)) return n
+    }
+    return null
+}
+
+/** Beyond this the hint stops being a nudge. Also bounds the search for a weight that never wins. */
+private const val MAX_PR_HINT_REPS = 50
+
+/** A running hold older than this can't be a hold still in progress — the app was killed or the
+ *  clock jumped. Comfortably past any real weighted plank, and well under the 1 h field ceiling. */
+private const val MAX_UNATTENDED_HOLD_MS = 15L * 60 * 1000

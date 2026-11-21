@@ -1,6 +1,6 @@
 # Avex in Relay
 
-Avex ([antho976/Avex](https://github.com/antho976/Avex)) is Antho's gym app for Android: workouts,
+Avex (`apps/avex`, formerly antho976/Avex) is Antho's gym app for Android: workouts,
 sets, cardio, programs and a coach, all on the phone. It is the third source in the Threads space,
 beside Tally and Arbiter (`docs/THREADS.md`): a sidebar key, its own pages, a panel beside a
 thread, and `gym.*` ops a thread's agent reads.

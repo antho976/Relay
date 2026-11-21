@@ -1,0 +1,75 @@
+package com.forge.app.data.db.entities
+
+import androidx.room.ColumnInfo
+import androidx.room.Entity
+import androidx.room.Index
+import androidx.room.PrimaryKey
+
+/**
+ * A single workout. `finishedAt` is null while the workout is in progress —
+ * there should be at most one such row at any time (enforced by app logic
+ * via [com.forge.app.data.db.dao.SessionDao.getActiveSession]).
+ *
+ * `totalVolumeLb` and `prCount` are denormalised on session finish, so the
+ * overview / history screens can list sessions cheaply without re-joining
+ * exercises and sets.
+ */
+@Entity(tableName = "session", indices = [
+    Index(value = ["draft_id"], unique = true),
+    Index(value = ["started_at"]),
+    Index(value = ["finished_at"]),
+    Index(value = ["day_key", "finished_at"])
+])
+data class Session(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "day_key") val dayKey: String,
+    @ColumnInfo(name = "started_at") val startedAt: Long,
+    @ColumnInfo(name = "finished_at") val finishedAt: Long? = null,
+    @ColumnInfo(name = "total_volume_lb") val totalVolumeLb: Double? = null,
+    @ColumnInfo(name = "pr_count") val prCount: Int = 0,
+    @ColumnInfo(name = "set_count") val setCount: Int = 0,
+    @ColumnInfo(name = "deload_marked_here") val deloadMarkedHere: Boolean = false,
+    /** Comma-separated quick tags chosen at session end (#107). Empty string = no tags. */
+    @ColumnInfo(name = "tags") val tags: String = "",
+    /** Session type marker (#109): "normal" | "deload" | "test" | "technique" | "first_back" */
+    @ColumnInfo(name = "session_type") val sessionType: String = "normal",
+    /** If true, session is untracked — excluded from streak, trophies, suggestions (#110). */
+    @ColumnInfo(name = "is_untracked") val isUntracked: Boolean = false,
+    /** Free-text journal for the whole session (#111). */
+    @ColumnInfo(name = "journal") val journal: String = "",
+    /** Intensity intent (#123): "light" | "normal" | "hard" */
+    @ColumnInfo(name = "intensity") val intensity: String = "normal",
+    /**
+     * Total ACTIVE seconds — the sum of the session's sitting segments, stamped at finish.
+     * This is the real time spent training (excludes the away-time between sittings that
+     * wall-clock finishedAt−startedAt would wrongly count). 0 for pre-feature sessions; readers
+     * fall back to wall-clock when it's 0.
+     */
+    @ColumnInfo(name = "active_seconds") val activeSeconds: Int = 0,
+    @ColumnInfo(name = "draft_id") val draftId: String? = null
+)
+
+/**
+ * Canonical display duration in whole minutes: prefer real ACTIVE training time (excludes away-time
+ * between sittings), falling back to wall-clock only when [activeSeconds] wasn't recorded (pre-feature
+ * sessions stamp 0). Null only when the session never finished and has no active time. Any positive
+ * duration reads as at least 1 min, so a genuine sub-minute session isn't hidden by a `> 0` guard.
+ *
+ * All display surfaces (session detail, overview, history rows, the weekly-duration chart) read
+ * through this so they can never disagree on a session's length.
+ */
+fun Session.durationMinutes(): Int? = sessionDurationMinutes(startedAt, finishedAt, activeSeconds)
+
+/**
+ * [Session.durationMinutes] for a caller holding only the three columns (a projection), so a
+ * session's length reads the same everywhere: the exercise chart's session list computed wall
+ * clock, and a workout resumed after a night away read "486 min" there.
+ */
+fun sessionDurationMinutes(startedAt: Long, finishedAt: Long?, activeSeconds: Int): Int? {
+    val seconds = when {
+        activeSeconds > 0 -> activeSeconds
+        finishedAt != null -> ((finishedAt - startedAt) / 1000L).toInt()
+        else -> return null
+    }
+    return if (seconds <= 0) 0 else (seconds / 60).coerceAtLeast(1)
+}

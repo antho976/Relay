@@ -1,0 +1,252 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+package com.forge.app.ui.settings
+
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import com.forge.app.ui.common.window.ModalBottomSheet
+import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.annotation.DrawableRes
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.imageResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.forge.app.appicon.AppIcon
+import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.clickableLabeled
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material3.Icon
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+/**
+ * The Appearance page's App icon row: the icon you are on now as the row's tile, its name, and a
+ * chevron into [AppIconPickerSheet].
+ */
+@Composable
+internal fun AppIconRow(currentKey: String, onOpen: () -> Unit) {
+    val current = AppIcon.fromKey(currentKey)
+    SettingsRowContainer(interaction = Modifier.clickableLabeled("App icon, ${current.displayName}. Change", onClick = onOpen)) {
+        AppIconThumb(current, isSelected = false, modifier = Modifier.size(36.dp), corner = 18.dp)
+        SettingsRowText("App icon", "${current.displayName} · also your splash")
+        SettingsChevron()
+    }
+}
+
+/**
+ * The Appearance page's icons (Relay design "sa"): as many 56dp tiles as fit the width, each with its
+ * name under it, the one you are on ringed in ink and always in the first row; "More" slides the rest
+ * down. A tap picks it.
+ */
+@Composable
+internal fun AppIconStrip(currentKey: String, onSelect: (AppIcon) -> Unit) {
+    val current = AppIcon.fromKey(currentKey)
+    SettingsFitGrid(
+        items = AppIcon.entries,
+        pickedIndex = AppIcon.entries.indexOf(current).coerceAtLeast(0),
+        cellWidth = 64.dp,
+        noun = "app icons",
+    ) { icon ->
+        val picked = icon == current
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            AppIconThumb(icon, isSelected = picked, modifier = Modifier.size(56.dp), onClick = { onSelect(icon) }, corner = 14.dp)
+            Text(
+                icon.label.uppercase(),
+                style = com.forge.app.ui.theme.OpenType.monoXS,
+                color = if (picked) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+            )
+        }
+    }
+}
+
+/**
+ * The icon picker — a modal sheet of every launcher icon grouped under mono family headers, the
+ * ringed one being the current pick. Mirrors [com.forge.app.ui.profile.AvatarPickerSheet].
+ */
+@Composable
+internal fun AppIconPickerSheet(
+    selectedKey: String,
+    onSelect: (AppIcon) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val accent = MaterialTheme.colorScheme.primary
+    val current = AppIcon.fromKey(selectedKey)
+    // Two dozen icons want the room — open fully rather than at a half-height stop.
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val byFamily = AppIcon.entries.groupBy { it.family }
+
+    // §5: a modal is `containerColor = surface`. Left unset it took M3's stock surfaceContainerLow,
+    // a purple-leaning grey belonging to no theme here (`design/AUDIT.md`, 2026-07-25).
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        val gridState = rememberLazyGridState()
+        LazyVerticalGrid(
+            state = gridState,
+            columns = GridCells.Fixed(4),
+            // Soft-fade the scrolling grid into the sheet at whichever edge still has content (matches
+            // the avatar sheet): an offscreen DstIn mask fades only this layer's pixels to the surface.
+            modifier = Modifier
+                .fillMaxWidth()
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            0f to (if (gridState.canScrollBackward) Color.Transparent else Color.Black),
+                            0.05f to Color.Black,
+                            0.94f to Color.Black,
+                            1f to (if (gridState.canScrollForward) Color.Transparent else Color.Black),
+                        ),
+                        blendMode = BlendMode.DstIn,
+                    )
+                },
+            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 32.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Column {
+                    Text("App icon", style = com.forge.app.ui.theme.OpenType.sheetTitle, color = onBg)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Your home screen updates a moment after you pick.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = muted,
+                    )
+                }
+            }
+            AppIcon.families.forEach { family ->
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text(
+                        family.name.lowercase().replaceFirstChar { it.uppercase() },
+                        style = MaterialTheme.typography.titleSmall,
+                        color = muted,
+                        modifier = Modifier.padding(top = 16.dp, bottom = 2.dp)
+                    )
+                }
+                items(byFamily.getValue(family), key = { it.name }) { icon ->
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        AppIconThumb(
+                            icon = icon,
+                            isSelected = icon == current,
+                            modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+                            onClick = { onSelect(icon) },
+                        )
+                        Text(
+                            icon.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (icon == current) onBg else muted,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** One rounded launcher-icon thumbnail — the icon as a launcher shows it, an accent ring when it's
+ *  the active pick, bounce when tappable. */
+@Composable
+private fun AppIconThumb(
+    icon: AppIcon,
+    isSelected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+    corner: androidx.compose.ui.unit.Dp = 16.dp,
+) {
+    // The pick is ringed in ink, as the design draws it; the rest keep a hairline edge.
+    val ring = MaterialTheme.colorScheme.onBackground
+    val shape = RoundedCornerShape(corner)
+    val label = "${icon.family} ${icon.label} icon" + if (isSelected) ", selected" else ""
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .clip(shape)
+            .then(if (onClick != null) Modifier.bounceClick(onClick = onClick) else Modifier)
+            .border(
+                width = if (isSelected) 2.dp else 1.dp,
+                color = if (isSelected) ring else com.forge.app.ui.theme.OpenColors.Track,
+                shape = shape,
+            )
+            .semantics { contentDescription = label },
+    ) {
+        AppIconPreviewImage(icon.previewRes, Modifier.fillMaxSize())
+    }
+}
+
+/**
+ * Launcher-icon previews, decoded once per process and off Main.
+ *
+ * `painterResource` decoded each 256 px WebP on the main thread every time the picker opened, some
+ * two dozen of them in the sheet's first frame. The decoded bitmaps are small and immutable, so one
+ * process-wide cache serves the sheet, its row tile and the About header alike.
+ */
+internal object AppIconPreviews {
+    private val cache = java.util.concurrent.ConcurrentHashMap<Int, ImageBitmap>()
+
+    fun cached(@DrawableRes id: Int): ImageBitmap? = cache[id]
+
+    fun load(res: android.content.res.Resources, @DrawableRes id: Int): ImageBitmap =
+        cache.getOrPut(id) { ImageBitmap.imageResource(res, id) }
+}
+
+/** One icon preview from [AppIconPreviews]; an empty box of the same size until it is decoded. */
+@Composable
+internal fun AppIconPreviewImage(@DrawableRes id: Int, modifier: Modifier = Modifier) {
+    val resources = LocalContext.current.resources
+    // produceState keeps its value across a key change, so a new id always reassigns: the cache
+    // answers at once when it can, else the decode runs on IO.
+    val bitmap by produceState(AppIconPreviews.cached(id), id) {
+        value = AppIconPreviews.cached(id) ?: withContext(Dispatchers.IO) { AppIconPreviews.load(resources, id) }
+    }
+    val loaded = bitmap
+    if (loaded != null) Image(bitmap = loaded, contentDescription = null, modifier = modifier)
+    else Box(modifier)
+}
