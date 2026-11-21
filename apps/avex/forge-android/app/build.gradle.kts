@@ -153,6 +153,13 @@ android {
             it.systemProperty("forge.regen", System.getProperty("forge.regen") ?: "false")
             it.systemProperty("forge.paydown", System.getProperty("forge.paydown") ?: "false")
 
+            // One time zone for every test JVM, the one CI runs in. Screens that format a time or
+            // a weekday use the JVM's default zone, so goldens recorded on a machine in Toronto
+            // (UTC-4 on their dates) said "7:40 AM" and "Fri 22" where CI renders "11:40 AM" and
+            // "Sat 23", and nine of them were red on main for nothing but the clock. A test that
+            // needs another zone still sets it itself (TimeZone.setDefault).
+            it.systemProperty("user.timezone", "UTC")
+
             // The doctrine tests read .claude/ and the golden screenshots, which Gradle cannot infer
             // from the classpath. Without declaring them, editing DESIGN.md leaves the test task
             // UP-TO-DATE and the parity/self-check suites silently do not run — the doc could drift
