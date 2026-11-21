@@ -358,6 +358,8 @@ object AutoCoachPlanner {
             val byMuscle = slots.groupBy { it.second.muscle }
             val candidate = byMuscle.entries.mapNotNull { (muscle, muscleSlots) ->
                 if (muscle in inputs.volumeLockedMuscles) return@mapNotNull null
+                // Held at Light on purpose (or skipped): more volume is exactly what was declined.
+                if (muscle in s.prefs.bodyParts.held) return@mapNotNull null
                 if ((inputs.volumeNetByMuscle[muscle] ?: 0) >= VOLUME_DRIFT_CAP) return@mapNotNull null
                 val tracked = muscleSlots.map { it.second.exerciseId }.filter { it in trackedIds }
                 if (tracked.isEmpty() || tracked.any { it in stalledIds }) return@mapNotNull null

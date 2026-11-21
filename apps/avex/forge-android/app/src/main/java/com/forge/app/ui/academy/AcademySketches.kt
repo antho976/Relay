@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.academy.AcademyCardio
 import com.forge.app.domain.academy.AcademyCoachLessons
+import com.forge.app.domain.academy.AcademyPractice
 import com.forge.app.domain.academy.AcademyRegistry
 import com.forge.app.domain.academy.AcademyTraining
 import com.forge.app.domain.academy.exampleWeight
@@ -599,7 +600,7 @@ internal fun sketch(description: String, body: Choreo.() -> Unit): Sketch =
     Choreo().apply(body).build(description)
 
 /**
- * The twelve drawings, one per lesson, each built once on first use.
+ * The drawings, one per lesson, each built once on first use.
  *
  * Each is an exact diagram of the lesson's single idea, with the accent on the answer. The numbers
  * drawn are the lesson's own (10 sets, 1.6 g per kg, 48 to 72 hours); the series they sit on are
@@ -622,7 +623,13 @@ object AcademySketches {
             AcademyCoachLessons.readiness.id to { _ -> readiness() },
             AcademyCoachLessons.blocks.id to { _ -> block() },
             AcademyCardio.zone2.id to { _ -> zones() },
-            AcademyCardio.intervals.id to { _ -> intervals() }
+            AcademyCardio.intervals.id to { _ -> intervals() },
+            AcademyCardio.yourWeek.id to { _ -> yourWeek() },
+            AcademyPractice.swaps.id to { _ -> swaps() },
+            AcademyPractice.plateaus.id to { _ -> plateaus() },
+            AcademyPractice.comingBack.id to { _ -> comingBack() },
+            AcademyPractice.losingWeight.id to { _ -> losingWeight() },
+            AcademyPractice.bodyParts.id to { _ -> bodyParts() }
         )
     }
     private val cache = ConcurrentHashMap<Pair<String, WeightUnit>, Sketch>()
@@ -1201,5 +1208,155 @@ object AcademySketches {
         }, Ink.GUIDE, style = Stroked.DOTTED))
         at(7.6f, 1.6f, label("a day clear", (day(0) + day(2)) / 2f, 54f, Anchor.CENTER, strong = true))
         at(8f, 1.4f, label("easy", day(5), 104f, Anchor.CENTER))
+    }
+
+    // ── The stand-alone Training lessons and the week (2026-11-18) ───────────
+
+    /**
+     * The lens two circles share: the lifts that are the same muscle AND the same kind of movement.
+     * Built from two arcs rather than a path intersection, so it is the same shape on every device.
+     */
+    internal fun lens(): Path = Path().apply {
+        arcTo(Rect(28f, 24f, 96f, 92f), -58.03f, 116.06f, forceMoveTo = true)
+        arcTo(Rect(64f, 24f, 132f, 92f), 121.97f, 116.06f, forceMoveTo = false)
+        close()
+    }
+
+    /** Same muscle, same movement: the overlap is where a swap costs the session nothing. */
+    private fun swaps(): Sketch = sketch(
+        "Two lifts are interchangeable when they train the same muscle through the same kind of movement. A fly trains the chest but is not a press, an overhead press is a press but not for the chest. A bench press and a dumbbell press are both, so swap them freely."
+    ) {
+        val muscle = Path().apply { addOval(Rect(28f, 24f, 96f, 92f)) }
+        val movement = Path().apply { addOval(Rect(64f, 24f, 132f, 92f)) }
+
+        at(0f, 2.6f, SketchMark.Line(muscle, Ink.INK))
+        at(0.8f, 2.6f, SketchMark.Line(movement, Ink.INK))
+        at(2.6f, 1.6f, label("same muscle", 46f, 16f, Anchor.CENTER), label("same movement", 114f, 16f, Anchor.CENTER))
+        at(3.2f, 1.6f, label("fly", 46f, 60f, Anchor.CENTER), label("overhead", 114f, 60f, Anchor.CENTER))
+        at(4f, 2.2f, SketchMark.Area(lens(), Ink.ACCENT))
+        at(5.4f, 1.1f, SketchMark.Dot(80f, 58f, 2.4f, Ink.ACCENT, halo = true))
+        at(5.8f, 1.4f, dotted(line(80f, 63f, 80f, 96f)))
+        at(6.2f, 1.6f, label("swap freely", 80f, 104f, Anchor.CENTER, strong = true))
+    }
+
+    /** A climb, three flat sessions, a step back, and the climb that passes the old mark. */
+    private fun plateaus(): Sketch = sketch(
+        "A lift climbs, then sits flat for three sessions. That is a stall. Stepping back about ten percent and building up again usually carries it past where it was stuck."
+    ) {
+        val climb = smooth(20f, 84f, 36f, 74f, 52f, 62f, 68f, 53f)
+        val flat = line(68f, 53f, 108f, 53f)
+        val restart = smooth(108f, 53f, 116f, 62f, 128f, 53f, 150f, 34f)
+
+        at(0f, 1.6f, SketchMark.Line(axisX(94f, 16f, 152f, listOf(20f, 44f, 68f, 88f, 108f, 129f, 150f)), Ink.GUIDE))
+        at(0.4f, 1.4f, label("sessions", 152f, 103f, Anchor.END))
+        at(0.8f, 3f, SketchMark.Line(climb, Ink.INK))
+        at(3.6f, 2f, SketchMark.Line(flat, Ink.INK))
+        at(4f, 1.2f, SketchMark.Dot(68f, 53f, 1.6f, Ink.INK), SketchMark.Dot(88f, 53f, 1.6f, Ink.INK), SketchMark.Dot(108f, 53f, 1.6f, Ink.INK))
+        at(5f, 1.4f, SketchMark.Line(bracket(68f, 108f, 44f), Ink.GUIDE))
+        at(5.2f, 1.6f, label("three flat", 88f, 38f, Anchor.CENTER, strong = true))
+        at(6f, 1.6f, dotted(line(108f, 53f, 152f, 53f)))
+        at(6.4f, 3.2f, SketchMark.Line(restart, Ink.ACCENT))
+        at(7f, 2.8f, SketchMark.Area(under(restart, 108f, 150f, 94f), Ink.ACCENT))
+        at(9f, 1.1f, SketchMark.Dot(116f, 62f, 2.2f, Ink.ACCENT, halo = true))
+        at(9.2f, 1.6f, label("step back", 116f, 74f, Anchor.CENTER, strong = true))
+        at(9.6f, 1.4f, label("past it", 150f, 26f, Anchor.END))
+    }
+
+    /** Built once slowly, lost a little in the break, rebuilt in a fraction of the time. */
+    private fun comingBack(): Sketch = sketch(
+        "Strength is built slowly, slips a little during time off, and comes back much faster than it was built the first time."
+    ) {
+        val built = smooth(18f, 84f, 32f, 73f, 46f, 62f, 62f, 52f)
+        val lost = line(62f, 52f, 86f, 64f)
+        val rebuilt = smooth(86f, 64f, 93f, 56f, 100f, 51f, 114f, 45f, 150f, 38f)
+
+        at(0f, 1.6f, SketchMark.Line(axisX(94f, 16f, 152f, emptyList()), Ink.GUIDE))
+        at(0.4f, 1.6f, SketchMark.Band(62f, 22f, 86f, 94f, Ink.GUIDE))
+        at(0.8f, 1.4f, label("time off", 74f, 16f, Anchor.CENTER))
+        at(1.2f, 3.4f, SketchMark.Line(built, Ink.INK))
+        at(4.4f, 1.6f, SketchMark.Line(lost, Ink.GUIDE, weight = 1.6f, style = Stroked.DASHED))
+        at(5.4f, 1.4f, dotted(line(62f, 52f, 152f, 52f)))
+        at(5.8f, 2.6f, SketchMark.Line(rebuilt, Ink.ACCENT))
+        at(6.2f, 2.4f, SketchMark.Area(under(rebuilt, 86f, 150f, 94f), Ink.ACCENT))
+        at(8f, 1.1f, SketchMark.Dot(98.5f, 52f, 2.2f, Ink.ACCENT, halo = true))
+        at(8.2f, 1.4f, SketchMark.Line(bracket(18f, 62f, 99f, lip = -2.4f), Ink.GUIDE), SketchMark.Line(bracket(86f, 98.5f, 99f, lip = -2.4f), Ink.GUIDE))
+        at(8.6f, 1.6f, label("built", 40f, 106f, Anchor.CENTER), label("rebuilt", 92f, 106f, Anchor.CENTER, strong = true))
+    }
+
+    /** Bodyweight falls at a steady 0.7 percent a week while the lift holds its line. */
+    private fun losingWeight(): Sketch = sketch(
+        "Bodyweight comes down slowly, about 0.7 percent a week, while the weight on the bar holds. A lift that stays put while you get lighter has done its job."
+    ) {
+        val weight = line(24f, 34f, 150f, 58f)
+        val lift = smooth(24f, 76f, 56f, 75f, 88f, 76f, 120f, 75f, 150f, 75f)
+
+        at(0f, 1.6f, SketchMark.Line(axisX(94f, 16f, 152f, listOf(24f, 66f, 108f, 150f)), Ink.GUIDE))
+        at(0.4f, 1.4f, label("weeks", 152f, 103f, Anchor.END))
+        at(0.8f, 3.4f, SketchMark.Line(weight, Ink.GUIDE, weight = 1.6f, style = Stroked.DASHED))
+        at(2f, 1.4f, label("bodyweight", 24f, 26f))
+        at(2.6f, 3.6f, SketchMark.Line(lift, Ink.INK))
+        at(3f, 3.4f, SketchMark.Area(under(lift, 24f, 150f, 94f), Ink.INK))
+        at(5f, 1.4f, label("your lift", 24f, 68f, strong = true))
+        at(6.2f, 1.1f, SketchMark.Dot(150f, 75f, 2.2f, Ink.ACCENT, halo = true))
+        at(6.4f, 1.4f, label("held", 146f, 68f, Anchor.END, strong = true))
+        at(7f, 1.8f, figure(0.7f, 1, 98f, 22f))
+        at(7.4f, 1.4f, label("percent a week", 122f, 24f))
+    }
+
+    /** Four levels as four columns: left out, held with very little, normal, and brought up. */
+    private fun bodyParts(): Sketch = sketch(
+        "Four levels for a muscle. Skip leaves it out. Light holds it with two sets a week. Normal is the plan as written. Focus trains it more often and first, with a little taken from everything else."
+    ) {
+        fun x(i: Int) = 36f + i * 32f
+        val base = 86f
+
+        at(0f, 1.4f, SketchMark.Line(line(16f, base, 152f, base), Ink.GUIDE))
+        at(0.6f, 1.4f, SketchMark.Column(x(0), 60f, base, 16f, Ink.GUIDE, ghost = true))
+        at(1.2f, 1.4f, SketchMark.Column(x(1), 74f, base, 16f, Ink.INK))
+        at(1.8f, 1.6f, SketchMark.Column(x(2), 56f, base, 16f, Ink.INK))
+        at(2.6f, 2.2f, SketchMark.Column(x(3), 26f, base, 16f, Ink.ACCENT))
+        at(3f, 1.4f, SketchMark.Line(line(x(1) - 8f, 74f, x(1) + 8f, 74f), Ink.INK))
+        stagger(3.2f, 1f, 0.2f, listOf("skip", "light", "normal").mapIndexed { i, t -> label(t, x(i), 96f, Anchor.CENTER) })
+        at(4f, 1.2f, label("focus", x(3), 96f, Anchor.CENTER, strong = true))
+        at(4.6f, 1.1f, SketchMark.Dot(x(3), 26f, 2.4f, Ink.ACCENT, halo = true))
+        at(5f, 1.6f, label("more often, first", x(3) + 8f, 16f, Anchor.END, strong = true))
+        at(5.4f, 1.8f, figure(2f, 0, x(1) - 5f, 60f))
+        at(5.8f, 1.4f, label("sets", x(1) + 4f, 66f))
+    }
+
+    /** One week: four lifting days, an easy session, the hard one a day clear of legs, one day off. */
+    private fun yourWeek(): Sketch = sketch(
+        "One week of seven days. Four lifting days stay where they are. Easy cardio goes on a free day, the one hard session sits a full day clear of the leg days, and one day stays fully off."
+    ) {
+        fun day(i: Int) = 24f + i * 18.8f
+        val letters = listOf("M", "T", "W", "T", "F", "S", "S")
+        val lift = listOf(0, 1, 3, 4)
+
+        at(0f, 1.4f, label("one week", 16f, 12f))
+        at(0.4f, 2f, SketchMark.Line(Path().apply {
+            (0 until 7).forEach { i ->
+                val c = day(i)
+                addRoundRect(RoundRect(c - 8f, 28f, c + 8f, 70f, CornerRadius(2.5f)))
+            }
+        }, Ink.GUIDE))
+        stagger(0.8f, 1f, 0.15f, letters.mapIndexed { i, s -> SketchMark.Label(s, day(i), 80f, Anchor.CENTER, Ink.GUIDE) })
+        stagger(2f, 1.2f, 0.3f, lift.map { SketchMark.Column(day(it), if (it == 1 || it == 4) 34f else 42f, 66f, 6f, Ink.INK) })
+        at(3.4f, 1.4f, label("legs", day(1), 22f, Anchor.CENTER), label("legs", day(4), 22f, Anchor.CENTER))
+        // Wednesday: easy, a low steady wave. Sunday: hard, three square efforts.
+        at(4f, 1.8f, SketchMark.Line(smooth(day(2) - 6f, 54f, day(2) - 2f, 50f, day(2) + 2f, 54f, day(2) + 6f, 50f), Ink.ACCENT))
+        at(4.6f, 1.8f, SketchMark.Line(Path().apply {
+            val c = day(6)
+            moveTo(c - 6f, 62f); lineTo(c - 6f, 40f); lineTo(c - 3f, 40f); lineTo(c - 3f, 62f)
+            lineTo(c - 1.5f, 62f); lineTo(c - 1.5f, 40f); lineTo(c + 1.5f, 40f); lineTo(c + 1.5f, 62f)
+            lineTo(c + 3f, 62f); lineTo(c + 3f, 40f); lineTo(c + 6f, 40f); lineTo(c + 6f, 62f)
+        }, Ink.ACCENT))
+        at(5.4f, 1f, SketchMark.Dot(day(5), 49f, 3f, Ink.INK, filled = false))
+        at(5.8f, 1.6f, label("lift", (day(0) + day(1)) / 2f, 92f, Anchor.CENTER), label("easy", day(2), 92f, Anchor.CENTER), label("off", day(5), 92f, Anchor.CENTER))
+        at(6.2f, 1.4f, label("hard", day(6), 92f, Anchor.CENTER, strong = true))
+        at(6.8f, 1.4f, SketchMark.Line(Path().apply {
+            moveTo(day(4) + 3f, 74f); quadraticTo((day(4) + day(6)) / 2f, 108f, day(6) - 3f, 96f)
+        }, Ink.GUIDE, style = Stroked.DOTTED))
+        at(7.2f, 1.1f, SketchMark.Dot(day(6), 36f, 2f, Ink.ACCENT, halo = true))
+        at(7.4f, 1.6f, label("a day clear of legs", (day(4) + day(6)) / 2f - 16f, 104f, Anchor.CENTER, strong = true))
     }
 }

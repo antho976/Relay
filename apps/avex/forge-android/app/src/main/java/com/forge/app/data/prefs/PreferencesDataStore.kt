@@ -307,8 +307,19 @@ object PreferenceKeys {
     val PROGRAM_EXPERIENCE = stringPreferencesKey("program_experience")
     /** Flagged problem areas (ProblemArea codes) — generation avoids movements that stress them. */
     val PROBLEM_AREAS = stringSetPreferencesKey("problem_areas")
-    /** Priority muscles (MuscleGroup codes) — granular emphasis, extra volume. */
+    /**
+     * Focused muscles (MuscleGroup codes): [com.forge.app.program.BodyPartLevel.FOCUS]. Stored under
+     * the name it had as "priority muscles", so a preference set before 2026-11-18 carries over.
+     */
     val PRIORITY_MUSCLES = stringSetPreferencesKey("priority_muscles")
+    /** Muscles left out of the plan: [com.forge.app.program.BodyPartLevel.SKIP]. */
+    val MUSCLE_SKIP = stringSetPreferencesKey("muscle_skip")
+    /** Muscles held at one light slot a week: [com.forge.app.program.BodyPartLevel.LIGHT]. */
+    val MUSCLE_LIGHT = stringSetPreferencesKey("muscle_light")
+    /** The day (`LocalDate.toEpochDay`) the skips and lights end and those muscles come back. Absent = for good. */
+    val BODY_PARTS_UNTIL = longPreferencesKey("body_parts_until")
+    /** The day (`LocalDate.toEpochDay`) the current focus ends and the plan returns to normal. */
+    val FOCUS_UNTIL = longPreferencesKey("focus_until")
     /** Pinned exercise library ids — kept across regenerations when their muscle is trained. */
     val PINNED_EXERCISES = stringSetPreferencesKey("pinned_exercises")
     /** Bookmarked exercise ids — surfaced first in the exercise browser's Favorites filter. */
@@ -356,6 +367,12 @@ object PreferenceKeys {
     /** Weekly cardio goal in minutes. 0 = no goal. */
     val CARDIO_WEEKLY_TARGET_MIN = intPreferencesKey("cardio_weekly_target_min")
 
+    /**
+     * Whether the week plan lays cardio days and finishers around the lifting days. Absent = on:
+     * with no goal set it plans toward the 150 minute health floor.
+     */
+    val CARDIO_IN_PLAN = booleanPreferencesKey("cardio_in_plan")
+
     /** Set true once the user dismisses the "connect a watch/ring" hint on the cardio screen, so it
      *  never reappears. Lives in DataStore so it survives a DB wipe/restore. */
     val CARDIO_WEARABLE_HINT_DISMISSED = booleanPreferencesKey("cardio_wearable_hint_dismissed")
@@ -388,6 +405,12 @@ object PreferenceKeys {
 
     /** Coach mode (auto-coach Phase 4): "suggest" (default) | "auto" (earned auto-apply). */
     val COACH_MODE = stringPreferencesKey("coach_mode")
+
+    /**
+     * When the live session asks how hard a set was: "last" (default, once per exercise) | "every" |
+     * "off". See [com.forge.app.domain.adapt.EffortPromptMode].
+     */
+    val EFFORT_PROMPT = stringPreferencesKey("effort_prompt")
 
     /** Whether the Coach page shows its readings (signals, block, inputs, learned). Off = calls only. */
     val COACH_ADVANCED = booleanPreferencesKey("coach_advanced")
@@ -454,6 +477,7 @@ object PreferenceKeys {
         LAST_SEEN_COACH_WEEK_ID, LAST_SEEN_RANK_TIER_ORDINAL,
         // What the current program was generated from, and the engine state riding on it.
         DAYS_PER_WEEK, SESSION_MINUTES, PROGRAM_EMPHASIS, PROGRAM_EXPERIENCE, PROBLEM_AREAS, PRIORITY_MUSCLES,
+        MUSCLE_SKIP, MUSCLE_LIGHT, BODY_PARTS_UNTIL, FOCUS_UNTIL,
         AVAILABLE_EQUIPMENT, FROZEN_EXERCISE_IDS, MAX_DB_WEIGHT_LB, SCHEDULE_MODE, SCHEDULE_WEEKLY, SCHEDULE_HISTORY,
         PINNED_EXERCISES, FAVORITE_EXERCISES, LIKED_EXERCISES, DISLIKED_EXERCISES,
         DELOAD_WEEK_START_MS, BLOCK_DELOAD_OWED, PROGRAM_GENERATION_INTENT, PROGRAM_GENERATION_SEED, ROTATION_COUNTER,

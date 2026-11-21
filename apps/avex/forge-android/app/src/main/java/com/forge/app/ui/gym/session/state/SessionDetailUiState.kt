@@ -34,8 +34,13 @@ data class SetDetail(
     /** Advanced set type (null = normal | "warmup" | "drop" | …) — drives the WARM/DROP badges. */
     val setType: String?,
     /** Held time in seconds for a timed-hold set (GYMAP-51); null = a normal rep set. */
-    val durationSeconds: Int? = null
+    val durationSeconds: Int? = null,
+    /** The logged set's row id, which is what a late effort rating is written to. 0 in fake data. */
+    val id: Long = 0
 ) {
+    /** A working set, the kind effort is read from: not a warm-up row. */
+    val isWorking: Boolean get() = setType != com.forge.app.domain.adapt.EffortModel.SET_TYPE_WARMUP
+
     /** Zero for a timed hold: its [reps] is a duration, not a count. */
     val volumeLb: Double get() =
         com.forge.app.domain.volume.VolumeCalculator.setVolumeLb(weightLb, reps, durationSeconds)

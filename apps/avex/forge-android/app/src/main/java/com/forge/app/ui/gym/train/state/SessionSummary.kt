@@ -21,10 +21,11 @@ data class SessionSummary(
     val highlights: List<ExerciseHighlight>,
     /** Working sets per muscle group THIS session — tints the recap's body map. */
     val setsByMuscle: Map<MuscleGroup, Int> = emptyMap(),
-    /** Logged sets carrying an RPE value — the coach's per-set effort signal (data-capture nudge). */
-    val setsWithRpe: Int = 0,
-    /** Logged (non-skipped) exercises carrying a "how hard it felt" rating (data-capture nudge). */
-    val exercisesRated: Int = 0,
+    /**
+     * The exercises nothing says the effort of, each with the set that should carry it: the finish
+     * summary asks about them in one place, so a rating forgotten mid-session is still one tap away.
+     */
+    val unrated: List<UnratedLift> = emptyList(),
     /** The coach's one-line read of this session (#19), or null for an empty session. */
     val coachOpinion: String? = null,
     /** Journal text already captured mid-session (top-bar note) — flows straight through on COMPLETE. */
@@ -32,6 +33,9 @@ data class SessionSummary(
     /** Lifetime PR count after this session — drives the PR-milestone notification. */
     val lifetimePrCount: Int = 0
 )
+
+/** An exercise the session logged without any effort signal, and the set ([setId]) to rate for it. */
+data class UnratedLift(val exerciseName: String, val setId: Long)
 
 data class ExerciseHighlight(
     val exerciseName: String,

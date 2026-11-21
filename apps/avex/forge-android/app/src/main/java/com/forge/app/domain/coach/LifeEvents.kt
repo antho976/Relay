@@ -41,6 +41,28 @@ object LifeEvents {
     /** How much the first sessions back hold off — enough to matter, not enough to insult. */
     const val RAMP_SCALE = 0.9
 
+    /**
+     * A single lift left alone this long comes back eased, even when the rest of training never
+     * stopped: a muscle that was skipped for a month, or a movement that rotated out and back in.
+     * The layoff ramp only sees a gap in ALL training, so without this a returning lift opened on
+     * the weight it was left at.
+     */
+    const val STALE_LIFT_DAYS = 21
+
+    /** The scale for a lift last trained at [lastBoutStartedAtMs]: [RAMP_SCALE] once it is stale. */
+    fun staleLiftScale(lastBoutStartedAtMs: Long?, nowMs: Long): Double =
+        if (staleLiftDays(lastBoutStartedAtMs, nowMs) != null) RAMP_SCALE else 1.0
+
+    /** Why a stale lift is eased, in the coach's words; null when it is not stale. */
+    fun staleLiftNote(lastBoutStartedAtMs: Long?, nowMs: Long): String? =
+        staleLiftDays(lastBoutStartedAtMs, nowMs)?.let { "first time on this lift in ${gapPhrase(it)}" }
+
+    private fun staleLiftDays(lastBoutStartedAtMs: Long?, nowMs: Long): Int? {
+        val last = lastBoutStartedAtMs ?: return null
+        val days = ((nowMs - last) / (24L * 60 * 60 * 1000)).toInt()
+        return days.takeIf { it >= STALE_LIFT_DAYS }
+    }
+
     /** A sick flag speaks for this long; illness doesn't end the moment you stop logging it. */
     const val SICK_WINDOW_DAYS = 3
 

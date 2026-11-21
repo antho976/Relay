@@ -33,7 +33,6 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.timer.RestTimerState
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.program.ExerciseUnit
@@ -90,7 +89,6 @@ fun ExerciseCard(
     onDeleteSet: (setId: Long) -> Unit,
     onEditSet: (setId: Long, weightText: String, reps: Int) -> Unit,
     onLogSameAsLast: (setId: Long) -> Unit,
-    onRate: (EffortRating) -> Unit,
     onNoteChange: (String) -> Unit,
     onToggleSkipped: () -> Unit,
     onOpenSwapPicker: () -> Unit,
@@ -101,6 +99,10 @@ fun ExerciseCard(
     onPinNote: (String) -> Unit = {},
     onToggleSetDifficultyTag: (setId: Long, currentTag: String?) -> Unit = { _, _ -> },
     onSetRpe: (setId: Long, rpe: Double?) -> Unit = { _, _ -> },
+    /** Hands-off coach mode: the next set opens on the coach's target, not last session's weight. */
+    coachFillsTargets: Boolean = false,
+    /** When the card asks how hard the set just logged was (the reps-left row). */
+    effortPrompt: com.forge.app.domain.adapt.EffortPromptMode = com.forge.app.domain.adapt.EffortPromptMode.LAST_SET,
     /** The set logged moments ago that can still be taken back; its row shows "undo". */
     undoableSetId: Long? = null,
     onUndoSet: () -> Unit = {},
@@ -383,6 +385,17 @@ fun ExerciseCard(
                     InlineRestTimerSlot(restTimerState, onTap = onOpenRestTimerSetter, onSkip = onSkipRest)
                 }
 
+                // The effort question, right where the rest starts: one tap on how many reps were
+                // left, about the set just logged. Asked once it is the set the coach reads (or after
+                // every set, or never: the Session setting), and gone as soon as it is answered.
+                val askAbout = remember(state.loggedSets, state.targetSets, effortPrompt) {
+                    com.forge.app.domain.adapt.EffortPrompt.setToAsk(state.loggedSets, state.targetSets, effortPrompt)
+                }
+                if (askAbout != null && !state.skipped) {
+                    Spacer(Modifier.height(10.dp))
+                    RepsLeftRow(rpe = null, onPick = { rpe -> onSetRpe(askAbout.id, rpe) })
+                }
+
                 // Input row for the next set
                 if (!state.skipped) {
                     val targetsMet = state.loggedSets.size >= state.targetSets
@@ -403,6 +416,7 @@ fun ExerciseCard(
                         todayLastSet = lastLogged,
                         fill = fill,
                         rampSeedLb = state.suggestedTargetLb.takeIf { easingBack },
+                        coachSeedLb = state.suggestedTargetLb.takeIf { coachFillsTargets },
                         // A lighter day (low readiness, a reset) asks for less than last session too,
                         // so its sets read "last", not "beat": "try 32.5 lb" over "beat 33.2 × 10"
                         // gave two opposite instructions for the same set.
@@ -431,7 +445,6 @@ fun ExerciseCard(
                     state = state,
                     onNoteChange = onNoteChange,
                     onPinNote = onPinNote,
-                    onRate = onRate,
                     onOpenSwapPicker = onOpenSwapPicker,
                     onToggleSkipped = onToggleSkipped
                 )

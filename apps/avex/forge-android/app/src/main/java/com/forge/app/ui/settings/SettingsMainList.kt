@@ -403,6 +403,7 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState, split: String =
         gearReading(s).let { gear -> if (s.freestyleMode) "Freestyle · $gear" else "${planLine(split, s.daysPerWeek)} · $gear" }
     SettingsPage.Coach -> when {
         !s.coachEnabled -> "Off"
+        s.coachMode == com.forge.app.domain.coach.CoachMode.HANDS_OFF -> "On · hands-off"
         s.coachMode == "auto" -> "On · earning auto-apply"
         else -> "On · asks before changing"
     }

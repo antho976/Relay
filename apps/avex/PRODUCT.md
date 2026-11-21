@@ -37,14 +37,20 @@ check later whether it worked.
 
 ## Positioning
 
-**The coach proposes, the user approves, and both halves are on the record.** The weekly pass
-never silently rewrites the program: every change is a proposal carrying its own evidence, apply
-and skip are one tap, undo stays available, and a two-week watch window afterwards records
-whether the change actually worked. Autopilot is earned per change type by that type's own track
-record, not granted by a setting.
+**The coach shows its work, and anything it does can be undone.** The weekly pass never silently
+rewrites the program: every change carries its own evidence, undo stays available, and a two-week
+watch window afterwards records whether the change actually worked.
 
-A neighboring app can copy automatic progression. It cannot truthfully copy the consent trail:
-the proposal, its evidence, its outcome, and the week-by-week ledger of what the coach got right.
+How much the user approves first is theirs to set (Settings → Coach, asked once in onboarding):
+
+- **Suggest** (the default): every change is a proposal, and apply and skip are one tap.
+- **Earn auto-apply**: a change type applies itself once its own track record has earned it.
+- **Hands-off** (added 2026-11-18): every change applies itself and Monday's brief is a report of
+  what changed. This is for the lifter who wants the app to do the thinking and leave them the
+  training. It gives up approving first; it keeps the evidence, the watch window and undo.
+
+A neighboring app can copy automatic progression. It cannot truthfully copy the trail behind it:
+the change, its evidence, its outcome, and the week-by-week ledger of what the coach got right.
 
 Second, it is genuinely offline: no account, no servers, and the app holds no internet
 permission at all. Every reading the coach uses is derived on-device from the user's own logs
@@ -84,7 +90,8 @@ plus optional Health Connect data.
 
 ### Must survive the Coach redesign (user-confirmed, 2026-08-20)
 
-1. Apply / skip / undo on every proposed change.
+1. Apply / skip / undo on every proposed change (in hands-off mode, where changes apply
+   themselves, undo on every applied one).
 2. The evidence behind a call — the trend or reading the coach decided from, visible before the
    user approves. Removing it would make the coach a black box.
 3. The week-by-week record of what the coach did and whether it worked.
@@ -118,8 +125,9 @@ plus optional Health Connect data.
 
 ## Product Principles
 
-1. **The coach proposes, the user disposes.** Nothing changes the program without consent, and
-   consent is always reversible.
+1. **The coach shows its work, the user disposes.** Nothing changes the program out of sight: a
+   change is either approved first or, in hands-off mode, reported with its reason, and either way
+   it is reversible.
 2. **Show the reading, not just the verdict.** A conclusion travels with the number it came
    from; below a gate, show progress toward the gate rather than "not enough data".
 3. **Serve both ends of the ladder from one screen.** Depth grows with the user's history; a

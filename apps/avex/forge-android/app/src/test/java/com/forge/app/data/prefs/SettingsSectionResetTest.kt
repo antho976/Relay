@@ -121,14 +121,106 @@ class SettingsSectionResetTest {
 
     /** The on/off decision is made against the persisted set, so back-to-back taps alternate. */
     @Test
-    fun problemAreaAndPriorityTogglesFlipAgainstPersistedState() = runTest {
+    fun problemAreaTogglesFlipAgainstPersistedState() = runTest {
         repo.toggleProblemArea("knees")
         repo.toggleProblemArea("knees")
         assertTrue(repo.problemAreas.first().isEmpty())
+    }
 
-        repo.togglePriorityMuscle("chest")
-        assertEquals(setOf("chest"), repo.priorityMuscles.first())
-        repo.togglePriorityMuscle("chest")
+    // ── Body parts: Skip / Light / Normal / Focus ─────────────────────────────
+
+    private val today = 20_000L
+    private val skip = com.forge.app.program.BodyPartLevel.SKIP
+    private val light = com.forge.app.program.BodyPartLevel.LIGHT
+    private val normal = com.forge.app.program.BodyPartLevel.NORMAL
+    private val focus = com.forge.app.program.BodyPartLevel.FOCUS
+
+    /** The DataStore outlives a test in this class, so each of these starts from every muscle at Normal. */
+    private suspend fun allNormal() {
+        com.forge.app.program.MuscleGroup.entries.forEach { repo.setBodyPartLevel(it.code, normal, today) }
+        repo.setBodyPartsUntil(null)
+    }
+
+    /** A muscle is in exactly one of the three sets, whichever level it was last given. */
+    @Test
+    fun aMuscleHoldsOneLevelAtATime() = runTest {
+        allNormal()
+        repo.setBodyPartLevel("quads", skip, today)
+        assertEquals(setOf("quads"), repo.skipMuscles.first())
+        repo.setBodyPartLevel("quads", light, today)
+        assertTrue(repo.skipMuscles.first().isEmpty())
+        assertEquals(setOf("quads"), repo.lightMuscles.first())
+        repo.setBodyPartLevel("quads", focus, today)
+        assertTrue(repo.lightMuscles.first().isEmpty())
+        assertEquals(setOf("quads"), repo.priorityMuscles.first())
+        repo.setBodyPartLevel("quads", normal, today)
         assertTrue(repo.priorityMuscles.first().isEmpty())
+    }
+
+    /** Two focused muscles at most: the third is refused and the first two are left alone. */
+    @Test
+    fun aThirdFocusIsRefused() = runTest {
+        allNormal()
+        assertTrue(repo.setBodyPartLevel("chest", focus, today))
+        assertTrue(repo.setBodyPartLevel("back", focus, today))
+        assertEquals(false, repo.setBodyPartLevel("biceps", focus, today))
+        assertEquals(setOf("chest", "back"), repo.priorityMuscles.first())
+        // Setting an already-focused muscle to Focus again is not a third.
+        assertTrue(repo.setBodyPartLevel("chest", focus, today))
+    }
+
+    /** The first focus starts a six-week clock; a second joins it; clearing the last stops it. */
+    @Test
+    fun focusRunsSixWeeksFromTheFirstOne() = runTest {
+        allNormal()
+        repo.setBodyPartLevel("chest", focus, today)
+        assertEquals(today + 42, repo.focusUntilEpochDay.first())
+        repo.setBodyPartLevel("back", focus, today + 10)
+        assertEquals(today + 42, repo.focusUntilEpochDay.first())
+        repo.setBodyPartLevel("chest", normal, today + 10)
+        repo.setBodyPartLevel("back", normal, today + 10)
+        assertEquals(null, repo.focusUntilEpochDay.first())
+    }
+
+    /** A timed skip ends on its day and takes the lights with it; a focus ends on its own clock. */
+    @Test
+    fun timedLevelsEndOnTheirDay() = runTest {
+        allNormal()
+        repo.setBodyPartLevel("quads", skip, today)
+        repo.setBodyPartLevel("calves", light, today)
+        repo.setBodyPartLevel("chest", focus, today)
+        repo.setBodyPartsUntil(today + 14)
+
+        assertEquals(false, repo.endTimedBodyParts(today + 13))
+        assertEquals(setOf("quads"), repo.skipMuscles.first())
+
+        assertTrue(repo.endTimedBodyParts(today + 14))
+        assertTrue(repo.skipMuscles.first().isEmpty())
+        assertTrue(repo.lightMuscles.first().isEmpty())
+        assertEquals(null, repo.bodyPartsUntilEpochDay.first())
+        // The focus has four weeks left and is untouched.
+        assertEquals(setOf("chest"), repo.priorityMuscles.first())
+
+        assertTrue(repo.endTimedBodyParts(today + 42))
+        assertTrue(repo.priorityMuscles.first().isEmpty())
+    }
+
+    /** With no end date a skip lasts until it is changed, however much time passes. */
+    @Test
+    fun anUntimedSkipNeverEndsByItself() = runTest {
+        allNormal()
+        repo.setBodyPartLevel("quads", skip, today)
+        assertEquals(false, repo.endTimedBodyParts(today + 10_000))
+        assertEquals(setOf("quads"), repo.skipMuscles.first())
+    }
+
+    /** Bringing the last skipped muscle back clears the end date with it. */
+    @Test
+    fun theEndDateGoesWhenNothingIsHeld() = runTest {
+        allNormal()
+        repo.setBodyPartLevel("quads", skip, today)
+        repo.setBodyPartsUntil(today + 14)
+        repo.setBodyPartLevel("quads", normal, today)
+        assertEquals(null, repo.bodyPartsUntilEpochDay.first())
     }
 }

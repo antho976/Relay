@@ -24,7 +24,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -37,7 +36,6 @@ import com.forge.app.program.equipmentGroups
 import com.forge.app.program.equipmentPresets
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.OnboardingType
-import com.forge.app.ui.theme.OpenIcons
 
 /**
  * The gym half of the generated path: pick a setup, fine-tune the gear, flag sore spots, then the
@@ -63,14 +61,6 @@ internal fun <T> TileGrid(
     }
 }
 
-/** The house glyph for a setup tile, from the redesign's own icon set. */
-private fun presetIcon(id: String): ImageVector = when (id) {
-    "everything" -> OpenIcons.Store
-    "basic-gym", "dumbbells" -> OpenIcons.Dumbbell
-    "home-big", "home-small", "developer" -> OpenIcons.Home
-    else -> OpenIcons.User
-}
-
 /** GYMAP-20 step 1 of 2: pick the closest gym preset. */
 @Composable
 internal fun StepGymPresets(
@@ -87,7 +77,7 @@ internal fun StepGymPresets(
             val picked = selected == preset.equipment && frozenIds == preset.frozenIds
             OnbTile(selected = picked, onClick = { onSelectPreset(preset) }, modifier = modifier) {
                 Icon(
-                    presetIcon(preset.id), contentDescription = null,
+                    OnboardingIcons.forPreset(preset.id), contentDescription = null,
                     tint = if (picked) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(22.dp)
                 )

@@ -272,4 +272,24 @@ class CardioOpenScreenshotTest {
             )
         }
     }
+
+    /**
+     * The sheet as Home's cardio day opens it: the prescribed minutes, effort and activity already
+     * in. The duration is the reason this exists. Until 2026-11-18 a duration with a number in it
+     * drew as a blank beside "min" (the figure was laid out past the field's right edge), and no
+     * golden held a filled one, so only the empty "0" was ever pinned.
+     */
+    @Test
+    fun logSheetPrescribed() = shoot("cardio-log-prescribed") {
+        SheetFrame {
+            CardioLogSheet(
+                onDismiss = {}, onSave = { _, _, _, _, _, _, _, _, _, _, _, _, _ -> },
+                useMiles = true, lastUsedType = "run", recentTypes = listOf("run", "walk", "cycle"),
+                editing = com.forge.app.data.db.entities.CardioEntry(
+                    id = 0, date = at(today, 18, 30), type = "walk", durationMin = 35, effort = "easy"
+                ),
+                now = { at(today, 18, 30) }
+            )
+        }
+    }
 }

@@ -269,6 +269,15 @@ class DayViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepo.restIsolationSeconds.collect { restBaseIsolation = it }
         }
+        viewModelScope.launch {
+            settingsRepo.coachMode.combine(settingsRepo.coachEnabled) { mode, on ->
+                on && com.forge.app.domain.coach.CoachMode.fillsTargets(mode)
+            }.collect { fills -> _state.update { it.copy(coachFillsTargets = fills) } }
+        }
+        // Live too, so changing when the effort question is asked applies to the session in progress.
+        viewModelScope.launch {
+            settingsRepo.effortPrompt.collect { mode -> _state.update { it.copy(effortPrompt = mode) } }
+        }
         // Learn the user's realized-rest factors once per screen — calibrated against the user's CURRENT
         // rest bases so the learned realized÷base factor matches the base the timer prescribes from
         // (a non-default base would otherwise mis-scale every prescription). Pure/synchronous after.
@@ -331,7 +340,7 @@ class DayViewModel @Inject constructor(
         when (event) {
             is DayUiEvent.ToggleExpanded, is DayUiEvent.LogSet, is DayUiEvent.LogSameAsLast,
             is DayUiEvent.DeleteSet, is DayUiEvent.RestoreDeletedSet, is DayUiEvent.ForgetDeletedSet,
-            is DayUiEvent.EditSet, is DayUiEvent.RateExercise,
+            is DayUiEvent.EditSet,
             is DayUiEvent.UpdateNote, is DayUiEvent.ToggleSkipped, is DayUiEvent.OpenGoalSetter,
             is DayUiEvent.SetGoal, is DayUiEvent.ClearGoal, is DayUiEvent.DismissGoalSetter,
             is DayUiEvent.SetExerciseUnit, is DayUiEvent.SetRestTimerOverride,

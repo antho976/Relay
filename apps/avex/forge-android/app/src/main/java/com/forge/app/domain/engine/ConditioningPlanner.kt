@@ -90,11 +90,12 @@ object ConditioningPlanner {
                 blockPhase != BlockPhase.DELOAD &&
                 !rampCapped &&
                 liftingDaysAhead <= 3
-            if (isInterval) intervalSession(profile, weekdayMode) else steadySession(profile, perSession, blockPhase)
+            if (isInterval) intervals(profile, weekdayMode) else steady(profile, perSession, blockPhase)
         }
     }
 
-    private fun steadySession(
+    /** An easy steady session of [minutes]: zone 2, the work the week is mostly made of. */
+    fun steady(
         profile: ConditioningProfile,
         minutes: Int,
         phase: BlockPhase?
@@ -116,7 +117,7 @@ object ConditioningPlanner {
      * Intervals always carry a warm-up and a cool-down. A prescription of "8 × 1 minute hard" with
      * no ramp in or out is an incomplete instruction, and the one most likely to hurt someone.
      */
-    private fun intervalSession(profile: ConditioningProfile, weekdayMode: Boolean) = Prescription(
+    fun intervals(profile: ConditioningProfile, weekdayMode: Boolean) = Prescription(
         minutes = 16,
         zone = 4,
         zoneBand = profile.bandFor(4),
@@ -133,6 +134,24 @@ object ConditioningPlanner {
         intervals = 8,
         lessonId = "engine.intervals"
     )
+
+    /**
+     * A short easy finisher tacked onto a lifting day, for the minutes the free days could not hold.
+     * Never planned after a lower-body day, which is the caller's rule ([com.forge.app.domain.schedule.WeekPlan]).
+     */
+    fun finisher(profile: ConditioningProfile, minutes: Int) = Prescription(
+        minutes = minutes,
+        zone = 2,
+        zoneBand = profile.bandFor(2),
+        effortWord = "easy",
+        structure = Structure.STEADY,
+        reason = "A short easy finisher: it adds to your week without costing the session you just did.",
+        serves = "your aerobic base",
+        lessonId = "engine.what_zone2_is"
+    )
+
+    /** The week's cardio target under [phase]: a deload week asks for half. */
+    fun weekTarget(targetMinutes: Int, phase: BlockPhase?): Int = deloadAdjusted(targetMinutes, phase)
 
     /** A deload week halves conditioning too: the whole week is meant to ask less. */
     private fun deloadAdjusted(target: Int, phase: BlockPhase?): Int =

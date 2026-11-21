@@ -97,6 +97,17 @@ class AcademyRepository @Inject constructor(
         if (profile.volumeCaps.isNotEmpty()) unlock(LESSON_VOLUME)
         if (ProgressionAdvisor.cutSuppressedStalls(snapshot).isNotEmpty()) unlock(LESSON_PROTEIN)
 
+        // The stand-alone Training lessons: each is flagged when its subject actually arrives.
+        val bouts = snapshot.exerciseHistory.values.flatten()
+        if (bouts.any { it.swappedName != null || it.performedExerciseId != null }) unlock(LESSON_SWAPS)
+        if (ProgressionAdvisor.evaluate(snapshot).isNotEmpty()) unlock(LESSON_PLATEAUS)
+        val life = runCatching { adaptationRepository.lifeEvents(snapshot.nowMs, snapshot.sessions) }.getOrNull()
+        if (life?.layoff?.let { it.away || it.returning } == true) unlock(LESSON_COMING_BACK)
+        if (com.forge.app.domain.coach.WeightPhase.of(snapshot.bodyweight) == com.forge.app.domain.coach.WeightPhase.CUT) {
+            unlock(LESSON_LOSING_WEIGHT)
+        }
+        if (!snapshot.prefs.bodyParts.isDefault) unlock(LESSON_BODY_PARTS)
+
         // Your coach: once it has enough sessions to speak, or has acted under its own authority.
         if (snapshot.sessions.size >= 3) {
             unlock(LESSON_HOW_IT_DECIDES)
@@ -143,5 +154,11 @@ class AcademyRepository @Inject constructor(
         const val LESSON_BLOCKS = "coach.blocks"
         const val LESSON_ZONE2 = "cardio.zone2"
         const val LESSON_INTERVALS = "cardio.intervals"
+        const val LESSON_YOUR_WEEK = "cardio.your_week"
+        const val LESSON_SWAPS = "training.swaps"
+        const val LESSON_PLATEAUS = "training.plateaus"
+        const val LESSON_COMING_BACK = "training.coming_back"
+        const val LESSON_LOSING_WEIGHT = "training.losing_weight"
+        const val LESSON_BODY_PARTS = "training.body_parts"
     }
 }

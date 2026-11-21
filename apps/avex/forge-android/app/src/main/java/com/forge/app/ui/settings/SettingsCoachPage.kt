@@ -59,8 +59,13 @@ internal fun CoachSettingsPage(
             // type builds its accepted streak. The count waits for loadCoachData so it never
             // flashes a false zero.
             val earned = trust.count { it.earned }
-            SettingsGroup("Mode", rowGap = KitPickGap) {
-                SettingsRadioRow("Suggest", state.coachMode != "auto", "Every change waits for your tap") {
+            SettingsGroup(
+                "Mode",
+                footer = "Whichever you pick, every change keeps its reason, a two-week check on whether it worked, and Undo.",
+                rowGap = KitPickGap
+            ) {
+                val handsOff = state.coachMode == com.forge.app.domain.coach.CoachMode.HANDS_OFF
+                SettingsRadioRow("Suggest", state.coachMode != "auto" && !handsOff, "Every change waits for your tap") {
                     vm.setCoachMode("suggest")
                 }
                 SettingsRadioRow(
@@ -69,6 +74,11 @@ internal fun CoachSettingsPage(
                     "A change type applies itself once you've accepted it enough times in a row" +
                         if (trust.isNotEmpty()) ". $earned of ${trust.size} earned so far." else ""
                 ) { vm.setCoachMode("auto") }
+                SettingsRadioRow(
+                    "Hands-off",
+                    handsOff,
+                    "Changes apply themselves and Monday reports what changed. In a session the coach's weight is already filled in"
+                ) { vm.setCoachMode(com.forge.app.domain.coach.CoachMode.HANDS_OFF) }
             }
 
             // How much of the Coach page is drawn. Nothing about the coach's behaviour changes.

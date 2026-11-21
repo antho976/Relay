@@ -88,17 +88,29 @@ data class SettingsUiState(
     val rotationCadence: String = "never",
     val rotationEveryN: Int = 4,
     val cardioWeeklyTargetMin: Int = 0,
+    /** Whether the week plan lays cardio days around the lifting days. */
+    val cardioInPlan: Boolean = true,
     val userGoal: String = "build_muscle",
     /** User's sex ("male" | "female" | "") — selects the bodyweight-relative strength bands. */
     val userSex: String = "",
     val experience: String = "intermediate",
     val problemAreas: Set<String> = emptySet(),
+    /** Focused muscle codes (the old "priority muscles"). */
     val priorityMuscles: Set<String> = emptySet(),
+    /** Muscle codes left out of the plan, and held at one light slot a week. */
+    val skipMuscles: Set<String> = emptySet(),
+    val lightMuscles: Set<String> = emptySet(),
+    /** The day (`LocalDate.toEpochDay`) the skips and lights end; null = until changed. */
+    val bodyPartsUntilEpochDay: Long? = null,
+    /** The day the current focus ends; null with nothing focused. */
+    val focusUntilEpochDay: Long? = null,
     val pinnedExercises: Set<String> = emptySet(),
     /** Coarse one-tap volume emphasis: "balanced" | "upper" | "legs" | "arms-shoulders". */
     val programEmphasis: String = "balanced",
     /** Coach mode (auto-coach Phase 4): "suggest" | "auto" (earned auto-apply). */
     val coachMode: String = "suggest",
+    /** When the live session asks how hard a set was. */
+    val effortPrompt: com.forge.app.domain.adapt.EffortPromptMode = com.forge.app.domain.adapt.EffortPromptMode.LAST_SET,
     /** Advanced tracking: the Coach page shows its readings, not just its calls. */
     val coachAdvanced: Boolean = false,
     /** "Go with the flow": no fixed plan; the home leads with freestyle logging instead of day cards. */
@@ -202,6 +214,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { withContext(NonCancellable) { block() } }
 
     fun setCoachMode(mode: String) = write { settingsRepo.setCoachMode(mode) }
+    fun setEffortPrompt(mode: com.forge.app.domain.adapt.EffortPromptMode) = write { settingsRepo.setEffortPrompt(mode) }
     fun setCoachAdvanced(v: Boolean) = write {
         settingsRepo.setCoachAdvanced(v)
         // Turning it on retires the Coach page's offer for good, as from the pop-up itself.
@@ -210,6 +223,12 @@ class SettingsViewModel @Inject constructor(
 
     // ─── Day-aware scheduling (weekly plan vs sequence) ───────────────────────
     // Seeded from the last snapshot like [state], so the schedule does not open on its defaults.
+    /**
+     * Bumps whenever the plan is rebuilt, so the page's "your plan" line follows a rebuild that keeps
+     * the day count but changes the split (skipping a region, a different equipment set).
+     */
+    val programRevision: StateFlow<Long> = programRepository.revision
+
     val scheduleMode: StateFlow<String> = settingsRepo.scheduleMode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
             settingsRepo.lastPreferences?.let { settingsRepo.values(it).scheduleMode }
@@ -343,14 +362,20 @@ class SettingsViewModel @Inject constructor(
             rotationCadence = v.rotationCadence,
             rotationEveryN = v.rotationEveryN,
             cardioWeeklyTargetMin = v.cardioWeeklyTargetMin,
+            cardioInPlan = v.cardioInPlan,
             userGoal = v.userGoal.ifBlank { "build_muscle" },
             userSex = v.userSex,
             experience = v.programExperience,
             problemAreas = v.problemAreas,
             priorityMuscles = v.priorityMuscles,
+            skipMuscles = v.skipMuscles,
+            lightMuscles = v.lightMuscles,
+            bodyPartsUntilEpochDay = v.bodyPartsUntilEpochDay,
+            focusUntilEpochDay = v.focusUntilEpochDay,
             pinnedExercises = v.pinnedExercises,
             programEmphasis = v.programEmphasis,
             coachMode = v.coachMode,
+            effortPrompt = v.effortPrompt,
             coachAdvanced = v.coachAdvanced,
             freestyleMode = v.freestyleMode,
             coachEnabled = v.coachEnabled
@@ -450,6 +475,7 @@ class SettingsViewModel @Inject constructor(
     fun setCoachEnabled(v: Boolean) = write { settingsRepo.setCoachEnabled(v) }
     /** Weekly cardio-minutes goal for the cardio tab (no effect on the lifting plan). */
     fun setCardioWeeklyTargetMin(min: Int) = write { settingsRepo.setCardioWeeklyTargetMin(min) }
+    fun setCardioInPlan(v: Boolean) = write { settingsRepo.setCardioInPlan(v) }
     /** All generation inputs read from prefs, through the one shared builder: a copy here left out
      *  personal caps, so Settings generated a different program than rotation and deload (audit
      *  2026-09-26, 08). */
@@ -520,7 +546,28 @@ class SettingsViewModel @Inject constructor(
     fun setExperience(level: String) = write { settingsRepo.setProgramExperience(level) }
     fun setProgramEmphasis(v: String) = write { settingsRepo.setProgramEmphasis(v) }
     fun toggleProblemArea(code: String) = write { settingsRepo.toggleProblemArea(code) }
-    fun togglePriorityMuscle(code: String) = write { settingsRepo.togglePriorityMuscle(code) }
+
+    private fun todayEpochDay(): Long = java.time.LocalDate.now().toEpochDay()
+
+    /** Set one muscle to Skip, Light, Normal or Focus. A third focus is refused, with a line saying why. */
+    fun setBodyPartLevel(code: String, level: com.forge.app.program.BodyPartLevel) = write {
+        if (!settingsRepo.setBodyPartLevel(code, level, todayEpochDay())) {
+            snackbar.show("Two muscles can be focused at once. Set one back to Normal first.")
+        }
+    }
+
+    /** The region shortcuts: skip every muscle in [skip], and bring back any other skipped one. */
+    fun setSkippedRegion(skip: Set<com.forge.app.program.MuscleGroup>) = write {
+        val today = todayEpochDay()
+        val current = com.forge.app.program.BodyParts.muscles(settingsRepo.skipMuscles.first())
+        settingsRepo.setBodyPartLevels((current - skip).map { it.code }, com.forge.app.program.BodyPartLevel.NORMAL, today)
+        settingsRepo.setBodyPartLevels(skip.map { it.code }, com.forge.app.program.BodyPartLevel.SKIP, today)
+    }
+
+    /** How long the skips and lights last: [weeks] from today, or null for "until I change it". */
+    fun setBodyPartsWeeks(weeks: Int?) = write {
+        settingsRepo.setBodyPartsUntil(weeks?.let { todayEpochDay() + it * 7L })
+    }
     fun togglePin(libId: String) = write {
         settingsRepo.togglePinned(libId, libId !in settingsRepo.pinnedExercises.first())
     }

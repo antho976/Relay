@@ -53,6 +53,8 @@ import com.forge.app.ui.gym.train.state.SessionSummary
 @Composable
 fun SessionSummarySheet(
     summary: SessionSummary,
+    /** Rate one of the summary's unrated lifts: the RPE for that set. */
+    onRateSet: (setId: Long, rpe: Double) -> Unit = { _, _ -> },
     onDismiss: (mood: Mood?, tags: List<String>, journal: String) -> Unit
 ) {
     // Block swipe-to-dismiss: the only way out is the COMPLETE button, otherwise the sheet can be
@@ -160,13 +162,9 @@ fun SessionSummarySheet(
                 // Coach — what he read from this session, and the effort data he'd like more of.
                 CoachReadSection(
                     coachOpinion = summary.coachOpinion,
-                    setsWithRpe = summary.setsWithRpe,
-                    totalSets = summary.setCount,
-                    exercisesRated = summary.exercisesRated,
-                    exercisesLogged = summary.exercisesLogged,
-                    onBg = onBg,
-                    muted = muted,
-                    outline = outline
+                    unrated = summary.unrated,
+                    onRateSet = onRateSet,
+                    onBg = onBg
                 )
 
                 // Complete button — only way to dismiss. Tags/mood are gone; the mid-session journal

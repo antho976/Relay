@@ -168,7 +168,9 @@ class OnboardingViewModel @Inject constructor(
         /** Minutes per session; null / ≤ 0 = no ceiling. Generated path only, like the day count. */
         sessionMinutes: Int? = null,
         /** Weekdays to pin the generated days to (0 = Monday); null = "whenever I can" (sequence). */
-        trainingWeekdays: Set<Int>? = null
+        trainingWeekdays: Set<Int>? = null,
+        /** The coach applies its changes itself instead of asking first (Settings → Coach → Hands-off). */
+        coachHandsOff: Boolean = false
     ) {
         // The CTA stays tappable until ONBOARDING_DONE flips the UI, which is after the whole
         // generation below, so a double tap started a second, concurrent completion.
@@ -182,6 +184,7 @@ class OnboardingViewModel @Inject constructor(
             settingsRepo.setUserSex(sex)
             settingsRepo.setFreestyleMode(planMode == PLAN_FREESTYLE)
             settingsRepo.setCoachEnabled(coachEnabled)
+            if (coachEnabled && coachHandsOff) settingsRepo.setCoachMode(com.forge.app.domain.coach.CoachMode.HANDS_OFF)
             // App-lock opt-in (GYMAP-69); leave off unless the user turned it on.
             if (appLock) settingsRepo.setAppLockEnabled(true)
 

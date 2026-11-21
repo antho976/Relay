@@ -154,11 +154,31 @@ class AcademyRegistryTest {
     // ── The 2026-09-26 cut: 35 pieces to 12 ────────────────────────────────────
 
     @Test
-    fun theAcademyShipsTwelveLessonsInThreeChapters() {
-        assertEquals(12, AcademyRegistry.lessons.size)
-        assertEquals(7, AcademyRegistry.byTrack(LessonTrack.TRAINING).size)
+    fun theAcademyShipsEighteenLessonsInThreeChapters() {
+        // Twelve from the 2026-09-26 cut, six added 2026-11-18: five stand-alone Training lessons
+        // and the week lesson in Cardio.
+        assertEquals(18, AcademyRegistry.lessons.size)
+        assertEquals(12, AcademyRegistry.byTrack(LessonTrack.TRAINING).size)
         assertEquals(3, AcademyRegistry.byTrack(LessonTrack.COACH).size)
-        assertEquals(2, AcademyRegistry.byTrack(LessonTrack.CARDIO).size)
+        assertEquals(3, AcademyRegistry.byTrack(LessonTrack.CARDIO).size)
+    }
+
+    @Test
+    fun theStandAloneTrainingLessonsFollowTheSevenAndStayOutOfTheColdStartTrack() {
+        val training = AcademyRegistry.byTrack(LessonTrack.TRAINING)
+        assertEquals(AcademyRegistry.coldStartTrack, training.take(7))
+        assertEquals(
+            listOf("training.swaps", "training.plateaus", "training.coming_back", "training.losing_weight", "training.body_parts"),
+            training.drop(7).map { it.id }
+        )
+    }
+
+    @Test
+    fun everyLessonAddedInNovemberCitesItsResearchOrExplainsTheCoach() {
+        // The five that lean on studies name them; the stall lesson explains what the coach does.
+        listOf("training.swaps", "training.coming_back", "training.losing_weight", "training.body_parts", "cardio.your_week")
+            .forEach { id -> assertTrue("$id should cite its sources", AcademyRegistry.lesson(id)!!.sources.size >= 2) }
+        assertTrue(AcademyRegistry.lesson("training.plateaus")!!.sources.isEmpty())
     }
 
     @Test

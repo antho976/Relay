@@ -179,5 +179,11 @@ data class PrefsSnap(
      */
     val lastDeloadAppliedMs: Long? = null,
     /** The unit the user lifts in: load targets snap to its grid ([AdaptThresholds.loadStepLb]). */
-    val weightUnit: WeightUnit = WeightUnit.LB
+    val weightUnit: WeightUnit = WeightUnit.LB,
+    /**
+     * What the lifter has left out of the plan, held light or is specializing in. A choice, not a
+     * gap: every rule that would call a skipped or held muscle neglected, unbalanced or due more
+     * work reads this first and stays quiet about it.
+     */
+    val bodyParts: com.forge.app.program.BodyParts = com.forge.app.program.BodyParts.NONE
 )
