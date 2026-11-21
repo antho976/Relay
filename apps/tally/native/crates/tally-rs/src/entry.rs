@@ -25,8 +25,33 @@ use crate::theme;
 use crate::ui::{HScroll, Scroll};
 use crate::widgets::{self, SheetOut};
 
+/// The editor's draft as kept while the system has stopped Tally: what was typed and picked, and
+/// which entry it edits. Ids are checked again as it is put back.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SavedDraft {
+    pub editing: Option<i64>,
+    pub kind: TxType,
+    /// The keypad's text, as typed ("12." stays "12.").
+    pub amount: String,
+    pub note: String,
+    pub account: Option<i64>,
+    pub to_account: Option<i64>,
+    pub category: Option<i64>,
+    #[serde(default)]
+    pub category_chosen: bool,
+    /// The day, as YYYY-MM-DD.
+    pub date: String,
+    /// The account sheet's "New account" was picked from this side, so the account made under
+    /// it comes back to the same side after the system stopped Tally.
+    #[serde(default)]
+    pub made_for: Option<Pick>,
+    /// "New category" was picked, so the category made under it comes back picked.
+    #[serde(default)]
+    pub made_category: bool,
+}
+
 /// A sheet open over the editor.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Pick {
     From,
     To,
@@ -62,6 +87,9 @@ pub struct Entry {
     pub by_category: Vec<(i64, TxType, i64, usize)>,
     pub category_budgets: Vec<(i64, i64)>,
     pub bill: Option<LinkedBill>,
+    /// The [`App::ledger_gen`] `bill` was read at: a change since (a bill deleted, then put back
+    /// by its Undo) reads it again, so "Open bill" comes back with it.
+    pub bill_gen: u64,
     /// The usual entries, offered on a new one, and notes used before, for suggestions.
     pub usual: Vec<Usual>,
     pub notes: Vec<(String, Option<i64>)>,
@@ -77,6 +105,11 @@ pub struct Entry {
     /// The account sheet's "New account" was picked from this side: the account made comes back
     /// to it.
     pub made_for: Option<Pick>,
+    /// "New category" was picked: the category made comes back picked.
+    pub made_category: bool,
+    /// The entry this editor was opened to edit is gone (deleted meanwhile, on another page or by
+    /// a sync): the editor leaves on its first frame rather than open blank as a new entry.
+    pub gone: bool,
 }
 
 impl Default for Entry {
@@ -104,6 +137,7 @@ impl Default for Entry {
             by_category: Vec::new(),
             category_budgets: Vec::new(),
             bill: None,
+            bill_gen: 0,
             usual: Vec::new(),
             notes: Vec::new(),
             category_chosen: false,
@@ -113,6 +147,8 @@ impl Default for Entry {
             sugg_scroll: HScroll::default(),
             footer_top: 0.0,
             made_for: None,
+            made_category: false,
+            gone: false,
         }
     }
 }
@@ -169,13 +205,14 @@ impl Entry {
         let category_budgets =
             categories.iter().filter(|c| c.kind == CategoryKind::Expense).filter_map(|c| store.ledger.budget(Some(c.id)).ok().flatten().map(|b| (c.id, b))).collect();
         let usual = logic::usual(&recent, 8).into_iter().filter(|u| categories.iter().any(|c| c.id == u.category)).collect();
+        // The account new entries start in (Accounts sets it), else the first open one.
+        let account = crate::accounts_store::default_account(store).filter(|id| accounts.iter().any(|a| a.id == *id)).or_else(|| accounts.first().map(|a| a.id));
+        // A transfer goes somewhere else: the first account that is not the one it leaves.
+        let to_account = accounts.iter().map(|a| a.id).find(|id| Some(*id) != account);
         Entry {
             amount: AmountInput::empty(digits),
-            // The account new entries start in (Accounts sets it), else the first open one.
-            account: crate::accounts_store::default_account(store)
-                .filter(|id| accounts.iter().any(|a| a.id == *id))
-                .or_else(|| accounts.first().map(|a| a.id)),
-            to_account: accounts.get(1).map(|a| a.id),
+            account,
+            to_account,
             categories,
             accounts,
             period,
@@ -199,25 +236,39 @@ impl Entry {
         if let Some(k) = kind {
             e.kind = k;
         }
-        if account.is_some() {
+        // The route's account or category may be archived (an archived account's "See its
+        // entries", then +): it is put on offer, as an edit's are, so the chip shows it and a
+        // trip to another page and back keeps it. One gone altogether is not used.
+        if let Some(a) = account
+            && e.offer_account(store, a)
+        {
             e.account = account;
             if e.to_account == account {
                 e.to_account = e.accounts.iter().map(|a| a.id).find(|a| Some(*a) != account);
             }
         }
-        if category.is_some() {
+        if let Some(c) = category
+            && e.offer_category(store, c)
+        {
             e.category = category;
             e.category_chosen = true;
         }
-        if let Some(id) = id
-            && let Ok(t) = store.ledger.tx(id)
-        {
+        if let Some(id) = id {
+            let Ok(t) = store.ledger.tx(id) else {
+                e.gone = true;
+                return e;
+            };
             let digits = store.formatter().fraction_digits;
             e.editing = Some(id);
             e.kind = t.r#type;
             e.amount = AmountInput::of(t.amount, digits);
             e.account = Some(t.account_id);
             e.to_account = t.to_account_id.or(e.to_account);
+            // Not a transfer, its To is the fresh one's pick, which may be the account this entry
+            // is in: switched to Transfer it would go from an account to itself.
+            if e.to_account == e.account {
+                e.to_account = e.accounts.iter().map(|a| a.id).find(|a| Some(*a) != e.account);
+            }
             e.category = t.category_id;
             e.category_chosen = true;
             e.note = t.note.clone();
@@ -227,24 +278,46 @@ impl Entry {
             }
             e.pad_open = false;
             // An entry that wears an archived account or category keeps it on offer.
-            let all_accounts = store.ledger.accounts().unwrap_or_default();
             for wanted in [Some(t.account_id), t.to_account_id].into_iter().flatten() {
-                if !e.accounts.iter().any(|a| a.id == wanted)
-                    && let Some(a) = all_accounts.iter().find(|a| a.id == wanted)
-                {
-                    e.accounts.push(a.clone());
-                }
+                e.offer_account(store, wanted);
             }
-            if let Some(c) = t.category_id
-                && !e.categories.iter().any(|x| x.id == c)
-                && let Some(cat) = store.ledger.categories().unwrap_or_default().into_iter().find(|x| x.id == c)
-            {
-                e.categories.push(cat);
+            if let Some(c) = t.category_id {
+                e.offer_category(store, c);
             }
             e.bill = linked_bill(store, id);
             e.original = Some(t);
         }
         e
+    }
+
+    /// Puts account `id` on offer if it is not (an archived one). False when there is no such
+    /// account.
+    pub fn offer_account(&mut self, store: &Store, id: i64) -> bool {
+        if self.accounts.iter().any(|a| a.id == id) {
+            return true;
+        }
+        match store.ledger.accounts().unwrap_or_default().into_iter().find(|a| a.id == id) {
+            Some(a) => {
+                self.accounts.push(a);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Puts category `id` on offer if it is not (an archived one). False when there is no such
+    /// category.
+    fn offer_category(&mut self, store: &Store, id: i64) -> bool {
+        if self.categories.iter().any(|c| c.id == id) {
+            return true;
+        }
+        match store.ledger.categories().unwrap_or_default().into_iter().find(|c| c.id == id) {
+            Some(c) => {
+                self.categories.push(c);
+                true
+            }
+            None => false,
+        }
     }
 
     /// One entry as its overview reads it: the entry, its accounts' names, its bill, and how its
@@ -305,14 +378,26 @@ impl Entry {
     /// stays as it was; the accounts and categories are read again, and one just made is picked.
     pub fn came_back(&mut self, store: &Store) {
         self.picking = None;
+        // The entry being edited went meanwhile (a sync deleted it): the editor leaves on its
+        // next frame, as when it is opened for one that is gone.
+        if let Some(id) = self.editing
+            && store.ledger.tx(id).is_err()
+        {
+            self.gone = true;
+            return;
+        }
         let made_for = self.made_for.take();
         let had: Vec<i64> = self.accounts.iter().map(|a| a.id).collect();
         self.accounts = store.ledger.accounts().unwrap_or_default().into_iter().filter(|a| !a.archived || had.contains(&a.id)).collect();
         let present = |id: Option<i64>, list: &[AccountView]| id.filter(|id| list.iter().any(|a| a.id == *id));
         self.account = present(self.account, &self.accounts);
         self.to_account = present(self.to_account, &self.accounts);
-        if let Some(new) = self.accounts.iter().filter(|a| !had.contains(&a.id)).map(|a| a.id).max() {
-            if made_for == Some(Pick::To) {
+        // Only an account this editor asked for is picked: one that arrived otherwise (a sync
+        // brought it in) would move the entry on Save.
+        if let Some(side) = made_for
+            && let Some(new) = self.accounts.iter().filter(|a| !had.contains(&a.id)).map(|a| a.id).max()
+        {
+            if side == Pick::To {
                 self.to_account = Some(new);
             } else {
                 self.account = Some(new);
@@ -328,7 +413,9 @@ impl Entry {
         let mut categories: Vec<CategoryView> = self.categories.iter().filter_map(|c| all.iter().find(|x| x.id == c.id).cloned()).collect();
         let made: Vec<CategoryView> = all.into_iter().filter(|c| !c.archived && !had.contains(&c.id)).collect();
         let want = if self.kind == TxType::Income { CategoryKind::Income } else { CategoryKind::Expense };
-        let pick = made.iter().filter(|c| c.kind == want).map(|c| c.id).max();
+        // As for accounts: only a category this editor asked to make is picked.
+        let asked = std::mem::take(&mut self.made_category);
+        let pick = made.iter().filter(|c| c.kind == want).map(|c| c.id).max().filter(|_| asked);
         categories.extend(made);
         self.categories = categories;
         if self.category.is_some_and(|id| !self.categories.iter().any(|c| c.id == id)) {
@@ -345,8 +432,87 @@ impl Entry {
         }
     }
 
+    /// What Copy to today adds: the draft as it stands (kind, amount, accounts, category, note),
+    /// dated `today`. Err says what stops it, as Save would.
+    pub fn copy_input(&self, today: Date) -> Result<TxInput, &'static str> {
+        let draft = Draft { date: today, ..self.draft() };
+        if let Some(why) = logic::validate(&draft) {
+            return Err(why);
+        }
+        let Some(account) = self.account else { return Err("Pick an account") };
+        let transfer = self.kind == TxType::Transfer;
+        let note = self.note.trim().to_string();
+        Ok(TxInput {
+            r#type: self.kind,
+            amount: draft.amount,
+            date: today.to_string(),
+            account_id: account,
+            to_account_id: if transfer { self.to_account } else { None },
+            category_id: if transfer { None } else { self.category },
+            note: (!note.is_empty()).then_some(note),
+        })
+    }
+
     fn draft(&self) -> Draft {
         Draft { kind: self.kind, amount: self.amount.minor(), date: self.date, account: self.account, to_account: self.to_account, category: self.category }
+    }
+
+    /// What was typed, to keep across the system stopping Tally (Android's saved state).
+    pub fn saved_draft(&self) -> SavedDraft {
+        SavedDraft {
+            editing: self.editing,
+            kind: self.kind,
+            amount: self.amount.text.clone(),
+            note: self.note.clone(),
+            account: self.account,
+            to_account: self.to_account,
+            category: self.category,
+            category_chosen: self.category_chosen,
+            date: self.date.to_string(),
+            made_for: self.made_for,
+            made_category: self.made_category,
+        }
+    }
+
+    /// Puts back what [`Entry::saved_draft`] kept, over the editor its route just opened. A draft
+    /// for another entry than the one open is not used. An account or category gone since (or
+    /// not on offer) is dropped: the editor keeps the one it opened with.
+    pub fn restore_draft(&mut self, d: &SavedDraft) {
+        if d.editing != self.editing {
+            return;
+        }
+        self.kind = d.kind;
+        self.amount = AmountInput::new(&d.amount, self.amount.fraction_digits);
+        self.note = d.note.clone();
+        self.made_for = d.made_for;
+        self.made_category = d.made_category;
+        let account = |id: Option<i64>| id.filter(|id| self.accounts.iter().any(|a| a.id == *id));
+        if let Some(a) = account(d.account) {
+            self.account = Some(a);
+        }
+        if let Some(a) = account(d.to_account) {
+            self.to_account = Some(a);
+        }
+        match d.category.filter(|id| self.categories.iter().any(|c| c.id == *id)) {
+            Some(c) => {
+                self.category = Some(c);
+                self.category_chosen = d.category_chosen;
+            }
+            // Dropped on purpose (none was picked): none, as it was.
+            None if d.category.is_none() => {
+                self.category = None;
+                self.category_chosen = false;
+            }
+            None => {}
+        }
+        if let Ok(date) = d.date.parse::<Date>() {
+            self.date = date;
+            self.month = date;
+        }
+        // Typed in and categorised: the keypad folds, as it would have.
+        if self.category.is_some() {
+            self.fold_if_typed();
+        }
     }
 
     fn shown_categories(&self) -> Vec<&CategoryView> {
@@ -419,6 +585,19 @@ const GAP: f32 = 8.0;
 const TAG_H: f32 = 44.0;
 
 pub fn draw(app: &mut App, dt: f32) -> bool {
+    // Opened to edit an entry that is gone: say so and leave, rather than offer a blank editor
+    // whose Save would add a new entry.
+    if app.entry.gone {
+        app.entry.gone = false;
+        leave_gone(app);
+        return true;
+    }
+    if app.entry.bill_gen != app.ledger_gen {
+        app.entry.bill_gen = app.ledger_gen;
+        if let Some(id) = app.entry.editing {
+            app.entry.bill = linked_bill(&app.store, id);
+        }
+    }
     // While the keyboard is up the keypad steps aside: the bottom inset is then the keyboard.
     let typing = app.keyboard_up && app.focus.is(NOTE);
     let fmt = app.store.formatter();
@@ -472,11 +651,17 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let sc = app.scroll();
     sc.max = bottom + 24.0 - footer_top;
     // Typing: keep the note above the keyboard.
+    let mut raised = false;
     if typing && let Some((y, h)) = at {
         let need = y + h + 16.0 - footer_top;
         if need > sc.off {
             sc.off = need;
+            raised = true;
         }
+    }
+    // This frame drew at the old offset: draw again so the note shows above the keyboard now.
+    if raised {
+        app.wake_at(app.now_ns);
     }
     match act {
         Some(Act::Back) => {
@@ -533,13 +718,15 @@ fn form(cx: &mut Ctx, e: &mut Entry, top: f32, fmt: &relay_money::money::MoneyFo
         let want = if e.kind == TxType::Income { CategoryKind::Income } else { CategoryKind::Expense };
         if e.category.and_then(|id| e.categories.iter().find(|c| c.id == id)).is_some_and(|c| c.kind != want) {
             e.category = None;
+            // Nothing is picked now, so a suggested note may bring its category again.
+            e.category_chosen = false;
         }
     }
     y += 44.0 + 22.0;
 
     // The amount, cents raised, with a brass caret while the keypad shows; tapped, it brings the
     // keypad back.
-    let size = 56.0;
+    let big = 56.0;
     let empty = e.amount.text.is_empty();
     // Folded, it reads as money ("$6.50"); while typed, as typed ("$6.5").
     let amount = if empty {
@@ -556,17 +743,25 @@ fn form(cx: &mut Ctx, e: &mut Entry, top: f32, fmt: &relay_money::money::MoneyFo
     } else {
         (p.ink, p.ink2)
     };
-    let aw = kit::money_w(cx.c, &amount, size);
+    // A very large amount shrinks to fit the screen, caret or pencil included; it keeps the full
+    // size's row, centred in it, so nothing below jumps as digits go in.
+    let mut size = big;
+    let mut aw = kit::money_w(cx.c, &amount, size);
+    while aw > W - 40.0 && size > 20.0 {
+        size -= 2.0;
+        aw = kit::money_w(cx.c, &amount, size);
+    }
+    let ty = y + (big - size) * 0.575;
     let ax = WIDTH / 2.0 - aw / 2.0;
-    kit::money(cx, &amount, ax, y, size, ink, cents);
+    kit::money(cx, &amount, ax, ty, size, ink, cents);
     if e.pad_open {
         if cx.focus.id.is_none() {
-            cx.c.rect(ax + aw + 5.0, y + size * 0.14, 2.5, size * 0.92, 1.25, p.signal);
+            cx.c.rect(ax + aw + 5.0, ty + size * 0.14, 2.5, size * 0.92, 1.25, p.signal);
         }
     } else {
-        cx.c.icon("edit", ax + aw + 18.0, y + size * 0.6, 16.0, p.ink3);
+        cx.c.icon("edit", ax + aw + 18.0, ty + size * 0.6, 16.0, p.ink3);
     }
-    let amount_h = size * 1.15;
+    let amount_h = big * 1.15;
     if cx.tap(PAD, y - 6.0, W, amount_h + 6.0) {
         e.pad_open = true;
         if cx.focus.id.take().is_some() {
@@ -683,6 +878,7 @@ fn form(cx: &mut Ctx, e: &mut Entry, top: f32, fmt: &relay_money::money::MoneyFo
         y += TAG_H;
     }
     if let Some(pick) = open {
+        close_note(cx);
         e.fold_if_typed();
         if pick == Pick::Day {
             e.month = e.date;
@@ -751,9 +947,11 @@ fn categories(cx: &mut Ctx, e: &mut Entry, y: f32, dt: f32, act: &mut Option<Act
     }
     if tail_tapped {
         if hidden > 0 {
+            close_note(cx);
             e.picking = Some(Pick::Category);
             e.sheet_scroll = Scroll::default();
         } else {
+            e.made_category = true;
             *act = Some(Act::Go(new_category(e.kind)));
         }
     }
@@ -774,7 +972,8 @@ fn usual_row(cx: &mut Ctx, e: &mut Entry, y: f32, fmt: &relay_money::money::Mone
         .filter(|u| u.kind == e.kind)
         .filter_map(|u| {
             let c = e.categories.iter().find(|c| c.id == u.category)?;
-            Some((u.clone(), c, 0.0, 0.0, fmt.format_whole(u.last_amount)))
+            // The exact amount it fills, not a rounded one ($4.75, not $5).
+            Some((u.clone(), c, 0.0, 0.0, fmt.format(u.last_amount)))
         })
         .collect();
     let chips: Vec<(Usual, &CategoryView, f32, f32, String)> = chips
@@ -807,6 +1006,12 @@ fn usual_row(cx: &mut Ctx, e: &mut Entry, y: f32, fmt: &relay_money::money::Mone
     }
     kit::carousel_end(cx);
     if let Some(u) = picked {
+        // A focused note field copies its own text back each frame: it takes the usual note too,
+        // as a suggested note does, or the tap's note is lost.
+        if cx.focus.is(NOTE) {
+            cx.focus.text = u.note.clone();
+            cx.host.keyboard(true, &u.note, false);
+        }
         e.note = u.note;
         e.category = Some(u.category);
         e.category_chosen = true;
@@ -814,6 +1019,16 @@ fn usual_row(cx: &mut Ctx, e: &mut Entry, y: f32, fmt: &relay_money::money::Mone
         e.pad_open = false;
     }
     y + h
+}
+
+/// A sheet opens over the editor: typing in the note stops, as a tap on the amount stops it, so
+/// the keyboard does not stay up over the sheet with the hidden note focused.
+fn close_note(cx: &mut Ctx) {
+    if cx.focus.is(NOTE) {
+        cx.focus.id = None;
+        cx.focus.at = None;
+        cx.host.keyboard(false, "", false);
+    }
 }
 
 fn new_category(kind: TxType) -> Route {
@@ -913,7 +1128,7 @@ fn sheet(cx: &mut Ctx, e: &mut Entry, dt: f32, act: &mut Option<Act>) {
                 SheetOut::Pick(_) => {
                     e.picking = None;
                     e.made_for = Some(pick);
-                    *act = Some(Act::Go(Route::AccountEdit { id: None }));
+                    *act = Some(Act::Go(Route::AccountEdit { id: None, kind: None }));
                 }
                 SheetOut::Close => e.picking = None,
                 SheetOut::Nothing => {}
@@ -933,6 +1148,7 @@ fn sheet(cx: &mut Ctx, e: &mut Entry, dt: f32, act: &mut Option<Act>) {
                 }
                 SheetOut::Pick(_) => {
                     e.picking = None;
+                    e.made_category = true;
                     *act = Some(Act::Go(new_category(e.kind)));
                 }
                 SheetOut::Close => e.picking = None,
@@ -965,6 +1181,20 @@ pub fn dress(text: &str, fmt: &relay_money::money::MoneyFormatter) -> String {
             format!("{}{}{f}{}", &whole[..at], fmt.locale.decimal_separator(), &whole[at..])
         }
     }
+}
+
+/// The entry being edited is gone: say so and leave the editor.
+fn leave_gone(app: &mut App) {
+    if !app.pop() {
+        app.push(Route::Overview);
+    }
+    app.say("This entry is gone", None);
+}
+
+/// A write to the entry being edited failed because the entry itself went meanwhile (a sync
+/// deleted it while the editor was open), not for a reason the person can fix.
+fn edited_gone(app: &App) -> bool {
+    app.entry.editing.is_some_and(|id| app.store.ledger.tx(id).is_err())
 }
 
 /// Back on the editor closes the sheet open over it, if one is.
@@ -1021,8 +1251,15 @@ fn save(app: &mut App, next: bool) {
             app.say(words, if editing { None } else { Some(tx.id) });
             app.invalidate();
             if next && !editing {
+                // Let go of the note field first, or next frame it writes what was typed into the
+                // fresh entry's note.
+                app.finish_typing();
                 let keep = (app.entry.kind, app.entry.account, app.entry.to_account);
                 app.entry = Entry::fresh(&app.store);
+                // An archived account kept from the last entry stays on offer.
+                for a in [keep.1, keep.2].into_iter().flatten() {
+                    app.entry.offer_account(&app.store, a);
+                }
                 (app.entry.kind, app.entry.account, app.entry.to_account) = keep;
                 app.ui.reset();
                 *app.scroll() = Scroll::default();
@@ -1030,6 +1267,7 @@ fn save(app: &mut App, next: bool) {
                 app.pop();
             }
         }
+        Err(_) if edited_gone(app) => leave_gone(app),
         Err(e) => app.say(e, None),
     }
 }
@@ -1037,7 +1275,11 @@ fn save(app: &mut App, next: bool) {
 /// Delete the entry being edited and leave; the notice's Undo puts it back.
 fn delete(app: &mut App) {
     let Some(id) = app.entry.editing else { return };
-    let words = logic::deleted_notice(app.entry.kind, app.entry.category_name().as_deref());
+    // The words name what is deleted (the stored entry), not what the editor was changed to.
+    let words = match &app.entry.original {
+        Some(t) => logic::deleted_notice(t.r#type, t.category.as_deref()),
+        None => logic::deleted_notice(app.entry.kind, app.entry.category_name().as_deref()),
+    };
     match app.store.delete(id) {
         Ok(()) => {
             app.invalidate();
@@ -1048,30 +1290,30 @@ fn delete(app: &mut App) {
             }
             app.say_restore(words, id);
         }
+        Err(_) if edited_gone(app) => leave_gone(app),
         Err(e) => app.say(e, None),
     }
 }
 
-/// The stored entry again, dated today.
+/// The entry as the editor shows it, again, dated today. Changes made before Copy go into the
+/// copy rather than being thrown away; the stored entry stays as it was.
 fn duplicate(app: &mut App) {
-    let Some(t) = app.entry.original.clone() else { return };
-    if t.amount <= 0 {
+    if app.entry.editing.is_none() {
         return;
     }
-    let input = TxInput {
-        r#type: t.r#type,
-        amount: t.amount,
-        date: model::today().to_string(),
-        account_id: t.account_id,
-        to_account_id: t.to_account_id,
-        category_id: t.category_id,
-        note: (!t.note.is_empty()).then_some(t.note.clone()),
+    let input = match app.entry.copy_input(model::today()) {
+        Ok(i) => i,
+        Err(why) => {
+            app.say(why, None);
+            return;
+        }
     };
     match app.store.add(&input) {
-        Ok(_) => {
+        Ok(tx) => {
             app.invalidate();
             app.pop();
-            app.say("Copied to today", None);
+            // A copy is a new entry, as one added: Undo takes it out again.
+            app.say("Copied to today", Some(tx.id));
         }
         Err(e) => app.say(e, None),
     }

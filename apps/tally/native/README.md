@@ -56,7 +56,14 @@ can never replace the server's ledger: its first sync only pulls (`sync_ledger.r
 replace unrepresentable; tests check it against a fake server). A ledger replaced on the phone
 (Erase everything, the sample) never pushes its deletions: the next sync takes the server's ledger
 whole instead. Restore asks you to disconnect first. Plain `ws://`/`http://` is used only to
-loopback, private-LAN and Tailscale (100.64/10) addresses.
+loopback, private-LAN and Tailscale (100.64/10) addresses, and to those only when the server offers
+no `wss://` route at all (loopback always): a refusal heard over a clear route reads as unreachable,
+never as unpaired. A whole pull that finds the phone's ledger changed while it ran, or a stale merge
+with changes not yet sent, asks before replacing anything. Pairing again with the same server
+(after a disconnect, or after the server forgot the phone) goes on from where sync stood and
+merges; only a new server starts with a pull-only first sync. A whole pull nobody asked for that
+holds under half the phone's accounts and entries asks first, and categories changed before
+connecting count as something held.
 
 Writes relay-money has no call for (bills, goals, contributions, categories, account kind and
 opening balance, the week start) go through `Store::sql()` in `*_store.rs`, each tested by reading

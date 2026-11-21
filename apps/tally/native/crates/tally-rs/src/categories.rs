@@ -38,11 +38,15 @@ pub struct State {
     /// Where a finger came to rest, and when, for the hold that edits.
     press: Option<((f32, f32), u64)>,
     edit: Option<Editor>,
+    /// Drafts of editors lower on the stack, under another category's editor opened over them.
+    parked: Vec<Editor>,
 }
 
 struct Editor {
     /// The id the page was opened for (none for a new category).
     route_id: Option<i64>,
+    /// Where its page sits in `app.nav`.
+    depth: usize,
     id: Option<i64>,
     kind: CategoryKind,
     stored_name: String,
@@ -63,6 +67,13 @@ struct Editor {
     sheet: Scroll,
 }
 
+impl Editor {
+    /// Opened for a category that is no longer stored.
+    fn gone(&self) -> bool {
+        self.route_id.is_some() && self.id.is_none()
+    }
+}
+
 enum Act {
     Go(Route),
     Back,
@@ -71,6 +82,37 @@ enum Act {
     AskDelete,
     Move(Option<i64>),
     CloseSheet,
+}
+
+/// The category editor's fields as typed, kept while the system has stopped Tally
+/// ([`crate::app::Saved`]).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CategoryDraft {
+    name: String,
+    icon: String,
+    color: i64,
+    archived: bool,
+    icon_chosen: bool,
+}
+
+/// The drafts of the category editor showing (or the one last open while its page is still on
+/// the stack) and of those parked under another category's editor, for [`App::saved`]: each whose
+/// page is still open, so none of them is lost when the system stops Tally.
+pub fn saved_draft(app: &App) -> Vec<crate::app::PageDraft> {
+    let st = &app.st.categories;
+    let mut out: Vec<crate::app::PageDraft> = Vec::new();
+    for e in st.edit.iter().chain(st.parked.iter()) {
+        let route = match app.nav.get(e.depth) {
+            Some((r @ Route::CategoryEdit { id, .. }, _)) if *id == e.route_id => r.clone(),
+            _ => continue,
+        };
+        if out.iter().any(|d| d.depth == e.depth) {
+            continue;
+        }
+        let draft = CategoryDraft { name: e.name.clone(), icon: e.icon.clone(), color: e.color, archived: e.archived, icon_chosen: e.icon_chosen };
+        out.push(crate::app::PageDraft { depth: e.depth, route, draft: crate::app::Draft::Category(draft) });
+    }
+    out
 }
 
 /// Back closes the move sheet when it is open.
@@ -239,9 +281,11 @@ fn open_editor(app: &App, id: Option<i64>, kind: CategoryKind) -> Editor {
             k.active.iter().chain(&k.archived).find(|l| l.id == c.id).cloned()
         })
     });
+    let depth = app.nav.len() - 1;
     match stored {
         Some(c) => Editor {
             route_id: id,
+            depth,
             id: Some(c.id),
             kind: c.kind,
             stored_name: c.name.clone(),
@@ -262,6 +306,7 @@ fn open_editor(app: &App, id: Option<i64>, kind: CategoryKind) -> Editor {
             let used: Vec<i64> = all.iter().filter(|c| c.kind == kind).map(|c| c.color).collect();
             Editor {
                 route_id: id,
+                depth,
                 id: None,
                 kind,
                 stored_name: String::new(),
@@ -282,11 +327,55 @@ fn open_editor(app: &App, id: Option<i64>, kind: CategoryKind) -> Editor {
     }
 }
 
+/// An editor for this same category already sits lower on the stack (its entries page's edit
+/// key, on the "See its entries" page that editor opened): go back down to it rather than open a
+/// second one, which would read the category again into the draft they share and lose what was
+/// typed.
+fn back_to_open_editor(app: &mut App, id: Option<i64>) {
+    let Some(id) = id else { return };
+    let same = |r: &Route| matches!(r, Route::CategoryEdit { id: Some(x), .. } if *x == id);
+    let below = app.nav.len().saturating_sub(1);
+    if app.nav[..below].iter().any(|(r, _)| same(r)) {
+        app.pop();
+        while !same(app.route()) && app.pop() {}
+    }
+}
+
+/// One draft per editor page open. Another category's editor opened over this one (a new category
+/// from an entry its "See its entries" led to) parks this draft, and Back to this page brings it
+/// back rather than reading the category again. Drafts of pages no longer open are let go.
+fn keep_drafts(app: &mut App, id: Option<i64>) {
+    let depth = app.nav.len() - 1;
+    // Opened anew, the page is over every draft still open; uncovered, its own draft is there too.
+    let below = if app.returned { depth + 1 } else { depth };
+    let nav = &app.nav;
+    let st = &mut app.st.categories;
+    if let Some(e) = st.edit.take() {
+        st.parked.push(e);
+    }
+    st.parked.retain(|e| e.depth < below && matches!(nav.get(e.depth), Some((Route::CategoryEdit { id, .. }, _)) if *id == e.route_id));
+    if app.returned
+        && let Some(i) = st.parked.iter().position(|e| e.depth == depth && e.route_id == id)
+    {
+        st.edit = Some(st.parked.remove(i));
+    }
+}
+
 fn editor(app: &mut App, dt: f32, id: Option<i64>, kind: CategoryKind) -> bool {
+    if app.fresh && !app.returned {
+        back_to_open_editor(app, id);
+    }
+    if app.fresh {
+        keep_drafts(app, id);
+    }
     // Opened anew it reads the category; back from a page it opened ("See its entries") the
     // draft stays.
     if (app.fresh && !app.returned) || app.st.categories.edit.as_ref().is_none_or(|e| e.route_id != id || (id.is_none() && e.kind != kind)) {
-        let e = open_editor(app, id, kind);
+        let mut e = open_editor(app, id, kind);
+        // Restored after the system stopped Tally: the fields as they were being typed.
+        if let Some(crate::app::Draft::Category(d)) = app.take_draft() {
+            (e.name, e.icon, e.color, e.archived, e.icon_chosen) = (d.name, d.icon, d.color, d.archived, d.icon_chosen);
+        }
         app.st.categories.edit = Some(e);
     }
     let pg = app.page_begin(dt);
@@ -330,6 +419,16 @@ fn editor(app: &mut App, dt: f32, id: Option<i64>, kind: CategoryKind) -> bool {
 fn edit_form(cx: &mut Ctx, e: &mut Editor, fmt: &MoneyFormatter, problem: Option<&str>, top: f32, act: &mut Option<Act>) -> f32 {
     let p = cx.p;
     let mut y = top;
+    // Opened for a category that is no longer there (deleted on another device, or the page
+    // restored after it went): no form, so Save can't make a new category in its place.
+    if e.gone() {
+        let (back, _, h) = widgets::page_header(cx, y, "Category", None);
+        if back {
+            *act = Some(Act::Back);
+        }
+        y += h;
+        return y + widgets::empty(cx, PAD, y, W, "tag", "This category is gone", "It was deleted, here or on another of your devices.");
+    }
     let (title, sub) = match e.id {
         None => (format!("New {} category", store::kind_label(e.kind).to_lowercase()), None),
         Some(_) => (e.stored_name.clone(), Some(format!("{} · {} this month", copy::plural_as(e.entries, "entry", "entries"), fmt.format_whole(e.period_total)))),
@@ -404,6 +503,9 @@ fn edit_act(app: &mut App, a: Act, fmt: &MoneyFormatter) {
         Act::Go(r) => app.push(r),
         Act::Lens(_) => {}
         Act::Save => {
+            if e.gone() {
+                return;
+            }
             if store::name_problem(&e.name, e.kind, e.id, &e.all).is_some() {
                 e.show_errors = true;
                 return;
@@ -454,6 +556,10 @@ fn remove(app: &mut App, id: i64, to: Option<i64>, u: CategoryUse, fmt: &MoneyFo
         Ok(()) => {
             app.invalidate();
             app.pop();
+            // Its entries page it was opened from would read as gone: leave it too.
+            if matches!(app.route(), Route::Transactions { category: Some(c), .. } if *c == id) {
+                app.pop();
+            }
             if undoable {
                 app.say_undo(line, move |app: &mut App| store::restore(&app.store, id, budget));
             } else {

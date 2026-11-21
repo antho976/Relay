@@ -114,30 +114,129 @@ pub struct Mine {
     pub external_ref: String,
 }
 
-/// The Tally account a bank's account most likely is: the one whose number ends in its mask, else
-/// the one same-bank account of the same kind, else the one same-bank account.
-pub fn match_account<'a>(institution: &str, a: &BankAccount, mine: &'a [Mine]) -> Option<&'a Mine> {
-    let bank = institution.to_lowercase().split(' ').next().unwrap_or("").to_string();
-    let credit = a.kind.to_lowercase().contains("credit");
-    let live: Vec<&Mine> = mine.iter().filter(|m| !m.archived).collect();
-    if let Some(m) = live.iter().find(|m| !a.mask.trim().is_empty() && m.external_ref.ends_with(&a.mask)) {
+/// Which of Tally's account types a bank's account can be, by Plaid's subtype: a card is only ever
+/// a credit account, a chequing or savings account only a cash-like one, an investment only an
+/// investment. Empty for a kind Tally can't place (a loan, a mortgage, nothing said), which is then
+/// never guessed by name.
+fn types_for(kind: &str) -> &'static [AccountType] {
+    let k = kind.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| k.contains(w));
+    if has(&["credit"]) {
+        &[AccountType::Credit]
+    } else if has(&["tfsa", "rrsp", "rrif", "resp", "fhsa", "lira", "brokerage", "investment", "401k", "ira", "retirement", "pension"]) {
+        &[AccountType::Investment]
+    } else if has(&["checking", "chequing", "savings", "prepaid", "cash", "money market", "depository", "hsa", "paypal"]) {
+        &[AccountType::Chequing, AccountType::Savings, AccountType::Cash]
+    } else {
+        &[]
+    }
+}
+
+/// The one Tally type a bank's subtype names exactly ("savings" is Savings), for choosing between
+/// a chequing and a savings account at the same bank.
+fn exact_type(kind: &str) -> Option<AccountType> {
+    let k = kind.to_lowercase();
+    if k.contains("saving") {
+        Some(AccountType::Savings)
+    } else if k.contains("checking") || k.contains("chequing") {
+        Some(AccountType::Chequing)
+    } else {
+        types_for(kind).first().copied().filter(|_| types_for(kind).len() == 1)
+    }
+}
+
+/// True when `hay` holds `word` as whole words: "td" is in "TD Visa", not in "Outdoor fund". A
+/// multi-word name matches as a phrase (accounts_store::bank_name reads names the same way).
+fn has_words(hay: &str, word: &str) -> bool {
+    let hay = hay.to_lowercase();
+    let words: Vec<&str> = hay.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let want: Vec<&str> = word.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    !want.is_empty() && words.windows(want.len()).any(|w| w == want.as_slice())
+}
+
+/// Words a bank's name may start with that don't say which bank it is: "Bank of America" is not
+/// "My bank account", and "Caisse populaire Desjardins" is Desjardins.
+const GENERIC: [&str; 14] = ["the", "bank", "banque", "caisse", "caisses", "populaire", "credit", "union", "of", "de", "du", "des", "la", "le"];
+
+/// What an account's name or bank must hold to be at `institution`: its first word that says
+/// which bank it is ("td" for "TD Canada Trust", "america" for "Bank of America"), else the whole
+/// name as a phrase.
+fn bank_word(institution: &str) -> String {
+    let name = institution.to_lowercase();
+    let words: Vec<&str> = name.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    match words.iter().find(|w| !GENERIC.contains(w)) {
+        Some(w) => w.to_string(),
+        None => words.join(" "),
+    }
+}
+
+/// The Tally account a bank's account most likely is, among those of an agreeing type that no
+/// other bank account already fills (`taken`, by uid): the one whose number ends in its mask, else
+/// the one same-bank account of exactly its kind, else the one same-bank account of its kind's
+/// family. Never an account of another type: a card's purchases landing in chequing would read as
+/// money in.
+pub fn match_account<'a>(institution: &str, a: &BankAccount, mine: &'a [Mine], taken: &[String]) -> Option<&'a Mine> {
+    let bank = bank_word(institution);
+    let types = types_for(&a.kind);
+    let free: Vec<&Mine> = mine.iter().filter(|m| !m.archived && !taken.contains(&m.uid)).collect();
+    // A kind Tally can't place still matches by number, as long as the number is the account's own.
+    let agrees = |m: &Mine| types.is_empty() || types.contains(&m.r#type);
+    if let Some(m) = free.iter().find(|m| !a.mask.trim().is_empty() && m.external_ref.ends_with(&a.mask) && agrees(m)) {
         return Some(m);
     }
-    let same: Vec<&Mine> = live.iter().copied().filter(|m| !bank.is_empty() && (m.name.to_lowercase().contains(&bank) || m.institution.to_lowercase().contains(&bank))).collect();
-    let by_kind: Vec<&Mine> = same.iter().copied().filter(|m| (m.r#type == AccountType::Credit) == credit).collect();
-    if by_kind.len() == 1 {
-        return Some(by_kind[0]);
+    if types.is_empty() || bank.is_empty() {
+        return None;
+    }
+    let same: Vec<&Mine> = free.iter().copied().filter(|m| types.contains(&m.r#type) && (has_words(&m.name, &bank) || has_words(&m.institution, &bank))).collect();
+    if let Some(exact) = exact_type(&a.kind) {
+        let by_kind: Vec<&Mine> = same.iter().copied().filter(|m| m.r#type == exact).collect();
+        if by_kind.len() == 1 {
+            return Some(by_kind[0]);
+        }
     }
     if same.len() == 1 { Some(same[0]) } else { None }
 }
 
-/// A bank just connected, with the accounts Tally suggests following and where each lands.
+/// A bank just connected, with the accounts Tally suggests following and where each lands. No two
+/// of its accounts are suggested into the same Tally account.
 pub fn suggested(bank: &Bank, mine: &[Mine]) -> Bank {
-    let mut b = bank.clone();
+    suggested_beside(bank, mine, &[])
+}
+
+/// [`suggested`], never into a Tally account in `elsewhere`: the ones another bank connection
+/// already follows into ([`followed_uids`]), which two banks writing into would count twice.
+pub fn suggested_beside(bank: &Bank, mine: &[Mine], elsewhere: &[String]) -> Bank {
+    let mut b = with_places_beside(bank, mine, elsewhere);
     for a in &mut b.accounts {
         a.follow = follows_by_default(a);
+    }
+    b
+}
+
+/// A bank with each account not yet placed given the Tally account it most likely is, what it
+/// follows left as it is (a bank opened from the list). No two land in the same Tally account.
+pub fn with_places(bank: &Bank, mine: &[Mine]) -> Bank {
+    with_places_beside(bank, mine, &[])
+}
+
+/// [`with_places`], never placing one into a Tally account in `elsewhere` (another connection's
+/// followed accounts, see [`suggested_beside`]).
+pub fn with_places_beside(bank: &Bank, mine: &[Mine], elsewhere: &[String]) -> Bank {
+    let mut b = bank.clone();
+    // An account pointing into a Tally account since deleted, or archived, is placed afresh: left
+    // as it was, the page would read "Into a new account" (the sheet lists neither) while Follow
+    // still sent that uid.
+    for a in &mut b.accounts {
+        if a.into.as_ref().is_some_and(|u| !mine.iter().any(|m| &m.uid == u && !m.archived)) {
+            a.into = None;
+        }
+    }
+    let mut taken: Vec<String> = b.accounts.iter().filter_map(|a| a.into.clone()).collect();
+    taken.extend(elsewhere.iter().cloned());
+    for a in &mut b.accounts {
         if a.into.is_none() {
-            a.into = match_account(&bank.institution, a, mine).map(|m| m.uid.clone());
+            a.into = match_account(&bank.institution, a, mine, &taken).map(|m| m.uid.clone());
+            taken.extend(a.into.clone());
         }
     }
     b
@@ -170,6 +269,40 @@ impl Since {
         }
         .to_string()
     }
+}
+
+/// The preference holding the uids of the accounts the server last said it follows (a JSON list),
+/// written each time the Banks page reads `money.bank.list`.
+pub const FOLLOWED_PREF: &str = "bank_followed_uids";
+
+/// The Tally accounts `banks` write into: each followed bank account's `into`.
+pub fn followed_uids(banks: &[Bank]) -> Vec<String> {
+    let mut out: Vec<String> = banks.iter().flat_map(|b| &b.accounts).filter(|a| a.follow).filter_map(|a| a.into.clone()).collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// What the Banks page last read of [`followed_uids`], if it ever read one.
+pub fn followed_pref(store: &crate::model::Store) -> Option<Vec<String>> {
+    store.pref(FOLLOWED_PREF).and_then(|v| serde_json::from_str(&v).ok())
+}
+
+/// Keeps what the server just said it follows; true when that changed.
+pub fn remember_followed(store: &mut crate::model::Store, banks: &[Bank]) -> bool {
+    let now = followed_uids(banks);
+    if followed_pref(store).as_ref() == Some(&now) {
+        return false;
+    }
+    store.set_pref(FOLLOWED_PREF, &json!(now).to_string()).is_ok()
+}
+
+/// True for a reference the bank link names an account it made by: Plaid's mask, the last two to
+/// four letters or digits of the bank's number. A Wealthsimple import's account number
+/// ("HQ7XFMC41CAD") is longer, so an imported account never reads as connected by its number.
+pub fn is_bank_mask(external_ref: &str) -> bool {
+    let r = external_ref.trim();
+    (2..=4).contains(&r.chars().count()) && r.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 /// " •• 4411", or nothing without a mask.
@@ -211,6 +344,14 @@ pub const COMPLETION_URI: &str = "tallyrs://banks";
 
 pub fn hosted_link_payload() -> Value {
     json!({ "client_name": "Tally", "completion_redirect_uri": COMPLETION_URI })
+}
+
+/// What a bank that needs signing in again says when its Fix is tapped. `money.bank.hosted_link`
+/// takes no bank id (docs/PLAID.md), so the server can only open a new connection, not Plaid's
+/// update mode for this one; going through it would add the same bank a second time. Until the
+/// server can reopen a sign-in, the honest way is to disconnect and connect again.
+pub fn sign_in_again_line(institution: &str) -> String {
+    format!("Your server can't reopen the sign-in for {institution} yet. Disconnect it below, then connect it again; its entries stay.")
 }
 
 /// The server's answer to `money.bank.hosted_link`: the link token and the page to open.

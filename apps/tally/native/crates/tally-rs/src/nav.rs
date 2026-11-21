@@ -5,9 +5,10 @@
 //! siblings: going to one replaces the one showing. Every other page is pushed over them and Back
 //! pops it.
 
-use relay_money::model::{CategoryKind, TxType};
+use relay_money::model::{AccountType, CategoryKind, TxType};
 
-#[derive(Clone, Debug, PartialEq)]
+/// Serialisable so the pages open outlast the process ([`crate::app::Saved`]).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Route {
     // Spend
     Overview,
@@ -32,7 +33,13 @@ pub enum Route {
     GoalEdit { id: Option<i64> },
     // Money
     Accounts,
-    AccountEdit { id: Option<i64> },
+    /// An account (`id` none for a new one, which starts as `kind`: none for the editor's own
+    /// first kind). Pages saved before `kind` was added still load.
+    AccountEdit {
+        id: Option<i64>,
+        #[serde(default)]
+        kind: Option<AccountType>,
+    },
     Investments,
     /// Contribution room for a registration ("TFSA", "RRSP", "FHSA").
     RoomEdit { kind: String },

@@ -12,12 +12,41 @@ use crate::draw::{Rgba, Text, WIDTH};
 use crate::kit::{Ctx, KEY_R, PAD, ty};
 use crate::ui::Scroll;
 
+/// The keyboard a text field asks for: words, digits (an amount), or a web address. A web
+/// address gets no capitals and no suggestions: autocorrect would "fix" a server's name into a
+/// word ("anthobot.bid" into "anthology.").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Kb {
+    #[default]
+    Text,
+    Number,
+    /// Digits and a minus: an amount that can be below zero. Only where a minus means something
+    /// (a balance goal's target, an account's opening); elsewhere the amount reader drops it.
+    Signed,
+    Url,
+}
+
+impl Kb {
+    /// Digits when `numeric`, else words: what the fields that take a `numeric` flag mean.
+    pub fn numeric(numeric: bool) -> Kb {
+        if numeric { Kb::Number } else { Kb::Text }
+    }
+
+    /// Digits of either kind: an amount.
+    pub fn is_number(self) -> bool {
+        matches!(self, Kb::Number | Kb::Signed)
+    }
+}
+
 /// Which text field has the keyboard, and what it holds while it is being edited.
 #[derive(Default, Debug)]
 pub struct Focus {
     pub id: Option<&'static str>,
     pub text: String,
     pub numeric: bool,
+    /// The keyboard the field named here asked for ([`inline_kb`]). Kept with the field's id, so
+    /// a field focused by a page itself (setting `id` and `numeric`) never inherits it.
+    pub kind: Option<(&'static str, Kb)>,
     /// The focused field's place on its page (content top, height), so the page keeps it in view.
     pub at: Option<(f32, f32)>,
     /// The soft keyboard shows (the app sets it each frame), so a tap on a focused field whose
@@ -28,6 +57,14 @@ pub struct Focus {
 impl Focus {
     pub fn is(&self, id: &str) -> bool {
         self.id == Some(id)
+    }
+
+    /// The keyboard the focused field wants.
+    pub fn kb(&self) -> Kb {
+        match self.kind {
+            Some((id, kind)) if self.id == Some(id) => kind,
+            _ => Kb::numeric(self.numeric),
+        }
     }
 }
 
@@ -234,6 +271,12 @@ pub fn pills(cx: &mut Ctx, x: f32, y: f32, w: f32, labels: &[&str], selected: Op
 /// height used. While focused, `value` follows what the keyboard holds.
 #[allow(clippy::too_many_arguments)]
 pub fn field(cx: &mut Ctx, id: &'static str, x: f32, y: f32, w: f32, label: &str, placeholder: &str, value: &mut String, numeric: bool) -> f32 {
+    field_kb(cx, id, x, y, w, label, placeholder, value, Kb::numeric(numeric))
+}
+
+/// [`field`], asking for the keyboard `kind` (digits with a minus, say).
+#[allow(clippy::too_many_arguments)]
+pub fn field_kb(cx: &mut Ctx, id: &'static str, x: f32, y: f32, w: f32, label: &str, placeholder: &str, value: &mut String, kind: Kb) -> f32 {
     let p = cx.p;
     let lt = Text::new(ty::CAPTION, p.ink2).medium();
     cx.c.text(label, x + 2.0, y, lt);
@@ -252,7 +295,7 @@ pub fn field(cx: &mut Ctx, id: &'static str, x: f32, y: f32, w: f32, label: &str
         let l = p.line_subtle;
         cx.c.outline(x, fy, w, h, 14.0, 1.0, l);
     }
-    inline(cx, id, x + 14.0, fy, w - 28.0, h, placeholder, value, numeric, Text::new(ty::BODY, p.ink));
+    inline_kb(cx, id, x + 14.0, fy, w - 28.0, h, placeholder, value, kind, Text::new(ty::BODY, p.ink));
     lt.lh() + 4.0 + h
 }
 
@@ -260,6 +303,12 @@ pub fn field(cx: &mut Ctx, id: &'static str, x: f32, y: f32, w: f32, label: &str
 /// that gives it the keyboard. For rows that carry their own frame, like the entry's note.
 #[allow(clippy::too_many_arguments)]
 pub fn inline(cx: &mut Ctx, id: &'static str, x: f32, y: f32, w: f32, h: f32, placeholder: &str, value: &mut String, numeric: bool, style: Text) -> bool {
+    inline_kb(cx, id, x, y, w, h, placeholder, value, Kb::numeric(numeric), style)
+}
+
+/// [`inline`], asking for the keyboard `kind` (a web address, say) rather than words or digits.
+#[allow(clippy::too_many_arguments)]
+pub fn inline_kb(cx: &mut Ctx, id: &'static str, x: f32, y: f32, w: f32, h: f32, placeholder: &str, value: &mut String, kind: Kb, style: Text) -> bool {
     let p = cx.p;
     let focused = cx.focus.is(id);
     if focused {
@@ -279,13 +328,14 @@ pub fn inline(cx: &mut Ctx, id: &'static str, x: f32, y: f32, w: f32, h: f32, pl
         if !focused {
             cx.focus.id = Some(id);
             cx.focus.text = value.clone();
-            cx.focus.numeric = numeric;
-            cx.host.keyboard(true, value, numeric);
+            cx.focus.numeric = kind.is_number();
+            cx.focus.kind = Some((id, kind));
+            cx.host.keyboard_kind(true, value, kind);
             return true;
         }
         // Still focused but the keyboard went (the system took it away): bring it back.
         if !cx.focus.keyboard_up {
-            cx.host.keyboard(true, value, numeric);
+            cx.host.keyboard_kind(true, value, kind);
             return true;
         }
     }
@@ -319,13 +369,20 @@ pub fn minor_text(minor: i64, fraction_digits: u32) -> String {
         return minor.to_string();
     }
     let scale = relay_money::money::pow10(fraction_digits);
-    format!("{}.{:0width$}", minor / scale, (minor % scale).abs(), width = fraction_digits as usize)
+    // The sign goes in front by itself: -50 is "-0.50", which `minor / scale` (0) would lose.
+    let sign = if minor < 0 { "-" } else { "" };
+    let abs = minor.unsigned_abs();
+    let scale = scale.unsigned_abs();
+    format!("{sign}{}.{:0width$}", abs / scale, abs % scale, width = fraction_digits as usize)
 }
 
 // Over the page
 
-/// Take this frame's tap away from what is under a sheet. Call before drawing the page.
+/// Take this frame's tap away from what is under a sheet. Call before drawing the page. It also
+/// marks the page covered, so a drag on the sheet does not scroll the page under it
+/// ([`crate::app::App::page_begin`]).
 pub fn hold(cx: &mut Ctx) -> Option<(f32, f32)> {
+    cx.ui.cover();
     cx.ui.tap.take()
 }
 
@@ -343,6 +400,8 @@ pub enum SheetOut {
 
 /// The dark veil behind a sheet or dialog, over the whole screen. True when it was tapped.
 fn scrim(cx: &mut Ctx) -> bool {
+    // The page under the veil holds still, even on a page that forgot to `hold`.
+    cx.ui.cover();
     let h = cx.c.h;
     cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, h, 0.0, Rgba::hex(0x000000).a(if cx.p.light { 0.4 } else { 0.7 }));
     cx.ui.tap.is_some_and(|_| true)
@@ -365,7 +424,8 @@ pub fn sheet_list(cx: &mut Ctx, title: &str, items: &[(String, Option<String>)],
     let top = screen_h - h;
     cx.c.rect(0.0, top, WIDTH, h + 40.0, 28.0, p.raised);
     cx.c.rect(WIDTH / 2.0 - 18.0, top + 8.0, 36.0, 4.0, 2.0, p.track.mix(p.ink, 0.2));
-    cx.c.text(title, PAD + 4.0, top + 22.0, Text::new(ty::TITLE, p.ink).semi());
+    // Fitted: a long name in the title ("Where ... lands") would run off the sheet.
+    cx.c.text_fit(title, PAD + 4.0, top + 22.0, WIDTH - PAD * 2.0 - 8.0, Text::new(ty::TITLE, p.ink).semi());
     let view = [0.0, top + head, WIDTH, h - head];
     scroll.update(cx.ui, view, dt);
     scroll.max = list_h + 16.0 + bottom_inset - (h - head);
@@ -481,7 +541,8 @@ pub fn confirm(cx: &mut Ctx, title: &str, body: &str, act: &str, destructive: bo
     let h = 20.0 + 24.0 + 8.0 + bh + 20.0 + 48.0 + 20.0;
     let (x, y) = (24.0, (cx.c.h - h) / 2.0);
     cx.c.rect(x, y, w, h, 24.0, p.raised);
-    cx.c.text(title, x + 20.0, y + 20.0, Text::new(ty::TITLE, p.ink).semi());
+    // Fitted: a long name in the title ("Disconnect ...?") would run off the dialog.
+    cx.c.text_fit(title, x + 20.0, y + 20.0, w - 40.0, Text::new(ty::TITLE, p.ink).semi());
     cx.c.para(body, x + 20.0, y + 52.0, w - 40.0, bt, 6);
     let by = y + h - 20.0 - 48.0;
     let bw = (w - 40.0 - 10.0) / 2.0;

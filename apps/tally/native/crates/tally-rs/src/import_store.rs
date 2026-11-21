@@ -7,7 +7,7 @@ use relay_money::ledger::{Ledger, LedgerError, MAX_AMOUNT};
 use relay_money::model::{AccountType, CategoryKind, TxType};
 use relay_money::views::{TxInput, TxQuery};
 
-use crate::import_logic::{ImportLine, NoteUse, Twins};
+use crate::import_logic::{ImportLine, NoteUse, Opening, Twins};
 use crate::model::Store;
 
 fn range(from: Date, to: Date, account: Option<i64>) -> TxQuery {
@@ -99,6 +99,74 @@ pub fn write(ledger: &mut Ledger, target: &Target, lines: &[ImportLine]) -> Resu
         .map_err(|e| e.to_string())
 }
 
+/// What an older statement's lines meet in `account`: its opening balance, its first entry's day
+/// and whether a recorded value sets its balance. None when it is gone, or the ledger is held in
+/// memory (no second connection to read the opening by: relay-money's views leave it out).
+pub fn opening_of(store: &Store, account: i64) -> Option<Opening> {
+    use rusqlite::OptionalExtension;
+    let db = store.sql().ok()?;
+    let (opening, first, valued): (i64, Option<String>, bool) = db
+        .prepare_cached(
+            "SELECT a.opening_balance,
+                    (SELECT MIN(t.date) FROM transactions t WHERE t.deleted = 0 AND (t.account_id = a.id OR t.to_account_id = a.id)),
+                    EXISTS (SELECT 1 FROM account_values v WHERE v.deleted = 0 AND v.account_id = a.id)
+             FROM accounts a WHERE a.id = ?1 AND a.deleted = 0",
+        )
+        .ok()?
+        .query_row([account], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .optional()
+        .ok()
+        .flatten()?;
+    Some(Opening { opening, first_entry: first.and_then(|d| d.parse().ok()), valued })
+}
+
+/// What [`write_moving_opening`] did: the account the lines went into, and whether its opening
+/// balance moved with them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Written {
+    pub account: i64,
+    pub moved: bool,
+}
+
+/// Writes `lines` into `account` and moves its opening balance from `from` to `to`: the opening
+/// already held the lines dated before its first entry ([`crate::import_logic::Earlier::Move`]).
+///
+/// relay-money has no call that changes an opening balance, so it goes through the second
+/// connection, which cannot join the ledger's transaction (the ledger holds the write lock while
+/// its lines go in). So the lines go first, in one transaction, and the opening after. Stopped
+/// between the two (the app killed), the lines are in and the opening is not moved: the file
+/// read again finds every line already logged and still offers the move
+/// ([`crate::import_logic::earlier_lines`]), so nothing is lost and nothing counts twice. The
+/// other order would leave a moved opening with its lines missing, which nothing finds again.
+///
+/// It only moves from the `from` the preview read: one changed since (a sync) refuses before
+/// anything is written. A move that fails after the lines are in says so ([`Written::moved`]).
+/// Stamped as accounts_store stamps an edit, so the move syncs and outranks what it replaces.
+pub fn write_moving_opening(store: &mut Store, account: i64, from: i64, to: i64, lines: &[ImportLine]) -> Result<Written, String> {
+    if from == to {
+        return write(&mut store.ledger, &Target::Existing(account), lines).map(|account| Written { account, moved: false });
+    }
+    if opening_of(store, account).map(|o| o.opening) != Some(from) {
+        return Err("The account's starting balance changed since the preview: open the file again.".into());
+    }
+    let account = write(&mut store.ledger, &Target::Existing(account), lines)?;
+    Ok(Written { account, moved: move_opening(store, account, from, to).is_ok_and(|n| n == 1) })
+}
+
+/// Sets `account`'s opening balance from `was` to `now_is`, only when it still reads `was`.
+/// Returns the rows changed.
+fn move_opening(store: &Store, account: i64, was: i64, now_is: i64) -> Result<usize, String> {
+    let (_, now) = Store::stamp();
+    store
+        .sql()?
+        .prepare_cached(
+            "UPDATE accounts SET opening_balance = ?3, updated_at = MAX(?4, MIN(updated_at, 4000000000000000) + 1)
+             WHERE id = ?1 AND deleted = 0 AND opening_balance = ?2",
+        )
+        .and_then(|mut q| q.execute(rusqlite::params![account, was, now_is, now]))
+        .map_err(|e| e.to_string())
+}
+
 /// A line of Tally's CSV as the ledger would match it: day, type, amount, the account names (any
 /// case) and the note. Its category is left out: a line filed elsewhere since is still the same line.
 type CsvKey = (Date, TxType, i64, String, Option<String>, String);
@@ -125,6 +193,25 @@ pub fn import_tally_csv(store: &mut Store, text: &str) -> Result<String, String>
         .or_else(|| accounts.iter().find(|a| !a.archived))
         .map(|a| a.name.clone())
         .unwrap_or_else(|| "Imported".into());
+    // The export names its currency on every line. Amounts are read in this ledger's decimals, so
+    // a file in a currency with other decimals ("12.50" into yen) would come in 100 times off. One
+    // with the same decimals (USD into CAD) would come in at the right size but counted as this
+    // ledger's money, which it is not: refused too, with nothing converted behind the owner's back.
+    let records = relay_money::csv::parse_records(text, ',');
+    if let Some(cur_col) = records.first().and_then(|h| h.iter().position(|c| c.trim().eq_ignore_ascii_case("currency"))) {
+        let ours = store.formatter().currency.to_uppercase();
+        let codes: Vec<String> = records.iter().skip(1).filter_map(|r| r.get(cur_col).map(|c| c.trim().to_uppercase())).filter(|c| !c.is_empty()).collect();
+        if let Some(code) = codes.iter().find(|c| relay_money::money::fraction_digits(c).is_some_and(|d| d != digits)) {
+            return Err(format!(
+                "That file's amounts are in {code}, which has a different number of decimals from this ledger's currency. Nothing was imported."
+            ));
+        }
+        if let Some(code) = codes.iter().find(|c| **c != ours) {
+            return Err(format!(
+                "That file's amounts are in {code}, but this ledger keeps {ours}. Nothing was imported."
+            ));
+        }
+    }
     let parsed = relay_money::csv::decode(text, digits, &default_account);
     if parsed.rows.is_empty() {
         return Err(parsed.errors.first().cloned().unwrap_or_else(|| "No entries found in that file.".into()));

@@ -47,9 +47,28 @@ pub fn account_badge(cx: &mut Ctx, x: f32, y: f32, d: f32, t: AccountType) {
 /// An entry's amount as a row shows it: spending with a minus, income signed and green, a transfer
 /// quieter.
 pub fn amount_of(cx: &Ctx, t: &Tx, fmt: &MoneyFormatter) -> (String, Rgba) {
+    amount_on(cx, t, fmt, None)
+}
+
+/// What a transfer does to the account whose page is showing (`on`): out of it is negative, into
+/// it positive. Zero for anything else, or with no account's page.
+pub fn transfer_effect(t: &Tx, on: Option<i64>) -> i64 {
+    match on {
+        Some(a) if t.r#type == TxType::Transfer && t.account_id == a => -t.amount,
+        Some(a) if t.r#type == TxType::Transfer && t.to_account_id == Some(a) => t.amount,
+        _ => 0,
+    }
+}
+
+/// [`amount_of`], on the page of account `on`: a transfer there is signed by which way it went,
+/// as two unsigned "$500.00" rows would not say which left and which came in.
+fn amount_on(cx: &Ctx, t: &Tx, fmt: &MoneyFormatter, on: Option<i64>) -> (String, Rgba) {
     match t.r#type {
         TxType::Income => (format!("+{}", fmt.format(t.amount)), cx.p.live_text),
-        TxType::Transfer => (fmt.format(t.amount), cx.p.ink2),
+        TxType::Transfer => match transfer_effect(t, on) {
+            0 => (fmt.format(t.amount), cx.p.ink2),
+            v => (signed(v, fmt), cx.p.ink2),
+        },
         TxType::Expense => (format!("−{}", fmt.format(t.amount)), cx.p.ink),
     }
 }
@@ -69,10 +88,16 @@ pub fn signed(v: i64, fmt: &MoneyFormatter) -> String {
 /// amount over `when`. A transfer wears the two arrows. Rows off screen only take their tap.
 #[allow(clippy::too_many_arguments)]
 pub fn entry_row(cx: &mut Ctx, x: f32, y: f32, w: f32, t: &Tx, fmt: &MoneyFormatter, when: &str) -> bool {
+    entry_row_on(cx, x, y, w, t, fmt, when, None)
+}
+
+/// [`entry_row`] on the page of account `on` (see [`amount_on`]).
+#[allow(clippy::too_many_arguments)]
+fn entry_row_on(cx: &mut Ctx, x: f32, y: f32, w: f32, t: &Tx, fmt: &MoneyFormatter, when: &str, on: Option<i64>) -> bool {
     if !visible(cx, y, ROW_H) {
         return cx.tap(x - 8.0, y, w + 16.0, ROW_H);
     }
-    let (amount, colour) = amount_of(cx, t, fmt);
+    let (amount, colour) = amount_on(cx, t, fmt, on);
     let name = activity_data::entry_name(t);
     let line = activity_data::entry_line(t, None);
     if t.r#type != TxType::Transfer {
@@ -153,6 +178,11 @@ pub fn row_card_h(n: usize) -> f32 {
 /// Entries on a card, inset, with a hairline between rows. `when` says what goes under each
 /// amount. Returns the bottom and the entry tapped.
 pub fn row_card<'a>(cx: &mut Ctx, y: f32, rows: impl IntoIterator<Item = &'a Tx>, fmt: &MoneyFormatter, when: impl Fn(&Tx) -> String) -> (f32, Option<i64>) {
+    row_card_on(cx, y, rows, fmt, when, None)
+}
+
+/// [`row_card`] on the page of account `on` (see [`amount_on`]).
+fn row_card_on<'a>(cx: &mut Ctx, y: f32, rows: impl IntoIterator<Item = &'a Tx>, fmt: &MoneyFormatter, when: impl Fn(&Tx) -> String, on: Option<i64>) -> (f32, Option<i64>) {
     let rows: Vec<&Tx> = rows.into_iter().collect();
     let h = row_card_h(rows.len());
     if visible(cx, y, h) {
@@ -166,7 +196,7 @@ pub fn row_card<'a>(cx: &mut Ctx, y: f32, rows: impl IntoIterator<Item = &'a Tx>
             let line = cx.p.line_subtle;
             cx.c.rect(x + 58.0, ry, w - 58.0, 1.0, 0.0, line);
         }
-        if entry_row(cx, x, ry, w, t, fmt, &when(t)) {
+        if entry_row_on(cx, x, ry, w, t, fmt, &when(t), on) {
             tapped = Some(t.id);
         }
         ry += ROW_H;
@@ -175,17 +205,20 @@ pub fn row_card<'a>(cx: &mut Ctx, y: f32, rows: impl IntoIterator<Item = &'a Tx>
 }
 
 /// The day groups: a header with the day's net on the ground, then that day's entries on a card.
-/// Returns the bottom and the entry tapped.
-pub fn days(cx: &mut Ctx, mut y: f32, days: &[DayGroup], today: Date, fmt: &MoneyFormatter, repeats: &std::collections::HashSet<i64>) -> (f32, Option<i64>) {
+/// On account `on`'s page its transfers are signed and count in the day's net, as they move its
+/// money; elsewhere a transfer is neither. Returns the bottom and the entry tapped.
+pub fn days(cx: &mut Ctx, mut y: f32, days: &[DayGroup], today: Date, fmt: &MoneyFormatter, repeats: &std::collections::HashSet<i64>, on: Option<i64>) -> (f32, Option<i64>) {
     let mut tapped = None;
     for d in days {
         if visible(cx, y, DAY_H) {
-            let net = d.income - d.spent;
-            let words = if d.spent == 0 && d.income == 0 { String::new() } else { signed(net, fmt) };
+            let moved: i64 = d.rows.iter().map(|t| transfer_effect(t, on)).sum();
+            let any_moved = d.rows.iter().any(|t| transfer_effect(t, on) != 0);
+            let net = d.income - d.spent + moved;
+            let words = if d.spent == 0 && d.income == 0 && !any_moved { String::new() } else { signed(net, fmt) };
             let ink3 = cx.p.ink3;
             day_head(cx, y, &day_name(d.date, today), &words, ink3);
         }
-        let (b, t) = row_card(cx, y + DAY_H, &d.rows, fmt, |t| when_in_day(t, repeats).to_string());
+        let (b, t) = row_card_on(cx, y + DAY_H, &d.rows, fmt, |t| when_in_day(t, repeats).to_string(), on);
         if t.is_some() {
             tapped = t;
         }

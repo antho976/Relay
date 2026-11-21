@@ -29,12 +29,23 @@ pub struct State {
     /// The list as read at a ledger generation.
     list: Option<(u64, Result<AccountsState, String>)>,
     edit: Option<Editor>,
+    /// Drafts of editors lower on the stack, under another account's editor opened over them.
+    parked: Vec<Editor>,
+}
+
+impl State {
+    /// Reads the list again on its next draw: something it shows changed outside the ledger.
+    pub fn forget_list(&mut self) {
+        self.list = None;
+    }
 }
 
 /// The account editor's draft and what it was read from.
 struct Editor {
     /// The id the page was opened for (none for a new account).
     route_id: Option<i64>,
+    /// Where its page sits in `app.nav`.
+    depth: usize,
     id: Option<i64>,
     read_at: u64,
     stored: Option<Stored>,
@@ -45,6 +56,16 @@ struct Editor {
     values: Vec<Value>,
     value_text: String,
     templates: Vec<Template>,
+    /// "Money owed" was shown in this editor: it stays while the kind does, so turning it off on
+    /// an account that is not a card doesn't take the switch away with it.
+    owe_shown: bool,
+}
+
+impl Editor {
+    /// Opened for an account that is no longer stored.
+    fn gone(&self) -> bool {
+        self.route_id.is_some() && self.stored.is_none()
+    }
 }
 
 enum Act {
@@ -59,6 +80,54 @@ enum Act {
     RemoveValue(i64),
 }
 
+/// The account editor's fields as typed, kept while the system has stopped Tally
+/// ([`crate::app::Saved`]).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AccountDraft {
+    name: String,
+    kind: AccountType,
+    opening_text: String,
+    owe: bool,
+    is_default: bool,
+    archived: bool,
+    registration: Option<relay_money::model::Registration>,
+    #[serde(default)]
+    value_text: String,
+    #[serde(default)]
+    owe_shown: bool,
+}
+
+/// The drafts of the account editor showing (or the one last open while its page is still on the
+/// stack) and of those parked under another account's editor, for [`App::saved`]: each whose page
+/// is still open, so none of them is lost when the system stops Tally.
+pub fn saved_draft(app: &App) -> Vec<crate::app::PageDraft> {
+    let st = &app.st.accounts;
+    let mut out: Vec<crate::app::PageDraft> = Vec::new();
+    for e in st.edit.iter().chain(st.parked.iter()) {
+        let route = match app.nav.get(e.depth) {
+            Some((r @ Route::AccountEdit { id, .. }, _)) if *id == e.route_id => r.clone(),
+            _ => continue,
+        };
+        if out.iter().any(|d| d.depth == e.depth) {
+            continue;
+        }
+        let d = &e.draft;
+        let draft = AccountDraft {
+            name: d.name.clone(),
+            kind: d.kind,
+            opening_text: d.opening_text.clone(),
+            owe: d.owe,
+            is_default: d.is_default,
+            archived: d.archived,
+            registration: d.registration,
+            value_text: e.value_text.clone(),
+            owe_shown: e.owe_shown,
+        };
+        out.push(crate::app::PageDraft { depth: e.depth, route, draft: crate::app::Draft::Account(draft) });
+    }
+    out
+}
+
 /// Back closes the delete dialog when it is open.
 pub fn back(app: &mut App) -> bool {
     matches!(app.route(), Route::AccountEdit { .. }) && app.st.accounts.edit.as_mut().is_some_and(|e| e.confirm.take().is_some())
@@ -66,7 +135,7 @@ pub fn back(app: &mut App) -> bool {
 
 pub fn draw(app: &mut App, dt: f32) -> bool {
     match app.route().clone() {
-        Route::AccountEdit { id } => editor(app, dt, id),
+        Route::AccountEdit { id, kind } => editor(app, dt, id, kind),
         _ => list(app, dt),
     }
 }
@@ -91,7 +160,7 @@ fn list(app: &mut App, dt: f32) -> bool {
             act = Some(Act::Back);
         }
         if plus {
-            act = Some(Act::Go(Route::AccountEdit { id: None }));
+            act = Some(Act::Go(Route::AccountEdit { id: None, kind: None }));
         }
         if can_transfer && mk::header_key(&mut cx, pg.top, "transfer") {
             act = Some(Act::Go(Route::Entry { id: None, kind: Some(TxType::Transfer), account: None, category: None }));
@@ -133,7 +202,7 @@ fn list_content(cx: &mut Ctx, s: &AccountsState, fmt: &MoneyFormatter, top: f32,
         );
         y += eh + 14.0;
         if kit::key(cx, PAD, y, W, 52.0, "Add an account", Some("plus"), KeyKind::Primary) {
-            *act = Some(Act::Go(Route::AccountEdit { id: None }));
+            *act = Some(Act::Go(Route::AccountEdit { id: None, kind: None }));
         }
         y += 52.0 + 24.0;
         return banks_link(cx, s, y, act);
@@ -219,7 +288,7 @@ fn account_card(cx: &mut Ctx, y: f32, lines: &[&AccountLine], s: &AccountsState,
     });
     if let Some(i) = hit {
         let a = &lines[i].row.view;
-        *act = Some(Act::Go(if a.archived { Route::AccountEdit { id: Some(a.id) } } else { Route::Transactions { category: None, account: Some(a.id) } }));
+        *act = Some(Act::Go(if a.archived { Route::AccountEdit { id: Some(a.id), kind: None } } else { Route::Transactions { category: None, account: Some(a.id) } }));
     }
     y + h
 }
@@ -250,14 +319,20 @@ fn banks_link(cx: &mut Ctx, s: &AccountsState, y: f32, act: &mut Option<Act>) ->
 
 // The editor
 
-fn open_editor(app: &mut App, id: Option<i64>) -> Editor {
+fn open_editor(app: &mut App, id: Option<i64>, kind: Option<AccountType>) -> Editor {
     let digits = app.store.formatter().fraction_digits;
     let default_id = store::default_account(&app.store);
     let stored = id.and_then(|id| store::stored(&app.store, id).ok().flatten());
     let draft = match &stored {
         Some(s) => store::draft_of(s, default_id, digits),
         // The first account becomes the default, so the entry screen has somewhere to start.
-        None => Draft { is_default: default_id.is_none(), ..Draft::default() },
+        // A new account starts as the kind the page that opened it asked for (an investment
+        // account from Investments or Import's statement), else the draft's own first kind.
+        None => {
+            let d = Draft::default();
+            let kind = kind.unwrap_or(d.kind);
+            Draft { is_default: default_id.is_none(), kind, owe: kind == AccountType::Credit, ..d }
+        }
     };
     let templates = if stored.is_none() {
         let names: Vec<String> = store::rows(&app.store).unwrap_or_default().into_iter().map(|r| r.view.name).collect();
@@ -266,14 +341,60 @@ fn open_editor(app: &mut App, id: Option<i64>) -> Editor {
         Vec::new()
     };
     let values = id.map(|id| store::values(&app.store, id).unwrap_or_default()).unwrap_or_default();
-    Editor { route_id: id, id: stored.as_ref().map(|s| s.row.view.id), read_at: app.ledger_gen, stored, draft, show_errors: false, confirm: None, values, value_text: String::new(), templates }
+    let depth = app.nav.len() - 1;
+    Editor { route_id: id, depth, id: stored.as_ref().map(|s| s.row.view.id), read_at: app.ledger_gen, stored, draft, show_errors: false, confirm: None, values, value_text: String::new(), templates, owe_shown: false }
 }
 
-fn editor(app: &mut App, dt: f32, id: Option<i64>) -> bool {
+/// An editor for this same account already sits lower on the stack (its entries page's edit key,
+/// on the "See its entries" page that editor opened): go back down to it rather than open a second
+/// one, which would read the account again into the draft they share and lose what was typed.
+fn back_to_open_editor(app: &mut App, id: Option<i64>) {
+    let Some(id) = id else { return };
+    let same = |r: &Route| matches!(r, Route::AccountEdit { id: Some(x), .. } if *x == id);
+    let below = app.nav.len().saturating_sub(1);
+    if app.nav[..below].iter().any(|(r, _)| same(r)) {
+        app.pop();
+        while !same(app.route()) && app.pop() {}
+    }
+}
+
+/// One draft per editor page open. Another account's editor opened over this one (a new account
+/// from an entry its "See its entries" led to) parks this draft, and Back to this page brings it
+/// back rather than reading the account again. Drafts of pages no longer open are let go.
+fn keep_drafts(app: &mut App, id: Option<i64>) {
+    let depth = app.nav.len() - 1;
+    // Opened anew, the page is over every draft still open; uncovered, its own draft is there too.
+    let below = if app.returned { depth + 1 } else { depth };
+    let nav = &app.nav;
+    let st = &mut app.st.accounts;
+    if let Some(e) = st.edit.take() {
+        st.parked.push(e);
+    }
+    st.parked.retain(|e| e.depth < below && matches!(nav.get(e.depth), Some((Route::AccountEdit { id, .. }, _)) if *id == e.route_id));
+    if app.returned
+        && let Some(i) = st.parked.iter().position(|e| e.depth == depth && e.route_id == id)
+    {
+        st.edit = Some(st.parked.remove(i));
+    }
+}
+
+fn editor(app: &mut App, dt: f32, id: Option<i64>, kind: Option<AccountType>) -> bool {
+    if app.fresh && !app.returned {
+        back_to_open_editor(app, id);
+    }
+    if app.fresh {
+        keep_drafts(app, id);
+    }
     // Opened anew it reads the account; back from a page it opened ("See its entries") the
     // draft stays.
     if (app.fresh && !app.returned) || app.st.accounts.edit.as_ref().is_none_or(|e| e.route_id != id) {
-        let e = open_editor(app, id);
+        let mut e = open_editor(app, id, kind);
+        // Restored after the system stopped Tally: the fields as they were being typed.
+        if let Some(crate::app::Draft::Account(d)) = app.take_draft() {
+            e.draft = Draft { name: d.name, kind: d.kind, opening_text: d.opening_text, owe: d.owe, is_default: d.is_default, archived: d.archived, registration: d.registration };
+            e.value_text = d.value_text;
+            e.owe_shown = d.owe_shown;
+        }
         app.st.accounts.edit = Some(e);
     }
     // Another write moved the ledger (a value recorded): read the stored row again, keep the draft.
@@ -321,12 +442,23 @@ fn edit_form(cx: &mut Ctx, e: &mut Editor, fmt: &MoneyFormatter, today: relay_mo
     let p = cx.p;
     let digits = fmt.fraction_digits;
     let mut y = top;
+    // Opened for an account that is no longer there (deleted on another device, or the page
+    // restored after it went): no form, so Save can't make a new account in its place.
+    if e.gone() {
+        let (back, _, h) = widgets::page_header(cx, y, "Account", None);
+        if back {
+            *act = Some(Act::Back);
+        }
+        y += h;
+        return y + widgets::empty(cx, PAD, y, W, "bank", "This account is gone", "It was deleted, here or on another of your devices.");
+    }
     let (title, subtitle) = match &e.stored {
         None => ("New account".to_string(), None),
         Some(s) => {
             let mut parts = Vec::new();
             let opening = e.draft.signed_opening(digits).unwrap_or(s.row.opening);
-            if opening != 0 || !e.values.is_empty() {
+            // As `AccountRow::tracked`: a card shows what is owed even when it started at nothing.
+            if opening != 0 || !e.values.is_empty() || e.draft.kind == AccountType::Credit {
                 let words = store::balance_words(e.draft.kind, store::preview_balance(Some(s), opening), fmt);
                 parts.push(capitalise(&words));
             }
@@ -356,6 +488,14 @@ fn edit_form(cx: &mut Ctx, e: &mut Editor, fmt: &MoneyFormatter, today: relay_mo
         if let Some(i) = picked {
             let t = e.templates[i];
             e.draft.apply(&t);
+            // A template sets the kind and "Money owed" afresh, as picking the kind does.
+            e.owe_shown = false;
+            // A focused Name field copies the keyboard's text over the draft as it draws: give
+            // the keyboard the template's name too, or the pick is lost.
+            if cx.focus.is("account.name") {
+                cx.focus.text = e.draft.name.clone();
+                cx.host.keyboard(true, &e.draft.name, false);
+            }
         }
         y += fh + 20.0;
     }
@@ -371,7 +511,20 @@ fn edit_form(cx: &mut Ctx, e: &mut Editor, fmt: &MoneyFormatter, today: relay_mo
     let selected = store::TYPES.iter().position(|t| *t == e.draft.kind);
     let (picked, kh) = widgets::pills(cx, PAD, y, W, &kinds, selected);
     if let Some(i) = picked {
-        e.draft.kind = store::TYPES[i];
+        let kind = store::TYPES[i];
+        // Becoming a card, or no longer one, sets "Money owed" as a template does: a card's
+        // opening is what is owed on it, stored below zero. Only for a new account or a blank
+        // opening: a saved account's opening already has its sign, and flipping it here would
+        // turn $500 owed into $500 held. There the switch stays where it is, and on screen.
+        let fresh = e.stored.is_none() || e.draft.opening_text.trim().is_empty();
+        if fresh && (kind == AccountType::Credit) != (e.draft.kind == AccountType::Credit) {
+            e.draft.owe = kind == AccountType::Credit;
+            // A saved account keeps its switch on screen once shown.
+            if e.stored.is_none() {
+                e.owe_shown = false;
+            }
+        }
+        e.draft.kind = kind;
     }
     y += kh + 4.0;
     y += mk::hint(cx, PAD, y, W, store::type_hint(e.draft.kind), false) + 20.0;
@@ -394,7 +547,19 @@ fn edit_form(cx: &mut Ctx, e: &mut Editor, fmt: &MoneyFormatter, today: relay_mo
     }
 
     let opening_label = if e.draft.owe { "Owed when it opened" } else { "Balance when it opened" };
-    y += widgets::field(cx, "account.opening", PAD, y, W, opening_label, &fmt.format(0), &mut e.draft.opening_text, true);
+    // A keyboard with a minus: one typed flips "Money owed", below.
+    y += widgets::field_kb(cx, "account.opening", PAD, y, W, opening_label, &fmt.format(0), &mut e.draft.opening_text, widgets::Kb::Signed);
+    // The amount reader drops a minus, so "-50" would save as +50. A leading minus flips "Money
+    // owed" instead (the switch shows, the label reads "Owed"), which is how a balance below zero
+    // is stored, and leaves the amount itself.
+    if let Some(rest) = e.draft.opening_text.trim_start().strip_prefix('-') {
+        e.draft.opening_text = rest.to_string();
+        e.draft.owe = !e.draft.owe;
+        if cx.focus.is("account.opening") {
+            cx.focus.text = e.draft.opening_text.clone();
+            cx.host.keyboard_kind(true, &e.draft.opening_text, widgets::Kb::Signed);
+        }
+    }
     y += match opening_problem.filter(|_| errors) {
         Some(pr) => mk::hint(cx, PAD, y, W, pr, true),
         None => mk::hint(cx, PAD, y, W, "What it held before the first entry in Tally", false),
@@ -403,7 +568,8 @@ fn edit_form(cx: &mut Ctx, e: &mut Editor, fmt: &MoneyFormatter, today: relay_mo
 
     // The switches, in one card.
     let mut rows: Vec<(&'static str, &str, Option<&str>)> = Vec::new();
-    if e.draft.shows_owe() {
+    e.owe_shown |= e.draft.shows_owe();
+    if e.owe_shown {
         rows.push(("card", "Money owed", Some("Counts against what you hold")));
     }
     rows.push(("flag", "New entries start here", None));
@@ -432,7 +598,9 @@ fn edit_form(cx: &mut Ctx, e: &mut Editor, fmt: &MoneyFormatter, today: relay_mo
     }
     y += ch + 20.0;
 
-    if e.stored.is_some() && e.draft.kind == AccountType::Investment {
+    // Values are recorded on a stored investment account: a kind switched to Investment but not
+    // saved yet has nowhere to record them.
+    if e.stored.as_ref().is_some_and(|s| s.row.view.r#type == AccountType::Investment) && e.draft.kind == AccountType::Investment {
         y = values_panel(cx, e, fmt, today, y, act);
     }
     if let Some(id) = e.id {
@@ -510,6 +678,9 @@ fn edit_act(app: &mut App, a: Act) {
         }
         Act::Go(r) => app.push(r),
         Act::Save => {
+            if e.gone() {
+                return;
+            }
             let (n, o) = store::problems(&e.draft, digits);
             if n.is_some() || o.is_some() {
                 e.show_errors = true;
@@ -542,6 +713,10 @@ fn edit_act(app: &mut App, a: Act) {
                     app.invalidate();
                     app.say(store::deleted_line(&name, &u), None);
                     app.pop();
+                    // Its entries page it was opened from would read as gone: leave it too.
+                    if matches!(app.route(), Route::Transactions { account: Some(a), .. } if *a == id) {
+                        app.pop();
+                    }
                 }
                 Err(err) => app.say(err, None),
             }
@@ -553,7 +728,7 @@ fn edit_act(app: &mut App, a: Act) {
             match store::set_archived(&mut app.store, id, true) {
                 Ok(()) => {
                     app.invalidate();
-                    app.say(format!("{name} archived · its entries and bills stay"), None);
+                    app.say(format!("{name} archived · everything in it stays"), None);
                     app.pop();
                 }
                 Err(err) => app.say(err, None),
@@ -575,7 +750,8 @@ fn edit_act(app: &mut App, a: Act) {
         Act::RemoveValue(vid) => match store::delete_value(&app.store, vid) {
             Ok(()) => {
                 app.invalidate();
-                app.say("Value removed", None);
+                // One tap on a small ×: Undo puts it back.
+                app.say_undo("Value removed", move |app: &mut App| store::restore_value(&app.store, vid));
             }
             Err(err) => app.say(err, None),
         },

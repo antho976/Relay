@@ -18,7 +18,7 @@ use relay_money::money::MoneyFormatter;
 
 use crate::accounts_kit::{self as mk, W};
 use crate::accounts_store::{self as accounts, AccountRow};
-use crate::app::App;
+use crate::app::{App, Draft, PageDraft};
 use crate::cx;
 use crate::draw::{Rgba, Text, WIDTH};
 use crate::invest_logic::{self as logic, InvestView};
@@ -51,15 +51,26 @@ struct Read {
 fn read(app: &App, today: Date) -> Read {
     let rows = accounts::rows(&app.store).unwrap_or_default();
     let input = app.store.ledger.portfolio_input(today).ok();
-    let worth_on = |d: Date| -> HashMap<i64, i64> {
-        let Some(input) = &input else { return HashMap::new() };
-        let balances = accounts::balances_on(&app.store, d).unwrap_or_default();
-        logic::values_on(input, &balances, d).into_iter().map(|(id, (v, _))| (id, v)).collect()
-    };
+    // Each month's end as the Accounts page reads last month's (accounts_store::worth_back): an
+    // account not priced from holdings by `d` and with nowhere to start by then (no opening, no
+    // value recorded) reads as worth what it is now less what was moved into it since, so a first
+    // holdings import is not a gain this year or on the chart, and money moved in is not either.
+    let now = accounts::worth_today(&rows, input.as_ref(), today);
+    // With no portfolio input (it failed to read), still by balances, as the Accounts page does:
+    // nothing at all would draw the chart from $0 and read the whole worth as this year's gain.
+    let worth_on = |d: Date| -> HashMap<i64, i64> { accounts::worth_back(&app.store, &rows, input.as_ref(), d, &now).unwrap_or_default() };
     let history = logic::month_ends(today).into_iter().map(|d| (d, worth_on(d))).collect();
     let year_start = Date::new(today.year() - 1, 12, 31).map(worth_on).unwrap_or_default();
     match app.store.ledger.portfolio(today) {
-        Ok(p) => Read { portfolio: Some(p), rows, problem: None, history, year_start },
+        Ok(mut p) => {
+            // A report older than a value recorded by hand is set aside, and what moved in or out
+            // after an account's report counts there, as net worth reads it.
+            if let Some(i) = &input {
+                logic::set_aside_older_reports(&mut p, i, &rows);
+                logic::count_moves(&mut p, i);
+            }
+            Read { portfolio: Some(p), rows, problem: None, history, year_start }
+        }
         Err(_) => Read {
             portfolio: None,
             rows,
@@ -107,7 +118,7 @@ fn page(app: &mut App, dt: f32, today: Date) -> bool {
             act = Some(Act::Back);
         }
         if plus {
-            act = Some(Act::Go(Route::AccountEdit { id: None }));
+            act = Some(Act::Go(Route::AccountEdit { id: None, kind: Some(relay_money::model::AccountType::Investment) }));
         }
         if mk::header_key(&mut cx, pg.top, "download") {
             act = Some(Act::Go(Route::Import));
@@ -147,7 +158,7 @@ fn content(cx: &mut Ctx, v: &InvestView, r: &Read, fmt: &MoneyFormatter, today: 
         y += eh + 14.0;
         let kw = (W - 10.0) / 2.0;
         if kit::key(cx, PAD, y, kw, 52.0, "Add an account", Some("plus"), KeyKind::Primary) {
-            *act = Some(Act::Go(Route::AccountEdit { id: None }));
+            *act = Some(Act::Go(Route::AccountEdit { id: None, kind: Some(relay_money::model::AccountType::Investment) }));
         }
         if kit::key(cx, PAD + kw + 10.0, y, kw, 52.0, "Import", Some("download"), KeyKind::Plain) {
             *act = Some(Act::Go(Route::Import));
@@ -250,15 +261,19 @@ fn content(cx: &mut Ctx, v: &InvestView, r: &Read, fmt: &MoneyFormatter, today: 
         y += hh + 4.0;
         cx.c.text("Largest first", PAD, y, Text::new(13.0, p.ink3));
         y += 26.0;
-        let (h, _) = mk::row_card(cx, y, shown.len(), |cx, i, ry| {
+        let (h, hit) = mk::row_card(cx, y, shown.len(), |cx, i, ry| {
             let h = &shown[i];
             let value = fmt.format_whole(h.value);
             let gain = logic::gain_text(h.gain, h.gain_bps, fmt);
             let name = if h.name.trim().is_empty() { h.symbol.clone() } else { format!("{} · {}", h.symbol, h.name) };
             let gc = if h.gain >= 0 { p.live_text } else { p.held_text };
-            mk::card_row(cx, PAD, ry, W, "coins", &name, &logic::holding_line(h), Some((&value, p.ink)), Some((&gain, gc)));
-            false
+            mk::card_row(cx, PAD, ry, W, "coins", &name, &logic::holding_line(h), Some((&value, p.ink)), Some((&gain, gc)))
         });
+        // The row reads as pressed under a finger: a tap opens the account that holds it, as its
+        // account's row above does, rather than nothing.
+        if let Some(i) = hit {
+            *act = Some(Act::Go(Route::Transactions { category: None, account: Some(shown[i].account_id) }));
+        }
         y += h + 16.0;
     }
     for issue in &v.issues {
@@ -363,7 +378,17 @@ fn share_card(cx: &mut Ctx, y: f32, title: &str, lines: &[logic::ShareLine], fmt
 
 // The room editor
 
+/// The room being typed, while its page is open, to keep across the process being stopped.
+pub fn saved_draft(app: &App) -> Option<PageDraft> {
+    let e = app.st.invest.room.as_ref()?;
+    let route = Route::RoomEdit { kind: e.route_kind.clone() };
+    let depth = app.depth_of(&route)?;
+    Some(PageDraft { depth, route, draft: Draft::Room { input: e.input.text.clone() } })
+}
+
 struct RoomEditor {
+    /// The kind its route names, to find its page on the stack when keeping the draft.
+    route_kind: String,
     registration: Registration,
     year: i32,
     existing: Option<i64>,
@@ -380,6 +405,7 @@ fn open_room(app: &App, kind: &str, today: Date) -> RoomEditor {
     let line = app.st.invest.read.as_ref().and_then(|(_, r)| r.portfolio.as_ref()).and_then(|p| p.room.iter().find(|l| l.registration == registration && l.year == year).cloned());
     let existing = line.as_ref().and_then(|l| l.room);
     RoomEditor {
+        route_kind: kind.to_string(),
         registration,
         year,
         existing,
@@ -391,7 +417,11 @@ fn open_room(app: &App, kind: &str, today: Date) -> RoomEditor {
 
 fn room_editor(app: &mut App, dt: f32, kind: &str, today: Date) -> bool {
     if app.fresh || app.st.invest.room.is_none() {
-        let r = open_room(app, kind, today);
+        let mut r = open_room(app, kind, today);
+        // Restored after the system stopped Tally: the figure as it was being typed.
+        if let Some(Draft::Room { input }) = app.take_draft() {
+            r.input = AmountInput::new(&input, r.input.fraction_digits);
+        }
         app.st.invest.room = Some(r);
     }
     let pg = app.page_begin(dt);
@@ -426,11 +456,16 @@ fn room_editor(app: &mut App, dt: f32, kind: &str, today: Date) -> bool {
             }
         }
         Some(Act::RemoveRoom) => {
-            // A figure of zero removes it.
+            // A figure of zero removes it. One tap does it, so Undo sets the old figure again.
+            let old = e.existing;
             match app.store.ledger.room_set(reg, year, 0) {
                 Ok(()) => {
                     app.invalidate();
-                    app.say(format!("{} room removed", reg.label()), None);
+                    let words = format!("{} room removed", reg.label());
+                    match old {
+                        Some(old) => app.say_undo(words, move |app: &mut App| app.store.ledger.room_set(reg, year, old).map_err(|e| e.to_string())),
+                        None => app.say(words, None),
+                    }
                     app.pop();
                 }
                 Err(err) => app.say(err.to_string(), None),

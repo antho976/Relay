@@ -195,18 +195,7 @@ pub fn may_reach(url: &str) -> bool {
     if !(scheme.eq_ignore_ascii_case("ws") || scheme.eq_ignore_ascii_case("http")) {
         return false;
     }
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    // A user part ("ws://10.0.0.2@elsewhere") hides where it really goes.
-    if authority.contains('@') {
-        return false;
-    }
-    let host = match authority.strip_prefix('[') {
-        Some(h) => match h.split_once(']') {
-            Some((h, _)) => h,
-            None => return false,
-        },
-        None => authority.rsplit_once(':').map_or(authority, |(h, _)| h),
-    };
+    let Some(host) = host_of(rest) else { return false };
     if host.eq_ignore_ascii_case("localhost") {
         return true;
     }
@@ -220,16 +209,45 @@ pub fn may_reach(url: &str) -> bool {
     }
 }
 
+/// The host of an address's `authority…` part, brackets off. None when a user part
+/// ("ws://10.0.0.2@elsewhere") hides where it really goes, or a bracket is left open.
+fn host_of(rest: &str) -> Option<&str> {
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') {
+        return None;
+    }
+    match authority.strip_prefix('[') {
+        Some(h) => h.split_once(']').map(|(h, _)| h),
+        None => Some(authority.rsplit_once(':').map_or(authority, |(h, _)| h)),
+    }
+}
+
+/// Whether `url` reaches this machine itself: `localhost`, 127/8, `::1`. Nothing between the
+/// phone and its network can answer there.
+pub fn is_loopback(url: &str) -> bool {
+    let Some(host) = url.split_once("://").and_then(|(_, rest)| host_of(rest)) else { return false };
+    host.eq_ignore_ascii_case("localhost")
+        || host.parse::<std::net::IpAddr>().is_ok_and(|a| match a {
+            std::net::IpAddr::V4(a) => a.is_loopback(),
+            std::net::IpAddr::V6(a) => a.is_loopback() || a.to_ipv4_mapped().is_some_and(|a| a.is_loopback()),
+        })
+}
+
 fn private_v4(a: std::net::Ipv4Addr) -> bool {
     let [x, y, ..] = a.octets();
     a.is_loopback() || a.is_private() || a.is_link_local() || (x == 100 && (64..128).contains(&y))
 }
 
 /// `routes` in the order to try them, encrypted first, and without the clear ones
-/// [`may_reach`] refuses.
+/// [`may_reach`] refuses. When there is an encrypted one, a clear one is no fallback but this
+/// machine's own: the door never proves it knows this phone's key, so whatever answers at a
+/// private address on the network the phone is on (a hostile Wi-Fi's gateway that blocks the
+/// encrypted route) would be sent the ledger's changes and believed. Clear routes to a private
+/// network are used only by a door that offers nothing encrypted.
 pub fn ordered_routes(routes: &[String]) -> Vec<String> {
     let (secure, clear): (Vec<&String>, Vec<&String>) = routes.iter().filter(|r| may_reach(r)).partition(|r| is_secure(r));
-    secure.into_iter().chain(clear).cloned().collect()
+    let clear = clear.into_iter().filter(|r| secure.is_empty() || is_loopback(r));
+    secure.iter().copied().chain(clear).cloned().collect()
 }
 
 impl PairLink {
@@ -283,6 +301,11 @@ pub fn normalize(server: &str) -> String {
     } else {
         format!("https://{s}")
     };
+    // The scheme and the host are the same server in any case ("HTTPS://Anthobot.bid" is
+    // "https://anthobot.bid"), so they are kept in one case and compare equal; a path keeps its own.
+    let host_end = s.find("://").map_or(0, |i| i + 3);
+    let path_at = s[host_end..].find('/').map_or(s.len(), |i| host_end + i);
+    s = format!("{}{}", s[..path_at].to_ascii_lowercase(), &s[path_at..]);
     for suffix in ["/relay", "/api/tally"] {
         if let Some(t) = s.strip_suffix(suffix) {
             s = t.to_string();
@@ -360,7 +383,9 @@ mod tests {
         let l = PairLink::parse("relay://pair?v=1&code=AB%2012&host=Cloud&direct=ws%3A%2F%2F10.0.0.2%3A7420,http://no&via=wss://s.example/join/r1").unwrap();
         assert_eq!(l.code, "AB 12");
         assert_eq!(l.host, "Cloud");
-        assert_eq!(l.routes(), vec!["wss://s.example/join/r1".to_string(), "ws://10.0.0.2:7420".to_string()], "encrypted first");
+        assert_eq!(l.routes(), vec!["wss://s.example/join/r1".to_string()], "encrypted, with no clear fallback beside it");
+        let lan = PairLink::parse("relay://pair?v=1&code=A&direct=ws%3A%2F%2F10.0.0.2%3A7420").unwrap();
+        assert_eq!(lan.routes(), vec!["ws://10.0.0.2:7420".to_string()], "a door with nothing encrypted is reached in the clear");
         assert_eq!(l.instance, "stable");
         assert!(PairLink::parse("relay://pair?v=2&code=A&via=wss://x").is_none());
         assert!(PairLink::parse("relay://pair?v=1&via=wss://x").is_none());
@@ -406,7 +431,12 @@ mod tests {
             assert!(!may_reach(no), "{no}");
         }
         let routes = ["ws://8.8.8.8:7420", "ws://192.168.1.20:7420", "wss://s.example/join/r"].map(String::from);
-        assert_eq!(ordered_routes(&routes), vec!["wss://s.example/join/r".to_string(), "ws://192.168.1.20:7420".to_string()]);
+        assert_eq!(ordered_routes(&routes), vec!["wss://s.example/join/r".to_string()], "no clear fallback beside an encrypted route");
+        let routes = ["ws://8.8.8.8:7420", "ws://192.168.1.20:7420", "ws://100.74.208.9:7420"].map(String::from);
+        assert_eq!(ordered_routes(&routes), vec!["ws://192.168.1.20:7420".to_string(), "ws://100.74.208.9:7420".to_string()]);
+        let routes = ["ws://127.0.0.1:7430", "wss://s.example/join/r", "ws://[::1]:7430", "ws://localhost:1"].map(String::from);
+        assert_eq!(ordered_routes(&routes), ["wss://s.example/join/r", "ws://127.0.0.1:7430", "ws://[::1]:7430", "ws://localhost:1"].map(String::from).to_vec(), "this machine's own stays");
+        assert!(!is_loopback("ws://127.0.0.1@10.0.0.2") && !is_loopback("ws://10.0.0.2") && is_loopback("http://127.0.0.2:80/x"));
     }
 
     #[test]
@@ -414,6 +444,10 @@ mod tests {
         assert_eq!(normalize("antho.example.com/"), "https://antho.example.com");
         assert_eq!(normalize("wss://antho.example.com/relay"), "https://antho.example.com");
         assert_eq!(normalize("http://10.0.0.2:8080/api/tally"), "http://10.0.0.2:8080");
+        // One server in any case: the scheme and host are lowered, a path is kept as typed.
+        assert_eq!(normalize("HTTPS://Anthobot.bid"), normalize("anthobot.bid"));
+        assert_eq!(normalize("WSS://Anthobot.BID/relay"), "https://anthobot.bid");
+        assert_eq!(normalize("Anthobot.bid/Tally"), "https://anthobot.bid/Tally");
         assert_eq!(api("https://a.b"), "https://a.b/api/tally");
         assert!(DEFAULT_SERVER.starts_with("https://"));
     }

@@ -295,14 +295,19 @@ pub fn confirm(cx: &mut Ctx, title: &str, body: &str, act: &str, alternate: Opti
     cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, screen_h, 0.0, Rgba::hex(0x000000).a(if p.light { 0.4 } else { 0.7 }));
     let w = WIDTH - 48.0;
     let bt = Text::new(ty::UI, p.ink2).line(1.4);
-    let bh = cx.c.para_h(body, w - 40.0, bt, 10);
     let alt_h = if alternate.is_some() { 48.0 + 10.0 } else { 0.0 };
-    let h = 20.0 + 24.0 + 8.0 + bh + 20.0 + alt_h + 48.0 + 20.0;
+    let chrome = 20.0 + 24.0 + 8.0 + 20.0 + alt_h + 48.0 + 20.0;
+    // As many lines as the screen holds around the keys, so the words near the end (what can't
+    // be undone, what Archive does) are cut only on a screen too short for them.
+    let lines = (((screen_h - 48.0 - chrome) / bt.lh()).floor() as usize).max(4);
+    let bh = cx.c.para_h(body, w - 40.0, bt, lines);
+    let h = chrome + bh;
     let (x, y) = (24.0, (screen_h - h) / 2.0);
     cx.c.rect(x, y, w, h, CARD_R, p.raised);
     cx.c.outline(x, y, w, h, CARD_R, 1.0, p.line_subtle);
-    cx.c.text(title, x + 20.0, y + 20.0, Text::new(ty::TITLE, p.ink).semi());
-    cx.c.para(body, x + 20.0, y + 52.0, w - 40.0, bt, 10);
+    // Fitted to the card: a long account name would otherwise run off its edge.
+    cx.c.text_fit(title, x + 20.0, y + 20.0, w - 40.0, Text::new(ty::TITLE, p.ink).semi());
+    cx.c.para(body, x + 20.0, y + 52.0, w - 40.0, bt, lines);
     let mut by = y + h - 20.0 - 48.0 - alt_h;
     let mut out = None;
     if let Some(a) = alternate {

@@ -7,8 +7,8 @@ use std::collections::HashMap;
 
 use relay_money::Date;
 use relay_money::copy;
-use relay_money::invest::{self, HoldingView, Portfolio, PortfolioInput, RoomView};
-use relay_money::model::{AccountType, Registration, SecurityKind};
+use relay_money::invest::{self, ActivityRow, HoldingView, Portfolio, PortfolioAccount, PortfolioInput, RoomView};
+use relay_money::model::{ActivityType, AccountType, Registration, SecurityKind};
 use relay_money::money::MoneyFormatter;
 
 use crate::accounts_store::AccountRow;
@@ -268,14 +268,15 @@ fn day(s: Option<&str>) -> Option<Date> {
 }
 
 /// The open investment accounts, each read from the portfolio when it holds something there,
-/// else from its balance.
+/// else from its balance. A report older than a value recorded by hand is set aside first
+/// ([`set_aside_older_reports`]), so such an account reads from its balance here too.
 pub fn invest_lines(portfolio: Option<&Portfolio>, rows: &[AccountRow]) -> Vec<InvestLine> {
     rows.iter()
         .filter(|r| r.view.r#type == AccountType::Investment && !r.view.archived)
         .map(|b| {
             let p = portfolio.and_then(|p| p.accounts.iter().find(|a| a.id == b.view.id));
             match p {
-                Some(p) if p.holdings > 0 || p.cash != 0 || p.book != 0 => InvestLine {
+                Some(p) if priced(p) => InvestLine {
                     id: b.view.id,
                     name: b.view.name.clone(),
                     registration: p.registration,
@@ -293,7 +294,9 @@ pub fn invest_lines(portfolio: Option<&Portfolio>, rows: &[AccountRow]) -> Vec<I
                     id: b.view.id,
                     name: b.view.name.clone(),
                     registration: p.map(|p| p.registration).unwrap_or(b.view.registration),
-                    worth: b.view.balance,
+                    // As net worth reads it: one given nowhere to start by its entries
+                    // (accounts_store::worth_by_entries).
+                    worth: b.worth,
                     cost: 0,
                     cash: 0,
                     holdings: 0,
@@ -469,12 +472,58 @@ pub fn room_year(r: Registration, today: Date) -> i32 {
     invest::room_year(r, today)
 }
 
-// History
+// Money moved after a report
 
-/// What each open investment account was worth at the end of `day`, and whether that came from
-/// its holdings: the portfolio read again with only the rows on or before that day, else
-/// `balances` (the account's balance that day, values recorded by hand included).
-pub fn values_on(input: &PortfolioInput, balances: &HashMap<i64, i64>, day: Date) -> HashMap<i64, (i64, bool)> {
+/// The portfolio prices the account: it holds something there (holdings, cash or a book cost).
+pub fn priced(a: &PortfolioAccount) -> bool {
+    a.holdings > 0 || a.cash != 0 || a.book != 0
+}
+
+/// An activity that records money moving into or out of the account itself: a deposit, a
+/// withdrawal, or cash moved in or out. Tally's own transfer for the same money is in it.
+fn moves_cash(a: &ActivityRow) -> bool {
+    match a.r#type {
+        ActivityType::Deposit | ActivityType::Withdrawal => true,
+        ActivityType::TransferIn | ActivityType::TransferOut => a.security_id.is_none(),
+        _ => false,
+    }
+}
+
+/// The last day the portfolio's own rows say what an investment account holds, as of `day`: its
+/// newest holdings report on or before it, or a later activity that moves cash, which already
+/// records a deposit or a withdrawal Tally also has as a transfer. None: neither.
+pub fn report_day(input: &PortfolioInput, account: i64, day: Date) -> Option<Date> {
+    let report = input.holdings.iter().filter(|h| h.account_id == account && h.date <= day).map(|h| h.date).max();
+    let cash = input.activities.iter().filter(|a| a.account_id == account && a.date <= day && moves_cash(a)).map(|a| a.date).max();
+    report.max(cash)
+}
+
+/// What Tally's own transfers moved into each investment account (less what they moved out)
+/// after its [`report_day`] as of `day`, up to `through` (none: every later date, as a balance
+/// counts them). The portfolio reads only its own rows, so without this a transfer after the
+/// newest report would leave the account it came from and arrive nowhere: a holdings value is
+/// read like a recorded value, plus what moved after it.
+pub fn moved_since_report(input: &PortfolioInput, day: Date, through: Option<Date>) -> HashMap<i64, i64> {
+    let mut out = HashMap::new();
+    for a in &input.accounts {
+        let from = report_day(input, a.id, day);
+        let moved: i64 = input
+            .transfers
+            .iter()
+            .filter(|t| t.account_id == a.id && from.is_none_or(|f| t.date > f) && through.is_none_or(|u| t.date <= u))
+            .map(|t| t.amount)
+            .sum();
+        if moved != 0 {
+            out.insert(a.id, moved);
+        }
+    }
+    out
+}
+
+/// Each open investment account the portfolio prices at the end of `day`, at its value: the
+/// portfolio read again with only the rows on or before that day, plus what moved in or out
+/// after its report up to `through` ([`moved_since_report`]).
+pub fn priced_on(input: &PortfolioInput, day: Date, through: Option<Date>) -> HashMap<i64, i64> {
     let mut i = input.clone();
     i.today = day;
     i.holdings.retain(|r| r.date <= day);
@@ -483,18 +532,114 @@ pub fn values_on(input: &PortfolioInput, balances: &HashMap<i64, i64>, day: Date
     i.fx_rates.retain(|r| r.date <= day);
     i.transfers.retain(|r| r.date <= day);
     let p = invest::portfolio(&i);
+    let moved = moved_since_report(input, day, through);
+    p.accounts.iter().filter(|a| priced(a)).map(|a| (a.id, a.value + moved.get(&a.id).copied().unwrap_or(0))).collect()
+}
+
+/// The portfolio as the Investments page shows it: what moved into or out of an account it
+/// prices after that account's report is counted as cash there ([`moved_since_report`]), so the
+/// page reads each account as the Accounts page and net worth do.
+pub fn count_moves(p: &mut Portfolio, input: &PortfolioInput) {
+    let moved = moved_since_report(input, input.today, None);
+    if moved.is_empty() {
+        return;
+    }
+    let bps = |part: i64, of: i64| if of > 0 { invest::mul_div_half_even(part, 10_000, of) } else { None };
+    for a in p.accounts.iter_mut().filter(|a| priced(a)) {
+        let m = moved.get(&a.id).copied().unwrap_or(0);
+        a.value += m;
+        a.cash += m;
+        a.book += m;
+        a.gain = a.value - a.book;
+        a.gain_bps = bps(a.gain, a.book);
+    }
+    retotal(p);
+}
+
+/// The portfolio's totals and each holding's weight, summed again after its accounts changed.
+fn retotal(p: &mut Portfolio) {
+    let bps = |part: i64, of: i64| if of > 0 { invest::mul_div_half_even(part, 10_000, of) } else { None };
+    p.value = p.accounts.iter().map(|a| a.value).sum();
+    p.book = p.accounts.iter().map(|a| a.book).sum();
+    p.cash = p.accounts.iter().map(|a| a.cash).sum();
+    p.gain = p.value - p.book;
+    p.gain_bps = bps(p.gain, p.book);
+    for h in &mut p.holdings {
+        h.weight_bps = if p.value == 0 { 0 } else { invest::mul_div_half_even(h.value, 10_000, p.value).unwrap_or(0) };
+    }
+}
+
+/// Holdings say what an account holds on `day` only when they were said last: its
+/// [`report_day`] is on or after `valued`, the newest value recorded by hand by then (none: no
+/// value, so holdings always win). A value recorded after the report is newer word, and the
+/// account reads as its balance does then: that value plus what moved after it. Net worth, the
+/// Accounts page and the Investments page all ask this, now and for an earlier day alike.
+pub fn holdings_win(input: &PortfolioInput, account: i64, day: Date, valued: Option<Date>) -> bool {
+    valued.is_none_or(|v| report_day(input, account, day).is_some_and(|r| r >= v))
+}
+
+/// The portfolio as the Investments page shows it, with each account whose holdings are older
+/// than a value recorded by hand ([`holdings_win`]) set aside: no value, cash or holdings from
+/// that report, so [`invest_lines`] reads it by hand, from its balance, as net worth does.
+pub fn set_aside_older_reports(p: &mut Portfolio, input: &PortfolioInput, rows: &[AccountRow]) {
+    let older: Vec<i64> = p
+        .accounts
+        .iter()
+        .filter(|a| priced(a))
+        .filter(|a| !holdings_win(input, a.id, input.today, rows.iter().find(|r| r.view.id == a.id).and_then(|r| r.valued_on)))
+        .map(|a| a.id)
+        .collect();
+    if older.is_empty() {
+        return;
+    }
+    for a in p.accounts.iter_mut().filter(|a| older.contains(&a.id)) {
+        (a.value, a.book, a.gain, a.gain_bps, a.cash, a.holdings) = (0, 0, 0, None, 0, 0);
+    }
+    p.holdings.retain(|h| !older.contains(&h.account_id));
+    retotal(p);
+}
+
+// History
+
+/// What each open investment account was worth at the end of `day`, and whether that came from
+/// its holdings ([`priced_on`], what moved after its report that day included), else `balances`
+/// (the account's balance that day, values recorded by hand included).
+pub fn values_on(input: &PortfolioInput, balances: &HashMap<i64, i64>, day: Date) -> HashMap<i64, (i64, bool)> {
+    let priced = priced_on(input, day, Some(day));
     input
         .accounts
         .iter()
         .map(|a| {
-            let held = p.accounts.iter().find(|pa| pa.id == a.id).filter(|pa| pa.holdings > 0 || pa.cash != 0 || pa.book != 0);
-            let v = match held {
-                Some(pa) => (pa.value, true),
+            let v = match priced.get(&a.id) {
+                Some(&v) => (v, true),
                 None => (balances.get(&a.id).copied().unwrap_or(0), false),
             };
             (a.id, v)
         })
         .collect()
+}
+
+/// What an account was worth on an earlier day, given `then` as `values_on` read it for that day
+/// (the value, and whether holdings priced it), whether it had somewhere to start by then (an
+/// opening balance, or a value recorded on or before the day), and `now`: what it is worth now,
+/// less what was moved into it since ([`worth_before`]). Not priced from holdings then and with
+/// nowhere to start: nothing says what it was worth, so it reads as `now`, and its first import
+/// or first value is not read as a gain.
+pub fn worth_then(then: Option<(i64, bool)>, started: bool, now: i64) -> i64 {
+    match then {
+        Some((v, true)) => v,
+        Some((v, false)) if started => v,
+        _ => now,
+    }
+}
+
+/// What an account with nowhere to start by an earlier day reads as then: what it is worth `now`
+/// less what was `moved` into it by transfer since (what moved out added back). The account the
+/// money came from reads it as gone, so without this a transfer into a new account would read as
+/// money lost. Never below zero when it is worth something now: nothing says it was a debt.
+pub fn worth_before(now: i64, moved: i64) -> i64 {
+    let v = now - moved;
+    if now >= 0 { v.max(0) } else { v }
 }
 
 /// The chart's days: the last day of each of the eleven months before this one, then today.

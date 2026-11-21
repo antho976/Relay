@@ -135,10 +135,17 @@ pub fn for_goal(name: &str, invest: bool) -> &'static str {
     }
 }
 
+/// A decoded picture: its size, its pixels and the ground at its foot.
+type Decoded = (u32, u32, Vec<u8>, [u8; 4]);
+
 struct Shared {
     want: Sender<&'static str>,
-    done: Receiver<(&'static str, u32, u32, Vec<u8>, [u8; 4])>,
+    /// Each picture asked for, decoded or (none) not.
+    done: Receiver<(&'static str, Option<Decoded>)>,
     asked: HashSet<&'static str>,
+    /// Pictures that would not decode (or fit no atlas): never asked for again, so a page that
+    /// draws one is not waiting on it for ever, nor decoding it again every frame.
+    failed: HashSet<&'static str>,
     /// Each decoded picture's ground at its foot, where words go.
     grounds: HashMap<&'static str, [u8; 4]>,
 }
@@ -169,18 +176,21 @@ fn shared() -> &'static Mutex<Shared> {
             .name("pictures".into())
             .spawn(move || {
                 for key in rx {
-                    let Some((_, bytes)) = FILES.iter().find(|(n, _)| *n == key) else { continue };
-                    // A picture that fails to decode (or panics the decoder) stays a plain box;
-                    // the thread lives on for the others.
-                    let decoded = std::panic::catch_unwind(|| {
-                        let img = image::load_from_memory_with_format(bytes, image::ImageFormat::WebP).ok()?.to_rgba8();
-                        let (w, h) = img.dimensions();
-                        let px = img.into_raw();
-                        let ground = foot(&px, w, h);
-                        Some((w, h, px, ground))
+                    // A picture that fails to decode (or panics the decoder) stays a plain box,
+                    // and says so, so it is no longer waited on; the thread lives on for the
+                    // others.
+                    let decoded = FILES.iter().find(|(n, _)| *n == key).and_then(|(_, bytes)| {
+                        std::panic::catch_unwind(|| {
+                            let img = image::load_from_memory_with_format(bytes, image::ImageFormat::WebP).ok()?.to_rgba8();
+                            let (w, h) = img.dimensions();
+                            let px = img.into_raw();
+                            let ground = foot(&px, w, h);
+                            Some((w, h, px, ground))
+                        })
+                        .ok()
+                        .flatten()
                     });
-                    let Ok(Some((w, h, px, ground))) = decoded else { continue };
-                    if tx.send((key, w, h, px, ground)).is_err() {
+                    if tx.send((key, decoded)).is_err() {
                         break;
                     }
                     if let Some(wake) = waker().as_ref() {
@@ -189,7 +199,7 @@ fn shared() -> &'static Mutex<Shared> {
                 }
             })
             .expect("the pictures thread starts");
-        Mutex::new(Shared { want, done, asked: HashSet::new(), grounds: HashMap::new() })
+        Mutex::new(Shared { want, done, asked: HashSet::new(), failed: HashSet::new(), grounds: HashMap::new() })
     })
 }
 
@@ -202,7 +212,7 @@ pub fn ensure(c: &mut Canvas, key: &'static str) -> bool {
         return false;
     }
     let mut s = shared().lock().expect("pictures lock");
-    if s.asked.insert(key) {
+    if !s.failed.contains(key) && s.asked.insert(key) {
         let _ = s.want.send(key);
     }
     false
@@ -213,11 +223,18 @@ pub fn ensure(c: &mut Canvas, key: &'static str) -> bool {
 pub fn drain(c: &mut Canvas) -> bool {
     let mut s = shared().lock().expect("pictures lock");
     let mut arrived = false;
-    while let Ok((key, w, h, px, ground)) = s.done.try_recv() {
-        s.grounds.insert(key, ground);
-        // Placed now, or kept by the canvas until a picture no longer drawn makes room.
-        c.add_image(key, w, h, px);
+    while let Ok((key, decoded)) = s.done.try_recv() {
         s.asked.remove(key);
+        let Some((w, h, px, ground)) = decoded else {
+            s.failed.insert(key);
+            continue;
+        };
+        s.grounds.insert(key, ground);
+        // Placed now, or kept by the canvas until a picture no longer drawn makes room; one too
+        // big for the atlas is neither, and would otherwise be decoded again at every frame.
+        if !c.add_image(key, w, h, px) && !c.image_waiting(key) {
+            s.failed.insert(key);
+        }
         arrived = true;
     }
     arrived || !s.asked.is_empty()
@@ -232,4 +249,32 @@ pub fn pending() -> bool {
 /// fills before it arrives).
 pub fn ground(key: &str) -> Option<Rgba> {
     shared().lock().expect("pictures lock").grounds.get(key).map(|c| Rgba(*c))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_picture_that_will_not_decode_is_not_waited_on() {
+        let mut c = Canvas::new(crate::app::FONTS);
+        // No such picture: the decoder answers that it has none.
+        let key = "no-such-picture";
+        assert!(!ensure(&mut c, key));
+        let state = || {
+            let s = shared().lock().expect("pictures lock");
+            (s.asked.contains(key), s.failed.contains(key))
+        };
+        for _ in 0..400 {
+            drain(&mut c);
+            if !state().0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(state(), (false, true), "no longer waited on, and known to fail");
+        // Asked again, it is not decoded again.
+        assert!(!ensure(&mut c, key));
+        assert_eq!(state(), (false, true));
+    }
 }

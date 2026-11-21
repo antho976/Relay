@@ -309,6 +309,12 @@ pub fn hint(cx: &mut Ctx, y: f32, words: &str, problem: bool) -> f32 {
 /// optional glyph before what is typed. Returns its height (52).
 #[allow(clippy::too_many_arguments)]
 pub fn field(cx: &mut Ctx, id: &'static str, x: f32, y: f32, w: f32, glyph: Option<&'static str>, placeholder: &str, value: &mut String, numeric: bool, error: bool) -> f32 {
+    field_kb(cx, id, x, y, w, glyph, placeholder, value, crate::widgets::Kb::numeric(numeric), error)
+}
+
+/// [`field`] with the keyboard named: a Balance goal's target takes a minus sign.
+#[allow(clippy::too_many_arguments)]
+pub fn field_kb(cx: &mut Ctx, id: &'static str, x: f32, y: f32, w: f32, glyph: Option<&'static str>, placeholder: &str, value: &mut String, kind: crate::widgets::Kb, error: bool) -> f32 {
     let p = cx.p;
     let h = 52.0;
     let focused = cx.focus.is(id);
@@ -325,7 +331,7 @@ pub fn field(cx: &mut Ctx, id: &'static str, x: f32, y: f32, w: f32, glyph: Opti
         cx.c.icon(g, tx + 8.0, y + h / 2.0, 16.0, p.ink3);
         tx += 28.0;
     }
-    crate::widgets::inline(cx, id, tx, y, x + w - 16.0 - tx, h, placeholder, value, numeric, Text::new(16.0, p.ink));
+    crate::widgets::inline_kb(cx, id, tx, y, x + w - 16.0 - tx, h, placeholder, value, kind, Text::new(16.0, p.ink));
     h
 }
 

@@ -3,6 +3,8 @@
 //! falls due, every kind of goal's reading and pace, and the editors' words. Pure: no drawing, no
 //! ledger; [`load`] reads what they need in one go.
 
+use std::collections::HashMap;
+
 use jiff::ToSpan;
 use relay_money::Date;
 use relay_money::copy;
@@ -18,8 +20,9 @@ use crate::plan_store::{self, BillRow, Goal};
 
 pub type Result<T> = std::result::Result<T, String>;
 
-/// The longest gap the bill editor's stepper offers between two dates.
-pub const MAX_INTERVAL: i32 = 12;
+/// The longest gap the bill editor's stepper offers between two dates: the store's own limit
+/// (`plan_store` keeps 1 to 52), so a stored "every 26 weeks" is not cut down by a tap or a draft.
+pub const MAX_INTERVAL: i32 = 52;
 /// The periods a budget suggestion averages: the three before this one.
 pub const SUGGEST_PERIODS: i64 = 3;
 /// A suggestion needs spending in at least this many of them, so a one-off buys nothing.
@@ -355,6 +358,8 @@ pub fn due_through(bills: &[&BillLine], through: Date) -> DueSum {
     let mut s = DueSum::default();
     for b in bills {
         let bill = &b.row.bill;
+        // A bill with an end date posts nothing after it.
+        let through = bill.end.map_or(through, |e| e.min(through));
         if bill.next > through {
             continue;
         }
@@ -631,6 +636,46 @@ pub struct GoalInputs {
     pub accounts: Vec<AccountView>,
     /// Every transfer over the periods: (date, from, to, amount).
     pub transfers: Vec<(Date, i64, i64, i64)>,
+    /// Net worth as the Accounts page counts it ([`worth_total`]): an "everything you own"
+    /// Balance goal reads this.
+    pub worth: i64,
+    /// Each counted account's value as the Accounts page shows it (an investment account at its
+    /// holdings): a Balance goal on one account reads this, through [`account_value`].
+    pub worth_of: HashMap<i64, i64>,
+}
+
+/// Net worth as the Accounts page counts it, with each counted account's value.
+#[derive(Clone, Debug, Default)]
+pub struct WorthNow {
+    pub total: i64,
+    pub of: HashMap<i64, i64>,
+}
+
+/// Net worth as the Accounts page counts it: investments at their holdings' value, and an account
+/// given nowhere to start with its spending never read as a debt and its transfers in full
+/// (accounts_store::worth_by_entries), so saving into a new account never moves an "everything
+/// you own" goal backwards, and paying a card from one never moves it forwards. `of` holds every
+/// open account as that page values it, $0 included: a goal on one given nowhere to start reads
+/// what it holds, never the debt its spending alone makes of its balance. Falls back to every
+/// open balance if it can't be read.
+pub fn worth_now(store: &Store, today: Date) -> WorthNow {
+    crate::accounts_store::worth_now(store, today)
+        .map(|(_, now)| {
+            let of: HashMap<i64, i64> = now.into_iter().map(|(id, (v, _))| (id, v)).collect();
+            WorthNow { total: of.values().sum(), of }
+        })
+        .unwrap_or_else(|_| WorthNow { total: net_worth(&store.ledger.accounts().unwrap_or_default()), of: HashMap::new() })
+}
+
+pub fn worth_total(store: &Store, today: Date) -> i64 {
+    worth_now(store, today).total
+}
+
+/// One account's value as the Accounts page shows it (an investment account at its holdings, one
+/// given nowhere to start by its entries), else its balance: an archived account, which net
+/// worth leaves out.
+pub fn account_value(worth_of: &HashMap<i64, i64>, a: &AccountView) -> i64 {
+    worth_of.get(&a.id).copied().unwrap_or(a.balance)
 }
 
 pub fn net_worth(accounts: &[AccountView]) -> i64 {
@@ -680,7 +725,14 @@ pub fn goal_line(g: &Goal, i: &GoalInputs, today: Date) -> GoalLine {
         }
         GoalKind::Balance => {
             let account = g.account_id.and_then(|id| i.accounts.iter().find(|a| a.id == id));
-            let line = GoalLine { saved: account.map_or_else(|| net_worth(&i.accounts), |a| a.balance), start: g.start_amount, account_name: account.map(|a| a.name.clone()), ..base };
+            let saved = match (g.account_id, account) {
+                (None, _) => i.worth,
+                (Some(_), Some(a)) => account_value(&i.worth_of, a),
+                // Its account is gone: it reads where it started rather than against net worth,
+                // which its start and target never were.
+                (Some(_), None) => g.start_amount,
+            };
+            let line = GoalLine { saved, start: g.start_amount, account_name: account.map(|a| a.name.clone()), ..base };
             let pace = if line.reached() { None } else { goal_pace_fraction(g.start_date, g.target_date, today) };
             GoalLine { pace_fraction: pace, ..line }
         }
@@ -833,7 +885,9 @@ pub fn closest_goal(goals: &[GoalLine]) -> Option<usize> {
         goals
             .iter()
             .enumerate()
-            .filter(|(_, g)| !g.reached() && g.monthly() == monthly && g.target > 0)
+            // A balance goal can aim at zero or below (paying a card down); it is open while it has
+            // somewhere to go.
+            .filter(|(_, g)| !g.reached() && g.monthly() == monthly && if g.kind == GoalKind::Balance { g.target != g.start } else { g.target > 0 })
             .max_by(|a, b| a.1.fraction().partial_cmp(&b.1.fraction()).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(i, _)| i)
     };
@@ -1015,7 +1069,7 @@ pub fn load(store: &Store, today: Date) -> Result<PlanData> {
 
     // Goals.
     let goal_rows = plan_store::goals(conn)?;
-    let inputs = goal_inputs(conn, &period, accounts.clone())?;
+    let inputs = goal_inputs(conn, &period, accounts.clone(), worth_now(store, today))?;
     let lines = goal_rows.iter().filter(|g| !g.archived).map(|g| goal_line(g, &inputs, today)).collect();
     let goals = goals_reading(lines, today);
     let goals_month = plan_store::contributed(conn, period.start, period.end_exclusive)?;
@@ -1023,7 +1077,7 @@ pub fn load(store: &Store, today: Date) -> Result<PlanData> {
     Ok(PlanData { today, period, fmt, budgets, bills, goals, categories, accounts, start_day, goal_rows, inputs, bill_posts, goals_month })
 }
 
-pub fn goal_inputs(conn: &rusqlite::Connection, period: &BudgetPeriod, accounts: Vec<AccountView>) -> Result<GoalInputs> {
+pub fn goal_inputs(conn: &rusqlite::Connection, period: &BudgetPeriod, accounts: Vec<AccountView>, worth: WorthNow) -> Result<GoalInputs> {
     let periods: Vec<BudgetPeriod> = (0..=GOAL_MONTHS).map(|n| period.shift(-n)).collect();
     let mut flows = Vec::new();
     for p in &periods {
@@ -1031,7 +1085,7 @@ pub fn goal_inputs(conn: &rusqlite::Connection, period: &BudgetPeriod, accounts:
     }
     let first = periods.last().map_or(period.start, |p| p.start);
     let transfers = plan_store::transfers(conn, first, period.end_exclusive)?;
-    Ok(GoalInputs { periods, flows, accounts, transfers })
+    Ok(GoalInputs { periods, flows, accounts, transfers, worth: worth.total, worth_of: worth.of })
 }
 
 /// One budget's editor reading: spent in this period and the three before (oldest first), with

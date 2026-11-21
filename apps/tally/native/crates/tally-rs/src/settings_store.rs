@@ -34,7 +34,8 @@ pub fn counts(store: &Store) -> Counts {
     Counts {
         entries,
         accounts: accounts.len(),
-        net: accounts.iter().map(|a| a.balance).sum(),
+        // The net worth the Accounts page shows, not every balance summed.
+        net: crate::plan_logic::worth_total(store, crate::model::today()),
         spending: categories.iter().filter(|c| c.kind == CategoryKind::Expense).count(),
         income: categories.iter().filter(|c| c.kind == CategoryKind::Income).count(),
         first,

@@ -9,6 +9,7 @@
         android:label="Tally RS"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction"
         android:theme="@style/Theme.TallyRs">
         <!-- The whole app is libtally.so; TallyActivity (GameActivity with the file picker's and
              the share sheet's callbacks) hosts it and its keyboard. Every configuration change
@@ -32,8 +33,13 @@
             </intent-filter>
         </activity>
 
-        <!-- The home screen icon, two ways: the dark one while Tally RS is on Dark, the light one on
-             Light. TallyActivity.setIconDark turns on the one that matches and off the other. -->
+        <!-- The home screen icon, two ways: the dark one when the person picks Dark in Appearance,
+             the light one when they pick Light; on System it stays as it is (a launcher deletes
+             the home-screen shortcut of an alias turned off, so it must not switch with the
+             phone's light and dark). TallyActivity.setIcon turns on the one that matches and off
+             the other, once no task the other started is alive (Android removes such a task when
+             its alias goes off). TallyActivity renames the alias in its intent to itself, so it
+             never looks up an alias that is off. -->
         <activity-alias
             android:name="com.tally.rs.LauncherDark"
             android:targetActivity="com.tally.rs.TallyActivity"

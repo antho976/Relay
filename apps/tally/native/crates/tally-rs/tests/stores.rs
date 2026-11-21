@@ -142,7 +142,7 @@ fn an_archived_default_stays_undone_when_it_comes_back() {
 // 3. A deleted account's goals
 
 #[test]
-fn deleting_an_account_lets_its_goals_follow_everything() {
+fn deleting_an_account_archives_its_goal_to_reach_an_amount() {
     let (mut s, _d) = store();
     let visa = s.ledger.account_add("Visa", AccountType::Credit, 0, None, "").unwrap().id;
     let goal = GoalInput {
@@ -159,7 +159,9 @@ fn deleting_an_account_lets_its_goals_follow_everything() {
     let g = plan::goal_save(s.sql().unwrap(), None, &goal).unwrap();
     let (stamp0, seq0) = stamp_and_seq(&s, "goals", g);
     accounts::delete(&mut s, visa).unwrap();
-    assert_eq!(plan::goal(s.sql().unwrap(), g).unwrap().unwrap().account_id, None);
+    // "Pay it off" read against net worth would be nonsense: it is archived, still on its account.
+    let read = plan::goal(s.sql().unwrap(), g).unwrap().unwrap();
+    assert_eq!((read.archived, read.account_id), (true, Some(visa)));
     let (stamp1, seq1) = stamp_and_seq(&s, "goals", g);
     assert!(stamp1 > stamp0 && seq1 > seq0, "the change is stamped and numbered for sync");
 }

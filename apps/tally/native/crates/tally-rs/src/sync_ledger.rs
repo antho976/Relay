@@ -36,6 +36,9 @@ pub const SCHEMA: &str = "bus.schema";
 pub const STALE: &str = "money.sync_stale";
 /// This phone's ledger is not the one it last merged with: it sends nothing.
 pub const STALE_HERE: &str = "tally.sync_stale_here";
+/// The server's ledger was replaced since the last sync and this phone holds changes it never
+/// sent: taking the server's ledger would drop them, so the person says so first.
+pub const STALE_UNSENT: &str = "tally.sync_stale_unsent";
 
 /// The name the server is recorded under in this phone's ledger (`sync.device.*`).
 const LOCAL: &str = "Your server";
@@ -97,8 +100,24 @@ pub struct Answer {
     pub generation: Generation,
     /// The server's rows this phone has not seen, newest of each.
     pub changes: Vec<Change>,
+    /// This phone's changes the server took.
     pub sent: usize,
+    /// This phone's changes the server did not take and holds nothing newer of (a stamp too far
+    /// ahead of its clock, a row it cannot place): they go again next time.
+    pub not_taken: usize,
     pub note: Option<String>,
+}
+
+/// What [`not_taken`](Answer::not_taken) says on the Sync page.
+pub fn not_taken_note(n: usize) -> String {
+    let what = if n == 1 { "1 change here was".to_string() } else { format!("{n} changes here were") };
+    format!("{what} not taken by your server. They go again with the next sync; if this stays, check this phone's date and time.")
+}
+
+/// What [`Applied::ahead`] says on the Sync page.
+pub fn ahead_note(n: usize) -> String {
+    let what = if n == 1 { "1 change from your server is".to_string() } else { format!("{n} changes from your server are") };
+    format!("{what} dated more than a day ahead of this phone's clock, so it was not taken here. It comes again with the next sync; check this phone's date and time.")
 }
 
 fn unreadable() -> Failure {
@@ -109,40 +128,100 @@ fn unreadable() -> Failure {
 pub fn exchange(r: &mut dyn Requester, device: &str, ask: Ask) -> Result<Answer, Failure> {
     match ask {
         Ask::Whole => {
-            let (cursor, generation, changes) = send(r, device, 0, None, &[])?;
-            Ok(Answer { whole: true, cursor, generation, changes, sent: 0, note: None })
+            let s = send(r, device, 0, None, &[])?;
+            Ok(Answer { whole: true, cursor: s.cursor, generation: s.generation, changes: s.changes, sent: 0, not_taken: 0, note: None })
         }
         Ask::Merge { since, generation, changes } => match send(r, device, since, Some(&generation), &changes) {
-            Ok((cursor, generation, back)) => Ok(Answer { whole: false, cursor, generation, changes: back, sent: changes.len(), note: None }),
-            // The server's ledger was restored, erased or replaced since: take it whole. What
-            // changed here since the last sync is not sent: the latest wholesale act wins.
-            Err(f) if f.code == STALE => {
-                let (cursor, generation, changes) = send(r, device, 0, None, &[])?;
-                Ok(Answer { whole: true, cursor, generation, changes, sent: 0, note: Some(TOOK_SERVER_LEDGER.into()) })
+            Ok(s) => Ok(Answer {
+                whole: false,
+                cursor: s.cursor,
+                generation: s.generation,
+                changes: s.changes,
+                sent: changes.len().saturating_sub(s.skipped),
+                not_taken: s.not_taken,
+                note: (s.not_taken > 0).then(|| not_taken_note(s.not_taken)),
+            }),
+            // The server's ledger was restored, erased or replaced since: it is taken whole, and
+            // nothing here is sent (the latest wholesale act wins). With nothing unsent here that
+            // loses nothing, so it happens by itself; changes made here and never sent would go
+            // with it, so the person is asked first. So is a ledger that came back far smaller
+            // than this phone's (`apply`): the server's may have been lost.
+            Err(f) if f.code == STALE && changes.is_empty() => {
+                let s = send(r, device, 0, None, &[])?;
+                Ok(Answer { whole: true, cursor: s.cursor, generation: s.generation, changes: s.changes, sent: 0, not_taken: 0, note: Some(TOOK_SERVER_LEDGER.into()) })
             }
+            Err(f) if f.code == STALE => Err(fail(STALE_UNSENT, "Your server's ledger was replaced since this phone last synced, and changes made here never went to it")),
             Err(f) => Err(f),
         },
     }
 }
 
-/// One `money.sync` of `changes` in batches, and the server's answer to it whole, asked for in
-/// pages while the server says `more`. A row edited while the pages are read comes again, newer:
-/// the newest of each is kept, and what the server hands back exactly as sent is no news. A
-/// server from before pages refuses `limit` before applying anything and is asked again whole.
-fn send(r: &mut dyn Requester, device: &str, since: i64, generation: Option<&Generation>, changes: &[Change]) -> Result<(i64, Generation, Vec<Change>), Failure> {
-    let sent: std::collections::HashMap<(&str, &str), i64> = changes.iter().map(|c| ((c.table.as_str(), c.uid.as_str()), c.updated_at)).collect();
+/// What one [`send`] came back with.
+struct Sent {
+    cursor: i64,
+    generation: Generation,
+    changes: Vec<Change>,
+    /// The server's count of the rows sent that it did not take.
+    skipped: usize,
+    /// Of those, the ones it holds nothing as new as (its answer did not bring them back as new
+    /// or newer): not taken, and not outdated either.
+    not_taken: usize,
+}
+
+/// A table, whether the row is matched by category, and the category's uid or the row's.
+type MatchKey<'a> = (&'a str, bool, &'a str);
+
+/// What the server matches a sent row by: its uid, but a budget by its category (each category
+/// has one budget, whatever uid each device gave it; no category is the overall budget). A budget
+/// tombstone that does not say its category is matched by uid, as the server matches it.
+fn match_key(c: &Change) -> MatchKey<'_> {
+    if c.table == "budgets" && (!c.deleted || c.row.contains_key("category")) {
+        match c.row.get("category") {
+            None | Some(Value::Null) => return (c.table.as_str(), true, ""),
+            Some(Value::String(category)) => return (c.table.as_str(), true, category.as_str()),
+            Some(_) => {}
+        }
+    }
+    (c.table.as_str(), false, c.uid.as_str())
+}
+
+/// One `money.sync` of `changes` in batches, and the server's answer to it whole. The server's
+/// changes are read first, in pages while the server says `more`, with nothing sent; then each
+/// batch goes in a request of its own, answered whole (only what changed on the server since the
+/// last page). A row the server takes is numbered after every page, so a page read after a batch
+/// went would bring that batch back as it went, which would read as the server holding it as new
+/// and hide a row it refused. A row edited while the pages are read comes again, newer: the newest
+/// of each is kept, and what the server hands back exactly as sent is no news. A server from
+/// before pages refuses `limit` before applying anything and is asked again whole.
+fn send(r: &mut dyn Requester, device: &str, since: i64, generation: Option<&Generation>, changes: &[Change]) -> Result<Sent, Failure> {
+    // Each row sent, by what the server matches it by: its stamp, where it is, and its uid.
+    let mut sent: std::collections::HashMap<MatchKey, Vec<(i64, usize, &Change)>> = std::collections::HashMap::new();
+    for (i, c) in changes.iter().enumerate() {
+        sent.entry(match_key(c)).or_default().push((c.updated_at, i, c));
+    }
+    // A row sent that the server skips as older than its own comes back in the answer as new or
+    // newer (a budget under the uid the server gave its own); one that does not come back was
+    // refused.
+    let mut outdated: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut skipped = 0usize;
     let mut newest: Vec<Change> = Vec::new();
     let mut at: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
     let batches: Vec<&[Change]> = changes.chunks(BATCH).collect();
     let mut cursor = since;
     let mut gen_: Option<String> = generation.map(|g| g.0.clone());
     let mut paged = true;
-    let mut i = 0;
+    // Reading the server's pages, before (or between) the batches.
+    let mut pulling = true;
+    let mut next_batch = 0;
+    // A server that pages an answer to a batch unasked (Relay's does not) may bring the batch back
+    // as it went: what it skipped cannot be told from what it holds newer, so every skip counts.
+    let mut unsure = false;
     loop {
-        let batch: &[Change] = batches.get(i).copied().unwrap_or(&[]);
+        let batch: &[Change] = if pulling { &[] } else { batches[next_batch] };
+        let limit = (pulling && paged).then_some(PAGE);
         let payload = |limit: Option<u32>| serde_json::to_value(SyncIn { device, since: cursor, generation: gen_.as_deref(), changes: batch, limit }).unwrap_or(Value::Null);
-        let result = match r.request("money.sync", &payload(Some(PAGE)), crate::sync_net::REQUEST_TIMEOUT) {
-            Err(f) if paged && f.code == SCHEMA => {
+        let result = match r.request("money.sync", &payload(limit), crate::sync_net::REQUEST_TIMEOUT) {
+            Err(f) if limit.is_some() && f.code == SCHEMA => {
                 paged = false;
                 r.request("money.sync", &payload(None), crate::sync_net::REQUEST_TIMEOUT)?
             }
@@ -153,17 +232,31 @@ fn send(r: &mut dyn Requester, device: &str, since: i64, generation: Option<&Gen
             return Err(fail(code::ANSWER, "Your server says it replaced its ledger, which Tally RS never asks. Nothing here was changed."));
         }
         let next = result.get("cursor").and_then(Value::as_i64).ok_or_else(unreadable)?;
-        let more = paged && result.get("more").and_then(Value::as_bool) == Some(true);
+        let more = result.get("more").and_then(Value::as_bool) == Some(true);
         if more && next <= cursor {
             return Err(unreadable());
         }
+        unsure |= more && !batch.is_empty();
         cursor = next;
         if let Some(g) = result.get("generation").and_then(Value::as_str) {
             gen_ = Some(g.to_string());
         }
+        skipped += result.get("skipped").and_then(Value::as_u64).map_or(0, |n| n as usize);
         for v in result.get("changes").and_then(Value::as_array).into_iter().flatten() {
             let Ok(c) = serde_json::from_value::<Change>(v.clone()) else { continue };
-            if sent.get(&(c.table.as_str(), c.uid.as_str())) == Some(&c.updated_at) {
+            let mut echo = false;
+            for &(mine, i, row) in sent.get(&match_key(&c)).into_iter().flatten() {
+                // Newer there, or as new and held before this push went (a page read first, or
+                // the very row sent): the server skips the one sent. A budget the server takes
+                // onto its own (another uid, one per category) comes back in that batch's answer
+                // under its uid with the stamp it went with: that is it taken, not outdated, and
+                // counting it so would hide a row refused in the same push.
+                if c.updated_at > mine || (c.updated_at == mine && (c.uid == row.uid || batch.is_empty())) {
+                    outdated.insert(i);
+                }
+                echo |= c.updated_at == mine && c.uid == row.uid;
+            }
+            if echo {
                 continue;
             }
             match at.get(&(c.table.clone(), c.uid.clone())) {
@@ -175,13 +268,18 @@ fn send(r: &mut dyn Requester, device: &str, since: i64, generation: Option<&Gen
                 }
             }
         }
-        i += 1;
-        if !more && i >= batches.len() {
+        if !batch.is_empty() {
+            next_batch += 1;
+        }
+        // The rest of the server's answer first, then the next batch.
+        pulling = more;
+        if !more && next_batch >= batches.len() {
             break;
         }
     }
     let generation = gen_.filter(|g| !g.is_empty()).map(Generation).ok_or_else(unreadable)?;
-    Ok((cursor, generation, newest))
+    let not_taken = if unsure { skipped } else { skipped.saturating_sub(outdated.len()) };
+    Ok(Sent { cursor, generation, changes: newest, skipped, not_taken })
 }
 
 fn now_text() -> String {
@@ -223,59 +321,174 @@ pub fn collect(store: &mut Store) -> Result<(Vec<Change>, i64), Failure> {
     Ok((out.changes, out.cursor))
 }
 
+/// Where this phone's ledger stood when a sync read it: its counter and its generation. One
+/// that moved by the time the answer comes was changed here meanwhile.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mark {
+    /// The local cursor (for a merge, the one the sent rows were read at).
+    pub cursor: i64,
+    generation: String,
+}
+
+impl Mark {
+    /// Where this phone's ledger stands now.
+    pub fn now(store: &Store) -> Result<Mark, Failure> {
+        // The generation first: the first read of it writes it, which moves the counter.
+        let generation = store.ledger.generation().map_err(err)?;
+        Ok(Mark { cursor: store.ledger.cursor().map_err(err)?, generation })
+    }
+
+    fn moved(&self, store: &Store) -> Result<bool, Failure> {
+        Ok(Mark::now(store)? != *self)
+    }
+}
+
 /// What applying an answer did here.
 #[derive(Debug, PartialEq)]
 pub struct Applied {
     pub received: usize,
     /// Rows changed here while the sync ran: they go next time, so sync again soon.
     pub again: bool,
+    /// A whole answer was not applied: this phone's ledger changed while it came, and taking it
+    /// would drop what was made here meanwhile. The person says whether to take it.
+    pub ask_first: bool,
+    /// The server's rows this ledger did not take, stamped more than a day ahead of this phone's
+    /// clock: where sync stands is kept so they come again ([`ahead_note`]).
+    pub ahead: usize,
+    /// Why a whole answer nobody asked for was not applied: it holds under half the accounts and
+    /// entries this phone does, `(the server's, this phone's)`. The person says whether to take it.
+    pub fewer: Option<(usize, usize)>,
+}
+
+/// The accounts and entries among `changes`, as Relay's own PC link weighs a ledger.
+fn weight(changes: &[Change]) -> usize {
+    changes.iter().filter(|c| !c.deleted && (c.table == "accounts" || c.table == "transactions")).count()
+}
+
+/// The accounts and entries this phone's ledger holds.
+fn own_weight(store: &Store) -> Result<usize, Failure> {
+    match store.sql() {
+        Ok(db) => db
+            .query_row("SELECT (SELECT COUNT(*) FROM accounts WHERE deleted = 0) + (SELECT COUNT(*) FROM transactions WHERE deleted = 0)", [], |r| r.get::<_, i64>(0))
+            .map(|n| n.max(0) as usize)
+            .map_err(err),
+        // In memory there is no second connection.
+        Err(_) => store.ledger.export_backup("").map(|f| f.accounts.len() + f.transactions.len()).map_err(err),
+    }
+}
+
+/// Whether this phone's categories are other than the ones every new ledger is given: added,
+/// renamed, recoloured, archived or deleted here. `Store::holds_anything` (and relay-money's own,
+/// which decides whether a replace keeps a copy first) leaves categories out.
+pub fn categories_changed(store: &Store) -> bool {
+    use relay_money::model::{CategoryKind, DEFAULT_CATEGORIES};
+    // Unreadable, they count as changed: asking is the safe side.
+    let Ok(here) = store.ledger.categories() else { return true };
+    let mut here: Vec<(String, bool, String, i64, bool)> = here.into_iter().map(|c| (c.name, c.kind == CategoryKind::Income, c.icon, c.color, c.archived)).collect();
+    let mut seeded: Vec<(String, bool, String, i64, bool)> =
+        DEFAULT_CATEGORIES.iter().map(|c| (c.name.to_string(), c.kind == CategoryKind::Income, c.icon.to_string(), i64::from(c.color), false)).collect();
+    here.sort();
+    seeded.sort();
+    here != seeded
+}
+
+/// Whether this phone holds anything a pull of the server's whole ledger would replace: the
+/// owner's rows, or categories they changed.
+pub fn holds_own(store: &Store) -> bool {
+    store.holds_anything() || categories_changed(store)
 }
 
 /// Applies the server's answer to this phone's ledger and keeps where both stand. A whole answer
-/// replaces this phone's ledger (relay-money keeps a copy of it in `money-backups/` first).
-/// `collected_at` is the local cursor the sent rows were read at (None for a whole sync).
-pub fn apply(store: &mut Store, answer: &Answer, collected_at: Option<i64>) -> Result<Applied, Failure> {
-    let (received, pushed, again) = if answer.whole {
+/// replaces this phone's ledger (relay-money keeps a copy of it in `money-backups/` first), unless
+/// the ledger moved from `mark` since the sync started, or, when the person did not ask for it
+/// (`asked` false), it holds under half the accounts and entries this phone does. `mark` is where
+/// the ledger stood when the sync read it ([`next_ask`]).
+pub fn apply(store: &mut Store, answer: &Answer, mark: &Mark, asked: bool) -> Result<Applied, Failure> {
+    // The server's rows relay-money will not take here: stamped more than a day ahead of this
+    // phone's clock (a clock behind, or the server's ahead). Counted before applying, on a clock
+    // no later than the one `sync_page` reads, so none it skips goes uncounted.
+    let now = jiff::Timestamp::now().as_millisecond();
+    let ahead = answer.changes.iter().filter(|c| c.updated_at > now.saturating_add(relay_money::ledger::STAMP_AHEAD_MS)).count();
+    // Where sync stands with the server is kept only when everything sent was taken and nothing
+    // changed here meanwhile: otherwise this sync's rows go again, and the server's answer comes
+    // again with them, so each row sent again is matched to the server's copy of it. Nor when a
+    // row of the server's was not taken here for its stamp: it would never come again.
+    let (received, pushed, again, cursor) = if answer.whole {
+        if mark.moved(store)? {
+            // Entries made here while the server's ledger was on its way: replacing would erase
+            // them unannounced. Nothing is applied; the person is asked, with them in view.
+            return Ok(Applied { received: 0, again: false, ask_first: true, ahead: 0, fewer: None });
+        }
+        if !asked {
+            // A server whose ledger was lost or made again empty (a restart on a disk that does
+            // not last, a reinstall, an erase on the PC) answers stale, and this phone may hold
+            // the only copy: taken by itself, it would go. Far fewer rows there than here, the
+            // person says first, as Relay's own PC link holds such a replace.
+            let (there, here) = (weight(&answer.changes), own_weight(store)?);
+            if here > 0 && there * 2 < here {
+                return Ok(Applied { received: 0, again: false, ask_first: true, ahead: 0, fewer: Some((there, here)) });
+            }
+        }
+        // relay-money keeps a copy before a replace only of a ledger holding more than categories:
+        // categories changed here are kept too.
+        if !store.holds_anything() && categories_changed(store) {
+            store.ledger.snapshot().map_err(err)?;
+        }
         let out = local_page(store, true, 0, &answer.changes)?;
-        (out.applied, out.cursor, false)
+        // A whole pull that left rows out is not where this phone stands: the next sync asks for
+        // the server's rows from the start, as a merge, until they are taken.
+        (out.applied, Some(out.cursor), false, Some(if ahead > 0 { 0 } else { answer.cursor }))
     } else {
-        let at = collected_at.unwrap_or(0);
+        let at = mark.cursor;
         if !same_ledger(store) || at > store.ledger.cursor().map_err(err)? {
             // This ledger was replaced while the sync ran (an erase, a restore): it is not the one
             // the answer is for, and what it holds must never go up. Nothing is applied; the next
             // sync takes the server's ledger whole.
             forget(store);
-            return Ok(Applied { received: 0, again: true });
+            return Ok(Applied { received: 0, again: true, ask_first: false, ahead: 0, fewer: None });
         }
         let out = local_page(store, false, at, &answer.changes)?;
-        // Rows numbered after `at` that this answer did not bring were edited here meanwhile.
-        if out.changes.is_empty() { (out.applied, out.cursor, false) } else { (out.applied, at, true) }
+        if answer.not_taken > 0 {
+            // Rows the server did not take: they go again next time, from where this push began.
+            (out.applied, None, !out.changes.is_empty(), None)
+        } else if !out.changes.is_empty() {
+            // Rows numbered after `at` that this answer did not bring were edited here meanwhile.
+            (out.applied, Some(at), true, None)
+        } else {
+            (out.applied, Some(out.cursor), false, (ahead == 0).then_some(answer.cursor))
+        }
     };
     let local_gen = store.ledger.generation().map_err(err)?;
     store.holding_prefs(|store| {
+        let first = store.pref(CURSOR).is_none();
         let mut save = |k: &str, v: &str| store.set_pref(k, v).map_err(err);
-        save(CURSOR, &answer.cursor.to_string())?;
+        if let Some(cursor) = cursor.or(first.then_some(answer.cursor)) {
+            save(CURSOR, &cursor.to_string())?;
+        }
         save(GENERATION, answer.generation.as_str())?;
-        save(PUSHED, &pushed.to_string())?;
+        if let Some(pushed) = pushed {
+            save(PUSHED, &pushed.to_string())?;
+        }
         save(LOCAL_GENERATION, &local_gen)?;
         // Last: a merge needs it, and it says the server's ledger is here.
         save(PULLED, "1")
     })?;
-    Ok(Applied { received, again })
+    Ok(Applied { received, again, ask_first: false, ahead, fewer: None })
 }
 
 /// The next sync's ask: a merge of what changed here once this phone holds the server's ledger,
-/// its whole ledger before, or after this phone's ledger was replaced here. Returns the local
-/// cursor the rows were read at.
-pub fn next_ask(store: &mut Store) -> Result<(Ask, Option<i64>), Failure> {
-    let Some(generation) = Generation::saved(store) else { return Ok((Ask::Whole, None)) };
+/// its whole ledger before, or after this phone's ledger was replaced here. Returns where the
+/// local ledger stood when it was read.
+pub fn next_ask(store: &mut Store) -> Result<(Ask, Mark), Failure> {
+    let Some(generation) = Generation::saved(store) else { return Ok((Ask::Whole, Mark::now(store)?)) };
     if !same_ledger(store) {
         forget(store);
-        return Ok((Ask::Whole, None));
+        return Ok((Ask::Whole, Mark::now(store)?));
     }
     let since = store.pref(CURSOR).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
     let (changes, at) = collect(store)?;
-    Ok((Ask::Merge { since, generation, changes }, Some(at)))
+    let mark = Mark { cursor: at, generation: store.ledger.generation().map_err(err)? };
+    Ok((Ask::Merge { since, generation, changes }, mark))
 }
 
 /// Forget where sync stood with the server (a new pairing, or a disconnect): the next sync takes
@@ -375,8 +588,8 @@ pub mod tests {
         apply_store(phone, &answer, at)
     }
 
-    pub fn apply_store(store: &mut Store, answer: &Answer, at: Option<i64>) -> Applied {
-        apply(store, answer, at).unwrap()
+    pub fn apply_store(store: &mut Store, answer: &Answer, at: Mark) -> Applied {
+        apply(store, answer, &at, false).unwrap()
     }
 
     fn phone_with_sample() -> Store {
@@ -419,7 +632,7 @@ pub mod tests {
         sync_once(&mut phone, &mut server);
         // Nothing changed either side: nothing goes, nothing comes.
         let quiet = sync_once(&mut phone, &mut server);
-        assert_eq!(quiet, Applied { received: 0, again: false });
+        assert_eq!(quiet, Applied { received: 0, again: false, ask_first: false, ahead: 0, fewer: None });
         assert!(server.requests.last().unwrap()["changes"].as_array().unwrap().is_empty(), "the rows the pull wrote are not sent back");
         let account = phone.ledger.accounts().unwrap()[0].id;
         let mine = phone.add(&TxInput { r#type: TxType::Expense, amount: 5_00, date: crate::model::today().to_string(), account_id: account, to_account_id: None, category_id: None, note: Some("From Tally RS".into()) }).unwrap();
@@ -440,19 +653,22 @@ pub mod tests {
         assert_eq!(server.replaces, 0);
     }
 
-    #[test]
-    fn a_server_whose_ledger_was_replaced_is_taken_whole_not_merged_into() {
-        let mut server = FakeServer::with_owners_ledger();
-        let mut phone = Store::in_memory().unwrap();
-        sync_once(&mut phone, &mut server);
-        // Another device replaces the server's ledger (the Kotlin app, re-paired).
+    /// Another device replaces the server's ledger (the Kotlin app, re-paired).
+    fn replace_servers_ledger(server: &mut FakeServer) {
         let mut other = FakeServer::new();
         other.ledger.ensure_categories().unwrap();
         other.ledger.load_sample(crate::model::today(), "USD").unwrap();
         let rows = other.ledger.sync("x", false, 0, None, &[], "t").unwrap().changes;
         server.ledger.sync("Kotlin", true, 0, None, &rows, "t").unwrap();
-        let account = phone.ledger.accounts().unwrap()[0].id;
-        phone.add(&TxInput { r#type: TxType::Expense, amount: 1_00, date: crate::model::today().to_string(), account_id: account, to_account_id: None, category_id: None, note: None }).unwrap();
+    }
+
+    #[test]
+    fn a_server_whose_ledger_was_replaced_is_taken_whole_not_merged_into() {
+        let mut server = FakeServer::with_owners_ledger();
+        let mut phone = Store::in_memory().unwrap();
+        sync_once(&mut phone, &mut server);
+        replace_servers_ledger(&mut server);
+        // Nothing unsent here: nothing is lost, so it is taken by itself.
         let (ask, at) = next_ask(&mut phone).unwrap();
         let answer = exchange(&mut server, "Tally RS", ask).unwrap();
         assert!(answer.whole);
@@ -462,13 +678,30 @@ pub mod tests {
     }
 
     #[test]
+    fn a_replaced_server_ledger_is_not_taken_over_changes_never_sent() {
+        let mut server = FakeServer::with_owners_ledger();
+        let mut phone = Store::in_memory().unwrap();
+        sync_once(&mut phone, &mut server);
+        replace_servers_ledger(&mut server);
+        let account = phone.ledger.accounts().unwrap()[0].id;
+        let mine = phone.add(&TxInput { r#type: TxType::Expense, amount: 1_00, date: crate::model::today().to_string(), account_id: account, to_account_id: None, category_id: None, note: None }).unwrap();
+        let (ask, _) = next_ask(&mut phone).unwrap();
+        let refused = exchange(&mut server, "Tally RS", ask).unwrap_err();
+        assert_eq!(refused.code, STALE_UNSENT, "the person is asked; nothing here is replaced by itself");
+        assert!(all_uids(&phone.ledger).contains(&mine.uid));
+        assert!(!server.entries().contains(&mine.uid));
+        assert_eq!(server.replaces, 0);
+    }
+
+    #[test]
     fn a_long_ledger_comes_in_pages_and_an_old_server_whole() {
         let mut server = FakeServer::with_owners_ledger();
         let mut phone = Store::in_memory().unwrap();
         let mut r = PagedBy(&mut server, 7);
         let answer = exchange(&mut r, "Tally RS", Ask::Whole).unwrap();
         assert!(server.requests.len() > 5);
-        apply_store(&mut phone, &answer, None);
+        let mark = Mark::now(&phone).unwrap();
+        apply_store(&mut phone, &answer, mark);
         assert_eq!(all_uids(&phone.ledger), all_uids(&server.ledger));
 
         let mut old = FakeServer::with_owners_ledger();
@@ -476,7 +709,8 @@ pub mod tests {
         let answer = exchange(&mut old, "Tally RS", Ask::Whole).unwrap();
         assert_eq!(old.requests.len(), 2, "refused with a limit, then asked whole");
         let mut phone = Store::in_memory().unwrap();
-        apply_store(&mut phone, &answer, None);
+        let mark = Mark::now(&phone).unwrap();
+        apply_store(&mut phone, &answer, mark);
         assert_eq!(all_uids(&phone.ledger), all_uids(&old.ledger));
     }
 
@@ -575,7 +809,7 @@ pub mod tests {
         let answer = exchange(&mut server, "Tally RS", ask).unwrap();
         phone.ledger.reset().unwrap();
         let applied = apply_store(&mut phone, &answer, at);
-        assert_eq!(applied, Applied { received: 0, again: true });
+        assert_eq!(applied, Applied { received: 0, again: true, ask_first: false, ahead: 0, fewer: None });
         sync_once(&mut phone, &mut server);
         assert_eq!(sent(&server), (0, 0));
         assert_eq!(server.entries(), before);
