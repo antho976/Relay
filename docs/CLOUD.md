@@ -64,6 +64,13 @@ connection pings every 30 s and dials again when it drops (from 1 s, doubling to
 minute's round runs regardless, so a dropped connection costs speed, never data. `relay cloud sync`
 merges now.
 
+The cloud copy moves with its server. When the link's address stops answering and `cloud.json`
+names the owner's server (the `server` that connecting through it wrote), the link dials the same
+room there, `wss://<server>/relay/join/<room>`, and keeps that address if the engine answering is
+the one it paired with (the same `host_id`, accepting its credential); otherwise it reports the
+first failure. The cloud copy moved off Render on 2026-11-04, and the link kept dialing the old
+host until 2026-11-21.
+
 A round:
 
 1. Ask this PC for its changes since the link's cursor here (`money.sync` with no changes).
