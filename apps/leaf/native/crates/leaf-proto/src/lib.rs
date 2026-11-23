@@ -29,6 +29,15 @@ pub struct Series {
     pub updated_at: i64,
     /// Something the person should know, in words ("Asura Scans needs you to pass a check").
     pub note: Option<String>,
+    /// The bell is on: new chapters of this series are announced (`/v1/events`, kind "new").
+    #[serde(default)]
+    pub bell: bool,
+    /// When it was added to your space (ms since the epoch).
+    #[serde(default)]
+    pub added_at: i64,
+    /// When a chapter of it was last read (ms since the epoch), 0 if never.
+    #[serde(default)]
+    pub last_read_at: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -50,6 +59,10 @@ pub struct Chapter {
     pub downloaded: bool,
     /// When the source published it (ms since the epoch).
     pub uploaded_at: i64,
+    /// The source it comes from when that is not the series' own: a chapter the series' source
+    /// lacks, filled in from another ("Drake Scans").
+    #[serde(default)]
+    pub from: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -87,6 +100,11 @@ pub struct Follow {
 pub struct Pages {
     pub chapter_id: i64,
     pub count: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct Bell {
+    pub on: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]

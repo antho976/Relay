@@ -132,6 +132,7 @@ impl Reader {
             last_page: b.place.block,
             downloaded: true,
             uploaded_at: 0,
+            from: None,
         };
         let page = b.place.block.min(b.pages.saturating_sub(1));
         let item = if page > 0 { Item::Page(0, page) } else { Item::Head(0) };

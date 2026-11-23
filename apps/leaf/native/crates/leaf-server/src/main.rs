@@ -12,7 +12,7 @@
 //! | `LEAF_SOURCES` | `Asura Scans,MangaDex` | preferred sources, best first; their extensions are installed at start |
 //! | `LEAF_EXTENSIONS_REPO` | Keiyoushi's `index.min.json` | the extension list added when Suwayomi has none |
 //! | `LEAF_FLARESOLVERR` | none | a FlareSolverr's address, turned on in Suwayomi for Cloudflare-checked sources |
-//! | `LEAF_AHEAD` | `5` | unread chapters kept downloaded per series |
+//! | `LEAF_AHEAD` | `1` | chapters after the last one read kept downloaded |
 //! | `LEAF_TICK_SECS` | `3600` | how often the autopilot looks at what is due |
 
 mod anilist;
@@ -57,7 +57,7 @@ fn main() {
         store: Mutex::new(store),
         lang: var("LEAF_LANG", "en"),
         prefs: var("LEAF_SOURCES", "Asura Scans,MangaDex").split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
-        ahead: var("LEAF_AHEAD", "5").parse().unwrap_or(5),
+        ahead: var("LEAF_AHEAD", "1").parse().unwrap_or(1),
         pages: Mutex::new(HashMap::new()),
     });
     let tick = Duration::from_secs(var("LEAF_TICK_SECS", "3600").parse().unwrap_or(3600).max(60));

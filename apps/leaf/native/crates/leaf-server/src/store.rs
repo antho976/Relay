@@ -26,6 +26,8 @@ pub struct Work {
     pub latest: f64,
     pub updated_at: i64,
     pub note: Option<String>,
+    /// New chapters are announced.
+    pub bell: bool,
 }
 
 const SCHEMA: &str = "
@@ -51,9 +53,10 @@ CREATE TABLE IF NOT EXISTS event (
 );
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS alias (work_id INTEGER NOT NULL, title TEXT NOT NULL, UNIQUE(work_id, title));
+CREATE TABLE IF NOT EXISTS link (work_id INTEGER NOT NULL, manga_id INTEGER NOT NULL UNIQUE, source TEXT NOT NULL);
 ";
 
-const WORK_COLS: &str = "id, title, manga_id, source, followed_at, fails, checked_at, compared_at, latest, updated_at, note";
+const WORK_COLS: &str = "id, title, manga_id, source, followed_at, fails, checked_at, compared_at, latest, updated_at, note, bell";
 
 fn work_of(r: &rusqlite::Row) -> rusqlite::Result<Work> {
     Ok(Work {
@@ -68,6 +71,7 @@ fn work_of(r: &rusqlite::Row) -> rusqlite::Result<Work> {
         latest: r.get(8)?,
         updated_at: r.get(9)?,
         note: r.get(10)?,
+        bell: r.get::<_, i64>(11)? != 0,
     })
 }
 
@@ -85,6 +89,11 @@ impl Store {
     fn with(db: Connection) -> Result<Store, String> {
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;").map_err(|e| e.to_string())?;
         db.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
+        // Added after the first deploy: a store from before has no bell column yet.
+        let has_bell: bool = db.prepare("SELECT 1 FROM pragma_table_info('work') WHERE name = 'bell'").and_then(|mut s| s.exists([])).unwrap_or(false);
+        if !has_bell {
+            db.execute_batch("ALTER TABLE work ADD COLUMN bell INTEGER NOT NULL DEFAULT 0").map_err(|e| e.to_string())?;
+        }
         Ok(Store { db })
     }
 
@@ -114,6 +123,34 @@ impl Store {
     pub fn remove_work(&self, id: i64) {
         let _ = self.db.execute("DELETE FROM work WHERE id = ?1", [id]);
         let _ = self.db.execute("DELETE FROM alias WHERE work_id = ?1", [id]);
+        let _ = self.db.execute("DELETE FROM link WHERE work_id = ?1", [id]);
+    }
+
+    /// The same work on another source, kept to fill the chapters the work's own source lacks.
+    pub fn add_link(&self, id: i64, manga_id: i64, source: &str) {
+        let _ = self.db.execute(
+            "INSERT INTO link (work_id, manga_id, source) VALUES (?1, ?2, ?3) ON CONFLICT(manga_id) DO UPDATE SET work_id = excluded.work_id, source = excluded.source",
+            params![id, manga_id, source],
+        );
+    }
+
+    pub fn remove_link(&self, manga_id: i64) {
+        let _ = self.db.execute("DELETE FROM link WHERE manga_id = ?1", [manga_id]);
+    }
+
+    /// The linked copies' Suwayomi manga ids.
+    pub fn links(&self, id: i64) -> Vec<i64> {
+        let mut st = self.db.prepare_cached("SELECT manga_id FROM link WHERE work_id = ?1 ORDER BY rowid").expect("a statement");
+        st.query_map([id], |r| r.get(0)).expect("links").filter_map(Result::ok).collect()
+    }
+
+    /// The work a manga belongs to, as its own copy or a linked one.
+    pub fn work_of_any(&self, manga_id: i64) -> Option<Work> {
+        if let Some(w) = self.work_of_manga(manga_id) {
+            return Some(w);
+        }
+        let id: i64 = self.db.prepare_cached("SELECT work_id FROM link WHERE manga_id = ?1").ok()?.query_row([manga_id], |r| r.get(0)).optional().ok()??;
+        self.work(id)
     }
 
     /// Other titles the work goes by on other sources.
@@ -144,6 +181,19 @@ impl Store {
         if let Some(l) = latest {
             let _ = self.db.execute("UPDATE work SET latest = ?2, updated_at = ?3 WHERE id = ?1 AND latest < ?2", params![id, l, now]);
         }
+    }
+
+    pub fn set_bell(&self, id: i64, on: bool) {
+        let _ = self.db.execute("UPDATE work SET bell = ?2 WHERE id = ?1", params![id, on as i64]);
+    }
+
+    /// Events after `since` (ms since the epoch), oldest first: what the phone has not shown yet.
+    pub fn events_since(&self, since: i64) -> Vec<leaf_proto::Event> {
+        let mut st = self.db.prepare_cached("SELECT at, work_id, kind, text FROM event WHERE at > ?1 ORDER BY id LIMIT 100").expect("a statement");
+        st.query_map([since], |r| Ok(leaf_proto::Event { at: r.get(0)?, series: r.get(1)?, kind: r.get(2)?, text: r.get(3)? }))
+            .expect("events")
+            .filter_map(Result::ok)
+            .collect()
     }
 
     pub fn compared(&self, id: i64, now: i64) {
@@ -191,9 +241,19 @@ mod tests {
         s.move_work(id, 9, "Asura Scans", 400).unwrap();
         let w = s.work(id).unwrap();
         assert_eq!((w.manga_id, w.source.as_str(), w.fails), (9, "Asura Scans", 0));
+        assert!(!w.bell, "adding is not following");
+        s.set_bell(id, true);
+        assert!(s.work(id).unwrap().bell);
         assert_eq!(s.work_of_manga(9).unwrap().id, id);
         s.add_aliases(id, &["Became the King by Scavenging".into(), "Became the King by Scavenging".into()]);
         assert_eq!(s.aliases(id), vec!["Became the King by Scavenging"]);
+        s.add_link(id, 12, "Drake Scans");
+        s.add_link(id, 12, "Drake Scans");
+        assert_eq!(s.links(id), vec![12]);
+        assert_eq!(s.work_of_any(12).unwrap().id, id);
+        assert_eq!(s.work_of_any(9).unwrap().id, id);
+        s.remove_link(12);
+        assert!(s.work_of_any(12).is_none());
         assert!(s.work_of_manga(1).is_none());
         s.checked(id, true, Some(60.0), 500);
         s.checked(id, true, Some(58.0), 600);

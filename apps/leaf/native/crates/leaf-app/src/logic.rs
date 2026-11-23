@@ -375,7 +375,7 @@ mod tests {
     use super::*;
 
     fn ch(id: i64, number: f64, read: bool, last_page: u32) -> Chapter {
-        Chapter { id, number, name: format!("Ch.{}", num(number)), group: None, pages: 30, read, last_page, downloaded: true, uploaded_at: 0 }
+        Chapter { id, number, name: format!("Ch.{}", num(number)), group: None, pages: 30, read, last_page, downloaded: true, uploaded_at: 0, from: None }
     }
 
     #[test]
@@ -413,6 +413,9 @@ mod tests {
             gaps: vec![],
             updated_at: 0,
             note: None,
+            bell: false,
+            added_at: 0,
+            last_read_at: 0,
         };
         assert_eq!(library_line(&s), "350 chapters");
         assert_eq!(read_fraction(&s), 0.0);

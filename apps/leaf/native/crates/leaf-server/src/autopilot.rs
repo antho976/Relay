@@ -119,10 +119,36 @@ pub fn decide(cur: &Offer, fails: u32, alts: &[Offer], read_upto: Option<f64>, p
 }
 
 /// The series as the phone shows it: one copy per chapter number, read when any copy is read.
-pub fn detail_of(w: &Work, m: &Manga) -> SeriesDetail {
-    let copies: Vec<Copy> = m.chapters.iter().map(|c| Copy { id: c.id, number: c.number, group: c.group.clone(), uploaded_at: c.uploaded_at }).collect();
-    let by_id: HashMap<i64, &crate::suwa::Ch> = m.chapters.iter().map(|c| (c.id, c)).collect();
-    let mut read_numbers: Vec<f64> = m.chapters.iter().filter(|c| c.read).map(|c| c.number).collect();
+/// Chapters come from the series' own source; a whole number it lacks is filled from the linked
+/// copies on other sources (`extras`), preferred sources first, and says where it came from.
+pub fn detail_of(w: &Work, m: &Manga, extras: &[Manga], prefs: &[String]) -> SeriesDetail {
+    use std::collections::HashSet;
+    let floor = |n: f64| n.floor() as i64;
+    let own: HashSet<i64> = m.chapters.iter().filter(|c| c.number >= 0.0).map(|c| floor(c.number)).collect();
+    let mut from: HashMap<i64, &str> = HashMap::new();
+    let mut pool: Vec<&crate::suwa::Ch> = m.chapters.iter().collect();
+    let mut taken: HashSet<i64> = HashSet::new();
+    let mut ordered: Vec<&Manga> = extras.iter().filter(|e| e.id != m.id).collect();
+    ordered.sort_by_key(|e| rank(&e.source_name, prefs));
+    for e in ordered {
+        let copies: Vec<Copy> = e.chapters.iter().map(|c| Copy { id: c.id, number: c.number, group: c.group.clone(), uploaded_at: c.uploaded_at }).collect();
+        let mut added: HashSet<i64> = HashSet::new();
+        for c in pick_copies(&copies) {
+            let f = floor(c.number);
+            if own.contains(&f) || (taken.contains(&f) && !added.contains(&f)) {
+                continue;
+            }
+            if let Some(ch) = e.chapters.iter().find(|x| x.id == c.id) {
+                pool.push(ch);
+                from.insert(ch.id, e.source_name.as_str());
+                added.insert(f);
+            }
+        }
+        taken.extend(added);
+    }
+    let copies: Vec<Copy> = pool.iter().map(|c| Copy { id: c.id, number: c.number, group: c.group.clone(), uploaded_at: c.uploaded_at }).collect();
+    let by_id: HashMap<i64, &crate::suwa::Ch> = pool.iter().map(|c| (c.id, *c)).collect();
+    let mut read_numbers: Vec<f64> = m.chapters.iter().chain(extras.iter().flat_map(|e| e.chapters.iter())).filter(|c| c.read).map(|c| c.number).collect();
     read_numbers.sort_by(f64::total_cmp);
     let chapters: Vec<Chapter> = pick_copies(&copies)
         .into_iter()
@@ -138,6 +164,7 @@ pub fn detail_of(w: &Work, m: &Manga) -> SeriesDetail {
                 last_page: ch.last_page,
                 downloaded: ch.downloaded,
                 uploaded_at: ch.uploaded_at,
+                from: from.get(&ch.id).map(|s| s.to_string()),
             }
         })
         .collect();
@@ -157,24 +184,57 @@ pub fn detail_of(w: &Work, m: &Manga) -> SeriesDetail {
         gaps: gaps(&numbers),
         updated_at: w.updated_at,
         note: w.note.clone(),
+        bell: w.bell,
+        added_at: w.followed_at,
+        last_read_at: m.chapters.iter().chain(extras.iter().flat_map(|e| e.chapters.iter())).map(|c| c.last_read_at).max().unwrap_or(0),
     };
     SeriesDetail { series, description: m.description.clone(), chapters }
 }
 
 impl Ctx {
+    /// The store, locked. Never hold the guard across a call that may lock it again: keep each
+    /// use to one statement (`let w = self.store().work(id);`), not an `if let` condition.
     fn store(&self) -> std::sync::MutexGuard<'_, Store> {
         self.store.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    /// The work's linked copies on other sources, as Suwayomi last stored them.
+    fn extras(&self, w: &Work) -> Vec<Manga> {
+        let links = self.store().links(w.id);
+        links.into_iter().filter(|id| *id != w.manga_id).filter_map(|id| self.suwa.manga(id).ok()).collect()
+    }
+
+    fn detail_now(&self, w: &Work, m: &Manga) -> SeriesDetail {
+        detail_of(w, m, &self.extras(w), &self.prefs)
+    }
+
     pub fn library(&self) -> Vec<Series> {
         let works = self.store().works();
-        works.iter().filter_map(|w| self.suwa.manga(w.manga_id).ok().map(|m| detail_of(w, &m).series)).collect()
+        works.iter().filter_map(|w| self.suwa.manga(w.manga_id).ok().map(|m| self.detail_now(w, &m).series)).collect()
     }
 
     pub fn detail(&self, id: i64) -> Result<SeriesDetail, String> {
         let w = self.store().work(id).ok_or("no such series")?;
         let m = self.suwa.manga(w.manga_id)?;
-        Ok(detail_of(&w, &m))
+        Ok(self.detail_now(&w, &m))
+    }
+
+    /// Looks for the work on every other source now (and links what it finds), as the daily
+    /// pass would: right after a follow, so the best source and the missing chapters are there
+    /// within a minute instead of tomorrow.
+    pub fn compare_now(&self, id: i64) {
+        let Some(w) = self.store().work(id) else { return };
+        let Ok(m) = self.suwa.manga(w.manga_id) else { return };
+        let d = self.detail_now(&w, &m);
+        self.compare(&w, &m, &d, 0, now_ms());
+        // Read into a local first: a guard in an `if let` lives through its block, and
+        // `detail_now` takes the store again (a deadlock that froze every request, 2026-11-22).
+        let work = self.store().work(id);
+        if let Some(w) = work
+            && let Ok(m) = self.suwa.manga(w.manga_id)
+        {
+            self.keep_ahead(&self.detail_now(&w, &m));
+        }
     }
 
     /// Every installed source searched at once, the results grouped by work.
@@ -241,7 +301,7 @@ impl Ctx {
         };
         self.store().event(now, Some(id), "info", &words);
         let w = self.store().work(id).ok_or("the series just added")?;
-        let d = detail_of(&w, m);
+        let d = self.detail_now(&w, m);
         self.keep_ahead(&d);
         Ok(d.series)
     }
@@ -266,6 +326,17 @@ impl Ctx {
         names
     }
 
+    pub fn set_bell(&self, id: i64, on: bool) -> Result<(), String> {
+        let w = self.store().work(id).ok_or("no such series")?;
+        self.store().set_bell(w.id, on);
+        Ok(())
+    }
+
+    /// A chapter downloaded because you asked (it is kept until you remove it).
+    pub fn download(&self, chapter_id: i64, on: bool) -> Result<(), String> {
+        if on { self.suwa.enqueue(&[chapter_id]) } else { self.suwa.delete_downloads(&[chapter_id]) }
+    }
+
     pub fn unfollow(&self, id: i64) -> Result<(), String> {
         let w = self.store().work(id).ok_or("no such series")?;
         self.suwa.set_in_library(w.manga_id, false)?;
@@ -282,10 +353,13 @@ impl Ctx {
         let m = self.suwa.manga(manga_id)?;
         let ids: Vec<i64> = m.chapters.iter().filter(|c| c.number == number || c.id == chapter_id).map(|c| c.id).collect();
         self.suwa.mark(&ids, Some(true), Some(page))?;
-        if let Some(w) = self.store().work_of_manga(manga_id)
-            && let Ok(d) = self.suwa.manga(manga_id).map(|m| detail_of(&w, &m)) {
-                self.keep_ahead(&d);
-            }
+        // The chapter may be a linked copy's: the work is found either way.
+        let work = self.store().work_of_any(manga_id);
+        if let Some(w) = work
+            && let Ok(own) = self.suwa.manga(w.manga_id)
+        {
+            self.keep_ahead(&self.detail_now(&w, &own));
+        }
         Ok(())
     }
 
@@ -302,9 +376,12 @@ impl Ctx {
         Ok(p)
     }
 
-    /// The next unread chapters, downloaded ahead of you.
+    /// The chapter after the last one you read (`ahead` of them, 1 by default), downloaded before
+    /// you get there. Nothing for a series you have not started: downloads are otherwise yours to
+    /// ask for.
     fn keep_ahead(&self, d: &SeriesDetail) {
-        let want: Vec<i64> = d.chapters.iter().filter(|c| !c.read).take(self.ahead).filter(|c| !c.downloaded).map(|c| c.id).collect();
+        let Some(upto) = d.series.read_upto else { return };
+        let want: Vec<i64> = d.chapters.iter().filter(|c| c.number > upto && !c.read).take(self.ahead).filter(|c| !c.downloaded).map(|c| c.id).collect();
         if let Err(e) = self.suwa.enqueue(&want) {
             log(&format!("download {}: {e}", d.series.title));
         }
@@ -343,9 +420,10 @@ impl Ctx {
                 }
             }
         };
-        let d = detail_of(w, &m);
+        let d = self.detail_now(w, &m);
         let latest = d.series.latest;
-        if ok && let Some(l) = latest.filter(|l| *l > w.latest && w.latest >= 0.0) {
+        // Announced only for a series with its bell on.
+        if ok && w.bell && let Some(l) = latest.filter(|l| *l > w.latest && w.latest >= 0.0) {
             let n = d.chapters.iter().filter(|c| c.number > w.latest).count();
             self.store().event(now, Some(w.id), "new", &format!("{n} new chapter{} of {}, up to {}", if n == 1 { "" } else { "s" }, w.title, fmt_num(l)));
         }
@@ -392,6 +470,9 @@ impl Ctx {
                 .collect();
             hs.into_iter().filter_map(|h| h.join().ok().flatten()).collect()
         });
+        for a in &alts {
+            self.store().add_link(w.id, a.id, &a.source_name);
+        }
         let offers: Vec<Offer> = alts.iter().map(Offer::of).collect();
         let Move::Switch { to, why } = decide(&Offer::of(m), fails, &offers, d.series.read_upto, &self.prefs, self.ahead as u32) else { return false };
         let Some(new) = alts.iter().find(|a| a.id == to.manga_id) else { return false };
@@ -411,10 +492,15 @@ impl Ctx {
         }
         self.store().move_work(w.id, new.id, &new.source_name, now)?;
         let _ = self.suwa.set_in_library(w.manga_id, false);
-        if let Some(w2) = self.store().work(w.id)
-            && let Ok(m) = self.suwa.manga(new.id) {
-                self.keep_ahead(&detail_of(&w2, &m));
-            }
+        // The old source stays linked: it may still fill a chapter the new one lacks.
+        self.store().remove_link(new.id);
+        self.store().add_link(w.id, w.manga_id, &w.source);
+        let moved = self.store().work(w.id);
+        if let Some(w2) = moved
+            && let Ok(m) = self.suwa.manga(new.id)
+        {
+            self.keep_ahead(&self.detail_now(&w2, &m));
+        }
         Ok(())
     }
 }
@@ -433,6 +519,59 @@ mod tests {
 
     fn prefs() -> Vec<String> {
         vec!["Asura Scans".into(), "MangaDex".into()]
+    }
+
+    fn manga(id: i64, source: &str, numbers: &[f64], read: &[f64]) -> Manga {
+        Manga {
+            id,
+            title: "Junk to King".into(),
+            source_name: source.into(),
+            chapters: numbers
+                .iter()
+                .enumerate()
+                .map(|(i, n)| crate::suwa::Ch {
+                    id: id * 1000 + i as i64,
+                    number: *n,
+                    name: String::new(),
+                    group: Some(source.into()),
+                    pages: 20,
+                    read: read.contains(n),
+                    last_page: 0,
+                    downloaded: false,
+                    uploaded_at: 0,
+                    last_read_at: 0,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn work() -> Work {
+        Work { id: 1, title: "Junk to King".into(), manga_id: 1, source: "MangaDex".into(), followed_at: 0, fails: 0, checked_at: 0, compared_at: 0, latest: 54.0, updated_at: 0, note: None, bell: false }
+    }
+
+    #[test]
+    fn missing_chapters_are_filled_from_linked_sources() {
+        let own: Vec<f64> = (1..=22).chain(45..=54).map(f64::from).collect();
+        let drake: Vec<f64> = (1..=40).map(f64::from).chain([23.5]).collect();
+        let other: Vec<f64> = (1..=84).map(f64::from).collect();
+        let m = manga(1, "MangaDex", &own, &[1.0, 2.0]);
+        let extras = [manga(3, "Other", &other, &[]), manga(2, "Drake Scans", &drake, &[23.0])];
+        let prefs = vec!["Drake Scans".into(), "MangaDex".into()];
+        let d = detail_of(&work(), &m, &extras, &prefs);
+        assert!(d.series.gaps.is_empty(), "{:?}", d.series.gaps);
+        let at = |n: f64| d.chapters.iter().find(|c| c.number == n).unwrap();
+        assert_eq!(at(22.0).from, None, "the series' own source first");
+        assert_eq!(at(23.0).from.as_deref(), Some("Drake Scans"), "then the preferred source");
+        assert_eq!(at(23.5).from.as_deref(), Some("Drake Scans"), "with its part chapters");
+        assert_eq!(at(41.0).from.as_deref(), Some("Other"), "then whoever has the rest");
+        assert_eq!(at(45.0).from, None);
+        assert_eq!(at(84.0).from.as_deref(), Some("Other"));
+        assert!(at(23.0).read, "read on the linked copy counts");
+        assert_eq!(d.series.latest, Some(84.0));
+        assert_eq!(d.series.read_upto, Some(23.0));
+        let alone = detail_of(&work(), &m, &[], &prefs);
+        assert_eq!(alone.series.gaps.len(), 1, "no links, the gap stays honest");
     }
 
     #[test]

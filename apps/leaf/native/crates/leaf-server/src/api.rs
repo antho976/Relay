@@ -14,12 +14,14 @@
 //! | `GET /v1/chapters/{id}/pages` | [`Pages`] |
 //! | `GET /v1/chapters/{id}/pages/{n}` | the page image (WebP when Suwayomi converted it) |
 //! | `POST /v1/chapters/{id}/progress` [`Progress`] | `{"ok":true}` |
-//! | `GET /v1/events` | `[Event]`, newest first |
+//! | `GET /v1/events` | `[Event]`, newest first; `?since=<ms>` the ones after, oldest first |
+//! | `POST /v1/series/{id}/bell` [`Bell`] | turns its new-chapter notices on or off |
+//! | `POST` / `DELETE /v1/chapters/{id}/download` | downloads a chapter on the server, or removes it |
 
 use std::io::Read;
 use std::sync::Arc;
 
-use leaf_proto::{Follow, Pages, Progress, Status};
+use leaf_proto::{Bell, Follow, Pages, Progress, Status};
 use serde::Serialize;
 use tiny_http::{Header, Method, Request, Response};
 
@@ -125,7 +127,20 @@ impl Api {
                 Ok(json(&Status { server: env!("CARGO_PKG_VERSION").into(), suwayomi: ctx.suwa.version().ok(), sources, series }))
             }
             (Method::Get, ["v1", "library"]) => Ok(json(&ctx.library())),
-            (Method::Get, ["v1", "events"]) => Ok(json(&ctx.store.lock().map(|s| s.events(100)).unwrap_or_default())),
+            (Method::Get, ["v1", "events"]) => Ok(json(&match query_param(url, "since").and_then(|v| v.parse::<i64>().ok()) {
+                Some(since) => ctx.store.lock().map(|s| s.events_since(since)).unwrap_or_default(),
+                None => ctx.store.lock().map(|s| s.events(100)).unwrap_or_default(),
+            })),
+            (Method::Post, ["v1", "series", _, "bell"]) => {
+                let Some(i) = id(2) else { return fail(400, "bad id") };
+                serde_json::from_str::<Bell>(body).map_err(|e| format!("bell: {e}")).and_then(|b| ctx.set_bell(i, b.on)).map(|_| json(&serde_json::json!({ "ok": true })))
+            }
+            (Method::Post, ["v1", "chapters", _, "download"]) => {
+                id(2).ok_or("bad id".to_string()).and_then(|c| ctx.download(c, true)).map(|_| json(&serde_json::json!({ "ok": true })))
+            }
+            (Method::Delete, ["v1", "chapters", _, "download"]) => {
+                id(2).ok_or("bad id".to_string()).and_then(|c| ctx.download(c, false)).map(|_| json(&serde_json::json!({ "ok": true })))
+            }
             (Method::Get, ["v1", "series", _]) => id(2).ok_or("bad id".to_string()).and_then(|i| ctx.detail(i)).map(|d| json(&d)),
             (Method::Delete, ["v1", "series", _]) => id(2).ok_or("bad id".to_string()).and_then(|i| ctx.unfollow(i)).map(|_| json(&serde_json::json!({ "ok": true }))),
             (Method::Get, ["v1", "series", _, "cover"]) => {
@@ -143,7 +158,12 @@ impl Api {
             (Method::Post, ["v1", "follow"]) => serde_json::from_str::<Follow>(body)
                 .map_err(|e| format!("follow: {e}"))
                 .and_then(|f| ctx.follow(&f.title, &f.manga_ids))
-                .map(|s| json(&s)),
+                .map(|s| {
+                    // The other sources are looked at right away, off this request.
+                    let (c, id) = (self.ctx.clone(), s.id);
+                    std::thread::spawn(move || c.compare_now(id));
+                    json(&s)
+                }),
             (Method::Get, ["v1", "chapters", _, "pages"]) => {
                 id(2).ok_or("bad id".to_string()).and_then(|c| ctx.pages(c).map(|p| json(&Pages { chapter_id: c, count: p.len() as u32 })))
             }

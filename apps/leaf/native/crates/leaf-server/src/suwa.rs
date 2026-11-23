@@ -46,10 +46,12 @@ pub struct Ch {
     pub last_page: u32,
     pub downloaded: bool,
     pub uploaded_at: i64,
+    /// When it was last read (ms since the epoch), 0 if never.
+    pub last_read_at: i64,
 }
 
 const MANGA_FIELDS: &str = "id title author description status source { id displayName }";
-const CHAPTER_FIELDS: &str = "id chapterNumber name scanlator pageCount isRead lastPageRead isDownloaded uploadDate";
+const CHAPTER_FIELDS: &str = "id chapterNumber name scanlator pageCount isRead lastPageRead isDownloaded uploadDate lastReadAt";
 
 /// Images a page conversion turns to WebP. No quality is given: Suwayomi 2.4 refuses its own
 /// `compressionLevel` ("No compression type set!") and then keeps the original, while its default
@@ -84,15 +86,16 @@ impl Suwa {
         Ok(d["aboutServer"]["version"].as_str().unwrap_or("?").to_string())
     }
 
-    /// What Leaf needs Suwayomi to do on its own: keep new chapters of followed series, and store
-    /// (and serve) pages as WebP.
+    /// What Leaf needs Suwayomi to do on its own: store (and serve) pages as WebP, and download
+    /// nothing by itself (leaf-server asks for the chapter after the one you read, and for what
+    /// you tap download on).
     /// `flaresolverr` is the address of a FlareSolverr beside Suwayomi, which passes the
     /// Cloudflare checks some sites put in front of their pages; without one those sources answer
     /// "Cloudflare bypass currently disabled".
     pub fn ensure_settings(&self, flaresolverr: Option<&str>) -> Result<(), String> {
         let conv: Vec<Value> = TO_WEBP.iter().map(|m| json!({ "mimeType": m, "target": "image/webp" })).collect();
         self.gql(
-            "mutation($c:[SettingsDownloadConversionTypeInput!]){ setSettings(input:{settings:{downloadConversions:$c, serveConversions:$c, downloadAsCbz:false, autoDownloadNewChapters:true, autoDownloadIgnoreReUploads:true}}){ clientMutationId } }",
+            "mutation($c:[SettingsDownloadConversionTypeInput!]){ setSettings(input:{settings:{downloadConversions:$c, serveConversions:$c, downloadAsCbz:false, autoDownloadNewChapters:false}}){ clientMutationId } }",
             json!({ "c": conv }),
         )?;
         if let Some(url) = flaresolverr {
@@ -216,6 +219,14 @@ impl Suwa {
         Ok(done)
     }
 
+    pub fn delete_downloads(&self, chapter_ids: &[i64]) -> Result<(), String> {
+        if chapter_ids.is_empty() {
+            return Ok(());
+        }
+        self.gql("mutation($i:[Int!]!){ deleteDownloadedChapters(input:{ids:$i}){ clientMutationId } }", json!({ "i": chapter_ids }))?;
+        Ok(())
+    }
+
     /// Fetches the extension lists again and updates every installed extension that has a newer
     /// version; answers the names updated.
     pub fn update_extensions(&self) -> Result<Vec<String>, String> {
@@ -279,6 +290,7 @@ fn manga_of(m: &Value, chapters: &Value) -> Manga {
                 last_page: c["lastPageRead"].as_i64().unwrap_or(0).max(0) as u32,
                 downloaded: c["isDownloaded"].as_bool().unwrap_or(false),
                 uploaded_at: c["uploadDate"].as_str().and_then(|s| s.parse().ok()).or_else(|| c["uploadDate"].as_i64()).unwrap_or(0),
+                last_read_at: c["lastReadAt"].as_str().and_then(|s| s.parse().ok()).or_else(|| c["lastReadAt"].as_i64()).unwrap_or(0),
             })
             .collect(),
     }

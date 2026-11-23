@@ -70,6 +70,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         app.ask(Job::Library);
     }
     let pg = app.page_begin(dt, TOP);
+    // While the + menu is open, a tap is the menu's: the page draws first and would otherwise
+    // take it for the cover under the menu (the tap went through to the cover, 2026-11-22).
+    let menu_tap = if app.st.library.add_menu { app.ui.tap.take() } else { None };
     let now = app.now_ns;
     let series: Vec<Series> = app.library.data.clone().unwrap_or_default();
     let books: Vec<Book> = app.shelf.books.clone();
@@ -306,6 +309,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let tab = kit::tabs(&mut cx, 0);
     let mut follow = false;
     if app.st.library.add_menu {
+        if menu_tap.is_some() {
+            cx.ui.tap = menu_tap;
+        }
         let top = cx.c.inset_top + TOP - 4.0;
         match kit::menu(&mut cx, top, &["Books from this phone", "Follow a series"]) {
             Some(0) => {
