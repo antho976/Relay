@@ -68,20 +68,44 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
     with how far each is read, "Ch. 338 · 2 new"); Recently updated.
   - **Search**: every source at once. **Add** puts a series in My space with its bell off: adding
     is not following. Sources are never named anywhere in the app.
-  - **My space** (`space.rs`): Recent (last read first, Continue or Start), Following (webtoon's
-    Subscribed list: the bell is the follow, sorted by Recently read, updated or followed) and
-    Downloads (per series, what the server keeps and what is on this phone, and removing it).
-    Highlights and Reading time are in its ⋯ menu, no longer tabs; a book's notes stay in the
-    reader's menu.
+  - **My space** (`space.rs`): Updates (chapters that came over the last 14 days, `/v1/updates`,
+    by day, unread in full ink and read dimmed, Belled only or All; a row opens the reader at that
+    chapter), Recent (last read first, Continue or Start), Following (webtoon's Subscribed list:
+    the bell is the follow, sorted by Recently read, updated or followed, with a row of shelves:
+    Reading, Plan to read, On hold, Dropped, Done, and their counts) and Downloads (per series,
+    what the server keeps and what is on this phone, and removing it). Updates, Recent and
+    Following have a field that narrows the list by title as you type (any case or accent, inside
+    words). A long press on a series' row puts it on another shelf; Dropped series stay out of
+    Home's spotlight and Continue reading. Highlights and Reading time are in its ⋯ menu, no
+    longer tabs; a book's notes stay in the reader's menu.
   - **Series** (`series.rs`): banner, facts, Continue, Chapters / About; Newest ⇅ kept per series.
     Each chapter row has a picture cut from its own pages once downloaded (`thumb.rs`: the most
     colourful 4:3 crop of a few random pages, near-white weighed hard against, kept in `thumbs/`),
     a cloud tile until then that downloads it when tapped, and Read, Continue or a check. ⋯ has
     "Download next 5" and "Remove from My space". Nothing downloads by itself: the server keeps
     only the chapter after the last one read.
+  - A long press on a chapter's row: Mark as read or unread, Mark all before as read, Download or
+    Remove download, each shown at once and put back with a toast if the server says no. The
+    series' ⋯ also has its shelf and "Wrong series?" (the other entries for the work with their
+    chapter counts, `/v1/series/{id}/alternatives`; picking one repins the series, place carried).
   - **Notices** (Android): `LeafChaptersJob` asks `/v1/events?since=` about hourly and posts one
     notice per run of new chapters of a belled series; the first bell turned on asks to post
-    notifications.
+    notifications. When to post is `notices.rs`'s (called through JNI): quiet hours (default
+    23:00 to 08:00) hold notices until they end, and "One summary a day" posts a single "12 new
+    chapters in 5 series" at its time (default 09:00). Both are in Settings, kept in
+    `files/config.json` under `notify`.
+  - **Reading comfort** (comics, and books where it applies): a tap in the top or bottom third
+    turns the page by 85% of a screen (a setting), as the volume keys do (`LeafActivity` takes
+    them while reading: GameActivity never passes them on); the screen stays on while reading; a
+    dimmer below the phone's lowest brightness (the reader's overlay, the book's type sheet);
+    long white or black runs at a comic page's top and bottom are cut to 16 px when it is decoded
+    (`logic::gutter_cuts`, a setting). Comics auto-scroll from the overlay's play key at the
+    series' own speed (− and +, kept per series); it waits while the page ahead is loading, a
+    tap stops it, and it stops by itself only at the last chapter's end.
+  - **Settings** (the gear on Home): the server, then Reading, Notifications, Sources (each one's
+    health from `/v1/health`), AniList (a token kept on the server, which pushes chapter progress)
+    and Backup (the latest nightly `/v1/backup` to the share sheet, the desktop saves it under
+    `exports/`; or one made now).
   - The reader chains chapters, caches pages on disk and reports progress. The last library and
     series are kept for offline.
 

@@ -15,7 +15,11 @@
 //! JNI from this thread: it is attached for as long as `android_main` runs, and never returns to
 //! Java, so every JNI sequence runs inside a local frame ([`with_activity`]), which frees its
 //! local references. Back comes from `LeafActivity` (AndroidX would finish the activity first),
-//! and the reader hides the system bars through `LeafActivity.setImmersive`.
+//! and the reader hides the system bars through `LeafActivity.setImmersive`. While a book or a
+//! strip is open, `LeafActivity.setReading` keeps the screen on and takes the volume keys
+//! (GameActivity's own filter never passes them to native code), handing each press here
+//! (`nativeVolume`). `LeafChaptersJob` asks `nativePlan` which chapter notices to post
+//! ([`crate::notices`]).
 
 use std::ffi::CString;
 use std::path::PathBuf;
@@ -74,6 +78,10 @@ impl Host for AndroidHost {
 
     fn immersive(&self, on: bool) {
         with_activity(&self.app, |env, activity| env.call_method(activity, "setImmersive", "(Z)V", &[JValue::Bool(on as u8)]).map(|_| ()));
+    }
+
+    fn reading(&self, on: bool, volume_keys: bool) {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "setReading", "(ZZ)V", &[JValue::Bool(on as u8), JValue::Bool((on && volume_keys) as u8)]).map(|_| ()));
     }
 
     fn ask_notifications(&self) {
@@ -190,6 +198,32 @@ static BACK: AtomicBool = AtomicBool::new(false);
 pub extern "system" fn Java_com_quietsoftware_leaf_LeafActivity_nativeBack<'local>(_env: JNIEnv<'local>, _class: JClass<'local>) {
     BACK.store(true, Ordering::SeqCst);
     wake();
+}
+
+/// Volume key presses while reading, from LeafActivity: down (+1) or up (-1), summed.
+static VOLUME: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_leaf_LeafActivity_nativeVolume<'local>(_env: JNIEnv<'local>, _class: JClass<'local>, down: jni::sys::jboolean) {
+    VOLUME.fetch_add(if down != 0 { 1 } else { -1 }, Ordering::SeqCst);
+    wake();
+}
+
+/// The chapter job's question: what to post now ([`crate::notices::plan_json`]).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_leaf_LeafChaptersJob_nativePlan<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    notify: JString<'local>,
+    state: JString<'local>,
+    events: JString<'local>,
+    now_ms: jni::sys::jlong,
+    offset_min: jni::sys::jint,
+) -> jni::sys::jstring {
+    let mut read = |s: &JString<'local>| -> String { if s.is_null() { String::new() } else { env.get_string(s).map(Into::into).unwrap_or_default() } };
+    let (n, st, ev) = (read(&notify), read(&state), read(&events));
+    let out = std::panic::catch_unwind(|| crate::notices::plan_json(&n, &st, &ev, now_ms, offset_min)).unwrap_or_else(|_| "{}".into());
+    env.new_string(out).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
 }
 
 #[link(name = "log")]
@@ -423,6 +457,12 @@ fn android_main(android: AndroidApp) {
         }
 
         let mut go_back = BACK.swap(false, Ordering::SeqCst);
+        let mut volume = VOLUME.swap(0, Ordering::SeqCst);
+        while volume != 0 {
+            app.volume(volume > 0);
+            volume -= volume.signum();
+            dirty = true;
+        }
         let mut text: Option<String> = None;
         let mut done_typing = false;
         if let Ok(mut events) = android.input_events_iter() {

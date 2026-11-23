@@ -47,7 +47,9 @@ anywhere but loopback.
 ## The phone's UI: settled (design 42, 2026-11-22)
 
 - Tabs are Home, Search and My space only; Notes and Stats are not tabs (My space's ⋯ reaches
-  them). No source names anywhere in the UI. Adding a series is not following it: the bell is.
+  them). My space's own tabs are Updates (first), Recent, Following, Downloads (2026-11-23). No
+  source names anywhere in the UI, except Settings' Sources list, which the owner asked for
+  (2026-11-23). Adding a series is not following it: the bell is.
 - Nothing downloads without being asked, apart from the server's one next chapter.
 - While a menu is open, the page under it takes no tap (`kit::hold`; `flows.rs` tests it). Nor
   does a tap on fixed chrome drawn after the page (the tab bar, a fixed top): `Ui::begin_frame`

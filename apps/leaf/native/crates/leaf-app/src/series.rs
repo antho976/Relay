@@ -9,8 +9,13 @@
 //!   of chapters no source has gets a row of its own; the server fills most from other sources.
 //! - **About**: the description and what is known of the series.
 //!
-//! The bell in the top bar is the follow: new chapters are announced while it is on. ⋯ holds
-//! "Download next 5" and "Remove from My space" (behind a confirm). Sources are never named.
+//! The bell in the top bar is the follow: new chapters are announced while it is on. ⋯ holds the
+//! shelf it sits on, "Download next 5", "Wrong series?" (the other entries found for the work, to
+//! read from instead) and "Remove from My space" (behind a confirm). Sources are never named.
+//!
+//! A long press on a chapter's row opens a sheet: Mark as read or unread, Mark all before as read,
+//! Download or Remove download. Each shows at once and is put back, with a toast, if the server
+//! says no.
 
 use leaf_proto::SeriesDetail;
 
@@ -36,15 +41,42 @@ pub struct State {
     polled_ns: u64,
     /// How many times it was asked since the last download began: each wait is longer.
     polls: u32,
+    /// A chapter's sheet is open (the long press on its row): its id.
+    pub chapter: Option<i64>,
+    /// The shelf sheet is open.
+    pub shelf: bool,
+    /// "Wrong series?" is open, and an entry was picked and is being moved to.
+    pub alternatives: bool,
+    pub repinning: bool,
 }
 
 impl State {
-    /// Close the menu or the dialog, if one is open.
+    /// Close the menu, a sheet or the dialog, if one is open.
     pub fn close_over(&mut self) -> bool {
-        let open = self.menu || self.confirm;
+        let open = self.menu || self.confirm || self.chapter.is_some() || self.shelf || self.alternatives;
         self.menu = false;
         self.confirm = false;
+        self.chapter = None;
+        self.shelf = false;
+        self.alternatives = false;
         open
+    }
+
+    fn covered(&self) -> bool {
+        self.menu || self.confirm || self.chapter.is_some() || self.shelf || self.alternatives
+    }
+}
+
+/// A finger held this long on a row opens its sheet.
+pub const LONG_PRESS_NS: u64 = 450_000_000;
+
+/// The sheet of shelves for a series on `on`: Some(Some(shelf)) for one picked, Some(None) for a
+/// tap outside.
+pub fn shelf_sheet(cx: &mut kit::Ctx, title: &str, on: logic::Shelf) -> Option<Option<logic::Shelf>> {
+    let items: Vec<(&str, bool)> = logic::Shelf::ALL.iter().map(|s| (s.words(), *s == on)).collect();
+    match kit::choices(cx, title, Some("Dropped series stay out of Home"), &items)? {
+        i if i < logic::Shelf::ALL.len() => Some(Some(logic::Shelf::ALL[i])),
+        _ => Some(None),
     }
 }
 
@@ -68,6 +100,15 @@ enum Act {
     Open(usize, u32),
     Download(i64),
     Bell(bool),
+    Sheet(i64),
+}
+
+/// What a chapter's sheet asked for.
+enum ChapterAct {
+    Read(i64, bool),
+    Before(f64),
+    Download(i64),
+    Remove(i64),
 }
 
 pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
@@ -105,7 +146,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         let at = app.st.series.polled_ns + poll_wait(app.st.series.polls);
         app.wake_at(at);
     }
-    let covered = app.st.series.menu || app.st.series.confirm;
+    let covered = app.st.series.covered();
     let oldest = app.oldest_first.contains(&id);
     let cached = app.images.cached.clone().unwrap_or_default();
     let downloading = app.downloading.clone();
@@ -269,6 +310,8 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                 let view_bottom = -cx.c.dy + cx.c.h + 60.0;
                 let current = cont.as_ref().map(|c| c.index);
                 let mut thumbs: Vec<(i64, u32)> = Vec::new();
+                // A finger held on a row opens its sheet.
+                let held_at = cx.ui.resting(now).filter(|(_, ns)| *ns >= LONG_PRESS_NS).map(|(p, _)| p);
                 for row in rows {
                     let h = if matches!(row, Row::Gap(_)) { GAP_H } else { ROW_H };
                     if y + h < view_top || y > view_bottom {
@@ -356,6 +399,14 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                                 }
                             }
                             cx.c.text_fit(&line.join(" · "), lx, ly, (tx + tw - lx).max(0.0), line_t);
+                            if let Some((_, hy)) = held_at
+                                && !covered
+                                && hy >= y + cx.c.dy
+                                && hy < y + h + cx.c.dy
+                            {
+                                cx.ui.swallow();
+                                act = Some(Act::Sheet(c.id));
+                            }
                             let pic_tap = !c.downloaded && !on_phone && !fetching && cx.tap(px - 6.0, py - 6.0, PIC.0 + 12.0, PIC.1 + 12.0);
                             if pic_tap {
                                 act = Some(Act::Download(c.id));
@@ -421,19 +472,74 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let st = &mut app.st.series;
     let mut remove = false;
     let mut next5 = false;
+    let mut chapter_act: Option<ChapterAct> = None;
+    let mut new_shelf: Option<logic::Shelf> = None;
+    let mut ask_alternatives = false;
+    let mut repin: Option<i64> = None;
+    let on_shelf = series.as_ref().map_or(logic::Shelf::Plan, logic::shelf_of);
     if covered {
         kit::release(&mut cx, held);
         if st.menu {
-            match kit::menu(&mut cx, top + 52.0, &["Download next 5", "Remove from My space"]) {
+            let shelf_words = format!("Shelf: {}", on_shelf.words());
+            match kit::menu(&mut cx, top + 52.0, &[&shelf_words, "Download next 5", "Wrong series?", "Remove from My space"]) {
                 Some(0) => {
+                    st.menu = false;
+                    st.shelf = true;
+                }
+                Some(1) => {
                     st.menu = false;
                     next5 = true;
                 }
-                Some(1) => {
+                Some(2) => {
+                    st.menu = false;
+                    st.alternatives = true;
+                    ask_alternatives = true;
+                }
+                Some(3) => {
                     st.menu = false;
                     st.confirm = true;
                 }
                 Some(_) => st.menu = false,
+                None => {}
+            }
+        } else if st.shelf {
+            let title = series.as_ref().map_or("This series", |s| s.title.as_str());
+            if let Some(picked) = shelf_sheet(&mut cx, title, on_shelf) {
+                st.shelf = false;
+                new_shelf = picked.filter(|p| *p != on_shelf);
+            }
+        } else if let Some(cid) = st.chapter {
+            match detail.as_ref().and_then(|d| d.chapters.iter().find(|c| c.id == cid)) {
+                Some(c) => {
+                    let title = logic::chapter_title(&c.name, c.number).map_or_else(|| format!("Chapter {}", logic::num(c.number)), |t| format!("Chapter {} · {t}", logic::num(c.number)));
+                    let sub = (c.uploaded_at > 0).then(|| logic::local_date(c.uploaded_at));
+                    let kept = c.downloaded || cached.contains_key(&c.id) || downloading.contains(&c.id);
+                    // "Mark all before" only when something comes before it.
+                    let before = detail.as_ref().is_some_and(|d| d.chapters.iter().any(|x| x.number < c.number));
+                    let mut items = vec![(if c.read { "Mark as unread" } else { "Mark as read" }, false)];
+                    let mut acts = vec![ChapterAct::Read(c.id, !c.read)];
+                    if before {
+                        items.push(("Mark all before as read", false));
+                        acts.push(ChapterAct::Before(c.number));
+                    }
+                    items.push((if kept { "Remove download" } else { "Download" }, false));
+                    acts.push(if kept { ChapterAct::Remove(c.id) } else { ChapterAct::Download(c.id) });
+                    match kit::choices(&mut cx, &title, sub.as_deref(), &items) {
+                        Some(i) if i < acts.len() => chapter_act = Some(acts.swap_remove(i)),
+                        Some(_) => st.chapter = None,
+                        None => {}
+                    }
+                    if chapter_act.is_some() {
+                        st.chapter = None;
+                    }
+                }
+                None => st.chapter = None,
+            }
+        } else if st.alternatives {
+            let alts = app.alternatives.get(&id);
+            match alternatives_sheet(&mut cx, alts, st.repinning, now) {
+                Some(Some(m)) => repin = Some(m),
+                Some(None) => st.alternatives = false,
                 None => {}
             }
         } else if st.confirm {
@@ -454,7 +560,42 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     if let Some(a) = set_about {
         st.about = a;
     }
+    let waiting_alts = st.alternatives && app.alternatives.get(&id).is_some_and(|l| l.loading) || st.repinning;
     app.page_end(&pg, bottom);
+    if waiting_alts {
+        // The spinner turns while every source is asked.
+        app.wake_at(now + 50_000_000);
+    }
+    if ask_alternatives && !app.alternatives.get(&id).is_some_and(|l| l.loading || l.data.is_some()) {
+        app.ask(Job::Alternatives(id));
+    }
+    if let Some(m) = repin {
+        app.st.series.repinning = true;
+        app.ask(Job::Repin(id, m));
+        if app.shot {
+            app.st.series.repinning = false;
+        }
+    }
+    if let Some(sh) = new_shelf {
+        app.set_shelf(id, sh);
+    }
+    match chapter_act {
+        Some(ChapterAct::Read(c, read)) => app.set_read(c, read),
+        Some(ChapterAct::Before(n)) => {
+            app.read_before(id, n);
+            app.toast(&format!("Everything before chapter {} marked read", logic::num(n)));
+        }
+        Some(ChapterAct::Download(c)) => {
+            app.download(&[c], true);
+            app.st.series.polled_ns = app.now_ns;
+            app.st.series.polls = 0;
+        }
+        Some(ChapterAct::Remove(c)) => {
+            app.remove_download(c);
+            app.toast("Download removed");
+        }
+        None => {}
+    }
     if waiting {
         // The spinner turns.
         app.wake_at(now + 50_000_000);
@@ -493,6 +634,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             app.st.series.polls = 0;
         }
         Some(Act::Bell(on)) if !covered => app.set_bell(id, on),
+        Some(Act::Sheet(c)) if !covered => app.st.series.chapter = Some(c),
         _ => {
             if back && !covered {
                 app.pop();
@@ -500,6 +642,69 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         }
     }
     pg.moving || loading && !crate::wake::has()
+}
+
+/// "Wrong series?": every entry found for the work, with its chapters, the one read now checked.
+/// Some(Some(manga)) for an entry picked, Some(None) for a tap outside.
+fn alternatives_sheet(cx: &mut kit::Ctx, alts: Option<&crate::app::Loaded<Vec<leaf_proto::Alternative>>>, moving: bool, now: u64) -> Option<Option<i64>> {
+    let list = alts.and_then(|l| l.data.as_ref());
+    let loading = alts.is_none_or(|l| l.loading && l.data.is_none());
+    let error = alts.and_then(|l| l.error.clone()).filter(|_| list.is_none());
+    let rh = 64.0;
+    let rows = list.map_or(0, |l| l.len());
+    let body_h = if rows > 0 { rh * rows.min(6) as f32 } else { 96.0 };
+    let (top, outside) = kit::sheet(cx, 82.0 + body_h + 16.0);
+    if outside {
+        return Some(None);
+    }
+    let x = PAD + 4.0;
+    let w = WIDTH - 2.0 * x;
+    cx.c.text("Wrong series?", x, top + 26.0, Text::new(ty::SECTION, t::INK).semi());
+    cx.c.text_fit("Pick the right entry for this title. Your place comes along.", x, top + 50.0, w, Text::new(ty::CAPTION, t::INK3));
+    let y0 = top + 82.0;
+    let spinner = |cx: &mut kit::Ctx, cy: f32| {
+        let turn = (now as f64 / 1e9 * 0.9).fract() as f32;
+        cx.c.arc(x + 10.0, cy, 9.0, 2.0, turn, turn + 0.7, t::INK3, false);
+    };
+    if loading {
+        spinner(cx, y0 + 22.0);
+        cx.c.para("Asking every source. This takes a few seconds.", x + 30.0, y0 + 12.0, w - 30.0, Text::new(ty::UI, t::INK2).line(1.4), 3);
+    } else if let Some(e) = error {
+        cx.c.para(&e, x, y0 + 12.0, w, Text::new(ty::UI, t::DANGER).line(1.4), 3);
+    } else if rows == 0 {
+        cx.c.para("No other entry for this title was found.", x, y0 + 12.0, w, Text::new(ty::UI, t::INK2).line(1.4), 3);
+    }
+    let mut out = None;
+    for (i, a) in list.into_iter().flatten().take(6).enumerate() {
+        let y = y0 + rh * i as f32;
+        if !a.current && cx.pressed(0.0, y, WIDTH, rh) {
+            cx.c.rect(8.0, y, WIDTH - 16.0, rh, 10.0, t::WASH);
+        }
+        let tt = Text::new(ty::BODY, t::INK).medium();
+        let lt = Text::new(ty::CAPTION, t::INK3);
+        let ty0 = y + (rh - tt.lh() - 4.0 - lt.lh()) / 2.0;
+        cx.c.text_fit(&a.title, x, ty0, w - 40.0, tt);
+        let mut line = logic::chapters_words(a.chapters as usize);
+        if let Some(l) = a.latest {
+            line.push_str(&format!(", up to {}", logic::num(l)));
+        }
+        if a.current {
+            line.push_str(" · reading this one");
+        }
+        cx.c.text_fit(&line, x, ty0 + tt.lh() + 4.0, w - 40.0, lt.color(if a.current { t::ACCENT } else { t::INK3 }));
+        if a.current {
+            cx.c.icon("check", WIDTH - PAD - 12.0, y + rh / 2.0, 17.0, t::ACCENT);
+        } else if moving {
+            // Being moved to: the rows wait.
+        } else if cx.tap(0.0, y, WIDTH, rh) {
+            out = Some(Some(a.manga_id));
+        }
+    }
+    if moving {
+        spinner(cx, top + 30.0);
+    }
+    cx.ui.tap = None;
+    out
 }
 
 #[cfg(test)]

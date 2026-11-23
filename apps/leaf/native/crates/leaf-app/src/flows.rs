@@ -37,6 +37,7 @@ fn series(id: i64, title: &str) -> Series {
         bell: false,
         added_at: 1_700_000_000_000,
         last_read_at: 1_700_000_000_000 + id * 1000,
+        shelf: None,
     }
 }
 
@@ -78,6 +79,7 @@ fn tap(app: &mut App, t: &mut u64, x: f32, y: f32) {
 #[test]
 fn a_tap_on_the_plus_menu_never_reaches_the_row_under_it() {
     let (mut app, mut t, dir) = app("menu");
+    app.st.space.tab = crate::space::RECENT;
     app.reset_to(Route::Space);
     step(&mut app, &mut t);
     step(&mut app, &mut t);
@@ -137,10 +139,17 @@ fn a_tab_tap_never_reaches_the_page_under_the_tab_bar() {
     tab_over_content(&mut app, &mut t, Route::Home, 0.0, 2, Route::Space);
     tab_over_content(&mut app, &mut t, Route::Home, 120.0, 1, Route::Search);
     // My space's Recent list and Following's series rows.
-    app.st.space.tab = 0;
+    app.st.space.tab = crate::space::RECENT;
     tab_over_content(&mut app, &mut t, Route::Space, 0.0, 0, Route::Home);
-    app.st.space.tab = 1;
+    app.st.space.tab = crate::space::FOLLOWING;
     tab_over_content(&mut app, &mut t, Route::Space, 0.0, 1, Route::Search);
+    // Updates' rows: each opens the reader once its series is at hand.
+    app.updates.data = Some(updates(12));
+    for i in 1..=12 {
+        app.series.insert(i, loaded(detail(i, 10)));
+    }
+    app.st.space.tab = crate::space::UPDATES;
+    tab_over_content(&mut app, &mut t, Route::Space, 0.0, 0, Route::Home);
     let _ = std::fs::remove_dir_all(dir);
     // Continue reading's rail of covers lies under it on a short one.
     let (mut app, mut t, dir) = app_with("tabs-rail", 12, 1500.0);
@@ -221,5 +230,211 @@ fn the_spotlight_turns_slowly_by_itself_and_a_dot_chooses_one() {
         step(&mut app, &mut t);
     }
     assert_eq!(app.st.home.pos, 2.0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A series' chapters, 1 to `n`, the first four read, as the series page has them.
+fn detail(id: i64, n: usize) -> leaf_proto::SeriesDetail {
+    let chapters = (1..=n)
+        .map(|k| leaf_proto::Chapter { id: id * 1000 + k as i64, number: k as f64, name: format!("Chapter {k}"), group: None, pages: 30, read: k <= 4, last_page: 0, downloaded: true, uploaded_at: 0, from: None })
+        .collect();
+    leaf_proto::SeriesDetail { series: series(id, &format!("Series {id}")), description: None, chapters }
+}
+
+fn loaded<T>(data: T) -> crate::app::Loaded<T> {
+    crate::app::Loaded { data: Some(data), live: true, error: None, loading: false }
+}
+
+/// One update per series 1..=n, each its chapter 10, newest first, belled: all from today, around
+/// local noon (whatever the hour the test runs at, they stay one day).
+fn updates(n: i64) -> Vec<leaf_proto::Update> {
+    let today = crate::shelf::day_of(crate::shelf::now_ms());
+    let noon = (today * 86_400 - crate::shelf::zone_offset() + 12 * 3600) * 1000;
+    (1..=n).map(|i| leaf_proto::Update { series: i, title: format!("Series {i}"), chapter: i * 1000 + 10, number: 10.0, name: String::new(), at: noon - i * 600_000, read: false, bell: true }).collect()
+}
+
+/// A finger held at (x, y) past a long press, then lifted.
+fn hold(app: &mut App, t: &mut u64, x: f32, y: f32) {
+    let u = app.canvas.u;
+    let x0 = ((app.canvas.px_w - WIDTH * u) * 0.5).max(0.0);
+    app.touch(Touch { id: 1, phase: Phase::Down, x: x0 + x * u, y: y * u, t_ns: *t });
+    step(app, t);
+    std::thread::sleep(std::time::Duration::from_millis(crate::series::LONG_PRESS_NS / 1_000_000 + 80));
+    step(app, t);
+    step(app, t);
+    app.touch(Touch { id: 1, phase: Phase::Up, x: x0 + x * u, y: y * u, t_ns: *t + 600_000_000 });
+    step(app, t);
+}
+
+#[test]
+fn updates_come_first_and_a_row_opens_its_chapter() {
+    let (mut app, mut t, dir) = app("updates");
+    app.updates.data = Some(updates(3));
+    app.series.insert(2, loaded(detail(2, 10)));
+    app.reset_to(Route::Space);
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    assert_eq!(app.st.space.tab, crate::space::UPDATES, "Updates is My space's first tab");
+    // Under the tabs, the field, the count and Belled only / All: the day's heading at 214, then
+    // rows of 76 from 248. The second is series 2.
+    tap(&mut app, &mut t, 200.0, 248.0 + 76.0 + 38.0);
+    assert_eq!(app.route(), &Route::Reader, "the update opened the reader");
+    let r = app.reader.as_ref().unwrap();
+    assert_eq!((r.series, r.chapters.len()), (2, 10));
+    assert!(matches!(r.pos.item, crate::strip::Item::Head(9)), "at chapter 10: {:?}", r.pos.item);
+    // A series not at hand yet: asked for, opened once it comes.
+    app.reset_to(Route::Space);
+    step(&mut app, &mut t);
+    tap(&mut app, &mut t, 200.0, 248.0 + 38.0);
+    assert_eq!(app.route(), &Route::Space);
+    assert_eq!(app.open_after, Some((1, 1010)));
+    app.series.insert(1, loaded(detail(1, 10)));
+    step(&mut app, &mut t);
+    assert_eq!(app.route(), &Route::Reader);
+    // Belled only hides series whose bell is off.
+    app.reset_to(Route::Space);
+    let mut list = updates(3);
+    list[0].bell = false;
+    app.updates.data = Some(list);
+    app.updates_all = false;
+    step(&mut app, &mut t);
+    tap(&mut app, &mut t, 200.0, 248.0 + 38.0);
+    assert_eq!(app.reader.as_ref().map(|r| r.series), Some(2), "series 1 is hidden: its bell is off");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_filter_takes_its_tap_and_narrows_the_list() {
+    let (mut app, mut t, dir) = app_with("filter", 12, 2340.0);
+    app.library.data.as_mut().unwrap()[10].title = "Pokémon Adventures".into();
+    app.st.space.tab = crate::space::FOLLOWING;
+    app.reset_to(Route::Space);
+    step(&mut app, &mut t);
+    // Scrolled so rows pass under the field, then the field tapped: it takes the keyboard, no row
+    // opens.
+    app.scroll().off = 300.0;
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    tap(&mut app, &mut t, 150.0, 104.0 + 8.0 + 20.0);
+    assert_eq!(app.route(), &Route::Space, "the field is not the row under it");
+    assert!(app.focus.is("space-filter"));
+    app.set_text("POKEMON adv");
+    step(&mut app, &mut t);
+    assert_eq!(app.st.space.query, "POKEMON adv");
+    app.finish_typing();
+    *app.scroll() = Default::default();
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    // One row is left: the first under the chips (rows start at 158 + 54 + 46 = 258).
+    tap(&mut app, &mut t, 200.0, 258.0 + 40.0);
+    assert_eq!(app.route(), &Route::Series(11));
+    app.pop();
+    step(&mut app, &mut t);
+    // The clear key empties it.
+    tap(&mut app, &mut t, WIDTH - crate::theme::PAD - 20.0, 104.0 + 8.0 + 20.0);
+    assert_eq!(app.st.space.query, "");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_long_press_on_a_row_puts_it_on_a_shelf_and_the_chips_filter_by_it() {
+    let (mut app, mut t, dir) = app("shelves");
+    app.st.space.tab = crate::space::FOLLOWING;
+    app.reset_to(Route::Space);
+    step(&mut app, &mut t);
+    // Following sorts by last read: series 3 first, its row at 258.
+    hold(&mut app, &mut t, 200.0, 258.0 + 50.0);
+    assert_eq!(app.st.space.shelf_for, Some(3), "the long press opened the shelf sheet");
+    assert_eq!(app.route(), &Route::Space, "and did not open the series");
+    // The sheet: title and line (76), then Reading, Plan to read, On hold, Dropped, Done; 52 each.
+    let h = app.canvas.h;
+    let top = h - (76.0 + 52.0 * 5.0 + 12.0);
+    tap(&mut app, &mut t, 120.0, top + 76.0 + 52.0 * 3.0 + 26.0);
+    assert_eq!(app.st.space.shelf_for, None);
+    assert_eq!(app.library.data.as_ref().unwrap().iter().find(|s| s.id == 3).unwrap().shelf.as_deref(), Some("dropped"));
+    assert_eq!(app.route(), &Route::Space, "the row under the sheet was not opened");
+    // Dropped is the fifth chip: only series 3 is left.
+    app.st.space.shelf = Some(crate::logic::Shelf::Dropped);
+    step(&mut app, &mut t);
+    tap(&mut app, &mut t, 200.0, 258.0 + 50.0);
+    assert_eq!(app.route(), &Route::Series(3));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_long_press_on_a_chapter_opens_its_sheet_and_marks_it() {
+    let (mut app, mut t, dir) = app("chapter");
+    app.series.insert(1, loaded(detail(1, 10)));
+    app.push(Route::Series(1));
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    // Newest first: chapter 10's row, then 9's (rows 84 tall from about 509).
+    hold(&mut app, &mut t, 200.0, 640.0);
+    let c = app.st.series.chapter.expect("the chapter's sheet is open");
+    assert_eq!(app.route(), &Route::Series(1), "the long press did not open the reader");
+    // Mark as read, the sheet's first row (no date: no line under its title).
+    let h = app.canvas.h;
+    let top = h - (58.0 + 52.0 * 3.0 + 12.0);
+    tap(&mut app, &mut t, 120.0, top + 58.0 + 26.0);
+    let d = app.series[&1].data.as_ref().unwrap();
+    assert!(d.chapters.iter().find(|x| x.id == c).unwrap().read, "marked read at once");
+    assert_eq!(app.st.series.chapter, None);
+    assert_eq!(app.route(), &Route::Series(1), "the row under the sheet was not opened");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_reader_turns_pages_by_thirds_and_auto_scrolls_until_tapped() {
+    let (mut app, mut t, dir) = app("reader");
+    let d = detail(1, 3);
+    for c in &d.chapters {
+        for n in 0..30 {
+            app.images.fake_size(c.id, n, 800, 1600);
+        }
+    }
+    app.open_chapter(&d, 1, 0);
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    let h = app.canvas.h;
+    let at = |app: &App| app.reader.as_ref().map(|r| r.pos).unwrap();
+    // The bottom third: most of a screen down, gliding there.
+    let before = at(&app);
+    tap(&mut app, &mut t, 200.0, h * 0.85);
+    for _ in 0..60 {
+        step(&mut app, &mut t);
+    }
+    assert_ne!(at(&app), before, "the page turned");
+    assert!(!app.reader.as_ref().unwrap().overlay, "and no overlay");
+    // A volume key the same way, then back up with the top third.
+    let mid = at(&app);
+    assert!(app.volume(true));
+    for _ in 0..60 {
+        step(&mut app, &mut t);
+    }
+    tap(&mut app, &mut t, 200.0, h * 0.1);
+    for _ in 0..60 {
+        step(&mut app, &mut t);
+    }
+    assert_eq!(at(&app).item, mid.item, "down and up again");
+    // The middle shows the overlay; its play key starts auto-scroll and puts the overlay away.
+    tap(&mut app, &mut t, 200.0, h * 0.5);
+    assert!(app.reader.as_ref().unwrap().overlay);
+    let bar_top = h - 112.0;
+    tap(&mut app, &mut t, WIDTH / 2.0, bar_top + 10.0 + 22.0);
+    let r = app.reader.as_ref().unwrap();
+    assert!(r.auto && !r.overlay, "playing");
+    let from = at(&app);
+    for _ in 0..30 {
+        step(&mut app, &mut t);
+    }
+    assert_ne!(at(&app), from, "it moves by itself");
+    // Any tap stops it and shows the overlay.
+    tap(&mut app, &mut t, 200.0, h * 0.85);
+    let r = app.reader.as_ref().unwrap();
+    assert!(!r.auto && r.overlay);
+    // − and + set the series' speed, kept.
+    let speed = app.speed_of(1);
+    tap(&mut app, &mut t, WIDTH / 2.0 + 26.0 + 22.0, bar_top + 10.0 + 22.0);
+    assert_eq!(app.speed_of(1), speed + 1);
     let _ = std::fs::remove_dir_all(dir);
 }

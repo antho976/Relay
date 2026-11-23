@@ -218,8 +218,10 @@ impl Ui {
     /// the next frame on (a sheet opens with a tap, never mid-drag).
     pub fn cover(&mut self) {
         self.covered = true;
-        // A tap held because the dialog was over the page last frame is the dialog's.
-        if self.held_for_cover {
+        // A tap held because the dialog was over the page last frame is the dialog's; so is one
+        // held for fixed chrome: the menu or dialog lies over the chrome too (a menu opened in the
+        // frame before, so not yet known as a cover when this frame began).
+        if self.held.is_some() {
             self.tap = self.held.take();
             self.held_for_cover = false;
         }

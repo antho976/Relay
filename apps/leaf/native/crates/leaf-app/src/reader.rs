@@ -1,6 +1,12 @@
 //! The reader: every chapter of the series as one strip, full bleed, scrolled with momentum. The
-//! end of a chapter flows into the next past a slim heading. A tap shows or hides a small overlay
-//! (Back, the series and chapter, a thin progress line, the chapters before and after).
+//! end of a chapter flows into the next past a slim heading. A tap in the middle of the screen
+//! shows or hides a small overlay (Back, the series and chapter, a thin progress line, the
+//! chapters before and after, auto-scroll and the dimmer); a tap in the top or bottom third turns
+//! the page up or down most of a screen (a setting), as the volume keys do.
+//!
+//! Auto-scroll moves the strip at the series' own speed (kept in `config.json`); it waits while
+//! the page ahead is not loaded yet and goes on when it is, a tap stops it, and it stops by itself
+//! only at the end of the last chapter.
 //!
 //! The place is a strip item and an offset within it ([`crate::strip`]), so a page above the
 //! screen whose height arrives late never moves what is on it. Pages are fetched and decoded on
@@ -50,7 +56,17 @@ pub struct Reader {
     /// A PDF from the shelf (its book id), not a series: pages come from the platform's renderer
     /// and the place is kept on the phone, never sent to the server.
     pub local: Option<i64>,
+    /// Auto-scroll is on, at this speed (1 to [`logic::SPEEDS`]).
+    pub auto: bool,
+    pub speed: u8,
+    /// Auto-scroll is waiting for the page ahead.
+    pub waiting: bool,
+    /// What is left of a page turn (a tap in a third, a volume key), in units: it glides there.
+    glide: f32,
 }
+
+/// How far ahead of the screen's bottom auto-scroll wants pages loaded before it moves on.
+const AHEAD: f32 = 0.6;
 
 /// The strip as the images know it now.
 struct View<'a> {
@@ -117,6 +133,10 @@ impl Reader {
             gate,
             top_pad: 0.0,
             local: None,
+            auto: false,
+            speed: logic::DEFAULT_SPEED,
+            waiting: false,
+            glide: 0.0,
         }
     }
 
@@ -148,6 +168,10 @@ impl Reader {
             gate: ProgressGate::default(),
             top_pad: 0.0,
             local: Some(b.id),
+            auto: false,
+            speed: logic::DEFAULT_SPEED,
+            waiting: false,
+            glide: 0.0,
         }
     }
 
@@ -181,6 +205,12 @@ impl Reader {
                 }
             }
         }
+    }
+
+    /// Turn the page: glide `by` units down (up when negative).
+    pub fn turn(&mut self, by: f32) {
+        self.glide += by;
+        self.fling.stop();
     }
 
     pub fn scroll_by(&mut self, im: &Images, dy: f32, view_h: f32) {
@@ -227,12 +257,39 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
     r.top_pad = app.canvas.inset_top;
     // The overlay's keys take their taps before the strip does.
     let overlay_tap = r.overlay;
-    // Scroll: the finger, then the momentum it left.
+    let (top_bar, bottom_bar) = (app.canvas.inset_top + 60.0, BAR_H + app.canvas.inset_bottom);
+    // A drag on the overlay's bars (the dimmer) is theirs, not the strip's.
+    let on_bars = r.overlay && app.ui.drag_from.is_some_and(|(_, y)| y < top_bar || y > view_h - bottom_bar);
+    // Scroll: the finger, then the momentum it left, a page turn gliding, auto-scroll.
     let before = r.fling.off;
-    let coasting = r.fling.update(&app.ui, [0.0, 0.0, WIDTH, view_h], dt);
-    let dy = r.fling.off - before;
+    let coasting = if on_bars { false } else { r.fling.update(&app.ui, [0.0, 0.0, WIDTH, view_h], dt) };
+    let mut dy = r.fling.off - before;
     r.fling.off = FLING_MID;
     let mut moving = coasting;
+    if r.glide != 0.0 {
+        let step = if r.glide.abs() < 1.0 { r.glide } else { r.glide * (1.0 - (-dt * 14.0).exp()) };
+        r.glide -= step;
+        dy += step;
+        moving = true;
+    }
+    if r.auto {
+        let v = View { r, im: &app.images };
+        match ahead(&v, r.pos, view_h) {
+            Ahead::Ready => {
+                r.waiting = false;
+                if !app.ui.busy() {
+                    dy += logic::scroll_speed(r.speed) * dt;
+                }
+                moving = true;
+            }
+            Ahead::Loading => r.waiting = true,
+            // A page that would not load: stop at it (its Retry is on screen), never skip it.
+            Ahead::Failed => {
+                r.auto = false;
+                r.waiting = false;
+            }
+        }
+    }
     if dy != 0.0 {
         let v = View { r, im: &app.images };
         let p = strip::scroll(&v, r.pos, dy, view_h);
@@ -240,6 +297,11 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
         r.pos = p;
         if stuck {
             r.fling.stop();
+            r.glide = 0.0;
+            // The end of the last chapter: nothing more to scroll to.
+            if r.auto && dy > 0.0 {
+                r.auto = false;
+            }
         }
     }
     // Ask for page counts the strip needs (a chapter the server listed without them).
@@ -411,9 +473,25 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
             app.wake_at(at);
         }
     }
+    // The dimmer: a black veil over the pages, under the overlay.
+    if app.prefs.dim > 0.0 {
+        let c = &mut app.canvas;
+        c.rect(-1000.0, 0.0, WIDTH + 2000.0, view_h, 0.0, crate::draw::Rgba::hex(0x000000).a(app.prefs.dim.min(crate::app::DIM_MAX)));
+    }
+    if r.auto && r.waiting && !r.overlay {
+        let c = &mut app.canvas;
+        let words = "Waiting for the next page";
+        let tt = Text::new(ty::CAPTION, t::INK2).medium();
+        let w = c.measure(words, tt) + 28.0;
+        let y = view_h - c.inset_bottom - 56.0;
+        c.rect((WIDTH - w) / 2.0, y, w, 32.0, 16.0, t::GLASS);
+        c.text(words, WIDTH / 2.0, y + (32.0 - tt.lh()) / 2.0, tt.center());
+    }
     // The overlay, or the tap that brings it.
     let mut back = false;
     let mut jump: Option<usize> = None;
+    let mut speed: Option<u8> = None;
+    let mut dim: Option<f32> = None;
     if r.overlay {
         let mut cx = cx!(app);
         let top = cx.c.inset_top;
@@ -430,14 +508,43 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
             None => format!("Chapter {}", logic::num(ch.number)),
         };
         cx.c.text_fit(&sub, 56.0, top + 31.0, WIDTH - 56.0 - PAD, Text::new(ty::CAPTION, t::INK2));
-        // The bottom: the chapter's progress as a thin line, the chapters around it.
-        let bar_h = 64.0 + cx.c.inset_bottom;
-        let by = cx.c.h - bar_h;
-        cx.c.rect(-1000.0, by, WIDTH + 2000.0, bar_h, 0.0, t::GLASS);
+        // The bottom: the chapter's progress as a thin line, the chapters around it, auto-scroll,
+        // then the dimmer.
+        let by = cx.c.h - bottom_bar;
+        cx.c.rect(-1000.0, by, WIDTH + 2000.0, bottom_bar, 0.0, t::GLASS);
         let f = pages.map(|n| (page + 1) as f32 / n.max(1) as f32).unwrap_or(0.0);
         cx.c.rect(0.0, by, WIDTH, 2.0, 0.0, t::INK.a(0.12));
         cx.c.rect(0.0, by, WIDTH * f, 2.0, 0.0, t::ACCENT);
         let ky = by + 10.0;
+        if r.local.is_none() {
+            // − play +, in the middle.
+            let mid = WIDTH / 2.0;
+            if kit::icon_key_ink(&mut cx, mid - 22.0 - 48.0, ky, "minus", if r.speed > 1 { t::INK } else { t::INK3 }) && r.speed > 1 {
+                speed = Some(r.speed - 1);
+            }
+            let pressed = cx.pressed(mid - 24.0, ky - 2.0, 48.0, 48.0);
+            cx.c.circle(mid, ky + 22.0, 23.0, if r.auto { t::ACCENT } else if pressed { t::S3 } else { t::S2 });
+            cx.c.icon(if r.auto { "pause" } else { "play" }, mid + if r.auto { 0.0 } else { 1.5 }, ky + 22.0, 18.0, if r.auto { t::ON_ACCENT } else { t::INK });
+            if cx.tap(mid - 24.0, ky - 2.0, 48.0, 48.0) {
+                r.auto = !r.auto;
+                r.waiting = false;
+                if r.auto {
+                    r.overlay = false;
+                }
+            }
+            if kit::icon_key_ink(&mut cx, mid + 22.0 + 4.0, ky, "plus", if r.speed < logic::SPEEDS { t::INK } else { t::INK3 }) && r.speed < logic::SPEEDS {
+                speed = Some(r.speed + 1);
+            }
+        }
+        // The dimmer: darker to the left, past what the phone's own brightness goes down to.
+        let sy = by + 64.0 + 22.0;
+        let lt = Text::new(ty::CAPTION, t::INK2);
+        cx.c.text("Brightness", PAD, sy - lt.lh() / 2.0, lt);
+        let (sx, sw) = (PAD + 92.0, WIDTH - 2.0 * PAD - 92.0 - 10.0);
+        let bright = 1.0 - app.prefs.dim / crate::app::DIM_MAX;
+        if let Some(v) = kit::slider(&mut cx, sx, sy, sw, bright) {
+            dim = Some((1.0 - v) * crate::app::DIM_MAX);
+        }
         if ci > 0 {
             let words = format!("Ch. {}", logic::num(r.chapters[ci - 1].number));
             if chapter_key(&mut cx, PAD - 6.0, ky, &words, "chevron-left", false) {
@@ -450,12 +557,35 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
                 jump = Some(ci + 1);
             }
         }
-        // Any other tap puts it away (not the touch that stopped a fling: `tapped` knows).
-        if cx.ui.tapped(-1e5, -1e5, 2e5, 2e5) {
+        // A tap elsewhere on the bars is theirs; any other puts the overlay away (not the touch
+        // that stopped a fling: `tapped` knows).
+        let on_bar = cx.ui.tapped(-1e5, -1e5, 2e5, top_bar + 1e5) || cx.ui.tapped(-1e5, view_h - bottom_bar, 2e5, 1e5);
+        if !on_bar && cx.ui.tapped(-1e5, -1e5, 2e5, 2e5) {
             r.overlay = false;
         }
-    } else if app.ui.tapped(-1e5, -1e5, 2e5, 2e5) {
-        r.overlay = true;
+    } else if let Some((_, ty_)) = app.ui.tap
+        && app.ui.tapped(-1e5, -1e5, 2e5, 2e5)
+    {
+        if r.auto {
+            // A tap stops auto-scroll, and shows the overlay to start it again.
+            r.auto = false;
+            r.overlay = true;
+        } else if app.prefs.tap_zones && ty_ < view_h / 3.0 {
+            r.turn(-view_h * crate::app::PAGE_TURN);
+        } else if app.prefs.tap_zones && ty_ > view_h * 2.0 / 3.0 {
+            r.turn(view_h * crate::app::PAGE_TURN);
+        } else {
+            r.overlay = true;
+        }
+    }
+    if let Some(l) = speed {
+        r.speed = l;
+        app.set_speed(r.series, l);
+        app.toast(&format!("Auto-scroll speed {l} of {}", logic::SPEEDS));
+    }
+    if let Some(d) = dim {
+        app.prefs.dim = if d < 0.02 { 0.0 } else { d };
+        app.dim_dirty = true;
     }
     if retry {
         app.images.retry_failed();
@@ -467,6 +597,41 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
     }
     moving |= app.images.pages_pending() && !crate::wake::has();
     (moving, back || to_series)
+}
+
+/// The overlay's bottom bar, above the gesture bar: the chapter keys and auto-scroll, then the
+/// dimmer.
+const BAR_H: f32 = 64.0 + 48.0;
+
+/// What auto-scroll finds from the screen's top to a little past its bottom.
+#[derive(Debug, PartialEq)]
+enum Ahead {
+    /// Every page there is loaded and every chapter knows its length.
+    Ready,
+    Loading,
+    /// A page there would not load.
+    Failed,
+}
+
+fn ahead(v: &View, pos: Pos, view_h: f32) -> Ahead {
+    let mut out = Ahead::Ready;
+    for (item, _) in strip::visible(v, pos, view_h, view_h * AHEAD) {
+        match item {
+            Item::Head(c) if v.pages(c).is_none() => out = Ahead::Loading,
+            Item::Page(c, n) => {
+                let id = v.r.chapters[c].id;
+                if v.im.size(id, n).is_some() {
+                    // Measured: it has loaded once (a later fetch failing is the drawing's business).
+                } else if v.im.failed(id, n).is_some() {
+                    return Ahead::Failed;
+                } else {
+                    out = Ahead::Loading;
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// A key for the chapter before or after: its glyph and its number. `right` anchors it at `x`'s
@@ -487,4 +652,57 @@ fn chapter_key(cx: &mut kit::Ctx, x: f32, y: f32, words: &str, glyph: &'static s
         cx.c.text(words, kx + 32.0, y + (h - tt.lh()) / 2.0, tt);
     }
     cx.tap(kx, y, w, h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn detail(chapters: usize, pages: u32) -> SeriesDetail {
+        let c = |i: usize| Chapter { id: 100 + i as i64, number: i as f64 + 1.0, name: String::new(), group: None, pages, read: false, last_page: 0, downloaded: true, uploaded_at: 0, from: None };
+        SeriesDetail {
+            series: leaf_proto::Series {
+                id: 1,
+                title: "T".into(),
+                author: None,
+                source: "S".into(),
+                status: "ongoing".into(),
+                chapters: chapters as u32,
+                read_upto: None,
+                unread: chapters as u32,
+                latest: Some(chapters as f64),
+                gaps: vec![],
+                updated_at: 0,
+                note: None,
+                bell: false,
+                added_at: 0,
+                last_read_at: 0,
+                shelf: None,
+            },
+            description: None,
+            chapters: (0..chapters).map(c).collect(),
+        }
+    }
+
+    #[test]
+    fn auto_scroll_waits_for_the_page_ahead() {
+        let dir = std::env::temp_dir().join(format!("leaf-ahead-{}", std::process::id()));
+        let mut im = Images::new(dir.clone());
+        let r = Reader::open(&detail(2, 3), 0, 0);
+        // Nothing measured yet: wait.
+        assert_eq!(ahead(&View { r: &r, im: &im }, r.pos, 800.0), Ahead::Loading);
+        // The first two pages fill the screen and 0.6 of one below it: ready, though the third
+        // is still on its way.
+        im.fake_size(100, 0, 800, 1600);
+        im.fake_size(100, 1, 800, 1600);
+        assert_eq!(ahead(&View { r: &r, im: &im }, r.pos, 800.0), Ahead::Ready);
+        // Further down, the third is needed.
+        let p = Pos { item: Item::Page(0, 1), off: 300.0 };
+        assert_eq!(ahead(&View { r: &r, im: &im }, p, 800.0), Ahead::Loading);
+        im.fake_size(100, 2, 800, 1600);
+        // The next chapter's heading is there, and it knows its length (3): its first page isn't.
+        let p = Pos { item: Item::Page(0, 2), off: 500.0 };
+        assert_eq!(ahead(&View { r: &r, im: &im }, p, 800.0), Ahead::Loading);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

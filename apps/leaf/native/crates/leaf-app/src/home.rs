@@ -108,7 +108,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     }
     let now = app.now_ns;
     let now_ms = shelf::now_ms();
-    let series: Vec<Series> = app.library.data.clone().unwrap_or_default();
+    let all_series: Vec<Series> = app.library.data.clone().unwrap_or_default();
+    // Dropped series stay out of the spotlight and Continue reading.
+    let series: Vec<Series> = all_series.iter().filter(|s| logic::shelf_of(s) != logic::Shelf::Dropped).cloned().collect();
     let books: Vec<Book> = app.shelf.books.clone();
     let detail = |id: i64| app.series.get(&id).and_then(|l| l.data.as_ref());
     let new_of = |s: &Series| logic::new_chapters(s, detail(s.id));
@@ -172,7 +174,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let mut rail: Vec<(i64, Item)> = series.iter().filter(|s| s.last_read_at > 0 && s.unread > 0).map(|s| (s.last_read_at, Item::Series(s.clone()))).collect();
     rail.extend(books.iter().filter(|b| b.opened_ms > 0 && b.progress < 0.995).map(|b| (b.opened_ms, Item::Book(b.clone()))));
     rail.sort_by_key(|a| std::cmp::Reverse(a.0));
-    let mut updated: Vec<&Series> = series.iter().filter(|s| s.updated_at > 0).collect();
+    let mut updated: Vec<&Series> = all_series.iter().filter(|s| s.updated_at > 0).collect();
     updated.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
     updated.truncate(8);
     // The chapters of what the spotlight and the rail show, so Continue opens the reader and new
@@ -589,7 +591,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     } else if to_search {
         app.go_tab(1);
     } else if to_space {
-        app.st.space.tab = 0;
+        app.st.space.tab = crate::space::RECENT;
         app.go_tab(2);
     } else if let Some(i) = tab {
         app.go_tab(i);

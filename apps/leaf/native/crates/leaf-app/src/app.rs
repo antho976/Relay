@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use leaf_proto::{Series, SeriesDetail};
+use leaf_proto::{Alternative, Series, SeriesDetail, SourceHealth, Status, Update};
 
 use crate::draw::{Canvas, WIDTH};
 use crate::images::Images;
@@ -47,6 +47,9 @@ pub trait Host: Send + Sync {
     }
     /// Ask to post notifications (Android 13 and later), for a bell just turned on.
     fn ask_notifications(&self) {}
+    /// A book or a strip is on screen (or no longer): keep the screen on, and let the volume keys
+    /// turn pages when `volume_keys`.
+    fn reading(&self, _on: bool, _volume_keys: bool) {}
 }
 
 /// When the next frame is wanted.
@@ -151,6 +154,50 @@ struct Config {
     /// Notifications were asked for once (the first bell turned on).
     #[serde(default)]
     asked_notifications: bool,
+    #[serde(default)]
+    reading: ReadPrefs,
+    /// Read by Android's chapter job (`LeafChaptersJob`) too.
+    #[serde(default)]
+    notify: crate::notices::Notify,
+    /// Updates shows every series in My space, not only belled ones.
+    #[serde(default)]
+    updates_all: bool,
+    #[serde(default)]
+    backup: Option<BackupInfo>,
+}
+
+/// How reading feels, kept in `config.json`.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct ReadPrefs {
+    /// A tap in the top or bottom third of a page turns it (the middle shows the controls).
+    pub tap_zones: bool,
+    /// The volume keys turn pages while reading (Android).
+    pub volume_keys: bool,
+    /// Blank white or black runs at a comic page's top and bottom are cut short.
+    pub trim_gutters: bool,
+    /// The dimmer: a black veil over the page this opaque, 0 when off.
+    pub dim: f32,
+    /// Auto-scroll's speed per series (1 to [`logic::SPEEDS`]).
+    pub speeds: std::collections::BTreeMap<i64, u8>,
+}
+
+impl Default for ReadPrefs {
+    fn default() -> ReadPrefs {
+        ReadPrefs { tap_zones: true, volume_keys: true, trim_gutters: true, dim: 0.0, speeds: Default::default() }
+    }
+}
+
+/// The dimmer goes no darker than this.
+pub const DIM_MAX: f32 = 0.85;
+/// A tap in a third, a volume key: the page moves this much of the screen.
+pub const PAGE_TURN: f32 = 0.85;
+
+/// The last backup exported: its file name, and when the server made it (ms; 0 if unknown).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+pub struct BackupInfo {
+    pub name: String,
+    pub made_ms: i64,
 }
 
 pub struct App {
@@ -180,6 +227,30 @@ pub struct App {
     pub oldest_first: HashSet<i64>,
     pub following_sort: u8,
     asked_notifications: bool,
+    pub prefs: ReadPrefs,
+    pub notify: crate::notices::Notify,
+    pub updates_all: bool,
+    pub backup: Option<BackupInfo>,
+    /// Chapters that came for series in My space (`/v1/updates`).
+    pub updates: Loaded<Vec<Update>>,
+    /// The server's status, as Settings shows it (AniList).
+    pub status: Loaded<Status>,
+    pub health: Loaded<Vec<SourceHealth>>,
+    /// "Wrong series?": the other entries for a series' work.
+    pub alternatives: HashMap<i64, Loaded<Vec<Alternative>>>,
+    /// A chapter to open once its series has loaded (an update tapped): (series, chapter).
+    pub open_after: Option<(i64, i64)>,
+    /// What chapters' read marks were before "Mark all before as read", per series, until the
+    /// server agrees.
+    read_undo: HashMap<i64, Vec<(i64, bool)>>,
+    /// A series' shelf before it was moved, until the server agrees.
+    shelf_undo: HashMap<i64, Option<String>>,
+    /// A backup being exported.
+    pub backing_up: bool,
+    /// The dimmer moved: kept once the finger lifts.
+    pub dim_dirty: bool,
+    /// Words a thread of the app's own left for the toast (the share sheet's answer).
+    late_toast: Arc<std::sync::Mutex<Option<String>>>,
     /// Chapters asked to download on the server and not yet downloaded there.
     pub downloading: HashSet<i64>,
     /// A short message at the bottom, until this time.
@@ -204,6 +275,7 @@ impl App {
         // A few bytes, read once at start.
         let config: Config = std::fs::read(data.join("config.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         let images = Images::new(data.clone());
+        images.set_trim(config.reading.trim_gutters);
         images.set_server(config.server.clone());
         images.set_host(host.clone());
         images.scan_cache();
@@ -231,6 +303,20 @@ impl App {
             oldest_first: config.oldest_first.iter().copied().collect(),
             following_sort: config.following_sort.min(2),
             asked_notifications: config.asked_notifications,
+            prefs: config.reading.clone(),
+            notify: config.notify,
+            updates_all: config.updates_all,
+            backup: config.backup.clone(),
+            updates: Loaded::default(),
+            status: Loaded::default(),
+            health: Loaded::default(),
+            alternatives: HashMap::new(),
+            open_after: None,
+            read_undo: HashMap::new(),
+            shelf_undo: HashMap::new(),
+            backing_up: false,
+            dim_dirty: false,
+            late_toast: Arc::new(std::sync::Mutex::new(None)),
             downloading: HashSet::new(),
             toast: None,
             typed_done: None,
@@ -294,7 +380,9 @@ impl App {
 
     /// Open a series' chapter in the reader, at a page.
     pub fn open_chapter(&mut self, d: &SeriesDetail, index: usize, page: u32) {
-        self.reader = Some(crate::reader::Reader::open(d, index, page));
+        let mut r = crate::reader::Reader::open(d, index, page);
+        r.speed = self.speed_of(d.series.id);
+        self.reader = Some(r);
         self.host.immersive(true);
         self.push(Route::Reader);
     }
@@ -412,6 +500,10 @@ impl App {
         // What came from another server is not this one's.
         self.library = Loaded::default();
         self.series.clear();
+        self.updates = Loaded::default();
+        self.status = Loaded::default();
+        self.health = Loaded::default();
+        self.alternatives.clear();
     }
 
     /// Keep the settings, on a thread of its own (a small file, but still a write). Saves land in
@@ -422,7 +514,16 @@ impl App {
         static WRITTEN: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
         let mut oldest: Vec<i64> = self.oldest_first.iter().copied().collect();
         oldest.sort_unstable();
-        let config = Config { server: self.server.clone(), oldest_first: oldest, following_sort: self.following_sort, asked_notifications: self.asked_notifications };
+        let config = Config {
+            server: self.server.clone(),
+            oldest_first: oldest,
+            following_sort: self.following_sort,
+            asked_notifications: self.asked_notifications,
+            reading: self.prefs.clone(),
+            notify: self.notify,
+            updates_all: self.updates_all,
+            backup: self.backup.clone(),
+        };
         let (path, host) = (self.data.join("config.json"), self.host.clone());
         let n = ASKED.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = std::thread::Builder::new().name("leaf-config".into()).spawn(move || {
@@ -490,9 +591,16 @@ impl App {
         if self.server.is_none() && !matches!(job, Job::Status(..)) {
             return;
         }
+        // A screenshot changes nothing on the server: what it marks stays on its own copy.
+        if self.shot && job.writes() {
+            return;
+        }
         match &job {
             Job::Library => self.library.loading = true,
             Job::Series(id) => self.series.entry(*id).or_default().loading = true,
+            Job::Updates(_) => self.updates.loading = true,
+            Job::Health => self.health.loading = true,
+            Job::Alternatives(id) => self.alternatives.entry(*id).or_default().loading = true,
             _ => {}
         }
         self.jobs.send(self.server.as_ref(), job);
@@ -512,7 +620,24 @@ impl App {
         let label = self.server_label();
         for done in self.jobs.take() {
             match done {
-                Done::Status(s, r) => self.st.connect.answered(s, r.map_err(|f| f.words(&logic::server_label(&self.st.connect.tried)))),
+                Done::Status(s, r) => {
+                    if self.server.as_ref().is_some_and(|mine| mine.base == s.base) {
+                        let st = &mut self.status;
+                        st.loading = false;
+                        match &r {
+                            Ok(status) => {
+                                st.data = Some(status.clone());
+                                st.live = true;
+                                st.error = None;
+                            }
+                            Err(f) => st.error = Some(f.words(&label)),
+                        }
+                    }
+                    // Settings asking again is not Connect's check.
+                    if self.st.connect.checking {
+                        self.st.connect.answered(s, r.map_err(|f| f.words(&logic::server_label(&self.st.connect.tried))));
+                    }
+                }
                 Done::Library { cached, result } => {
                     let l = &mut self.library;
                     match result {
@@ -546,6 +671,12 @@ impl App {
                     match result {
                         Ok(mut d) => {
                             logic::mend_times(&mut d.series);
+                            // A move on its way to the server shows already.
+                            if self.shelf_undo.contains_key(&id)
+                                && let Some(s) = self.library.data.as_ref().and_then(|list| list.iter().find(|s| s.id == id))
+                            {
+                                d.series.shelf = s.shelf.clone();
+                            }
                             l.data = Some(d);
                             if !cached {
                                 l.live = true;
@@ -609,21 +740,280 @@ impl App {
                     }
                 }
                 Done::Download(chapter, on, r) => match r {
-                    Ok(()) if !on => {
-                        for l in self.series.values_mut() {
-                            if let Some(c) = l.data.as_mut().and_then(|d| d.chapters.iter_mut().find(|c| c.id == chapter)) {
-                                c.downloaded = false;
-                            }
-                        }
-                    }
                     Ok(()) => {}
                     Err(f) => {
                         self.downloading.remove(&chapter);
+                        if !on {
+                            // Removing was shown at once: it is there after all.
+                            self.mark_downloaded(chapter, true);
+                        }
                         self.toast(&f.words(&label));
                     }
                 },
+                Done::Updates { cached, result } => {
+                    let l = &mut self.updates;
+                    match result {
+                        Ok(list) => {
+                            l.data = Some(list);
+                            if !cached {
+                                l.live = true;
+                                l.error = None;
+                                l.loading = false;
+                            }
+                        }
+                        Err(f) => {
+                            l.loading = false;
+                            l.live = false;
+                            l.error = Some(f.words(&label));
+                        }
+                    }
+                }
+                Done::ChapterRead(chapter, read, r) => match r {
+                    Ok(()) => self.ask(Job::Library),
+                    Err(f) => {
+                        self.mark_read(chapter, !read);
+                        self.toast(&format!("Not marked: {}", lower_first(&f.words(&label))));
+                    }
+                },
+                Done::ReadBefore(series, r) => {
+                    let undo = self.read_undo.remove(&series);
+                    match r {
+                        Ok(()) => {
+                            self.ask(Job::Series(series));
+                            self.ask(Job::Library);
+                        }
+                        Err(f) => {
+                            for (c, was) in undo.unwrap_or_default() {
+                                self.mark_read(c, was);
+                            }
+                            self.toast(&format!("Not marked: {}", lower_first(&f.words(&label))));
+                        }
+                    }
+                }
+                Done::Shelf(series, r) => {
+                    let undo = self.shelf_undo.remove(&series);
+                    if let Err(f) = r {
+                        if let Some(old) = undo {
+                            self.mark_shelf(series, old);
+                        }
+                        self.toast(&format!("Not moved: {}", lower_first(&f.words(&label))));
+                    }
+                }
+                Done::Health(r) => {
+                    let l = &mut self.health;
+                    l.loading = false;
+                    match r {
+                        Ok(list) => {
+                            l.data = Some(list);
+                            l.live = true;
+                            l.error = None;
+                        }
+                        Err(f) => l.error = Some(f.words(&label)),
+                    }
+                }
+                Done::Backup(r) => {
+                    self.backing_up = false;
+                    match r {
+                        Ok(file) => {
+                            let made_ms = logic::backup_made_ms(&file.name);
+                            self.backup = Some(BackupInfo { name: file.name.clone(), made_ms });
+                            self.save_config();
+                            // Written and handed over off this thread: a backup can be megabytes.
+                            let (host, out) = (self.host.clone(), self.late_toast.clone());
+                            let _ = std::thread::Builder::new().name("leaf-share".into()).spawn(move || {
+                                let said = host.share_file(&file.name, &file.mime, &file.bytes);
+                                *out.lock().unwrap_or_else(|e| e.into_inner()) = said;
+                                crate::wake::wake();
+                            });
+                        }
+                        Err(f) => self.toast(&format!("No backup: {}", lower_first(&f.words(&label)))),
+                    }
+                }
+                Done::Anilist(on, r) => match r {
+                    Ok(()) => {
+                        if let Some(st) = &mut self.status.data {
+                            st.anilist = on;
+                        }
+                        self.st.connect.anilist.clear();
+                        self.toast(if on { "AniList connected. Chapters you finish count there now" } else { "AniList disconnected" });
+                    }
+                    Err(f) => self.toast(&f.words(&label)),
+                },
+                Done::Alternatives(id, r) => {
+                    let l = self.alternatives.entry(id).or_default();
+                    l.loading = false;
+                    match r {
+                        Ok(list) => {
+                            l.data = Some(list);
+                            l.live = true;
+                            l.error = None;
+                        }
+                        Err(f) => l.error = Some(f.words(&label)),
+                    }
+                }
+                Done::Repinned(id, r) => {
+                    self.st.series.repinning = false;
+                    match r {
+                        Ok(mut s) => {
+                            logic::mend_times(&mut s);
+                            if let Some(list) = &mut self.library.data
+                                && let Some(old) = list.iter_mut().find(|x| x.id == id)
+                            {
+                                *old = s;
+                            }
+                            self.alternatives.remove(&id);
+                            self.st.series.alternatives = false;
+                            self.ask(Job::Series(id));
+                            self.toast("Reading from that entry now. Your place came along");
+                        }
+                        Err(f) => self.toast(&f.words(&label)),
+                    }
+                }
             }
         }
+    }
+
+    /// An update tapped before its series had loaded: open it now that it has.
+    fn open_waiting(&mut self) {
+        let Some((series, chapter)) = self.open_after else { return };
+        let Some(d) = self.series.get(&series).and_then(|l| l.data.clone()) else {
+            if self.series.get(&series).is_some_and(|l| !l.loading && l.error.is_some()) {
+                self.open_after = None;
+                self.toast("That chapter didn't load");
+            }
+            return;
+        };
+        self.open_after = None;
+        self.open_update(&d, chapter);
+    }
+
+    /// Open the reader at a chapter of a series that is at hand (by its id, else its number).
+    pub fn open_update(&mut self, d: &SeriesDetail, chapter: i64) {
+        let number = self.updates.data.as_ref().and_then(|l| l.iter().find(|u| u.chapter == chapter)).map(|u| u.number);
+        let i = d.chapters.iter().position(|c| c.id == chapter).or_else(|| number.and_then(|n| d.chapters.iter().position(|c| c.number == n)));
+        match i {
+            Some(i) => {
+                let c = &d.chapters[i];
+                let page = if c.read { 0 } else { logic::resume_page(c) };
+                self.open_chapter(d, i, page);
+            }
+            None => self.push(Route::Series(d.series.id)),
+        }
+    }
+
+    /// An update tapped: its chapter in the reader, now or once the series arrives.
+    pub fn open_chapter_of(&mut self, series: i64, chapter: i64) {
+        if let Some(d) = self.series.get(&series).and_then(|l| l.data.clone()) {
+            self.open_update(&d, chapter);
+        } else {
+            self.open_after = Some((series, chapter));
+            self.ask(Job::Series(series));
+        }
+    }
+
+    // Marks shown at once, put back if the server says no
+
+    fn mark_downloaded(&mut self, chapter: i64, on: bool) {
+        for l in self.series.values_mut() {
+            if let Some(c) = l.data.as_mut().and_then(|d| d.chapters.iter_mut().find(|c| c.id == chapter)) {
+                c.downloaded = on;
+            }
+        }
+    }
+
+    /// Show a chapter read or unread everywhere it is listed.
+    pub fn mark_read(&mut self, chapter: i64, read: bool) {
+        for l in self.series.values_mut() {
+            if let Some(c) = l.data.as_mut().and_then(|d| d.chapters.iter_mut().find(|c| c.id == chapter)) {
+                c.read = read;
+                if read {
+                    c.last_page = 0;
+                }
+            }
+        }
+        if let Some(list) = &mut self.updates.data {
+            for u in list.iter_mut().filter(|u| u.chapter == chapter) {
+                u.read = read;
+            }
+        }
+    }
+
+    /// Mark one chapter read or unread (the long press on its row).
+    pub fn set_read(&mut self, chapter: i64, read: bool) {
+        self.mark_read(chapter, read);
+        self.ask(Job::ChapterRead(chapter, read));
+    }
+
+    /// Every chapter of a series numbered below `before`, read.
+    pub fn read_before(&mut self, series: i64, before: f64) {
+        let Some(d) = self.series.get(&series).and_then(|l| l.data.clone()) else { return };
+        let mut undo = Vec::new();
+        for c in d.chapters.iter().filter(|c| c.number < before) {
+            undo.push((c.id, c.read));
+            self.mark_read(c.id, true);
+        }
+        self.read_undo.insert(series, undo);
+        self.ask(Job::ReadBefore(series, before));
+    }
+
+    /// Remove a chapter's download, from the server and this phone.
+    pub fn remove_download(&mut self, chapter: i64) {
+        self.mark_downloaded(chapter, false);
+        self.downloading.remove(&chapter);
+        self.images.remove_chapters(vec![chapter]);
+        self.ask(Job::Download(chapter, false));
+    }
+
+    fn mark_shelf(&mut self, id: i64, shelf: Option<String>) {
+        if let Some(list) = &mut self.library.data
+            && let Some(s) = list.iter_mut().find(|s| s.id == id)
+        {
+            s.shelf = shelf.clone();
+        }
+        if let Some(d) = self.series.get_mut(&id).and_then(|l| l.data.as_mut()) {
+            d.series.shelf = shelf;
+        }
+    }
+
+    /// Put a series on a shelf: shown at once, told to the server, put back if it says no.
+    pub fn set_shelf(&mut self, id: i64, shelf: logic::Shelf) {
+        let old = self.library.data.as_ref().and_then(|l| l.iter().find(|s| s.id == id)).map(|s| s.shelf.clone()).or_else(|| self.series.get(&id).and_then(|l| l.data.as_ref()).map(|d| d.series.shelf.clone()));
+        self.shelf_undo.entry(id).or_insert(old.flatten());
+        self.mark_shelf(id, Some(shelf.key().to_string()));
+        self.ask(Job::Shelf(id, Some(shelf.key().to_string())));
+        self.toast(&format!("Moved to {}", shelf.words()));
+    }
+
+    /// Auto-scroll's speed for a series.
+    pub fn speed_of(&self, series: i64) -> u8 {
+        self.prefs.speeds.get(&series).copied().unwrap_or(logic::DEFAULT_SPEED)
+    }
+
+    pub fn set_speed(&mut self, series: i64, level: u8) {
+        self.prefs.speeds.insert(series, level.clamp(1, logic::SPEEDS));
+        self.save_config();
+    }
+
+    /// A volume key while reading: the page moves down (or up) most of a screen. False when no
+    /// book or strip is showing (the key is the system's then).
+    pub fn volume(&mut self, down: bool) -> bool {
+        let h = self.canvas.h;
+        let by = if down { h * PAGE_TURN } else { -h * PAGE_TURN };
+        match self.route() {
+            Route::Reader => {
+                if let Some(r) = &mut self.reader {
+                    r.turn(by);
+                }
+            }
+            Route::Book => {
+                if let Some(b) = &mut self.book {
+                    b.turn(by);
+                }
+            }
+            _ => return false,
+        }
+        self.wake_at(self.now_ns);
+        true
     }
 
     // Navigation
@@ -634,6 +1024,7 @@ impl App {
         // The bars hide only while a book or a strip is on screen (not over its notes or search).
         let reading = matches!(self.route(), Route::Book | Route::Reader);
         self.host.immersive(reading);
+        self.host.reading(reading, self.prefs.volume_keys);
         if self.focus.id.take().is_some() {
             self.host.keyboard(false, "", Kb::Text);
         }
@@ -824,6 +1215,11 @@ impl App {
         self.now_ns = now_ns;
         self.wake = None;
         self.take_answers();
+        self.open_waiting();
+        let late = self.late_toast.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(words) = late {
+            self.toast(&words);
+        }
         self.focus.keyboard_up = self.keyboard_up;
         let tapped = self.ui.tap.is_some();
         let (w, h) = self.size;
@@ -873,6 +1269,10 @@ impl App {
         let working = self.images.pending() || self.jobs.running() > 0 || self.shelf.busy();
         moving |= arrived;
         moving |= working && !crate::wake::has();
+        if self.dim_dirty && self.ui.finger().is_none() {
+            self.dim_dirty = false;
+            self.save_config();
+        }
         self.canvas.finish();
         self.ui.end_frame();
         if moving || tapped || self.ui.busy() || self.fresh {
@@ -890,4 +1290,13 @@ pub struct Page {
     pub top: f32,
     pub bottom: f32,
     pub moving: bool,
+}
+
+/// "Can't reach your server" from "Can't reach..." as the second half of a sentence.
+fn lower_first(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) if !s.starts_with("AniList") => f.to_lowercase().chain(c).collect(),
+        _ => s.to_string(),
+    }
 }

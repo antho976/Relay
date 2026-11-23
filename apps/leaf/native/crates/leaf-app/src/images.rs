@@ -153,6 +153,8 @@ struct Shared {
     host: Mutex<Option<std::sync::Arc<dyn crate::app::Host>>>,
     /// The screen's width in pixels, which decides whether a cover fills the spotlight.
     screen_w: std::sync::atomic::AtomicU32,
+    /// Blank runs at a page's top and bottom are cut short ([`crate::logic::gutter_cuts`]).
+    trim: std::sync::atomic::AtomicBool,
 }
 
 /// How many fetches and decodes run at once.
@@ -200,6 +202,7 @@ impl Images {
             pdfs: Mutex::new(HashMap::new()),
             host: Mutex::new(None),
             screen_w: std::sync::atomic::AtomicU32::new(1080),
+            trim: std::sync::atomic::AtomicBool::new(true),
         });
         let (tx, rx) = channel();
         let client = Client::new();
@@ -253,6 +256,20 @@ impl Images {
 
     pub fn hero_poster(&self, of: CoverOf) -> Option<(u32, u32)> {
         self.posters.get(&of).copied()
+    }
+
+    /// Cut blank gutters from pages decoded from now on. Pages already measured are measured
+    /// again, so the strip takes their new heights.
+    pub fn set_trim(&self, on: bool) {
+        self.shared.trim.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The setting changed while no reader is open: forget the pages' sizes.
+    pub fn retrim(&mut self, on: bool) {
+        self.set_trim(on);
+        self.sizes.clear();
+        self.decoded.clear();
+        self.last_wants.clear();
     }
 
     /// The platform, for PDF pages.
@@ -595,6 +612,12 @@ impl Images {
         self.decoded.clear();
     }
 
+    /// Tests: a page measured as if it had been decoded.
+    #[cfg(test)]
+    pub fn fake_size(&mut self, chapter: i64, n: u32, w: u32, h: u32) {
+        self.sizes.insert((chapter, n), (w, h));
+    }
+
     /// Something is being fetched or decoded.
     pub fn pending(&self) -> bool {
         !self.asked.is_empty()
@@ -621,7 +644,7 @@ fn worker(shared: &Shared, tx: &Sender<Got>, client: &Client, data: &Path) {
         let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match &want {
             Want::Cover(of) => cover(client, server.as_ref(), data, *of),
             Want::Page { chapter, n, decode } if *chapter < 0 => Got::Page { chapter: *chapter, n: *n, decode: *decode, result: pdf_page(shared, *chapter, *n, *decode) },
-            Want::Page { chapter, n, decode } => Got::Page { chapter: *chapter, n: *n, decode: *decode, result: page(client, server.as_ref(), data, *chapter, *n, *decode) },
+            Want::Page { chapter, n, decode } => Got::Page { chapter: *chapter, n: *n, decode: *decode, result: page(client, server.as_ref(), data, *chapter, *n, *decode, shared.trim.load(std::sync::atomic::Ordering::Relaxed)) },
             Want::Local { key, book, entry } => Got::Local { key: key.clone(), book: book.clone(), entry: entry.clone(), img: local_picture(book, entry) },
             Want::Hero(of) => Got::Hero { of: *of, img: hero(client, server.as_ref(), data, *of, shared.screen_w.load(std::sync::atomic::Ordering::Relaxed)) },
             Want::Thumb { chapter, pages } => Got::Thumb { chapter: *chapter, pages: *pages, img: thumb(client, server.as_ref(), data, *chapter, *pages) },
@@ -874,7 +897,8 @@ pub fn touch_chapter(data: &Path, chapter: i64) {
     let _ = std::fs::write(dir.join(".used"), now_ms().to_string());
 }
 
-fn page(client: &Client, server: Option<&Server>, data: &Path, chapter: i64, n: u32, decode: bool) -> Result<Option<PageImg>, String> {
+#[allow(clippy::too_many_arguments)]
+fn page(client: &Client, server: Option<&Server>, data: &Path, chapter: i64, n: u32, decode: bool, trim: bool) -> Result<Option<PageImg>, String> {
     let dir = chapter_dir(data, chapter);
     let file = dir.join(n.to_string());
     if !decode && file.is_file() {
@@ -891,7 +915,7 @@ fn page(client: &Client, server: Option<&Server>, data: &Path, chapter: i64, n: 
     if !decode {
         return Ok(None);
     }
-    decode_page(&bytes).map(Some).inspect_err(|_| {
+    decode_page(&bytes, trim).map(Some).inspect_err(|_| {
         // A broken copy on disk is fetched again next time.
         let _ = std::fs::remove_file(&file);
     })
@@ -905,8 +929,9 @@ const PAGE_MAX_ALLOC: u64 = 256 << 20;
 const BIG_PAGE_PX: u64 = 12_000_000;
 static BIG_DECODE: Mutex<()> = Mutex::new(());
 
-/// A page's bytes decoded, scaled down to at most [`PAGE_W`] wide, and cut into tiles.
-pub fn decode_page(bytes: &[u8]) -> Result<PageImg, String> {
+/// A page's bytes decoded, scaled down to at most [`PAGE_W`] wide, its blank gutters cut short
+/// when `trim` ([`crate::logic::gutter_cuts`]), and cut into tiles.
+pub fn decode_page(bytes: &[u8], trim: bool) -> Result<PageImg, String> {
     let bad = |_| "This page didn't decode".to_string();
     let reader = || -> std::io::Result<image::ImageReader<std::io::Cursor<&[u8]>>> {
         let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
@@ -923,6 +948,9 @@ pub fn decode_page(bytes: &[u8]) -> Result<PageImg, String> {
     let rgba = if (w, h) == (w0, h0) { img.into_rgba8() } else { image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle) };
     let raw = rgba.into_raw();
     let row = (w * 4) as usize;
+    let (cut_top, cut_bottom) = if trim { crate::logic::gutter_cuts(&raw, w, h) } else { (0, 0) };
+    let h = h - cut_top - cut_bottom;
+    let raw = &raw[cut_top as usize * row..(cut_top + h) as usize * row];
     let tiles = crate::logic::tile_rows(h).into_iter().map(|(y, th)| raw[y as usize * row..(y + th) as usize * row].to_vec()).collect();
     Ok(PageImg { w, h, tiles })
 }
@@ -977,13 +1005,13 @@ mod tests {
         let img = image::RgbaImage::from_pixel(1000, 2600, image::Rgba([10, 200, 30, 255]));
         let mut bytes = Vec::new();
         img.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
-        let p = decode_page(&bytes).unwrap();
+        let p = decode_page(&bytes, true).unwrap();
         assert_eq!((p.w, p.h), (800, 2080));
         assert_eq!(p.tiles.len(), 3);
         assert_eq!(p.tiles[0].len(), 800 * 1020 * 4);
         assert_eq!(p.tiles[2].len(), 800 * 40 * 4);
         assert_eq!((tile_h(2080, 0), tile_h(2080, 2)), (1020, 40));
-        assert!(decode_page(b"not an image").is_err());
+        assert!(decode_page(b"not an image", true).is_err());
         // A PNG header claiming 60000 × 60000 is refused before anything that size is made.
         let mut huge = Vec::new();
         image::RgbaImage::new(1, 1).write_to(&mut std::io::Cursor::new(&mut huge), image::ImageFormat::Png).unwrap();
@@ -999,7 +1027,20 @@ mod tests {
         });
         huge[29..33].copy_from_slice(&(!crc).to_be_bytes());
         assert_eq!(image::ImageReader::new(std::io::Cursor::new(&huge)).with_guessed_format().unwrap().into_dimensions().unwrap(), (60_000, 60_000));
-        assert!(decode_page(&huge).is_err());
+        assert!(decode_page(&huge, true).is_err());
+    }
+
+    #[test]
+    fn a_page_decodes_without_its_long_white_top() {
+        // 600 × 500: 120 white rows over the art. Trimmed: 16 of them stay.
+        let img = image::RgbaImage::from_fn(600, 500, |_, y| if y < 120 { image::Rgba([255, 255, 255, 255]) } else { image::Rgba([90, 30, 160, 255]) });
+        let mut bytes = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+        let p = decode_page(&bytes, true).unwrap();
+        assert_eq!((p.w, p.h), (600, 396));
+        assert_eq!(&p.tiles[0][..4], &[255, 255, 255, 255]);
+        assert_eq!(&p.tiles[0][16 * 600 * 4..16 * 600 * 4 + 4], &[90, 30, 160, 255]);
+        assert_eq!(decode_page(&bytes, false).unwrap().h, 500, "the setting off keeps the page whole");
     }
 
     #[test]

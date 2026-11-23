@@ -5,9 +5,14 @@
 //!   (`--server`, default `http://127.0.0.1:4580`; `--token`), on a data folder of its own that
 //!   is removed after. Screens: `connect` (the first run, the address checked), `connect-empty`,
 //!   `home` (`--hero N` for the spotlight's Nth), `library-empty` (the list answered empty),
-//!   `space` (`--tab recent|following|downloads`, `--sort 0..2` for Following), `search`
-//!   (`--query`, default "nano"), `series` (`--id`, default 1; `--tab about`), `reader`
-//!   (`--id`, `--chapter` number, default 1; `--scroll UNITS` down the strip; `--overlay 1`).
+//!   `space` (`--tab updates|recent|following|downloads`, `--sort 0..2` for Following, `--filter
+//!   WORDS` typed in its field, `--shelf 0..4` for one shelf, `--shelve ID:dropped` to put a
+//!   series on a shelf in the shot's copy, `--fake-updates 1` for a made-up Updates list built from
+//!   the library, `--all 1` for Updates' All, `--sheet shelf` with `--id` for the shelf sheet),
+//!   `search` (`--query`, default "nano"), `series` (`--id`, default 1; `--tab about`; `--sheet
+//!   chapter|shelf|wrong|menu`), `reader` (`--id`, `--chapter` number, default 1; `--scroll UNITS`
+//!   down the strip; `--overlay 1`; `--auto 1` auto-scroll on; `--dim 0..0.85`), `settings` (the
+//!   Settings page, `--scroll UNITS`, `--backup 1` to export the latest backup).
 //!   `--size WxH` (default 1080x2340). `--bell ID` and `--seen ID` mark a series on the shot's own
 //!   copy only (its bell on; read up to two chapters before its newest). Nothing is written to the server: no progress is reported.
 //! - `--data DIR` keeps Leaf's files somewhere else than `~/.local/share/leaf` (and, with
@@ -21,7 +26,8 @@
 //!   (`--query`), `stats`.
 //! - A window picks books from `LEAF_PICK` (paths separated by `:`), as Tally RS's `TALLY_PICK`.
 //!
-//! Keys: Escape goes back, Enter is the keyboard's Done, Backspace deletes.
+//! Keys: Escape goes back, Enter is the keyboard's Done, Backspace deletes, Page Down and Page Up
+//! turn a page as the phone's volume keys do.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -323,6 +329,26 @@ fn seed(app: &mut App, gfx: &Gfx, clock: &mut u64, id: i64) -> Result<(), String
     Ok(())
 }
 
+/// Updates made up from the library for a shot (the server only records arrivals from the day it
+/// learnt to): each series' newest chapters, spread over the last few days, the older ones read.
+fn fake_updates(app: &mut App) {
+    let now = crate::shelf::now_ms();
+    let hour = 3_600_000;
+    let mut list = Vec::new();
+    let mut lib = app.library.data.clone().unwrap_or_default();
+    lib.sort_by_key(|s| std::cmp::Reverse(s.last_read_at));
+    for (k, s) in lib.iter().filter(|s| app.series.get(&s.id).is_some_and(|l| l.data.is_some())).take(6).enumerate() {
+        let Some(d) = app.series.get(&s.id).and_then(|l| l.data.as_ref()) else { continue };
+        for (j, c) in d.chapters.iter().rev().take(3).enumerate() {
+            let ago = (k as i64 * 7 + j as i64 * 19) * hour + 25 * 60_000;
+            list.push(leaf_proto::Update { series: s.id, title: s.title.clone(), chapter: c.id, number: c.number, name: c.name.clone(), at: now - ago, read: j >= 2 || c.read, bell: s.bell });
+        }
+    }
+    list.sort_by_key(|u| std::cmp::Reverse(u.at));
+    app.updates.data = Some(list);
+    app.updates.loading = false;
+}
+
 /// One frame of a screen, drawn with no window.
 fn shot(args: &[String], out: &str) -> Result<(), String> {
     let (w, h) = arg(args, "--size")
@@ -358,13 +384,23 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.reset_to(Route::Home);
             app.st.home.shot_spot = arg(args, "--hero").and_then(|v| v.parse::<usize>().ok());
         }
+        "settings" => {
+            app.set_server(server);
+            app.reset_to(Route::Home);
+            app.push(Route::Connect);
+            app.st.connect.load(app.server.as_ref());
+        }
         "space" => {
             app.set_server(server);
             app.st.space.tab = match arg(args, "--tab").as_deref() {
-                Some("following") => 1,
-                Some("downloads") => 2,
-                _ => 0,
+                Some("updates") => crate::space::UPDATES,
+                Some("following") => crate::space::FOLLOWING,
+                Some("downloads") => crate::space::DOWNLOADS,
+                _ => crate::space::RECENT,
             };
+            app.st.space.query = arg(args, "--filter").unwrap_or_default();
+            app.st.space.shelf = arg(args, "--shelf").and_then(|v| v.parse::<usize>().ok()).and_then(|i| crate::logic::Shelf::ALL.get(i).copied());
+            app.updates_all = arg(args, "--all").is_some();
             app.following_sort = arg(args, "--sort").and_then(|v| v.parse::<u8>().ok()).unwrap_or(0).min(2);
             app.reset_to(Route::Space);
         }
@@ -428,6 +464,53 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
         }
         settle(&mut app, &gfx, &mut clock, 5.0);
     }
+    // `--shelve ID:shelf`, several separated by commas: the shot's copy only.
+    if let Some(list) = arg(args, "--shelve") {
+        for pair in list.split(',') {
+            if let Some((sid, sh)) = pair.split_once(':')
+                && let (Ok(sid), Some(sh)) = (sid.parse::<i64>(), crate::logic::Shelf::from_key(sh))
+                && let Some(s) = app.library.data.as_mut().and_then(|l| l.iter_mut().find(|s| s.id == sid))
+            {
+                s.shelf = Some(sh.key().into());
+            }
+        }
+        settle(&mut app, &gfx, &mut clock, 10.0);
+    }
+    if arg(args, "--fake-updates").is_some() {
+        fake_updates(&mut app);
+        settle(&mut app, &gfx, &mut clock, 20.0);
+    }
+    // `--backup 1`: Settings exports the latest backup (a read; the desktop saves it under the
+    // shot's own folder).
+    if screen == "settings" && arg(args, "--backup").is_some() {
+        app.backing_up = true;
+        app.ask(crate::net::Job::Backup(false));
+        settle(&mut app, &gfx, &mut clock, 30.0);
+    }
+    if screen == "space"
+        && arg(args, "--sheet").as_deref() == Some("shelf")
+    {
+        app.st.space.shelf_for = Some(id);
+    }
+    if screen == "series"
+        && let Some(sheet) = arg(args, "--sheet")
+    {
+        let st = &mut app.st.series;
+        match sheet.as_str() {
+            "menu" => st.menu = true,
+            "shelf" => st.shelf = true,
+            "wrong" => {
+                st.alternatives = true;
+                app.ask(crate::net::Job::Alternatives(id));
+            }
+            _ => {
+                let d = app.series.get(&id).and_then(|l| l.data.clone()).ok_or("the series did not load")?;
+                let c = crate::logic::continue_point(&d.chapters).map(|c| d.chapters[c.index].id);
+                app.st.series.chapter = c.or(d.chapters.last().map(|c| c.id));
+            }
+        }
+        settle(&mut app, &gfx, &mut clock, 30.0);
+    }
     if screen == "library-empty" {
         // What a first library looks like, before anything is followed (the owner's server
         // follows two series already).
@@ -457,6 +540,14 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             && let Some(r) = &mut app.reader
         {
             r.overlay = true;
+        }
+        if arg(args, "--auto").is_some()
+            && let Some(r) = &mut app.reader
+        {
+            r.auto = true;
+        }
+        if let Some(d) = arg(args, "--dim").and_then(|v| v.parse::<f32>().ok()) {
+            app.prefs.dim = d.clamp(0.0, crate::app::DIM_MAX);
         }
         settle(&mut app, &gfx, &mut clock, 10.0);
     }
@@ -571,6 +662,13 @@ impl ApplicationHandler<()> for Windowed {
                     }
                 }
                 Key::Named(NamedKey::Backspace) => app.backspace(),
+                // The volume keys' stand-ins.
+                Key::Named(NamedKey::PageDown) => {
+                    app.volume(true);
+                }
+                Key::Named(NamedKey::PageUp) => {
+                    app.volume(false);
+                }
                 Key::Named(NamedKey::Space) => app.type_text(" "),
                 _ => {
                     if let Some(text) = &event.text {

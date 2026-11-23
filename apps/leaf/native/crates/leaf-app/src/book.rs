@@ -168,6 +168,8 @@ pub struct BookReader {
     note_for: Option<Highlight>,
     confirm_remove: bool,
     more: bool,
+    /// What is left of a page turn (a tap in a third, a volume key), in units.
+    glide: f32,
 }
 
 /// The book as the strip sees it.
@@ -273,12 +275,19 @@ impl BookReader {
             note_for: None,
             confirm_remove: false,
             more: false,
+            glide: 0.0,
         }
     }
 
     fn view<'a>(&'a mut self, c: &'a mut Canvas, im: &'a Images) -> Option<View<'a>> {
         let doc = self.doc.as_deref()?;
         Some(View { doc, cache: RefCell::new(&mut self.cache), c: RefCell::new(c), im, ty: self.ty, top_pad: self.top_pad, book: self.id })
+    }
+
+    /// Turn the page: glide `by` units down (up when negative).
+    pub fn turn(&mut self, by: f32) {
+        self.glide += by;
+        self.fling.stop();
     }
 
     /// The mouse wheel or a screenshot's scroll.
@@ -452,14 +461,21 @@ fn frame(app: &mut App, r: &mut BookReader, dt: f32) -> (bool, bool) {
     if scrolling_allowed {
         let before = r.fling.off;
         moving = r.fling.update(&app.ui, [0.0, 0.0, WIDTH, view_h], dt);
-        let dy = r.fling.off - before;
+        let mut dy = r.fling.off - before;
         r.fling.off = FLING_MID;
+        if r.glide != 0.0 {
+            let step = if r.glide.abs() < 1.0 { r.glide } else { r.glide * (1.0 - (-dt * 14.0).exp()) };
+            r.glide -= step;
+            dy += step;
+            moving = true;
+        }
         if dy != 0.0 {
             let pos = r.pos;
             if let Some(v) = r.view(&mut app.canvas, &app.images) {
                 let p = strip::scroll(&v, pos, dy, view_h);
                 if p == pos {
                     r.fling.stop();
+                    r.glide = 0.0;
                 }
                 r.pos = p;
             }
@@ -467,6 +483,7 @@ fn frame(app: &mut App, r: &mut BookReader, dt: f32) -> (bool, bool) {
     } else {
         r.fling.stop();
         r.fling.off = FLING_MID;
+        r.glide = 0.0;
     }
     // What shows.
     let pos = r.pos;
@@ -556,6 +573,11 @@ fn frame(app: &mut App, r: &mut BookReader, dt: f32) -> (bool, bool) {
         c.text(&left_words, PAD + 4.0, by + 6.0, tt);
         c.text(&format!("{pct}%"), WIDTH - PAD - 4.0, by + 6.0, tt.right());
     }
+    // The dimmer: a black veil over the page, under the controls.
+    if app.prefs.dim > 0.0 {
+        let c = &mut app.canvas;
+        c.rect(-1000.0, 0.0, WIDTH + 2000.0, view_h, 0.0, Rgba::hex(0x000000).a(app.prefs.dim.min(crate::app::DIM_MAX)));
+    }
     // One tap back to where a jump came from.
     let mut back_jump = false;
     if let Some(bt) = r.back_to {
@@ -611,7 +633,15 @@ fn frame(app: &mut App, r: &mut BookReader, dt: f32) -> (bool, bool) {
                 }
             }
             if !handled {
-                r.chrome = !r.chrome;
+                // The top and bottom thirds turn the page (a setting); the middle, or any tap while
+                // the controls show, shows or hides them.
+                if !r.chrome && app.prefs.tap_zones && ty_ < view_h / 3.0 {
+                    r.turn(-view_h * crate::app::PAGE_TURN);
+                } else if !r.chrome && app.prefs.tap_zones && ty_ > view_h * 2.0 / 3.0 {
+                    r.turn(view_h * crate::app::PAGE_TURN);
+                } else {
+                    r.chrome = !r.chrome;
+                }
             }
         }
     }
@@ -1291,7 +1321,7 @@ fn popover(app: &mut App, r: &mut BookReader, doc: &Doc, s: u32, b: u32, view_h:
 /// The type sheet: size, spacing, margins and theme, previewed live on the page above it.
 fn type_sheet(app: &mut App, r: &mut BookReader) {
     let mut cx = cx!(app);
-    let (top, outside) = kit::sheet(&mut cx, 330.0);
+    let (top, outside) = kit::sheet(&mut cx, 350.0);
     let x = PAD + 4.0;
     let w = WIDTH - 2.0 * x;
     let mut y = top + 28.0;
@@ -1341,6 +1371,15 @@ fn type_sheet(app: &mut App, r: &mut BookReader) {
         if cx.tap(sx, y, sw, 70.0) {
             r.ty.theme = i as u8;
         }
+    }
+    // The dimmer: darker than the phone's own lowest brightness.
+    y += 92.0;
+    cx.c.text("Brightness", x, y - label.lh() / 2.0, label);
+    let bright = 1.0 - app.prefs.dim / crate::app::DIM_MAX;
+    if let Some(v) = kit::slider(&mut cx, seg_x, y, w - 96.0 - 10.0, bright) {
+        let d = (1.0 - v) * crate::app::DIM_MAX;
+        app.prefs.dim = if d < 0.02 { 0.0 } else { d };
+        app.dim_dirty = true;
     }
     cx.ui.tap = None;
     if outside {

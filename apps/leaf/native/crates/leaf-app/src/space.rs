@@ -1,5 +1,9 @@
-//! My space (design 42, page 14): what you read, in three tabs.
+//! My space (design 42, page 14): what you read, in four tabs.
 //!
+//! - **Updates**: chapters that came for series in My space over the last two weeks, by day
+//!   (Today, Yesterday, then dates), newest first: a small cover, the series, "Chapter 132" and the
+//!   time; unread in full ink, read dimmed. A tap opens the reader at that chapter. Belled only
+//!   or All, remembered.
 //! - **Recent** (artboard A): every series and book, last read first, each with the chapter you
 //!   are on out of how many, NEW when chapters came since, when you last read it, and Continue or
 //!   Start.
@@ -11,28 +15,41 @@
 //! - **Downloads**: per series, the chapters the server keeps and the ones on this phone, with
 //!   the room they take, and removing them.
 //!
+//! Updates, Recent and Following have a field under the tabs that narrows the list to titles
+//! holding what is typed ([`logic::title_matches`]: any case, any accents, inside words). Following
+//! has a row of shelves (Reading, Plan to read, On hold, Dropped, Done) with their counts; a long
+//! press on a series' row in any list puts it on another shelf.
+//!
 //! The + menu adds books from the phone or a series from Search; ⋯ holds Highlights and Reading
 //! time, which are no longer tabs. While a menu is open the page under it gets no tap (the + menu's
 //! tap went through to the cover under it, 2026-11-22).
 
 use std::collections::HashMap;
 
-use leaf_proto::Series;
+use leaf_proto::{Series, Update};
 
 use crate::app::{App, Route};
 use crate::cx;
 use crate::draw::{Rgba, Text, WIDTH};
 use crate::home::new_tag;
 use crate::images::CoverOf;
-use crate::kit;
-use crate::logic;
+use crate::kit::{self, Kb};
+use crate::logic::{self, Shelf};
 use crate::net::Job;
 use crate::shelf::{self, Book};
 use crate::theme::{self as t, PAD, ty};
 
 /// The fixed top: the title and its keys, then the tabs.
 const TOP: f32 = 104.0;
-const TABS: [&str; 3] = ["RECENT", "FOLLOWING", "DOWNLOADS"];
+/// The filter field under the tabs (Updates, Recent, Following).
+const FIELD: f32 = 54.0;
+const TABS: [&str; 4] = ["UPDATES", "RECENT", "FOLLOWING", "DOWNLOADS"];
+pub const UPDATES: u8 = 0;
+pub const RECENT: u8 = 1;
+pub const FOLLOWING: u8 = 2;
+pub const DOWNLOADS: u8 = 3;
+/// How far back Updates looks, in days.
+pub const UPDATE_DAYS: u32 = 14;
 
 #[derive(Default)]
 pub struct State {
@@ -42,16 +59,28 @@ pub struct State {
     pub sort_menu: bool,
     /// Where the sort menu drops from (screen units).
     sort_top: f32,
+    /// What the list is narrowed to.
+    pub query: String,
+    /// Following shows one shelf only.
+    pub shelf: Option<Shelf>,
+    chips: crate::ui::HScroll,
+    /// The shelf sheet is open for this series (a long press on its row).
+    pub shelf_for: Option<i64>,
 }
 
 impl State {
-    /// Close a menu, if one is open.
+    /// Close a menu or the shelf sheet, if one is open.
     pub fn close_over(&mut self) -> bool {
-        let open = self.add_menu || self.more_menu || self.sort_menu;
+        let open = self.covered();
         self.add_menu = false;
         self.more_menu = false;
         self.sort_menu = false;
+        self.shelf_for = None;
         open
+    }
+
+    fn covered(&self) -> bool {
+        self.add_menu || self.more_menu || self.sort_menu || self.shelf_for.is_some()
     }
 }
 
@@ -75,6 +104,16 @@ enum Act {
     Book(i64),
     Bell(i64, bool),
     Remove(i64),
+    /// An update: its chapter in the reader.
+    Chapter(i64, i64),
+    /// A long press on a series' row: the shelf sheet.
+    Shelve(i64),
+}
+
+/// A finger held on (x, y) since long enough to open a row's sheet: the row under it is asked
+/// with [`held_on`].
+fn held_on(held: Option<(f32, f32)>, y: f32, h: f32, dy: f32) -> bool {
+    held.is_some_and(|(_, hy)| hy >= y + dy && hy < y + h + dy)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -87,13 +126,24 @@ fn cover(cx: &mut kit::Ctx, im: &mut crate::images::Images, s: &Series, x: f32, 
 }
 
 pub fn draw(app: &mut App, dt: f32) -> bool {
-    let tab = app.st.space.tab.min(2);
+    let tab = app.st.space.tab.min(DOWNLOADS);
     if app.fresh {
         if !app.library.loading && app.server.is_some() {
             app.ask(Job::Library);
         }
+        if tab == UPDATES && !app.updates.loading && app.server.is_some() {
+            app.ask(Job::Updates(UPDATE_DAYS));
+        }
         app.images.scan_cache();
     }
+    let updates: Vec<Update> = app.updates.data.clone().unwrap_or_default();
+    let updates_state = (app.updates.loading && app.updates.data.is_none(), app.updates.error.clone().filter(|_| app.updates.data.is_none()));
+    let belled_only = !app.updates_all;
+    let query = app.st.space.query.clone();
+    let filtered = tab != DOWNLOADS;
+    let top_h = if filtered { TOP + FIELD } else { TOP };
+    let today = shelf::day_of(now_ms_());
+    let offset = shelf::zone_offset();
     let series: Vec<Series> = app.library.data.clone().unwrap_or_default();
     let books: Vec<Book> = app.shelf.books.clone();
     // Downloads need every series' chapters; Recent and Following count new ones with them.
@@ -109,8 +159,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let offline = app.library.offline();
     let error = app.library.error.clone().filter(|_| !offline);
     let sort = app.following_sort;
-    let covered = app.st.space.add_menu || app.st.space.more_menu || app.st.space.sort_menu;
-    let pg = app.page_begin(dt, TOP);
+    let covered = app.st.space.covered();
+    let pg = app.page_begin(dt, top_h);
     let mut cx = cx!(app);
     let held = if covered { kit::hold(&mut cx) } else { None };
     let st = &mut app.st.space;
@@ -121,8 +171,117 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let mut to_search = false;
     let view_top = -cx.c.dy - 140.0;
     let view_bottom = -cx.c.dy + cx.c.h + 140.0;
+    let mut retry_updates = false;
+    let mut set_all: Option<bool> = None;
+    let held_at = if covered { None } else { cx.ui.resting(now).filter(|(_, ns)| *ns >= crate::series::LONG_PRESS_NS).map(|(p, _)| p) };
     match tab {
-        0 => {
+        UPDATES => {
+            let groups = logic::group_updates(&updates, belled_only, &query, shelf::day_of);
+            let shown: usize = groups.iter().map(|g| g.1.len()).sum();
+            let unread = groups.iter().flat_map(|g| g.1.iter()).filter(|&&i| !updates[i].read).count();
+            y += 10.0;
+            let head_h = 40.0;
+            let ht = Text::new(ty::UI, t::INK2);
+            let words = match (shown, unread) {
+                (0, _) => format!("Last {UPDATE_DAYS} days"),
+                (n, 0) => format!("{} · all read", logic::chapters_words(n)),
+                (n, u) => format!("{} · {u} unread", logic::chapters_words(n)),
+            };
+            let seg_w = 176.0;
+            cx.c.text_fit(&words, x0, y + (head_h - ht.lh()) / 2.0, w - seg_w - 12.0, ht);
+            if let Some(i) = kit::segmented(&mut cx, WIDTH - PAD - seg_w, y + 2.0, seg_w, &["Belled only", "All"], if belled_only { 0 } else { 1 }) {
+                set_all = Some(i == 1);
+            }
+            y += head_h + 8.0;
+            if groups.is_empty() {
+                y += 30.0;
+                if updates_state.0 {
+                    let turn = (now as f64 / 1e9 * 0.9).fract() as f32;
+                    cx.c.arc(WIDTH / 2.0, y + 10.0, 9.0, 2.0, turn, turn + 0.7, t::INK3, false);
+                    cx.c.text("Asking your server", WIDTH / 2.0, y + 32.0, Text::new(ty::UI, t::INK2).center());
+                    y += 60.0;
+                } else if let Some(e) = &updates_state.1 {
+                    let (h, r) = kit::notice(&mut cx, x0 + 16.0, y, w - 32.0, e, None, Some("Retry"));
+                    retry_updates = r;
+                    y += h;
+                } else if !query.trim().is_empty() {
+                    let (h, _) = kit::notice(&mut cx, x0 + 16.0, y, w - 32.0, &format!("No chapters of a title with \u{201C}{}\u{201D}", query.trim()), None, None);
+                    y += h;
+                } else if belled_only && !updates.is_empty() {
+                    let (h, all) = kit::notice(
+                        &mut cx,
+                        x0 + 16.0,
+                        y,
+                        w - 32.0,
+                        "Nothing new for belled series",
+                        Some(&format!("{} came for series with their bell off in the last {UPDATE_DAYS} days.", logic::chapters_words(updates.len()))),
+                        Some("Show all"),
+                    );
+                    if all {
+                        set_all = Some(true);
+                    }
+                    y += h;
+                } else {
+                    let (h, _) = kit::notice(
+                        &mut cx,
+                        x0 + 16.0,
+                        y,
+                        w - 32.0,
+                        &format!("No new chapters in the last {UPDATE_DAYS} days"),
+                        Some("Chapters your server finds for series in My space show here, newest first."),
+                        None,
+                    );
+                    y += h;
+                }
+            }
+            let rh = 76.0;
+            for (day, idx) in &groups {
+                if y + 34.0 >= view_top && y <= view_bottom {
+                    cx.c.text(&logic::day_words(*day, today).to_uppercase(), x0, y + 12.0, Text::new(ty::SMALL, t::INK3).semi());
+                }
+                y += 34.0;
+                for &i in idx {
+                    let u = &updates[i];
+                    if y + rh < view_top || y > view_bottom {
+                        y += rh;
+                        continue;
+                    }
+                    if cx.pressed(0.0, y, WIDTH, rh) {
+                        cx.c.rect(0.0, y, WIDTH, rh, 0.0, t::WASH);
+                    }
+                    let (cw, ch) = (44.0, 60.0);
+                    let of = CoverOf::Series(u.series);
+                    cx.c.rect(x0, y + (rh - ch) / 2.0, cw, ch, 6.0, t::S1);
+                    if app.images.cover(cx.c, of, now) {
+                        cx.c.image_cover(&of.key(), x0, y + (rh - ch) / 2.0, cw, ch, 6.0, Rgba::WHITE.a(if u.read { 0.5 } else { 1.0 }));
+                    }
+                    let tx = x0 + cw + 14.0;
+                    let time = logic::clock_words(u.at, offset);
+                    let tt_ = Text::new(12.5, t::INK3).right();
+                    let tw_ = cx.c.measure(&time, tt_);
+                    let title_t = Text::new(ty::BODY, if u.read { t::INK3 } else { t::INK }).medium();
+                    let line_t = Text::new(ty::UI, if u.read { t::INK3 } else { t::INK2 });
+                    let ty0 = y + (rh - title_t.lh() - 4.0 - line_t.lh()) / 2.0;
+                    let room = WIDTH - PAD - tw_ - 12.0 - tx;
+                    cx.c.text_fit(&u.title, tx, ty0, room, title_t);
+                    cx.c.text(&time, WIDTH - PAD, ty0 + 2.0, tt_);
+                    let line = match logic::chapter_title(&u.name, u.number) {
+                        Some(n) => format!("Chapter {} · {n}", logic::num(u.number)),
+                        None => format!("Chapter {}", logic::num(u.number)),
+                    };
+                    cx.c.text_fit(&line, tx, ty0 + title_t.lh() + 4.0, room, line_t);
+                    if held_on(held_at, y, rh, cx.c.dy) {
+                        cx.ui.swallow();
+                        act = Some(Act::Shelve(u.series));
+                    } else if cx.tap(0.0, y, WIDTH, rh) {
+                        act = Some(Act::Chapter(u.series, u.chapter));
+                    }
+                    y += rh;
+                }
+                y += 6.0;
+            }
+        }
+        RECENT => {
             let with_new = series.iter().filter(|s| new_of[&s.id] > 0).count();
             let mut words = vec![if series.len() == 1 { "1 series".to_string() } else { format!("{} series", series.len()) }];
             if with_new > 0 {
@@ -131,14 +290,22 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             if !books.is_empty() {
                 words.push(if books.len() == 1 { "1 book".into() } else { format!("{} books", books.len()) });
             }
+            let found = series.iter().filter(|s| logic::title_matches(&s.title, &query)).count() + books.iter().filter(|b| logic::title_matches(&b.title, &query) || logic::title_matches(&b.author, &query)).count();
+            if !query.trim().is_empty() {
+                words = vec![format!("{found} of {} found", series.len() + books.len())];
+            }
             y += 12.0;
             cx.c.text_fit(&words.join(" · ").to_uppercase(), x0, y, w, Text::new(ty::SMALL, t::INK3).semi());
             y += 30.0;
             // Last read first; never read after, newest added first.
-            let mut rows: Vec<(i64, i64, Result<&Series, &Book>)> = series.iter().map(|s| (s.last_read_at, s.added_at, Ok(s))).collect();
-            rows.extend(books.iter().map(|b| (b.opened_ms, b.added_ms, Err(b))));
+            let mut rows: Vec<(i64, i64, Result<&Series, &Book>)> = series.iter().filter(|s| logic::title_matches(&s.title, &query)).map(|s| (s.last_read_at, s.added_at, Ok(s))).collect();
+            rows.extend(books.iter().filter(|b| logic::title_matches(&b.title, &query) || logic::title_matches(&b.author, &query)).map(|b| (b.opened_ms, b.added_ms, Err(b))));
             rows.sort_by_key(|r| (std::cmp::Reverse(r.0), std::cmp::Reverse(r.1)));
-            if rows.is_empty() && !loading {
+            if rows.is_empty() && !query.trim().is_empty() && !(series.is_empty() && books.is_empty()) {
+                y += 40.0;
+                let (h, _) = kit::notice(&mut cx, x0 + 16.0, y, w - 32.0, &format!("Nothing with \u{201C}{}\u{201D} in its title", query.trim()), None, None);
+                y += h;
+            } else if rows.is_empty() && !loading {
                 y += 40.0;
                 let (h, _) = kit::notice(&mut cx, x0 + 16.0, y, w - 32.0, "Nothing here yet", Some("Books you add and series you add from Search show here, last read first."), None);
                 y += h + 20.0;
@@ -207,7 +374,10 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     new_tag(cx.c, tx + lw + 8.0, ly, &tag);
                 }
                 cx.c.text_fit(&last, tx, ly + 18.0 + 6.0, tw, last_t);
-                if cx.tap(kx - 6.0, ky - 8.0, kw + 12.0, 52.0) {
+                if let (true, Act::Series(id)) = (held_on(held_at, y, rh, cx.c.dy), &row_act) {
+                    cx.ui.swallow();
+                    act = Some(Act::Shelve(*id));
+                } else if cx.tap(kx - 6.0, ky - 8.0, kw + 12.0, 52.0) {
                     act = Some(key_act);
                 } else if cx.tap(0.0, y, WIDTH, rh) {
                     act = Some(row_act);
@@ -215,11 +385,17 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 y += rh;
             }
         }
-        1 => {
+        FOLLOWING => {
             y += 10.0;
             let ht = Text::new(ty::UI, t::INK2);
             let head_h = 40.0;
-            cx.c.text(&if series.len() == 1 { "1 series".to_string() } else { format!("{} series", series.len()) }, x0, y + (head_h - ht.lh()) / 2.0, ht);
+            let shown = series.iter().filter(|s| st.shelf.is_none_or(|sh| logic::shelf_of(s) == sh) && logic::title_matches(&s.title, &query)).count();
+            let count = match (shown == series.len(), series.len()) {
+                (true, 1) => "1 series".to_string(),
+                (true, n) => format!("{n} series"),
+                (false, n) => format!("{shown} of {n} series"),
+            };
+            cx.c.text(&count, x0, y + (head_h - ht.lh()) / 2.0, ht);
             let sw = logic::FOLLOWING_SORTS[sort as usize];
             let stt = Text::new(ty::UI, t::INK).medium().right();
             let sww = cx.c.measure(sw, stt);
@@ -230,9 +406,27 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 st.sort_top = y + head_h + cx.c.dy;
             }
             y += head_h + 4.0;
-            let mut list = series.clone();
+            // The shelves, with how many series each holds.
+            let counts = logic::shelf_counts(&series);
+            let mut chips: Vec<(String, bool, Option<Rgba>)> = vec![(format!("All {}", series.len()), st.shelf.is_none(), None)];
+            chips.extend(Shelf::ALL.iter().zip(counts).map(|(sh, n)| (format!("{} {n}", sh.words()), st.shelf == Some(*sh), None)));
+            if let Some(i) = kit::chip_row(&mut cx, &mut st.chips, y, &chips, dt) {
+                st.shelf = if i == 0 { None } else { Some(Shelf::ALL[i - 1]) };
+            }
+            y += 32.0 + 14.0;
+            let mut list: Vec<Series> = series.iter().filter(|s| st.shelf.is_none_or(|sh| logic::shelf_of(s) == sh) && logic::title_matches(&s.title, &query)).cloned().collect();
             logic::sort_following(&mut list, sort);
-            if list.is_empty() && !loading {
+            if list.is_empty() && !series.is_empty() {
+                y += 30.0;
+                let why = match (st.shelf, query.trim().is_empty()) {
+                    (Some(sh), true) => format!("Nothing on {} yet", sh.words()),
+                    (Some(sh), false) => format!("Nothing on {} with \u{201C}{}\u{201D} in its title", sh.words(), query.trim()),
+                    (None, _) => format!("Nothing with \u{201C}{}\u{201D} in its title", query.trim()),
+                };
+                let body = st.shelf.map(|_| "Hold a series' row, or use ⋯ on its page, to put it on a shelf.");
+                let (h, _) = kit::notice(&mut cx, x0 + 16.0, y, w - 32.0, &why, body, None);
+                y += h;
+            } else if list.is_empty() && !loading {
                 y += 40.0;
                 let (h, _) = kit::notice(
                     &mut cx,
@@ -283,7 +477,10 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 }
                 let updated = if s.updated_at > 0 { format!("{} Updated", logic::local_date(s.updated_at)) } else { format!("Added {}", logic::local_date(s.added_at)) };
                 cx.c.text_fit(&updated, tx, ly + 6.0, tw, line_t);
-                if !bell && cx.tap(0.0, y, WIDTH, rh) {
+                if held_on(held_at, y, rh, cx.c.dy) {
+                    cx.ui.swallow();
+                    act = Some(Act::Shelve(s.id));
+                } else if !bell && cx.tap(0.0, y, WIDTH, rh) {
                     act = Some(Act::Series(s.id));
                 }
                 y += rh;
@@ -368,8 +565,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     {
         let top = cx.c.inset_top;
         cx.c.dy = 0.0;
-        cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + TOP, 0.0, t::BG);
-        kit::fixed_top(&mut cx, TOP);
+        cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + top_h, 0.0, t::BG);
+        kit::fixed_top(&mut cx, top_h);
         cx.c.text("My space", PAD, top + 14.0, Text::new(ty::TITLE, t::INK).brand());
         if kit::icon_key(&mut cx, WIDTH - 6.0 - 44.0 * 2.0, top + 10.0, "plus") {
             st.add_menu = true;
@@ -380,18 +577,43 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         let ty_ = top + 62.0;
         let tt = Text::new(13.5, t::INK3).medium();
         let mut x = PAD;
+        // Spread across the width, never closer than 16 apart.
+        let words_w: f32 = TABS.iter().map(|w| cx.c.measure(w, tt)).sum();
+        let gap = ((WIDTH - 2.0 * PAD - words_w) / (TABS.len() - 1) as f32).clamp(16.0, 28.0);
         for (i, words) in TABS.iter().enumerate() {
             let on = i as u8 == tab;
             let tw = cx.c.text(words, x, ty_ + (38.0 - tt.lh()) / 2.0, if on { tt.color(t::INK) } else { tt });
             if on {
                 cx.c.rect(x, ty_ + 38.0 - 2.0, tw, 2.0, 1.0, t::ACCENT);
             }
-            if cx.ui.tapped(x - 10.0, ty_, tw + 20.0, 38.0) {
+            if cx.ui.tapped(x - gap / 2.0, ty_, tw + gap, 38.0) {
                 set_tab = Some(i as u8);
             }
-            x += tw + 24.0;
+            x += tw + gap;
         }
         cx.c.rect(-1000.0, ty_ + 38.0, WIDTH + 2000.0, 1.0, 0.0, t::LINE);
+        // The filter: narrows the list to titles holding what is typed.
+        if filtered {
+            let (fx, fy, fw, fh) = (PAD, ty_ + 38.0 + 8.0, WIDTH - 2.0 * PAD, 40.0);
+            cx.c.rect(fx, fy, fw, fh, t::KEY_R, t::S1);
+            cx.c.icon("search", fx + 18.0, fy + fh / 2.0, 15.0, t::INK3);
+            let mut q = st.query.clone();
+            let clear_w = if q.is_empty() { 0.0 } else { 40.0 };
+            let hint = match tab {
+                UPDATES => "Find in updates",
+                RECENT => "Find in Recent",
+                _ => "Find in Following",
+            };
+            kit::inline(&mut cx, "space-filter", fx + 36.0, fy, fw - 36.0 - 14.0 - clear_w, fh, hint, &mut q, Kb::Text, Text::new(ty::UI, t::INK));
+            if !q.is_empty() && kit::icon_key_ink(&mut cx, fx + fw - 42.0, fy - 2.0, "close", t::INK2) {
+                q.clear();
+                if cx.focus.is("space-filter") {
+                    cx.focus.text.clear();
+                    cx.host.keyboard(true, "", Kb::Text);
+                }
+            }
+            st.query = q;
+        }
     }
     let tab_hit = kit::tabs(&mut cx, 2);
     // Over the page: the menus.
@@ -399,6 +621,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let mut to_notes = false;
     let mut to_stats = false;
     let mut new_sort = None;
+    let mut new_shelf: Option<(i64, Shelf)> = None;
     if covered {
         kit::release(&mut cx, held);
         let top = cx.c.inset_top + 56.0;
@@ -437,19 +660,44 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 Some(_) => st.sort_menu = false,
                 None => {}
             }
+        } else if let Some(id) = st.shelf_for {
+            match series.iter().find(|s| s.id == id) {
+                Some(s) => {
+                    if let Some(picked) = crate::series::shelf_sheet(&mut cx, &s.title, logic::shelf_of(s)) {
+                        st.shelf_for = None;
+                        new_shelf = picked.filter(|p| *p != logic::shelf_of(s)).map(|p| (id, p));
+                    }
+                }
+                None => st.shelf_for = None,
+            }
         }
     }
     app.page_end(&pg, bottom);
     if let Some(s) = new_sort {
         app.set_following_sort(s);
     }
+    if let Some((id, sh)) = new_shelf {
+        app.set_shelf(id, sh);
+    }
+    if let Some(all) = set_all
+        && all != app.updates_all
+    {
+        app.updates_all = all;
+        app.save_config();
+    }
+    if retry_updates {
+        app.ask(Job::Updates(UPDATE_DAYS));
+    }
     if let Some(t_) = set_tab
         && t_ != tab
     {
         app.st.space.tab = t_;
         *app.scroll() = Default::default();
-        if t_ == 2 {
+        if t_ == DOWNLOADS {
             app.images.scan_cache();
+        }
+        if t_ == UPDATES && !app.updates.loading {
+            app.ask(Job::Updates(UPDATE_DAYS));
         }
     }
     if add_books {
@@ -461,6 +709,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         Some(Act::Book(id)) => app.open_book(id),
         Some(Act::Bell(id, on)) => app.set_bell(id, on),
         Some(Act::Remove(id)) => remove_downloads(app, id),
+        Some(Act::Chapter(series, chapter)) => app.open_chapter_of(series, chapter),
+        Some(Act::Shelve(id)) => app.st.space.shelf_for = Some(id),
         None => {
             if to_search {
                 app.go_tab(1);
@@ -473,7 +723,14 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             }
         }
     }
-    pg.moving || app.library.loading && !crate::wake::has()
+    if tab == UPDATES && updates_state.0 {
+        app.wake_at(now + 50_000_000);
+    }
+    pg.moving || (app.library.loading || app.updates.loading) && !crate::wake::has()
+}
+
+fn now_ms_() -> i64 {
+    shelf::now_ms()
 }
 
 /// Remove a series' downloads: its chapters' pages on this phone, and the copies the server keeps.

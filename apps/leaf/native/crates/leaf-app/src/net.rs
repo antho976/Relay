@@ -11,7 +11,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use leaf_proto::{Bell, Follow, Pages, Progress, Series, SeriesDetail, Status};
+use leaf_proto::{Alternative, AnilistToken, Bell, ChapterRead, Follow, Pages, Progress, ReadBefore, Repin, Series, SeriesDetail, ShelfSet, SourceHealth, Status, Update};
 use serde::{Deserialize, Serialize};
 
 /// Where the server is, and its token if it has one.
@@ -93,6 +93,30 @@ impl Client {
         }
     }
 
+    /// A file: its bytes, its name (from `Content-Disposition`) and its type.
+    pub fn file(&self, s: &Server, path: &str, post: bool) -> Result<BackupFile, Fail> {
+        let url = Client::url(s, path);
+        let r = if post {
+            let mut req = self.agent.post(url);
+            if let Some(t) = &s.token {
+                req = req.header("Authorization", format!("Bearer {t}"));
+            }
+            req.send_empty()
+        } else {
+            let mut req = self.agent.get(url);
+            if let Some(t) = &s.token {
+                req = req.header("Authorization", format!("Bearer {t}"));
+            }
+            req.call()
+        };
+        let r = r.map_err(|_| Fail::Unreachable)?;
+        let header = |name: &str| r.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+        let name = header("content-disposition").and_then(|h| crate::logic::disposition_name(&h)).unwrap_or_else(|| "leaf-backup.json".into());
+        let mime = header("content-type").map(|m| m.split(';').next().unwrap_or("").trim().to_string()).filter(|m| !m.is_empty()).unwrap_or_else(|| "application/json".into());
+        let bytes = Client::read(Ok(r))?;
+        Ok(BackupFile { name, mime, bytes })
+    }
+
     pub fn get(&self, s: &Server, path: &str) -> Result<Vec<u8>, Fail> {
         let mut req = self.agent.get(Client::url(s, path));
         if let Some(t) = &s.token {
@@ -135,6 +159,14 @@ pub fn query_escape(q: &str) -> String {
     out
 }
 
+/// A backup as the server handed it.
+#[derive(Debug, Clone)]
+pub struct BackupFile {
+    pub name: String,
+    pub mime: String,
+    pub bytes: Vec<u8>,
+}
+
 /// What a screen asks the server.
 #[derive(Clone, Debug)]
 pub enum Job {
@@ -151,6 +183,34 @@ pub enum Job {
     /// Download a chapter on the server, or remove it (`POST` / `DELETE
     /// /v1/chapters/{id}/download`).
     Download(i64, bool),
+    /// Chapters that came lately for series in My space, over this many days (`/v1/updates`).
+    Updates(u32),
+    /// A chapter read or unread (`POST /v1/chapters/{id}/read`).
+    ChapterRead(i64, bool),
+    /// Every chapter of a series numbered below this, read (`POST /v1/series/{id}/read`).
+    ReadBefore(i64, f64),
+    /// A series put on a shelf (`POST /v1/series/{id}/shelf`).
+    Shelf(i64, Option<String>),
+    /// How each source is doing (`/v1/health`).
+    Health,
+    /// The latest backup (`GET /v1/backup`), or one made now (`POST`).
+    Backup(bool),
+    /// An AniList token kept on the server, or removed (`POST /v1/settings/anilist`).
+    Anilist(Option<String>),
+    /// The other entries for a series' work (`/v1/series/{id}/alternatives`; slow).
+    Alternatives(i64),
+    /// Read a series from another entry (`POST /v1/series/{id}/repin`).
+    Repin(i64, i64),
+}
+
+impl Job {
+    /// It changes something on the server (a screenshot never sends these).
+    pub fn writes(&self) -> bool {
+        matches!(
+            self,
+            Job::Follow(_) | Job::Unfollow(_) | Job::Progress(..) | Job::Bell(..) | Job::Download(..) | Job::ChapterRead(..) | Job::ReadBefore(..) | Job::Shelf(..) | Job::Backup(true) | Job::Anilist(_) | Job::Repin(..)
+        )
+    }
 }
 
 /// An answer. `cached` ones come from the copy on disk, before (or instead of) the server's.
@@ -166,6 +226,16 @@ pub enum Done {
     PageCount(i64, Result<u32, Fail>),
     Bell(i64, bool, Result<(), Fail>),
     Download(i64, bool, Result<(), Fail>),
+    Updates { cached: bool, result: Result<Vec<Update>, Fail> },
+    ChapterRead(i64, bool, Result<(), Fail>),
+    ReadBefore(i64, Result<(), Fail>),
+    Shelf(i64, Result<(), Fail>),
+    Health(Result<Vec<SourceHealth>, Fail>),
+    Backup(Result<BackupFile, Fail>),
+    /// Whether a token was set (true) or removed.
+    Anilist(bool, Result<(), Fail>),
+    Alternatives(i64, Result<Vec<Alternative>, Fail>),
+    Repinned(i64, Result<Series, Fail>),
 }
 
 type Task = (Option<Server>, Job);
@@ -337,6 +407,17 @@ fn flush_outbox(client: &Client, data: &Path, s: &Server) {
     outbox_write(data, &left);
 }
 
+fn updates_file(data: &Path) -> PathBuf {
+    data.join("updates.json")
+}
+
+/// POST `body` as JSON, the answer dropped.
+fn post_json<T: Serialize>(client: &Client, server: &Option<Server>, path: &str, body: &T) -> Result<Vec<u8>, Fail> {
+    let Some(s) = server else { return no_server() };
+    let body = serde_json::to_string(body).map_err(|_| Fail::Garbled)?;
+    client.post(s, path, body)
+}
+
 fn series_file(data: &Path, id: i64) -> PathBuf {
     data.join("series").join(format!("{id}.json"))
 }
@@ -460,6 +541,62 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
                 None => no_server(),
             };
             send(Done::Download(chapter, on, r));
+        }
+        Job::Updates(days) => {
+            let file = updates_file(data);
+            if let Some(list) = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice::<Vec<Update>>(&b).ok()) {
+                send(Done::Updates { cached: true, result: Ok(list) });
+            }
+            let Some(s) = server else { return send(Done::Updates { cached: false, result: no_server() }) };
+            wait_for_progress();
+            let r = client.get(&s, &format!("/v1/updates?days={days}")).and_then(|b| {
+                let list = serde_json::from_slice::<Vec<Update>>(&b).map_err(|_| Fail::Garbled)?;
+                let _ = write_atomic(&file, &b);
+                Ok(list)
+            });
+            send(Done::Updates { cached: false, result: r });
+        }
+        Job::ChapterRead(chapter, read) => {
+            let r = post_json(client, &server, &format!("/v1/chapters/{chapter}/read"), &ChapterRead { read }).map(|_| ());
+            send(Done::ChapterRead(chapter, read, r));
+        }
+        Job::ReadBefore(id, before) => {
+            let r = post_json(client, &server, &format!("/v1/series/{id}/read"), &ReadBefore { before }).map(|_| ());
+            send(Done::ReadBefore(id, r));
+        }
+        Job::Shelf(id, shelf) => {
+            let r = post_json(client, &server, &format!("/v1/series/{id}/shelf"), &ShelfSet { shelf }).map(|_| ());
+            send(Done::Shelf(id, r));
+        }
+        Job::Health => {
+            let r = match &server {
+                Some(s) => client.json(s, "/v1/health"),
+                None => no_server(),
+            };
+            send(Done::Health(r));
+        }
+        Job::Backup(now) => {
+            let r = match &server {
+                Some(s) => client.file(s, "/v1/backup", now),
+                None => no_server(),
+            };
+            send(Done::Backup(r));
+        }
+        Job::Anilist(token) => {
+            let on = token.is_some();
+            let r = post_json(client, &server, "/v1/settings/anilist", &AnilistToken { token }).map(|_| ());
+            send(Done::Anilist(on, r));
+        }
+        Job::Alternatives(id) => {
+            let r = match &server {
+                Some(s) => client.json(s, &format!("/v1/series/{id}/alternatives")),
+                None => no_server(),
+            };
+            send(Done::Alternatives(id, r));
+        }
+        Job::Repin(id, manga_id) => {
+            let r = post_json(client, &server, &format!("/v1/series/{id}/repin"), &Repin { manga_id }).and_then(|b| serde_json::from_slice::<Series>(&b).map_err(|_| Fail::Garbled));
+            send(Done::Repinned(id, r));
         }
     }
 }

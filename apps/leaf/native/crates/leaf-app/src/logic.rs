@@ -549,6 +549,259 @@ pub fn tile_rows(h: u32) -> Vec<(u32, u32)> {
     (0..h.div_ceil(TILE_H)).map(|i| (i * TILE_H, TILE_H.min(h - i * TILE_H))).collect()
 }
 
+/// When a backup file was made, from its name ("leaf-backup-1795398420.json": seconds since the
+/// epoch); 0 when the name doesn't say.
+pub fn backup_made_ms(name: &str) -> i64 {
+    let digits: String = name.rsplit('-').next().unwrap_or("").chars().take_while(char::is_ascii_digit).collect();
+    digits.parse::<i64>().ok().filter(|s| *s > 1_000_000_000).map_or(0, |s| s * 1000)
+}
+
+/// A file name from a `Content-Disposition` header (`attachment; filename="x.json"`).
+pub fn disposition_name(h: &str) -> Option<String> {
+    let (_, rest) = h.split_once("filename=")?;
+    let name = rest.split(';').next()?.trim().trim_matches('"').trim();
+    let name: String = name.chars().filter(|c| !matches!(c, '/' | '\\')).collect();
+    (!name.is_empty()).then_some(name)
+}
+
+// Finding a title as you type
+
+/// A letter without its accent, lower case: "é" and "É" are "e", "ß" is "ss", "æ" is "ae".
+fn fold_char(c: char, out: &mut String) {
+    let base = match c {
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' | 'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' | 'Ā' | 'Ă' | 'Ą' => 'a',
+        'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' | 'Ç' | 'Ć' | 'Ĉ' | 'Ċ' | 'Č' => 'c',
+        'ď' | 'đ' | 'Ď' | 'Đ' | 'ð' | 'Ð' => 'd',
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' | 'È' | 'É' | 'Ê' | 'Ë' | 'Ē' | 'Ĕ' | 'Ė' | 'Ę' | 'Ě' => 'e',
+        'ĝ' | 'ğ' | 'ġ' | 'ģ' | 'Ĝ' | 'Ğ' | 'Ġ' | 'Ģ' => 'g',
+        'ĥ' | 'ħ' | 'Ĥ' | 'Ħ' => 'h',
+        'ì' | 'í' | 'î' | 'ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ı' | 'Ì' | 'Í' | 'Î' | 'Ï' | 'Ĩ' | 'Ī' | 'Ĭ' | 'Į' | 'İ' => 'i',
+        'ĵ' | 'Ĵ' => 'j',
+        'ķ' | 'Ķ' => 'k',
+        'ĺ' | 'ļ' | 'ľ' | 'ŀ' | 'ł' | 'Ĺ' | 'Ļ' | 'Ľ' | 'Ŀ' | 'Ł' => 'l',
+        'ñ' | 'ń' | 'ņ' | 'ň' | 'Ñ' | 'Ń' | 'Ņ' | 'Ň' => 'n',
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ŏ' | 'ő' | 'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' | 'Ø' | 'Ō' | 'Ŏ' | 'Ő' => 'o',
+        'ŕ' | 'ŗ' | 'ř' | 'Ŕ' | 'Ŗ' | 'Ř' => 'r',
+        'ś' | 'ŝ' | 'ş' | 'š' | 'Ś' | 'Ŝ' | 'Ş' | 'Š' => 's',
+        'ţ' | 'ť' | 'ŧ' | 'Ţ' | 'Ť' | 'Ŧ' => 't',
+        'ù' | 'ú' | 'û' | 'ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' | 'Ù' | 'Ú' | 'Û' | 'Ü' | 'Ũ' | 'Ū' | 'Ŭ' | 'Ů' | 'Ű' | 'Ų' => 'u',
+        'ŵ' | 'Ŵ' => 'w',
+        'ý' | 'ÿ' | 'ŷ' | 'Ý' | 'Ÿ' | 'Ŷ' => 'y',
+        'ź' | 'ż' | 'ž' | 'Ź' | 'Ż' | 'Ž' => 'z',
+        'ß' => return out.push_str("ss"),
+        'æ' | 'Æ' => return out.push_str("ae"),
+        'œ' | 'Œ' => return out.push_str("oe"),
+        'þ' | 'Þ' => return out.push_str("th"),
+        // Curly quotes and dashes read as the plain ones.
+        '\u{2018}' | '\u{2019}' => '\'',
+        '\u{2013}' | '\u{2014}' => '-',
+        c => return out.extend(c.to_lowercase()),
+    };
+    out.push(base);
+}
+
+/// `s` lower case, without accents, its runs of spaces made one.
+pub fn fold(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_whitespace() {
+            if !out.is_empty() && !out.ends_with(' ') {
+                out.push(' ');
+            }
+        } else {
+            fold_char(c, &mut out);
+        }
+    }
+    out.trim_end().to_string()
+}
+
+/// The title holds every word typed, anywhere in it (inside words too), whatever the case and
+/// accents: "lev god" finds "Level Up with the Gods". An empty query holds everything.
+pub fn title_matches(title: &str, query: &str) -> bool {
+    let t = fold(title);
+    fold(query).split(' ').filter(|w| !w.is_empty()).all(|w| t.contains(w))
+}
+
+// Shelves
+
+/// Where a series sits in My space: what you choose, or Reading once started and Plan to read
+/// before.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Shelf {
+    Reading,
+    Plan,
+    Hold,
+    Dropped,
+    Done,
+}
+
+impl Shelf {
+    pub const ALL: [Shelf; 5] = [Shelf::Reading, Shelf::Plan, Shelf::Hold, Shelf::Dropped, Shelf::Done];
+
+    /// The name the server keeps.
+    pub fn key(self) -> &'static str {
+        match self {
+            Shelf::Reading => "reading",
+            Shelf::Plan => "plan",
+            Shelf::Hold => "hold",
+            Shelf::Dropped => "dropped",
+            Shelf::Done => "done",
+        }
+    }
+
+    pub fn words(self) -> &'static str {
+        match self {
+            Shelf::Reading => "Reading",
+            Shelf::Plan => "Plan to read",
+            Shelf::Hold => "On hold",
+            Shelf::Dropped => "Dropped",
+            Shelf::Done => "Done",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Shelf> {
+        Shelf::ALL.into_iter().find(|s| s.key() == k)
+    }
+}
+
+/// The shelf a series shows on: the one chosen, else Reading once a chapter was read or opened,
+/// else Plan to read.
+pub fn shelf_of(s: &Series) -> Shelf {
+    if let Some(sh) = s.shelf.as_deref().and_then(Shelf::from_key) {
+        return sh;
+    }
+    if s.read_upto.is_some() || s.last_read_at > 0 { Shelf::Reading } else { Shelf::Plan }
+}
+
+/// How many series sit on each shelf, in [`Shelf::ALL`]'s order.
+pub fn shelf_counts(list: &[Series]) -> [usize; 5] {
+    let mut n = [0; 5];
+    for s in list {
+        let i = Shelf::ALL.iter().position(|x| *x == shelf_of(s)).unwrap_or(0);
+        n[i] += 1;
+    }
+    n
+}
+
+// Updates
+
+/// Updates grouped by the local day they came, newest first: (`day` counted from 1970-01-01 as
+/// [`crate::shelf::day_of`] counts, indexes into `list`). `belled_only` leaves out series whose
+/// bell is off; `query` filters by title.
+pub fn group_updates(list: &[leaf_proto::Update], belled_only: bool, query: &str, day_of: impl Fn(i64) -> i64) -> Vec<(i64, Vec<usize>)> {
+    let mut idx: Vec<usize> = (0..list.len()).filter(|&i| (!belled_only || list[i].bell) && title_matches(&list[i].title, query)).collect();
+    idx.sort_by_key(|&i| (std::cmp::Reverse(list[i].at), std::cmp::Reverse(list[i].number.to_bits())));
+    let mut out: Vec<(i64, Vec<usize>)> = Vec::new();
+    for i in idx {
+        let d = day_of(list[i].at);
+        match out.last_mut() {
+            Some((day, v)) if *day == d => v.push(i),
+            _ => out.push((d, vec![i])),
+        }
+    }
+    out
+}
+
+/// A day's heading: "Today", "Yesterday", else its date.
+pub fn day_words(day: i64, today: i64) -> String {
+    match today - day {
+        0 => "Today".into(),
+        1 => "Yesterday".into(),
+        _ => date(day * 86_400_000),
+    }
+}
+
+/// The local time of day, "14:05", of a moment `offset_s` seconds from UTC.
+pub fn clock_words(ms: i64, offset_s: i64) -> String {
+    let m = (ms.div_euclid(1000) + offset_s).div_euclid(60).rem_euclid(1440);
+    format!("{:02}:{:02}", m / 60, m % 60)
+}
+
+/// Minutes into the day as "23:00".
+pub fn minute_words(m: u16) -> String {
+    format!("{:02}:{:02}", (m / 60) % 24, m % 60)
+}
+
+// Auto-scroll
+
+/// Auto-scroll's speeds, slowest first.
+pub const SPEEDS: u8 = 10;
+/// The speed a series starts at.
+pub const DEFAULT_SPEED: u8 = 4;
+
+/// Units per second at speed `level` (1 to [`SPEEDS`]): each a quarter faster than the one before,
+/// from a slow read of dense pages to a skim.
+pub fn scroll_speed(level: u8) -> f32 {
+    40.0 * 1.25f32.powi(level.clamp(1, SPEEDS) as i32 - 1)
+}
+
+// White and black gutters
+
+/// A run of near-uniform rows at a page's top or bottom longer than this (page pixels) is cut.
+pub const GUTTER_MIN: u32 = 40;
+/// It is cut down to this.
+pub const GUTTER_KEEP: u32 = 16;
+
+/// A row of RGBA pixels is near-uniform white (Some(true)) or black (Some(false)): all but one in
+/// a hundred of the pixels looked at are within a small distance of it.
+fn row_kind(row: &[u8]) -> Option<bool> {
+    let px = row.len() / 4;
+    if px == 0 {
+        return None;
+    }
+    let step = (px / 200).max(1);
+    let (mut white, mut black, mut seen) = (0usize, 0usize, 0usize);
+    for i in (0..px).step_by(step) {
+        let p = &row[i * 4..i * 4 + 3];
+        let (lo, hi) = (p.iter().copied().min().unwrap_or(0), p.iter().copied().max().unwrap_or(0));
+        if lo >= 232 {
+            white += 1;
+        } else if hi <= 24 {
+            black += 1;
+        }
+        seen += 1;
+    }
+    let need = seen - seen / 100;
+    if white >= need {
+        Some(true)
+    } else if black >= need {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// How many rows to cut from a page's top and bottom (RGBA, `w` × `h`): a run of near-white or
+/// near-black rows longer than [`GUTTER_MIN`] is cut down to [`GUTTER_KEEP`]. A page that is all
+/// one blank keeps twice that.
+pub fn gutter_cuts(px: &[u8], w: u32, h: u32) -> (u32, u32) {
+    let row = (w * 4) as usize;
+    if h == 0 || px.len() < row * h as usize {
+        return (0, 0);
+    }
+    let kind = |y: u32| row_kind(&px[y as usize * row..(y as usize + 1) * row]);
+    let run = |rows: &mut dyn Iterator<Item = u32>| -> u32 {
+        let mut first = None;
+        let mut n = 0;
+        for y in rows {
+            match (kind(y), first) {
+                (Some(k), None) => first = Some(k),
+                (Some(k), Some(f)) if k == f => {}
+                _ => break,
+            }
+            n += 1;
+        }
+        n
+    };
+    let top = run(&mut (0..h));
+    if top >= h {
+        return (h.saturating_sub(2 * GUTTER_KEEP), 0);
+    }
+    let bottom = run(&mut (0..h).rev());
+    let cut = |n: u32| if n > GUTTER_MIN { n - GUTTER_KEEP } else { 0 };
+    (cut(top), cut(bottom))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,6 +858,7 @@ mod tests {
             bell: false,
             added_at: 0,
             last_read_at: 0,
+            shelf: None,
         };
         assert_eq!(library_line(&s), "350 chapters");
         assert_eq!(read_fraction(&s), 0.0);
@@ -658,6 +912,7 @@ mod tests {
             bell: false,
             added_at: 1,
             last_read_at,
+            shelf: None,
         }
     }
 
@@ -843,5 +1098,106 @@ mod tests {
         assert_eq!(tile_rows(2500), vec![(0, 1020), (1020, 1020), (2040, 460)]);
         assert_eq!(tile_rows(1020), vec![(0, 1020)]);
         assert!(tile_rows(0).is_empty());
+    }
+
+    #[test]
+    fn a_title_is_found_by_any_part_of_it_whatever_its_accents() {
+        assert!(title_matches("Level Up with the Gods", "lev god"));
+        assert!(title_matches("Level Up with the Gods", ""));
+        assert!(title_matches("Pokémon Adventures", "POKEMON"));
+        assert!(title_matches("Çağ", "cag"));
+        assert!(title_matches("Solo  Leveling", "o lev"));
+        assert!(!title_matches("Nano Machine", "nano king"));
+        assert_eq!(fold("  Straße  Œuvre "), "strasse oeuvre");
+    }
+
+    #[test]
+    fn a_series_sits_on_the_shelf_chosen_else_where_its_reading_puts_it() {
+        let mut s = series(None, 10, 0, 0);
+        assert_eq!(shelf_of(&s), Shelf::Plan);
+        s.last_read_at = 5;
+        assert_eq!(shelf_of(&s), Shelf::Reading);
+        s.shelf = Some("dropped".into());
+        assert_eq!(shelf_of(&s), Shelf::Dropped);
+        s.shelf = Some("nonsense".into());
+        assert_eq!(shelf_of(&s), Shelf::Reading);
+        let mut d = series(Some(1.0), 9, 0, 0);
+        d.shelf = Some("done".into());
+        assert_eq!(shelf_counts(&[s, d, series(None, 1, 0, 0)]), [1, 1, 0, 0, 1]);
+        for sh in Shelf::ALL {
+            assert_eq!(Shelf::from_key(sh.key()), Some(sh));
+        }
+    }
+
+    #[test]
+    fn updates_group_by_day_newest_first() {
+        let day = 86_400_000i64;
+        let u = |series: i64, title: &str, number: f64, at: i64, bell: bool| leaf_proto::Update { series, title: title.into(), chapter: series * 1000 + number as i64, number, name: String::new(), at, read: false, bell };
+        let list = vec![u(1, "Nano Machine", 280.0, 10 * day + 5, true), u(2, "Level Up", 90.0, 11 * day + 7, false), u(1, "Nano Machine", 281.0, 10 * day + 5, true), u(3, "Junk", 5.0, 9 * day, true)];
+        let g = group_updates(&list, false, "", |ms| ms.div_euclid(day));
+        assert_eq!(g, vec![(11, vec![1]), (10, vec![2, 0]), (9, vec![3])]);
+        assert_eq!(group_updates(&list, true, "", |ms| ms.div_euclid(day)), vec![(10, vec![2, 0]), (9, vec![3])]);
+        assert_eq!(group_updates(&list, false, "nano", |ms| ms.div_euclid(day)), vec![(10, vec![2, 0])]);
+        assert_eq!(day_words(11, 11), "Today");
+        assert_eq!(day_words(10, 11), "Yesterday");
+        assert_eq!(day_words(0, 11), "Jan 1, 1970");
+        assert_eq!(clock_words(14 * 3_600_000 + 5 * 60_000, 0), "14:05");
+        assert_eq!(clock_words(23 * 3_600_000, 3600), "00:00");
+        assert_eq!(minute_words(1380), "23:00");
+    }
+
+    #[test]
+    fn auto_scroll_speeds_climb_evenly() {
+        assert_eq!(scroll_speed(1), 40.0);
+        assert!(scroll_speed(0) == scroll_speed(1) && scroll_speed(99) == scroll_speed(SPEEDS));
+        for l in 1..SPEEDS {
+            assert!((scroll_speed(l + 1) / scroll_speed(l) - 1.25).abs() < 1e-4);
+        }
+    }
+
+    /// A page `w` wide of rows given as (colour, count) from the top.
+    fn page(w: u32, bands: &[([u8; 3], u32)]) -> (Vec<u8>, u32) {
+        let mut px = Vec::new();
+        let mut h = 0;
+        for (c, n) in bands {
+            for _ in 0..*n {
+                for _ in 0..w {
+                    px.extend_from_slice(&[c[0], c[1], c[2], 255]);
+                }
+            }
+            h += n;
+        }
+        (px, h)
+    }
+
+    #[test]
+    fn white_and_black_gutters_are_cut_down() {
+        let (white, black, art) = ([255, 255, 255], [3, 3, 3], [120, 60, 200]);
+        // 100 white rows over the art, 60 black under it: cut to 16 each.
+        let (px, h) = page(50, &[(white, 100), (art, 300), (black, 60)]);
+        assert_eq!(gutter_cuts(&px, 50, h), (84, 44));
+        // 40 rows is not more than 40: kept whole.
+        let (px, h) = page(50, &[(white, 40), (art, 300), ([250, 248, 245], 41)]);
+        assert_eq!(gutter_cuts(&px, 50, h), (0, 25), "near-white counts as white");
+        // White then black is two runs: only the first counts.
+        let (px, h) = page(50, &[(white, 30), (black, 30), (art, 100)]);
+        assert_eq!(gutter_cuts(&px, 50, h), (0, 0));
+        // A speck or two in a row does not stop it being blank; art does.
+        let (mut px, h) = page(400, &[(white, 80), (art, 100)]);
+        px[10 * 400 * 4..10 * 400 * 4 + 4].copy_from_slice(&[0, 0, 0, 255]);
+        assert_eq!(gutter_cuts(&px, 400, h), (64, 0));
+        // A blank page keeps a sliver.
+        let (px, h) = page(50, &[(white, 500)]);
+        assert_eq!(gutter_cuts(&px, 50, h), (500 - 32, 0));
+        assert_eq!(gutter_cuts(&[], 50, 0), (0, 0));
+    }
+
+    #[test]
+    fn a_backup_says_when_it_was_made() {
+        assert_eq!(backup_made_ms("leaf-backup-1795398420.json"), 1_795_398_420_000);
+        assert_eq!(backup_made_ms("backup.json"), 0);
+        assert_eq!(disposition_name("attachment; filename=\"leaf-backup-1795398420.json\""), Some("leaf-backup-1795398420.json".into()));
+        assert_eq!(disposition_name("attachment; filename=../x.json"), Some("..x.json".into()));
+        assert_eq!(disposition_name("inline"), None);
     }
 }
