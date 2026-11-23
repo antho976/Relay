@@ -265,8 +265,11 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     cx.c.text(&logic::day_words(*day, today).to_uppercase(), x0, y + 12.0, Text::new(ty::SMALL, t::INK3).semi());
                 }
                 y += 34.0;
-                for &i in idx {
+                for run in logic::fold_updates(&updates, idx) {
+                    let i = run[run.len() - 1];
                     let u = &updates[i];
+                    let folded = run.len() > 1;
+                    let read = run.iter().all(|&j| updates[j].read);
                     if y + rh < view_top || y > view_bottom {
                         y += rh;
                         continue;
@@ -279,19 +282,20 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     let of = CoverOf::Series(u.series);
                     cx.c.rect(0.0, y, cw, rh, 0.0, t::S1);
                     if app.images.cover(cx.c, of, now) {
-                        cx.c.image_cover(&of.key(), 0.0, y, cw, rh, 0.0, Rgba::WHITE.a(if u.read { 0.5 } else { 1.0 }));
+                        cx.c.image_cover(&of.key(), 0.0, y, cw, rh, 0.0, Rgba::WHITE.a(if read { 0.5 } else { 1.0 }));
                     }
                     let tx = cw + 14.0;
-                    let time = logic::clock_words(u.at, offset);
+                    let time = logic::clock_words(run.iter().map(|&j| updates[j].at).max().unwrap_or(u.at), offset);
                     let tt_ = Text::new(12.5, t::INK3).right();
                     let tw_ = cx.c.measure(&time, tt_);
-                    let title_t = Text::new(ty::BODY, if u.read { t::INK3 } else { t::INK }).medium();
-                    let line_t = Text::new(ty::UI, if u.read { t::INK3 } else { t::INK2 });
+                    let title_t = Text::new(ty::BODY, if read { t::INK3 } else { t::INK }).medium();
+                    let line_t = Text::new(ty::UI, if read { t::INK3 } else { t::INK2 });
                     let ty0 = y + (rh - title_t.lh() - 4.0 - line_t.lh()) / 2.0;
                     let room = WIDTH - PAD - tw_ - 12.0 - tx;
                     cx.c.text_fit(&u.title, tx, ty0, room, title_t);
                     cx.c.text(&time, WIDTH - PAD, ty0 + 2.0, tt_);
                     let line = match logic::chapter_title(&u.name, u.number) {
+                        _ if folded => logic::run_words(&updates, &run),
                         Some(n) => format!("Chapter {} · {n}", logic::num(u.number)),
                         None => format!("Chapter {}", logic::num(u.number)),
                     };
@@ -300,7 +304,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                         cx.ui.swallow();
                         act = Some(Act::Shelve(u.series));
                     } else if cx.tap(0.0, y, WIDTH, rh) {
-                        act = Some(Act::Chapter(u.series, u.chapter));
+                        // A folded row opens the series: one chapter of 86 is not the one meant.
+                        act = Some(if folded { Act::Series(u.series) } else { Act::Chapter(u.series, u.chapter) });
                     }
                     y += rh;
                 }

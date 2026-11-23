@@ -771,6 +771,41 @@ pub fn group_updates(list: &[leaf_proto::Update], belled_only: bool, query: &str
     out
 }
 
+/// A day's updates as rows: a series with more than two chapters that day is one row (its
+/// chapters, lowest number first), the others one row per chapter; in the day's order, a series'
+/// row where its newest chapter was.
+pub fn fold_updates(list: &[leaf_proto::Update], day: &[usize]) -> Vec<Vec<usize>> {
+    let mut of: Vec<(i64, Vec<usize>)> = Vec::new();
+    for &i in day {
+        match of.iter_mut().find(|(s, _)| *s == list[i].series) {
+            Some((_, v)) => v.push(i),
+            None => of.push((list[i].series, vec![i])),
+        }
+    }
+    let mut out = Vec::new();
+    for (_, mut v) in of {
+        if v.len() > 2 {
+            v.sort_by(|&a, &b| list[a].number.total_cmp(&list[b].number));
+            out.push(v);
+        } else {
+            out.extend(v.into_iter().map(|i| vec![i]));
+        }
+    }
+    out
+}
+
+/// A folded row's line: "Chapters 1–86 · 86 new", "· 3 new of 86", or "· read".
+pub fn run_words(list: &[leaf_proto::Update], run: &[usize]) -> String {
+    let (lo, hi) = (list[run[0]].number, list[run[run.len() - 1]].number);
+    let unread = run.iter().filter(|&&i| !list[i].read).count();
+    let tail = match unread {
+        0 => "read".to_string(),
+        u if u == run.len() => format!("{u} new"),
+        u => format!("{u} new of {}", run.len()),
+    };
+    format!("Chapters {}\u{2013}{} · {tail}", num(lo), num(hi))
+}
+
 /// A day's heading: "Today", "Yesterday", else its date.
 pub fn day_words(day: i64, today: i64) -> String {
     match today - day {
@@ -1321,5 +1356,27 @@ mod tests {
         assert_eq!(disposition_name("attachment; filename=\"leaf-backup-1795398420.json\""), Some("leaf-backup-1795398420.json".into()));
         assert_eq!(disposition_name("attachment; filename=../x.json"), Some("..x.json".into()));
         assert_eq!(disposition_name("inline"), None);
+    }
+}
+
+#[cfg(test)]
+mod fold_tests {
+    use super::*;
+    fn u(series: i64, number: f64, read: bool) -> leaf_proto::Update {
+        leaf_proto::Update { series, title: format!("S{series}"), chapter: (series * 1000) + number as i64, number, name: String::new(), at: 0, read, bell: true }
+    }
+    #[test]
+    fn more_than_two_of_a_series_fold_into_one_row() {
+        let mut list: Vec<_> = (1..=86).rev().map(|n| u(1, n as f64, false)).collect();
+        list.push(u(2, 5.0, false));
+        list.push(u(2, 4.0, true));
+        let day: Vec<usize> = (0..list.len()).collect();
+        let rows = fold_updates(&list, &day);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].len(), 86);
+        assert_eq!(run_words(&list, &rows[0]), "Chapters 1\u{2013}86 · 86 new");
+        assert_eq!((rows[1].len(), rows[2].len()), (1, 1));
+        list[0].read = true;
+        assert_eq!(run_words(&list, &rows[0]), "Chapters 1\u{2013}86 · 85 new of 86");
     }
 }
