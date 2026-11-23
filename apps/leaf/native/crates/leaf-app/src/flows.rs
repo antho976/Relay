@@ -2191,3 +2191,25 @@ fn cancelling_downloads_empties_the_line_and_leaves_nothing_half_saved() {
     assert!(fake.state.lock().unwrap().hits.iter().all(|h| !h.contains("/pages/")), "nothing fetched after cancelling");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn a_chapter_opened_by_mistake_does_not_move_continue() {
+    let dir = std::env::temp_dir().join(format!("leaf-flows-slip-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut places = crate::places::Places::load(&dir);
+    let mut d = comic(1, &[30, 30, 30, 30, 30]);
+    d.chapters[0].read = true;
+    d.chapters[1].read = true;
+    let place = |chapter: i64, number: f64, page: u32| crate::places::Place { series: 1, chapter, number, page, head: false, off: 40.0, at_ms: i64::MAX / 2 };
+    // Chapter 5 tapped by mistake and left on its first page: Continue stays on chapter 3.
+    places.put(place(1005, 5.0, 0));
+    assert_eq!(crate::places::resume(&places, &d).unwrap().index, 2);
+    // Read into chapter 5 (its fourth page): that is where you are.
+    places.put(place(1005, 5.0, 3));
+    assert_eq!(crate::places::resume(&places, &d).unwrap().index, 4);
+    // On chapter 3 itself, even its first page keeps the exact spot.
+    places.put(place(1003, 3.0, 0));
+    let c = crate::places::resume(&places, &d).unwrap();
+    assert_eq!((c.index, c.page), (2, 0));
+    let _ = std::fs::remove_dir_all(dir);
+}

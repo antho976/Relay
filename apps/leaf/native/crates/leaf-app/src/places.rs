@@ -151,6 +151,10 @@ pub fn resume(places: &Places, d: &leaf_proto::SeriesDetail) -> Option<crate::lo
     if d.chapters[i].read && cp.index > i {
         return Some(cp);
     }
+    // Another chapter than the server's next, only opened (a tap by mistake): the server's next.
+    if i != cp.index && !d.chapters[i].read && !crate::logic::read_into(if p.head { 0 } else { p.page }, d.chapters[i].pages) {
+        return Some(cp);
+    }
     let page = if p.head { 0 } else { p.page };
     Some(crate::logic::Continue { index: i, page, label: format!("Continue ch. {}", crate::logic::num(d.chapters[i].number)) })
 }

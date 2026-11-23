@@ -458,6 +458,12 @@ pub fn in_space(s: &Series, downloads: bool) -> bool {
     s.bell || s.last_read_at > 0 || s.read_upto.is_some() || downloads
 }
 
+/// Read into a chapter, not just opened: past its second page, or a fifth of it (chapters cut
+/// into a few tall pages). A chapter opened by mistake and left at once is not.
+pub fn read_into(page: u32, pages: u32) -> bool {
+    page >= 2 || (pages > 0 && page >= 1 && page * 5 >= pages)
+}
+
 /// Continue where the person stopped: a chapter left part way (after the last one finished),
 /// else the one after the last finished, else the first. When everything is read, the newest.
 pub fn continue_point(chapters: &[Chapter]) -> Option<Continue> {
@@ -465,7 +471,10 @@ pub fn continue_point(chapters: &[Chapter]) -> Option<Continue> {
         return None;
     }
     let last_read = chapters.iter().rposition(|c| c.read);
-    let part_way = chapters.iter().rposition(|c| !c.read && c.last_page > 0);
+    // A chapter left part way counts only once it was read into, or when it is the one after
+    // the last finished anyway: one opened by mistake and left at once does not move Continue.
+    let next = last_read.map_or(0, |r| r + 1);
+    let part_way = chapters.iter().enumerate().rposition(|(i, c)| !c.read && c.last_page > 0 && (i == next || read_into(c.last_page, c.pages)));
     let at = |i: usize, page: u32, verb: &str| Continue { index: i, page, label: format!("{verb} ch. {}", num(chapters[i].number)) };
     match (part_way, last_read) {
         (Some(p), r) if r.is_none_or(|r| p > r) => Some(at(p, resume_page(&chapters[p]), "Continue")),
@@ -1204,6 +1213,12 @@ mod tests {
         assert_eq!(continue_point(&old).unwrap().index, 2);
         let all = vec![ch(1, 1.0, true, 29), ch(2, 2.0, true, 29)];
         assert_eq!(continue_point(&all).unwrap(), Continue { index: 1, page: 0, label: "Read ch. 2 again".into() });
+        // A chapter far ahead opened by mistake (left on its first pages) does not move Continue;
+        // one read into does.
+        let slip = vec![ch(1, 1.0, true, 29), ch(2, 2.0, false, 0), ch(3, 3.0, false, 0), ch(4, 4.0, false, 1)];
+        assert_eq!(continue_point(&slip).unwrap().index, 1);
+        let real = vec![ch(1, 1.0, true, 29), ch(2, 2.0, false, 0), ch(3, 3.0, false, 0), ch(4, 4.0, false, 6)];
+        assert_eq!(continue_point(&real).unwrap().index, 3);
         let mut unknown = vec![ch(1, 1.0, true, 0), ch(2, 2.0, false, 15)];
         unknown[1].pages = 0;
         assert_eq!(continue_point(&unknown).unwrap().page, 15, "a length not known yet does not start the chapter over");
