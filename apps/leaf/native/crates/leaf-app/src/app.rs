@@ -219,11 +219,13 @@ pub struct ReadPrefs {
     pub dim: f32,
     /// Auto-scroll's speed per series (1 to [`logic::SPEEDS`]).
     pub speeds: std::collections::BTreeMap<i64, u8>,
+    /// Scanlators' promo pages ("join our Discord") are left out: the server skips them.
+    pub skip_promo: bool,
 }
 
 impl Default for ReadPrefs {
     fn default() -> ReadPrefs {
-        ReadPrefs { tap_zones: true, volume_keys: true, trim_gutters: true, dim: 0.0, speeds: Default::default() }
+        ReadPrefs { tap_zones: true, volume_keys: true, trim_gutters: true, dim: 0.0, speeds: Default::default(), skip_promo: true }
     }
 }
 
@@ -256,6 +258,8 @@ pub struct App {
     pub series: HashMap<i64, Loaded<SeriesDetail>>,
     pub st: States,
     pub reader: Option<crate::reader::Reader>,
+    /// The exact place in each series, kept on the phone (`places.json`).
+    pub places: crate::places::Places,
     /// The books on the phone.
     pub shelf: crate::shelf::Shelf,
     pub book: Option<crate::book::BookReader>,
@@ -286,6 +290,8 @@ pub struct App {
     shelf_undo: HashMap<i64, Option<String>>,
     /// A backup being exported.
     pub backing_up: bool,
+    /// How many pages the owner hid by hand (`/v1/pages/hidden`), as Settings shows it.
+    pub hidden_pages: Loaded<u32>,
     /// The dimmer moved: kept once the finger lifts.
     pub dim_dirty: bool,
     /// Words a thread of the app's own left for the toast (the share sheet's answer).
@@ -333,6 +339,8 @@ impl App {
         let config: Config = std::fs::read(data.join("config.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         let images = Images::new(data.clone());
         images.set_trim(config.reading.trim_gutters);
+        let mut images = images;
+        images.set_promo(config.reading.skip_promo);
         images.set_server(config.server.clone());
         images.set_host(host.clone());
         images.scan_cache();
@@ -353,6 +361,7 @@ impl App {
             series: HashMap::new(),
             st: States::default(),
             reader: None,
+            places: crate::places::Places::load(&data),
             shelf: crate::shelf::Shelf::new(data.clone()),
             book: None,
             docs: HashMap::new(),
@@ -374,6 +383,7 @@ impl App {
             read_undo: HashMap::new(),
             shelf_undo: HashMap::new(),
             backing_up: false,
+            hidden_pages: Loaded::default(),
             dim_dirty: false,
             late_toast: Arc::new(std::sync::Mutex::new(None)),
             downloading: HashSet::new(),
@@ -450,6 +460,10 @@ impl App {
     /// Back would (its held-back place sent), and the new one takes its place on the stack.
     pub fn open_chapter(&mut self, d: &SeriesDetail, index: usize, page: u32) {
         let mut r = crate::reader::Reader::open(d, index, page);
+        // Where reading stopped, as the phone kept it to the unit: there exactly.
+        if let Some(p) = crate::places::exact(&self.places, d, index, page) {
+            r.restore(index.min(d.chapters.len().saturating_sub(1)), p);
+        }
         r.speed = self.speed_of(d.series.id);
         self.close_reader();
         self.reader = Some(r);
@@ -464,27 +478,60 @@ impl App {
     /// Continue a series where it was left, when its chapters are at hand; else open its page.
     pub fn continue_series(&mut self, id: i64) {
         let d = self.series.get(&id).and_then(|l| l.data.clone());
-        match d.as_ref().and_then(|d| logic::continue_point(&d.chapters).map(|c| (d, c))) {
+        match d.as_ref().and_then(|d| crate::places::resume(&self.places, d).map(|c| (d, c))) {
             Some((d, c)) => self.open_chapter(d, c.index, c.page),
             None => self.push(Route::Series(id)),
         }
     }
 
     /// The app goes to the background (and may be killed there): the open book's place and time,
-    /// the open PDF's page and the comic reader's held-back report are kept now.
+    /// the open PDF's page, and the comic reader's exact place and held-back report are kept now.
     pub fn paused(&mut self) {
         if let Some(mut r) = self.book.take() {
             crate::book::close(self, &mut r);
             self.book = Some(r);
         }
+        self.keep_place();
+    }
+
+    /// The window lost focus, or the app is stopping: the comic reader's exact place goes to disk
+    /// and its held-back report to the server, now (cheap: nothing else is touched).
+    pub fn keep_place(&mut self) {
         if let Some(mut r) = self.reader.take() {
             if r.local.is_some() {
                 self.keep_pdf_place(&r);
-            } else if let Some((c, p)) = r.flush(self.now_ns) {
-                self.report_progress(c, p);
+            } else {
+                if let Some(p) = r.keep_now(self.now_ns) {
+                    self.places.put(p);
+                }
+                if let Some((c, p)) = r.flush(self.now_ns) {
+                    self.report_progress(c, p);
+                }
             }
             self.reader = Some(r);
         }
+    }
+
+    /// "Hide this page and ones like it": out of the strip at once (the place kept still), the
+    /// server told, and an Undo offered.
+    pub fn hide_page(&mut self, chapter: i64, n: u32) {
+        let old_h = self.reader.as_ref().map_or(0.0, |r| r.page_h(&self.images, chapter, n));
+        self.images.skip(chapter, n);
+        if let Some(r) = &mut self.reader {
+            r.drop_page(&self.images, chapter, n, old_h, self.canvas.h);
+            r.undo = Some((chapter, n, self.now_ns + crate::reader::UNDO_NS));
+        }
+        self.wake_at(self.now_ns + crate::reader::UNDO_NS);
+        self.ask(Job::HidePage(chapter, n, true));
+    }
+
+    /// Undo: the page is back, and the server forgets it.
+    pub fn unhide_page(&mut self, chapter: i64, n: u32) {
+        self.images.unskip(chapter, n);
+        if let Some(r) = &mut self.reader {
+            r.undo = None;
+        }
+        self.ask(Job::HidePage(chapter, n, false));
     }
 
     /// Tell the server how far a chapter was read (a screenshot tells it nothing).
@@ -585,6 +632,7 @@ impl App {
         self.updates = Loaded::default();
         self.status = Loaded::default();
         self.health = Loaded::default();
+        self.hidden_pages = Loaded::default();
         self.alternatives.clear();
         self.recs = Loaded::default();
         self.recs_asked_ms = 0;
@@ -874,7 +922,7 @@ impl App {
                         }
                     }
                 }
-                Done::Search(q, r) => self.st.search.answered(q, r.map_err(|f| f.words(&label))),
+                Done::Search { q, all, result, last } => self.st.search.answered(q, all, result.map_err(|f| f.words(&label)), last),
                 Done::Followed(r) => match r {
                     Ok(s) => {
                         self.st.search.followed(&s);
@@ -994,6 +1042,28 @@ impl App {
                             self.mark_shelf(series, old);
                         }
                         self.toast(&format!("Not moved: {}", lower_first(&f.words(&label))));
+                    }
+                }
+                Done::HidePage(chapter, page, on, r) => match r {
+                    Ok(n) => self.hidden_pages.data = Some(n),
+                    // The page stays out here; the server could not take it (offline, or a page
+                    // too plain to know others by), so the ones like it are not left out.
+                    Err(f) if on => {
+                        let _ = (chapter, page);
+                        self.toast(&format!("Hidden on this phone only: {}", lower_first(&f.words(&label))));
+                    }
+                    Err(f) => self.toast(&format!("Couldn't show that page again everywhere: {}", lower_first(&f.words(&label)))),
+                },
+                Done::HiddenPages(r) => {
+                    let l = &mut self.hidden_pages;
+                    l.loading = false;
+                    match r {
+                        Ok(n) => {
+                            l.data = Some(n);
+                            l.error = None;
+                            l.live = true;
+                        }
+                        Err(f) => l.error = Some(f.words(&label)),
                     }
                 }
                 Done::Health(r) => {
@@ -1338,6 +1408,9 @@ impl App {
                 self.host.immersive(false);
                 return;
             }
+            if let Some(p) = r.keep_now(self.now_ns) {
+                self.places.put(p);
+            }
             if let Some((c, p)) = r.flush(self.now_ns) {
                 self.report_progress(c, p);
             }
@@ -1401,12 +1474,14 @@ impl App {
             self.ui.reset();
             return true;
         }
-        // The comic reader's overlay goes first, as the book's chrome does.
+        // The comic reader's sheet and overlay go first, as the book's chrome does.
         if self.route() == &Route::Reader
             && let Some(r) = &mut self.reader
-            && r.overlay
+            && (r.overlay || r.hide_sheet.is_some())
         {
-            r.overlay = false;
+            if r.hide_sheet.take().is_none() {
+                r.overlay = false;
+            }
             self.ui.reset();
             return true;
         }

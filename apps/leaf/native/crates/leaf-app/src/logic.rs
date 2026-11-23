@@ -314,6 +314,56 @@ pub fn updated_words(s: &Series, new: u32) -> String {
     }
 }
 
+/// Everything there is of the series is read: nothing after the furthest chapter read to its end
+/// (a stray side chapter left unread below it does not keep it going). With the chapters at hand,
+/// none unread past it; without, the library's newest is not past it. A belled series whose new
+/// chapter came after you finished is not finished: it has one past it.
+pub fn finished(s: &Series, d: Option<&SeriesDetail>) -> bool {
+    let Some(upto) = s.read_upto else { return false };
+    match d {
+        Some(d) if !d.chapters.is_empty() => !d.chapters.iter().any(|c| !c.read && c.number > upto),
+        _ => s.unread == 0 || s.latest.is_none_or(|l| l <= upto),
+    }
+}
+
+/// Unread chapters after the furthest one read: what "58 to go" counts.
+pub fn to_go(s: &Series, d: Option<&SeriesDetail>) -> u32 {
+    match (s.read_upto, d) {
+        (Some(upto), Some(d)) if !d.chapters.is_empty() => d.chapters.iter().filter(|c| !c.read && c.number > upto).count() as u32,
+        _ => s.unread,
+    }
+}
+
+/// Something "Continue reading" may list (a series or a book).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Reading {
+    /// Opened at least once (a chapter read or begun, a book opened).
+    pub started: bool,
+    /// Nothing left to read ([`finished`]).
+    pub done: bool,
+    /// When it was last read, ms.
+    pub read_at: i64,
+    /// A belled series' newest chapter came after it was last read: when it came, ms (0 if not).
+    pub news_at: i64,
+}
+
+/// "Continue reading" lists at least this many when it can: finished things fill it up to here.
+pub const CONTINUE_FILL: usize = 15;
+
+/// Continue reading's order, as (index, finished): what you have started and not finished, most
+/// recently read first (a belled series' new chapter counts as of when it came, so it comes back
+/// near the front); then, only while there are fewer than [`CONTINUE_FILL`], finished ones, most
+/// recently read first. Never what was never opened.
+pub fn continue_order(list: &[Reading]) -> Vec<(usize, bool)> {
+    let key = |r: &Reading| r.read_at.max(r.news_at);
+    let mut going: Vec<usize> = (0..list.len()).filter(|&i| list[i].started && !list[i].done).collect();
+    going.sort_by_key(|&i| std::cmp::Reverse(key(&list[i])));
+    let mut done: Vec<usize> = (0..list.len()).filter(|&i| list[i].started && list[i].done).collect();
+    done.sort_by_key(|&i| std::cmp::Reverse(list[i].read_at));
+    let room = CONTINUE_FILL.saturating_sub(going.len());
+    going.into_iter().map(|i| (i, false)).chain(done.into_iter().take(room).map(|i| (i, true))).collect()
+}
+
 /// Something the home page's spotlight may show.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spot {
@@ -323,14 +373,17 @@ pub struct Spot {
     pub updated_at: i64,
     /// When it was last read (or opened), ms; 0 if never.
     pub read_at: i64,
+    /// Everything of it is read ([`finished`]): it comes after what is still being read.
+    pub done: bool,
 }
 
 /// The spotlight's order, as indexes into `spots`: belled series with new chapters first (newest
-/// first), then what was read most recently; at most `max`. Never-read things lead nothing.
+/// first), then what is being read, most recently first; at most `max`. Finished things are left
+/// out (the caller adds them last, after what was added lately); never-read things lead nothing.
 pub fn spotlight(spots: &[Spot], max: usize) -> Vec<usize> {
     let mut ringing: Vec<usize> = (0..spots.len()).filter(|&i| spots[i].rings).collect();
     ringing.sort_by_key(|&i| std::cmp::Reverse(spots[i].updated_at));
-    let mut read: Vec<usize> = (0..spots.len()).filter(|&i| !spots[i].rings && spots[i].read_at > 0).collect();
+    let mut read: Vec<usize> = (0..spots.len()).filter(|&i| !spots[i].rings && !spots[i].done && spots[i].read_at > 0).collect();
     read.sort_by_key(|&i| std::cmp::Reverse(spots[i].read_at));
     ringing.into_iter().chain(read).take(max).collect()
 }
@@ -961,11 +1014,54 @@ mod tests {
 
     #[test]
     fn the_spotlight_leads_with_belled_news_then_reading() {
-        let sp = |rings, updated_at, read_at| Spot { rings, updated_at, read_at };
-        let spots = [sp(false, 9, 50), sp(true, 30, 10), sp(false, 0, 0), sp(true, 40, 5), sp(false, 1, 70)];
+        let sp = |rings, updated_at, read_at| Spot { rings, updated_at, read_at, done: false };
+        let mut spots = vec![sp(false, 9, 50), sp(true, 30, 10), sp(false, 0, 0), sp(true, 40, 5), sp(false, 1, 70)];
         assert_eq!(spotlight(&spots, 5), vec![3, 1, 4, 0]);
         assert_eq!(spotlight(&spots, 2), vec![3, 1]);
         assert!(spotlight(&[], 5).is_empty());
+        // Finished, read last: left to the caller to add at the end.
+        spots.push(Spot { done: true, ..sp(false, 0, 90) });
+        assert_eq!(spotlight(&spots, 9), vec![3, 1, 4, 0]);
+    }
+
+    #[test]
+    fn finished_means_nothing_left_past_where_you_read() {
+        // Read to 10 of 10: finished, though a side chapter 4.5 was never read.
+        let mut s = series(Some(10.0), 1, 0, 5);
+        assert!(finished(&s, None));
+        let mut cs: Vec<Chapter> = (1..=10).map(|n| ch(n, n as f64, true, 0)).collect();
+        cs.insert(4, ch(99, 4.5, false, 0));
+        let d = SeriesDetail { series: s.clone(), description: None, chapters: cs.clone() };
+        assert!(finished(&s, Some(&d)));
+        assert_eq!(to_go(&s, Some(&d)), 0);
+        // A new chapter 11 came after: not finished, one to go.
+        cs.push(ch(11, 11.0, false, 0));
+        s.latest = Some(11.0);
+        let d = SeriesDetail { series: s.clone(), description: None, chapters: cs };
+        assert!(!finished(&s, Some(&d)));
+        assert!(!finished(&s, None));
+        assert_eq!(to_go(&s, Some(&d)), 1);
+        // Never read, or part way: not finished.
+        assert!(!finished(&series(None, 10, 0, 0), None));
+        assert!(!finished(&series(Some(6.0), 4, 0, 5), None));
+    }
+
+    #[test]
+    fn continue_lists_what_is_going_then_fills_with_what_is_finished() {
+        let r = |started, done, read_at, news_at| Reading { started, done, read_at, news_at };
+        let list = [r(true, false, 50, 0), r(true, true, 90, 0), r(false, false, 0, 0), r(true, false, 10, 80), r(true, false, 70, 0), r(true, true, 60, 0)];
+        // Going, most recent first (3's new chapter came at 80); then finished ones, labelled.
+        assert_eq!(continue_order(&list), vec![(3, false), (4, false), (0, false), (1, true), (5, true)]);
+        // Fifteen going: no finished ones.
+        let mut many: Vec<Reading> = (0..15).map(|i| r(true, false, 100 + i, 0)).collect();
+        many.push(r(true, true, 1000, 0));
+        let order = continue_order(&many);
+        assert_eq!(order.len(), 15);
+        assert!(order.iter().all(|(_, done)| !done));
+        assert_eq!(order[0].0, 14);
+        // Fourteen going: one finished fills the last place.
+        many.remove(0);
+        assert_eq!(continue_order(&many).last(), Some(&(14, true)));
     }
 
     #[test]

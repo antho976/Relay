@@ -9,10 +9,13 @@
 //! | `GET /v1/series/{id}` | [`SeriesDetail`] |
 //! | `DELETE /v1/series/{id}` | unfollows |
 //! | `GET /v1/series/{id}/cover` | the cover image |
-//! | `GET /v1/search?q=` | `[Candidate]` |
+//! | `GET /v1/search?q=` | `[Candidate]`: the broad sources (`LEAF_SEARCH_SOURCES`); `&all=1` every source, `&source=<name>` one; only titles with every word searched, at most 20, each source's answer kept 10 min |
+//! | `GET /v1/search/sources` | [`SearchSources`]: the broad sources, asked one by one by the phone |
 //! | `POST /v1/follow` [`Follow`] | [`Series`] |
 //! | `GET /v1/chapters/{id}/pages` | [`Pages`] |
-//! | `GET /v1/chapters/{id}/pages/{n}` | the page image (WebP when Suwayomi converted it) |
+//! | `GET /v1/chapters/{id}/pages/{n}` | the page image (WebP when Suwayomi converted it); `204` with `x-leaf-skip: 1` for a scanlator's promo page (`promo.rs`) unless `?promo=1` |
+//! | `POST` / `DELETE /v1/pages/hide` [`PageHide`] | hides a page and the ones like it, for good / undoes that (`all`: every one); `{"ok":true,"count":n}` |
+//! | `GET /v1/pages/hidden` | [`HiddenPages`]: how many pages were hidden by hand |
 //! | `POST /v1/chapters/{id}/progress` [`Progress`] | `{"ok":true}` |
 //! | `GET /v1/events` | `[Event]`, newest first; `?since=<ms>` the ones after, oldest first |
 //! | `POST /v1/series/{id}/bell` [`Bell`] | turns its new-chapter notices on or off |
@@ -44,11 +47,12 @@
 use std::io::Read;
 use std::sync::Arc;
 
-use leaf_proto::{AnilistToken, AppLatest, Bell, ChapterRead, DownloadIds, Follow, Pages, Progress, ReadBefore, RecTag, Repin, SeriesDownload, ShelfSet, Status};
+use leaf_proto::{AnilistToken, AppLatest, Bell, ChapterRead, DownloadIds, Follow, HiddenPages, PageHide, Pages, Progress, ReadBefore, RecTag, Repin, SearchSources, SeriesDownload, ShelfSet, Status};
 use serde::Serialize;
 use tiny_http::{Header, Method, Request, Response};
 
-use crate::autopilot::{Ctx, log};
+use crate::autopilot::{Ctx, Scope, log};
+use crate::promo::PageOut;
 
 pub struct Api {
     pub ctx: Arc<Ctx>,
@@ -230,9 +234,26 @@ impl Api {
                 .and_then(|m| ctx.suwa.bytes(&format!("/api/v1/manga/{m}/thumbnail")))
                 .map(|(b, k)| image(b, &k)),
             (Method::Get, ["v1", "search"]) => match query_param(url, "q").filter(|q| !q.trim().is_empty()) {
-                Some(q) => ctx.search(q.trim()).map(|c| json(&c)),
+                Some(q) => {
+                    let scope = match (query_param(url, "source").filter(|s| !s.trim().is_empty()), query_param(url, "all").as_deref()) {
+                        (Some(s), _) => Scope::One(s),
+                        (None, Some("1")) => Scope::All,
+                        _ => Scope::Broad,
+                    };
+                    ctx.search(q.trim(), &scope).map(|c| json(&c))
+                }
                 None => Err("search for what?".into()),
             },
+            (Method::Get, ["v1", "search", "sources"]) => ctx.search_names(&Scope::Broad).map(|(broad, all)| json(&SearchSources { broad, all })),
+            (Method::Get, ["v1", "pages", "hidden"]) => Ok(json(&HiddenPages { count: ctx.hidden_count() })),
+            (Method::Post, ["v1", "pages", "hide"]) => serde_json::from_str::<PageHide>(body)
+                .map_err(|e| format!("hide: {e}"))
+                .and_then(|h| ctx.hide_page(h.chapter, h.page))
+                .map(|n| json(&serde_json::json!({ "ok": true, "count": n }))),
+            (Method::Delete, ["v1", "pages", "hide"]) => serde_json::from_str::<PageHide>(body).map_err(|e| format!("hide: {e}")).map(|h| {
+                let n = ctx.unhide_page(if h.all { None } else { Some((h.chapter, h.page)) });
+                json(&serde_json::json!({ "ok": true, "count": n }))
+            }),
             (Method::Post, ["v1", "follow"]) => serde_json::from_str::<Follow>(body)
                 .map_err(|e| format!("follow: {e}"))
                 .and_then(|f| ctx.follow(&f.title, &f.manga_ids).map(|s| (s, f.quiet)))
@@ -258,13 +279,17 @@ impl Api {
             }
             (Method::Get, ["v1", "chapters", _, "pages", _]) => {
                 let (Some(c), Some(n)) = (id(2), id(4)) else { return fail(400, "bad page") };
-                let got = ctx.page(c, n.max(0) as usize);
+                let skip = query_param(url, "promo").as_deref() != Some("1");
+                let got = ctx.page_out(c, n.max(0) as u32, skip);
                 if got.is_err() {
                     // The phone asks again; the list is fetched afresh, from another source if
                     // this one keeps refusing.
                     ctx.forget_pages(c);
                 }
-                got.map(|(b, k)| image(b, &k))
+                got.map(|p| match p {
+                    PageOut::Bytes(b, k) => image(b, &k),
+                    PageOut::Skip => Response::from_data(Vec::new()).with_status_code(204).with_header(header("x-leaf-skip", "1")),
+                })
             }
             (Method::Post, ["v1", "chapters", _, "progress"]) => {
                 let Some(c) = id(2) else { return fail(400, "bad id") };

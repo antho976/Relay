@@ -134,10 +134,17 @@ struct HeroPics {
     poster: Option<Pixels>,
 }
 
+/// A page's fetch: decoded (or only kept on disk, None), or a scanlator's promo page the server
+/// skips (`x-leaf-skip`): dropped from the strip.
+enum Fetched {
+    Img(Option<PageImg>),
+    Skip,
+}
+
 enum Got {
     /// `src`: the cover's own size in pixels, which says whether it can fill the spotlight.
     Cover { of: CoverOf, img: Option<Pixels>, banner: Option<Pixels>, src: Option<(u32, u32)> },
-    Page { chapter: i64, n: u32, decode: bool, result: Result<Option<PageImg>, String> },
+    Page { chapter: i64, n: u32, decode: bool, result: Result<Fetched, String> },
     Local { key: String, book: PathBuf, entry: String, img: Option<Pixels> },
     Hero { of: CoverOf, img: Option<HeroPics> },
     Thumb { chapter: i64, img: Option<Pixels> },
@@ -163,6 +170,10 @@ struct Shared {
     screen_w: std::sync::atomic::AtomicU32,
     /// Blank runs at a page's top and bottom are cut short ([`crate::logic::gutter_cuts`]).
     trim: std::sync::atomic::AtomicBool,
+    /// Scanlators' promo pages are shown too (the setting off: `?promo=1`).
+    promo: std::sync::atomic::AtomicBool,
+    /// Screenshots: pages are made up here, never fetched.
+    fake_pages: std::sync::atomic::AtomicBool,
 }
 
 /// How many fetches and decodes run at once.
@@ -206,6 +217,9 @@ pub struct Images {
     thumb_failed: HashMap<i64, (u64, bool)>,
     /// The chapters whose pages are on this phone, with their bytes, once the cache was looked at.
     pub cached: Option<HashMap<i64, u64>>,
+    /// Pages left out of the strip: scanlators' promo pages the server skips, and pages hidden by
+    /// hand. Kept on disk beside the page (`<n>.skip`).
+    skipped: HashSet<(i64, u32)>,
     tx: Sender<Got>,
     data: PathBuf,
 }
@@ -220,6 +234,8 @@ impl Images {
             host: Mutex::new(None),
             screen_w: std::sync::atomic::AtomicU32::new(1080),
             trim: std::sync::atomic::AtomicBool::new(true),
+            promo: std::sync::atomic::AtomicBool::new(false),
+            fake_pages: std::sync::atomic::AtomicBool::new(false),
         });
         let (tx, rx) = channel();
         let client = Client::new();
@@ -233,6 +249,7 @@ impl Images {
             cover_src: HashMap::new(),
             thumb_failed: HashMap::new(),
             cached: None,
+            skipped: HashSet::new(),
             tx,
             data,
             shared,
@@ -482,7 +499,7 @@ impl Images {
         for (i, &(chapter, n, decode)) in wants.iter().enumerate() {
             let k = (chapter, n);
             let done = if decode { self.decoded.contains_key(&k) } else { self.stored.contains(&k) || self.sizes.contains_key(&k) };
-            if done || self.failed.contains_key(&k) || (!decode && self.ahead_failed.contains(&k)) {
+            if done || self.skipped.contains(&k) || self.failed.contains_key(&k) || (!decode && self.ahead_failed.contains(&k)) {
                 continue;
             }
             let want = Want::Page { chapter, n, decode };
@@ -535,15 +552,18 @@ impl Images {
                         m.entry(chapter).or_insert(0);
                     }
                     match result {
-                        Ok(Some(img)) => {
+                        Ok(Fetched::Img(Some(img))) => {
                             self.sizes.insert(k, (img.w, img.h));
                             self.stored.insert(k);
                             if self.reading {
                                 self.decoded.insert(k, img);
                             }
                         }
-                        Ok(None) => {
+                        Ok(Fetched::Img(None)) => {
                             self.stored.insert(k);
+                        }
+                        Ok(Fetched::Skip) => {
+                            self.skipped.insert(k);
                         }
                         Err(e) if decode => {
                             self.failed.insert(k, e);
@@ -617,6 +637,68 @@ impl Images {
 
     pub fn page(&self, chapter: i64, n: u32) -> Option<&PageImg> {
         self.decoded.get(&(chapter, n))
+    }
+
+    /// The page is left out of the strip (a promo page, or hidden by hand).
+    pub fn skipped(&self, chapter: i64, n: u32) -> bool {
+        self.skipped.contains(&(chapter, n))
+    }
+
+    /// Leave a page out from now on (hidden by hand): kept on disk beside it.
+    pub fn skip(&mut self, chapter: i64, n: u32) {
+        self.skipped.insert((chapter, n));
+        self.decoded.remove(&(chapter, n));
+        // One empty file, on a tap: written here, so an Undo right after finds it to remove.
+        let dir = chapter_dir(&self.data, chapter);
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join(format!("{n}.skip")), b"");
+    }
+
+    /// A page hidden by hand is shown again (Undo): fetched anew.
+    pub fn unskip(&mut self, chapter: i64, n: u32) {
+        self.skipped.remove(&(chapter, n));
+        self.last_wants.clear();
+        // Removed before the page is asked for again (the fetch reads it).
+        let _ = std::fs::remove_file(chapter_dir(&self.data, chapter).join(format!("{n}.skip")));
+    }
+
+    /// Every page left out is asked for again (the pages hidden by hand cleared, the setting
+    /// turned off): the server says again which to skip.
+    pub fn clear_skips(&mut self) {
+        self.skipped.clear();
+        self.last_wants.clear();
+        let data = self.data.clone();
+        let _ = std::thread::Builder::new().name("leaf-skip".into()).spawn(move || {
+            for d in std::fs::read_dir(data.join("cache")).into_iter().flatten().flatten() {
+                for f in std::fs::read_dir(d.path()).into_iter().flatten().flatten() {
+                    if f.file_name().to_string_lossy().ends_with(".skip") {
+                        let _ = std::fs::remove_file(f.path());
+                    }
+                }
+            }
+        });
+    }
+
+    /// Scanlators' promo pages are skipped (the setting, on by default) or shown.
+    pub fn set_promo(&mut self, skip: bool) {
+        let was = !self.shared.promo.swap(!skip, std::sync::atomic::Ordering::Relaxed);
+        if was != skip && !skip {
+            // Shown again: what was left out is fetched (with `?promo=1`).
+            self.skipped.clear();
+            self.last_wants.clear();
+        }
+    }
+
+    /// Screenshots: pages are drawn here (bands of colour) instead of fetched, so a shot of the
+    /// reader asks the server for no page.
+    pub fn set_fake_pages(&self, on: bool) {
+        self.shared.fake_pages.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Tests: a page the server said to skip.
+    #[cfg(test)]
+    pub fn fake_skip(&mut self, chapter: i64, n: u32) {
+        self.skipped.insert((chapter, n));
     }
 
     /// Why a page could not be had, if it could not.
@@ -695,8 +777,16 @@ fn worker(shared: &Shared, tx: &Sender<Got>, client: &Client, data: &Path) {
         let server = shared.server.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match &want {
             Want::Cover(of) => cover(client, server.as_ref(), data, *of),
-            Want::Page { chapter, n, decode } if *chapter < 0 => Got::Page { chapter: *chapter, n: *n, decode: *decode, result: pdf_page(shared, *chapter, *n, *decode) },
-            Want::Page { chapter, n, decode } => Got::Page { chapter: *chapter, n: *n, decode: *decode, result: page(client, server.as_ref(), data, *chapter, *n, *decode, shared.trim.load(std::sync::atomic::Ordering::Relaxed)) },
+            Want::Page { chapter, n, decode } if *chapter < 0 => Got::Page { chapter: *chapter, n: *n, decode: *decode, result: pdf_page(shared, *chapter, *n, *decode).map(Fetched::Img) },
+            Want::Page { chapter, n, decode } if shared.fake_pages.load(std::sync::atomic::Ordering::Relaxed) => {
+                Got::Page { chapter: *chapter, n: *n, decode: *decode, result: Ok(Fetched::Img(Some(made_up_page(*chapter, *n)))) }
+            }
+            Want::Page { chapter, n, decode } => Got::Page {
+                chapter: *chapter,
+                n: *n,
+                decode: *decode,
+                result: page(client, server.as_ref(), data, *chapter, *n, *decode, shared.trim.load(std::sync::atomic::Ordering::Relaxed), shared.promo.load(std::sync::atomic::Ordering::Relaxed)),
+            },
             Want::Local { key, book, entry } => Got::Local { key: key.clone(), book: book.clone(), entry: entry.clone(), img: local_picture(book, entry) },
             Want::Hero(of) => Got::Hero { of: *of, img: hero(client, server.as_ref(), data, *of, shared.screen_w.load(std::sync::atomic::Ordering::Relaxed)) },
             Want::Thumb { chapter } => Got::Thumb { chapter: *chapter, img: thumb(client, server.as_ref(), data, *chapter) },
@@ -906,28 +996,76 @@ pub fn touch_chapter(data: &Path, chapter: i64) {
     let _ = std::fs::write(dir.join(".used"), now_ms().to_string());
 }
 
+/// A page: from disk, else the server (then kept on disk). A page the server skips (a scanlator's
+/// promo page, `x-leaf-skip`) is marked on disk (`<n>.skip`) and not asked for again, unless
+/// promo pages are to be shown (`promo`: asked with `?promo=1`, the mark ignored and dropped).
 #[allow(clippy::too_many_arguments)]
-fn page(client: &Client, server: Option<&Server>, data: &Path, chapter: i64, n: u32, decode: bool, trim: bool) -> Result<Option<PageImg>, String> {
+fn page(client: &Client, server: Option<&Server>, data: &Path, chapter: i64, n: u32, decode: bool, trim: bool, promo: bool) -> Result<Fetched, String> {
     let dir = chapter_dir(data, chapter);
     let file = dir.join(n.to_string());
+    let mark = dir.join(format!("{n}.skip"));
+    if !promo && mark.is_file() && !file.is_file() {
+        return Ok(Fetched::Skip);
+    }
     if !decode && file.is_file() {
-        return Ok(None);
+        return Ok(Fetched::Img(None));
     }
     let fresh = !file.is_file();
-    let bytes = fetch(client, server, &file, &format!("/v1/chapters/{chapter}/pages/{n}")).map_err(|e| match e {
+    let words = |e: crate::net::Fail| match e {
         crate::net::Fail::Unreachable => "Can't reach your server for this page".to_string(),
         e => e.words("your server"),
-    })?;
+    };
+    let bytes = match std::fs::read(&file).ok().filter(|b| !b.is_empty()) {
+        Some(b) => b,
+        None => {
+            let s = server.ok_or_else(|| words(crate::net::Fail::Unreachable))?;
+            let path = format!("/v1/chapters/{chapter}/pages/{n}{}", if promo { "?promo=1" } else { "" });
+            match client.get_page(s, &path).map_err(words)? {
+                Some(b) => {
+                    let _ = write_atomic(&file, &b);
+                    if promo {
+                        let _ = std::fs::remove_file(&mark);
+                    }
+                    b
+                }
+                None => {
+                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = std::fs::write(&mark, b"");
+                    if !dir.join(".used").is_file() {
+                        touch_chapter(data, chapter);
+                    }
+                    return Ok(Fetched::Skip);
+                }
+            }
+        }
+    };
     if fresh && !dir.join(".used").is_file() {
         touch_chapter(data, chapter);
     }
     if !decode {
-        return Ok(None);
+        return Ok(Fetched::Img(None));
     }
-    decode_page(&bytes, trim).map(Some).inspect_err(|_| {
+    decode_page(&bytes, trim).map(|p| Fetched::Img(Some(p))).inspect_err(|_| {
         // A broken copy on disk is fetched again next time.
         let _ = std::fs::remove_file(&file);
     })
+}
+
+/// A made-up page for screenshots: soft bands of colour, a panel's frame, by chapter and page.
+fn made_up_page(chapter: i64, n: u32) -> PageImg {
+    let (w, h) = (crate::logic::PAGE_W, crate::logic::PAGE_W * 3 / 2);
+    let seed = (chapter.unsigned_abs() as u32).wrapping_mul(31).wrapping_add(n * 17);
+    let img = image::RgbaImage::from_fn(w, h, |x, y| {
+        let band = (y * 5 / h + seed) % 5;
+        let base = [[38u8, 52, 74], [92, 64, 88], [40, 86, 92], [120, 96, 70], [60, 70, 110]][band as usize];
+        let edge = x < 24 || x >= w - 24 || (y % (h / 3)) < 12;
+        let shade = (x as f32 / w as f32 * 30.0) as u8;
+        if edge { image::Rgba([235, 232, 226, 255]) } else { image::Rgba([base[0].saturating_add(shade), base[1], base[2].saturating_add(shade / 2), 255]) }
+    });
+    let raw = img.into_raw();
+    let row = (w * 4) as usize;
+    let tiles = crate::logic::tile_rows(h).into_iter().map(|(y, th)| raw[y as usize * row..(y + th) as usize * row].to_vec()).collect();
+    PageImg { w, h, tiles }
 }
 
 /// The most one page's decode may allocate: a 1600 × 30000 webtoon strip fits, a malformed

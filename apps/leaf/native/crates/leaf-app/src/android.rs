@@ -443,10 +443,15 @@ fn android_main(android: AndroidApp) {
                     }
                 }
                 MainEvent::Stop => {
+                    // Out of sight (Pause kept everything already; the place again, in case).
+                    app.keep_place();
                     if !multi_resume {
                         foreground = false;
                     }
                 }
+                // The notification shade, a dialog, the app switcher: the reader's place is kept.
+                MainEvent::LostFocus => app.keep_place(),
+                MainEvent::SaveState { .. } => app.keep_place(),
                 MainEvent::Resume { .. } => {
                     foreground = true;
                     dirty = true;

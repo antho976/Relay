@@ -513,3 +513,62 @@ pub struct AppLatest {
     pub sha256: String,
     pub made_at: i64,
 }
+
+/// `POST` / `DELETE /v1/pages/hide`: a page the owner hid by hand ("Hide this page and ones like
+/// it"), or that hiding undone; `all` on a DELETE forgets every page hidden.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+pub struct PageHide {
+    #[serde(default)]
+    pub chapter: i64,
+    #[serde(default)]
+    pub page: u32,
+    #[serde(default)]
+    pub all: bool,
+}
+
+/// `GET /v1/pages/hidden`: how many pages the owner hid by hand.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+pub struct HiddenPages {
+    #[serde(default)]
+    pub count: u32,
+}
+
+/// `GET /v1/search/sources`: the broad sources a search asks first (one request each, so the
+/// phone shows each one's results as they come), and how many sources there are in all.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct SearchSources {
+    #[serde(default)]
+    pub broad: Vec<String>,
+    #[serde(default)]
+    pub all: u32,
+}
+
+/// A search's words found in a title: every word of the query inside the title (both
+/// normalised, [`norm_title`]), or the two naming the same work ([`same_work`]). What a source
+/// answers beyond that ("Solo Leveling" bringing back every title with "level" in its synopsis) is
+/// not shown.
+pub fn title_has_words(title: &str, query: &str) -> bool {
+    let (t, q) = (norm_title(title), norm_title(query));
+    if q.is_empty() || t.is_empty() {
+        return false;
+    }
+    q.split(' ').all(|w| t.contains(w)) || same_work(title, query)
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::title_has_words;
+
+    #[test]
+    fn a_result_keeps_every_word_of_the_search() {
+        assert!(title_has_words("Solo Leveling", "solo leveling"));
+        assert!(title_has_words("Solo Leveling: Ragnarok", "solo lev"), "a word typed part way");
+        assert!(title_has_words("The Greatest Estate Developer", "estate developer"));
+        assert!(title_has_words("Omniscient Reader’s Viewpoint", "omniscient readers"));
+        assert!(!title_has_words("Leveling With the Gods", "solo leveling"), "one word missing");
+        assert!(!title_has_words("Return of the Mount Hua Sect", "solo"));
+        assert!(title_has_words("I Became the King by Scavenging", "Became the King by Scavenging"));
+        assert!(!title_has_words("", "solo"));
+        assert!(!title_has_words("Solo Leveling", "  "));
+    }
+}

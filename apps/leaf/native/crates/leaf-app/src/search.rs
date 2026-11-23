@@ -1,7 +1,11 @@
-//! Search, the second tab: one field, every source on the server asked at once (`/v1/search`),
-//! one row per work. Add sends every hit's manga id (`POST /v1/follow`), which puts the series in
-//! My space with its bell off (adding is not following), and opens it; one already added opens.
-//! Sources are not named: which one a series comes from is the server's business.
+//! Search, the second tab: one field, one row per work. The server asks a few broad sources
+//! (`/v1/search?source=`, one request each, so results show as they come) and keeps only titles
+//! with every word searched; "Search all sources" under the results asks the rest. A search goes
+//! once the typing pauses ([`PAUSE_NS`]) or on Enter, never for fewer than [`MIN_CHARS`]
+//! characters, never twice for the same words. Add sends every hit's manga id (`POST
+//! /v1/follow`), which puts the series in My space with its bell off (adding is not following),
+//! and opens it; one already added opens. Sources are not named: which one a series comes from is
+//! the server's business.
 
 use leaf_proto::{Candidate, Follow, Series};
 
@@ -13,21 +17,104 @@ use crate::kit::{self, Kb};
 use crate::net::Job;
 use crate::theme::{self as t, COVER_R, PAD, ty};
 
+/// A search goes this long after the last key, unless Enter sends it first.
+pub const PAUSE_NS: u64 = 700_000_000;
+/// Fewer characters than this are not searched.
+pub const MIN_CHARS: usize = 3;
+/// The most works shown (the server sends at most this many per source).
+pub const MAX_SHOWN: usize = 20;
+
 #[derive(Default)]
 pub struct State {
     pub query: String,
-    /// The query last sent, and what came back for it.
+    /// The query last sent, and what came back for it so far.
     pub asked: Option<String>,
+    /// That search asks every source ("Search all sources").
+    pub all: bool,
     pub results: Option<Result<Vec<Candidate>, String>>,
+    /// Parts of the search still to come.
+    pub more: bool,
+    /// The next part replaces what is shown (the all-sources answer), rather than joining it.
+    replace: bool,
+    /// The words as last seen, and when they last changed.
+    typed: String,
+    typed_ns: u64,
     /// The title being followed now, and why the last follow failed.
     pub following: Option<String>,
     pub follow_error: Option<String>,
 }
 
+/// One source's works joined to those shown: the same work (as the server tells works apart)
+/// gains its hits; found on more sources first; at most [`MAX_SHOWN`].
+pub fn merge(shown: &mut Vec<Candidate>, more: Vec<Candidate>) {
+    for c in more {
+        match shown.iter_mut().find(|s| leaf_proto::same_work(&s.title, &c.title)) {
+            Some(s) => {
+                for h in c.hits {
+                    if !s.hits.iter().any(|x| x.manga_id == h.manga_id || x.source == h.source) {
+                        s.hits.push(h);
+                    }
+                }
+                s.followed = s.followed.or(c.followed);
+            }
+            None => shown.push(c),
+        }
+    }
+    shown.sort_by_key(|c| std::cmp::Reverse(c.hits.len()));
+    shown.truncate(MAX_SHOWN);
+}
+
+/// Whether `q` (trimmed) is to be searched now: long enough, not the words last searched, and
+/// either sent (Enter) or the typing paused.
+pub fn due(q: &str, asked: Option<&str>, sent: bool, typed_ns: u64, now_ns: u64) -> bool {
+    q.chars().count() >= MIN_CHARS && asked != Some(q) && (sent || now_ns.saturating_sub(typed_ns) >= PAUSE_NS)
+}
+
 impl State {
-    pub fn answered(&mut self, q: String, r: Result<Vec<Candidate>, String>) {
-        if self.asked.as_deref() == Some(q.as_str()) {
-            self.results = Some(r);
+    /// An answer, or one source's part of it.
+    pub fn answered(&mut self, q: String, all: bool, r: Result<Vec<Candidate>, String>, last: bool) {
+        if self.asked.as_deref() != Some(q.as_str()) || self.all != all {
+            return;
+        }
+        match r {
+            Ok(list) => match &mut self.results {
+                Some(Ok(shown)) if !self.replace => merge(shown, list),
+                _ => {
+                    let mut shown = Vec::new();
+                    merge(&mut shown, list);
+                    self.results = Some(Ok(shown));
+                }
+            },
+            // A source that failed leaves the others' results; alone, it says why.
+            Err(e) => {
+                if self.results.is_none() && last {
+                    self.results = Some(Err(e));
+                }
+            }
+        }
+        if last {
+            self.more = false;
+            self.replace = false;
+            if self.results.is_none() {
+                self.results = Some(Ok(Vec::new()));
+            }
+        } else if self.results.is_some() {
+            self.replace = false;
+        }
+    }
+
+    /// The search sent: the broad sources, or (`all`) every one, the results shown kept until it
+    /// answers.
+    fn ask(&mut self, q: &str, all: bool) {
+        self.asked = Some(q.to_string());
+        self.all = all;
+        self.more = true;
+        self.follow_error = None;
+        if all {
+            self.replace = true;
+        } else {
+            self.results = None;
+            self.replace = false;
         }
     }
 
@@ -49,7 +136,7 @@ impl State {
     }
 
     fn searching(&self) -> bool {
-        self.asked.is_some() && self.results.is_none()
+        self.asked.is_some() && (self.results.is_none() || self.more)
     }
 }
 
@@ -75,6 +162,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let mut follow: Option<Candidate> = None;
     let mut open: Option<i64> = None;
     let mut retry = false;
+    let mut search_all = false;
     let mut connect = false;
     let no_server = app.server.is_none();
     if let Some(e) = &st.follow_error {
@@ -90,7 +178,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         (None, _) => {
             y += 24.0;
             cx.c.para(
-                "Search every source on your server at once. Adding a series puts it in My space; turn on its bell to hear when new chapters come.",
+                "Type a title: Leaf searches your server's main sources as you type. Adding a series puts it in My space; turn on its bell to hear when new chapters come.",
                 x0 + 8.0,
                 y,
                 w - 16.0,
@@ -110,14 +198,24 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             retry = r;
             y += h;
         }
-        (Some(q), Some(Ok(list))) if list.is_empty() => {
+        (Some(q), Some(Ok(list))) if list.is_empty() && !st.more => {
             y += 40.0;
             let (h, _) = kit::notice(&mut cx, x0 + 16.0, y, w - 32.0, &format!("Nothing found for \u{201C}{q}\u{201D}"), Some("Try the title as a source spells it, or a shorter part of it."), None);
-            y += h;
+            y += h + 16.0;
+            if !st.all && kit::plain(&mut cx, x0 + 40.0, y, w - 80.0, 46.0, "Search all sources", Some("search")) {
+                search_all = true;
+            }
+            y += 46.0;
         }
         (Some(_), Some(Ok(list))) => {
             let n = list.len();
-            cx.c.text(&if n == 1 { "1 work".to_string() } else { format!("{n} works") }, x0, y, Text::new(ty::CAPTION, t::INK3).medium());
+            let ct = Text::new(ty::CAPTION, t::INK3).medium();
+            let words = if n == 1 { "1 work".to_string() } else { format!("{n} works") };
+            cx.c.text(&words, x0, y, ct);
+            if st.more {
+                let ww = cx.c.measure(&words, ct);
+                cx.c.text(if st.all { "· searching every source" } else { "· still searching" }, x0 + ww + 6.0, y, ct.color(t::INK3.a(0.7)));
+            }
             y += 26.0;
             let view_top = -cx.c.dy - 40.0;
             let view_bottom = -cx.c.dy + cx.c.h + 40.0;
@@ -171,6 +269,14 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 }
                 y += ROW_H;
             }
+            // The rest of the sources, only when asked (each search costs every source a request).
+            if !st.all && !st.more {
+                y += 14.0;
+                if kit::plain(&mut cx, x0 + 40.0, y, w - 80.0, 46.0, "Search all sources", Some("search")) {
+                    search_all = true;
+                }
+                y += 46.0 + 8.0;
+            }
         }
     }
     let bottom = y;
@@ -202,13 +308,26 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let searching = st.searching();
     app.page_end(&pg, bottom);
     let q = app.st.search.query.trim().to_string();
-    if (submit || retry) && !q.is_empty() {
-        let st = &mut app.st.search;
-        st.asked = Some(q.clone());
-        st.results = None;
-        st.follow_error = None;
+    let st = &mut app.st.search;
+    if st.typed != q {
+        st.typed = q.clone();
+        st.typed_ns = now;
+    }
+    if retry && !q.is_empty() {
+        // Asked again by hand: the same words may go twice.
+        st.asked = None;
+    }
+    let all_of = st.asked.clone().filter(|_| search_all);
+    if let Some(asked) = all_of {
+        st.ask(&asked, true);
+        app.ask(Job::Search(asked, true));
+    } else if due(&q, st.asked.as_deref(), submit || retry, st.typed_ns, now) && app.server.is_some() {
+        st.ask(&q, false);
         app.nav.last_mut().expect("a page").1 = Default::default();
-        app.ask(Job::Search(q));
+        app.ask(Job::Search(q, false));
+    } else if q.chars().count() >= MIN_CHARS && st.asked.as_deref() != Some(q.as_str()) {
+        let at = st.typed_ns + PAUSE_NS;
+        app.wake_at(at);
     }
     if let Some(c) = follow {
         app.st.search.following = Some(c.title.clone());
@@ -225,4 +344,50 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         app.go_tab(i);
     }
     pg.moving || searching && !crate::wake::has()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cand(title: &str, manga: i64, source: &str) -> Candidate {
+        Candidate { title: title.into(), cover_of: Some(manga), hits: vec![leaf_proto::Hit { manga_id: manga, source: source.into() }], followed: None }
+    }
+
+    #[test]
+    fn a_search_waits_for_the_typing_to_pause_and_never_goes_twice() {
+        let s = 1_000_000_000u64;
+        assert!(!due("so", None, true, 0, 10 * s), "two characters, even with Enter");
+        assert!(!due("sol", None, false, s, s + PAUSE_NS - 1), "still typing");
+        assert!(due("sol", None, false, s, s + PAUSE_NS), "paused");
+        assert!(due("sol", None, true, s, s), "Enter goes at once");
+        assert!(!due("sol", Some("sol"), true, 0, 10 * s), "never the same words twice");
+        assert!(due("solo", Some("sol"), false, 0, 10 * s));
+    }
+
+    #[test]
+    fn results_join_as_each_source_answers() {
+        let mut st = State::default();
+        st.ask("solo leveling", false);
+        st.answered("solo leveling".into(), false, Ok(vec![cand("Solo Leveling", 1, "A")]), false);
+        assert_eq!(st.results.as_ref().unwrap().as_ref().unwrap().len(), 1, "shown at once");
+        assert!(st.searching(), "more to come");
+        // An old search's answer is not shown.
+        st.answered("solo".into(), false, Ok(vec![cand("Solo", 9, "A")]), true);
+        // A failed source leaves the rest; the same work found again gains a hit.
+        st.answered("solo leveling".into(), false, Err("down".into()), false);
+        st.answered("solo leveling".into(), false, Ok(vec![cand("Solo Leveling: Ragnarok", 3, "B"), cand("solo leveling", 2, "B")]), true);
+        let list = st.results.as_ref().unwrap().as_ref().unwrap();
+        assert_eq!(list.iter().map(|c| (c.title.as_str(), c.hits.len())).collect::<Vec<_>>(), vec![("Solo Leveling", 2), ("Solo Leveling: Ragnarok", 1)]);
+        assert!(!st.searching());
+        // Every source: what is shown stays until that answer replaces it.
+        st.ask("solo leveling", true);
+        assert_eq!(st.results.as_ref().unwrap().as_ref().unwrap().len(), 2);
+        st.answered("solo leveling".into(), true, Ok(vec![cand("Solo Leveling", 1, "A")]), true);
+        assert_eq!(st.results.as_ref().unwrap().as_ref().unwrap().len(), 1);
+        // Never more than twenty.
+        let mut shown = Vec::new();
+        merge(&mut shown, (0..30).map(|i| cand(&format!("Work number {i} of many"), i, "A")).collect());
+        assert_eq!(shown.len(), MAX_SHOWN);
+    }
 }

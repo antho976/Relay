@@ -125,6 +125,20 @@ impl Client {
         Client::read(req.call())
     }
 
+    /// A page's picture, or None when the server skips it (a scanlator's promo page: `204` with
+    /// `x-leaf-skip: 1`).
+    pub fn get_page(&self, s: &Server, path: &str) -> Result<Option<Vec<u8>>, Fail> {
+        let mut req = self.agent.get(Client::url(s, path));
+        if let Some(t) = &s.token {
+            req = req.header("Authorization", format!("Bearer {t}"));
+        }
+        let r = req.call().map_err(|_| Fail::Unreachable)?;
+        if r.headers().get("x-leaf-skip").is_some_and(|v| v.as_bytes() == b"1") {
+            return Ok(None);
+        }
+        Client::read(Ok(r)).map(Some)
+    }
+
     pub fn post(&self, s: &Server, path: &str, body: String) -> Result<Vec<u8>, Fail> {
         let mut req = self.agent.post(Client::url(s, path)).header("content-type", "application/json");
         if let Some(t) = &s.token {
@@ -220,7 +234,9 @@ pub enum Job {
     Status(Server),
     Library,
     Series(i64),
-    Search(String),
+    /// A search: the broad sources one by one (each answer as it comes), or every source (`true`,
+    /// "Search all sources") at once.
+    Search(String, bool),
     Follow(Follow),
     Unfollow(i64),
     Progress(i64, Progress),
@@ -264,6 +280,13 @@ pub enum Job {
     SeriesDownload(i64, SeriesDownload),
     /// The newest app the server holds (`/v1/app/latest`).
     AppLatest,
+    /// A page hidden by hand with the ones like it, or that undone (`POST` / `DELETE
+    /// /v1/pages/hide`).
+    HidePage(i64, u32, bool),
+    /// How many pages were hidden by hand (`/v1/pages/hidden`).
+    HiddenPages,
+    /// Every page hidden by hand shown again (`DELETE /v1/pages/hide`, `all`).
+    ClearHidden,
 }
 
 /// The recommendations on disk are asked for again after this long (they are made once a day).
@@ -335,6 +358,8 @@ impl Job {
                 | Job::RecTag(..)
                 | Job::Downloads(..)
                 | Job::SeriesDownload(..)
+                | Job::HidePage(..)
+                | Job::ClearHidden
         )
     }
 }
@@ -345,7 +370,8 @@ pub enum Done {
     Status(Server, Result<Status, Fail>),
     Library { cached: bool, result: Result<(Vec<Series>, Vec<SeriesExtra>), Fail> },
     Series { id: i64, cached: bool, result: Result<(SeriesDetail, Extras), Fail> },
-    Search(String, Result<Vec<leaf_proto::Candidate>, Fail>),
+    /// A search's answer, or one source's part of it: (query, every source, result, the last part).
+    Search { q: String, all: bool, result: Result<Vec<leaf_proto::Candidate>, Fail>, last: bool },
     Followed(Result<Series, Fail>),
     Unfollowed(i64, Result<(), Fail>),
     Progress(i64, Result<(), Fail>),
@@ -371,6 +397,10 @@ pub enum Done {
     SeriesDownload(i64, SeriesDownload, Result<u32, Fail>),
     /// None: the server holds no app.
     AppLatest(Result<Option<AppLatest>, Fail>),
+    /// (chapter, page, hidden or shown again, the count of pages hidden by hand).
+    HidePage(i64, u32, bool, Result<u32, Fail>),
+    /// The count of pages hidden by hand (asked, or after Clear).
+    HiddenPages(Result<u32, Fail>),
 }
 
 type Task = (Option<Server>, Job);
@@ -616,12 +646,40 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
             });
             send(Done::Series { id, cached: false, result: r });
         }
-        Job::Search(q) => {
-            let r = match &server {
-                Some(s) => client.json(s, &format!("/v1/search?q={}", query_escape(&q))),
-                None => no_server(),
-            };
-            send(Done::Search(q, r));
+        Job::Search(q, all) => {
+            let Some(s) = &server else { return send(Done::Search { q, all, result: no_server(), last: true }) };
+            let path = format!("/v1/search?q={}", query_escape(&q));
+            // The broad sources, each asked apart so its results show as they come; a server
+            // without the list (older) answers the whole search at once.
+            let broad = if all { None } else { client.json::<leaf_proto::SearchSources>(s, "/v1/search/sources").ok().filter(|l| !l.broad.is_empty()) };
+            match broad {
+                Some(list) => {
+                    let (tx, rx) = channel();
+                    std::thread::scope(|sc| {
+                        for name in &list.broad {
+                            let (tx, path) = (tx.clone(), format!("{path}&source={}", query_escape(name)));
+                            sc.spawn(move || {
+                                let _ = tx.send(client.json::<Vec<leaf_proto::Candidate>>(s, &path));
+                            });
+                        }
+                        drop(tx);
+                        let n = list.broad.len();
+                        let mut got = 0;
+                        for result in rx.iter() {
+                            got += 1;
+                            send(Done::Search { q: q.clone(), all, result, last: got == n });
+                        }
+                        // A part that never came (its thread ended early) still ends the search.
+                        if got < n {
+                            send(Done::Search { q: q.clone(), all, result: Ok(Vec::new()), last: true });
+                        }
+                    });
+                }
+                None => {
+                    let result = client.json(s, &if all { format!("{path}&all=1") } else { path });
+                    send(Done::Search { q, all, result, last: true });
+                }
+            }
         }
         Job::Follow(f) => {
             let r = match &server {
@@ -706,6 +764,30 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
         Job::Shelf(id, shelf) => {
             let r = post_json(client, &server, &format!("/v1/series/{id}/shelf"), &ShelfSet { shelf }).map(|_| ());
             send(Done::Shelf(id, r));
+        }
+        Job::HidePage(chapter, page, on) => {
+            let body = serde_json::to_string(&leaf_proto::PageHide { chapter, page, all: false }).unwrap_or_default();
+            let r = match &server {
+                Some(s) if on => client.post(s, "/v1/pages/hide", body),
+                Some(s) => client.delete_json(s, "/v1/pages/hide", body),
+                None => no_server(),
+            };
+            send(Done::HidePage(chapter, page, on, r.map(|b| count_of(&b))));
+        }
+        Job::HiddenPages => {
+            let r = match &server {
+                Some(s) => client.json::<leaf_proto::HiddenPages>(s, "/v1/pages/hidden").map(|h| h.count),
+                None => no_server(),
+            };
+            send(Done::HiddenPages(r));
+        }
+        Job::ClearHidden => {
+            let body = serde_json::to_string(&leaf_proto::PageHide { all: true, ..Default::default() }).unwrap_or_default();
+            let r = match &server {
+                Some(s) => client.delete_json(s, "/v1/pages/hide", body).map(|b| count_of(&b)),
+                None => no_server(),
+            };
+            send(Done::HiddenPages(r));
         }
         Job::Health => {
             let r = match &server {

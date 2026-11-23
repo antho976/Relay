@@ -73,7 +73,21 @@ pub struct Reader {
     pub waiting: bool,
     /// What is left of a page turn (a tap in a third, a volume key), in units: it glides there.
     glide: f32,
+    /// Opened at a place kept on the phone: how far down its item, once that item's height is
+    /// known (a page decoded, a chapter's length come). A move before then lets it go.
+    pending_off: Option<f32>,
+    /// When the place is kept on the phone ([`crate::places::Gate`]).
+    save: crate::places::Gate,
+    /// The place last kept on the phone (the overlay shows it).
+    pub saved: Option<crate::places::Place>,
+    /// A page just hidden by hand, with Undo offered until then: (chapter id, page, until ns).
+    pub undo: Option<(i64, u32, u64)>,
+    /// The sheet over the strip after a long press on a page: (chapter index, page).
+    pub hide_sheet: Option<(usize, u32)>,
 }
+
+/// Undo is offered this long after a page is hidden.
+pub const UNDO_NS: u64 = 5_000_000_000;
 
 /// How far ahead of the screen's bottom auto-scroll wants pages loaded before it moves on.
 const AHEAD: f32 = 0.6;
@@ -100,6 +114,10 @@ impl Book for View<'_> {
             Item::Head(c) => self.r.top_pad + HEAD_H + if self.pages(c).is_none() { LOADING_H } else { 0.0 },
             Item::Page(c, n) => {
                 let id = self.r.chapters[c].id;
+                // A scanlator's promo page, or one hidden by hand: not in the strip at all.
+                if self.im.skipped(id, n) {
+                    return 0.0;
+                }
                 match self.im.size(id, n) {
                     Some((w, h)) if w > 0 => h as f32 * WIDTH / w as f32,
                     _ if self.im.failed(id, n).is_some() => FAILED_H,
@@ -151,6 +169,11 @@ impl Reader {
             speed: logic::DEFAULT_SPEED,
             waiting: false,
             glide: 0.0,
+            pending_off: None,
+            save: Default::default(),
+            saved: None,
+            undo: None,
+            hide_sheet: None,
         }
     }
 
@@ -188,6 +211,11 @@ impl Reader {
             speed: logic::DEFAULT_SPEED,
             waiting: false,
             glide: 0.0,
+            pending_off: None,
+            save: Default::default(),
+            saved: None,
+            undo: None,
+            hide_sheet: None,
         }
     }
 
@@ -200,6 +228,93 @@ impl Reader {
             Item::End => pages.saturating_sub(1),
         };
         Some((crate::shelf::Place { section: 0, block: page, byte: 0 }, (page + 1) as f32 / pages.max(1) as f32))
+    }
+
+    /// Open at a place kept on the phone, in chapter `index`: its page (or heading), then its
+    /// offset once that page's height is known.
+    pub fn restore(&mut self, index: usize, p: crate::places::Place) {
+        let item = if p.head { Item::Head(index) } else { Item::Page(index, p.page) };
+        self.pos = Pos { item, off: 0.0 };
+        self.pending_off = (p.off > 0.0).then_some(p.off);
+        self.saved = Some(p);
+    }
+
+    /// Where the top of the screen is, as the phone keeps it (a series only; while a restored
+    /// offset waits for its page, the place it was opened at).
+    pub fn place_now(&self) -> Option<crate::places::Place> {
+        if self.local.is_some() || self.chapters.is_empty() {
+            return None;
+        }
+        if self.pending_off.is_some() {
+            return self.saved;
+        }
+        let (c, page, head) = match self.pos.item {
+            Item::Head(c) => (c, 0, true),
+            Item::Page(c, n) => (c, n, false),
+            Item::End => return None,
+        };
+        let ch = &self.chapters[c];
+        Some(crate::places::Place { series: self.series, chapter: ch.id, number: ch.number, page, head, off: self.pos.off.max(0.0), at_ms: crate::shelf::now_ms() })
+    }
+
+    /// The place kept now, whatever the gate says (the app goes to the background, the reader
+    /// closes).
+    pub fn keep_now(&mut self, now_ns: u64) -> Option<crate::places::Place> {
+        let p = self.place_now()?;
+        self.save.force(&p, now_ns);
+        self.saved = Some(p);
+        Some(p)
+    }
+
+    /// A page leaves the strip (hidden by hand, `old_h` units tall until now, or skipped by the
+    /// server): when it is the one the screen's top is in, the place moves to what follows it so
+    /// that nothing below it moves on screen. Above the screen, nothing moves anyway (the place is
+    /// an item and an offset).
+    /// Call once the page is skipped ([`Images::skip`]), with its height from before.
+    pub fn drop_page(&mut self, im: &Images, chapter: i64, n: u32, old_h: f32, view_h: f32) {
+        let Some(c) = self.chapters.iter().position(|ch| ch.id == chapter) else { return };
+        if self.pos.item == Item::Page(c, n) {
+            self.anchor_past(im, old_h, view_h);
+        }
+    }
+
+    /// A page's height in the strip now (0 when it is not this series').
+    pub fn page_h(&self, im: &Images, chapter: i64, n: u32) -> f32 {
+        match self.chapters.iter().position(|ch| ch.id == chapter) {
+            Some(c) => View { r: self, im }.height(Item::Page(c, n)),
+            None => 0.0,
+        }
+    }
+
+    /// The place, in a page whose height became 0, moved to the item after it at the same spot on
+    /// screen (that item's top stays `old_h - off` down the screen).
+    fn anchor_past(&mut self, im: &Images, old_h: f32, view_h: f32) {
+        let v = View { r: self, im };
+        let Some(next) = strip::next(&v, self.pos.item) else { return };
+        let p = strip::normalize(&v, Pos { item: next, off: self.pos.off - old_h });
+        self.pos = strip::clamp_bottom(&v, p, view_h);
+        self.pending_off = None;
+    }
+
+    /// Screenshots: chapters whose length is not listed get `n` pages, so the shot asks the
+    /// server for none.
+    pub fn shot_counts(&mut self, n: u32) {
+        for c in &mut self.counts {
+            if c.is_none() {
+                *c = Some(n);
+            }
+        }
+    }
+
+    /// The items on screen, each with its top's y.
+    pub fn visible_items(&self, im: &Images, view_h: f32) -> Vec<(Item, f32)> {
+        strip::visible(&View { r: self, im }, self.pos, view_h, 0.0)
+    }
+
+    /// Page `n` is the last of chapter `c` that is shown (those after it are left out).
+    fn last_shown(&self, im: &Images, c: usize, n: u32) -> bool {
+        let id = self.chapters[c].id;
+        self.counts[c].is_some_and(|p| n < p && (n + 1..p).all(|k| im.skipped(id, k)))
     }
 
     /// Chapter `c`'s page count, once known.
@@ -272,9 +387,14 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         app.pop();
         return true;
     };
-    let (moving, leave) = frame(app, &mut r, dt);
+    let (moving, leave, act) = frame(app, &mut r, dt);
     let series = (r.local.is_none()).then_some(r.series);
     app.reader = Some(r);
+    match act {
+        Some(PageAct::Hide(c, n)) => app.hide_page(c, n),
+        Some(PageAct::Unhide(c, n)) => app.unhide_page(c, n),
+        None => {}
+    }
     match leave {
         Leave::Stay => {}
         Leave::Back => {
@@ -294,6 +414,19 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     moving
 }
 
+/// A page hidden by hand, or that undone.
+enum PageAct {
+    Hide(i64, u32),
+    Unhide(i64, u32),
+}
+
+/// The Undo toast's box, at the screen's bottom (above the overlay's bar when it shows).
+fn undo_box(c: &crate::draw::Canvas, overlay: bool) -> (f32, f32, f32, f32) {
+    let w = WIDTH - 2.0 * PAD;
+    let bottom = c.h - c.inset_bottom - if overlay { BAR_H } else { 0.0 };
+    (PAD, bottom - 16.0 - 48.0, w, 48.0)
+}
+
 /// Where a frame of the reader goes next.
 enum Leave {
     Stay,
@@ -302,15 +435,36 @@ enum Leave {
 }
 
 /// One frame of the reader. Returns (still moving, where to go).
-fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave) {
+fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct>) {
     let view_h = app.canvas.h;
     let now = app.now_ns;
     r.top_pad = app.canvas.inset_top;
+    let mut page_act: Option<PageAct> = None;
+    // The sheet after a long press holds every tap and drag from the strip under it.
+    let sheet_open = r.hide_sheet.is_some();
+    let held = if sheet_open {
+        app.ui.cover();
+        app.ui.tap.take()
+    } else {
+        None
+    };
+    // The Undo toast takes its tap before anything under it.
+    if let Some((chapter, n, until)) = r.undo {
+        if now >= until {
+            r.undo = None;
+        } else {
+            app.wake_at(until);
+            let (x, y, w, h) = undo_box(&app.canvas, r.overlay);
+            if app.ui.tapped(x, y, w, h) {
+                page_act = Some(PageAct::Unhide(chapter, n));
+            }
+        }
+    }
     // The overlay's keys take their taps before the strip does.
     let overlay_tap = r.overlay;
     let (top_bar, bottom_bar) = (app.canvas.inset_top + 60.0, BAR_H + app.canvas.inset_bottom);
     // A drag on the overlay's bars (the dimmer) is theirs, not the strip's.
-    let on_bars = r.overlay && app.ui.drag_from.is_some_and(|(_, y)| y < top_bar || y > view_h - bottom_bar);
+    let on_bars = sheet_open || (r.overlay && app.ui.drag_from.is_some_and(|(_, y)| y < top_bar || y > view_h - bottom_bar));
     // Scroll: the finger, then the momentum it left, a page turn gliding, auto-scroll.
     let before = r.fling.off;
     let coasting = if on_bars { false } else { r.fling.update(&app.ui, [0.0, 0.0, WIDTH, view_h], dt) };
@@ -323,7 +477,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave) {
         dy += step;
         moving = true;
     }
-    if r.auto {
+    if r.auto && !sheet_open {
         let v = View { r, im: &app.images };
         match ahead(&v, r.pos, view_h) {
             Ahead::Ready => {
@@ -339,6 +493,36 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave) {
                 r.auto = false;
                 r.waiting = false;
             }
+        }
+    }
+    // A page the server skips that the screen's top is in (it was a placeholder until now): the
+    // place moves past it, what follows staying put on screen.
+    if let Item::Page(c, n) = r.pos.item
+        && app.images.skipped(r.chapters[c].id, n)
+    {
+        let old = if r.pos.off > 0.0 { PLACEHOLDER_H } else { 0.0 };
+        r.anchor_past(&app.images, old, view_h);
+    }
+    // A place kept on the phone: its offset, once its item's height is known; a move first lets
+    // it go (the item's top stays where it is).
+    if r.pending_off.is_some() && dy != 0.0 {
+        r.pending_off = None;
+    }
+    if let Some(off) = r.pending_off {
+        let v = View { r, im: &app.images };
+        let known = match r.pos.item {
+            Item::Page(c, n) => {
+                let id = r.chapters[c].id;
+                app.images.size(id, n).is_some() || app.images.failed(id, n).is_some() || app.images.skipped(id, n)
+            }
+            Item::Head(c) => r.counts[c].is_some(),
+            Item::End => true,
+        };
+        if known {
+            let h = v.height(r.pos.item);
+            let p = Pos { item: r.pos.item, off: off.min((h - 1.0).max(0.0)) };
+            r.pos = strip::clamp_bottom(&v, p, view_h);
+            r.pending_off = None;
         }
     }
     if dy != 0.0 {
@@ -516,6 +700,27 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave) {
             }
         }
     }
+    // A finger held on a page: the sheet that hides it (and the ones like it).
+    if !sheet_open
+        && !r.overlay
+        && !r.auto
+        && r.local.is_none()
+        && let Some(((_, py), ns)) = app.ui.resting(now)
+        && ns >= crate::series::LONG_PRESS_NS
+    {
+        for (item, y) in &shown {
+            if let Item::Page(c, n) = *item {
+                let h = View { r, im: &app.images }.height(*item);
+                if py >= *y && py < y + h && app.images.size(r.chapters[c].id, n).is_some() {
+                    app.ui.swallow();
+                    r.hide_sheet = Some((c, n));
+                    r.fling.stop();
+                    r.glide = 0.0;
+                    break;
+                }
+            }
+        }
+    }
     // Where the reader is, and what is finished.
     let (ci, page) = {
         let v = View { r, im: &app.images };
@@ -524,15 +729,17 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave) {
     if !app.shot && !r.chapters.is_empty() && r.local.is_none() {
         let mut reports = r.gate.see(r.chapters[ci].id, page, false, now);
         // A chapter is finished once its last page has been on screen from its top to its bottom.
+        // Promo pages left out at its end count as seen: the last page shown is its end.
         for (item, y) in &shown {
             if let Item::Page(c, n) = *item
-                && r.counts[c].is_some_and(|p| n + 1 == p)
+                && r.last_shown(&app.images, c, n)
             {
                 if *y >= -1.0 {
                     r.end_seen.insert(c);
                 }
                 let h = View { r, im: &app.images }.height(*item);
-                if y + h <= view_h + 1.0 && r.end_seen.contains(&c) && app.images.size(r.chapters[c].id, n).is_some() {
+                let id = r.chapters[c].id;
+                if y + h <= view_h + 1.0 && r.end_seen.contains(&c) && (app.images.size(id, n).is_some() || app.images.skipped(id, n)) {
                     reports.extend(r.gate.see(r.chapters[c].id, n, true, now));
                 }
             }
@@ -548,6 +755,18 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave) {
         }
         if let Some(at) = r.gate.due_at() {
             app.wake_at(at);
+        }
+    }
+    // The exact place, kept on the phone: on each new page, and every two seconds while the strip
+    // moves within one.
+    if r.pending_off.is_none()
+        && let Some(p) = r.place_now()
+    {
+        if r.save.due(&p, now) {
+            app.places.put(p);
+            r.saved = Some(p);
+        } else if !r.saved.is_some_and(|s| s.same_spot(&p)) {
+            app.wake_at(r.save.next_ns());
         }
     }
     // The dimmer: a black veil over the pages, under the overlay.
@@ -584,7 +803,21 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave) {
             Some(n) => format!("Chapter {} · page {} of {n}", logic::num(ch.number), (page + 1).min(n)),
             None => format!("Chapter {}", logic::num(ch.number)),
         };
-        cx.c.text_fit(&sub, 56.0, top + 31.0, WIDTH - 56.0 - PAD, Text::new(ty::CAPTION, t::INK2));
+        let sub_t = Text::new(ty::CAPTION, t::INK2);
+        // Where the place is kept on the phone: "Saved · page 12".
+        let saved = r.saved.filter(|_| r.local.is_none()).map(|s| match r.chapters.iter().position(|c| c.id == s.chapter) {
+            Some(i) if i == ci => (Some(s), format!("Saved · page {}", s.page + 1)),
+            Some(i) => (None, format!("Saved · ch. {} p. {}", logic::num(r.chapters[i].number), s.page + 1)),
+            None => (None, "Saved".to_string()),
+        });
+        let sub_w = cx.c.measure(&sub, sub_t);
+        cx.c.text_fit(&sub, 56.0, top + 31.0, WIDTH - 56.0 - PAD, sub_t);
+        if let Some((_, words)) = &saved {
+            let sx = 56.0 + sub_w + 8.0;
+            if sx < WIDTH - PAD - 60.0 {
+                cx.c.text_fit(&format!("· {words}"), sx, top + 31.0, WIDTH - PAD - sx, sub_t.color(t::ACCENT));
+            }
+        }
         // The bottom: the chapter's progress as a thin line, the chapters around it, auto-scroll,
         // then the dimmer.
         let by = cx.c.h - bottom_bar;
@@ -592,6 +825,11 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave) {
         let f = pages.map(|n| (page + 1) as f32 / n.max(1) as f32).unwrap_or(0.0);
         cx.c.rect(0.0, by, WIDTH, 2.0, 0.0, t::INK.a(0.12));
         cx.c.rect(0.0, by, WIDTH * f, 2.0, 0.0, t::ACCENT);
+        // The saved place, a small mark on the track.
+        if let (Some((Some(s), _)), Some(n)) = (&saved, pages) {
+            let mx = (WIDTH * (s.page + 1) as f32 / n.max(1) as f32).clamp(2.0, WIDTH - 2.0);
+            cx.c.rect(mx - 1.5, by - 3.0, 3.0, 8.0, 1.5, t::INK);
+        }
         let ky = by + 10.0;
         if r.local.is_none() {
             // − play +, in the middle.
@@ -675,6 +913,31 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave) {
         r.overlay = false;
     }
     moving |= app.images.pages_pending() && !crate::wake::has();
+    // Undo, for a few seconds after a page was hidden.
+    if r.undo.is_some() {
+        let (x, y, w, h) = undo_box(&app.canvas, r.overlay);
+        let c = &mut app.canvas;
+        c.rect(x, y, w, h, 12.0, t::S3);
+        let tt = Text::new(ty::UI, t::INK).medium();
+        c.text_fit("Page hidden, and ones like it", x + 16.0, y + (h - tt.lh()) / 2.0, w - 100.0, tt);
+        let kt = Text::new(ty::UI, t::ACCENT).semi().right();
+        c.text("Undo", x + w - 16.0, y + (h - kt.lh()) / 2.0, kt);
+    }
+    // The sheet after a long press: Hide, or Cancel (a tap outside closes it too).
+    if let Some((c, n)) = r.hide_sheet {
+        let mut cx = cx!(app);
+        kit::release(&mut cx, held);
+        let id = r.chapters[c].id;
+        let words = format!("Page {} of chapter {}", n + 1, logic::num(r.chapters[c].number));
+        match kit::choices(&mut cx, &words, Some("Scanlators' \u{201C}join our Discord\u{201D} pages and the like"), &[("Hide this page and ones like it", false), ("Cancel", false)]) {
+            Some(0) => {
+                r.hide_sheet = None;
+                page_act = Some(PageAct::Hide(id, n));
+            }
+            Some(_) => r.hide_sheet = None,
+            None => {}
+        }
+    }
     let leave = if to_series {
         Leave::ToSeries
     } else if back {
@@ -682,7 +945,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave) {
     } else {
         Leave::Stay
     };
-    (moving, leave)
+    (moving, leave, page_act)
 }
 
 /// The overlay's bottom bar, above the gesture bar: the chapter keys and auto-scroll, then the
@@ -708,7 +971,7 @@ fn ahead(v: &View, pos: Pos, view_h: f32) -> Ahead {
             Item::Head(c) if v.pages(c).is_none() => out = Ahead::Loading,
             Item::Page(c, n) => {
                 let id = v.r.chapters[c].id;
-                if v.im.size(id, n).is_some() {
+                if v.im.size(id, n).is_some() || v.im.skipped(id, n) {
                     // Measured: it has loaded once (a later fetch failing is the drawing's business).
                 } else if v.im.failed(id, n).is_some() {
                     return Ahead::Failed;

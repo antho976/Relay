@@ -60,6 +60,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         app.status.loading = true;
         app.jobs.send(Some(&s), Job::Status(s.clone()));
         app.ask(Job::Health);
+        app.ask(Job::HiddenPages);
     }
     let pg = app.page_begin(dt, 56.0);
     if let Some(s) = app.st.connect.answered_ok.take() {
@@ -141,6 +142,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             health: &app.health,
             backup: app.backup.as_ref(),
             backing_up: app.backing_up,
+            hidden: app.hidden_pages.data,
             anilist: &mut st.anilist,
             now_ms: crate::shelf::now_ms(),
         };
@@ -185,6 +187,13 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 app.ask(Job::Anilist(token));
             }
             Act::Health => app.ask(Job::Health),
+            Act::Promo(skip) => app.images.set_promo(skip),
+            Act::ClearHidden => {
+                app.ask(Job::ClearHidden);
+                // Asked again: the server says which still to skip (its own rule's pages).
+                app.images.clear_skips();
+                app.toast("Pages you hid will show again");
+            }
             Act::Copy(words) => {
                 app.host.copy_text(words);
                 app.toast("Copied");

@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS source_health (name TEXT PRIMARY KEY, ok_at INTEGER N
 CREATE TABLE IF NOT EXISTS dl_queue (seq INTEGER PRIMARY KEY, chapter_id INTEGER NOT NULL UNIQUE, source TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS rec_hidden (anilist_id INTEGER PRIMARY KEY, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS rec_tag (tag TEXT PRIMARY KEY, less INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS page_hash (chapter_id INTEGER NOT NULL, page INTEGER NOT NULL, hash INTEGER NOT NULL, source TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (chapter_id, page));
+CREATE TABLE IF NOT EXISTS page_hidden (chapter_id INTEGER NOT NULL, page INTEGER NOT NULL, hash INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (chapter_id, page));
 ";
 
 const WORK_COLS: &str = "id, title, manga_id, source, followed_at, fails, checked_at, compared_at, latest, updated_at, note, bell, shelf";
@@ -339,6 +341,39 @@ impl Store {
         } else {
             self.db.execute("DELETE FROM rec_tag WHERE tag = ?1", [&tag])
         };
+    }
+
+    /// A page near a chapter's start or end, by its picture's hash (`promo.rs`), kept for good.
+    pub fn add_page_hash(&self, chapter_id: i64, page: u32, hash: u64, source: &str, at: i64) {
+        let _ = self.db.execute(
+            "INSERT OR REPLACE INTO page_hash (chapter_id, page, hash, source, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![chapter_id, page, hash as i64, source, at],
+        );
+    }
+
+    /// Every page hash kept: (chapter, page, hash).
+    pub fn page_hashes(&self) -> Vec<(i64, u32, u64)> {
+        let mut st = self.db.prepare_cached("SELECT chapter_id, page, hash FROM page_hash").expect("a statement");
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? as u64))).expect("hashes").filter_map(Result::ok).collect()
+    }
+
+    /// A page the owner hid by hand, and the ones like it with it.
+    pub fn hide_page(&self, chapter_id: i64, page: u32, hash: u64, at: i64) {
+        let _ = self.db.execute("INSERT OR REPLACE INTO page_hidden (chapter_id, page, hash, at) VALUES (?1, ?2, ?3, ?4)", params![chapter_id, page, hash as i64, at]);
+    }
+
+    /// Undo one page hidden by hand, or (None) every one.
+    pub fn unhide_page(&self, which: Option<(i64, u32)>) {
+        let _ = match which {
+            Some((c, p)) => self.db.execute("DELETE FROM page_hidden WHERE chapter_id = ?1 AND page = ?2", params![c, p]),
+            None => self.db.execute("DELETE FROM page_hidden", []),
+        };
+    }
+
+    /// The pages hidden by hand: (chapter, page, hash).
+    pub fn hidden_pages(&self) -> Vec<(i64, u32, u64)> {
+        let mut st = self.db.prepare_cached("SELECT chapter_id, page, hash FROM page_hidden").expect("a statement");
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? as u64))).expect("hidden").filter_map(Result::ok).collect()
     }
 
     /// The tags marked "fewer like this", lower case.

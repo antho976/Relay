@@ -26,6 +26,10 @@ pub enum Act {
     Health,
     /// Put words on the clipboard.
     Copy(&'static str),
+    /// Scanlators' promo pages skipped (true) or shown.
+    Promo(bool),
+    /// Every page hidden by hand shown again.
+    ClearHidden,
 }
 
 const PIN_URL: &str = "https://anilist.co/api/v2/oauth/pin";
@@ -57,6 +61,8 @@ pub struct Parts<'a> {
     pub health: &'a Loaded<Vec<SourceHealth>>,
     pub backup: Option<&'a BackupInfo>,
     pub backing_up: bool,
+    /// How many pages were hidden by hand, once the server said.
+    pub hidden: Option<u32>,
     /// The AniList token being typed.
     pub anilist: &'a mut String,
     pub now_ms: i64,
@@ -142,7 +148,33 @@ pub fn draw(cx: &mut Ctx, p: Parts, x: f32, mut y: f32, w: f32, now_ns: u64) -> 
         acts.push(Act::Trim(p.prefs.trim_gutters));
         acts.push(Act::Save);
     }
-    y += h + 24.0;
+    y += h;
+    let (h, tap) = toggle_row(
+        cx,
+        x,
+        y,
+        w,
+        "Skip scanlator promo pages",
+        "The \u{201C}join our Discord\u{201D} and \u{201C}read only at\u{201D} pages groups put at a chapter's start or end are left out. A long press on a page hides it and the ones like it.",
+        p.prefs.skip_promo,
+    );
+    if tap {
+        p.prefs.skip_promo = !p.prefs.skip_promo;
+        acts.push(Act::Promo(p.prefs.skip_promo));
+        acts.push(Act::Save);
+    }
+    y += h;
+    if let Some(n) = p.hidden.filter(|n| *n > 0) {
+        let rh = 52.0;
+        let tt = Text::new(ty::UI, t::INK2);
+        let words = if n == 1 { "1 page hidden by you".to_string() } else { format!("{n} pages hidden by you") };
+        cx.c.text_fit(&words, x, y + (rh - tt.lh()) / 2.0, w - 110.0, tt);
+        if kit::plain(cx, x + w - 96.0, y + 4.0, 96.0, 44.0, "Clear", None) {
+            acts.push(Act::ClearHidden);
+        }
+        y += rh;
+    }
+    y += 24.0;
 
     // Notices
     y += heading(cx, x, y, "NOTIFICATIONS");

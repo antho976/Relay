@@ -608,6 +608,8 @@ mod fake {
         pub counts: HashMap<i64, u32>,
         pub fail_counts: HashSet<i64>,
         pub fail_pages: HashSet<i64>,
+        /// Pages answered as a scanlator's promo page: `204`, `x-leaf-skip: 1`.
+        pub skip_pages: HashSet<(i64, u32)>,
     }
 
     pub struct Fake {
@@ -670,6 +672,7 @@ mod fake {
         let mut parts = first.split(' ');
         let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or("").to_string());
         let seg: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+        let mut extra = String::new();
         let (code, kind, out): (u16, &str, Vec<u8>) = {
             let mut st = st.lock().unwrap();
             st.hits.push(format!("{method} {path}"));
@@ -681,8 +684,12 @@ mod fake {
                         _ => (503, "text/plain", b"busy".to_vec()),
                     }
                 }
-                ("GET", ["v1", "chapters", id, "pages", _]) => {
-                    if st.fail_pages.contains(&id.parse().unwrap_or(0)) {
+                ("GET", ["v1", "chapters", id, "pages", n]) => {
+                    let page = (id.parse().unwrap_or(0), n.split('?').next().unwrap_or("").parse().unwrap_or(u32::MAX));
+                    if st.skip_pages.contains(&page) {
+                        extra.push_str("x-leaf-skip: 1\r\n");
+                        (204, "image/png", Vec::new())
+                    } else if st.fail_pages.contains(&page.0) {
                         (503, "text/plain", b"busy".to_vec())
                     } else {
                         (200, "image/png", png.to_vec())
@@ -697,7 +704,7 @@ mod fake {
                 _ => (404, "text/plain", b"no".to_vec()),
             }
         };
-        let _ = write!(s, "HTTP/1.1 {code} X\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", out.len());
+        let _ = write!(s, "HTTP/1.1 {code} X\r\nContent-Type: {kind}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n", out.len());
         let _ = s.write_all(&out);
     }
 }
@@ -1090,5 +1097,155 @@ fn back_to_the_series_at_the_end_goes_to_the_series_wherever_the_reader_was_open
     tap(&mut app, &mut t, WIDTH / 2.0, h - 240.0 + 124.0 + 22.0);
     assert_eq!(app.nav.len(), 2);
     assert_eq!(app.route(), &Route::Series(1));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The places kept in a data folder, once the writer's thread has written one for `series`.
+fn kept_place(dir: &std::path::Path, series: i64, done: impl Fn(&crate::places::Place) -> bool) -> Option<crate::places::Place> {
+    for _ in 0..400 {
+        let p = crate::places::Places::load(dir);
+        if let Some(p) = p.get(series).filter(|p| done(p)) {
+            return Some(*p);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    None
+}
+
+#[test]
+fn the_app_closed_mid_chapter_reopens_at_the_same_page_and_offset() {
+    let (mut app, mut t, dir) = app("reader-place");
+    app.shot = false;
+    let d = comic(1, &[20, 20]);
+    measure(&mut app, &d);
+    app.series.insert(1, loaded(d.clone()));
+    app.open_chapter(&d, 0, 0);
+    step(&mut app, &mut t);
+    // Chapter 1's heading (64), five pages (780 each) and a third of the sixth.
+    scroll(&mut app, &mut t, 64.0 + 780.0 * 5.0 + 333.0);
+    let at = reader(&app).pos;
+    assert_eq!(at.item, crate::strip::Item::Page(0, 5), "{at:?}");
+    assert!((at.off - 333.0).abs() < 0.5, "{at:?}");
+    // A new page is kept at once, before anything else happens.
+    assert!(kept_place(&dir, 1, |p| p.page == 5).is_some(), "kept on the page change");
+    // Within the page, a little further: held back (two seconds), then the app goes to the
+    // background and Android ends it.
+    scroll(&mut app, &mut t, 40.0);
+    let at = reader(&app).pos;
+    app.paused();
+    drop(app);
+    let kept = kept_place(&dir, 1, |p| (p.off - at.off).abs() < 0.5).expect("the exact place is on disk");
+    assert_eq!((kept.chapter, kept.page), (1001, 5));
+    // Started again; the server's copy knows nothing of the page (its report never landed).
+    let mut app = App::new(Arc::new(TestHost(dir.clone())), 0);
+    app.resize(1080.0, 2340.0, 0.0, 0.0);
+    app.library.data = Some(vec![series(1, "Series 1")]);
+    app.series.insert(1, loaded(d.clone()));
+    measure(&mut app, &d);
+    let mut t = 1_000_000_000;
+    app.frame(t);
+    app.continue_series(1);
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    let back = reader(&app).pos;
+    assert_eq!(back.item, at.item, "the same page");
+    assert!((back.off - at.off).abs() < 0.5, "the same offset: {back:?} against {at:?}");
+    // The overlay says where the place is kept.
+    let h = app.canvas.h;
+    tap(&mut app, &mut t, 200.0, h * 0.5);
+    assert!(reader(&app).overlay);
+    assert_eq!(reader(&app).saved.map(|p| p.page), Some(5));
+    // Closing the reader keeps it too; the next Continue opens there again.
+    scroll(&mut app, &mut t, 780.0);
+    let moved = reader(&app).pos;
+    app.pop();
+    assert!(kept_place(&dir, 1, |p| p.page == 6 && (p.off - moved.off).abs() < 0.5).is_some(), "kept as the reader closed");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Where `item` is on screen (its top's y), if it is.
+fn on_screen(app: &App, item: crate::strip::Item) -> Option<f32> {
+    reader(app).visible_items(&app.images, app.canvas.h).into_iter().find(|(i, _)| *i == item).map(|(_, y)| y)
+}
+
+#[test]
+fn a_promo_page_the_server_skips_leaves_the_strip_without_moving_the_place() {
+    let (mut app, mut t, dir) = app("reader-skip");
+    app.shot = false;
+    let fake = fake::Fake::start();
+    app.server = Some(fake.server());
+    app.images.set_server(app.server.clone());
+    // Chapter 1's third page is a promo page; so is chapter 2's last.
+    fake.state.lock().unwrap().skip_pages.extend([(1001, 2), (1002, 2)]);
+    let d = comic(1, &[6, 3]);
+    // Every other page is measured as it will be (780 tall).
+    for (c, n) in [(1001, 0), (1001, 1), (1001, 3), (1001, 4), (1001, 5), (1002, 0), (1002, 1)] {
+        app.images.fake_size(c, n, 800, 1600);
+    }
+    app.open_chapter(&d, 0, 2);
+    // The screen's top 200 units down the promo page, still a placeholder: page 4 is 360 down.
+    if let Some(r) = &mut app.reader {
+        r.pos = crate::strip::Pos { item: crate::strip::Item::Page(0, 2), off: 200.0 };
+    }
+    step(&mut app, &mut t);
+    let before = on_screen(&app, crate::strip::Item::Page(0, 3)).expect("page 4 on screen");
+    assert!((before - 360.0).abs() < 0.5, "{before}");
+    assert!(until(&mut app, &mut t, 5.0, |a| a.images.skipped(1001, 2)), "the server said to skip it");
+    step(&mut app, &mut t);
+    assert!(app.images.failed(1001, 2).is_none(), "not a page that didn't load");
+    let after = on_screen(&app, crate::strip::Item::Page(0, 3)).expect("page 4 still on screen");
+    assert!((after - before).abs() < 0.5, "nothing below it moved: {before} then {after}");
+    assert_ne!(reader(&app).pos.item, crate::strip::Item::Page(0, 2), "the place is no longer in it");
+    assert!(dir.join("cache").join("1001").join("2.skip").is_file(), "kept on disk, not asked for again");
+    // Read on to chapter 2's end, its promo page left out: chapter 2 is finished all the same.
+    for _ in 0..14 {
+        scroll(&mut app, &mut t, 500.0);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(until(&mut app, &mut t, 5.0, |a| a.reported.iter().any(|(c, p)| *c == 1002 && p.done)), "chapter 2 finished: {:?}", app.reported);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_long_press_on_a_page_offers_to_hide_it_and_the_sheet_holds_every_tap() {
+    let (mut app, mut t, dir) = app("reader-hide");
+    nowhere(&mut app);
+    let d = comic(1, &[6]);
+    measure(&mut app, &d);
+    app.open_chapter(&d, 0, 2);
+    if let Some(r) = &mut app.reader {
+        r.pos = crate::strip::Pos { item: crate::strip::Item::Page(0, 2), off: 100.0 };
+    }
+    step(&mut app, &mut t);
+    let h = app.canvas.h;
+    let at = reader(&app).pos;
+    // Held on the page: the sheet, not the overlay.
+    hold(&mut app, &mut t, 200.0, 300.0);
+    assert_eq!(reader(&app).hide_sheet, Some((0, 2)), "the page under the finger");
+    assert!(!reader(&app).overlay);
+    // A tap above the sheet only closes it: no overlay, no page turn.
+    tap(&mut app, &mut t, 200.0, h * 0.1);
+    for _ in 0..30 {
+        step(&mut app, &mut t);
+    }
+    let r = reader(&app);
+    assert!(r.hide_sheet.is_none() && !r.overlay, "closed, and nothing under it took the tap");
+    assert_eq!(r.pos, at, "the strip did not move");
+    // Again, then Hide: the page leaves at once, page 4 staying where it was on screen.
+    let below = on_screen(&app, crate::strip::Item::Page(0, 3)).unwrap();
+    hold(&mut app, &mut t, 200.0, 300.0);
+    assert!(reader(&app).hide_sheet.is_some());
+    tap(&mut app, &mut t, 200.0, h - 192.0 + 76.0 + 26.0);
+    assert!(reader(&app).hide_sheet.is_none());
+    assert!(app.images.skipped(1001, 2), "hidden");
+    let moved = on_screen(&app, crate::strip::Item::Page(0, 3)).unwrap();
+    assert!((moved - below).abs() < 0.5, "{below} then {moved}");
+    assert!(reader(&app).undo.is_some(), "Undo offered");
+    // Undo, at the bottom (a frame on, as the screen draws after the sheet goes): the page is back.
+    step(&mut app, &mut t);
+    tap(&mut app, &mut t, WIDTH / 2.0, h - 16.0 - 24.0);
+    assert!(!app.images.skipped(1001, 2), "shown again");
+    assert!(reader(&app).undo.is_none());
+    assert!(!reader(&app).overlay, "the Undo took the tap, not the strip");
     let _ = std::fs::remove_dir_all(dir);
 }

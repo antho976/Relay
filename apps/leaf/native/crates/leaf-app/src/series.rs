@@ -280,7 +280,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let mut cont: Option<logic::Continue> = None;
     match &detail {
         Some(d) => {
-            cont = logic::continue_point(&d.chapters);
+            cont = crate::places::resume(&app.places, d);
             if let Some(note) = &d.series.note {
                 cx.c.icon("bolt", x0 + 8.0, y + 10.0, 16.0, t::WARN);
                 y += cx.c.para(note, x0 + 26.0, y, w - 26.0, Text::new(ty::UI, t::WARN).line(1.4), 4) + 14.0;

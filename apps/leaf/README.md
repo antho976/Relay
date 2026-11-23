@@ -100,14 +100,22 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
     gently to the next every 18 s (it is not dragged; its dots under it choose one); belled series
     with new chapters first, then what you read last, books too. Then **Top picks for you** (three
     across, each with why in the accent), **Continue reading** (square covers, "1 new chapter" in
-    the accent or "Ch. 12 · 58 to go"), **Because you read X** rails, **Collections** (a tile per
+    the accent or "Ch. 12 · 58 to go": what you started and haven't finished, last read first, a
+    belled series' new chapter bringing it back to the front; finished ones only fill it up to 15,
+    after the others, "Read" dimmed; `logic::continue_order`; the spotlight and My space's Recent
+    put finished ones last too), **Because you read X** rails, **Collections** (a tile per
     tag, each opening its list) and one **Finished, to binge**. Picks (`recs.rs`) come from
     `/v1/recs`, kept on disk and asked again at most every 30 minutes; until the server has made
     them the section says so. A tap or a long press on a pick opens its sheet: why it is there,
     Add to My space (`/v1/follow` with its sources' entries, bell off), Read chapter 1 (added,
     then opened), Not interested (hidden for good) and Fewer like a tag.
-  - **Search**: every source at once. **Add** puts a series in My space with its bell off: adding
-    is not following. Sources are never named anywhere in the app.
+  - **Search**: a few broad sources (`LEAF_SEARCH_SOURCES`, default MangaDex, Asura Scans, Weeb
+    Central, MangaFire), each asked apart (`/v1/search?source=`) so results show as they come; only
+    titles with every word searched (or the same work, `leaf_proto::title_has_words`), at most 20,
+    each source's answer kept 10 minutes on the server. It goes once typing pauses (700 ms) or on
+    Enter, never under 3 characters, never twice for the same words; "Search all sources" under
+    the results asks the rest. **Add** puts a series in My space with its bell off: adding is not
+    following. Sources are never named anywhere in the app.
   - **My space** (`space.rs`, design 42 page 16): rows with a square cover flush left (88, smaller
     than drawn, so more fit), the title, a line, when, and a key. Updates (chapters that came over
     the last 14 days, `/v1/updates`, by day, unread in full ink and read dimmed, Belled only or All;
@@ -166,6 +174,18 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
     `exports/`; or one made now).
   - The reader chains chapters, caches pages on disk and reports progress. The last library and
     series are kept for offline.
+  - **The exact place** (`places.rs`): chapter, page and how far down it, kept in `places.json` on
+    each page change and at most every 2 s while the strip moves (a thread writes it), and at once
+    when the app pauses, stops, loses focus or the reader closes (progress to the server then too;
+    otherwise debounced 3 s). Continue and a chapter's row open there to the unit when it is not
+    older than the server's last read; the overlay says "Saved · page 12" with a mark on its track.
+  - **Scanlator promo pages** (`leaf-server/src/promo.rs`): pages near a chapter's start (3) and
+    end (4) passing through the server get a 64-bit dHash; a picture seen near the edges of 3
+    chapters (Hamming ≤ 6), or like one hidden by hand, is answered `204` + `x-leaf-skip: 1` and
+    left out of the strip (the place never jumps; a chapter whose last pages are left out still
+    finishes). A long press on a page offers "Hide this page and ones like it" (`/v1/pages/hide`,
+    Undo for 5 s). Settings: "Skip scanlator promo pages" (off sends `?promo=1`) and "N pages
+    hidden by you · Clear". No source is ever asked anything for this.
 
 ## Building
 

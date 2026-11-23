@@ -91,6 +91,51 @@ pub struct Ctx {
     pub rec_source_names: Vec<String>,
     /// Titles looked for on them per day at most (`LEAF_REC_SEARCHES`).
     pub rec_searches: usize,
+    /// The broad sources a search asks (`LEAF_SEARCH_SOURCES`); the others only when the phone
+    /// asks for every source.
+    pub search_sources: Vec<String>,
+    /// What each source answered for a search lately: (normalised query, source) to (when, what).
+    pub search_cache: Mutex<SearchCache>,
+    /// Pages near chapters' edges by their pictures, and the ones hidden by hand (`promo.rs`).
+    pub promo: Mutex<crate::promo::Seen>,
+}
+
+/// Each source's answers to searches: (normalised query, source) to (when, what it found).
+pub type SearchCache = HashMap<(String, String), (i64, Vec<crate::suwa::Found>)>;
+
+/// A source's answer to a search is used again for this long.
+pub const SEARCH_KEEP_MS: i64 = 10 * 60_000;
+/// The most works a search answers with.
+pub const SEARCH_MAX: usize = 20;
+
+/// Which sources a search asks.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Scope {
+    /// The broad ones (`LEAF_SEARCH_SOURCES`).
+    Broad,
+    /// Every installed source ("Search all sources").
+    All,
+    /// One, by name (the phone asks each broad one apart, to show results as they come).
+    One(String),
+}
+
+/// The sources a search in `scope` asks, from those installed (`names`): the broad ones that are
+/// installed (every one, when none of them is), all, or the one named.
+pub fn search_scope(names: &[String], broad: &[String], scope: &Scope) -> Vec<String> {
+    let is = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
+    match scope {
+        Scope::All => names.to_vec(),
+        Scope::One(n) => names.iter().filter(|s| is(s, n)).cloned().collect(),
+        Scope::Broad => {
+            let picked: Vec<String> = broad.iter().filter_map(|b| names.iter().find(|s| is(s, b)).cloned()).collect();
+            if picked.is_empty() { names.to_vec() } else { picked }
+        }
+    }
+}
+
+/// One source's answer, kept to what names the search ([`leaf_proto::title_has_words`]).
+pub fn keep_matching(found: Vec<crate::suwa::Found>, query: &str) -> Vec<crate::suwa::Found> {
+    found.into_iter().filter(|f| leaf_proto::title_has_words(&f.title, query)).collect()
 }
 
 /// Nightly backups kept.
@@ -388,20 +433,38 @@ impl Ctx {
         }
     }
 
-    /// Every installed source searched at once, the results grouped by work.
-    pub fn search(&self, query: &str) -> Result<Vec<Candidate>, String> {
-        let sources = self.suwa.sources(&self.lang)?;
+    /// One source's answer to a search: the one kept from the last [`SEARCH_KEEP_MS`] for the same
+    /// words, else asked now (as the phone's request), kept to the titles that name the search.
+    fn search_one(&self, src: &crate::suwa::Source, query: &str, now: i64) -> Result<Vec<crate::suwa::Found>, String> {
+        let key = (leaf_proto::norm_title(query), src.name.clone());
+        let kept = self.search_cache.lock().unwrap_or_else(|p| p.into_inner()).get(&key).filter(|(at, _)| now - at < SEARCH_KEEP_MS).map(|(_, v)| v.clone());
+        if let Some(v) = kept {
+            return Ok(v);
+        }
+        let r = self.ask(&src.name, Lane::Fore, || self.suwa.search(&src.id, query));
+        self.note_source(&src.name, r.as_ref().err());
+        let found = keep_matching(r?, query);
+        let mut cache = self.search_cache.lock().unwrap_or_else(|p| p.into_inner());
+        cache.retain(|_, (at, _)| now - *at < SEARCH_KEEP_MS);
+        cache.insert(key, (now, found.clone()));
+        Ok(found)
+    }
+
+    /// The names a search in `scope` asks (`GET /v1/search/sources` lists the broad ones).
+    pub fn search_names(&self, scope: &Scope) -> Result<(Vec<String>, u32), String> {
+        let installed: Vec<String> = self.suwa.sources(&self.lang)?.into_iter().map(|s| s.name).collect();
+        Ok((search_scope(&installed, &self.search_sources, scope), installed.len() as u32))
+    }
+
+    /// A search: the sources in `scope` asked at once (each answer kept ten minutes), only titles
+    /// that name the search, grouped by work, found on more sources first, at most [`SEARCH_MAX`].
+    pub fn search(&self, query: &str, scope: &Scope) -> Result<Vec<Candidate>, String> {
+        let installed = self.suwa.sources(&self.lang)?;
+        let names = search_scope(&installed.iter().map(|s| s.name.clone()).collect::<Vec<_>>(), &self.search_sources, scope);
+        let sources: Vec<&crate::suwa::Source> = installed.iter().filter(|s| names.contains(&s.name)).collect();
+        let now = now_ms();
         let found: Vec<(String, Vec<crate::suwa::Found>)> = std::thread::scope(|s| {
-            let handles: Vec<_> = sources
-                .iter()
-                .map(|src| {
-                    s.spawn(move || {
-                        let r = self.ask(&src.name, Lane::Fore, || self.suwa.search(&src.id, query));
-                        self.note_source(&src.name, r.as_ref().err());
-                        (src.name.clone(), r)
-                    })
-                })
-                .collect();
+            let handles: Vec<_> = sources.iter().map(|src| s.spawn(move || (src.name.clone(), self.search_one(src, query, now)))).collect();
             handles
                 .into_iter()
                 .filter_map(|h| h.join().ok())
@@ -432,6 +495,7 @@ impl Ctx {
         }
         // Found on more sources first: more likely the work you meant.
         out.sort_by_key(|c| std::cmp::Reverse(c.hits.len()));
+        out.truncate(SEARCH_MAX);
         Ok(out)
     }
 
@@ -1425,6 +1489,22 @@ mod tests {
         assert!(!p.check.contains(&22) && !p.compare.contains(&22), "its source is paused");
         assert_eq!(p.compare, vec![20], "ceil(15 / 24) = 1, and a third failure may move it");
         assert_eq!(plan(&[], now), Plan::default());
+    }
+
+    #[test]
+    fn a_search_asks_the_broad_sources_and_keeps_what_names_it() {
+        let names: Vec<String> = ["Asura Scans", "MangaDex", "Drake Scans", "Weeb Central", "Toonily"].map(String::from).to_vec();
+        let broad: Vec<String> = ["MangaDex", "asura scans", "MangaFire"].map(String::from).to_vec();
+        // The broad ones installed, in their order; MangaFire isn't installed.
+        assert_eq!(search_scope(&names, &broad, &Scope::Broad), vec!["MangaDex".to_string(), "Asura Scans".to_string()]);
+        assert_eq!(search_scope(&names, &broad, &Scope::All).len(), 5);
+        assert_eq!(search_scope(&names, &broad, &Scope::One("drake scans".into())), vec!["Drake Scans".to_string()]);
+        assert!(search_scope(&names, &broad, &Scope::One("Nowhere".into())).is_empty());
+        // None of the broad ones installed: every source, rather than none.
+        assert_eq!(search_scope(&names, &["Gone".to_string()], &Scope::Broad).len(), 5);
+        let found = |t: &str| crate::suwa::Found { id: 1, title: t.into() };
+        let kept = keep_matching(vec![found("Solo Leveling"), found("Leveling With the Gods"), found("Solo Leveling: Ragnarok"), found("Solo Max-Level Newbie")], "solo leveling");
+        assert_eq!(kept.iter().map(|f| f.title.as_str()).collect::<Vec<_>>(), vec!["Solo Leveling", "Solo Leveling: Ragnarok"]);
     }
 
     #[test]

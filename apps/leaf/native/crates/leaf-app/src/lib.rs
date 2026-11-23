@@ -27,6 +27,7 @@ pub mod logic;
 pub mod net;
 pub mod notes;
 pub mod notices;
+pub mod places;
 pub mod reader;
 pub mod recs;
 pub mod search;

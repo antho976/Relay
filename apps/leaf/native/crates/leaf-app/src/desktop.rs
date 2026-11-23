@@ -4,16 +4,19 @@
 //! - `--shot out.png --screen NAME` draws one screen to a file, against a real server
 //!   (`--server`, default `http://127.0.0.1:4580`; `--token`), on a data folder of its own that
 //!   is removed after. Screens: `connect` (the first run, the address checked), `connect-empty`,
-//!   `home` (`--hero N` for the spotlight's Nth), `library-empty` (the list answered empty),
+//!   `home` (`--hero N` for the spotlight's Nth, `--rail UNITS|end` Continue reading moved sideways, `--all-read-but N` every series finished on the shot's copy but the N read last), `library-empty` (the list answered empty),
 //!   `space` (`--tab updates|recent|following|downloads`, `--sort 0..2` for Following, `--filter
 //!   WORDS` typed in its field, `--shelf 0..4` for one shelf, `--shelve ID:dropped` to put a
 //!   series on a shelf in the shot's copy, `--fake-updates 1` for a made-up Updates list built from
 //!   the library, `--all 1` for Updates' All, `--sheet shelf` with `--id` for the shelf sheet),
-//!   `--sheet downloads` with `--id`), `search` (`--query`, default "nano"), `series` (`--id`,
+//!   `--sheet downloads` with `--id`), `search` (`--query`, default "nano"; `--fake-search N`
+//!   answers with N works made from the library instead of asking the server's sources), `series` (`--id`,
 //!   default 1; `--tab also`; `--sheet shelf|wrong|menu|info|range|rec`; `--select N` selects N
 //!   chapters from where you are; `--paid FROM-TO` shows paid episodes ahead on the shot's copy),
 //!   `picks` (`--of top|binge|tag:<tag>|because:<id>`), `reader` (`--id`, `--chapter` number, default 1; `--scroll UNITS`
-//!   down the strip; `--overlay 1`; `--auto 1` auto-scroll on; `--dim 0..0.85`), `settings` (the
+//!   down the strip; `--overlay 1`; `--auto 1` auto-scroll on; `--dim 0..0.85`; `--fake-pages 1`
+//!   draws made-up pages instead of asking the server for any; `--sheet hide` the long press's
+//!   sheet on the page at the top), `settings` (the
 //!   Settings page, `--scroll UNITS`, `--backup 1` to export the latest backup).
 //!   `--fake-recs 1` makes Home's picks (and a series' Readers also like) from the library, for the
 //!   days the server has none (covers are the series' own, fetched once into `--data`);
@@ -336,6 +339,29 @@ fn seed(app: &mut App, gfx: &Gfx, clock: &mut u64, id: i64) -> Result<(), String
 
 /// Updates made up from the library for a shot (the server only records arrivals from the day it
 /// learnt to): each series' newest chapters, spread over the last few days, the older ones read.
+/// `--fake-search N`: the search answered with N works named after the library's series (none
+/// of the server's sources asked), the broad sources' answer, so "Search all sources" shows.
+fn fake_search(app: &mut App, n: usize, gfx: &Gfx, clock: &mut u64) {
+    // Asked already, as far as the page knows: it sends nothing while the library comes.
+    let q = app.st.search.query.trim().to_string();
+    app.st.search.asked = Some(q.clone());
+    app.ask(crate::net::Job::Library);
+    settle(app, gfx, clock, 20.0);
+    // Titles with the words searched first, as the server would keep them.
+    let mut lib = app.library.data.clone().unwrap_or_default();
+    lib.sort_by_key(|s| !leaf_proto::title_has_words(&s.title, &q));
+    let list: Vec<leaf_proto::Candidate> = lib
+        .iter()
+        .take(n)
+        .enumerate()
+        .map(|(i, s)| leaf_proto::Candidate { title: s.title.clone(), cover_of: None, hits: (0..(i % 3 + 1)).map(|k| leaf_proto::Hit { manga_id: s.id * 10 + k as i64, source: format!("S{k}") }).collect(), followed: (i == 0).then_some(s.id) })
+        .collect();
+    app.st.search.asked = Some(q.clone());
+    app.st.search.all = false;
+    app.st.search.more = true;
+    app.st.search.answered(q, false, Ok(list), true);
+}
+
 fn fake_updates(app: &mut App) {
     let now = crate::shelf::now_ms();
     let hour = 3_600_000;
@@ -472,7 +498,10 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.focus.id = Some("search");
             app.st.search.query = arg(args, "--query").unwrap_or_else(|| "nano".into());
             app.focus.text = app.st.search.query.clone();
-            app.finish_typing();
+            match arg(args, "--fake-search").and_then(|v| v.parse::<usize>().ok()) {
+                Some(n) => fake_search(&mut app, n, &gfx, &mut clock),
+                None => app.finish_typing(),
+            }
         }
         "series" | "reader" => {
             app.set_server(server);
@@ -617,7 +646,13 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
         let d = app.series.get(&id).and_then(|l| l.data.clone()).ok_or("the series did not load")?;
         let number = arg(args, "--chapter").and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
         let index = d.chapters.iter().position(|c| c.number == number).ok_or(format!("no chapter {number}"))?;
-        app.reader = Some(crate::reader::Reader::open(&d, index, 0));
+        let fake = arg(args, "--fake-pages").is_some();
+        app.images.set_fake_pages(fake);
+        let mut r = crate::reader::Reader::open(&d, index, 0);
+        if fake {
+            r.shot_counts(12);
+        }
+        app.reader = Some(r);
         app.push(Route::Reader);
         settle(&mut app, &gfx, &mut clock, 30.0);
         if let Some(units) = arg(args, "--scroll").and_then(|s| s.parse::<f32>().ok()) {
@@ -643,6 +678,12 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
         {
             r.auto = true;
         }
+        if arg(args, "--sheet").as_deref() == Some("hide")
+            && let Some(r) = &mut app.reader
+            && let crate::strip::Item::Page(c, n) = r.pos.item
+        {
+            r.hide_sheet = Some((c, n));
+        }
         if let Some(d) = arg(args, "--dim").and_then(|v| v.parse::<f32>().ok()) {
             app.prefs.dim = d.clamp(0.0, crate::app::DIM_MAX);
         }
@@ -654,6 +695,45 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
     {
         app.scroll().off = units;
         settle(&mut app, &gfx, &mut clock, 10.0);
+    }
+    // `--all-read-but N`: on the shot's copy only, every series read to its end but the N read
+    // last (to see finished ones fill Continue reading, labelled Read).
+    if let Some(keep) = arg(args, "--all-read-but").and_then(|v| v.parse::<usize>().ok()) {
+        // Every series' chapters in first, so none arrives after to undo the marks.
+        settle(&mut app, &gfx, &mut clock, 20.0);
+        let mut list = app.library.data.clone().unwrap_or_default();
+        list.sort_by_key(|s| std::cmp::Reverse(s.last_read_at));
+        let shot_now = crate::shelf::now_ms();
+        for (i, s) in list.iter_mut().filter(|s| s.read_upto.is_some() || s.last_read_at > 0).enumerate().skip(keep) {
+            s.read_upto = s.latest;
+            // Read lately, an hour apart, so they line up after the ones still going.
+            if s.last_read_at == 0 {
+                s.last_read_at = shot_now - (i as i64) * 3_600_000 - 86_400_000;
+            }
+            s.unread = 0;
+            if let Some(d) = app.series.get_mut(&s.id).and_then(|l| l.data.as_mut()) {
+                d.chapters.iter_mut().for_each(|c| c.read = true);
+                d.series = s.clone();
+            }
+        }
+        app.library.data = Some(list);
+        clock += 16_666_666;
+        app.frame(clock);
+    }
+    // `--rail UNITS`: Home's Continue reading moved sideways (`end` for its last covers).
+    if screen == "home"
+        && let Some(v) = arg(args, "--rail")
+    {
+        for _ in 0..3 {
+            clock += 16_666_666;
+            app.frame(clock);
+        }
+        let max = app.st.home.rail.max.max(0.0);
+        app.st.home.rail.off = if v == "end" { max } else { v.parse::<f32>().unwrap_or(0.0).min(max) };
+        for _ in 0..3 {
+            clock += 16_666_666;
+            app.frame(clock);
+        }
     }
     clock += 16_666_666;
     app.frame(clock);
@@ -718,6 +798,8 @@ impl ApplicationHandler<()> for Windowed {
         let Some(app) = &mut self.app else { return };
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            // Another window took focus: the reader's place is kept, as on the phone.
+            WindowEvent::Focused(false) => app.keep_place(),
             WindowEvent::Resized(size) => {
                 if let Some((gfx, screen)) = &mut self.gfx {
                     screen.resize(gfx, size.width, size.height);

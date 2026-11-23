@@ -37,6 +37,8 @@ const CARD_H: f32 = 412.0;
 const TOP_H: f32 = 56.0;
 /// The card's corners.
 const CARD_R: f32 = 14.0;
+/// A book this far through is finished.
+const BOOK_DONE: f32 = 0.995;
 /// Top picks shown on Home (the rest are a tap away).
 const TOP_PICKS: usize = 6;
 
@@ -135,11 +137,11 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let mut items: Vec<Item> = Vec::new();
     let mut spots: Vec<Spot> = Vec::new();
     for s in &series {
-        spots.push(Spot { rings: s.bell && new_of(s) > 0, updated_at: s.updated_at, read_at: s.last_read_at });
+        spots.push(Spot { rings: s.bell && new_of(s) > 0, updated_at: s.updated_at, read_at: s.last_read_at, done: logic::finished(s, detail(s.id)) });
         items.push(Item::Series(s.clone()));
     }
     for b in &books {
-        spots.push(Spot { rings: false, updated_at: 0, read_at: b.opened_ms });
+        spots.push(Spot { rings: false, updated_at: 0, read_at: b.opened_ms, done: b.progress >= BOOK_DONE });
         items.push(Item::Book(b.clone()));
     }
     let mut order = logic::spotlight(&spots, SPOT_CANDIDATES);
@@ -154,7 +156,11 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             })
             .collect();
         added.sort_by_key(|a| std::cmp::Reverse(a.0));
-        for (_, i) in added {
+        // Finished things last of all, most recently read first.
+        let mut done: Vec<usize> = (0..spots.len()).filter(|&i| spots[i].done && spots[i].read_at > 0).collect();
+        done.sort_by_key(|&i| std::cmp::Reverse(spots[i].read_at));
+        let fill: Vec<usize> = added.into_iter().map(|(_, i)| i).filter(|&i| !spots[i].done).chain(done).collect();
+        for i in fill {
             if order.len() >= SPOT_CANDIDATES {
                 break;
             }
@@ -187,10 +193,22 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         order.truncate(SPOTS);
     }
     let hero: Vec<Item> = order.iter().map(|&i| items[i].clone()).collect();
-    // What is being read: series part way, books part way, last read first.
-    let mut rail: Vec<(i64, Item)> = series.iter().filter(|s| s.last_read_at > 0 && s.unread > 0).map(|s| (s.last_read_at, Item::Series(s.clone()))).collect();
-    rail.extend(books.iter().filter(|b| b.opened_ms > 0 && b.progress < 0.995).map(|b| (b.opened_ms, Item::Book(b.clone()))));
-    rail.sort_by_key(|a| std::cmp::Reverse(a.0));
+    // What is being read, last read first (a belled series' new chapter as of when it came), then
+    // finished things while there are fewer than fifteen ([`logic::continue_order`]).
+    let mut reading: Vec<logic::Reading> = Vec::new();
+    let mut readable: Vec<Item> = Vec::new();
+    for s in &series {
+        let d = detail(s.id);
+        let ring = s.bell && new_of(s) > 0;
+        reading.push(logic::Reading { started: s.last_read_at > 0, done: logic::finished(s, d), read_at: s.last_read_at, news_at: if ring { s.updated_at } else { 0 } });
+        readable.push(Item::Series(s.clone()));
+    }
+    for b in &books {
+        reading.push(logic::Reading { started: b.opened_ms > 0, done: b.progress >= BOOK_DONE, read_at: b.opened_ms, news_at: 0 });
+        readable.push(Item::Book(b.clone()));
+    }
+    // (finished, the thing)
+    let rail: Vec<(bool, Item)> = logic::continue_order(&reading).into_iter().map(|(i, done)| (done, readable[i].clone())).collect();
     // The chapters of what the spotlight and the rail show, so Continue opens the reader and new
     // chapters are counted: asked once each, from the copy on disk first.
     let want: Vec<i64> = hero.iter().chain(rail.iter().map(|r| &r.1)).filter_map(|it| if let Item::Series(s) = it { Some(s.id) } else { None }).collect();
@@ -202,7 +220,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let news: Vec<u32> = hero.iter().map(|it| if let Item::Series(s) = it { logic::new_chapters(s, app.series.get(&s.id).and_then(|l| l.data.as_ref())) } else { 0 }).collect();
     let continues: Vec<Option<logic::Continue>> = hero
         .iter()
-        .map(|it| if let Item::Series(s) = it { app.series.get(&s.id).and_then(|l| l.data.as_ref()).and_then(|d| logic::continue_point(&d.chapters)) } else { None })
+        .map(|it| if let Item::Series(s) = it { app.series.get(&s.id).and_then(|l| l.data.as_ref()).and_then(|d| crate::places::resume(&app.places, d)) } else { None })
         .collect();
     let rail_new: Vec<u32> = rail.iter().map(|(_, it)| if let Item::Series(s) = it { logic::new_chapters(s, app.series.get(&s.id).and_then(|l| l.data.as_ref())) } else { 0 }).collect();
     let (loading, offline) = (app.library.loading && app.library.data.is_none(), app.library.offline());
@@ -528,20 +546,23 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         cx.ui.claim_h(area);
         moving |= st.rail.update(cx.ui, area, dt);
         let mut x = PAD - st.rail.off;
-        for (j, (_, it)) in rail.iter().enumerate() {
+        for (j, (done, it)) in rail.iter().enumerate() {
             if x + side > -10.0 && x < WIDTH + 10.0 {
                 cover(&mut cx, &mut app.images, it, x, y, side, side, COVER_R, now);
                 if cx.pressed(x, y, side, cell_h) {
                     cx.c.rect(x, y, side, side, COVER_R, t::WASH);
                 }
                 let (f, words, new) = match it {
+                    // Finished: "Read", dimmed, and no bar.
+                    _ if *done => (0.0, "Read".to_string(), false),
                     Item::Series(s) => {
                         let new = rail_new[j];
+                        let d = app.series.get(&s.id).and_then(|l| l.data.as_ref());
                         let words = if new > 0 {
                             if new == 1 { "1 new chapter".to_string() } else { format!("{new} new chapters") }
                         } else {
-                            let at = logic::at_chapter(s, app.series.get(&s.id).and_then(|l| l.data.as_ref())).map_or("Ch. 1".into(), |n| format!("Ch. {}", logic::num(n)));
-                            format!("{at} · {} to go", s.unread)
+                            let at = logic::at_chapter(s, d).map_or("Ch. 1".into(), |n| format!("Ch. {}", logic::num(n)));
+                            format!("{at} · {} to go", logic::to_go(s, d))
                         };
                         (logic::read_fraction(s), words, new > 0)
                     }
@@ -556,7 +577,14 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     cx.c.rect(x + 1.0, y + side - 4.0, ((side - 2.0) * f).max(3.0), 3.0, 1.5, t::ACCENT);
                 }
                 cx.c.text_fit(it.title(), x, y + side + 8.0, side, title_t);
-                cx.c.text_fit(&words, x, y + side + 8.0 + title_t.lh() + 3.0, side, if new { line_t.color(t::ACCENT) } else { line_t });
+                let words_t = if new {
+                    line_t.color(t::ACCENT)
+                } else if *done {
+                    line_t.color(t::INK3.a(0.6))
+                } else {
+                    line_t
+                };
+                cx.c.text_fit(&words, x, y + side + 8.0 + title_t.lh() + 3.0, side, words_t);
                 if !covered && cx.tap(x, y, side, cell_h) {
                     match it {
                         Item::Series(s) => open_series = Some(s.id),

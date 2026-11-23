@@ -19,6 +19,7 @@
 //! | `LEAF_SOURCE_GAP_MS` | `3000` (MangaDex `1500`, AniList `2000`) | background requests' spacing per source: `ms`, `Name=ms`, or both, comma-separated |
 //! | `LEAF_REC_SOURCES` | `MangaDex,Weeb Central,MangaFire` | the sources searched to tell whether a recommendation can be read |
 //! | `LEAF_REC_SEARCHES` | `80` | recommended titles looked for on them per day at most (each kept a week) |
+//! | `LEAF_SEARCH_SOURCES` | `MangaDex,Asura Scans,Weeb Central,MangaFire` | the broad sources a search asks; the others only on "Search all sources" |
 //!
 //! Data (`LEAF_DATA`): `leaf.db`, `backups/`, `thumbs/<chapter>.webp`, `recs/covers/`, and
 //! `app/` (`leaf.apk` and `latest.json`, put there by `apps/leaf/tools/publish-apk.sh`).
@@ -27,6 +28,7 @@ mod anilist;
 mod api;
 mod autopilot;
 mod budget;
+mod promo;
 mod recs;
 mod squeeze;
 mod store;
@@ -90,9 +92,13 @@ fn main() {
         kick: (Mutex::new(false), Condvar::new()),
         rec_source_names: var("LEAF_REC_SOURCES", "MangaDex,Weeb Central,MangaFire").split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
         rec_searches: var("LEAF_REC_SEARCHES", "80").parse().unwrap_or(80),
+        search_sources: var("LEAF_SEARCH_SOURCES", "MangaDex,Asura Scans,Weeb Central,MangaFire").split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        search_cache: Mutex::new(HashMap::new()),
+        promo: Mutex::new(promo::Seen::default()),
     });
     ctx.restore_pauses();
     ctx.load_thumbs();
+    ctx.load_promo();
     let tick = Duration::from_secs(var("LEAF_TICK_SECS", "3600").parse().unwrap_or(3600).max(60));
 
     // The autopilot: waits for Suwayomi, sets it up once, then a pass every `tick`.

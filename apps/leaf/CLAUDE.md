@@ -45,6 +45,11 @@ straight to Suwayomi. An error starting with `PAUSED` is not the source's failur
 toward moving a series. Chapter pictures come only from Suwayomi's downloaded files. Tests of
 these rules pass time in; none sleep.
 
+Search asks only the broad sources (`LEAF_SEARCH_SOURCES`) unless the owner asks for all, keeps
+each source's answer 10 minutes, and the phone searches only after typing pauses. Promo pages are
+recognised only from page bytes already passing through (`promo.rs`): never fetch a page to hash it,
+except the one page the owner hides by hand.
+
 `Series` and `Chapter` gain fields only through JSON the server adds (`paid`, `thumb`): leaf-server
 builds both structs field by field (`autopilot.rs`), and leaf-app in its tests, so a new field on
 them breaks both builds. The phone reads `paid` and `thumb` beside the structs, from the same JSON
