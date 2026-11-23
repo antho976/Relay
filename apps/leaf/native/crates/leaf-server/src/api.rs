@@ -83,9 +83,12 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Same length and same bytes, compared without stopping at the first difference.
+/// Same length and same bytes, compared without stopping at the first difference, and over the
+/// longer of the two so the time taken does not tell the token's length either.
 fn same_secret(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let diff = (0..a.len().max(b.len())).fold(0u8, |acc, i| acc | (a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0xff)));
+    diff == 0 && a.len() == b.len()
 }
 
 impl Api {
@@ -207,5 +210,7 @@ mod tests {
         assert!(same_secret("abc", "abc"));
         assert!(!same_secret("abc", "abd"));
         assert!(!same_secret("abc", "abcd"));
+        assert!(!same_secret("abcd", "abc"));
+        assert!(!same_secret("", "a"));
     }
 }

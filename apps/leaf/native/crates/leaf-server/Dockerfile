@@ -9,6 +9,8 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/leaf-server /usr/local/bin/leaf-server
 ENV LEAF_DATA=/data LEAF_BIND=0.0.0.0:4580
+# Owned by the user it runs as, for a named volume; a bind mount keeps its host folder's owner.
+RUN mkdir -p /data && chown 1000:1000 /data
 VOLUME /data
 EXPOSE 4580
 USER 1000:1000

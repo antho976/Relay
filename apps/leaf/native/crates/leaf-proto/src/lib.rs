@@ -172,9 +172,20 @@ fn main_title(t: &str) -> &str {
     t.split([':', '–', '—', '(']).next().unwrap_or(t).trim()
 }
 
+/// The subtitle, what follows the main title ("" when there is none).
+fn subtitle(t: &str) -> &str {
+    t.find([':', '–', '—', '(']).map_or("", |i| &t[i..])
+}
+
+/// Words in a subtitle that make it another work of the same name: "Tower of God: Urek Mazino
+/// Side Story" is not "Tower of God".
+const SPIN_OFF: [&str; 12] =
+    ["side story", "side stories", "spin off", "spinoff", "gaiden", "after story", "another story", "extra", "special", "anthology", "remake", "season"];
+
 /// Whether two sources' titles name the same work: equal once normalised, equal without their
 /// subtitles when that main title is at least three words (two is too weak: "Solo Leveling" and
-/// "Solo Leveling: Ragnarok" are different works), or nine tenths of their words shared once the
+/// "Solo Leveling: Ragnarok" are different works) and the subtitle left out is not a spin-off's
+/// ("Side Story"), or nine tenths of their words shared once the
 /// small words ("the", "I", "a") are set aside.
 pub fn same_work(a: &str, b: &str) -> bool {
     let (na, nb) = (norm_title(a), norm_title(b));
@@ -186,7 +197,16 @@ pub fn same_work(a: &str, b: &str) -> bool {
     }
     let (ma, mb) = (norm_title(main_title(a)), norm_title(main_title(b)));
     if ma == mb && ma.split(' ').count() >= 3 {
-        return true;
+        // One side leaving its subtitle out, unless that subtitle names a spin-off; two
+        // different subtitles are left to the shared words below.
+        let (sa, sb) = (norm_title(subtitle(a)), norm_title(subtitle(b)));
+        let spin_off = |s: &str| SPIN_OFF.iter().any(|w| format!(" {s} ").contains(&format!(" {w} ")));
+        match (sa.is_empty(), sb.is_empty()) {
+            (false, false) => {}
+            (true, false) if spin_off(&sb) => return false,
+            (false, true) if spin_off(&sa) => return false,
+            _ => return true,
+        }
     }
     // Small words come and go between translations ("I Became the King by Scavenging", "Became the
     // King by Scavenging"): compared without them.
@@ -204,23 +224,15 @@ pub fn gaps(numbers: &[f64]) -> Vec<Gap> {
     let mut whole: Vec<i64> = numbers.iter().filter(|n| n.is_finite() && **n >= 0.0).map(|n| n.floor() as i64).collect();
     whole.sort_unstable();
     whole.dedup();
-    let Some(&last) = whole.last() else { return Vec::new() };
+    // Walked number to number, not 1..=last: a source's misread "chapter 20241105" must not
+    // cost twenty million steps on every library answer.
     let mut out = Vec::new();
-    let mut run: Option<(i64, i64)> = None;
-    for n in 1..=last {
-        if whole.binary_search(&n).is_ok() {
-            if let Some((a, b)) = run.take() {
-                out.push(Gap { from: a as f64, to: b as f64 });
-            }
-        } else {
-            run = Some(match run {
-                Some((a, _)) => (a, n),
-                None => (n, n),
-            });
+    let mut have = 0;
+    for n in whole {
+        if n > have + 1 {
+            out.push(Gap { from: (have + 1) as f64, to: (n - 1) as f64 });
         }
-    }
-    if let Some((a, b)) = run {
-        out.push(Gap { from: a as f64, to: b as f64 });
+        have = have.max(n);
     }
     out
 }
@@ -278,6 +290,10 @@ mod tests {
         assert!(same_work("I Became the King By Scavenging", "Became the King by Scavenging"));
         assert!(!same_work("The King of the Tower", "The Tower of the King's Daughter"));
         assert!(!same_work("", "Anything"));
+        assert!(!same_work("Tower of God", "Tower of God: Urek Mazino Side Story"), "a spin-off is another work");
+        assert!(!same_work("Tower of God: Side Story", "Tower of God"));
+        assert!(!same_work("Junk to King: Season Two", "Junk to King: I Am A Scavenger"), "two subtitles, two works");
+        assert!(same_work("Junk to King: I Am A Scavenger", "Junk to King (I Am A Scavenger)"));
     }
 
     #[test]
@@ -289,6 +305,7 @@ mod tests {
         assert_eq!(gaps(&[0.0, 1.0, 2.0, 3.0]), vec![]);
         assert_eq!(gaps(&[2.0, 4.0]), vec![Gap { from: 1.0, to: 1.0 }, Gap { from: 3.0, to: 3.0 }]);
         assert_eq!(gaps(&[]), vec![]);
+        assert_eq!(gaps(&[1.0, 2.0, 20241105.0]), vec![Gap { from: 3.0, to: 20241104.0 }], "a misread number is one gap, found at once");
     }
 
     #[test]
