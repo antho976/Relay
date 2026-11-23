@@ -58,6 +58,9 @@ CREATE TABLE IF NOT EXISTS alias (work_id INTEGER NOT NULL, title TEXT NOT NULL,
 CREATE TABLE IF NOT EXISTS link (work_id INTEGER NOT NULL, manga_id INTEGER NOT NULL UNIQUE, source TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS arrival (work_id INTEGER NOT NULL, number REAL NOT NULL, at INTEGER NOT NULL, UNIQUE(work_id, number));
 CREATE TABLE IF NOT EXISTS source_health (name TEXT PRIMARY KEY, ok_at INTEGER NOT NULL DEFAULT 0, err_at INTEGER NOT NULL DEFAULT 0, err TEXT);
+CREATE TABLE IF NOT EXISTS dl_queue (seq INTEGER PRIMARY KEY, chapter_id INTEGER NOT NULL UNIQUE, source TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS rec_hidden (anilist_id INTEGER PRIMARY KEY, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS rec_tag (tag TEXT PRIMARY KEY, less INTEGER NOT NULL);
 ";
 
 const WORK_COLS: &str = "id, title, manga_id, source, followed_at, fails, checked_at, compared_at, latest, updated_at, note, bell, shelf";
@@ -281,6 +284,68 @@ impl Store {
     pub fn set(&self, k: &str, v: &str) {
         let _ = self.db.execute("INSERT INTO kv (k, v) VALUES (?1, ?2) ON CONFLICT(k) DO UPDATE SET v = excluded.v", params![k, v]);
     }
+
+    pub fn del(&self, k: &str) {
+        let _ = self.db.execute("DELETE FROM kv WHERE k = ?1", [k]);
+    }
+
+    /// Every (key, value) whose key starts with `prefix`.
+    pub fn with_prefix(&self, prefix: &str) -> Vec<(String, String)> {
+        let mut st = self.db.prepare_cached("SELECT k, v FROM kv WHERE substr(k, 1, length(?1)) = ?1 ORDER BY k").expect("a statement");
+        st.query_map([prefix], |r| Ok((r.get(0)?, r.get(1)?))).expect("kv").filter_map(Result::ok).collect()
+    }
+
+    /// The linked copies with their sources.
+    pub fn link_sources(&self, id: i64) -> Vec<(i64, String)> {
+        let mut st = self.db.prepare_cached("SELECT manga_id, source FROM link WHERE work_id = ?1 ORDER BY rowid").expect("a statement");
+        st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?))).expect("links").filter_map(Result::ok).collect()
+    }
+
+    /// Chapters to hand to Suwayomi's downloader as their source's budget allows; one asked
+    /// again keeps its place in line.
+    pub fn queue_downloads(&self, chapters: &[(i64, String)], at: i64) {
+        for (id, source) in chapters {
+            let _ = self.db.execute("INSERT OR IGNORE INTO dl_queue (chapter_id, source, at) VALUES (?1, ?2, ?3)", params![id, source, at]);
+        }
+    }
+
+    pub fn unqueue_downloads(&self, ids: &[i64]) {
+        for id in ids {
+            let _ = self.db.execute("DELETE FROM dl_queue WHERE chapter_id = ?1", [id]);
+        }
+    }
+
+    /// (chapter, source), first asked first.
+    pub fn queued_downloads(&self) -> Vec<(i64, String)> {
+        let mut st = self.db.prepare_cached("SELECT chapter_id, source FROM dl_queue ORDER BY seq").expect("a statement");
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).expect("queue").filter_map(Result::ok).collect()
+    }
+
+    /// "Not interested": kept for good.
+    pub fn hide_rec(&self, anilist_id: i64, at: i64) {
+        let _ = self.db.execute("INSERT OR IGNORE INTO rec_hidden (anilist_id, at) VALUES (?1, ?2)", params![anilist_id, at]);
+    }
+
+    pub fn hidden_recs(&self) -> std::collections::HashSet<i64> {
+        let mut st = self.db.prepare_cached("SELECT anilist_id FROM rec_hidden").expect("a statement");
+        st.query_map([], |r| r.get(0)).expect("hidden").filter_map(Result::ok).collect()
+    }
+
+    /// Fewer recommendations with this tag (`less`), or as before.
+    pub fn set_rec_tag(&self, tag: &str, less: bool) {
+        let tag = tag.trim().to_lowercase();
+        let _ = if less {
+            self.db.execute("INSERT INTO rec_tag (tag, less) VALUES (?1, 1) ON CONFLICT(tag) DO UPDATE SET less = 1", [&tag])
+        } else {
+            self.db.execute("DELETE FROM rec_tag WHERE tag = ?1", [&tag])
+        };
+    }
+
+    /// The tags marked "fewer like this", lower case.
+    pub fn less_tags(&self) -> std::collections::HashSet<String> {
+        let mut st = self.db.prepare_cached("SELECT tag FROM rec_tag WHERE less = 1").expect("a statement");
+        st.query_map([], |r| r.get(0)).expect("tags").filter_map(Result::ok).collect()
+    }
 }
 
 #[cfg(test)]
@@ -350,6 +415,29 @@ mod tests {
         s.event(1_000, Some(1), "new", "b");
         let after = s.events_since(seen);
         assert_eq!(after.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(), vec!["b"]);
+    }
+
+    #[test]
+    fn downloads_wait_in_line_and_recs_keep_what_you_said() {
+        let s = Store::in_memory();
+        s.queue_downloads(&[(7, "Asura Scans".into()), (3, "MangaDex".into())], 10);
+        s.queue_downloads(&[(7, "Asura Scans".into()), (9, "Asura Scans".into())], 20);
+        assert_eq!(s.queued_downloads(), vec![(7, "Asura Scans".to_string()), (3, "MangaDex".to_string()), (9, "Asura Scans".to_string())], "asked again keeps its place");
+        s.unqueue_downloads(&[7, 3]);
+        assert_eq!(s.queued_downloads(), vec![(9, "Asura Scans".to_string())]);
+        s.hide_rec(30, 1);
+        s.hide_rec(30, 2);
+        assert_eq!(s.hidden_recs().into_iter().collect::<Vec<_>>(), vec![30]);
+        s.set_rec_tag(" Isekai ", true);
+        s.set_rec_tag("Murim", true);
+        s.set_rec_tag("murim", false);
+        assert_eq!(s.less_tags().into_iter().collect::<Vec<_>>(), vec!["isekai".to_string()]);
+        s.set("pause:A", "1");
+        s.set("pause:B", "2");
+        s.set("paused", "3");
+        assert_eq!(s.with_prefix("pause:").len(), 2);
+        s.del("pause:A");
+        assert_eq!(s.get("pause:A"), None);
     }
 
     #[test]

@@ -53,14 +53,47 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
   chapter became 6.3 MB. Its WebP quality setting is broken in 2.4 ("No compression type set!"),
   so leaf-server sets the conversion with no quality.
 - **leaf-server** (`native/crates/leaf-server`) is the autopilot and the phone's only door
-  (`/v1/...`, bearer token). Follow searches every source and pins the series to the one you can
-  read the most chapters of in a row; every 6 h it refreshes, keeps the next 5 unread chapters
-  downloaded, and once a day compares sources, moving a series when yours is down to its last
-  few chapters in a row and another has more, or when yours failed three refreshes. AniList gives
+  (`/v1/...`, bearer token; every request is listed at the top of `api.rs`). Follow searches
+  every source and pins the series to the one you can read the most chapters of in a row; each
+  series is refreshed every 6 h and keeps the chapter after the last one read downloaded, and
+  once a day the other sources are compared, moving a series when yours is down to its last few
+  chapters in a row and another has more, or when yours failed three refreshes. The hourly pass
+  is spread out: at most a sixth of the series refreshed (oldest first) and a 24th compared, so
+  ~170 series never become a burst. AniList gives
   each series its other titles, so a source that names it differently is still found (MangaDex's
   "Junk to King: I Am A Scavenger" is Drake Scans' "Became the King by Scavenging"). Extensions
   update daily. Checked live 2026-11-22: Junk to King moved from MangaDex (chapters 23–44 missing)
   to Drake Scans (all 84) with chapters 1–22 still read and 23–26 already downloading.
+- **Each source asked politely** (`budget.rs`): everything that reaches a site through Suwayomi
+  goes through that source's budget. Background work (the pass, comparisons, recommendations,
+  the download line) waits its turn, one request every 3 s per source (MangaDex 1.5 s, AniList
+  2 s; `LEAF_SOURCE_GAP_MS`); what the phone waits on (pages, a typed search, a follow, "Wrong
+  series?") goes at once and is counted. A 429, "Too Many Requests" or a failed Cloudflare check
+  pauses that source's background work for an hour, twice as long on each repeat up to 12 h,
+  kept across restarts; Settings' Sources list says so (`/v1/health`: `paused_until`,
+  `requests_today`).
+- **Downloads** wait in leaf-server's own line and are handed to Suwayomi two per source at a
+  time, a minute apart at most: "Download next 5", a range or every unread chapter
+  (`POST /v1/series/{id}/download`, `POST`/`DELETE /v1/downloads`) fill in steadily. A single
+  chapter tapped goes at once.
+- **Chapter pictures** are made on the server too (`thumbs.rs`, the phone's `thumb.rs` scoring
+  ported as it is): from up to three pages of a downloaded chapter, read from Suwayomi's download
+  folder (never from a site), 240 × 180 WebP in `data/thumbs/`, kept for good; 60 per hourly
+  pass and within a minute of the phone asking (`GET /v1/chapters/{id}/thumb`, 404 until then;
+  `thumb` on each chapter says one exists).
+- **Recommendations** (`recs.rs`, once a day): AniList's recommendations from the series you've
+  read, scored (ratings pointing there, more from series you finished, your genres and tags, less
+  for tags you asked fewer of), without what you have, hid ("Not interested", kept for good),
+  adult titles or non-comics, and only titles a few broad sources carry (searched as background
+  work, kept a week): Top picks, Because you read X (your last three), Collections (your four
+  most read tags), one finished series to binge (`GET /v1/recs`); "Readers also like" per series
+  (`/v1/series/{id}/also`, kept a day, searches no source).
+- **Paid on Webtoon** (`webtoon.rs`): Webtoons.com's source lists only free episodes; once a day
+  the series' own list page says how many the app sells ahead ("Read 15 new episodes"), and a
+  series whose newest is beyond every source's gets `paid` ("Chapters 9–23 are on Webtoon",
+  with the link). No paid episode is ever fetched.
+- **App updates**: the server keeps the newest APK (`data/app/`, put there by
+  `tools/publish-apk.sh <apk> <build> <version>`), `GET /v1/app/latest` and `/v1/app/apk`.
 - **The phone** (`native/crates/leaf-app`), three tabs (design 42, pages 12 to 14):
   - **Home** (`home.rs`): a spotlight over a cover that slides gently to the next every 18 s (it
     is not dragged; its dots choose one; a cover too small to fill it sharp is a poster over a
@@ -130,6 +163,16 @@ Shots and anything that opens a window: headless only (`--shot`), never on the d
 `~/apps/leaf` holds `native/` (leaf-proto and leaf-server only) and `server/` (`compose.yml`,
 `.env` with `LEAF_TOKEN` and `LEAF_SOURCES`). Nothing is published: leaf-server joins the bot's
 network as `leaf-server`, and the bot's Caddy routes `/leaf/*` to it (Discord-bot-V2 #44).
+leaf-server's settings are its environment (the table at the top of `main.rs`); its data folder
+(`data/leaf`, `/data` in the container) holds `leaf.db`, `backups/`, `thumbs/`, `recs/covers/`
+and `app/`.
+
+```fish
+apps/leaf/tools/publish-apk.sh native/android/build/outputs/apk/release/app-release.apk 12 0.3.0
+```
+
+puts a new app there (`app/leaf.apk` and `app/latest.json`, copied under a temporary name and
+renamed, so the phone never sees one without the other).
 
 ```fish
 ssh server1
@@ -150,3 +193,6 @@ Until leaf-server is on main with an image of its own, a new version is copied o
 - The phone does not yet download chapters ahead on its own while closed; it prefetches while
   reading.
 - leaf-server is not built by CI or published as an image.
+- The phone does not read the server's round-3 answers yet: recommendations (`/v1/recs`,
+  `/also`), chapter pictures made on the server (`thumb`), paid episodes (`paid`), batch
+  downloads and app updates (`/v1/app/latest`) are served, not shown.

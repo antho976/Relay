@@ -43,10 +43,14 @@ services:
       - LEAF_DOWNLOADS=/downloads/mangas
       - LEAF_TOKEN=${LEAF_TOKEN:?set LEAF_TOKEN in .env}
       - LEAF_SOURCES=${LEAF_SOURCES:-Asura Scans,Flame Comics,Drake Scans,Rizz Comic,MangaDex,Weeb Central,MangaFire,ManhuaUS,Webtoons.com}
+      # Background requests' spacing per source ("3000,MangaDex=1500"), and the sources searched to
+      # tell whether a recommendation can be read; empty keeps leaf-server's defaults (main.rs).
+      - LEAF_SOURCE_GAP_MS=${LEAF_SOURCE_GAP_MS:-}
+      - LEAF_REC_SOURCES=${LEAF_REC_SOURCES:-}
     volumes:
       - ./data/leaf:/data
       # Suwayomi's downloads, so chapter pages (mangas/, not the covers in thumbnails/) can be
-      # re-encoded smaller (squeeze.rs).
+      # re-encoded smaller (squeeze.rs) and chapter pictures cut from them (thumbs.rs).
       - ./data/downloads:/downloads
     networks:
       default: {}

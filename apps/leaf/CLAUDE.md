@@ -13,7 +13,7 @@ run cargo from there, and plain `cargo test` at the root never builds it.
 | Crate | What |
 |---|---|
 | `leaf-proto` | The wire types the phone and the server share, and the rules both must read alike: title matching, gaps, which copy of a chapter to read. |
-| `leaf-server` | The comics autopilot beside a Suwayomi it drives (`server/compose.yml`). Headless. |
+| `leaf-server` | The comics autopilot beside a Suwayomi it drives (`server/compose.yml`). Headless: `autopilot` (the pass), `budget` (per-source requests), `thumbs`, `recs` (AniList), `webtoon` (paid episodes), `api`. |
 | `leaf-app` | The phone app (wgpu; renderer copied from Tally RS): tabs Home, Search, My space (`home`, `search`, `space`); books (`shelf`, `epub`, `typeset`, `book`, `notes`, `stats`) and comics (`series`, `reader`, `thumb` for chapter pictures). |
 
 ```fish
@@ -32,6 +32,21 @@ translation being read until it runs out. A change there keeps those tests and a
 
 Suwayomi is never exposed: leaf-server is the only door, and it needs `LEAF_TOKEN` to listen
 anywhere but loopback.
+
+## The server asks each source politely (2026-11-23)
+
+The owner's IP must not get banned. Everything in leaf-server that reaches a site through
+Suwayomi (a search, `refresh`, `pages`, page pictures not downloaded, `enqueue`) or AniList goes
+through `Ctx::ask` with its source's name: `Lane::Back` for the autopilot (waits its turn, skipped
+while the source is paused), `Lane::Fore` only for what the phone is waiting on. A new call that
+reaches a site goes through it too, a background loop never asks every series at once (`plan`
+spreads the pass), and downloads go through the line (`queue_downloads`, drained per source), not
+straight to Suwayomi. An error starting with `PAUSED` is not the source's failure: it never counts
+toward moving a series. Chapter pictures come only from Suwayomi's downloaded files. Tests of
+these rules pass time in; none sleep.
+
+`Series` and `Chapter` gain fields only through JSON the server adds (`paid`, `thumb`), until the
+phone adds them with `#[serde(default)]`: a new field on those structs breaks leaf-app's build.
 
 ## Books: what is easy to break
 

@@ -2,18 +2,28 @@
 //!
 //! - **Follow** searches every installed source and pins the series to the one you can read the
 //!   most chapters of in a row from where you are, ties to your preferred sources.
-//! - **Every hour** it refreshes the series not checked for `CHECK_EVERY`, keeps the next
-//!   `ahead` unread chapters downloaded (Suwayomi converts them to WebP), and once a day compares
-//!   the other sources: when yours is down to its last few chapters in a row and another has more,
-//!   or yours failed three refreshes in a row, the other takes over, your place carried across.
-//! - **Every day** it updates the installed extensions, which is how a site's change gets fixed.
+//! - **Every hour** it refreshes a sixth of the series (those checked longest ago, at most
+//!   ceil(series / 6), so each is checked every `CHECK_EVERY` without a burst), keeps the next
+//!   `ahead` unread chapters downloaded (Suwayomi converts them to WebP), and compares the other
+//!   sources for at most ceil(series / 24) of them, so each is compared once a day: when yours is
+//!   down to its last few chapters in a row and another has more, or yours failed three refreshes
+//!   in a row, the other takes over, your place carried across ([`plan`]).
+//! - **Every day** it updates the installed extensions, which is how a site's change gets fixed,
+//!   makes the recommendations (`recs.rs`) and reads Webtoons.com's paid episodes ahead.
+//! - Everything that reaches a source goes through its budget (`budget.rs`): the pass waits its
+//!   turn and stays away from a source that asked for fewer requests; the phone never waits.
+//! - Downloads wait in leaf-server's own line (`dl_queue`) and are handed to Suwayomi a couple
+//!   per source at a time ([`Ctx::drain`]), so a big batch fills in steadily.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use leaf_proto::{Candidate, Chapter, Copy, Hit, Series, SeriesDetail, gaps, pick_copies, same_work};
+use leaf_proto::{Candidate, Chapter, Copy, Hit, PaidAhead, Series, SeriesDetail, SeriesDownload, gaps, pick_copies, same_work};
+use serde_json::Value;
 
+use crate::budget::{Budget, Lane};
 use crate::store::{Store, Work};
 use crate::suwa::{Manga, Suwa};
 
@@ -37,6 +47,23 @@ pub const CLEAR_GAIN: u32 = 3;
 /// How far a chapter number may stand from every other one and still count as the latest: a
 /// source's misread "chapter 20241105" or a teaser numbered 1000 is not a new chapter.
 const LONE_NUMBER: f64 = 50.0;
+/// The start of the error a background request answers while its source is paused: not the
+/// source's failure, so it never counts toward moving a series.
+pub const PAUSED: &str = "paused: ";
+/// Chapters of one source in Suwayomi's download queue at a time.
+const DOWNLOADING_PER_SOURCE: usize = 2;
+/// Chapter pictures made per hourly pass (more when asked for by the phone, a few a minute).
+const THUMBS_PER_PASS: usize = 60;
+pub(crate) const WEBTOONS: &str = "Webtoons.com";
+
+/// A chapter's page addresses, the source they come from, and whether they are served from
+/// Suwayomi's downloads (so asking for one reaches no site).
+#[derive(Clone, Debug)]
+pub struct PageList {
+    pub urls: Vec<String>,
+    pub source: String,
+    pub local: bool,
+}
 
 pub struct Ctx {
     pub suwa: Suwa,
@@ -47,9 +74,23 @@ pub struct Ctx {
     /// How many unread chapters to keep downloaded per series.
     pub ahead: usize,
     /// Page addresses per chapter, so a page asks Suwayomi once for the list.
-    pub pages: Mutex<HashMap<i64, Vec<String>>>,
-    /// leaf-server's data folder (backups go in `backups/`).
+    pub pages: Mutex<HashMap<i64, PageList>>,
+    /// leaf-server's data folder (backups go in `backups/`, pictures in `thumbs/`).
     pub data: std::path::PathBuf,
+    /// Each source asked politely.
+    pub budget: Budget,
+    /// Suwayomi's download folder (`mangas/`), when shared: chapter pictures are cut from it.
+    pub downloads: Option<PathBuf>,
+    /// Chapters with a picture in `thumbs/`.
+    pub thumbs: Mutex<HashSet<i64>>,
+    /// Chapters whose picture the phone asked for before it was made.
+    pub thumbs_wanted: Mutex<Vec<i64>>,
+    /// Wakes the download line early (something was queued).
+    pub kick: (Mutex<bool>, Condvar),
+    /// The sources searched to tell whether a recommendation can be read (`LEAF_REC_SOURCES`).
+    pub rec_source_names: Vec<String>,
+    /// Titles looked for on them per day at most (`LEAF_REC_SEARCHES`).
+    pub rec_searches: usize,
 }
 
 /// Nightly backups kept.
@@ -225,8 +266,55 @@ pub fn detail_of(w: &Work, m: &Manga, extras: &[Manga], prefs: &[String]) -> Ser
 impl Ctx {
     /// The store, locked. Never hold the guard across a call that may lock it again: keep each
     /// use to one statement (`let w = self.store().work(id);`), not an `if let` condition.
-    fn store(&self) -> std::sync::MutexGuard<'_, Store> {
+    pub(crate) fn store(&self) -> std::sync::MutexGuard<'_, Store> {
         self.store.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// A request that reaches `source` (a site, through Suwayomi, or AniList), through its
+    /// budget: the foreground goes at once and is counted; the background waits its turn, or
+    /// answers [`PAUSED`] while the source asked for fewer requests. A rate limit in the answer
+    /// pauses the source's background work (kept across restarts).
+    pub(crate) fn ask<T>(&self, source: &str, lane: Lane, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        match lane {
+            Lane::Fore => self.budget.fore(source, now_ms()),
+            Lane::Back => {
+                let wait = self.budget.book(source, now_ms()).map_err(|until| format!("{PAUSED}{source} asked for fewer requests (until {until})"))?;
+                if wait > 0 {
+                    std::thread::sleep(Duration::from_millis(wait as u64));
+                }
+            }
+        }
+        let r = f();
+        if let Err(e) = &r
+            && let Some(p) = self.budget.answer(source, Some(e), now_ms())
+        {
+            log(&format!("{source}: background work paused for {} min: {e}", (p.until - p.last_at) / 60_000));
+            self.store().set(&format!("pause:{source}"), &p.encode());
+        }
+        r
+    }
+
+    /// Pauses kept from before a restart.
+    pub fn restore_pauses(&self) {
+        let kept = self.store().with_prefix("pause:");
+        for (k, v) in kept {
+            if let Some(p) = crate::budget::Pause::decode(&v) {
+                self.budget.restore(&k["pause:".len()..], p);
+            }
+        }
+    }
+
+    fn paused(&self, source: &str) -> bool {
+        self.budget.paused(source, now_ms()).is_some()
+    }
+
+    /// A manga fetched from its source now, through the source's budget.
+    fn refresh(&self, manga_id: i64, source: Option<&str>, lane: Lane) -> Result<Manga, String> {
+        let source = match source {
+            Some(s) => s.to_string(),
+            None => self.suwa.source_of(manga_id)?,
+        };
+        self.ask(&source, lane, || self.suwa.refresh(manga_id))
     }
 
     /// The work's linked copies on other sources, as Suwayomi last stored them.
@@ -235,7 +323,7 @@ impl Ctx {
         links.into_iter().filter(|id| *id != w.manga_id).filter_map(|id| self.suwa.manga(id).ok()).collect()
     }
 
-    fn detail_now(&self, w: &Work, m: &Manga) -> SeriesDetail {
+    pub(crate) fn detail_now(&self, w: &Work, m: &Manga) -> SeriesDetail {
         detail_of(w, m, &self.extras(w), &self.prefs)
     }
 
@@ -248,6 +336,38 @@ impl Ctx {
         let w = self.store().work(id).ok_or("no such series")?;
         let m = self.suwa.manga(w.manga_id)?;
         Ok(self.detail_now(&w, &m))
+    }
+
+    /// Paid episodes ahead on Webtoons.com, as the daily look found them.
+    pub fn paid(&self, id: i64) -> Option<PaidAhead> {
+        let kept = self.store().get(&format!("paid:{id}"));
+        kept.and_then(|v| serde_json::from_str(&v).ok())
+    }
+
+    /// A series as sent: [`Series`] and the fields the phone's struct doesn't have yet (`paid`).
+    fn series_json(&self, s: &Series) -> Value {
+        let mut v = serde_json::to_value(s).unwrap_or(Value::Null);
+        v["paid"] = serde_json::to_value(self.paid(s.id)).unwrap_or(Value::Null);
+        v
+    }
+
+    /// `GET /v1/library`.
+    pub fn library_json(&self) -> Value {
+        Value::Array(self.library().iter().map(|s| self.series_json(s)).collect())
+    }
+
+    /// `GET /v1/series/{id}`: with `paid` on the series and `thumb` on each chapter.
+    pub fn detail_json(&self, id: i64) -> Result<Value, String> {
+        let d = self.detail(id)?;
+        let mut v = serde_json::to_value(&d).map_err(|e| e.to_string())?;
+        v["series"] = self.series_json(&d.series);
+        let made = self.thumbs.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(list) = v["chapters"].as_array_mut() {
+            for (c, json) in d.chapters.iter().zip(list.iter_mut()) {
+                json["thumb"] = Value::Bool(made.contains(&c.id));
+            }
+        }
+        Ok(v)
     }
 
     /// Looks for the work on every other source now (and links what it finds), as the daily
@@ -276,7 +396,7 @@ impl Ctx {
                 .iter()
                 .map(|src| {
                     s.spawn(move || {
-                        let r = self.suwa.search(&src.id, query);
+                        let r = self.ask(&src.name, Lane::Fore, || self.suwa.search(&src.id, query));
                         self.note_source(&src.name, r.as_ref().err());
                         (src.name.clone(), r)
                     })
@@ -324,7 +444,7 @@ impl Ctx {
         // One source asked per thread: as many as there are sources, not as many as were sent.
         let manga_ids = &manga_ids[..manga_ids.len().min(MAX_FOLLOW_COPIES)];
         let mangas: Vec<Manga> = std::thread::scope(|s| {
-            let hs: Vec<_> = manga_ids.iter().map(|id| s.spawn(move || self.suwa.refresh(*id))).collect();
+            let hs: Vec<_> = manga_ids.iter().map(|id| s.spawn(move || self.refresh(*id, None, Lane::Fore))).collect();
             hs.into_iter()
                 .filter_map(|h| h.join().ok())
                 .filter_map(|r| r.map_err(|e| log(&format!("follow {title}: a source left out: {e}"))).ok())
@@ -352,16 +472,17 @@ impl Ctx {
 
     /// Every title the work goes by: its own, then the ones AniList knows (fetched once a week at
     /// most, and only while none are known).
-    fn names(&self, w: &Work, now: i64) -> Vec<String> {
+    fn names(&self, w: &Work, now: i64, lane: Lane) -> Vec<String> {
         let mut names = self.store().aliases(w.id);
         let key = format!("aliases_at:{}", w.id);
         let tried = self.store().get(&key).and_then(|v| v.parse::<i64>().ok()).is_some_and(|at| now - at < 7 * COMPARE_EVERY);
         if names.is_empty() && !tried {
-            match crate::anilist::titles(&w.title) {
+            match self.ask("AniList", lane, || crate::anilist::titles(&w.title)) {
                 Ok(found) => {
                     self.store().add_aliases(w.id, &found);
                     names = found;
                 }
+                Err(e) if e.starts_with(PAUSED) => return vec![w.title.clone()],
                 Err(e) => log(&format!("titles of {}: {e}", w.title)),
             }
             self.store().set(&key, &now.to_string());
@@ -396,9 +517,118 @@ impl Ctx {
         Ok(())
     }
 
-    /// A chapter downloaded because you asked (it is kept until you remove it).
+    /// A chapter downloaded because you tapped it (kept until you remove it): handed to Suwayomi
+    /// at once, counted as the reader's.
     pub fn download(&self, chapter_id: i64, on: bool) -> Result<(), String> {
-        if on { self.suwa.enqueue(&[chapter_id]) } else { self.suwa.delete_downloads(&[chapter_id]) }
+        if !on {
+            self.store().unqueue_downloads(&[chapter_id]);
+            return self.suwa.delete_downloads(&[chapter_id]);
+        }
+        let info = self.suwa.chapter_info(chapter_id)?;
+        self.store().unqueue_downloads(&[chapter_id]);
+        self.ask(&info.source, Lane::Fore, || self.suwa.enqueue(&[chapter_id]))
+    }
+
+    /// Chapters to download, put in line: handed to Suwayomi as each source's budget allows.
+    pub fn queue_downloads(&self, chapters: &[(i64, String)]) {
+        if chapters.is_empty() {
+            return;
+        }
+        self.store().queue_downloads(chapters, now_ms());
+        self.wake();
+    }
+
+    /// `POST` / `DELETE /v1/downloads`: many chapters at once (500 at most).
+    pub fn download_many(&self, ids: &[i64], on: bool) -> Result<u32, String> {
+        let ids = &ids[..ids.len().min(500)];
+        if !on {
+            self.store().unqueue_downloads(ids);
+            self.suwa.delete_downloads(ids)?;
+            return Ok(ids.len() as u32);
+        }
+        let mut want = Vec::new();
+        for id in ids {
+            let info = self.suwa.chapter_info(*id)?;
+            if !info.downloaded {
+                want.push((*id, info.source));
+            }
+        }
+        self.queue_downloads(&want);
+        Ok(want.len() as u32)
+    }
+
+    /// `POST /v1/series/{id}/download`: the chapters numbered `from` to `to`, or every unread one,
+    /// each from the copy the phone reads it from.
+    pub fn download_series(&self, id: i64, r: SeriesDownload) -> Result<u32, String> {
+        let d = self.detail(id)?;
+        let (from, to) = (r.from.unwrap_or(f64::MIN), r.to.unwrap_or(f64::MAX));
+        if !r.unread && r.from.is_none() && r.to.is_none() {
+            return Err("which chapters? from and to, or unread".into());
+        }
+        let want: Vec<(i64, String)> = d
+            .chapters
+            .iter()
+            .filter(|c| !c.downloaded && if r.unread { !c.read } else { c.number >= from && c.number <= to })
+            .map(|c| (c.id, c.from.clone().unwrap_or_else(|| d.series.source.clone())))
+            .collect();
+        self.queue_downloads(&want);
+        Ok(want.len() as u32)
+    }
+
+    pub(crate) fn wake(&self) {
+        let (m, cv) = &self.kick;
+        *m.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        cv.notify_all();
+    }
+
+    /// Waits until something is queued or `most` has passed.
+    pub fn wait_for_work(&self, most: Duration) {
+        let (m, cv) = &self.kick;
+        let guard = m.lock().unwrap_or_else(|p| p.into_inner());
+        let (mut woke, _) = cv.wait_timeout_while(guard, most, |k| !*k).unwrap_or_else(|p| p.into_inner());
+        *woke = false;
+    }
+
+    /// Hands queued downloads to Suwayomi: per source, enough to keep
+    /// [`DOWNLOADING_PER_SOURCE`] chapters downloading, each through the source's budget. A
+    /// paused source's chapters wait.
+    pub fn drain(&self) {
+        let queued = self.store().queued_downloads();
+        if queued.is_empty() {
+            return;
+        }
+        let busy = match self.suwa.download_queue() {
+            Ok(q) => q,
+            Err(e) => return log(&format!("download queue: {e}")),
+        };
+        let mut by_source: Vec<(String, Vec<i64>)> = Vec::new();
+        for (id, source) in queued {
+            if busy.iter().any(|(b, _)| *b == id) {
+                self.store().unqueue_downloads(&[id]);
+                continue;
+            }
+            match by_source.iter_mut().find(|(s, _)| *s == source) {
+                Some((_, v)) => v.push(id),
+                None => by_source.push((source, vec![id])),
+            }
+        }
+        for (source, ids) in by_source {
+            if self.paused(&source) {
+                continue;
+            }
+            let room = DOWNLOADING_PER_SOURCE.saturating_sub(busy.iter().filter(|(_, s)| *s == source).count());
+            for id in ids.into_iter().take(room) {
+                match self.ask(&source, Lane::Back, || self.suwa.enqueue(&[id])) {
+                    Ok(()) => self.store().unqueue_downloads(&[id]),
+                    Err(e) if e.starts_with(PAUSED) => break,
+                    Err(e) => {
+                        // A chapter gone from Suwayomi would otherwise wait for ever.
+                        log(&format!("download {id}: {e}"));
+                        self.store().unqueue_downloads(&[id]);
+                    }
+                }
+            }
+        }
     }
 
     pub fn unfollow(&self, id: i64) -> Result<(), String> {
@@ -429,18 +659,18 @@ impl Ctx {
 
     /// The same chapter number from the work's other copies, preferred sources first: a source
     /// that refuses (rate limits, a Cloudflare check, a site down) doesn't stop the reading.
-    fn pages_elsewhere(&self, chapter_id: i64) -> Option<Vec<String>> {
+    fn pages_elsewhere(&self, chapter_id: i64) -> Option<PageList> {
         let (manga_id, number) = self.suwa.chapter_place(chapter_id).ok()?;
         let work = self.store().work_of_any(manga_id)?;
         let mut copies: Vec<Manga> = std::iter::once(work.manga_id).chain(self.store().links(work.id)).filter(|id| *id != manga_id).filter_map(|id| self.suwa.manga(id).ok()).collect();
         copies.sort_by_key(|m| rank(&m.source_name, &self.prefs));
         for m in copies {
             for c in m.chapters.iter().filter(|c| c.number == number) {
-                if let Ok(p) = self.suwa.pages(c.id)
+                if let Ok(p) = self.ask(&m.source_name, Lane::Fore, || self.suwa.pages(c.id))
                     && !p.is_empty()
                 {
                     log(&format!("chapter {chapter_id}: read from {} instead", m.source_name));
-                    return Some(p);
+                    return Some(PageList { urls: p, source: m.source_name.clone(), local: c.downloaded });
                 }
             }
         }
@@ -452,12 +682,17 @@ impl Ctx {
         self.pages.lock().unwrap_or_else(|p| p.into_inner()).remove(&chapter_id);
     }
 
-    pub fn pages(&self, chapter_id: i64) -> Result<Vec<String>, String> {
-        if let Some(p) = self.pages.lock().unwrap_or_else(|p| p.into_inner()).get(&chapter_id) {
-            return Ok(p.clone());
+    /// The chapter's pages: from Suwayomi's downloads when it has them (no site asked), else from
+    /// its source as the reader's request, else from the work's other copies.
+    pub fn pages(&self, chapter_id: i64) -> Result<PageList, String> {
+        let cached = self.pages.lock().unwrap_or_else(|p| p.into_inner()).get(&chapter_id).cloned();
+        if let Some(p) = cached {
+            return Ok(p);
         }
-        let p = match self.suwa.pages(chapter_id) {
-            Ok(p) => p,
+        let info = self.suwa.chapter_info(chapter_id)?;
+        let asked = if info.downloaded { self.suwa.pages(chapter_id) } else { self.ask(&info.source, Lane::Fore, || self.suwa.pages(chapter_id)) };
+        let p = match asked {
+            Ok(urls) => PageList { urls, source: info.source, local: info.downloaded },
             Err(e) => {
                 log(&format!("chapter {chapter_id}: {e}; trying its other sources"));
                 self.pages_elsewhere(chapter_id).ok_or(e)?
@@ -471,15 +706,27 @@ impl Ctx {
         Ok(p)
     }
 
+    /// One page's picture; counted against its source unless served from the downloads.
+    pub fn page(&self, chapter_id: i64, n: usize) -> Result<(Vec<u8>, String), String> {
+        let list = self.pages(chapter_id)?;
+        let url = list.urls.get(n).ok_or("no such page")?;
+        if list.local { self.suwa.bytes(url) } else { self.ask(&list.source, Lane::Fore, || self.suwa.bytes(url)) }
+    }
+
     /// The chapter after the last one you read (`ahead` of them, 1 by default), downloaded before
     /// you get there. Nothing for a series you have not started: downloads are otherwise yours to
     /// ask for.
     fn keep_ahead(&self, d: &SeriesDetail) {
         let Some(upto) = d.series.read_upto else { return };
-        let want: Vec<i64> = d.chapters.iter().filter(|c| c.number > upto && !c.read).take(self.ahead).filter(|c| !c.downloaded).map(|c| c.id).collect();
-        if let Err(e) = self.suwa.enqueue(&want) {
-            log(&format!("download {}: {e}", d.series.title));
-        }
+        let want: Vec<(i64, String)> = d
+            .chapters
+            .iter()
+            .filter(|c| c.number > upto && !c.read)
+            .take(self.ahead)
+            .filter(|c| !c.downloaded)
+            .map(|c| (c.id, c.from.clone().unwrap_or_else(|| d.series.source.clone())))
+            .collect();
+        self.queue_downloads(&want);
     }
 
     /// Removes downloads of chapters `KEEP_BEHIND` or more behind the last one read, on the
@@ -512,21 +759,35 @@ impl Ctx {
         }
     }
 
-    pub fn health(&self) -> Vec<leaf_proto::SourceHealth> {
+    /// `GET /v1/health`: each source's last answer, and a pause in words while it lasts (the
+    /// phone shows `last_error`), with `paused_until` and today's `requests_today` beside it.
+    pub fn health(&self) -> Vec<Value> {
         let names: Vec<String> = self.suwa.sources(&self.lang).map(|v| v.into_iter().map(|s| s.name).collect()).unwrap_or_default();
         let rows = self.store().health();
+        let now = now_ms();
         names
             .into_iter()
             .map(|name| {
                 let (ok_at, err_at, err) = rows.iter().find(|r| r.0 == name).map(|r| (r.1, r.2, r.3.clone())).unwrap_or((0, 0, None));
                 let failing = err_at > ok_at;
-                leaf_proto::SourceHealth {
+                let pause = self.budget.paused(&name, now);
+                let last_error = match &pause {
+                    Some(p) => Some(format!("Asked for fewer requests: background work paused for {} min ({})", ((p.until - now) / 60_000).max(1), p.why)),
+                    None if failing => err.clone(),
+                    None => None,
+                };
+                let h = leaf_proto::SourceHealth {
                     blocked: failing && err.as_deref().is_some_and(|e| e.to_lowercase().contains("cloudflare")),
-                    ok: !failing,
+                    ok: !failing && pause.is_none(),
                     last_ok_at: ok_at,
-                    last_error: if failing { err } else { None },
-                    name,
-                }
+                    last_error,
+                    name: name.clone(),
+                };
+                let mut v = serde_json::to_value(&h).unwrap_or(Value::Null);
+                let c = self.budget.today(&name, now);
+                v["paused_until"] = Value::from(pause.map_or(0, |p| p.until));
+                v["requests_today"] = serde_json::json!({ "fore": c.fore, "back": c.back });
+                v
             })
             .collect()
     }
@@ -583,7 +844,7 @@ impl Ctx {
     /// every source, each hit read for its chapters (slow: sources are asked).
     pub fn alternatives(&self, id: i64) -> Result<Vec<leaf_proto::Alternative>, String> {
         let w = self.store().work(id).ok_or("no such series")?;
-        let names = self.names(&w, now_ms());
+        let names = self.names(&w, now_ms(), Lane::Fore);
         let names = &names;
         let sources = self.suwa.sources(&self.lang)?;
         let mut found: Vec<Manga> = std::thread::scope(|s| {
@@ -593,10 +854,10 @@ impl Ctx {
                     s.spawn(move || {
                         let mut hits: Vec<Manga> = Vec::new();
                         for query in names.iter().take(2) {
-                            let Ok(list) = self.suwa.search(&src.id, query) else { continue };
+                            let Ok(list) = self.ask(&src.name, Lane::Fore, || self.suwa.search(&src.id, query)) else { continue };
                             for f in list.into_iter().filter(|f| names.iter().any(|n| same_work(&f.title, n))).take(3) {
                                 if !hits.iter().any(|h| h.id == f.id)
-                                    && let Ok(m) = self.suwa.refresh(f.id)
+                                    && let Ok(m) = self.refresh(f.id, Some(&src.name), Lane::Fore)
                                 {
                                     hits.push(m);
                                 }
@@ -642,7 +903,7 @@ impl Ctx {
         }
         let m = self.suwa.manga(w.manga_id)?;
         let d = self.detail_now(&w, &m);
-        let new = self.suwa.refresh(manga_id)?;
+        let new = self.refresh(manga_id, None, Lane::Fore)?;
         let now = now_ms();
         self.switch(&w, &d, &new, now)?;
         self.store().event(now, Some(w.id), "switched", &format!("Moved {} to {} by hand", w.title, new.source_name));
@@ -717,24 +978,12 @@ impl Ctx {
             if sent.as_deref() == Some(want.as_str()) {
                 continue;
             }
-            let id_key = format!("al_id:{}", w.id);
-            let known = self.store().get(&id_key);
-            let media = match known {
-                Some(v) => v.parse::<i64>().ok(),
-                None => {
-                    std::thread::sleep(std::time::Duration::from_millis(900));
-                    let found = crate::anilist::media_id(&w.title).ok().flatten();
-                    self.store().set(&id_key, &found.map(|i| i.to_string()).unwrap_or_else(|| "none".into()));
-                    found
-                }
-            };
-            let Some(media) = media else { continue };
-            std::thread::sleep(std::time::Duration::from_millis(900));
-            match crate::anilist::save_progress(&token, media, progress, done) {
+            let Some(media) = self.anilist_id(w.id, &w.title, Lane::Back) else { continue };
+            match self.ask("AniList", Lane::Back, || crate::anilist::save_progress(&token, media, progress, done)) {
                 Ok(()) => self.store().set(&sent_key, &want),
                 Err(e) => {
                     log(&format!("anilist {}: {e}", w.title));
-                    if e.contains("Invalid token") || e.contains("Unauthorized") {
+                    if e.contains("Invalid token") || e.contains("Unauthorized") || e.starts_with(PAUSED) {
                         return;
                     }
                 }
@@ -755,8 +1004,21 @@ impl Ctx {
             self.store().set("extensions_at", &now.to_string());
         }
         let works = self.store().works();
-        for w in works.iter().filter(|w| now - w.checked_at >= CHECK_EVERY || w.fails > 0) {
-            self.check(w, now_ms());
+        let due: Vec<Due> = works.iter().map(|w| Due { id: w.id, checked_at: w.checked_at, compared_at: w.compared_at, fails: w.fails, paused: self.paused(&w.source) }).collect();
+        let p = plan(&due, now);
+        for w in works.iter().filter(|w| p.check.contains(&w.id)) {
+            self.check(w, now_ms(), p.compare.contains(&w.id));
+        }
+        // The comparisons due for series not checked this pass, from what Suwayomi last stored.
+        for id in p.compare.iter().filter(|id| !p.check.contains(id)) {
+            let work = self.store().work(*id);
+            let Some(w) = work else { continue };
+            if now - w.compared_at < COMPARE_EVERY && w.fails < FAILS_BEFORE_MOVING {
+                continue;
+            }
+            let Ok(m) = self.suwa.manga(w.manga_id) else { continue };
+            let d = self.detail_now(&w, &m);
+            self.compare(&w, &m, &d, w.fails, now_ms());
         }
         let backed = self.store().get("backup_at").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
         if now - backed >= 86_400_000 {
@@ -767,12 +1029,27 @@ impl Ctx {
             self.store().set("backup_at", &now.to_string());
         }
         self.sync_anilist();
+        self.paid_pass(now_ms());
+        let made = self.thumbs_pass(THUMBS_PER_PASS);
+        if made > 0 {
+            log(&format!("chapter pictures made: {made}"));
+        }
+        let recs_at = self.store().get("recs_at").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        if now - recs_at >= COMPARE_EVERY {
+            match self.make_recs() {
+                Ok(r) => log(&format!("recommendations: {} top, {} because, {} collections", r.top.len(), r.because.len(), r.collections.len())),
+                Err(e) => log(&format!("recommendations: {e}")),
+            }
+            self.store().set("recs_at", &now.to_string());
+        }
     }
 
-    fn check(&self, w: &Work, now: i64) {
-        let fresh = self.suwa.refresh(w.manga_id);
+    fn check(&self, w: &Work, now: i64, may_compare: bool) {
+        let fresh = self.refresh(w.manga_id, Some(&w.source), Lane::Back);
         let (ok, m) = match fresh {
             Ok(m) => (true, m),
+            // Paused for asking too much: not the source's failure, nothing counted.
+            Err(e) if e.starts_with(PAUSED) => return,
             Err(e) => {
                 log(&format!("refresh {}: {e}", w.title));
                 match self.suwa.manga(w.manga_id) {
@@ -800,10 +1077,9 @@ impl Ctx {
         }
         self.store().checked(w.id, ok, latest, now);
         let fails = if ok { 0 } else { w.fails + 1 };
-        if (fails >= FAILS_BEFORE_MOVING || now - w.compared_at >= COMPARE_EVERY)
-            && self.compare(w, &m, &d, fails, now) {
-                return;
-            }
+        if may_compare && (fails >= FAILS_BEFORE_MOVING || now - w.compared_at >= COMPARE_EVERY) && self.compare(w, &m, &d, fails, now) {
+            return;
+        }
         if fails >= FAILS_BEFORE_MOVING && w.note.is_none() {
             let note = format!("{} hasn't answered since {} tries. Nothing else carries it yet", w.source, fails);
             self.store().set_note(w.id, Some(&note));
@@ -821,19 +1097,23 @@ impl Ctx {
     fn compare(&self, w: &Work, m: &Manga, d: &SeriesDetail, fails: u32, now: i64) -> bool {
         self.store().compared(w.id, now);
         let Ok(sources) = self.suwa.sources(&self.lang) else { return false };
-        let names = self.names(w, now);
+        let names = self.names(w, now, Lane::Back);
         let names = &names;
         let alts: Vec<Manga> = std::thread::scope(|s| {
             let hs: Vec<_> = sources
                 .iter()
-                .filter(|src| src.id != m.source_id)
+                .filter(|src| src.id != m.source_id && !self.paused(&src.name))
                 .map(|src| {
                     s.spawn(move || {
                         // Each title in turn (three at most), until one finds the work.
                         for query in names.iter().take(3) {
-                            let Ok(found) = self.suwa.search(&src.id, query) else { continue };
+                            let found = match self.ask(&src.name, Lane::Back, || self.suwa.search(&src.id, query)) {
+                                Ok(f) => f,
+                                Err(e) if e.starts_with(PAUSED) => return None,
+                                Err(_) => continue,
+                            };
                             if let Some(hit) = found.into_iter().find(|f| names.iter().any(|n| same_work(&f.title, n))) {
-                                return self.suwa.refresh(hit.id).ok();
+                                return self.refresh(hit.id, Some(&src.name), Lane::Back).ok();
                             }
                         }
                         None
@@ -888,6 +1168,46 @@ impl Ctx {
             self.keep_ahead(&self.detail_now(&w2, &m));
         }
         Ok(())
+    }
+}
+
+/// A series as the hourly pass weighs when to look at it.
+#[derive(Clone, Copy, Debug)]
+pub struct Due {
+    pub id: i64,
+    pub checked_at: i64,
+    pub compared_at: i64,
+    pub fails: u32,
+    /// Its source asked for fewer requests: left alone until the pause is over.
+    pub paused: bool,
+}
+
+/// What one hourly pass does.
+#[derive(Debug, Default, PartialEq)]
+pub struct Plan {
+    /// Refreshed, oldest checked first.
+    pub check: Vec<i64>,
+    /// Compared with the other sources, oldest compared first.
+    pub compare: Vec<i64>,
+}
+
+/// A failing series is tried again after this long (the next pass), not every few minutes.
+const RETRY_AFTER: i64 = 50 * 60_000;
+
+/// The pass spread over the day: at most ceil(series / 6) refreshed (each due every
+/// [`CHECK_EVERY`]) and ceil(series / 24) compared (each due every [`COMPARE_EVERY`]), so a full
+/// round takes 6 h and 24 h without a burst. A series whose source failed goes first (three
+/// failures in a row move it), and one whose source is paused waits.
+pub fn plan(works: &[Due], now: i64) -> Plan {
+    let n = works.len();
+    let mut check: Vec<&Due> = works.iter().filter(|w| !w.paused && (now - w.checked_at >= CHECK_EVERY || (w.fails > 0 && now - w.checked_at >= RETRY_AFTER))).collect();
+    check.sort_by_key(|w| (w.fails == 0, w.checked_at, w.id));
+    let failing = |w: &Due| w.fails + 1 >= FAILS_BEFORE_MOVING;
+    let mut compare: Vec<&Due> = works.iter().filter(|w| !w.paused && (now - w.compared_at >= COMPARE_EVERY || failing(w))).collect();
+    compare.sort_by_key(|w| (!failing(w), w.compared_at, w.id));
+    Plan {
+        check: check.into_iter().take(n.div_ceil((CHECK_EVERY / HOUR) as usize)).map(|w| w.id).collect(),
+        compare: compare.into_iter().take(n.div_ceil((COMPARE_EVERY / HOUR) as usize)).map(|w| w.id).collect(),
     }
 }
 
@@ -1055,6 +1375,56 @@ mod tests {
         let numbers: Vec<f64> = read.iter().map(|id| new.chapters.iter().find(|c| c.id == *id).unwrap().number).collect();
         assert_eq!(numbers, (1..=10).map(f64::from).chain([54.0]).collect::<Vec<_>>(), "11 to 53 stay unread");
         assert_eq!(part, vec![(2000 + 10, 7)], "chapter 11's page comes along");
+    }
+
+    #[test]
+    fn passes_spread_the_checks_over_six_hours_and_comparisons_over_a_day() {
+        let mut works: Vec<Due> = (1..=170).map(|id| Due { id, checked_at: id, compared_at: id, fails: 0, paused: false }).collect();
+        let mut checked = std::collections::HashMap::new();
+        let mut compared = std::collections::HashMap::new();
+        let start = 10 * COMPARE_EVERY;
+        for pass in 0..24 {
+            let now = start + pass * HOUR;
+            let p = plan(&works, now);
+            assert!(p.check.len() <= 29, "ceil(170 / 6) at most: {}", p.check.len());
+            assert!(p.compare.len() <= 8, "ceil(170 / 24) at most");
+            for w in works.iter_mut() {
+                if p.check.contains(&w.id) {
+                    w.checked_at = now;
+                    *checked.entry(w.id).or_insert(0) += 1;
+                }
+                if p.compare.contains(&w.id) {
+                    w.compared_at = now;
+                    *compared.entry(w.id).or_insert(0) += 1;
+                }
+            }
+            if pass == 0 {
+                assert_eq!(p.check[..3], [1, 2, 3], "oldest first");
+            }
+            if pass == 5 {
+                assert_eq!(checked.len(), 170, "every series checked within six passes");
+            }
+        }
+        assert!(checked.values().all(|n| *n == 4), "each checked once every six hours over a day: {:?}", checked.values().max());
+        assert_eq!(compared.len(), 170, "every series compared within a day");
+        assert!(compared.values().all(|n| *n == 1));
+    }
+
+    #[test]
+    fn a_failing_series_goes_first_and_a_paused_source_waits() {
+        let now = 10 * COMPARE_EVERY;
+        let fresh = |id| Due { id, checked_at: now - HOUR, compared_at: now - HOUR, fails: 0, paused: false };
+        let mut works: Vec<Due> = (1..=12).map(|id| Due { checked_at: 0, compared_at: 0, ..fresh(id) }).collect();
+        works.push(Due { fails: 2, ..fresh(20) });
+        works.push(Due { fails: 1, checked_at: now - 10 * 60_000, ..fresh(21) });
+        works.push(Due { paused: true, checked_at: 0, compared_at: 0, ..fresh(22) });
+        let p = plan(&works, now);
+        assert_eq!(p.check.len(), 3, "ceil(15 / 6)");
+        assert_eq!(p.check[0], 20, "the failing one first");
+        assert!(!p.check.contains(&21), "tried ten minutes ago: next pass");
+        assert!(!p.check.contains(&22) && !p.compare.contains(&22), "its source is paused");
+        assert_eq!(p.compare, vec![20], "ceil(15 / 24) = 1, and a third failure may move it");
+        assert_eq!(plan(&[], now), Plan::default());
     }
 
     #[test]

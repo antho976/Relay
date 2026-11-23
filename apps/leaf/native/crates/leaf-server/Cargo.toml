@@ -14,6 +14,7 @@ ureq = { version = "3", default-features = false, features = ["rustls"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 tiny_http = "0.12"
 # Re-encoding downloaded pages smaller (squeeze.rs): decode with image, encode lossy WebP with
-# libwebp (image's own WebP encoder is lossless only).
-image = { version = "0.25", default-features = false, features = ["webp"] }
+# libwebp (image's own WebP encoder is lossless only). JPEG and PNG for the chapter pictures
+# (thumbs.rs) of pages Suwayomi kept as they came.
+image = { version = "0.25", default-features = false, features = ["webp", "jpeg", "png"] }
 webp = { version = "0.3", default-features = false }

@@ -25,12 +25,26 @@
 //! | `GET /v1/health` | `[SourceHealth]` |
 //! | `GET` / `POST /v1/backup` | the latest nightly backup / one made now (JSON) |
 //! | `POST /v1/settings/anilist` [`AnilistToken`] | sets or removes the AniList token |
-//! | `POST` / `DELETE /v1/chapters/{id}/download` | downloads a chapter on the server, or removes it |
+//! | `POST` / `DELETE /v1/chapters/{id}/download` | downloads a chapter on the server now, or removes it |
+//! | `POST` / `DELETE /v1/downloads` [`DownloadIds`] | queues chapters to download (drained per source), or removes them; `{"ok":true,"count":n}` |
+//! | `POST /v1/series/{id}/download` [`SeriesDownload`] | queues chapters `from`–`to`, or every unread one; `{"ok":true,"count":n}` |
+//! | `GET /v1/chapters/{id}/thumb` | the chapter's picture (WebP, 240 × 180); 404 at once while there is none |
+//! | `GET /v1/recs` | [`Recs`], made once a day |
+//! | `GET /v1/recs/cover/{anilist_id}` | a recommendation's cover |
+//! | `POST /v1/recs/{anilist_id}/hide` | "Not interested", for good |
+//! | `POST /v1/recs/tags` [`RecTag`] | fewer recommendations with a tag, or as before |
+//! | `GET /v1/series/{id}/also` | `[Rec]`: "Readers also like", kept a day |
+//! | `GET /v1/app/latest` | [`AppLatest`]; 404 when the server holds no app |
+//! | `GET /v1/app/apk` | the app (`application/vnd.android.package-archive`) |
+//!
+//! `/v1/library` and `/v1/series/{id}` send each series with `paid` ([`leaf_proto::PaidAhead`] or
+//! null) and each chapter with `thumb`; `/v1/health` each source with `paused_until` and
+//! `requests_today`: fields the phone's structs gain when it reads them (see leaf-proto).
 
 use std::io::Read;
 use std::sync::Arc;
 
-use leaf_proto::{AnilistToken, Bell, ChapterRead, Follow, Pages, Progress, ReadBefore, Repin, ShelfSet, Status};
+use leaf_proto::{AnilistToken, AppLatest, Bell, ChapterRead, DownloadIds, Follow, Pages, Progress, ReadBefore, RecTag, Repin, SeriesDownload, ShelfSet, Status};
 use serde::Serialize;
 use tiny_http::{Header, Method, Request, Response};
 
@@ -115,13 +129,28 @@ impl Api {
                 .and_then(|h| h.value.as_str().strip_prefix("Bearer "))
                 .is_some_and(|given| same_secret(given.trim(), t)),
         };
+        if authorised && matches!(method, Method::Get) && parts.as_slice() == ["v1", "app", "apk"] {
+            // Streamed from disk with its length (never chunked: the phone shows progress), not
+            // read into memory.
+            let path = self.ctx.data.join("app").join("leaf.apk");
+            let _ = match std::fs::File::open(&path) {
+                Ok(f) => req.respond(
+                    Response::from_file(f)
+                        .with_chunked_threshold(usize::MAX)
+                        .with_header(header("content-type", "application/vnd.android.package-archive"))
+                        .with_header(header("content-disposition", "attachment; filename=\"leaf.apk\"")),
+                ),
+                Err(_) => req.respond(fail(404, "no app on this server")),
+            };
+            return;
+        }
         let reply = if parts.as_slice() == ["v1", "ping"] {
             json(&serde_json::json!({ "ok": true }))
         } else if !authorised {
             fail(401, "this server needs its token")
         } else {
             let mut body = String::new();
-            if matches!(method, Method::Post) {
+            if matches!(method, Method::Post | Method::Delete) {
                 let _ = req.as_reader().take(1 << 20).read_to_string(&mut body);
             }
             self.route(&method, &parts, &url, &body)
@@ -138,7 +167,7 @@ impl Api {
                 let series = ctx.store.lock().map(|s| s.works().len() as u32).unwrap_or(0);
                 Ok(json(&Status { server: env!("CARGO_PKG_VERSION").into(), suwayomi: ctx.suwa.version().ok(), sources, series, anilist: ctx.anilist_on() }))
             }
-            (Method::Get, ["v1", "library"]) => Ok(json(&ctx.library())),
+            (Method::Get, ["v1", "library"]) => Ok(json(&ctx.library_json())),
             (Method::Get, ["v1", "events"]) => Ok(json(&match query_param(url, "since").and_then(|v| v.parse::<i64>().ok()) {
                 Some(since) => ctx.store.lock().map(|s| s.events_since(since)).unwrap_or_default(),
                 None => ctx.store.lock().map(|s| s.events(100)).unwrap_or_default(),
@@ -190,7 +219,7 @@ impl Api {
             (Method::Delete, ["v1", "chapters", _, "download"]) => {
                 id(2).ok_or("bad id".to_string()).and_then(|c| ctx.download(c, false)).map(|_| json(&serde_json::json!({ "ok": true })))
             }
-            (Method::Get, ["v1", "series", _]) => id(2).ok_or("bad id".to_string()).and_then(|i| ctx.detail(i)).map(|d| json(&d)),
+            (Method::Get, ["v1", "series", _]) => id(2).ok_or("bad id".to_string()).and_then(|i| ctx.detail_json(i)).map(|d| json(&d)),
             (Method::Delete, ["v1", "series", _]) => id(2).ok_or("bad id".to_string()).and_then(|i| ctx.unfollow(i)).map(|_| json(&serde_json::json!({ "ok": true }))),
             (Method::Get, ["v1", "series", _, "cover"]) => {
                 let manga = id(2).and_then(|i| ctx.store.lock().ok()?.work(i)).map(|w| w.manga_id);
@@ -225,11 +254,11 @@ impl Api {
                     .map(|n| json(&serde_json::json!({ "ok": true, "marked": n })))
             }
             (Method::Get, ["v1", "chapters", _, "pages"]) => {
-                id(2).ok_or("bad id".to_string()).and_then(|c| ctx.pages(c).map(|p| json(&Pages { chapter_id: c, count: p.len() as u32 })))
+                id(2).ok_or("bad id".to_string()).and_then(|c| ctx.pages(c).map(|p| json(&Pages { chapter_id: c, count: p.urls.len() as u32 })))
             }
             (Method::Get, ["v1", "chapters", _, "pages", _]) => {
                 let (Some(c), Some(n)) = (id(2), id(4)) else { return fail(400, "bad page") };
-                let got = ctx.pages(c).and_then(|p| p.get(n as usize).cloned().ok_or("no such page".to_string())).and_then(|u| ctx.suwa.bytes(&u));
+                let got = ctx.page(c, n.max(0) as usize);
                 if got.is_err() {
                     // The phone asks again; the list is fetched afresh, from another source if
                     // this one keeps refusing.
@@ -243,6 +272,46 @@ impl Api {
                     .map_err(|e| format!("progress: {e}"))
                     .and_then(|p| ctx.progress(c, p.page, p.done))
                     .map(|_| json(&serde_json::json!({ "ok": true })))
+            }
+            (Method::Get, ["v1", "chapters", _, "thumb"]) => {
+                let Some(c) = id(2) else { return fail(400, "bad id") };
+                match ctx.thumb(c) {
+                    Some(b) => Ok(image(b, "image/webp")),
+                    None => return fail(404, "no picture yet"),
+                }
+            }
+            (Method::Post, ["v1", "downloads"]) | (Method::Delete, ["v1", "downloads"]) => serde_json::from_str::<DownloadIds>(body)
+                .map_err(|e| format!("downloads: {e}"))
+                .and_then(|d| ctx.download_many(&d.ids, matches!(method, Method::Post)))
+                .map(|n| json(&serde_json::json!({ "ok": true, "count": n }))),
+            (Method::Post, ["v1", "series", _, "download"]) => {
+                let Some(i) = id(2) else { return fail(400, "bad id") };
+                serde_json::from_str::<SeriesDownload>(body)
+                    .map_err(|e| format!("download: {e}"))
+                    .and_then(|r| ctx.download_series(i, r))
+                    .map(|n| json(&serde_json::json!({ "ok": true, "count": n })))
+            }
+            (Method::Get, ["v1", "recs"]) => Ok(json(&ctx.recs())),
+            (Method::Get, ["v1", "recs", "cover", _]) => match id(3).ok_or("bad id".to_string()).and_then(|a| ctx.rec_cover(a)) {
+                Err(e) if e == crate::recs::NO_COVER => return fail(404, &e),
+                r => r.map(|(b, k)| image(b, &k)),
+            },
+            (Method::Post, ["v1", "recs", "tags"]) => serde_json::from_str::<RecTag>(body).map_err(|e| format!("tags: {e}")).map(|t| {
+                ctx.rec_tag(&t.tag, t.less);
+                json(&serde_json::json!({ "ok": true }))
+            }),
+            (Method::Post, ["v1", "recs", _, "hide"]) => {
+                let Some(a) = id(2) else { return fail(400, "bad id") };
+                ctx.hide_rec(a);
+                Ok(json(&serde_json::json!({ "ok": true })))
+            }
+            (Method::Get, ["v1", "series", _, "also"]) => id(2).ok_or("bad id".to_string()).and_then(|i| ctx.also(i)).map(|r| json(&r)),
+            (Method::Get, ["v1", "app", "latest"]) => {
+                let kept = std::fs::read_to_string(ctx.data.join("app").join("latest.json")).ok().and_then(|t| serde_json::from_str::<AppLatest>(&t).ok());
+                match kept {
+                    Some(a) => Ok(json(&a)),
+                    None => return fail(404, "no app on this server"),
+                }
             }
             _ => return fail(404, "no such thing"),
         };

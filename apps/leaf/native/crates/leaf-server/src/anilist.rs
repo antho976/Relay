@@ -73,6 +73,20 @@ fn post(token: Option<&str>, body: &Value) -> Result<Value, String> {
     Ok(v)
 }
 
+/// Any read-only query (recommendations, popular titles with a tag): `data` of the answer.
+pub fn query(q: &str, variables: Value) -> Result<Value, String> {
+    let mut v = post(None, &json!({ "query": q, "variables": variables }))?;
+    Ok(v["data"].take())
+}
+
+/// A picture from AniList's CDN (a cover), 8 MB at most.
+pub fn picture(url: &str) -> Result<Vec<u8>, String> {
+    let config = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).build();
+    let agent = ureq::Agent::new_with_config(config);
+    let mut resp = agent.get(url).call().map_err(|e| format!("anilist: {e}"))?;
+    resp.body_mut().with_config().limit(8 << 20).read_to_vec().map_err(|e| format!("anilist: {e}"))
+}
+
 /// AniList's id for the work it knows as `title` (the entry that names it), if any.
 pub fn media_id(title: &str) -> Result<Option<i64>, String> {
     const Q: &str = "query($s:String){ Page(perPage:5){ media(search:$s,type:MANGA){ id title{romaji english} synonyms } } }";

@@ -406,3 +406,110 @@ pub struct SourceHealth {
 pub struct AnilistToken {
     pub token: Option<String>,
 }
+
+// Round 3 (2026-11-23). New types only: `Series` and `Chapter` are built field by field in the
+// phone app, so a new field there breaks its build. The server sends these extra fields in the
+// same JSON (serde ignores what a struct lacks); the app reads them by adding the field with
+// `#[serde(default)]` when it is ready:
+//
+// - every `Series` (`/v1/library`, `/v1/series/{id}`): `"paid": PaidAhead | null`;
+// - every `Chapter` (`/v1/series/{id}`): `"thumb": bool`, a picture at `/v1/chapters/{id}/thumb`;
+// - every `SourceHealth` (`/v1/health`): `"paused_until": ms` (0 when not paused) and
+//   `"requests_today": {"fore": n, "back": n}`.
+
+/// Newer episodes the Webtoons.com app sells ahead of the free ones (`Series.paid`): "Chapters
+/// 9–23 are on Webtoon (paid)", with a link that opens the Webtoon app or site. Leaf never fetches
+/// a paid episode.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PaidAhead {
+    pub from: f64,
+    pub to: f64,
+    pub url: String,
+}
+
+/// A series recommended from AniList, carried by at least one of your sources (`hits`, to add
+/// it with `POST /v1/follow`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Rec {
+    pub anilist_id: i64,
+    pub title: String,
+    /// Why, in words: "More like Nano Machine", "3 of yours point here".
+    pub reason: String,
+    #[serde(default)]
+    pub genres: Vec<String>,
+    pub chapters: Option<u32>,
+    /// "ongoing", "completed", "hiatus", "cancelled" or "unknown", as `Series::status`.
+    pub status: String,
+    #[serde(default)]
+    pub hits: Vec<Hit>,
+    /// Its cover on this server: `/v1/recs/cover/{anilist_id}`.
+    pub cover: String,
+    /// Already in your space, as this series (only `/v1/series/{id}/also` lists those).
+    #[serde(default)]
+    pub in_space: Option<i64>,
+}
+
+/// "Because you read X".
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Because {
+    pub series: i64,
+    pub title: String,
+    pub recs: Vec<Rec>,
+}
+
+/// Popular titles with one of the tags you read most.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Collection {
+    pub tag: String,
+    pub recs: Vec<Rec>,
+}
+
+/// `GET /v1/recs`: made once a day on the server; `made_at` 0 when not made yet.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Recs {
+    #[serde(default)]
+    pub top: Vec<Rec>,
+    #[serde(default)]
+    pub because: Vec<Because>,
+    #[serde(default)]
+    pub collections: Vec<Collection>,
+    /// A finished series with high scores, to read in one go.
+    #[serde(default)]
+    pub binge: Option<Rec>,
+    #[serde(default)]
+    pub made_at: i64,
+}
+
+/// `POST /v1/recs/tags`: fewer recommendations with this tag (`less`), or as before.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct RecTag {
+    pub tag: String,
+    pub less: bool,
+}
+
+/// `POST` / `DELETE /v1/downloads`: chapters to download on the server, or to remove.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct DownloadIds {
+    pub ids: Vec<i64>,
+}
+
+/// `POST /v1/series/{id}/download`: the chapters numbered `from` to `to`, or every unread one.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+pub struct SeriesDownload {
+    #[serde(default)]
+    pub from: Option<f64>,
+    #[serde(default)]
+    pub to: Option<f64>,
+    #[serde(default)]
+    pub unread: bool,
+}
+
+/// `GET /v1/app/latest`: the newest phone app the server holds (`GET /v1/app/apk`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct AppLatest {
+    pub build: u32,
+    pub version: String,
+    pub size: u64,
+    pub sha256: String,
+    pub made_at: i64,
+}
