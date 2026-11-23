@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The owner's leaf-server: the library, covers and pages. No other host. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Plain http is allowed: a server on the home network (192.168.x.x:4580) has no certificate.
+         Leaf talks to the one server the person typed in, and nothing else. -->
+    <application
+        android:label="Leaf"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction"
+        android:usesCleartextTraffic="true"
+        android:theme="@style/Theme.Leaf">
+        <!-- The whole app is libleaf.so; LeafActivity (GameActivity, plus Back and the reader's
+             full screen) hosts it and its keyboard. Every configuration change the app follows by
+             itself is listed, so the activity is not recreated for them. -->
+        <activity
+            android:name="com.quietsoftware.leaf.LeafActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|screenLayout|smallestScreenSize|density|uiMode|navigation|fontScale|fontWeightAdjustment|locale|layoutDirection|colorMode|touchscreen|mcc|mnc|grammaticalGender">
+            <meta-data android:name="android.app.lib_name" android:value="leaf" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

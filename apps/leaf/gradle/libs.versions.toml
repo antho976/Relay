@@ -1,0 +1,6 @@
+[versions]
+# The same Android Gradle plugin as Tally RS, so one machine and one CI image serve both.
+agp = "9.2.1"
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }

@@ -1,0 +1,46 @@
+# Leaf's server: Suwayomi (runs the Mihon extensions, downloads chapters, converts them to WebP)
+# and leaf-server (the autopilot, and the only door the phone uses).
+#
+# On the home server (server1) it sits beside the bot (~/apps/discord-bot): no port is published.
+# leaf-server joins the bot's network, and the bot's Caddy sends https://anthobot.bid/leaf/* to it
+# (deploy/Caddyfile in antho976/Discord-bot-V2), behind the Cloudflare Tunnel already there.
+#
+#   cd ~/apps/leaf/server && cp env.example .env   # then set LEAF_TOKEN; chmod 600 .env
+#   docker compose up -d --build
+name: leaf
+
+services:
+  suwayomi:
+    image: ghcr.io/suwayomi/suwayomi-server:stable
+    restart: unless-stopped
+    environment:
+      # Suwayomi ships no sources: the community list Mihon uses.
+      - 'EXTENSION_REPOS=["https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"]'
+    volumes:
+      # Downloads first: the image's own instructions say it must be listed before the data.
+      - ./data/downloads:/home/suwayomi/.local/share/Tachidesk/downloads
+      - ./data/suwayomi:/home/suwayomi/.local/share/Tachidesk
+
+  leaf-server:
+    build:
+      context: ../native
+      dockerfile: crates/leaf-server/Dockerfile
+    image: leaf-server:local
+    restart: unless-stopped
+    depends_on: [suwayomi]
+    environment:
+      - SUWAYOMI_URL=http://suwayomi:4567
+      - LEAF_TOKEN=${LEAF_TOKEN:?set LEAF_TOKEN in .env}
+      - LEAF_SOURCES=${LEAF_SOURCES:-Asura Scans,MangaDex}
+    volumes:
+      - ./data/leaf:/data
+    networks:
+      default: {}
+      bot:
+        aliases: [leaf-server]
+
+networks:
+  # The bot's compose network, so its Caddy reaches leaf-server by name.
+  bot:
+    name: discord-bot_default
+    external: true

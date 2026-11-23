@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A leaf in the accent (#3FDD8C), its vein cut out, inside the 66dp safe circle. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FF3FDD8C"
+        android:pathData="M74,34 C74,34 44,30 36,52 C30,68 38,76 38,76 C38,76 46,80 60,72 C76,62 74,34 74,34 Z" />
+    <path android:strokeColor="#FF0D0D0E" android:strokeWidth="3" android:strokeLineCap="round"
+        android:pathData="M68,40 C56,50 46,62 34,78" />
+</vector>
