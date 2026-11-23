@@ -320,6 +320,8 @@ pub enum Job {
     PageCount(i64),
     /// Turn a series' bell on or off (`POST /v1/series/{id}/bell`).
     Bell(i64, bool),
+    /// Hear once when a source other than Webtoon has it (`POST /v1/series/{id}/watch`).
+    Watch(i64, bool),
     /// Chapters that came lately for series in My space, over this many days (`/v1/updates`).
     Updates(u32),
     /// A chapter read or unread (`POST /v1/chapters/{id}/read`).
@@ -371,6 +373,9 @@ pub struct SeriesExtra {
     pub id: i64,
     #[serde(default)]
     pub paid: Option<PaidAhead>,
+    /// Only Webtoon has it: whether you asked to hear when another source does (None: one does).
+    #[serde(default)]
+    pub watch: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
@@ -393,13 +398,14 @@ struct DetailExtra {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Extras {
     pub paid: Option<PaidAhead>,
+    pub watch: Option<bool>,
     pub thumbs: Vec<(i64, bool)>,
 }
 
 /// The extras of a `/v1/series/{id}` answer.
 pub fn detail_extras(bytes: &[u8]) -> Extras {
     let d: DetailExtra = serde_json::from_slice(bytes).unwrap_or_default();
-    Extras { paid: d.series.paid, thumbs: d.chapters.into_iter().map(|c| (c.id, c.thumb)).collect() }
+    Extras { paid: d.series.paid, watch: d.series.watch, thumbs: d.chapters.into_iter().map(|c| (c.id, c.thumb)).collect() }
 }
 
 /// Each series' paid episodes ahead, from a `/v1/library` answer.
@@ -416,6 +422,7 @@ impl Job {
                 | Job::Unfollow(_)
                 | Job::Progress(..)
                 | Job::Bell(..)
+                | Job::Watch(..)
                 | Job::ChapterRead(..)
                 | Job::ReadBefore(..)
                 | Job::Shelf(..)
@@ -445,6 +452,7 @@ pub enum Done {
     Progress(i64, Result<(), Fail>),
     PageCount(i64, Result<u32, Fail>),
     Bell(i64, bool, Result<(), Fail>),
+    Watch(i64, bool, Result<(), Fail>),
     Updates { cached: bool, result: Result<Vec<Update>, Fail> },
     ChapterRead(i64, bool, Result<(), Fail>),
     ReadBefore(i64, Result<(), Fail>),
@@ -490,6 +498,7 @@ impl Done {
             Done::Progress(_, r) => of(r),
             Done::PageCount(_, r) => of(r),
             Done::Bell(_, _, r) => of(r),
+            Done::Watch(_, _, r) => of(r),
             Done::Updates { result, .. } => of(result),
             Done::ChapterRead(_, _, r) => of(r),
             Done::ReadBefore(_, r) => of(r),
@@ -516,6 +525,8 @@ type Task = (Option<Server>, Job);
 pub struct Jobs {
     tx: Sender<Task>,
     rx: Receiver<Done>,
+    /// For what is answered from this phone at once, never queued behind the network.
+    done_tx: Sender<Done>,
     running: Arc<AtomicUsize>,
 }
 
@@ -566,7 +577,7 @@ impl Jobs {
                 })
                 .expect("a network thread starts");
         }
-        Jobs { tx, rx, running }
+        Jobs { tx, rx, done_tx, running }
     }
 
     /// Ask, of `server` (none: the app has no server yet, and the job answers from disk alone).
@@ -575,6 +586,11 @@ impl Jobs {
         if self.tx.send((server.cloned(), job)).is_err() {
             self.running.fetch_sub(1, Ordering::SeqCst);
         }
+    }
+
+    /// An answer known already (from what this phone holds): taken with the workers' next.
+    pub fn answer(&self, done: Done) {
+        let _ = self.done_tx.send(done);
     }
 
     /// Every answer that came since the last call.
@@ -867,6 +883,13 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
                 None => no_server(),
             };
             send(Done::Bell(id, on, r));
+        }
+        Job::Watch(id, on) => {
+            let r = match &server {
+                Some(s) => serde_json::to_string(&Bell { on }).map_err(|_| Fail::Garbled).and_then(|body| client.post(s, &format!("/v1/series/{id}/watch"), body)).map(|_| ()),
+                None => no_server(),
+            };
+            send(Done::Watch(id, on, r));
         }
         Job::Updates(days) => {
             let file = updates_file(data);

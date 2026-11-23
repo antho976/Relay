@@ -124,6 +124,17 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
   time in rather than sleep.
 - The app asks for a newer build when it opens and whenever it comes back to the front, at most
   every 15 minutes (`update::due`); Later still hides that build for a day (2026-11-23).
+- Webtoon (2026-11-23): a series' paid row ("Chapters 9–23 are on Webtoon (paid)") is cut at send
+  time to what the series has (`webtoon::still_paid`), so a chapter another source brings drops out
+  of it at once; each Webtoon list page is read at most once a day (`wt:{url}`). A search result
+  only Webtoon has, whose newer chapters are sold, says "Webtoon only, chapters 8–23 paid" under its
+  title (`Candidate::paid`, at most four pages read per search). A series only Webtoon has gets a
+  row under the paid one, "Tell me when another source has it" (Watch): the daily comparison posts
+  one "elsewhere" notice when one does, never folded into the daily summary, and the watch ends.
+- The reader decodes pages five screens ahead (`reader::DECODE_AHEAD`): failures shown only
+  within two screens, the rest tried again as they come near. Pages only kept on disk ahead never
+  take the last free page worker (`images::PLAIN_AT_ONCE`), so the page you scroll to never waits
+  on a slow network (2026-11-23).
 - Series ids are never reused by the server (`work_next_id` in `kv`); the phone still lets go of
   what it kept for an id that comes back naming another series (`known.rs`, 2026-11-23).
 

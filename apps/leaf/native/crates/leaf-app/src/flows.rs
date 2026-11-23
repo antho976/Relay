@@ -754,6 +754,7 @@ mod fake {
                     }
                     (200, "application/json", b"{\"ok\":true}".to_vec())
                 }
+                ("POST", ["v1", "series", _, "watch"]) => (200, "application/json", b"{\"ok\":true}".to_vec()),
                 ("GET", ["v1", "recs", "tagart", slug]) if st.tagart.contains(*slug) => (200, "image/png", png.to_vec()),
                 ("POST", ["v1", "chapters", id, "progress"]) => {
                     if let Ok(p) = serde_json::from_slice::<leaf_proto::Progress>(&body) {
@@ -1476,6 +1477,53 @@ fn reading_a_downloaded_chapter_asks_the_server_nothing() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn a_downloaded_chapter_reads_beside_a_server_that_hangs() {
+    let (mut app, mut t, dir) = app_on("offline-hang", |d| {
+        saved_on_disk(d, 1, 1002, 2.0, 3, false);
+    });
+    // A server that takes requests and never answers: every request worker is held by it.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    app.server = Some(crate::net::Server { base: format!("http://{}", listener.local_addr().unwrap()), token: None, alt: None });
+    app.images.set_server(app.server.clone());
+    for _ in 0..4 {
+        app.ask(crate::net::Job::Library);
+    }
+    // Chapter 1 is read from the server; chapter 2, below it, is on this phone.
+    let d = comic(1, &[2, 0]);
+    app.open_chapter(&d, 0, 0);
+    if let Some(r) = &mut app.reader {
+        r.pos = crate::strip::Pos { item: crate::strip::Item::Head(1), off: 0.0 };
+    }
+    assert!(until(&mut app, &mut t, 2.0, |a| a.reader.as_ref().is_some_and(|r| r.count(1) == Some(3))), "its length is the download's");
+    assert!(until(&mut app, &mut t, 5.0, |a| (0..3).all(|n| a.images.size(1002, n).is_some())), "and its pages come from this phone");
+    drop(listener);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_series_only_webtoon_has_can_be_watched_for_another_source() {
+    let (mut app, mut t, dir) = app("watch");
+    let fake = fake::Fake::start();
+    app.server = Some(fake.server());
+    app.shot = false;
+    app.series.insert(1, loaded(detail(1, 10)));
+    app.watch.insert(1, false);
+    app.push(Route::Series(1));
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    let y0 = first_row(&app);
+    // No paid row: the watch row is first; Watch at its right.
+    tap(&mut app, &mut t, WIDTH - crate::theme::PAD - 30.0, y0 + 28.0);
+    assert_eq!(app.watch.get(&1), Some(&true), "watching at once");
+    assert_eq!(app.route(), &Route::Series(1), "no chapter opened");
+    assert!(until(&mut app, &mut t, 5.0, |_| fake.hits("/v1/series/1/watch") == 1), "the server is told: {:?}", fake.state.lock().unwrap().hits);
+    // The chapters come after it.
+    tap(&mut app, &mut t, 200.0, y0 + 56.0 + crate::series::ROW_H / 2.0);
+    assert_eq!(app.route(), &Route::Reader);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Where Downloads' first series row starts: under the tabs (104), the size line (12 + 36) and 4.
 const DOWNLOADS_ROW: f32 = 104.0 + 12.0 + 36.0 + 4.0;
 
@@ -1669,7 +1717,7 @@ fn did_you_mean_searches_what_it_offers() {
 /// series 9, whose chapters (ids 9001…) are another entry's.
 fn awakening(fake: &fake::Fake) {
     let mut st = fake.state.lock().unwrap();
-    st.found = vec![leaf_proto::Candidate { title: "The Awakening Contract".into(), cover_of: Some(77), hits: vec![leaf_proto::Hit { manga_id: 77, source: "A".into() }, leaf_proto::Hit { manga_id: 78, source: "B".into() }], followed: None }];
+    st.found = vec![leaf_proto::Candidate { title: "The Awakening Contract".into(), cover_of: Some(77), hits: vec![leaf_proto::Hit { manga_id: 77, source: "A".into() }, leaf_proto::Hit { manga_id: 78, source: "B".into() }], followed: None, paid: None }];
     let mut d = comic(0, &[20; 5]);
     d.series.title = "The Awakening Contract".into();
     for c in &mut d.chapters {

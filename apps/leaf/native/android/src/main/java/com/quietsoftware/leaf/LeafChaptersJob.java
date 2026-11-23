@@ -62,6 +62,9 @@ public class LeafChaptersJob extends JobService {
     /** What to post: {"post":[{"id","text"}],"state":{...}} (notices.rs). */
     private static native String nativePlan(String notify, String state, String events, long nowMs, int offsetMin);
 
+    /** The server's second address (over Tailscale), built in; "" when there is none. */
+    private static native String nativeAltBase();
+
     /** Keeps the hourly job scheduled; a job already there is left alone, so its hour holds. */
     public static void schedule(Context c) {
         JobScheduler js = c.getSystemService(JobScheduler.class);
@@ -118,11 +121,23 @@ public class LeafChaptersJob extends JobService {
             prefs.edit().putLong(SINCE, System.currentTimeMillis()).apply();
             return;
         }
-        HttpURLConnection http = (HttpURLConnection) new URL(base.replaceAll("/+$", "") + "/v1/events?since=" + since).openConnection();
-        http.setConnectTimeout(15000);
-        http.setReadTimeout(30000);
-        http.setRequestProperty("User-Agent", "Leaf");
-        if (!token.isEmpty()) http.setRequestProperty("Authorization", "Bearer " + token);
+        // A network that blocks the server's address (a public wifi) is gone round by its second
+        // address, as the app does (net.rs, Client::go).
+        String alt = server.isNull("alt") ? "" : server.optString("alt", "");
+        if (alt.isEmpty() && NATIVE) {
+            try {
+                alt = nativeAltBase();
+            } catch (Throwable e) {
+                alt = "";
+            }
+        }
+        HttpURLConnection http;
+        try {
+            http = ask(base, since, token);
+        } catch (Exception e) {
+            if (alt == null || alt.isEmpty() || alt.replaceAll("/+$", "").equals(base.replaceAll("/+$", ""))) throw e;
+            http = ask(alt, since, token);
+        }
         try {
             if (http.getResponseCode() != 200) throw new Exception("server answered " + http.getResponseCode());
             JSONArray events = new JSONArray(read(http.getInputStream()));
@@ -133,7 +148,8 @@ public class LeafChaptersJob extends JobService {
             if (!planned(prefs, notify, events)) {
                 for (int i = 0; i < events.length(); i++) {
                     JSONObject e = events.getJSONObject(i);
-                    if ("new".equals(e.optString("kind"))) {
+                    String kind = e.optString("kind");
+                    if ("new".equals(kind) || "elsewhere".equals(kind)) {
                         long at = e.optLong("at", 0);
                         notify((int) (at % Integer.MAX_VALUE), e.optString("text", "New chapters"));
                     }
@@ -143,6 +159,22 @@ public class LeafChaptersJob extends JobService {
         } finally {
             http.disconnect();
         }
+    }
+
+    /** The events since {@code since} from one address; throws when it can't be reached or a
+     *  proxy in front of it says it is down. */
+    private static HttpURLConnection ask(String base, long since, String token) throws Exception {
+        HttpURLConnection http = (HttpURLConnection) new URL(base.replaceAll("/+$", "") + "/v1/events?since=" + since).openConnection();
+        http.setConnectTimeout(15000);
+        http.setReadTimeout(30000);
+        http.setRequestProperty("User-Agent", "Leaf");
+        if (!token.isEmpty()) http.setRequestProperty("Authorization", "Bearer " + token);
+        int code = http.getResponseCode();
+        if ((code >= 502 && code <= 504) || (code >= 520 && code <= 530)) {
+            http.disconnect();
+            throw new Exception("server answered " + code);
+        }
+        return http;
     }
 
     /** Posts what Rust says to post now, and keeps what it holds. False without the library. */

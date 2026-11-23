@@ -6,6 +6,8 @@
 //! - **Quiet hours** (default 23:00 to 08:00): notices are held, and posted at the first run after.
 //! - **One summary a day**: nothing is posted one by one; at the first run past the chosen time
 //!   (default 09:00) one notice says "12 new chapters in 5 series", once a day.
+//! - **"Elsewhere"** (a series only Webtoon had is on another source now) is said once and on its
+//!   own, never folded into a summary; it still waits out the quiet hours.
 //!
 //! The settings live in `files/config.json` under `notify`, where the job reads them.
 
@@ -37,6 +39,9 @@ pub struct Held {
     /// How many chapters it tells of.
     pub chapters: u32,
     pub text: String,
+    /// Posted on its own, never in a summary (an "elsewhere" notice).
+    #[serde(default)]
+    pub alone: bool,
 }
 
 /// What the job keeps between runs.
@@ -99,16 +104,26 @@ pub fn plan(n: &Notify, mut state: JobState, events: &[Event], now_ms: i64, offs
     let local = now_ms.div_euclid(60_000) + offset_min as i64;
     let minute = local.rem_euclid(1440) as u16;
     let day = local.div_euclid(1440);
-    for e in events.iter().filter(|e| e.kind == "new") {
-        state.held.push(Held { at: e.at, series: e.series, chapters: chapters_in(&e.text), text: e.text.clone() });
+    for e in events.iter().filter(|e| e.kind == "new" || e.kind == "elsewhere") {
+        let alone = e.kind == "elsewhere";
+        state.held.push(Held { at: e.at, series: e.series, chapters: if alone { 0 } else { chapters_in(&e.text) }, text: e.text.clone(), alone });
     }
     let mut post = Vec::new();
+    if n.summary && !in_quiet(n, minute) {
+        let (alone, rest): (Vec<Held>, Vec<Held>) = state.held.drain(..).partition(|h| h.alone);
+        state.held = rest;
+        for h in alone {
+            post.push(Post { id: (h.at % i32::MAX as i64) as i32, text: h.text });
+        }
+    }
     if n.summary {
         if minute >= n.summary_at % 1440 && state.summary_day < day {
-            if !state.held.is_empty() {
-                post.push(Post { id: 0x5000_0000 | (day as i32 & 0x0FFF_FFFF), text: summary_words(&state.held) });
-                state.held.clear();
+            // What waits on its own (in quiet hours) stays held; the rest is the summary.
+            let (alone, rest): (Vec<Held>, Vec<Held>) = state.held.drain(..).partition(|h| h.alone);
+            if !rest.is_empty() {
+                post.push(Post { id: 0x5000_0000 | (day as i32 & 0x0FFF_FFFF), text: summary_words(&rest) });
             }
+            state.held = alone;
             state.summary_day = day;
         }
     } else if !in_quiet(n, minute) {
@@ -137,6 +152,21 @@ mod tests {
 
     fn ev(at: i64, series: i64, text: &str) -> Event {
         Event { at, series: Some(series), kind: "new".into(), text: text.into() }
+    }
+
+    #[test]
+    fn found_elsewhere_is_said_on_its_own() {
+        let n = Notify { summary: true, ..Notify::default() };
+        let day0 = 20_000 * 24 * H;
+        let other = Event { at: day0 + 12 * H, series: Some(4), kind: "elsewhere".into(), text: "T is on another source now, up to chapter 40".into() };
+        // 08:30, before the summary's 09:00.
+        let p = plan(&n, JobState::default(), &[ev(day0 + 8 * H, 1, "2 new chapters of A, up to 5"), other.clone()], day0 + 8 * H + 30 * 60_000, 0);
+        assert_eq!(p.post.iter().map(|x| x.text.as_str()).collect::<Vec<_>>(), vec!["T is on another source now, up to chapter 40"], "not held for the summary");
+        assert_eq!(p.state.held.len(), 1);
+        // In quiet hours it waits like any notice.
+        let p = plan(&n, JobState::default(), &[other], day0 + 23 * H + 30 * 60_000, 0);
+        assert!(p.post.is_empty());
+        assert_eq!(p.state.held.len(), 1);
     }
 
     #[test]

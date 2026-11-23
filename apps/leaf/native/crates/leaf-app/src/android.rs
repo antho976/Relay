@@ -253,6 +253,12 @@ pub extern "system" fn Java_com_quietsoftware_leaf_LeafChaptersJob_nativePlan<'l
     env.new_string(out).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
 }
 
+/// The server's second address built in (`LEAF_ALT_BASE`), for the chapter job; "" when none.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_leaf_LeafChaptersJob_nativeAltBase<'local>(env: JNIEnv<'local>, _class: JClass<'local>) -> jni::sys::jstring {
+    env.new_string(crate::net::ALT_BASE.unwrap_or("")).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
+}
+
 #[link(name = "log")]
 unsafe extern "C" {
     fn __android_log_write(priority: i32, tag: *const std::ffi::c_char, text: *const std::ffi::c_char) -> i32;

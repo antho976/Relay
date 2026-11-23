@@ -90,7 +90,11 @@ pub const UNDO_NS: u64 = 5_000_000_000;
 /// How far ahead of the screen's bottom auto-scroll wants pages loaded before it moves on.
 const AHEAD: f32 = 0.6;
 /// How far past the screen (in screens) a page's tiles go to the atlas ahead of being shown.
-const TILE_AHEAD: f32 = 0.25;
+const TILE_AHEAD: f32 = 0.5;
+/// How far below the screen (in screens) pages are decoded ready: a flick covers two screens in
+/// a moment, and a page decoded only once it is reached shows as a dark square first. About
+/// eight webtoon pages, some 4 MB each.
+const DECODE_AHEAD: f32 = 5.0;
 
 /// The strip as the images know it now.
 struct View<'a> {
@@ -544,9 +548,10 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
             }
         }
     }
-    // What to fetch: what is on screen and two screens below first, then one above; then, only
-    // to disk, the rest of this chapter and the whole next one.
-    let (shown, wants, keep) = {
+    // What to fetch: what is on screen and two screens below first (needed: a failure shows),
+    // then one above; then decoded ready, [`DECODE_AHEAD`] screens below; then, only to disk, the
+    // rest of this chapter and the whole next one.
+    let (shown, wants, keep, firm) = {
         let v = View { r, im: &app.images };
         let shown = strip::visible(&v, r.pos, view_h, 0.0);
         let mut near = strip::visible(&v, r.pos, view_h, view_h * 2.0);
@@ -558,6 +563,15 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
                 let id = r.chapters[c].id;
                 wants.push((id, n, true));
                 keep.insert((id, n));
+            }
+        }
+        let firm = wants.len();
+        for (item, _) in strip::visible(&v, r.pos, view_h, view_h * DECODE_AHEAD) {
+            if let Item::Page(c, n) = item {
+                let id = r.chapters[c].id;
+                if keep.insert((id, n)) {
+                    wants.push((id, n, true));
+                }
             }
         }
         let c = near_chapter;
@@ -573,9 +587,9 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
                 }
             }
         }
-        (shown, wants, keep)
+        (shown, wants, keep, firm)
     };
-    app.images.want_pages(&wants);
+    app.images.want_pages_firm(&wants, firm);
     app.images.trim(&keep);
     // Draw the strip.
     let mut retry = false;

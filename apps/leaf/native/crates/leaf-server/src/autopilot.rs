@@ -55,6 +55,8 @@ const DOWNLOADING_PER_SOURCE: usize = 2;
 /// Chapter pictures made per hourly pass (more when asked for by the phone, a few a minute).
 const THUMBS_PER_PASS: usize = 60;
 pub(crate) const WEBTOONS: &str = "Webtoons.com";
+/// At most this many Webtoon list pages read for one search's paid warnings.
+const PAID_LOOKS: usize = 4;
 
 /// A chapter's page addresses, the source they come from, and whether they are served from
 /// Suwayomi's downloads (so asking for one reaches no site).
@@ -423,16 +425,38 @@ impl Ctx {
         Ok(self.detail_now(&w, &m))
     }
 
-    /// Paid episodes ahead on Webtoons.com, as the daily look found them.
-    pub fn paid(&self, id: i64) -> Option<PaidAhead> {
+    /// Paid episodes ahead on Webtoons.com, as the daily look found them, less what the series
+    /// has now (`latest`): a chapter another source brings leaves the range at once.
+    pub fn paid(&self, id: i64, latest: Option<f64>) -> Option<PaidAhead> {
         let kept = self.store().get(&format!("paid:{id}"));
-        kept.and_then(|v| serde_json::from_str(&v).ok())
+        kept.and_then(|v| serde_json::from_str(&v).ok()).and_then(|p| crate::webtoon::still_paid(p, latest))
     }
 
-    /// A series as sent: [`Series`] and the fields the phone's struct doesn't have yet (`paid`).
+    /// Whether you asked to hear when a source other than Webtoon has the series: None when one
+    /// has it already (nothing to wait for), else whether the watch is on.
+    pub fn watch(&self, s: &Series) -> Option<bool> {
+        let only_webtoon = s.source.eq_ignore_ascii_case(WEBTOONS) && self.store().link_sources(s.id).iter().all(|(_, src)| src.eq_ignore_ascii_case(WEBTOONS));
+        only_webtoon.then(|| self.store().get(&format!("watch:{}", s.id)).is_some())
+    }
+
+    /// `POST /v1/series/{id}/watch`: tell me when a source other than Webtoon has it. The daily
+    /// comparison looks at every source; it says so once ("elsewhere") and the watch ends.
+    pub fn set_watch(&self, id: i64, on: bool) -> Result<(), String> {
+        let w = self.store().work(id).ok_or("no such series")?;
+        if on {
+            self.store().set(&format!("watch:{}", w.id), "1");
+        } else {
+            self.store().del(&format!("watch:{}", w.id));
+        }
+        Ok(())
+    }
+
+    /// A series as sent: [`Series`] and the fields the phone's struct doesn't have yet (`paid`,
+    /// `watch`).
     fn series_json(&self, s: &Series) -> Value {
         let mut v = serde_json::to_value(s).unwrap_or(Value::Null);
-        v["paid"] = serde_json::to_value(self.paid(s.id)).unwrap_or(Value::Null);
+        v["paid"] = serde_json::to_value(self.paid(s.id, s.latest)).unwrap_or(Value::Null);
+        v["watch"] = serde_json::to_value(self.watch(s)).unwrap_or(Value::Null);
         v
     }
 
@@ -525,7 +549,7 @@ impl Ctx {
                 match out.iter_mut().find(|c| same_work(&c.title, &f.title)) {
                     Some(c) if !c.hits.iter().any(|h| h.source == source) => c.hits.push(hit),
                     Some(_) => {}
-                    None => out.push(Candidate { title: f.title.clone(), cover_of: Some(f.id), hits: vec![hit], followed: None }),
+                    None => out.push(Candidate { title: f.title.clone(), cover_of: Some(f.id), hits: vec![hit], followed: None, paid: None }),
                 }
             }
         }
@@ -536,7 +560,36 @@ impl Ctx {
         // Found on more sources first: more likely the work you meant.
         out.sort_by_key(|c| std::cmp::Reverse(c.hits.len()));
         out.truncate(SEARCH_MAX);
+        self.warn_paid(&mut out, now);
         Ok(out)
+    }
+
+    /// A result found only on Webtoon whose newer episodes are sold there: its paid range
+    /// (`Candidate::paid`), from the list page (kept a day; asked as the phone waits, at most
+    /// [`PAID_LOOKS`] in one search).
+    fn warn_paid(&self, out: &mut [Candidate], now: i64) {
+        let only: Vec<(usize, String)> = out
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.followed.is_none() && !c.hits.is_empty() && c.hits.iter().all(|h| h.source.eq_ignore_ascii_case(WEBTOONS)))
+            .filter_map(|(i, c)| self.webtoon_url(c.hits[0].manga_id).map(|u| (i, u)))
+            .take(PAID_LOOKS)
+            .collect();
+        let found: Vec<(usize, Option<PaidAhead>)> = std::thread::scope(|s| {
+            let hs: Vec<_> = only
+                .iter()
+                .map(|(i, url)| {
+                    s.spawn(move || {
+                        let l = self.listing(url, Lane::Fore, now).ok().flatten();
+                        (*i, l.and_then(|l| crate::webtoon::paid_ahead(&l, Some(l.free), url)))
+                    })
+                })
+                .collect();
+            hs.into_iter().filter_map(|h| h.join().ok()).collect()
+        });
+        for (i, p) in found {
+            out[i].paid = p;
+        }
     }
 
     /// `GET /v1/preview?manga_id=a,b`: a title not in My space, in the shape `/v1/series/{id}`
@@ -564,7 +617,17 @@ impl Ctx {
             match self.refresh(m, None, Lane::Fore) {
                 Ok(manga) if !manga.chapters.is_empty() => {
                     self.note_source(&manga.source_name, None);
-                    let v = preview_of(&manga, &self.prefs);
+                    let mut v = preview_of(&manga, &self.prefs);
+                    // Only on Webtoon: its paid episodes ahead, and the watch for another source.
+                    if manga_ids.len() == 1 && manga.source_name.eq_ignore_ascii_case(WEBTOONS) {
+                        let numbers: Vec<f64> = manga.chapters.iter().map(|c| c.number).collect();
+                        let paid = self.webtoon_url(m).and_then(|url| {
+                            let l = self.listing(&url, Lane::Fore, now).ok().flatten()?;
+                            crate::webtoon::paid_ahead(&l, plausible_latest(&numbers), &url)
+                        });
+                        v["series"]["paid"] = serde_json::to_value(paid).unwrap_or(Value::Null);
+                        v["series"]["watch"] = Value::Bool(false);
+                    }
                     let mut cache = self.preview_cache.lock().unwrap_or_else(|p| p.into_inner());
                     cache.retain(|_, (at, _)| now - *at < PREVIEW_KEEP_MS);
                     cache.insert(key, (now, v.clone()));
@@ -1303,6 +1366,7 @@ impl Ctx {
         for a in &alts {
             self.store().add_link(w.id, a.id, &a.source_name);
         }
+        self.found_elsewhere(w, &alts, now);
         // Chapters a newly linked copy fills in were there all along: not news for the bell.
         if alts.iter().any(|a| !linked.contains(&a.id)) {
             let filled = self.detail_now(w, m);
@@ -1320,6 +1384,20 @@ impl Ctx {
         }
         self.store().event(now, Some(w.id), "switched", &format!("Moved {} to {}: {why}", w.title, new.source_name));
         true
+    }
+
+    /// A watched series (only on Webtoon until now) that another source has: said once, as an
+    /// "elsewhere" event the phone posts as a notice, and the watch ends.
+    fn found_elsewhere(&self, w: &Work, alts: &[Manga], now: i64) {
+        let key = format!("watch:{}", w.id);
+        if self.store().get(&key).is_none() {
+            return;
+        }
+        let found: Vec<(&str, Vec<f64>)> = alts.iter().map(|a| (a.source_name.as_str(), a.chapters.iter().map(|c| c.number).collect())).collect();
+        if let Some(text) = elsewhere_words(&w.title, &found) {
+            self.store().event(now, Some(w.id), "elsewhere", &text);
+            self.store().del(&key);
+        }
     }
 
     fn switch(&self, w: &Work, d: &SeriesDetail, new: &Manga, now: i64) -> Result<(), String> {
@@ -1399,6 +1477,13 @@ pub fn carried(d: &SeriesDetail, new: &Manga) -> (Vec<i64>, Vec<(i64, u32)>) {
         .filter_map(|c| d.chapters.iter().find(|x| !x.read && x.last_page > 0 && x.number == c.number).filter(|_| c.last_page == 0).map(|x| (c.id, x.last_page)))
         .collect();
     (read, part)
+}
+
+/// What a watched series' notice says once a source other than Webtoon has chapters of it (the
+/// copies found: source, chapter numbers); None while none does.
+pub fn elsewhere_words(title: &str, found: &[(&str, Vec<f64>)]) -> Option<String> {
+    let best = found.iter().filter(|(src, ns)| !src.eq_ignore_ascii_case(WEBTOONS) && !ns.is_empty()).filter_map(|(_, ns)| plausible_latest(ns)).max_by(f64::total_cmp)?;
+    Some(format!("{title} is on another source now, up to chapter {}", fmt_num(best)))
 }
 
 pub fn fmt_num(n: f64) -> String {
@@ -1630,5 +1715,13 @@ mod tests {
         assert_eq!(plausible_latest(&[200.0]), Some(200.0), "a source with one chapter still has a latest");
         assert_eq!(plausible_latest(&(300..=350).chain(1..=10).map(f64::from).collect::<Vec<_>>()), Some(350.0));
         assert_eq!(plausible_latest(&[]), None);
+    }
+
+    #[test]
+    fn a_watched_series_is_news_once_another_source_has_chapters() {
+        assert_eq!(elsewhere_words("T", &[]), None);
+        assert_eq!(elsewhere_words("T", &[("Webtoons.com", vec![1.0, 2.0])]), None, "Webtoon itself is not news");
+        assert_eq!(elsewhere_words("T", &[("Asura Scans", vec![])]), None, "an entry with no chapters yet");
+        assert_eq!(elsewhere_words("T", &[("Webtoons.com", vec![1.0, 2.0]), ("Asura Scans", vec![1.0, 2.0, 3.0]), ("MangaFire", vec![1.0, 2.0, 3.0, 4.0, 40.0, 41.0])]).as_deref(), Some("T is on another source now, up to chapter 41"));
     }
 }

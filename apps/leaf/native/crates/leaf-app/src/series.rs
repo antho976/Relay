@@ -11,7 +11,8 @@
 //!   or Continue; read rows dimmed. Never what the server keeps: that is its own business. Smaller than drawn (the owner, 2026-11-23): 72 × 54, so more fit. A run of
 //!   chapters no source has gets a row of its own. Newer episodes Webtoon sells ahead get a row at
 //!   the newest end, "Chapters 9–23 are on Webtoon (paid)", whose Open hands the link to the
-//!   Webtoon app (or the browser). No paid episode is ever fetched.
+//!   Webtoon app (or the browser). No paid episode is ever fetched. A series only Webtoon has gets
+//!   a row under it, "Tell me when another source has it": one notice when one does.
 //! - **Readers also like**: AniList's recommendations from this series' readers that your sources
 //!   carry, three across, "Yours" on ones in My space ([`crate::recs`]).
 //!
@@ -117,6 +118,8 @@ const GAP_H: f32 = 48.0;
 pub const PIC: (f32, f32) = (72.0, 54.0);
 /// The paid episodes' row.
 const PAID_H: f32 = 70.0;
+/// The row under it, for a series only Webtoon has: tell me when another source has it.
+const WATCH_H: f32 = 56.0;
 /// The fixed key at the bottom, and the band it sits on.
 const KEY_H: f32 = 50.0;
 const BAR_H: f32 = KEY_H + 24.0;
@@ -133,6 +136,8 @@ enum Act {
     /// A tap while selecting (a long press sweeps, [`crate::sweep`]).
     Toggle(i64),
     Paid(String),
+    /// Hear once when a source other than Webtoon has it.
+    Watch(bool),
 }
 
 /// What the selection's bar asked for.
@@ -175,6 +180,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let covered = app.st.series.covered() || app.st.recs.sheet.is_some();
     let oldest = app.oldest_first.contains(&id);
     let paid = app.paid.get(&id).cloned();
+    let watch = app.watch.get(&id).copied();
     let selecting = app.st.series.select.clone();
     let pg = app.page_begin(dt, 0.0);
     let now = app.now_ns;
@@ -362,11 +368,31 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                     }
                     (tapped || cx.tap(0.0, y, WIDTH, PAID_H)).then(|| p.url.clone())
                 };
+                // Only Webtoon has it: a row to hear when another source does.
+                let watch_row = |cx: &mut kit::Ctx, y: f32, on: bool| -> bool {
+                    cx.c.icon(if on { "bell-on" } else { "bell" }, x0 + PIC.0 / 2.0, y + WATCH_H / 2.0, 18.0, if on { t::ACCENT } else { t::INK3 });
+                    let (kw, tapped) = kit::pill(cx, WIDTH - PAD, y + (WATCH_H - 32.0) / 2.0, if on { "Watching" } else { "Watch" }, on);
+                    let tx = x0 + PIC.0 + 14.0;
+                    let tt = Text::new(ty::UI, t::INK2).line(1.3);
+                    let lines = cx.c.wrap("Tell me when another source has it", WIDTH - PAD - kw - 12.0 - tx, tt, 2);
+                    let mut ty0 = y + (WATCH_H - lines.len() as f32 * tt.lh()) / 2.0;
+                    for l in &lines {
+                        cx.c.text(l, tx, ty0, tt);
+                        ty0 += tt.lh();
+                    }
+                    tapped || cx.tap(0.0, y, WIDTH, WATCH_H)
+                };
                 if !oldest && let Some(p) = &paid {
                     if let Some(u) = paid_row(&mut cx, y, p).filter(|_| !covered && selecting.is_none()) {
                         act = Some(Act::Paid(u));
                     }
                     y += PAID_H;
+                }
+                if !oldest && let Some(on) = watch {
+                    if watch_row(&mut cx, y, on) && !covered && selecting.is_none() {
+                        act = Some(Act::Watch(!on));
+                    }
+                    y += WATCH_H;
                 }
                 for row in rows {
                     let h = if matches!(row, Row::Gap(_)) { GAP_H } else { ROW_H };
@@ -528,6 +554,12 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                         act = Some(Act::Paid(u));
                     }
                     y += PAID_H;
+                }
+                if oldest && let Some(on) = watch {
+                    if watch_row(&mut cx, y, on) && !covered && selecting.is_none() {
+                        act = Some(Act::Watch(!on));
+                    }
+                    y += WATCH_H;
                 }
                 app.images.want_thumbs(cx.c, &thumbs, now);
             }
@@ -939,6 +971,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                 sel.insert(c);
             }
         }
+        Some(Act::Watch(on)) => app.set_watch(id, on),
         Some(Act::Paid(url)) => {
             if !app.host.open_url(&url) {
                 app.toast("Nothing on this phone opens that link");

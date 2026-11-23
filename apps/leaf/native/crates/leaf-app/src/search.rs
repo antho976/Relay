@@ -276,11 +276,19 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     cx.c.text(l, tx, ly, title_t);
                     ly += title_t.lh();
                 }
-                let found = match c.hits.len() {
-                    1 => "Found on 1 source".to_string(),
-                    n => format!("Found on {n} sources"),
-                };
-                cx.c.text_fit(&found, tx, ly + 6.0, tw, line_t);
+                // Only Webtoon has it, and sells its newer chapters: said before you open it.
+                if let Some(p) = &c.paid {
+                    let range = if p.from == p.to { format!("chapter {}", crate::logic::num(p.from)) } else { format!("chapters {}–{}", crate::logic::num(p.from), crate::logic::num(p.to)) };
+                    let warn = line_t.color(t::WARN);
+                    cx.c.icon("coins", tx + 7.0, ly + 6.0 + warn.lh() / 2.0, 14.0, t::WARN);
+                    cx.c.text_fit(&format!("Webtoon only, {range} paid"), tx + 20.0, ly + 6.0, tw - 20.0, warn);
+                } else {
+                    let found = match c.hits.len() {
+                        1 => "Found on 1 source".to_string(),
+                        n => format!("Found on {n} sources"),
+                    };
+                    cx.c.text_fit(&found, tx, ly + 6.0, tw, line_t);
+                }
                 if cx.tap(0.0, y, WIDTH, ROW_H) {
                     match c.followed {
                         Some(id) => open = Some(id),
@@ -405,7 +413,7 @@ mod tests {
     use super::*;
 
     fn cand(title: &str, manga: i64, source: &str) -> Candidate {
-        Candidate { title: title.into(), cover_of: Some(manga), hits: vec![leaf_proto::Hit { manga_id: manga, source: source.into() }], followed: None }
+        Candidate { title: title.into(), cover_of: Some(manga), hits: vec![leaf_proto::Hit { manga_id: manga, source: source.into() }], followed: None, paid: None }
     }
 
     #[test]

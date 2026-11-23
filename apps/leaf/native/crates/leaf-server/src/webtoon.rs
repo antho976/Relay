@@ -2,6 +2,10 @@
 //! I Killed": 8 of 23 on 2026-11-23); the series' own page says how many more the app sells
 //! ahead ("Read 15 new episodes"). Read once a day per series, with a normal browser's
 //! User-Agent and through the source's budget; a paid episode itself is never fetched.
+//!
+//! What a list page said is kept a day per page (`wt:{url}`), so a search, a preview and the daily
+//! look never ask Webtoon twice for the same series. The range sent is cut at send time to what
+//! the series has now ([`still_paid`]): a chapter another source brings drops out of it at once.
 
 use std::time::Duration;
 
@@ -13,7 +17,7 @@ use crate::budget::Lane;
 const DAY: i64 = 86_400_000;
 
 /// What a series' list page says.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Listing {
     /// The newest free episode ("#8" on the first entry of the list).
     pub free: f64,
@@ -101,7 +105,43 @@ pub fn paid_ahead(l: &Listing, highest: Option<f64>, url: &str) -> Option<PaidAh
     (newest > have).then(|| PaidAhead { from: have + 1.0, to: newest, url: url.to_string() })
 }
 
+/// The paid range as it stands now: what the series has (`latest`) taken off its start, none
+/// once it has them all.
+pub fn still_paid(p: PaidAhead, latest: Option<f64>) -> Option<PaidAhead> {
+    let have = latest.map_or(0.0, |l| l.floor() + 1.0);
+    let from = p.from.max(have);
+    (from <= p.to).then_some(PaidAhead { from, ..p })
+}
+
+/// At most this many series looked at for the first time in one pass, beside the day's share,
+/// so a newly linked copy shows its paid episodes within the hour.
+const FIRST_LOOKS: usize = 12;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Kept {
+    at: i64,
+    listing: Option<Listing>,
+}
+
 impl Ctx {
+    /// What a Webtoon list page says, kept a day: asked now (through Webtoon's budget, in `lane`)
+    /// only when not kept. None when the page has no episode list.
+    pub fn listing(&self, url: &str, lane: Lane, now: i64) -> Result<Option<Listing>, String> {
+        let key = format!("wt:{url}");
+        let kept = self.store().get(&key).and_then(|v| serde_json::from_str::<Kept>(&v).ok()).filter(|k| now - k.at < DAY);
+        if let Some(k) = kept {
+            return Ok(k.listing);
+        }
+        let listing = parse(&self.ask(WEBTOONS, lane, || fetch(url))?);
+        self.store().set(&key, &serde_json::to_string(&Kept { at: now, listing }).unwrap_or_default());
+        Ok(listing)
+    }
+
+    /// The list page of a Webtoon entry, if it is one.
+    pub fn webtoon_url(&self, manga_id: i64) -> Option<String> {
+        self.suwa.manga_url(manga_id).ok().and_then(|u| list_url(&u))
+    }
+
     /// Once a day per series with a Webtoons.com copy (its own or a linked one), spread over the
     /// day's passes: its list page read for the paid episodes ahead, kept as `paid:{work}`.
     pub fn paid_pass(&self, now: i64) {
@@ -122,14 +162,14 @@ impl Ctx {
             }
         }
         due.sort_by_key(|(at, w, _)| (*at, w.id));
-        for (_, w, copy) in due.into_iter().take(with_copy.div_ceil(24)) {
-            let Some(url) = self.suwa.manga_url(copy).ok().and_then(|u| list_url(&u)) else {
+        let first = due.iter().filter(|(at, _, _)| *at == 0).count().min(FIRST_LOOKS);
+        for (_, w, copy) in due.into_iter().take(with_copy.div_ceil(24).max(first)) {
+            let Some(url) = self.webtoon_url(copy) else {
                 self.store().set(&format!("paid_at:{}", w.id), &now.to_string());
                 continue;
             };
-            let page = self.ask(WEBTOONS, Lane::Back, || fetch(&url));
-            let listing = match page {
-                Ok(html) => parse(&html),
+            let listing = match self.listing(&url, Lane::Back, now) {
+                Ok(l) => l,
                 Err(e) if e.starts_with(PAUSED) => return,
                 Err(e) => {
                     log(&format!("paid episodes of {}: {e}", w.title));
@@ -193,6 +233,16 @@ mod tests {
         let free = r#"<li class="_episodeItem" data-episode-no="120"></li><p>Read Episode 1</p>"#;
         assert_eq!(parse(free), Some(Listing { free: 120.0, ahead: 0 }), "'Read Episode 1' is not a count");
         assert_eq!(parse("<html>Access denied</html>"), None);
+    }
+
+    #[test]
+    fn a_chapter_another_source_brings_leaves_the_paid_range() {
+        let p = PaidAhead { from: 9.0, to: 23.0, url: "u".into() };
+        assert_eq!(still_paid(p.clone(), Some(8.0)).map(|p| (p.from, p.to)), Some((9.0, 23.0)));
+        assert_eq!(still_paid(p.clone(), Some(12.0)).map(|p| p.from), Some(13.0), "chapters 9 to 12 came");
+        assert_eq!(still_paid(p.clone(), Some(22.5)).map(|p| p.from), Some(23.0));
+        assert_eq!(still_paid(p.clone(), Some(23.0)), None, "every one is here now");
+        assert_eq!(still_paid(p.clone(), None).map(|p| p.from), Some(9.0));
     }
 
     #[test]

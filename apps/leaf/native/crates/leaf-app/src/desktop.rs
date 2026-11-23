@@ -364,7 +364,7 @@ fn fake_search(app: &mut App, n: usize, gfx: &Gfx, clock: &mut u64) {
         .iter()
         .take(n)
         .enumerate()
-        .map(|(i, s)| leaf_proto::Candidate { title: s.title.clone(), cover_of: None, hits: (0..(i % 3 + 1)).map(|k| leaf_proto::Hit { manga_id: s.id * 10 + k as i64, source: format!("S{k}") }).collect(), followed: (i == 0).then_some(s.id) })
+        .map(|(i, s)| leaf_proto::Candidate { title: s.title.clone(), cover_of: None, hits: (0..(i % 3 + 1)).map(|k| leaf_proto::Hit { manga_id: s.id * 10 + k as i64, source: format!("S{k}") }).collect(), followed: (i == 0).then_some(s.id), paid: None })
         .collect();
     app.st.search.asked = Some(q.clone());
     app.st.search.all = false;

@@ -196,7 +196,14 @@ struct Queue {
     /// Priority (higher first), then the order asked.
     items: Vec<(i32, u64, Want)>,
     seq: u64,
+    /// Workers on a page only kept on disk ahead (not to be shown yet): at most
+    /// [`PLAIN_AT_ONCE`], so one is always free for the page coming on screen.
+    plain_out: usize,
 }
+
+/// How many workers may fetch pages only kept ahead at once: a slow network must not hold every
+/// worker while the page you scroll to waits.
+const PLAIN_AT_ONCE: usize = WORKERS - 1;
 
 struct Shared {
     q: Mutex<Queue>,
@@ -238,6 +245,10 @@ pub struct Images {
     /// Pages that would not load when only kept ahead on disk: not kept ahead again, but fetched
     /// when they come near, as any other (the server tries another source for them meanwhile).
     ahead_failed: HashSet<(i64, u32)>,
+    /// Pages asked to be decoded ahead of need ([`Images::want_pages_firm`]): a failure is not
+    /// shown, only tried again once they are needed.
+    soft: HashSet<(i64, u32)>,
+    last_firm: usize,
     /// How many times the trim setting changed: a page's tiles are keyed by it, so tiles cut the
     /// old way, still in the atlas, are never drawn for a page cut the new way.
     cut: u32,
@@ -267,7 +278,7 @@ pub struct Images {
 impl Images {
     pub fn new(data: PathBuf) -> Images {
         let shared = Arc::new(Shared {
-            q: Mutex::new(Queue { items: Vec::new(), seq: 0 }),
+            q: Mutex::new(Queue { items: Vec::new(), seq: 0, plain_out: 0 }),
             cv: Condvar::new(),
             server: Mutex::new(None),
             pdfs: Mutex::new(HashMap::new()),
@@ -300,6 +311,8 @@ impl Images {
             decoded: HashMap::new(),
             failed: HashMap::new(),
             ahead_failed: HashSet::new(),
+            soft: HashSet::new(),
+            last_firm: 0,
             cut: 0,
             stored: HashSet::new(),
             last_wants: Vec::new(),
@@ -518,11 +531,19 @@ impl Images {
     /// The pages the reader wants, nearest first: (chapter, page, decode). Anything else queued
     /// for pages is dropped.
     pub fn want_pages(&mut self, wants: &[(i64, u32, bool)]) {
+        self.want_pages_firm(wants, wants.len());
+    }
+
+    /// [`Self::want_pages`], where only the first `firm` are needed now (on screen or close to
+    /// it): one after those that fails is not shown as failed, only asked again once it is firm
+    /// (a page decoded far ahead the server can't send yet may well come when it is reached).
+    pub fn want_pages_firm(&mut self, wants: &[(i64, u32, bool)], firm: usize) {
         self.reading = true;
-        if wants == self.last_wants.as_slice() {
+        if wants == self.last_wants.as_slice() && firm == self.last_firm {
             return;
         }
         self.last_wants = wants.to_vec();
+        self.last_firm = firm;
         let mut q = self.shared.q.lock().unwrap_or_else(|e| e.into_inner());
         let mut dropped = Vec::new();
         q.items.retain(|(_, _, w)| {
@@ -539,8 +560,13 @@ impl Images {
         for (i, &(chapter, n, decode)) in wants.iter().enumerate() {
             let k = (chapter, n);
             let done = if decode { self.decoded.contains_key(&k) } else { self.stored.contains(&k) || self.sizes.contains_key(&k) };
-            if done || self.skipped.contains(&k) || self.failed.contains_key(&k) || (!decode && self.ahead_failed.contains(&k)) {
+            if done || self.skipped.contains(&k) || self.failed.contains_key(&k) || (i >= firm && self.ahead_failed.contains(&k)) {
                 continue;
+            }
+            if decode && i >= firm {
+                self.soft.insert(k);
+            } else {
+                self.soft.remove(&k);
             }
             let want = Want::Page { chapter, n, decode };
             // Being fetched already (or, for a decode, a plain fetch of it is: the decode waits).
@@ -600,13 +626,14 @@ impl Images {
                         Ok(Fetched::Skip) => {
                             self.skipped.insert(k);
                         }
-                        Err(e) if decode => {
+                        Err(e) if decode && !self.soft.contains(&k) => {
                             self.failed.insert(k, e);
                         }
                         Err(_) => {
                             self.ahead_failed.insert(k);
                         }
                     }
+                    self.soft.remove(&k);
                     // The reader's list may now ask for something it skipped while this was out.
                     self.last_wants.clear();
                 }
@@ -816,12 +843,19 @@ fn worker(shared: &Shared, tx: &Sender<Got>, client: &Client, data: &Path) {
         let want = {
             let mut q = shared.q.lock().unwrap_or_else(|e| e.into_inner());
             loop {
-                if let Some(i) = (0..q.items.len()).max_by_key(|&i| (q.items[i].0, std::cmp::Reverse(q.items[i].1))) {
-                    break q.items.swap_remove(i).2;
+                let full = q.plain_out >= PLAIN_AT_ONCE;
+                let plain = |w: &Want| matches!(w, Want::Page { decode: false, .. });
+                if let Some(i) = (0..q.items.len()).filter(|&i| !(full && plain(&q.items[i].2))).max_by_key(|&i| (q.items[i].0, std::cmp::Reverse(q.items[i].1))) {
+                    let w = q.items.swap_remove(i).2;
+                    if plain(&w) {
+                        q.plain_out += 1;
+                    }
+                    break w;
                 }
                 q = shared.cv.wait(q).unwrap_or_else(|e| e.into_inner());
             }
         };
+        let was_plain = matches!(want, Want::Page { decode: false, .. });
         let server = shared.server.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match &want {
             Want::Cover(of) => cover(client, server.as_ref(), data, *of),
@@ -848,6 +882,10 @@ fn worker(shared: &Shared, tx: &Sender<Got>, client: &Client, data: &Path) {
             Want::Thumb { chapter } => Got::Thumb { chapter, img: None },
             Want::Art(slug) => Got::Art { slug, img: None, none: false },
         });
+        if was_plain {
+            shared.q.lock().unwrap_or_else(|e| e.into_inner()).plain_out -= 1;
+            shared.cv.notify_all();
+        }
         if tx.send(got).is_err() {
             return;
         }
@@ -1323,6 +1361,33 @@ mod tests {
     }
 
     #[test]
+    fn pages_only_kept_ahead_never_hold_every_worker() {
+        // A server that takes requests and never answers.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let dir = std::env::temp_dir().join(format!("leaf-images-plain-{}", std::process::id()));
+        let mut im = Images::new(dir.clone());
+        im.set_server(Some(Server { base, token: None, alt: None }));
+        let queued = |im: &Images| -> Vec<Want> { im.shared.q.lock().unwrap().items.iter().map(|i| i.2.clone()).collect() };
+        let plain: Vec<(i64, u32, bool)> = (0..6).map(|n| (2, n, false)).collect();
+        im.want_pages(&plain);
+        let settled = |im: &Images, left: usize| (0..200).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            queued(im).len() == left
+        });
+        assert!(settled(&im, 6 - PLAIN_AT_ONCE), "only {PLAIN_AT_ONCE} are taken: {:?}", queued(&im));
+        // The page coming on screen goes at once, on the worker kept free.
+        let mut wants = vec![(1, 0, true)];
+        wants.extend(plain);
+        im.want_pages(&wants);
+        assert!(settled(&im, 6 - PLAIN_AT_ONCE), "the page shown is taken: {:?}", queued(&im));
+        assert!(!queued(&im).contains(&Want::Page { chapter: 1, n: 0, decode: true }));
+        im.leave_pages();
+        drop(listener);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn the_queue_follows_the_reader() {
         let dir = std::env::temp_dir().join(format!("leaf-images-test-{}", std::process::id()));
         let mut im = Images::new(dir.clone());
@@ -1347,3 +1412,4 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+

@@ -86,6 +86,9 @@ pub struct Candidate {
     pub hits: Vec<Hit>,
     /// Already followed, as this series.
     pub followed: Option<i64>,
+    /// Found only on Webtoon, which sells these episodes ahead of the free ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paid: Option<PaidAhead>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -134,7 +137,8 @@ pub struct Progress {
 pub struct Event {
     pub at: i64,
     pub series: Option<i64>,
-    /// "switched", "new", "blocked", "lost" or "info".
+    /// "switched", "new", "blocked", "lost", "elsewhere" (a watched series another source has
+    /// now) or "info".
     pub kind: String,
     pub text: String,
 }

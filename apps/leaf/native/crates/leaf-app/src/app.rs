@@ -156,6 +156,8 @@ pub struct Preview {
 pub enum Then {
     /// Its bell on.
     Follow,
+    /// Hear when a source other than Webtoon has it.
+    Watch,
     /// Open the chapter with this number, at this page.
     Read(f64, u32),
     /// Download the chapters with these numbers to this phone.
@@ -332,6 +334,8 @@ pub struct App {
     pub saver: crate::offline::Saver,
     /// Paid episodes ahead on Webtoon, per series (`paid`, read beside [`Series`]).
     pub paid: HashMap<i64, PaidAhead>,
+    /// Series only Webtoon has: whether you asked to hear when another source does (`watch`).
+    pub watch: HashMap<i64, bool>,
     /// Chapters the server has a picture of (`thumb`).
     pub thumbs: HashSet<i64>,
     /// Recommendations (`/v1/recs`), and when they were last asked for (ms).
@@ -426,6 +430,7 @@ impl App {
             late_toast: Arc::new(std::sync::Mutex::new(None)),
             saver: crate::offline::Saver::new(data.clone()),
             paid: HashMap::new(),
+            watch: HashMap::new(),
             thumbs: HashSet::new(),
             recs: Loaded::default(),
             recs_asked_ms: 0,
@@ -709,6 +714,7 @@ impl App {
         self.recs_asked_ms = 0;
         self.also.clear();
         self.paid.clear();
+        self.watch.clear();
         self.thumbs.clear();
     }
 
@@ -758,6 +764,22 @@ impl App {
             self.save_config();
         }
         self.toast(if on { "You'll hear when new chapters come" } else { "No more notices for this series" });
+    }
+
+    /// Hear once when a source other than Webtoon has the series (a preview is added first).
+    pub fn set_watch(&mut self, id: i64, on: bool) {
+        if id < 0 {
+            self.adopt(id, Then::Watch);
+            return;
+        }
+        self.watch.insert(id, on);
+        self.ask(Job::Watch(id, on));
+        if on && !self.asked_notifications {
+            self.asked_notifications = true;
+            self.host.ask_notifications();
+            self.save_config();
+        }
+        self.toast(if on { "You'll hear when another source has it" } else { "No notice when another source has it" });
     }
 
     fn mark_bell(&mut self, id: i64, on: bool) {
@@ -939,6 +961,14 @@ impl App {
         if self.shot && job.writes() {
             return;
         }
+        // A chapter downloaded to this phone: its length is known here, so it never waits in
+        // line behind requests to the server.
+        if let Job::PageCount(chapter) = job
+            && let Some(m) = self.saver.manifest(chapter)
+        {
+            self.jobs.answer(Done::PageCount(chapter, Ok(m.pages)));
+            return;
+        }
         // A preview's page asks for it like any series': its entries go instead.
         let job = match job {
             Job::Series(id) if id < 0 => match self.previews.get(&id) {
@@ -1011,6 +1041,10 @@ impl App {
                                     Some(p) => self.paid.insert(e.id, p),
                                     None => self.paid.remove(&e.id),
                                 };
+                                match e.watch {
+                                    Some(on) => self.watch.insert(e.id, on),
+                                    None => self.watch.remove(&e.id),
+                                };
                             }
                             let l = &mut self.library;
                             l.data = Some(list);
@@ -1054,6 +1088,10 @@ impl App {
                         match &extras.paid {
                             Some(p) => self.paid.insert(id, p.clone()),
                             None => self.paid.remove(&id),
+                        };
+                        match extras.watch {
+                            Some(on) => self.watch.insert(id, on),
+                            None => self.watch.remove(&id),
                         };
                         for (c, has) in &extras.thumbs {
                             if *has {
@@ -1142,6 +1180,14 @@ impl App {
                 Done::Bell(id, on, r) => {
                     if let Err(f) = r {
                         self.mark_bell(id, !on);
+                        self.toast(&f.words(&label));
+                    }
+                }
+                Done::Watch(id, on, r) => {
+                    if let Err(f) = r {
+                        if self.watch.contains_key(&id) {
+                            self.watch.insert(id, !on);
+                        }
                         self.toast(&f.words(&label));
                     }
                 }
@@ -1347,6 +1393,7 @@ impl App {
         crate::net::forget_series_copy(&self.data, id);
         self.series.remove(&id);
         self.paid.remove(&id);
+        self.watch.remove(&id);
         self.also.remove(&id);
         self.alternatives.remove(&id);
         let order = self.oldest_first.remove(&id);
@@ -1378,6 +1425,7 @@ impl App {
         }
         match then {
             Then::Follow => self.set_bell(id, true),
+            Then::Watch => self.set_watch(id, true),
             // The chapter opens only over its own page: elsewhere it would open over what you
             // went on to.
             Then::Read(..) if !shown => self.toast("Added to My space"),
@@ -1411,7 +1459,7 @@ impl App {
                     self.download(id, &get);
                 }
             }
-            Then::Follow => {}
+            Then::Follow | Then::Watch => {}
         }
     }
 

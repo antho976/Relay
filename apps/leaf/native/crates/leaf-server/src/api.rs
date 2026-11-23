@@ -21,6 +21,7 @@
 //! | `POST /v1/chapters/{id}/progress` [`Progress`] | `{"ok":true}` |
 //! | `GET /v1/events` | `[Event]`, newest first; `?since=<ms>` the ones after, oldest first |
 //! | `POST /v1/series/{id}/bell` [`Bell`] | turns its new-chapter notices on or off |
+//! | `POST /v1/series/{id}/watch` [`Bell`] | a series only on Webtoon: one notice ("elsewhere") when another source has it |
 //! | `POST /v1/series/{id}/read` [`ReadBefore`] | marks every chapter below a number read |
 //! | `GET /v1/updates?days=14` | `[Update]`, chapters that arrived, newest first |
 //! | `POST /v1/chapters/{id}/read` [`ChapterRead`] | marks that chapter number read or unread |
@@ -44,7 +45,8 @@
 //! | `GET /v1/app/apk` | the app (`application/vnd.android.package-archive`) |
 //!
 //! `/v1/library` and `/v1/series/{id}` send each series with `paid` ([`leaf_proto::PaidAhead`] or
-//! null) and each chapter with `thumb`; `/v1/health` each source with `paused_until` and
+//! null, less the chapters the series has now), `watch` (null unless only Webtoon has it, then
+//! whether `/watch` is on) and each chapter with `thumb`; `/v1/health` each source with `paused_until` and
 //! `requests_today`: fields the phone's structs gain when it reads them (see leaf-proto).
 
 use std::io::Read;
@@ -226,6 +228,10 @@ impl Api {
             (Method::Post, ["v1", "series", _, "bell"]) => {
                 let Some(i) = id(2) else { return fail(400, "bad id") };
                 serde_json::from_str::<Bell>(body).map_err(|e| format!("bell: {e}")).and_then(|b| ctx.set_bell(i, b.on)).map(|_| json(&serde_json::json!({ "ok": true })))
+            }
+            (Method::Post, ["v1", "series", _, "watch"]) => {
+                let Some(i) = id(2) else { return fail(400, "bad id") };
+                serde_json::from_str::<Bell>(body).map_err(|e| format!("watch: {e}")).and_then(|b| ctx.set_watch(i, b.on)).map(|_| json(&serde_json::json!({ "ok": true })))
             }
             (Method::Post, ["v1", "chapters", _, "download"]) => {
                 id(2).ok_or("bad id".to_string()).and_then(|c| ctx.download(c, true)).map(|_| json(&serde_json::json!({ "ok": true })))
