@@ -1219,24 +1219,50 @@ private val FRAME = Regex("""[│┃╭╮╰╯─━┌┐└┘├┤]""")
 private val PICKED = Regex("""^\s*[❯›]\s*\d[.)]\s+\S""")
 private val YES_NO = Regex("""\((?:y/n|Y/n|y/N)\)|\[(?:y/n|Y/n|y/N)\]""")
 
+/** A line the agent's own input box draws: its prompt mark with or without a draft, or the footer under it. */
+private val PROMPT = Regex("""^\s*[❯›>](?:\s|$)""")
+private val INPUT_FOOTER = Regex("""shift\+tab to cycle|\? for shortcuts|esc to interrupt""", RegexOption.IGNORE_CASE)
+
+private fun screenLines(screen: String): List<String> = screen.lines().map { FRAME.replace(it, " ").trimEnd() }
+
+/**
+ * Where the menu at the bottom of the screen starts and its numbered answers, or null when there
+ * is none: the last highlighted choice, with nothing after it that only the agent's input box
+ * draws. A menu takes the input box's place, so an input prompt, its footer or a working line
+ * below the choices means they are words on the screen (the person's own numbered message, echoed
+ * with the prompt mark), not a menu. The answers are numbered from 1 without a gap.
+ */
+private fun menuAt(lines: List<String>): Pair<Int, List<Pair<String, String>>>? {
+    val picked = lines.indexOfLast { PICKED.containsMatchIn(it) }
+    if (picked < 0) return null
+    val after = lines.drop(picked + 1)
+    if (after.any { (PROMPT.containsMatchIn(it) && !OPTION.matches(it)) || INPUT_FOOTER.containsMatchIn(it) }) return null
+    // The nearest "1." at or above the highlighted choice starts the menu.
+    val start = (picked downTo 0).firstOrNull { OPTION.matchEntire(lines[it])?.groupValues?.get(1) == "1" } ?: return null
+    val options = mutableListOf<Pair<String, String>>()
+    for (line in lines.drop(start)) {
+        val (n, label) = OPTION.matchEntire(line)?.destructured ?: continue
+        if (n.toInt() != options.size + 1) break
+        options += n to label
+    }
+    return start.takeIf { options.size >= 2 }?.let { it to options }
+}
+
 /**
  * The bottom of the agent's screen asks the person something: a menu of two or more choices with
  * one highlighted, or a y/n question. Only the last lines count, where a prompt is drawn.
  */
 internal fun screenAsks(screen: String): Boolean {
-    val tail = screen.lines().map { FRAME.replace(it, " ").trimEnd() }.filter { it.isNotBlank() }.takeLast(ASK_TAIL)
-    val menu = tail.any { PICKED.containsMatchIn(it) } && tail.mapNotNull { OPTION.matchEntire(it)?.groupValues?.get(1) }.distinct().size >= 2
-    return menu || tail.takeLast(4).any { YES_NO.containsMatchIn(it) }
+    val tail = screenLines(screen).filter { it.isNotBlank() }.takeLast(ASK_TAIL)
+    return menuAt(tail) != null || tail.takeLast(4).any { YES_NO.containsMatchIn(it) }
 }
 
 private const val ASK_TAIL = 24
 
 /** The question at the bottom of the agent's screen and its numbered answers, frame lines taken out. */
 internal fun askOf(screen: String): Pair<List<String>, List<Pair<String, String>>> {
-    val lines = screen.lines().map { FRAME.replace(it, " ").trimEnd() }.dropLastWhile { it.isBlank() }
-    val first = lines.indexOfFirst { OPTION.matches(it) }
-    if (first < 0) return lines.filter { it.isNotBlank() }.takeLast(10).map { it.trim() } to emptyList()
-    val options = lines.drop(first).mapNotNull { OPTION.matchEntire(it)?.destructured?.let { (n, label) -> n to label } }.distinctBy { it.first }
+    val lines = screenLines(screen).dropLastWhile { it.isBlank() }
+    val (first, options) = menuAt(lines) ?: return lines.filter { it.isNotBlank() }.takeLast(10).map { it.trim() } to emptyList()
     val question = lines.take(first).filter { it.isNotBlank() }.takeLast(6).map { it.trim() }
     return question to options
 }
