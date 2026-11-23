@@ -939,7 +939,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
 
 /// The overlay's bottom bar, above the gesture bar: the chapter keys and auto-scroll, then the
 /// dimmer.
-const BAR_H: f32 = 64.0 + 48.0;
+const BAR_H: f32 = 64.0 + 48.0 + 14.0;
 
 /// What auto-scroll finds from the screen's top to a little past its bottom.
 #[derive(Debug, PartialEq)]

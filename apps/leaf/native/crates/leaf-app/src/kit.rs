@@ -385,8 +385,13 @@ pub fn slider(cx: &mut Ctx, x: f32, y: f32, w: f32, value: f32) -> Option<f32> {
     cx.c.rect(x, y - 1.5, w * f, 3.0, 1.5, t::ACCENT);
     cx.c.circle(x + w * f, y, 9.0, t::INK);
     let sy = y + cx.c.dy;
-    let near = |(fx, fy): &(f32, f32)| *fx > x - 20.0 && *fx < x + w + 20.0 && (fy - sy).abs() < 24.0;
-    let finger = cx.ui.finger().filter(|_| cx.ui.drag_from.as_ref().is_some_and(near));
+    // Never from the phone's own gesture strip at the bottom edge (a swipe home or back that
+    // brushes the slider is the phone's, the owner 2026-11-23), and only while the finger goes
+    // more sideways than up or down.
+    let gestures = cx.c.h - cx.c.inset_bottom - 6.0;
+    let near = |(fx, fy): &(f32, f32)| *fx > x - 20.0 && *fx < x + w + 20.0 && (fy - sy).abs() < 24.0 && *fy < gestures;
+    let from = cx.ui.drag_from.filter(near);
+    let finger = cx.ui.finger().zip(from).filter(|((fx, fy), (ox, oy))| (fx - ox).abs() >= (fy - oy).abs()).map(|(f, _)| f);
     let tap = cx.ui.tap.filter(near);
     let (fx, _) = finger.or(tap)?;
     if tap.is_some() {

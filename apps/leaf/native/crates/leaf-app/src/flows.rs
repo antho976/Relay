@@ -1477,6 +1477,52 @@ fn reading_a_downloaded_chapter_asks_the_server_nothing() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A finger put down at `from` and moved by `by` in `n` steps, then lifted.
+fn slide(app: &mut App, t: &mut u64, from: (f32, f32), by: (f32, f32), n: u64) {
+    let u = app.canvas.u;
+    let x0 = ((app.canvas.px_w - WIDTH * u) * 0.5).max(0.0);
+    app.touch(Touch { id: 1, phase: Phase::Down, x: x0 + from.0 * u, y: from.1 * u, t_ns: *t });
+    step(app, t);
+    for i in 1..=n {
+        let f = i as f32 / n as f32;
+        app.touch(Touch { id: 1, phase: Phase::Move, x: x0 + (from.0 + by.0 * f) * u, y: (from.1 + by.1 * f) * u, t_ns: *t });
+        step(app, t);
+    }
+    app.touch(Touch { id: 1, phase: Phase::Up, x: x0 + (from.0 + by.0) * u, y: (from.1 + by.1) * u, t_ns: *t });
+    step(app, t);
+}
+
+#[test]
+fn a_swipe_home_over_the_brightness_slider_leaves_it_alone() {
+    let (mut app, mut t, dir) = app("dim-swipe");
+    let d = comic(1, &[4]);
+    app.open_chapter(&d, 0, 0);
+    step(&mut app, &mut t);
+    app.reader.as_mut().unwrap().overlay = true;
+    step(&mut app, &mut t);
+    let (h, inset) = (app.canvas.h, app.canvas.inset_bottom);
+    let slider_y = h - inset - 40.0;
+    let before = app.prefs.dim;
+    // Up from the phone's gesture strip, across the slider, a little to the side as thumbs go.
+    slide(&mut app, &mut t, (300.0, h - 4.0), (-30.0, -260.0), 12);
+    assert_eq!(app.prefs.dim, before, "the swipe was the phone's");
+    // Up from the slider's own row: still not a brightness change.
+    if let Some(r) = app.reader.as_mut() {
+        r.overlay = true;
+    }
+    step(&mut app, &mut t);
+    slide(&mut app, &mut t, (300.0, slider_y + 6.0), (-20.0, -200.0), 12);
+    assert_eq!(app.prefs.dim, before, "up is not along the slider");
+    // Along it: it sets the brightness.
+    if let Some(r) = app.reader.as_mut() {
+        r.overlay = true;
+    }
+    step(&mut app, &mut t);
+    slide(&mut app, &mut t, (300.0, slider_y), (-120.0, 4.0), 8);
+    assert!(app.prefs.dim > before, "dragged left along it, darker: {} after {before}", app.prefs.dim);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn a_downloaded_chapter_reads_beside_a_server_that_hangs() {
     let (mut app, mut t, dir) = app_on("offline-hang", |d| {
