@@ -418,11 +418,11 @@ pub fn chapter_rows(chapters: &[Chapter], gaps: &[Gap]) -> Vec<Row> {
     keyed.into_iter().map(|(_, _, r)| r).collect()
 }
 
-/// The next `n` chapters from where reading stopped (the Continue point on) that the server has
-/// not downloaded: what "Download next 5" asks for. Chapter ids.
-pub fn next_to_download(chapters: &[Chapter], n: usize) -> Vec<i64> {
+/// The next `n` chapters from where reading stopped (the Continue point on) that this phone
+/// doesn't hold or wait for (`kept`): what "Download next 5" asks for. Chapter ids.
+pub fn next_to_download(chapters: &[Chapter], n: usize, kept: impl Fn(i64) -> bool) -> Vec<i64> {
     let from = continue_point(chapters).map_or(0, |c| c.index);
-    chapters[from..].iter().filter(|c| !c.read && !c.downloaded).take(n).map(|c| c.id).collect()
+    chapters[from..].iter().filter(|c| !c.read && !kept(c.id)).take(n).map(|c| c.id).collect()
 }
 
 /// What a gap row says.
@@ -1099,13 +1099,11 @@ mod tests {
 
     #[test]
     fn download_next_starts_where_reading_stopped() {
-        let mut chapters: Vec<Chapter> = (1..=10).map(|n| ch(n, n as f64, n <= 3, 0)).collect();
-        for c in &mut chapters {
-            c.downloaded = false;
-        }
-        chapters[4].downloaded = true;
-        assert_eq!(next_to_download(&chapters, 5), vec![4, 6, 7, 8, 9]);
-        assert_eq!(next_to_download(&chapters[..5], 5), vec![4]);
+        let chapters: Vec<Chapter> = (1..=10).map(|n| ch(n, n as f64, n <= 3, 0)).collect();
+        // Chapter 5 is on this phone already; what the server keeps doesn't count.
+        let kept = |id: i64| id == 5;
+        assert_eq!(next_to_download(&chapters, 5, kept), vec![4, 6, 7, 8, 9]);
+        assert_eq!(next_to_download(&chapters[..5], 5, kept), vec![4]);
     }
 
     #[test]

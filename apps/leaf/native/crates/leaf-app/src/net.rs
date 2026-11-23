@@ -11,7 +11,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use leaf_proto::{Alternative, AnilistToken, AppLatest, Bell, ChapterRead, DownloadIds, Follow, PaidAhead, Pages, Progress, ReadBefore, Rec, RecTag, Recs, Repin, Series, SeriesDetail, SeriesDownload, ShelfSet, SourceHealth, Status, Update};
+use leaf_proto::{Alternative, AnilistToken, AppLatest, Bell, ChapterRead, Follow, PaidAhead, Pages, Progress, ReadBefore, Rec, RecTag, Recs, Repin, Series, SeriesDetail, ShelfSet, SourceHealth, Status, Update};
 use serde::{Deserialize, Serialize};
 
 /// Where the server is, and its token if it has one.
@@ -155,7 +155,7 @@ impl Client {
         Client::read(req.call())
     }
 
-    /// DELETE with a JSON body (`/v1/downloads`).
+    /// DELETE with a JSON body (`/v1/pages/hide`).
     pub fn delete_json(&self, s: &Server, path: &str, body: String) -> Result<Vec<u8>, Fail> {
         let mut req = self.agent.delete(Client::url(s, path)).force_send_body().header("content-type", "application/json");
         if let Some(t) = &s.token {
@@ -243,9 +243,6 @@ pub enum Job {
     PageCount(i64),
     /// Turn a series' bell on or off (`POST /v1/series/{id}/bell`).
     Bell(i64, bool),
-    /// Download a chapter on the server, or remove it (`POST` / `DELETE
-    /// /v1/chapters/{id}/download`).
-    Download(i64, bool),
     /// Chapters that came lately for series in My space, over this many days (`/v1/updates`).
     Updates(u32),
     /// A chapter read or unread (`POST /v1/chapters/{id}/read`).
@@ -273,11 +270,6 @@ pub enum Job {
     RecTag(String, bool),
     /// "Readers also like" for a series (`/v1/series/{id}/also`).
     Also(i64),
-    /// Chapters queued to download on the server, or removed there (`POST` / `DELETE
-    /// /v1/downloads`).
-    Downloads(Vec<i64>, bool),
-    /// A run of a series' chapters, or every unread one, queued (`POST /v1/series/{id}/download`).
-    SeriesDownload(i64, SeriesDownload),
     /// The newest app the server holds (`/v1/app/latest`).
     AppLatest,
     /// A page hidden by hand with the ones like it, or that undone (`POST` / `DELETE
@@ -347,7 +339,6 @@ impl Job {
                 | Job::Unfollow(_)
                 | Job::Progress(..)
                 | Job::Bell(..)
-                | Job::Download(..)
                 | Job::ChapterRead(..)
                 | Job::ReadBefore(..)
                 | Job::Shelf(..)
@@ -356,8 +347,6 @@ impl Job {
                 | Job::Repin(..)
                 | Job::HideRec(_)
                 | Job::RecTag(..)
-                | Job::Downloads(..)
-                | Job::SeriesDownload(..)
                 | Job::HidePage(..)
                 | Job::ClearHidden
         )
@@ -377,7 +366,6 @@ pub enum Done {
     Progress(i64, Result<(), Fail>),
     PageCount(i64, Result<u32, Fail>),
     Bell(i64, bool, Result<(), Fail>),
-    Download(i64, bool, Result<(), Fail>),
     Updates { cached: bool, result: Result<Vec<Update>, Fail> },
     ChapterRead(i64, bool, Result<(), Fail>),
     ReadBefore(i64, Result<(), Fail>),
@@ -392,9 +380,6 @@ pub enum Done {
     RecHidden(i64, Result<(), Fail>),
     RecTag(String, bool, Result<(), Fail>),
     Also(i64, Result<Vec<Rec>, Fail>),
-    /// How many chapters the server queued (or removed).
-    Downloads(Vec<i64>, bool, Result<u32, Fail>),
-    SeriesDownload(i64, SeriesDownload, Result<u32, Fail>),
     /// None: the server holds no app.
     AppLatest(Result<Option<AppLatest>, Fail>),
     /// (chapter, page, hidden or shown again, the count of pages hidden by hand).
@@ -717,6 +702,11 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
             send(Done::Progress(chapter, r));
         }
         Job::PageCount(chapter) => {
+            // Downloaded to this phone: its length is in its manifest.
+            let saved = std::fs::read(crate::offline::chapter_dir(data, chapter).join("manifest.json")).ok().and_then(|b| serde_json::from_slice::<crate::offline::Manifest>(&b).ok());
+            if let Some(m) = saved {
+                return send(Done::PageCount(chapter, Ok(m.pages)));
+            }
             let r = match &server {
                 Some(s) => client.json::<Pages>(s, &format!("/v1/chapters/{chapter}/pages")).map(|p| p.count),
                 None => no_server(),
@@ -729,15 +719,6 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
                 None => no_server(),
             };
             send(Done::Bell(id, on, r));
-        }
-        Job::Download(chapter, on) => {
-            let path = format!("/v1/chapters/{chapter}/download");
-            let r = match &server {
-                Some(s) if on => client.post(s, &path, String::new()).map(|_| ()),
-                Some(s) => client.delete(s, &path).map(|_| ()),
-                None => no_server(),
-            };
-            send(Done::Download(chapter, on, r));
         }
         Job::Updates(days) => {
             let file = updates_file(data);
@@ -853,19 +834,6 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
                 None => no_server(),
             };
             send(Done::Also(id, r));
-        }
-        Job::Downloads(ids, on) => {
-            let body = DownloadIds { ids: ids.clone() };
-            let r = match &server {
-                Some(s) if on => serde_json::to_string(&body).map_err(|_| Fail::Garbled).and_then(|b| client.post(s, "/v1/downloads", b)),
-                Some(s) => serde_json::to_string(&body).map_err(|_| Fail::Garbled).and_then(|b| client.delete_json(s, "/v1/downloads", b)),
-                None => no_server(),
-            };
-            send(Done::Downloads(ids, on, r.map(|b| count_of(&b))));
-        }
-        Job::SeriesDownload(id, what) => {
-            let r = post_json(client, &server, &format!("/v1/series/{id}/download"), &what).map(|b| count_of(&b));
-            send(Done::SeriesDownload(id, what, r));
         }
         Job::AppLatest => {
             let r = match &server {

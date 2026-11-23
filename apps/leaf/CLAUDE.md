@@ -72,7 +72,13 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
   them). My space's own tabs are Updates (first), Recent, Following, Downloads (2026-11-23). No
   source names anywhere in the UI, except Settings' Sources list, which the owner asked for
   (2026-11-23). Adding a series is not following it: the bell is.
-- Nothing downloads without being asked, apart from the server's one next chapter.
+- A download is a copy on this phone for reading offline (`offline.rs`, `offline/<chapter>/`, apart
+  from the page cache, which may be trimmed): nothing downloads without being asked. What the
+  server keeps (its one next chapter, chapters it fetched for the phone's line) is plumbing and is
+  never shown as a download; Downloads and the rows' states come from the phone's folder alone,
+  and deleting one never asks the server (2026-11-23). Its line goes one chapter at a time and
+  puts a chapter the server lacks in the server's own line first, so pages come from the server's
+  disk; select bars (`saved::select_bar`) are fixed chrome, tested in `flows.rs`.
 - While a menu is open, the page under it takes no tap (`kit::hold`; `flows.rs` tests it). Nor
   does a tap on fixed chrome drawn after the page (the tab bar, a fixed top): `Ui::begin_frame`
   holds it and `kit::chrome` / `kit::fixed_top` give it back; new fixed chrome registers itself so.

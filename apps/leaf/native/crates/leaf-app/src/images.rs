@@ -148,8 +148,6 @@ enum Got {
     Local { key: String, book: PathBuf, entry: String, img: Option<Pixels> },
     Hero { of: CoverOf, img: Option<HeroPics> },
     Thumb { chapter: i64, img: Option<Pixels> },
-    /// What the page cache holds: bytes per chapter.
-    Cached(HashMap<i64, u64>),
 }
 
 struct Queue {
@@ -215,12 +213,9 @@ pub struct Images {
     cover_src: HashMap<CoverOf, (u32, u32)>,
     /// Pictures the server had none of: when, and whether it said then that it had one.
     thumb_failed: HashMap<i64, (u64, bool)>,
-    /// The chapters whose pages are on this phone, with their bytes, once the cache was looked at.
-    pub cached: Option<HashMap<i64, u64>>,
     /// Pages left out of the strip: scanlators' promo pages the server skips, and pages hidden by
     /// hand. Kept on disk beside the page (`<n>.skip`).
     skipped: HashSet<(i64, u32)>,
-    tx: Sender<Got>,
     data: PathBuf,
 }
 
@@ -248,9 +243,7 @@ impl Images {
             posters: HashMap::new(),
             cover_src: HashMap::new(),
             thumb_failed: HashMap::new(),
-            cached: None,
             skipped: HashSet::new(),
-            tx,
             data,
             shared,
             rx,
@@ -441,40 +434,6 @@ impl Images {
         }
     }
 
-    /// Look at what the page cache holds, on a thread ([`Images::cached`] answers after).
-    pub fn scan_cache(&self) {
-        let (tx, data) = (self.tx.clone(), self.data.clone());
-        let _ = std::thread::Builder::new().name("leaf-scan".into()).spawn(move || {
-            let mut out = HashMap::new();
-            for (chapter, bytes, _) in cache_dirs(&data) {
-                out.insert(chapter, bytes);
-            }
-            let _ = tx.send(Got::Cached(out));
-            crate::wake::wake();
-        });
-    }
-
-    /// Remove these chapters' pages from the phone, on a thread, then look at the cache again.
-    pub fn remove_chapters(&mut self, chapters: Vec<i64>) {
-        if let Some(m) = &mut self.cached {
-            for c in &chapters {
-                m.remove(c);
-            }
-        }
-        let (tx, data) = (self.tx.clone(), self.data.clone());
-        let _ = std::thread::Builder::new().name("leaf-remove".into()).spawn(move || {
-            for c in chapters {
-                let _ = std::fs::remove_dir_all(chapter_dir(&data, c));
-            }
-            let mut out = HashMap::new();
-            for (chapter, bytes, _) in cache_dirs(&data) {
-                out.insert(chapter, bytes);
-            }
-            let _ = tx.send(Got::Cached(out));
-            crate::wake::wake();
-        });
-    }
-
     /// The pages the reader wants, nearest first: (chapter, page, decode). Anything else queued
     /// for pages is dropped.
     pub fn want_pages(&mut self, wants: &[(i64, u32, bool)]) {
@@ -546,11 +505,6 @@ impl Images {
                 Got::Page { chapter, n, decode, result } => {
                     self.asked.remove(&Want::Page { chapter, n, decode });
                     let k = (chapter, n);
-                    if chapter > 0
-                        && let Some(m) = &mut self.cached
-                    {
-                        m.entry(chapter).or_insert(0);
-                    }
                     match result {
                         Ok(Fetched::Img(Some(img))) => {
                             self.sizes.insert(k, (img.w, img.h));
@@ -609,9 +563,6 @@ impl Images {
                             self.thumb_failed.insert(chapter, (now_ns, had));
                         }
                     }
-                }
-                Got::Cached(m) => {
-                    self.cached = Some(m);
                 }
                 Got::Local { key, book, entry, img } => {
                     self.asked.remove(&Want::Local { key: key.clone(), book, entry });
@@ -1005,6 +956,16 @@ fn page(client: &Client, server: Option<&Server>, data: &Path, chapter: i64, n: 
     let file = dir.join(n.to_string());
     let mark = dir.join(format!("{n}.skip"));
     if !promo && mark.is_file() && !file.is_file() {
+        return Ok(Fetched::Skip);
+    }
+    // Downloaded to this phone: read from there, with no network at all.
+    let saved = crate::offline::chapter_dir(data, chapter);
+    if let Ok(b) = std::fs::read(saved.join(n.to_string()))
+        && !b.is_empty()
+    {
+        return if decode { decode_page(&b, trim).map(|p| Fetched::Img(Some(p))) } else { Ok(Fetched::Img(None)) };
+    }
+    if !promo && saved.join(format!("{n}.skip")).is_file() {
         return Ok(Fetched::Skip);
     }
     if !decode && file.is_file() {

@@ -12,8 +12,12 @@
 //!   are not. "New chapter" on a cover when some came since you read it. Sorted by Recently read,
 //!   Recently updated or Recently followed (when it was added: the server keeps no time for the
 //!   bell).
-//! - **Downloads**: per series, the chapters the server keeps and the ones on this phone, with
-//!   the room they take, and removing them.
+//! - **Downloads**: what is downloaded to this phone for reading offline, per series (the cover,
+//!   "12 chapters · 84 MB", the newest), with the room it all takes and a line while chapters are
+//!   being saved. Built from the folder alone ([`crate::offline`]): it shows, and opens, with no
+//!   server. A row opens the series' saved chapters ([`crate::saved`]). Select (a long press, the
+//!   header's Select, or ⋯) picks series, and the bar at the bottom deletes them, or only their read
+//!   chapters; ⋯ → "Delete read chapters" does so everywhere. Only this phone's copies go.
 //!
 //! Updates, Recent and Following have a field under the tabs that narrows the list to titles
 //! holding what is typed ([`logic::title_matches`]: any case, any accents, inside words). Following
@@ -24,7 +28,7 @@
 //! time, which are no longer tabs. While a menu is open the page under it gets no tap (the + menu's
 //! tap went through to the cover under it, 2026-11-22).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use leaf_proto::{Series, Update};
 
@@ -69,24 +73,26 @@ pub struct State {
     chips: crate::ui::HScroll,
     /// The shelf sheet is open for this series (a long press on its row).
     pub shelf_for: Option<i64>,
-    /// The downloads sheet is open for this series (a long press on its row in Downloads).
-    pub downloads_for: Option<i64>,
+    /// Downloads: selecting series (their ids). None when not selecting.
+    pub select: Option<BTreeSet<i64>>,
+    /// Downloads: chapters to delete, waiting for the confirm.
+    pub confirm: Option<Vec<i64>>,
 }
 
 impl State {
-    /// Close a menu or the shelf sheet, if one is open.
+    /// Close a menu, the shelf sheet or the confirm, if one is open; else stop selecting.
     pub fn close_over(&mut self) -> bool {
         let open = self.covered();
         self.add_menu = false;
         self.more_menu = false;
         self.sort_menu = false;
         self.shelf_for = None;
-        self.downloads_for = None;
-        open
+        self.confirm = None;
+        open || self.select.take().is_some()
     }
 
     fn covered(&self) -> bool {
-        self.add_menu || self.more_menu || self.sort_menu || self.shelf_for.is_some() || self.downloads_for.is_some()
+        self.add_menu || self.more_menu || self.sort_menu || self.shelf_for.is_some() || self.confirm.is_some()
     }
 }
 
@@ -109,11 +115,11 @@ enum Act {
     Continue(i64),
     Book(i64),
     Bell(i64, bool),
-    Remove(i64),
-    /// A series' read chapters, removed from this phone and the server.
-    RemoveRead(Option<i64>),
-    /// A long press on a row in Downloads: its sheet.
-    Downloads(i64),
+    /// A row in Downloads: that series' saved chapters.
+    Saved(i64),
+    /// Downloads: a long press starts selecting with this series; a tap while selecting.
+    Select(i64),
+    Toggle(i64),
     /// An update: its chapter in the reader.
     Chapter(i64, i64),
     /// A long press on a series' row: the shelf sheet.
@@ -144,7 +150,6 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         if tab == UPDATES && !app.updates.loading && app.server.is_some() {
             app.ask(Job::Updates(UPDATE_DAYS));
         }
-        app.images.scan_cache();
     }
     let updates: Vec<Update> = app.updates.data.clone().unwrap_or_default();
     let updates_state = (app.updates.loading && app.updates.data.is_none(), app.updates.error.clone().filter(|_| app.updates.data.is_none()));
@@ -182,7 +187,10 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let view_top = -cx.c.dy - 140.0;
     let view_bottom = -cx.c.dy + cx.c.h + 140.0;
     let mut retry_updates = false;
-    let mut remove_read = false;
+    let mut retry_saves = false;
+    let mut start_select = false;
+    let selecting = st.select.clone().filter(|_| tab == DOWNLOADS);
+    let groups = if tab == DOWNLOADS { app.saver.groups() } else { Vec::new() };
     let mut set_all: Option<bool> = None;
     let held_at = if covered { None } else { cx.ui.resting(now).filter(|(_, ns)| *ns >= crate::series::LONG_PRESS_NS).map(|(p, _)| p) };
     match tab {
@@ -505,89 +513,99 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             }
         }
         _ => {
-            let cached = app.images.cached.clone().unwrap_or_default();
-            // Per series: the chapters the server keeps, those on this phone with their bytes, and
-            // the newest download's day.
-            let mut rows: Vec<(&Series, usize, usize, u64)> = Vec::new();
-            let mut read_kept = 0usize;
-            for s in &series {
-                let Some(d) = app.series.get(&s.id).and_then(|l| l.data.as_ref()) else { continue };
-                let server = d.chapters.iter().filter(|c| c.downloaded).count();
-                let phone: Vec<u64> = d.chapters.iter().filter_map(|c| cached.get(&c.id).copied()).collect();
-                read_kept += d.chapters.iter().filter(|c| c.read && (c.downloaded || cached.contains_key(&c.id))).count();
-                if server > 0 || !phone.is_empty() {
-                    rows.push((s, server, phone.len(), phone.iter().sum()));
-                }
-            }
-            let total: u64 = rows.iter().map(|r| r.3).sum();
-            let on_server: usize = rows.iter().map(|r| r.1).sum();
+            // What is on this phone, from its own folder: no server needed.
+            let total: u64 = groups.iter().map(|g| g.bytes).sum();
+            let running = app.saver.running();
             y += 12.0;
             let ht = Text::new(ty::UI, t::INK2);
             let head_h = 36.0;
-            let words = format!("On this phone: {}", size_words(total));
-            cx.c.text(&words, x0, y + (head_h - ht.lh()) / 2.0, ht);
-            if read_kept > 0 {
-                let rt = Text::new(ty::UI, t::INK).semi().right();
-                let rw = cx.c.measure("Remove read", rt);
-                if cx.pressed(WIDTH - PAD - rw - 10.0, y, rw + 20.0, head_h) {
-                    cx.c.rect(WIDTH - PAD - rw - 10.0, y, rw + 20.0, head_h, 8.0, t::WASH);
-                }
-                cx.c.text("Remove read", WIDTH - PAD, y + (head_h - rt.lh()) / 2.0, rt);
-                if cx.tap(WIDTH - PAD - rw - 14.0, y - 4.0, rw + 14.0 + PAD, head_h + 8.0) {
-                    remove_read = true;
-                }
+            cx.c.text(&format!("On this phone: {}", size_words(total)), x0, y + (head_h - ht.lh()) / 2.0, ht);
+            if selecting.is_none() && !groups.is_empty() && crate::saved::text_key(&mut cx, y - 4.0, "Select") {
+                start_select = true;
             }
             y += head_h;
-            cx.c.text_fit(&format!("{} kept on your server, ready to read", logic::chapters_words(on_server)), x0, y, w, Text::new(12.5, t::INK3));
-            y += 30.0;
-            if rows.is_empty() && app.images.cached.is_some() && !loading {
+            // While chapters are being saved: which, how far, and how many wait.
+            if let Some((title, number, done, all)) = &running.now {
+                let more = running.waiting.saturating_sub(1);
+                let mut words = if *all > 0 { format!("Saving {title} ch. {} · {done} of {all} pages", logic::num(*number)) } else { format!("Waiting for your server: {title} ch. {}", logic::num(*number)) };
+                if more > 0 {
+                    words.push_str(&format!(" · {more} more waiting"));
+                }
+                let turn = (now as f64 / 1e9 * 0.9).fract() as f32;
+                cx.c.arc(x0 + 7.0, y + 9.0, 6.0, 1.8, turn, turn + 0.7, t::ACCENT, false);
+                y += cx.c.para(&words, x0 + 22.0, y, w - 22.0, Text::new(12.5, t::INK2).line(1.4), 2) + 10.0;
+            } else if running.waiting > 0 {
+                cx.c.text_fit(&format!("{} waiting to download", logic::chapters_words(running.waiting)), x0, y, w, Text::new(12.5, t::INK3));
+                y += 26.0;
+            }
+            if running.failed > 0 {
+                let words = format!("{} didn't save · Retry", logic::chapters_words(running.failed));
+                cx.c.icon("flag", x0 + 7.0, y + 9.0, 12.0, t::WARN);
+                cx.c.text_fit(&words, x0 + 22.0, y, w - 22.0, Text::new(12.5, t::WARN));
+                if !covered && selecting.is_none() && cx.tap(x0, y - 8.0, w, 34.0) {
+                    retry_saves = true;
+                }
+                y += 26.0;
+            }
+            y += 4.0;
+            if groups.is_empty() && app.saver.scanned() {
                 y += 20.0;
-                y += cx.c.para(
-                    "Nothing downloaded. Download chapters from a series page; your server keeps the one after the chapter you last read.",
-                    x0,
+                let (h, _) = kit::notice(
+                    &mut cx,
+                    x0 + 16.0,
                     y,
-                    w,
-                    Text::new(ty::UI, t::INK2).line(1.45),
-                    4,
+                    w - 32.0,
+                    "Nothing downloaded",
+                    Some("Chapters you download from a series page are kept on this phone, to read with no connection."),
+                    None,
                 );
+                y += h;
             }
             let rh = ROW_H;
-            for (s, server, phone, bytes) in rows {
+            for g in &groups {
                 if y + rh < view_top || y > view_bottom {
                     y += rh;
                     continue;
+                }
+                let picked = selecting.as_ref().is_some_and(|s| s.contains(&g.series));
+                if picked {
+                    cx.c.rect(0.0, y, WIDTH, rh, 0.0, t::ACCENT_DIM);
                 }
                 if cx.pressed(0.0, y, WIDTH, rh) {
                     cx.c.rect(0.0, y, WIDTH, rh, 0.0, t::WASH);
                 }
                 let cw = rh;
-                cover(&mut cx, &mut app.images, s, 0.0, y, cw, rh, 0.0, now);
+                let of = CoverOf::Series(g.series);
+                cx.c.rect(0.0, y, cw, rh, 0.0, t::S1);
+                if app.images.cover(cx.c, of, now) {
+                    cx.c.image_cover(&of.key(), 0.0, y, cw, rh, 0.0, Rgba::WHITE);
+                }
                 let tx = cw + 14.0;
-                let tw = WIDTH - PAD - tx;
+                let right = if selecting.is_some() { WIDTH - PAD - 34.0 } else { WIDTH - PAD };
+                let tw = right - tx;
+                if selecting.is_some() {
+                    let (cxx, cyy) = (WIDTH - PAD - 11.0, y + rh / 2.0);
+                    if picked {
+                        cx.c.circle(cxx, cyy, 11.0, t::ACCENT);
+                        cx.c.icon("check", cxx, cyy, 13.0, t::ON_ACCENT);
+                    } else {
+                        cx.c.outline(cxx - 11.0, cyy - 11.0, 22.0, 22.0, 11.0, 1.5, t::INK3);
+                    }
+                }
                 let title_t = Text::new(15.5, t::INK).semi();
-                let line_t = Text::new(12.5, t::INK3);
-                let author = s.author.as_deref().map(|a| logic::showable(a, |c| cx.c.can_show(c))).filter(|a| !a.is_empty());
-                let block = title_t.lh() + 4.0 + if author.is_some() { line_t.lh() + 2.0 } else { 0.0 } + line_t.lh();
-                let mut ly = y + (rh - block) / 2.0;
-                cx.c.text_fit(&s.title, tx, ly, tw, title_t);
-                ly += title_t.lh() + 4.0;
-                if let Some(a) = &author {
-                    cx.c.text_fit(a, tx, ly, tw, line_t.color(t::INK2));
-                    ly += line_t.lh() + 2.0;
-                }
-                let mut words = Vec::new();
-                if server > 0 {
-                    words.push(format!("{server} on your server"));
-                }
-                if phone > 0 {
-                    words.push(format!("{phone} here · {}", size_words(bytes)));
-                }
-                cx.c.text_fit(&words.join(" · "), tx, ly, tw, line_t);
-                if held_on(held_at, y, rh, cx.c.dy) {
+                let line_t = Text::new(13.0, t::INK2);
+                let last_t = Text::new(12.0, t::INK3);
+                let block = title_t.lh() + 4.0 + line_t.lh() + 2.0 + last_t.lh();
+                let ty0 = y + (rh - block) / 2.0;
+                cx.c.text_fit(&g.title, tx, ty0, tw, title_t);
+                cx.c.text_fit(&format!("{} · {}", logic::chapters_words(g.chapters), size_words(g.bytes)), tx, ty0 + title_t.lh() + 4.0, tw, line_t);
+                let newest = format!("Up to chapter {} · saved {}", logic::num(g.newest), logic::ago(g.saved_at, now_ms));
+                cx.c.text_fit(&newest, tx, ty0 + title_t.lh() + 4.0 + line_t.lh() + 2.0, tw, last_t);
+                if held_on(held_at, y, rh, cx.c.dy) && selecting.is_none() {
                     cx.ui.swallow();
-                    act = Some(Act::Downloads(s.id));
+                    act = Some(Act::Select(g.series));
                 } else if cx.tap(0.0, y, WIDTH, rh) {
-                    act = Some(Act::Series(s.id));
+                    act = Some(if selecting.is_some() { Act::Toggle(g.series) } else { Act::Saved(g.series) });
                 }
                 y += rh;
             }
@@ -597,20 +615,37 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         y += 12.0;
         y += cx.c.para(e, x0, y, w, Text::new(ty::CAPTION, t::DANGER), 3);
     }
-    let bottom = y + kit::TABS_H;
+    let bottom = y + if selecting.is_some() { crate::saved::BAR_H } else { kit::TABS_H };
     // The fixed top: the title, + and ⋯, then the tabs.
     let mut set_tab = None;
+    let mut stop_select = false;
+    let mut select_all = false;
     {
         let top = cx.c.inset_top;
         cx.c.dy = 0.0;
         cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + top_h, 0.0, t::BG);
         kit::fixed_top(&mut cx, top_h);
-        cx.c.text("My space", PAD, top + 14.0, Text::new(ty::TITLE, t::INK).brand());
-        if kit::icon_key(&mut cx, WIDTH - 6.0 - 44.0 * 2.0, top + 10.0, "plus") {
-            st.add_menu = true;
-        }
-        if kit::icon_key(&mut cx, WIDTH - 6.0 - 44.0, top + 10.0, "more") {
-            st.more_menu = true;
+        match &selecting {
+            Some(sel) => {
+                if kit::icon_key(&mut cx, 6.0, top + 10.0, "close") {
+                    stop_select = true;
+                }
+                let tt = Text::new(ty::SECTION, t::INK).semi();
+                let words = if sel.is_empty() { "Tap series to select".to_string() } else { format!("{} selected", sel.len()) };
+                cx.c.text_fit(&words, 56.0, top + 10.0 + (44.0 - tt.lh()) / 2.0, WIDTH - 56.0 - 90.0, tt);
+                if crate::saved::text_key(&mut cx, top + 10.0, "All") {
+                    select_all = true;
+                }
+            }
+            None => {
+                cx.c.text("My space", PAD, top + 14.0, Text::new(ty::TITLE, t::INK).brand());
+                if kit::icon_key(&mut cx, WIDTH - 6.0 - 44.0 * 2.0, top + 10.0, "plus") {
+                    st.add_menu = true;
+                }
+                if kit::icon_key(&mut cx, WIDTH - 6.0 - 44.0, top + 10.0, "more") {
+                    st.more_menu = true;
+                }
+            }
         }
         let ty_ = top + 62.0;
         let tt = Text::new(13.5, t::INK3).medium();
@@ -653,13 +688,23 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             st.query = q;
         }
     }
-    let tab_hit = kit::tabs(&mut cx, 2);
+    // Selecting downloads: the bar to delete them takes the tabs' place.
+    let (tab_hit, bar_hit) = match &selecting {
+        Some(sel) => {
+            let live = !sel.is_empty();
+            let words = if live { format!("Delete {}", sel.len()) } else { "Delete".into() };
+            (None, crate::saved::select_bar(&mut cx, &[(words.as_str(), live, true), ("Delete read", live, false)]))
+        }
+        None => (kit::tabs(&mut cx, 2), None),
+    };
     // Over the page: the menus.
     let mut add_books = false;
     let mut to_notes = false;
     let mut to_stats = false;
     let mut new_sort = None;
     let mut new_shelf: Option<(i64, Shelf)> = None;
+    let mut delete_read_all = false;
+    let mut confirmed: Option<Vec<i64>> = None;
     if covered {
         kit::release(&mut cx, held);
         let top = cx.c.inset_top + 56.0;
@@ -677,12 +722,23 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 None => {}
             }
         } else if st.more_menu {
-            match kit::menu(&mut cx, top, &["Highlights", "Reading time"]) {
-                Some(0) => {
+            // On Downloads, its own two first.
+            let items: &[&str] = if tab == DOWNLOADS { &["Select", "Delete read chapters", "Highlights", "Reading time"] } else { &["Highlights", "Reading time"] };
+            let skip = if tab == DOWNLOADS { 2 } else { 0 };
+            match kit::menu(&mut cx, top, items) {
+                Some(0) if skip == 2 => {
+                    start_select = true;
+                    st.more_menu = false;
+                }
+                Some(1) if skip == 2 => {
+                    delete_read_all = true;
+                    st.more_menu = false;
+                }
+                Some(i) if i == skip => {
                     to_notes = true;
                     st.more_menu = false;
                 }
-                Some(1) => {
+                Some(i) if i == skip + 1 => {
                     to_stats = true;
                     st.more_menu = false;
                 }
@@ -698,21 +754,14 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 Some(_) => st.sort_menu = false,
                 None => {}
             }
-        } else if let Some(id) = st.downloads_for {
-            match series.iter().find(|s| s.id == id) {
-                Some(s) => match kit::choices(&mut cx, &s.title, Some("Removed from this phone and your server"), &[("Remove every download", false), ("Remove the read ones", false)]) {
-                    Some(0) => {
-                        st.downloads_for = None;
-                        act = Some(Act::Remove(id));
-                    }
-                    Some(1) => {
-                        st.downloads_for = None;
-                        act = Some(Act::RemoveRead(Some(id)));
-                    }
-                    Some(_) => st.downloads_for = None,
-                    None => {}
-                },
-                None => st.downloads_for = None,
+        } else if let Some(ids) = st.confirm.clone() {
+            match crate::saved::confirm(&mut cx, &app.saver, &ids) {
+                Some(true) => {
+                    st.confirm = None;
+                    confirmed = Some(ids);
+                }
+                Some(false) => st.confirm = None,
+                None => {}
             }
         } else if let Some(id) = st.shelf_for {
             match series.iter().find(|s| s.id == id) {
@@ -727,6 +776,39 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         }
     }
     app.page_end(&pg, bottom);
+    // Downloads: what selecting asked for.
+    if !covered {
+        if stop_select {
+            app.st.space.select = None;
+        } else if select_all {
+            app.st.space.select = Some(groups.iter().map(|g| g.series).collect());
+        } else if let (Some(k), Some(sel)) = (bar_hit, &selecting) {
+            let ids = saved_chapters(app, |s| sel.contains(&s), k == 1);
+            if ids.is_empty() {
+                app.toast("None of those chapters is read yet");
+            } else {
+                app.st.space.confirm = Some(ids);
+            }
+        }
+    }
+    if start_select {
+        app.st.space.select = Some(BTreeSet::new());
+    }
+    if delete_read_all {
+        let ids = saved_chapters(app, |_| true, true);
+        if ids.is_empty() {
+            app.toast("No read chapters are on this phone");
+        } else {
+            app.st.space.confirm = Some(ids);
+        }
+    }
+    if let Some(ids) = confirmed {
+        crate::saved::delete(app, &ids);
+        app.st.space.select = None;
+    }
+    if retry_saves {
+        app.saver.retry(&[]);
+    }
     if let Some(s) = new_sort {
         app.set_following_sort(s);
     }
@@ -746,10 +828,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         && t_ != tab
     {
         app.st.space.tab = t_;
+        app.st.space.select = None;
         *app.scroll() = Default::default();
-        if t_ == DOWNLOADS {
-            app.images.scan_cache();
-        }
         if t_ == UPDATES && !app.updates.loading {
             app.ask(Job::Updates(UPDATE_DAYS));
         }
@@ -762,15 +842,19 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         Some(Act::Continue(id)) => app.continue_series(id),
         Some(Act::Book(id)) => app.open_book(id),
         Some(Act::Bell(id, on)) => app.set_bell(id, on),
-        Some(Act::Remove(id)) => remove_downloads(app, id),
-        Some(Act::RemoveRead(of)) => remove_read_downloads(app, of),
-        Some(Act::Downloads(id)) => app.st.space.downloads_for = Some(id),
+        Some(Act::Saved(id)) => app.push(Route::Saved(id)),
+        Some(Act::Select(id)) => app.st.space.select = Some([id].into_iter().collect()),
+        Some(Act::Toggle(id)) => {
+            if let Some(sel) = &mut app.st.space.select
+                && !sel.remove(&id)
+            {
+                sel.insert(id);
+            }
+        }
         Some(Act::Chapter(series, chapter)) => app.open_chapter_of(series, chapter),
         Some(Act::Shelve(id)) => app.st.space.shelf_for = Some(id),
         None => {
-            if remove_read {
-                remove_read_downloads(app, None);
-            } else if to_search {
+            if to_search {
                 app.go_tab(1);
             } else if to_notes {
                 app.push(Route::Notes);
@@ -791,50 +875,17 @@ fn now_ms_() -> i64 {
     shelf::now_ms()
 }
 
-/// Remove a series' downloads: its chapters' pages on this phone, and the copies the server keeps.
-fn remove_downloads(app: &mut App, id: i64) {
-    let Some(d) = app.series.get(&id).and_then(|l| l.data.clone()) else { return };
-    let cached = app.images.cached.clone().unwrap_or_default();
-    let phone: Vec<i64> = d.chapters.iter().filter(|c| cached.contains_key(&c.id)).map(|c| c.id).collect();
-    let server: Vec<i64> = d.chapters.iter().filter(|c| c.downloaded).map(|c| c.id).collect();
-    let n = phone.iter().chain(server.iter()).collect::<std::collections::HashSet<_>>().len();
-    app.images.remove_chapters(phone);
-    for c in &server {
-        app.mark_downloaded(*c, false);
-    }
-    app.download(&server, false);
-    app.toast(&format!("Removed {} of {}", logic::chapters_words(n), d.series.title));
-}
-
-/// Remove the chapters already read from this phone and the server: one series', or all.
-fn remove_read_downloads(app: &mut App, of: Option<i64>) {
-    let cached = app.images.cached.clone().unwrap_or_default();
-    let (mut phone, mut server) = (Vec::new(), Vec::new());
-    for l in app.series.values() {
-        let Some(d) = &l.data else { continue };
-        if of.is_some_and(|id| id != d.series.id) {
-            continue;
-        }
-        for c in d.chapters.iter().filter(|c| c.read) {
-            if cached.contains_key(&c.id) {
-                phone.push(c.id);
-            }
-            if c.downloaded {
-                server.push(c.id);
+/// The chapters on this phone of the series `of` picks (only the read ones when `read`).
+fn saved_chapters(app: &App, of: impl Fn(i64) -> bool, read: bool) -> Vec<i64> {
+    let mut ids = Vec::new();
+    for g in app.saver.groups().into_iter().filter(|g| of(g.series)) {
+        for m in app.saver.saved_of(g.series) {
+            if !read || crate::saved::is_read(app, &m) {
+                ids.push(m.chapter.id);
             }
         }
     }
-    let n = phone.iter().chain(server.iter()).collect::<std::collections::HashSet<_>>().len();
-    if n == 0 {
-        app.toast("No read chapters are kept");
-        return;
-    }
-    app.images.remove_chapters(phone);
-    for c in &server {
-        app.mark_downloaded(*c, false);
-    }
-    app.download(&server, false);
-    app.toast(&format!("Removed {} you've read", logic::chapters_words(n)));
+    ids
 }
 
 #[cfg(test)]

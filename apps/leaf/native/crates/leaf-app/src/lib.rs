@@ -7,7 +7,7 @@
 //!
 //! `app` holds the state and draws a frame; `home`, `space`, `library`, `search`, `series`,
 //! `reader` and `connect` are the screens, `recs` the picks (Home's and a series' Readers also
-//! like), `update` the app updates from the server; `strip` and `logic` the rules they read (tested); `net` and `images` the
+//! like), `update` the app updates from the server, `offline` the downloads kept on the phone and their line (`saved` a series' downloads); `strip` and `logic` the rules they read (tested); `net` and `images` the
 //! worker threads that talk to the server and decode; `draw` and `gfx` the canvas and the GPU;
 //! `desktop` and `android` the two front ends.
 
@@ -27,8 +27,10 @@ pub mod logic;
 pub mod net;
 pub mod notes;
 pub mod notices;
+pub mod offline;
 pub mod places;
 pub mod reader;
+pub mod saved;
 pub mod recs;
 pub mod search;
 pub mod series;

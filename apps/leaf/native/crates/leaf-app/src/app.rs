@@ -115,6 +115,8 @@ pub enum Route {
     /// The third tab: Recent, Following, Downloads.
     Space,
     Series(i64),
+    /// A series' chapters downloaded to this phone (from Downloads).
+    Saved(i64),
     /// The reader, over the series it was opened from ([`App::reader`]); a PDF too.
     Reader,
     /// A book open ([`App::book`]).
@@ -172,6 +174,7 @@ pub struct States {
     pub find: crate::notes::Find,
     pub recs: crate::recs::State,
     pub update: crate::update::State,
+    pub saved: crate::saved::State,
 }
 
 /// The settings kept in `config.json` (Android's chapter notices read `server` from it too).
@@ -296,8 +299,8 @@ pub struct App {
     pub dim_dirty: bool,
     /// Words a thread of the app's own left for the toast (the share sheet's answer).
     late_toast: Arc<std::sync::Mutex<Option<String>>>,
-    /// Chapters asked to download on the server and not yet downloaded there.
-    pub downloading: HashSet<i64>,
+    /// Chapters downloaded to this phone, and the line of those to come.
+    pub saver: crate::offline::Saver,
     /// Paid episodes ahead on Webtoon, per series (`paid`, read beside [`Series`]).
     pub paid: HashMap<i64, PaidAhead>,
     /// Chapters the server has a picture of (`thumb`).
@@ -343,7 +346,6 @@ impl App {
         images.set_promo(config.reading.skip_promo);
         images.set_server(config.server.clone());
         images.set_host(host.clone());
-        images.scan_cache();
         // Books need no server: Home is always the first page.
         let start = Route::Home;
         let mut app = App {
@@ -386,7 +388,7 @@ impl App {
             hidden_pages: Loaded::default(),
             dim_dirty: false,
             late_toast: Arc::new(std::sync::Mutex::new(None)),
-            downloading: HashSet::new(),
+            saver: crate::offline::Saver::new(data.clone()),
             paid: HashMap::new(),
             thumbs: HashSet::new(),
             recs: Loaded::default(),
@@ -460,6 +462,12 @@ impl App {
     /// Back would (its held-back place sent), and the new one takes its place on the stack.
     pub fn open_chapter(&mut self, d: &SeriesDetail, index: usize, page: u32) {
         let mut r = crate::reader::Reader::open(d, index, page);
+        // Downloaded chapters know their length: the server is not asked.
+        for c in &d.chapters {
+            if let Some(m) = self.saver.manifest(c.id) {
+                r.page_count(c.id, Some(m.pages), self.now_ns);
+            }
+        }
         // Where reading stopped, as the phone kept it to the unit: there exactly.
         if let Some(p) = crate::places::exact(&self.places, d, index, page) {
             r.restore(index.min(d.chapters.len().saturating_sub(1)), p);
@@ -477,7 +485,7 @@ impl App {
 
     /// Continue a series where it was left, when its chapters are at hand; else open its page.
     pub fn continue_series(&mut self, id: i64) {
-        let d = self.series.get(&id).and_then(|l| l.data.clone());
+        let d = self.detail_for(id);
         match d.as_ref().and_then(|d| crate::places::resume(&self.places, d).map(|c| (d, c))) {
             Some((d, c)) => self.open_chapter(d, c.index, c.page),
             None => self.push(Route::Series(id)),
@@ -700,17 +708,56 @@ impl App {
         }
     }
 
-    /// Download chapters on the server, or remove them there: one at once, several through the
-    /// server's line (`/v1/downloads`, drained a few at a time per source).
-    pub fn download(&mut self, chapters: &[i64], on: bool) {
-        if on {
-            self.downloading.extend(chapters.iter().copied());
+    /// Download chapters of a series to this phone (put in the line), and say so.
+    pub fn download(&mut self, series: i64, chapters: &[leaf_proto::Chapter]) {
+        let title = self.series_title(series);
+        let n = self.saver.add(series, &title, chapters);
+        match (chapters.len(), n) {
+            (_, 0) => self.toast(if chapters.len() == 1 { "That chapter is on this phone already" } else { "Those chapters are on this phone already" }),
+            (1, _) => self.toast("Downloading to this phone"),
+            (_, n) => self.toast(&format!("Downloading {} to this phone", logic::chapters_words(n))),
         }
-        match chapters {
-            [] => {}
-            [c] => self.ask(Job::Download(*c, on)),
-            _ => self.ask(Job::Downloads(chapters.to_vec(), on)),
+    }
+
+    /// A series' title, from whatever is at hand.
+    pub fn series_title(&self, id: i64) -> String {
+        self.series
+            .get(&id)
+            .and_then(|l| l.data.as_ref())
+            .map(|d| d.series.title.clone())
+            .or_else(|| self.library.data.as_ref().and_then(|l| l.iter().find(|s| s.id == id)).map(|s| s.title.clone()))
+            .or_else(|| self.saver.saved_of(id).first().map(|m| m.title.clone()))
+            .unwrap_or_default()
+    }
+
+    /// The server can't be asked about this series now: there is none, or it didn't answer and
+    /// what shows is the copy on disk (or nothing).
+    pub fn offline_for(&self, id: i64) -> bool {
+        self.server.is_none() || self.series.get(&id).is_some_and(|l| !l.live && l.error.is_some() && !l.loading)
+    }
+
+    /// A series' chapters to read: the server's list, or, offline with chapters downloaded, only
+    /// those (the others can't be read).
+    pub fn detail_for(&self, id: i64) -> Option<SeriesDetail> {
+        let loaded = self.series.get(&id).and_then(|l| l.data.clone());
+        if self.offline_for(id) {
+            let saved = self.saver.saved_of(id);
+            if !saved.is_empty() {
+                let series = loaded.as_ref().map(|d| d.series.clone()).or_else(|| self.library.data.as_ref().and_then(|l| l.iter().find(|s| s.id == id).cloned()));
+                // Read marks as the phone last knew them.
+                let mut d = crate::offline::saved_detail(series, &saved)?;
+                if let Some(l) = &loaded {
+                    for c in &mut d.chapters {
+                        if let Some(k) = l.chapters.iter().find(|k| k.id == c.id) {
+                            c.read = k.read;
+                            c.last_page = k.last_page;
+                        }
+                    }
+                }
+                return Some(d);
+            }
         }
+        loaded
     }
 
     /// Ask for the recommendations, at most every [`crate::net::RECS_FRESH_MS`] (or now).
@@ -887,15 +934,6 @@ impl App {
                             }
                         }
                     }
-                    if let Ok((d, _)) = &result
-                        && !cached
-                    {
-                        for c in &d.chapters {
-                            if c.downloaded {
-                                self.downloading.remove(&c.id);
-                            }
-                        }
-                    }
                     let l = self.series.entry(id).or_default();
                     match result {
                         // As the library: the copy in hand may already show what was just read.
@@ -984,17 +1022,6 @@ impl App {
                         self.toast(&f.words(&label));
                     }
                 }
-                Done::Download(chapter, on, r) => match r {
-                    Ok(()) => {}
-                    Err(f) => {
-                        self.downloading.remove(&chapter);
-                        if !on {
-                            // Removing was shown at once: it is there after all.
-                            self.mark_downloaded(chapter, true);
-                        }
-                        self.toast(&f.words(&label));
-                    }
-                },
                 Done::Updates { cached, result } => {
                     let l = &mut self.updates;
                     match result {
@@ -1160,28 +1187,6 @@ impl App {
                         Err(f) => l.error = Some(f.words(&label)),
                     }
                 }
-                Done::Downloads(ids, on, r) => match r {
-                    Ok(_) => {}
-                    Err(f) => {
-                        for c in &ids {
-                            self.downloading.remove(c);
-                            if !on {
-                                self.mark_downloaded(*c, true);
-                            }
-                        }
-                        self.toast(&f.words(&label));
-                    }
-                },
-                Done::SeriesDownload(id, _, r) => match r {
-                    Ok(0) => self.toast("Nothing to download there: those chapters are kept already"),
-                    Ok(n) => {
-                        self.toast(&format!("Downloading {}, a few at a time", logic::chapters_words(n as usize)));
-                        self.st.series.polled_ns = self.now_ns;
-                        self.st.series.polls = 0;
-                        self.ask(Job::Series(id));
-                    }
-                    Err(f) => self.toast(&format!("Not downloaded: {}", lower_first(&f.words(&label)))),
-                },
                 Done::AppLatest(r) => match r {
                     Ok(Some(l)) => crate::update::offered(self, l),
                     Ok(None) => {}
@@ -1263,14 +1268,6 @@ impl App {
 
     // Marks shown at once, put back if the server says no
 
-    pub fn mark_downloaded(&mut self, chapter: i64, on: bool) {
-        for l in self.series.values_mut() {
-            if let Some(c) = l.data.as_mut().and_then(|d| d.chapters.iter_mut().find(|c| c.id == chapter)) {
-                c.downloaded = on;
-            }
-        }
-    }
-
     /// Show a chapter read or unread everywhere it is listed.
     pub fn mark_read(&mut self, chapter: i64, read: bool) {
         for l in self.series.values_mut() {
@@ -1304,14 +1301,6 @@ impl App {
         }
         self.read_undo.insert(series, undo);
         self.ask(Job::ReadBefore(series, before));
-    }
-
-    /// Remove a chapter's download, from the server and this phone.
-    pub fn remove_download(&mut self, chapter: i64) {
-        self.mark_downloaded(chapter, false);
-        self.downloading.remove(&chapter);
-        self.images.remove_chapters(vec![chapter]);
-        self.ask(Job::Download(chapter, false));
     }
 
     fn mark_shelf(&mut self, id: i64, shelf: Option<String>) {
@@ -1474,6 +1463,10 @@ impl App {
             self.ui.reset();
             return true;
         }
+        if matches!(self.route(), Route::Saved(_)) && self.st.saved.close_over() {
+            self.ui.reset();
+            return true;
+        }
         // The comic reader's sheet and overlay go first, as the book's chrome does.
         if self.route() == &Route::Reader
             && let Some(r) = &mut self.reader
@@ -1598,6 +1591,9 @@ impl App {
         self.now_ns = now_ns;
         self.wake = None;
         self.take_answers();
+        // A screenshot fetches nothing for downloads.
+        self.saver.set_server(if self.shot { None } else { self.server.clone() });
+        self.saver.set_show_promo(!self.prefs.skip_promo);
         self.open_waiting();
         self.open_started();
         let late = self.late_toast.lock().unwrap_or_else(|e| e.into_inner()).take();
@@ -1634,6 +1630,7 @@ impl App {
             Route::Search => crate::search::draw(self, dt),
             Route::Space => crate::space::draw(self, dt),
             Route::Series(id) => crate::series::draw(self, id, dt),
+            Route::Saved(id) => crate::saved::draw(self, id, dt),
             Route::Reader => crate::reader::draw(self, dt),
             Route::Book => crate::book::draw(self, dt),
             Route::InSearch => crate::book::draw_search(self, dt),

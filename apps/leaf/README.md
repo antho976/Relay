@@ -72,10 +72,10 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
   pauses that source's background work for an hour, twice as long on each repeat up to 12 h,
   kept across restarts; Settings' Sources list says so (`/v1/health`: `paused_until`,
   `requests_today`).
-- **Downloads** wait in leaf-server's own line and are handed to Suwayomi two per source at a
-  time, a minute apart at most: "Download next 5", a range or every unread chapter
-  (`POST /v1/series/{id}/download`, `POST`/`DELETE /v1/downloads`) fill in steadily. A single
-  chapter tapped goes at once.
+- **The server's downloads** (plumbing, never shown in the app as downloads) wait in
+  leaf-server's own line and are handed to Suwayomi two per source at a time, a minute apart at
+  most (`POST`/`DELETE /v1/downloads`, `POST /v1/series/{id}/download`). The phone's download line
+  puts a chapter there before fetching its pages, so they come from the server's disk.
 - **Chapter pictures** are made on the server too (`thumbs.rs`, the phone's `thumb.rs` scoring
   ported as it is): from up to three pages of a downloaded chapter, read from Suwayomi's download
   folder (never from a site), 240 × 180 WebP in `data/thumbs/`, kept for good; 60 per hourly
@@ -122,8 +122,7 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
     a row opens the reader at that chapter), Recent (last read first, Continue or Start),
     Following (webtoon's Subscribed list: the bell is the follow, sorted by Recently read, updated
     or followed, with a row of shelves: Reading, Plan to read, On hold, Dropped, Done, and their
-    counts) and Downloads (per series, what the server keeps and what is on this phone; Remove
-    read clears chapters you have finished, a long press removes one series' downloads). Updates,
+    counts) and Downloads (see **Downloads** below). Updates,
     Recent and Following have a field that narrows the list by title as you type (any case or
     accent, inside words). A long press on a series' row puts it on another shelf; Dropped series
     stay out of Home's spotlight and Continue reading. Highlights and Reading time are in its ⋯
@@ -133,16 +132,17 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
     it all with the facts), tags; tabs **Chapters** / **Readers also like**; a fixed key at the
     bottom, "Continue chapter N". Chapter rows have the server's picture of the chapter (72 × 54,
     `/v1/chapters/{id}/thumb`, kept on disk; `thumb` on each chapter says one exists; the phone no
-    longer cuts pictures from pages), a cloud tile until it is downloaded (tapping it downloads
-    it), "Ch. 339 · title", the date or the page you are on, and Read or Continue; read rows are
-    dimmed. When Webtoon sells episodes ahead (`paid`), a row at the newest end says "Chapters
+    longer cuts pictures from pages) with a small download key on it until the chapter is on this
+    phone (a tap downloads it; a check once it is), "Ch. 339 · title", the date or the page you
+    are on, what the phone holds ("Saved", "Saving · 12 of 40 pages", "Waiting", "Didn't save ·
+    Retry"), and Read or Continue; read rows are dimmed. Offline with chapters downloaded, the list
+    is those alone, under an "Offline" note. When Webtoon sells episodes ahead (`paid`), a row at the newest end says "Chapters
     9–23 are on Webtoon (paid)" and Open hands its link to the Webtoon app or the browser.
     Readers also like is `/v1/series/{id}/also`, three across, "Yours" on ones in My space.
   - **Select** (a long press on a chapter, or ⋯ → Select chapters): taps add or take chapters away,
-    and the bottom key becomes Download N / Remove N / Mark read; "Select range…" takes a first and
-    last chapter to select or download (`/v1/series/{id}/download`); ⋯ also has "Download next 5"
-    and "Download all unread". Several chapters go through the server's line (`/v1/downloads`);
-    rows waiting say "queued", the two being fetched "downloading". ⋯ also has the shelf, "Wrong
+    and the bottom key becomes Download N / Delete N / Mark read (Delete removes this phone's
+    copies only); "Select range…" takes a first and last chapter to select or download; ⋯ also
+    has "Download next 5" and "Download all unread". ⋯ also has the shelf, "Wrong
     series?" (the other entries for the work with their chapter counts,
     `/v1/series/{id}/alternatives`; picking one repins the series, place carried) and "Remove from
     My space".
@@ -174,6 +174,22 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
     `exports/`; or one made now).
   - The reader chains chapters, caches pages on disk and reports progress. The last library and
     series are kept for offline.
+  - **Downloads** (`offline.rs`, `saved.rs`): a download is a chapter kept on this phone to read
+    with no connection; what the server keeps is its own business and never shown. Pages go to
+    `offline/<chapter>/` (a promo page the server skips as `<n>.skip`) with `manifest.json`
+    written last (series, chapter, pages, bytes, when), apart from the page cache, whose cleanup
+    never touches them; the reader reads them first and asks the server nothing, length included.
+    The line (`offline/queue.json`, kept across restarts) goes one chapter at a time, pages in
+    order, a pause between chapters, and takes a half-done chapter up where it stopped. A chapter
+    the server hasn't downloaded is first put in the server's own line (`POST /v1/downloads`, with
+    the next four), then fetched from the server's disk once `/v1/series/{id}` says it is there
+    (asked every 15 s, given up after 20 min: "Didn't save · Retry"); out of reach, the line rests
+    a minute. My space › Downloads lists, from the folder alone (no server needed), each series'
+    cover, "12 chapters · 84 MB" and the newest, the total on this phone, and a line while chapters
+    are being saved; a row opens that series' downloads (Read each, offline). Select (a long press,
+    Select or ⋯) picks series and the bar deletes them or only their read chapters, after a
+    confirm with the count and the room freed; ⋯ → "Delete read chapters" does it everywhere; a
+    series' downloads page selects chapters the same way. Deleting never asks the server.
   - **The exact place** (`places.rs`): chapter, page and how far down it, kept in `places.json` on
     each page change and at most every 2 s while the strip moves (a thread writes it), and at once
     when the app pauses, stops, loses focus or the reader closes (progress to the server then too;
@@ -235,7 +251,7 @@ Until leaf-server is on main with an image of its own, a new version is copied o
 - Books: the Book page (design 42 page 2), recaps, look-up and "ask", syncing through the server,
   reading time for comics and PDFs (only EPUB and text count), and full-text search across every
   book (Find searches titles, authors and your notes).
-- The phone does not yet download chapters ahead on its own while closed; it prefetches while
+- The phone's download line runs only while the app is open (no background job yet); it prefetches while
   reading.
 - leaf-server is not built by CI or published as an image.
 - `paid` and `thumb` are read by the phone beside leaf-proto's `Series` and `Chapter`

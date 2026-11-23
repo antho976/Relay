@@ -610,6 +610,10 @@ mod fake {
         pub fail_pages: HashSet<i64>,
         /// Pages answered as a scanlator's promo page: `204`, `x-leaf-skip: 1`.
         pub skip_pages: HashSet<(i64, u32)>,
+        /// Series answered by `/v1/series/{id}`.
+        pub details: HashMap<i64, leaf_proto::SeriesDetail>,
+        /// Chapters put in the server's download line (`POST /v1/downloads`): downloaded at once.
+        pub queued: Vec<i64>,
     }
 
     pub struct Fake {
@@ -694,6 +698,20 @@ mod fake {
                     } else {
                         (200, "image/png", png.to_vec())
                     }
+                }
+                ("GET", ["v1", "series", id]) => match st.details.get(&id.parse().unwrap_or(0)) {
+                    Some(d) => (200, "application/json", serde_json::to_vec(d).unwrap()),
+                    None => (404, "text/plain", b"no".to_vec()),
+                },
+                ("POST", ["v1", "downloads"]) => {
+                    let ids = serde_json::from_slice::<leaf_proto::DownloadIds>(&body).map(|d| d.ids).unwrap_or_default();
+                    st.queued.extend(&ids);
+                    for d in st.details.values_mut() {
+                        for c in d.chapters.iter_mut().filter(|c| ids.contains(&c.id)) {
+                            c.downloaded = true;
+                        }
+                    }
+                    (200, "application/json", format!("{{\"ok\":true,\"count\":{}}}", ids.len()).into_bytes())
                 }
                 ("POST", ["v1", "chapters", id, "progress"]) => {
                     if let Ok(p) = serde_json::from_slice::<leaf_proto::Progress>(&body) {
@@ -1247,5 +1265,295 @@ fn a_long_press_on_a_page_offers_to_hide_it_and_the_sheet_holds_every_tap() {
     assert!(!app.images.skipped(1001, 2), "shown again");
     assert!(reader(&app).undo.is_none());
     assert!(!reader(&app).overlay, "the Undo took the tap, not the strip");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// Downloads: chapters kept on this phone
+
+/// A small page picture (a flat colour), as the fake server sends.
+fn png() -> Vec<u8> {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(80, 160, image::Rgba([120, 90, 160, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    png
+}
+
+/// A chapter downloaded to this phone, on disk as the line leaves one: `pages` pictures and its
+/// manifest. Returns its bytes.
+fn saved_on_disk(dir: &std::path::Path, series: i64, chapter: i64, number: f64, pages: u32, read: bool) -> u64 {
+    let d = crate::offline::chapter_dir(dir, chapter);
+    std::fs::create_dir_all(&d).unwrap();
+    let p = png();
+    for n in 0..pages {
+        std::fs::write(d.join(n.to_string()), &p).unwrap();
+    }
+    let bytes = p.len() as u64 * pages as u64;
+    let chapter = leaf_proto::Chapter { id: chapter, number, name: String::new(), group: None, pages, read, last_page: 0, downloaded: false, uploaded_at: 0, from: None };
+    let m = crate::offline::Manifest { series, title: format!("Series {series}"), chapter, pages, skipped: vec![], bytes, saved_at: 1_700_000_000_000 + series * 1000 + number as i64 };
+    std::fs::write(d.join("manifest.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+    bytes
+}
+
+/// An app whose data folder already holds what `fill` puts there, on a 1080 × 2340 screen, with no
+/// library and a server that isn't there; its downloads read.
+fn app_on(name: &str, fill: impl Fn(&std::path::Path)) -> (App, u64, PathBuf) {
+    let dir = std::env::temp_dir().join(format!("leaf-flows-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    fill(&dir);
+    let mut app = App::new(Arc::new(TestHost(dir.clone())), 0);
+    app.shot = true;
+    nowhere(&mut app);
+    app.resize(1080.0, 2340.0, 0.0, 0.0);
+    let mut t = 1_000_000_000;
+    app.frame(t);
+    assert!(until(&mut app, &mut t, 5.0, |a| a.saver.scanned()), "the downloads were read");
+    (app, t, dir)
+}
+
+/// Waits (real time) until `done`.
+fn eventually(secs: f32, done: impl Fn() -> bool) -> bool {
+    for _ in 0..(secs * 200.0) as usize {
+        if done() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    false
+}
+
+#[test]
+fn a_download_survives_the_page_cache_cleanup() {
+    let dir = std::env::temp_dir().join(format!("leaf-flows-kept-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    saved_on_disk(&dir, 1, 1001, 1.0, 2, false);
+    // The same chapter in the page cache, and another, both read long ago: the cleanup takes both.
+    for c in [1001, 1002] {
+        let cache = crate::images::chapter_dir(&dir, c);
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("0"), png()).unwrap();
+        std::fs::write(cache.join(".used"), "1").unwrap();
+    }
+    crate::images::prune_cache(dir.clone(), Vec::new());
+    assert!(eventually(5.0, || !crate::images::chapter_dir(&dir, 1001).exists() && !crate::images::chapter_dir(&dir, 1002).exists()), "the cache was trimmed");
+    let kept = crate::offline::chapter_dir(&dir, 1001);
+    assert!(kept.join("0").is_file() && kept.join("1").is_file() && kept.join("manifest.json").is_file(), "the download is all there");
+    let saver = crate::offline::Saver::with_timing(dir.clone(), crate::offline::quick());
+    assert!(eventually(5.0, || saver.scanned()));
+    assert_eq!(saver.state(1001), crate::offline::Kept::Saved);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn downloads_wait_their_turn_survive_a_restart_and_resume_where_they_stopped() {
+    let dir = std::env::temp_dir().join(format!("leaf-flows-line-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let fake = fake::Fake::start();
+    {
+        let mut st = fake.state.lock().unwrap();
+        let mut d = comic(1, &[3, 2]);
+        // The server has chapter 2 already; chapter 1 it must download first.
+        d.chapters[0].downloaded = false;
+        st.details.insert(1, d);
+        st.counts.extend([(1001, 3), (1002, 2)]);
+        // Chapter 1's second page is a scanlator's promo page.
+        st.skip_pages.insert((1001, 1));
+    }
+    let chapters = comic(1, &[3, 2]).chapters;
+    // Asked for with no server: they wait in line, kept on disk.
+    let first = crate::offline::Saver::with_timing(dir.clone(), crate::offline::quick());
+    assert!(eventually(5.0, || first.scanned()));
+    assert_eq!(first.add(1, "Series 1", &chapters), 2);
+    assert_eq!(first.add(1, "Series 1", &chapters), 0, "asked twice, in line once");
+    assert_eq!(first.state(1001), crate::offline::Kept::Waiting);
+    assert!(eventually(5.0, || std::fs::read_to_string(dir.join("offline").join("queue.json")).is_ok_and(|q| q.contains("1002"))), "the line is on disk");
+    // Chapter 2 was half saved when the app stopped: its first page is here.
+    let part = crate::offline::chapter_dir(&dir, 1002);
+    std::fs::create_dir_all(&part).unwrap();
+    std::fs::write(part.join("0"), png()).unwrap();
+    drop(first);
+    // The app starts again, with its server.
+    let saver = crate::offline::Saver::with_timing(dir.clone(), crate::offline::quick());
+    saver.set_server(Some(fake.server()));
+    assert!(eventually(10.0, || saver.is_saved(1001) && saver.is_saved(1002)), "both saved: {:?} {:?}", saver.state(1001), saver.state(1002));
+    // Chapter 1 went through the server's own line first; its pages came after.
+    assert_eq!(fake.state.lock().unwrap().queued.first(), Some(&1001));
+    let hits = fake.state.lock().unwrap().hits.clone();
+    let queued_at = hits.iter().position(|h| h == "POST /v1/downloads").expect("the server was asked to download it");
+    let first_page = hits.iter().position(|h| h.starts_with("GET /v1/chapters/1001/pages/")).expect("its pages were fetched");
+    assert!(queued_at < first_page, "{hits:?}");
+    // One chapter at a time: every page of chapter 1 before any of chapter 2.
+    let last_of_1 = hits.iter().rposition(|h| h.starts_with("GET /v1/chapters/1001/pages/")).unwrap();
+    assert!(hits.iter().position(|h| h.starts_with("GET /v1/chapters/1002/pages/")).is_some_and(|i| i > last_of_1), "{hits:?}");
+    // The promo page is left out, not a failure; the page already here wasn't fetched again.
+    let m = saver.manifest(1001).unwrap();
+    assert_eq!((m.pages, m.skipped.clone()), (3, vec![1]));
+    assert!(crate::offline::chapter_dir(&dir, 1001).join("1.skip").is_file());
+    assert_eq!(fake.hits("/v1/chapters/1002/pages/0"), 0, "resumed where it stopped");
+    assert_eq!(fake.hits("/v1/chapters/1002/pages/1"), 1);
+    assert!(m.bytes > 0 && saver.manifest(1002).unwrap().bytes > 0);
+    assert!(eventually(5.0, || !dir.join("offline").join("queue.json").exists()), "nothing left in line");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_download_that_fails_says_so_and_goes_again_on_retry() {
+    let dir = std::env::temp_dir().join(format!("leaf-flows-retry-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let fake = fake::Fake::start();
+    {
+        let mut st = fake.state.lock().unwrap();
+        st.details.insert(1, comic(1, &[2]));
+        st.counts.insert(1001, 2);
+        st.fail_pages.insert(1001);
+    }
+    let saver = crate::offline::Saver::with_timing(dir.clone(), crate::offline::quick());
+    saver.set_server(Some(fake.server()));
+    saver.add(1, "Series 1", &comic(1, &[2]).chapters);
+    assert!(eventually(10.0, || matches!(saver.state(1001), crate::offline::Kept::Failed(_))), "{:?}", saver.state(1001));
+    assert_eq!(saver.running().failed, 1);
+    fake.state.lock().unwrap().fail_pages.clear();
+    saver.retry(&[]);
+    assert!(eventually(10.0, || saver.is_saved(1001)));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn reading_a_downloaded_chapter_asks_the_server_nothing() {
+    let (mut app, mut t, dir) = app_on("offline-read", |d| {
+        saved_on_disk(d, 1, 1001, 1.0, 3, false);
+    });
+    // A server that answers, and counts what it is asked.
+    let fake = fake::Fake::start();
+    app.server = Some(fake.server());
+    app.images.set_server(app.server.clone());
+    // The series as listed, its length not known yet.
+    let d = comic(1, &[0]);
+    app.open_chapter(&d, 0, 0);
+    assert_eq!(reader(&app).count(0), Some(3), "its length is the download's");
+    assert!(until(&mut app, &mut t, 5.0, |a| (0..3).all(|n| a.images.size(1001, n).is_some())), "the pages came from this phone");
+    assert_eq!(fake.state.lock().unwrap().hits, Vec::<String>::new(), "no request at all");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Where Downloads' first series row starts: under the tabs (104), the size line (12 + 36) and 4.
+const DOWNLOADS_ROW: f32 = 104.0 + 12.0 + 36.0 + 4.0;
+
+#[test]
+fn downloads_show_and_read_with_the_server_down() {
+    let (mut app, mut t, dir) = app_on("offline-list", |d| {
+        saved_on_disk(d, 5, 5001, 1.0, 2, true);
+        saved_on_disk(d, 5, 5002, 2.0, 2, false);
+        saved_on_disk(d, 6, 6001, 1.0, 1, false);
+    });
+    app.library = Default::default();
+    app.st.space.tab = crate::space::DOWNLOADS;
+    app.reset_to(Route::Space);
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    // Two series, the one saved to last first, from the folder alone.
+    let groups = app.saver.groups();
+    assert_eq!(groups.iter().map(|g| (g.series, g.chapters)).collect::<Vec<_>>(), vec![(6, 1), (5, 2)]);
+    tap(&mut app, &mut t, 200.0, DOWNLOADS_ROW + crate::space::ROW_H + 40.0);
+    assert_eq!(app.route(), &Route::Saved(5), "the row opened its series' downloads");
+    step(&mut app, &mut t);
+    // Newest first: chapter 2's row, under the top (60) and the line (8 + its height + 14).
+    let line = crate::draw::Text::new(crate::theme::ty::UI, crate::theme::INK).lh();
+    tap(&mut app, &mut t, 150.0, 60.0 + 8.0 + line + 14.0 + 35.0);
+    assert_eq!(app.route(), &Route::Reader);
+    let r = reader(&app);
+    assert_eq!((r.series, r.chapters.iter().map(|c| c.id).collect::<Vec<_>>()), (5, vec![5001, 5002]), "the saved chapters, read offline");
+    assert!(matches!(r.pos.item, crate::strip::Item::Head(1)), "{:?}", r.pos);
+    assert!(until(&mut app, &mut t, 5.0, |a| (0..2).all(|n| a.images.size(5002, n).is_some())));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn selected_downloads_are_deleted_and_nothing_else() {
+    let mut sizes = std::collections::HashMap::new();
+    let (mut app, mut t, dir) = app_on("delete", |d| {
+        saved_on_disk(d, 5, 5001, 1.0, 2, true);
+        saved_on_disk(d, 5, 5002, 2.0, 3, false);
+        saved_on_disk(d, 6, 6001, 1.0, 1, false);
+        saved_on_disk(d, 7, 7001, 1.0, 1, true);
+    });
+    for id in [5001, 5002, 6001, 7001] {
+        sizes.insert(id, app.saver.manifest(id).unwrap().bytes);
+    }
+    app.st.space.tab = crate::space::DOWNLOADS;
+    app.reset_to(Route::Space);
+    step(&mut app, &mut t);
+    // Rows: 7, 6, 5. A long press selects series 7; a tap adds 5.
+    let row = crate::space::ROW_H;
+    hold(&mut app, &mut t, 200.0, DOWNLOADS_ROW + row / 2.0);
+    assert_eq!(app.route(), &Route::Space, "the long press opened nothing");
+    tap(&mut app, &mut t, 200.0, DOWNLOADS_ROW + 2.0 * row + row / 2.0);
+    assert_eq!(app.st.space.select.clone().unwrap().into_iter().collect::<Vec<_>>(), vec![5, 7]);
+    // "Delete read", the bar's second key: only the read chapters of those two.
+    let h = app.canvas.h;
+    let key_y = h - crate::saved::BAR_H + 12.0 + 25.0;
+    let kw = (WIDTH - 2.0 * crate::theme::PAD - 8.0) / 2.0;
+    tap(&mut app, &mut t, crate::theme::PAD + kw + 8.0 + kw / 2.0, key_y);
+    let mut asked = app.st.space.confirm.clone().expect("the confirm");
+    asked.sort();
+    assert_eq!(asked, vec![5001, 7001]);
+    // Cancel, then the whole of both with Delete 2.
+    app.st.space.confirm = None;
+    step(&mut app, &mut t);
+    tap(&mut app, &mut t, crate::theme::PAD + kw / 2.0, key_y);
+    let mut asked = app.st.space.confirm.clone().expect("the confirm");
+    asked.sort();
+    assert_eq!(asked, vec![5001, 5002, 7001]);
+    // What the confirm's Delete does (its key is tapped in the test after this one).
+    app.st.space.confirm = None;
+    let (n, freed) = app.saver.delete(&asked);
+    assert_eq!((n, freed), (3, sizes[&5001] + sizes[&5002] + sizes[&7001]));
+    assert!(eventually(5.0, || [5001, 5002, 7001].iter().all(|c| !crate::offline::chapter_dir(&dir, *c).exists())), "their folders are gone");
+    assert!(crate::offline::chapter_dir(&dir, 6001).join("manifest.json").is_file(), "the other stays");
+    assert_eq!(app.saver.groups().iter().map(|g| g.series).collect::<Vec<_>>(), vec![6]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_confirm_deletes_and_the_select_bars_hold_their_taps() {
+    let (mut app, mut t, dir) = app_on("delete-bar", |d| {
+        // Enough rows to lie under the bar at the bottom.
+        for s in 1..=30 {
+            saved_on_disk(d, s, s * 1000 + 1, 1.0, 1, false);
+        }
+    });
+    app.st.space.tab = crate::space::DOWNLOADS;
+    app.reset_to(Route::Space);
+    step(&mut app, &mut t);
+    app.st.space.select = Some([30].into_iter().collect());
+    step(&mut app, &mut t);
+    let h = app.canvas.h;
+    // Just above the bar's keys, inside the bar: a row lies under it, and is not toggled.
+    let bar_top = h - crate::saved::BAR_H;
+    tap(&mut app, &mut t, 200.0, bar_top + 4.0);
+    assert_eq!(app.st.space.select.clone().unwrap().len(), 1, "the row under the bar took no tap");
+    assert_eq!(app.route(), &Route::Space);
+    // Delete 1, then the confirm's Delete (right half of its keys).
+    tap(&mut app, &mut t, crate::theme::PAD + 40.0, bar_top + 12.0 + 25.0);
+    assert_eq!(app.st.space.confirm, Some(vec![30001]));
+    step(&mut app, &mut t);
+    let w = WIDTH - 48.0;
+    let bt = crate::draw::Text::new(crate::theme::ty::UI, crate::theme::INK2).line(1.45);
+    let bytes = app.saver.manifest(30001).unwrap().bytes;
+    let body = format!("That frees {} on this phone. Your server keeps its own copies as before; download them again any time.", crate::space::size_words(bytes));
+    let bh = app.canvas.para_h(&body, w - 40.0, bt, 6);
+    let ch = 22.0 + 24.0 + 10.0 + bh + 22.0 + 44.0 + 20.0;
+    let by = (h - ch) / 2.0 + ch - 20.0 - 44.0;
+    tap(&mut app, &mut t, 24.0 + w - 20.0 - 30.0, by + 22.0);
+    assert!(!app.saver.is_saved(30001), "deleted");
+    assert_eq!(app.st.space.select, None, "selecting is done");
+    assert_eq!(app.saver.groups().len(), 29);
+    // A series' own downloads: the same bar holds its taps from the rows under it.
+    app.push(Route::Saved(29));
+    step(&mut app, &mut t);
+    app.st.saved.select = Some(std::collections::BTreeSet::new());
+    step(&mut app, &mut t);
+    tap(&mut app, &mut t, 200.0, bar_top + 4.0);
+    assert_eq!(app.route(), &Route::Saved(29));
+    assert!(app.st.saved.select.as_ref().is_some_and(|s| s.is_empty()));
     let _ = std::fs::remove_dir_all(dir);
 }

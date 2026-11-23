@@ -4,10 +4,11 @@
 //! tags; then two tabs, and a fixed key at the bottom that continues reading.
 //!
 //! - **Chapters**: "339 chapters · Newest ⇅" (remembered per series), then a row per chapter:
-//!   its picture (made by the server from the chapter's own pages once it is downloaded there,
-//!   `/v1/chapters/{id}/thumb`; a quiet tile with a cloud until then, which downloads it when
-//!   tapped), "Ch. 339 · title", the day it came out or the page you are on, and Read or Continue;
-//!   read rows dimmed. Smaller than drawn (the owner, 2026-11-23): 72 × 54, so more fit. A run of
+//!   its picture (made by the server, `/v1/chapters/{id}/thumb`; a quiet tile until then), with a
+//!   small download key on it until the chapter is on this phone ([`crate::offline`]: a tap puts it
+//!   in the line), "Ch. 339 · title", the day it came out or the page you are on, what this phone
+//!   holds of it ("Saved", "Saving · 12 of 40 pages", "Waiting", "Didn't save · Retry"), and Read
+//!   or Continue; read rows dimmed. Never what the server keeps: that is its own business. Smaller than drawn (the owner, 2026-11-23): 72 × 54, so more fit. A run of
 //!   chapters no source has gets a row of its own. Newer episodes Webtoon sells ahead get a row at
 //!   the newest end, "Chapters 9–23 are on Webtoon (paid)", whose Open hands the link to the
 //!   Webtoon app (or the browser). No paid episode is ever fetched.
@@ -15,19 +16,21 @@
 //!   carry, three across, "Yours" on ones in My space ([`crate::recs`]).
 //!
 //! The bell is the follow: new chapters are announced while it is on. ⋯ holds Select chapters,
-//! "Download next 5", "Download all unread", the shelf it sits on, "Wrong series?" (the other
+//! "Download next 5" and "Download all unread" (to this phone), the shelf it sits on, "Wrong series?" (the other
 //! entries found for the work, to read from instead) and "Remove from My space" (behind a
 //! confirm). Sources are never named.
 //!
 //! **Select**: a long press on a chapter (or ⋯ → Select chapters) selects; taps add or take
-//! chapters away, and the bottom key becomes Download N / Remove N / Mark read. "Select range…"
-//! takes a first and last chapter, to select them or download them all at once
-//! (`POST /v1/series/{id}/download`). Downloads go through the server's line, a few at a time:
-//! rows waiting say "queued", the ones being fetched "downloading".
+//! chapters away, and the bottom key becomes Download N / Delete N / Mark read (Delete removes
+//! this phone's copies only). "Select range…" takes a first and last chapter, to select them or
+//! download them all at once.
+//!
+//! Offline (no server, or it didn't answer) with chapters downloaded, the list is those chapters
+//! alone, under an "Offline" note: the others can't be read.
 
 use std::collections::BTreeSet;
 
-use leaf_proto::{SeriesDetail, SeriesDownload};
+use leaf_proto::{Chapter, SeriesDetail};
 
 use crate::app::App;
 use crate::cx;
@@ -47,12 +50,6 @@ pub struct State {
     pub error: Option<String>,
     /// Readers also like instead of Chapters.
     pub also: bool,
-    /// When the series was last asked again while chapters download.
-    pub polled_ns: u64,
-    /// How many times it was asked since the last download began (or arrived): each wait is longer.
-    pub polls: u32,
-    /// Chapters downloaded on the server when it was last asked: more since means progress.
-    seen_downloaded: usize,
     /// The shelf sheet is open.
     pub shelf: bool,
     /// "Wrong series?" is open, and an entry was picked and is being moved to.
@@ -113,23 +110,10 @@ const KEY_H: f32 = 50.0;
 const BAR_H: f32 = KEY_H + 24.0;
 /// The poster.
 const POSTER: (f32, f32) = (150.0, 212.0);
-/// While chapters download on the server, the series is asked again after this, then after twice
-/// as long each time (to [`POLL_MAX_NS`]), and given up on after [`POLLS`] asks with nothing new
-/// downloaded: a download the server took but could not finish is not waited for as long as the
-/// page is open. Each chapter that arrives starts the waits over.
-const POLL_NS: u64 = 5_000_000_000;
-const POLL_MAX_NS: u64 = 80_000_000_000;
-const POLLS: u32 = 12;
-/// The server hands this many chapters per source to its downloader at a time: the rest wait.
-const AT_ONCE: usize = 2;
-
-/// The wait before the series is asked again, after `polls` asks.
-fn poll_wait(polls: u32) -> u64 {
-    (POLL_NS << polls.min(8)).min(POLL_MAX_NS)
-}
 
 enum Act {
     Open(usize, u32),
+    /// Download a chapter to this phone (or try it again).
     Download(i64),
     Bell(bool),
     /// A long press: select this chapter.
@@ -142,7 +126,7 @@ enum Act {
 /// What the selection's bar asked for.
 enum Batch {
     Download(Vec<i64>),
-    Remove(Vec<i64>),
+    Delete(Vec<i64>),
     Read(Vec<i64>, bool),
 }
 
@@ -158,39 +142,15 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             app.ask(Job::Series(id));
         }
     }
-    // What the library knows stands in until the series itself arrives.
-    let detail: Option<SeriesDetail> = app.series.get(&id).and_then(|l| l.data.clone());
+    // What the library knows stands in until the series itself arrives. Offline, the chapters
+    // downloaded to this phone are the list.
+    let saved_n = app.saver.saved_of(id).len();
+    let saved_only = saved_n > 0 && app.offline_for(id);
+    let detail: Option<SeriesDetail> = app.detail_for(id);
     let from_library = app.library.data.as_ref().and_then(|l| l.iter().find(|s| s.id == id).cloned());
     let loaded = app.series.get(&id);
-    let (loading, error, offline) = (loaded.is_some_and(|l| l.loading), loaded.and_then(|l| l.error.clone()), loaded.is_some_and(|l| l.offline()));
-    // Chapters downloading on the server: asked again every few seconds until they are there.
-    let downloaded_now = detail.as_ref().map_or(0, |d| d.chapters.iter().filter(|c| c.downloaded).count());
-    if downloaded_now > app.st.series.seen_downloaded {
-        app.st.series.polls = 0;
-    }
-    app.st.series.seen_downloaded = downloaded_now;
-    let mut waiting = detail.as_ref().is_some_and(|d| d.chapters.iter().any(|c| app.downloading.contains(&c.id) && !c.downloaded));
-    if waiting && !loading && app.now_ns.saturating_sub(app.st.series.polled_ns) >= poll_wait(app.st.series.polls) {
-        if app.st.series.polls >= POLLS {
-            // The server took the download and never finished it: stop waiting, say so.
-            if let Some(d) = &detail {
-                for c in d.chapters.iter().filter(|c| !c.downloaded) {
-                    app.downloading.remove(&c.id);
-                }
-            }
-            app.st.series.polls = 0;
-            waiting = false;
-            app.toast("Your server couldn't download those chapters yet. Try again later");
-        } else {
-            app.st.series.polled_ns = app.now_ns;
-            app.st.series.polls += 1;
-            app.ask(Job::Series(id));
-        }
-    }
-    if waiting {
-        let at = app.st.series.polled_ns + poll_wait(app.st.series.polls);
-        app.wake_at(at);
-    }
+    let (loading, error) = (loaded.is_some_and(|l| l.loading), loaded.and_then(|l| l.error.clone()));
+    let offline = saved_only || loaded.is_some_and(|l| l.offline());
     let also_tab = app.st.series.also;
     if also_tab && !app.also.contains_key(&id) && app.server.is_some() {
         app.also.entry(id).or_default().loading = true;
@@ -199,8 +159,6 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let also = app.also.get(&id).map(|l| (l.data.clone(), l.loading, l.error.clone()));
     let covered = app.st.series.covered() || app.st.recs.sheet.is_some();
     let oldest = app.oldest_first.contains(&id);
-    let cached = app.images.cached.clone().unwrap_or_default();
-    let downloading = app.downloading.clone();
     let paid = app.paid.get(&id).cloned();
     let selecting = app.st.series.select.clone();
     let pg = app.page_begin(dt, 0.0);
@@ -234,6 +192,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let mut set_also = None;
     let mut open_info = false;
     let mut also_hit: Option<(crate::recs::Hit, Vec<leaf_proto::Rec>)> = None;
+    let mut spinning_any = false;
     if let Some(s) = &series {
         let tt = Text::new(24.0, t::INK).brand().line(1.18);
         for l in cx.c.wrap(&s.title, w, tt, 3) {
@@ -284,6 +243,11 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             if let Some(note) = &d.series.note {
                 cx.c.icon("bolt", x0 + 8.0, y + 10.0, 16.0, t::WARN);
                 y += cx.c.para(note, x0 + 26.0, y, w - 26.0, Text::new(ty::UI, t::WARN).line(1.4), 4) + 14.0;
+            }
+            if saved_only {
+                let words = format!("Offline: showing the {} downloaded to this phone.", if saved_n == 1 { "one chapter".to_string() } else { format!("{saved_n} chapters") });
+                cx.c.icon("wifi", x0 + 8.0, y + 10.0, 16.0, t::INK3);
+                y += cx.c.para(&words, x0 + 26.0, y, w - 26.0, Text::new(ty::UI, t::INK2).line(1.4), 3) + 14.0;
             }
             if let Some(e) = error.as_ref().filter(|_| !offline) {
                 y += cx.c.para(e, x0, y, w, Text::new(ty::UI, t::DANGER).line(1.4), 3) + 12.0;
@@ -363,8 +327,6 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                 let view_bottom = -cx.c.dy + cx.c.h + 60.0;
                 let current = cont.as_ref().map(|c| c.index);
                 let mut thumbs: Vec<(i64, bool)> = Vec::new();
-                // The two oldest chapters waiting are the ones being fetched: the rest are queued.
-                let waiting_ids: Vec<i64> = d.chapters.iter().filter(|c| downloading.contains(&c.id) && !c.downloaded).map(|c| c.id).take(AT_ONCE).collect();
                 // A finger held on a row starts selecting.
                 let held_at = if covered { None } else { cx.ui.resting(now).filter(|(_, ns)| *ns >= LONG_PRESS_NS).map(|(p, _)| p) };
                 // Paid episodes ahead: a row at the newest end.
@@ -414,24 +376,38 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                             }
                             let here = current == Some(i) && !(c.read && cont.as_ref().is_some_and(|k| k.label.starts_with("Read")));
                             let dim = c.read && !here;
-                            // The picture: the server's, once it has one; a cloud until it is downloaded.
+                            // The picture: the server's, once it has one; a quiet tile until then. On it, what
+                            // this phone holds: a download key, a turning arc while it comes, a check once here.
                             let (px, py) = (x0, y + (h - PIC.1) / 2.0);
-                            let on_phone = cached.contains_key(&c.id);
+                            let kept = app.saver.state(c.id);
                             let has_pic = app.thumbs.contains(&c.id);
-                            let fetching = downloading.contains(&c.id) && !c.downloaded;
-                            let mut drawn = false;
                             if has_pic || c.downloaded {
                                 thumbs.push((c.id, has_pic));
-                                drawn = cx.c.image_cover(&thumb_key(c.id), px, py, PIC.0, PIC.1, 6.0, Rgba::WHITE.a(if dim { 0.45 } else { 1.0 }));
                             }
+                            let drawn = has_pic && cx.c.image_cover(&thumb_key(c.id), px, py, PIC.0, PIC.1, 6.0, Rgba::WHITE.a(if dim { 0.45 } else { 1.0 }));
                             if !drawn {
-                                cx.c.rect(px, py, PIC.0, PIC.1, 6.0, if c.downloaded || on_phone { t::S1 } else { t::S2 });
-                                if fetching {
+                                cx.c.rect(px, py, PIC.0, PIC.1, 6.0, t::S2);
+                            }
+                            let (bx, by) = (px + PIC.0 - 13.0, py + PIC.1 - 13.0);
+                            let fade = if dim { 0.6 } else { 1.0 };
+                            match &kept {
+                                crate::offline::Kept::Saved => {
+                                    cx.c.circle(bx, by, 10.0, t::ACCENT);
+                                    cx.c.icon("check", bx, by, 12.0, t::ON_ACCENT);
+                                }
+                                crate::offline::Kept::Waiting | crate::offline::Kept::Saving(..) => {
+                                    spinning_any = true;
+                                    cx.c.circle(bx, by, 10.0, t::BG.a(0.75));
                                     let turn = (now as f64 / 1e9 * 0.9).fract() as f32;
-                                    cx.c.arc(px + PIC.0 / 2.0, py + PIC.1 / 2.0, 8.0, 2.0, turn, turn + 0.7, t::INK3, false);
-                                } else if !c.downloaded && !on_phone {
-                                    cx.c.icon("cloud", px + PIC.0 / 2.0, py + PIC.1 / 2.0 - 1.0, 20.0, t::INK3.a(if dim { 0.6 } else { 1.0 }));
-                                    cx.c.icon("arrow-down", px + PIC.0 / 2.0, py + PIC.1 / 2.0 + 1.0, 9.0, t::INK3.a(if dim { 0.6 } else { 1.0 }));
+                                    cx.c.arc(bx, by, 6.0, 1.8, turn, turn + 0.7, t::INK2, false);
+                                }
+                                crate::offline::Kept::Failed(_) => {
+                                    cx.c.circle(bx, by, 10.0, t::BG.a(0.75));
+                                    cx.c.icon("flag", bx, by, 11.0, t::WARN);
+                                }
+                                crate::offline::Kept::None => {
+                                    cx.c.circle(bx, by, 10.0, t::BG.a(0.75));
+                                    cx.c.icon("download", bx, by, 12.0, t::INK.a(fade));
                                 }
                             }
                             let tx = px + PIC.0 + 14.0;
@@ -474,18 +450,22 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                             let ly = ty0 + title_t.lh() + 3.0;
                             let mut lx = tx;
                             let mut line: Vec<String> = Vec::new();
-                            if !c.read && c.last_page > 0 {
+                            // What this phone holds says more than the day while it comes.
+                            let state: Option<(String, Rgba)> = match &kept {
+                                crate::offline::Kept::None => None,
+                                crate::offline::Kept::Saved => Some(("Saved".into(), t::INK3)),
+                                crate::offline::Kept::Waiting => Some(("Waiting".into(), t::INK3)),
+                                crate::offline::Kept::Saving(done, all) => Some((format!("Saving · {done} of {all} pages"), t::ACCENT)),
+                                crate::offline::Kept::Failed(_) => Some(("Didn't save · Retry".into(), t::WARN)),
+                            };
+                            let busy = matches!(kept, crate::offline::Kept::Saving(..) | crate::offline::Kept::Waiting | crate::offline::Kept::Failed(_));
+                            if !c.read && c.last_page > 0 && !busy {
                                 // Left part way: the page, in the accent.
                                 let lead = format!("page {} of {}", c.last_page + 1, c.pages.max(c.last_page + 1));
                                 lx += cx.c.text_fit(&lead, lx, ly, tw, line_t.color(t::ACCENT));
-                            } else if c.uploaded_at > 0 {
+                            } else if c.uploaded_at > 0 && !busy {
                                 line.push(logic::local_date(c.uploaded_at));
                             }
-                            let state = if fetching {
-                                Some(if waiting_ids.contains(&c.id) { ("downloading", t::ACCENT) } else { ("queued", t::INK3) })
-                            } else {
-                                None
-                            };
                             let rest = line.join(" · ");
                             if !rest.is_empty() {
                                 if lx > tx {
@@ -497,7 +477,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                                 if lx > tx {
                                     lx += cx.c.text(" · ", lx, ly, line_t);
                                 }
-                                cx.c.text_fit(words, lx, ly, (tx + tw - lx).max(0.0), line_t.color(ink));
+                                cx.c.text_fit(&words, lx, ly, (tx + tw - lx).max(0.0), line_t.color(ink));
                             }
                             if let Some((_, hy)) = held_at
                                 && hy >= y + cx.c.dy
@@ -511,8 +491,12 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                                     act = Some(Act::Toggle(c.id));
                                 }
                             } else if !covered {
-                                let pic_tap = !c.downloaded && !on_phone && !fetching && !drawn && cx.tap(px - 6.0, py - 6.0, PIC.0 + 12.0, PIC.1 + 12.0);
-                                if pic_tap {
+                                // The picture downloads (or tries again) what isn't on this phone; so does
+                                // "Retry" on the line.
+                                let can_get = matches!(kept, crate::offline::Kept::None | crate::offline::Kept::Failed(_));
+                                let retry_tap = matches!(kept, crate::offline::Kept::Failed(_)) && cx.tap(tx, ly - 8.0, tw, line_t.lh() + 16.0);
+                                let pic_tap = can_get && cx.tap(px - 6.0, py - 6.0, PIC.0 + 12.0, PIC.1 + 12.0);
+                                if pic_tap || retry_tap {
                                     act = Some(Act::Download(c.id));
                                 } else if key_tap || cx.tap(0.0, y, WIDTH, h) {
                                     let page = if !c.read { logic::resume_page(c) } else { 0 };
@@ -562,12 +546,12 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             Some(sel) => {
                 let n = sel.len();
                 let ids: Vec<i64> = d.chapters.iter().filter(|c| sel.contains(&c.id)).map(|c| c.id).collect();
-                let to_get: Vec<i64> = d.chapters.iter().filter(|c| sel.contains(&c.id) && !c.downloaded).map(|c| c.id).collect();
-                let to_drop: Vec<i64> = d.chapters.iter().filter(|c| sel.contains(&c.id) && (c.downloaded || cached.contains_key(&c.id) || downloading.contains(&c.id))).map(|c| c.id).collect();
+                let to_get: Vec<i64> = d.chapters.iter().filter(|c| sel.contains(&c.id) && matches!(app.saver.state(c.id), crate::offline::Kept::None | crate::offline::Kept::Failed(_))).map(|c| c.id).collect();
+                let to_drop: Vec<i64> = d.chapters.iter().filter(|c| sel.contains(&c.id) && app.saver.state(c.id) != crate::offline::Kept::None).map(|c| c.id).collect();
                 let read = mark_read_verb(d, sel);
                 let gw = (w - 16.0) / 3.0;
                 let get_words = if to_get.is_empty() { "Download".to_string() } else { format!("Download {}", to_get.len()) };
-                let drop_words = if to_drop.is_empty() { "Remove".to_string() } else { format!("Remove {}", to_drop.len()) };
+                let drop_words = if to_drop.is_empty() { "Delete".to_string() } else { format!("Delete {}", to_drop.len()) };
                 let mark_words = if read { "Mark read" } else { "Mark unread" };
                 for (k, (words, live)) in [(get_words.as_str(), !to_get.is_empty()), (drop_words.as_str(), !to_drop.is_empty()), (mark_words, n > 0)].iter().enumerate() {
                     let kx = x0 + k as f32 * (gw + 8.0);
@@ -584,7 +568,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                     if tapped && !covered {
                         batch = Some(match k {
                             0 => Batch::Download(to_get.clone()),
-                            1 => Batch::Remove(to_drop.clone()),
+                            1 => Batch::Delete(to_drop.clone()),
                             _ => Batch::Read(ids.clone(), read),
                         });
                     }
@@ -742,7 +726,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             }
         } else if st.confirm {
             let name = series.as_ref().map(|s| s.title.as_str()).unwrap_or("this series");
-            let body = "It leaves My space, and your server stops keeping its chapters. Your place in it is forgotten. You can add it again from Search.";
+            let body = "It leaves My space, and your place in it is forgotten. Chapters downloaded to this phone stay until you delete them in Downloads. You can add it again from Search.";
             match kit::confirm(&mut cx, &format!("Remove {name}?"), body, "Remove") {
                 Some(true) => {
                     st.confirm = false;
@@ -803,30 +787,24 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         if ids.is_empty() {
             app.toast(&format!("No chapters from {} to {}", logic::num(lo), logic::num(hi)));
         } else if download {
-            let get: Vec<i64> = d.chapters.iter().filter(|c| c.number >= lo && c.number <= hi && !c.downloaded).map(|c| c.id).collect();
-            app.downloading.extend(get.iter().copied());
-            app.ask(Job::SeriesDownload(id, SeriesDownload { from: Some(lo), to: Some(hi), unread: false }));
+            let get: Vec<Chapter> = d.chapters.iter().filter(|c| c.number >= lo && c.number <= hi).cloned().collect();
+            app.download(id, &get);
             app.st.series.select = None;
-            restart_polls(app);
         } else {
             app.st.series.select = Some(ids.into_iter().collect());
         }
     }
     match batch {
         Some(Batch::Download(ids)) => {
-            app.download(&ids, true);
-            app.toast(&format!("Downloading {}, a few at a time", logic::chapters_words(ids.len())));
-            app.st.series.select = None;
-            restart_polls(app);
-        }
-        Some(Batch::Remove(ids)) => {
-            for c in &ids {
-                app.mark_downloaded(*c, false);
-                app.downloading.remove(c);
+            if let Some(d) = &detail {
+                let get: Vec<Chapter> = d.chapters.iter().filter(|c| ids.contains(&c.id)).cloned().collect();
+                app.download(id, &get);
             }
-            app.images.remove_chapters(ids.clone());
-            app.download(&ids, false);
-            app.toast(&format!("Removed {}", logic::chapters_words(ids.len())));
+            app.st.series.select = None;
+        }
+        Some(Batch::Delete(ids)) => {
+            let (n, bytes) = app.saver.delete(&ids);
+            app.toast(&format!("Deleted {} from this phone{}", logic::chapters_words(n), if bytes > 0 { format!(" · {} freed", crate::space::size_words(bytes)) } else { String::new() }));
             app.st.series.select = None;
         }
         Some(Batch::Read(ids, read)) => {
@@ -835,8 +813,8 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         }
         None => {}
     }
-    if waiting {
-        // The spinner turns.
+    if spinning_any {
+        // The arcs turn, and the pages counted show as they come.
         app.wake_at(now + 50_000_000);
     }
     if flip {
@@ -849,23 +827,20 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     }
     if let Some(d) = &detail {
         if next5 {
-            let ids = logic::next_to_download(&d.chapters, 5);
+            let ids = logic::next_to_download(&d.chapters, 5, |c| app.saver.state(c) != crate::offline::Kept::None);
             if ids.is_empty() {
-                app.toast("The next 5 chapters are already downloaded");
+                app.toast("The next 5 chapters are on this phone already");
             } else {
-                app.download(&ids, true);
-                app.toast(&format!("Downloading {}", logic::chapters_words(ids.len())));
-                restart_polls(app);
+                let get: Vec<Chapter> = d.chapters.iter().filter(|c| ids.contains(&c.id)).cloned().collect();
+                app.download(id, &get);
             }
         }
         if all_unread {
-            let get: Vec<i64> = d.chapters.iter().filter(|c| !c.read && !c.downloaded).map(|c| c.id).collect();
+            let get: Vec<Chapter> = d.chapters.iter().filter(|c| !c.read).cloned().collect();
             if get.is_empty() {
-                app.toast("Every unread chapter is downloaded already");
+                app.toast("Every chapter is read");
             } else {
-                app.downloading.extend(get.iter().copied());
-                app.ask(Job::SeriesDownload(id, SeriesDownload { from: None, to: None, unread: true }));
-                restart_polls(app);
+                app.download(id, &get);
             }
         }
     }
@@ -884,8 +859,9 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             }
         }
         Some(Act::Download(c)) => {
-            app.download(&[c], true);
-            restart_polls(app);
+            if let Some(ch) = detail.as_ref().and_then(|d| d.chapters.iter().find(|k| k.id == c).cloned()) {
+                app.download(id, &[ch]);
+            }
         }
         Some(Act::Bell(on)) => app.set_bell(id, on),
         Some(Act::Select(c)) => app.st.series.select = Some([c].into_iter().collect()),
@@ -912,12 +888,6 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         }
     }
     pg.moving || loading && !crate::wake::has()
-}
-
-/// Downloads were asked for: the series is asked again soon, and the waits start over.
-fn restart_polls(app: &mut App) {
-    app.st.series.polled_ns = app.now_ns;
-    app.st.series.polls = 0;
 }
 
 /// Mark chapters read or unread, at once on the phone. A run from the first chapter is one request
@@ -1089,18 +1059,4 @@ fn alternatives_sheet(cx: &mut kit::Ctx, alts: Option<&crate::app::Loaded<Vec<le
     }
     cx.ui.tap = None;
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_download_is_waited_for_less_and_less_often_then_given_up() {
-        let waits: Vec<u64> = (0..POLLS).map(poll_wait).collect();
-        assert_eq!(&waits[..5], &[5_000_000_000, 10_000_000_000, 20_000_000_000, 40_000_000_000, 80_000_000_000]);
-        assert!(waits.iter().all(|w| *w <= POLL_MAX_NS));
-        let total: u64 = waits.iter().sum();
-        assert!(total < 20 * 60 * 1_000_000_000, "given up within twenty minutes");
-    }
 }

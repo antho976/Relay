@@ -8,8 +8,9 @@
 //!   `space` (`--tab updates|recent|following|downloads`, `--sort 0..2` for Following, `--filter
 //!   WORDS` typed in its field, `--shelf 0..4` for one shelf, `--shelve ID:dropped` to put a
 //!   series on a shelf in the shot's copy, `--fake-updates 1` for a made-up Updates list built from
-//!   the library, `--all 1` for Updates' All, `--sheet shelf` with `--id` for the shelf sheet),
-//!   `--sheet downloads` with `--id`), `search` (`--query`, default "nano"; `--fake-search N`
+//!   the library, `--all 1` for Updates' All, `--sheet shelf` with `--id` for the shelf sheet,
+//!   `--sheet select` for Downloads selecting its first two series), `saved` (`--id`: a series'
+//!   downloads), `search` (`--query`, default "nano"; `--fake-search N`
 //!   answers with N works made from the library instead of asking the server's sources), `series` (`--id`,
 //!   default 1; `--tab also`; `--sheet shelf|wrong|menu|info|range|rec`; `--select N` selects N
 //!   chapters from where you are; `--paid FROM-TO` shows paid episodes ahead on the shot's copy),
@@ -21,6 +22,10 @@
 //!   `--fake-recs 1` makes Home's picks (and a series' Readers also like) from the library, for the
 //!   days the server has none (covers are the series' own, fetched once into `--data`);
 //!   `--sheet rec` on `home` opens the first pick's sheet; `--update 1` offers a made-up newer app.
+//!   `--fake-saved N` shows chapters as downloaded to this phone on the shot's copy (N series' in
+//!   `space`; a few of `--id`'s on `series` and `saved`), their manifests written to the shot's
+//!   folder with no page, so a later shot with `--data` and no server finds them;
+//!   `--fake-saving 1` puts the next few in line, the first part way.
 //!   `--size WxH` (default 1080x2340). `--bell ID` and `--seen ID` mark a series on the shot's own
 //!   copy only (its bell on; read up to two chapters before its newest). Nothing is written to the server: no progress is reported.
 //! - `--data DIR` keeps Leaf's files somewhere else than `~/.local/share/leaf` (and, with
@@ -362,6 +367,48 @@ fn fake_search(app: &mut App, n: usize, gfx: &Gfx, clock: &mut u64) {
     app.st.search.answered(q, false, Ok(list), true);
 }
 
+/// Chapters shown as downloaded to this phone, on the shot's copy: `n` series' a few each (or, with
+/// `only`, four of that one's, under its newest). Their manifests go to the shot's folder (no
+/// pages), so a shot after with no server finds them.
+fn fake_saved(app: &mut App, dir: &std::path::Path, n: usize, only: Option<i64>) {
+    let ids: Vec<i64> = match only {
+        Some(id) => vec![id],
+        None => app.library.data.iter().flatten().map(|s| s.id).filter(|id| app.series.get(id).is_some_and(|l| l.data.is_some())).take(n).collect(),
+    };
+    let now = crate::shelf::now_ms();
+    let mut list = Vec::new();
+    for (i, id) in ids.iter().enumerate() {
+        let Some(d) = app.series.get(id).and_then(|l| l.data.clone()) else { continue };
+        let k = d.chapters.len();
+        let per = if only.is_some() { 4 } else { 3 + (i * 5) % 9 };
+        let from = k.saturating_sub(1 + per);
+        for (j, c) in d.chapters[from..k.saturating_sub(1)].iter().enumerate() {
+            let pages = if c.pages > 0 { c.pages } else { 30 + (c.number as u32 * 7) % 25 };
+            let bytes = 4_200_000 + (c.number * 137_000.0) as u64 % 3_100_000;
+            list.push(crate::offline::Manifest { series: *id, title: d.series.title.clone(), chapter: c.clone(), pages, skipped: vec![], bytes, saved_at: now - (i as i64) * 3 * 3_600_000 - j as i64 * 60_000 });
+        }
+    }
+    for m in &list {
+        let _ = crate::net::write_atomic(&crate::offline::chapter_dir(dir, m.chapter.id).join("manifest.json"), &serde_json::to_vec(m).unwrap_or_default());
+    }
+    app.saver.shot_saved(list);
+}
+
+/// The three chapters under the saved ones in line on the shot's copy, the first part way.
+fn fake_saving(app: &mut App, id: i64) {
+    let Some(d) = app.series.get(&id).and_then(|l| l.data.clone()) else { return };
+    let items: Vec<crate::offline::Item> = d
+        .chapters
+        .iter()
+        .rev()
+        .filter(|c| !app.saver.is_saved(c.id))
+        .skip(1)
+        .take(3)
+        .map(|c| crate::offline::Item { series: id, title: d.series.title.clone(), chapter: c.clone(), asked: true, failed: None })
+        .collect();
+    app.saver.shot_line(items, 12, 40);
+}
+
 fn fake_updates(app: &mut App) {
     let now = crate::shelf::now_ms();
     let hour = 3_600_000;
@@ -476,6 +523,11 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.reset_to(Route::Home);
             app.push(Route::Connect);
             app.st.connect.load(app.server.as_ref());
+        }
+        "saved" => {
+            app.set_server(server);
+            app.st.space.tab = crate::space::DOWNLOADS;
+            app.reset_to(Route::Space);
         }
         "space" => {
             app.set_server(server);
@@ -593,6 +645,18 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
         let from = crate::logic::continue_point(&d.chapters).map_or(0, |c| c.index);
         app.st.series.select = Some(d.chapters.iter().rev().skip(d.chapters.len().saturating_sub(from + 1)).take(n).map(|c| c.id).collect());
     }
+    if let Some(n) = arg(args, "--fake-saved").and_then(|v| v.parse::<usize>().ok()) {
+        let only = matches!(screen.as_str(), "series" | "saved").then_some(id);
+        fake_saved(&mut app, &dir, n, only);
+        if arg(args, "--fake-saving").is_some() {
+            fake_saving(&mut app, id);
+        }
+        settle(&mut app, &gfx, &mut clock, 5.0);
+    }
+    if screen == "saved" {
+        app.push(Route::Saved(id));
+        settle(&mut app, &gfx, &mut clock, 10.0);
+    }
     if arg(args, "--fake-updates").is_some() {
         fake_updates(&mut app);
         settle(&mut app, &gfx, &mut clock, 20.0);
@@ -607,7 +671,7 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
     if screen == "space" {
         match arg(args, "--sheet").as_deref() {
             Some("shelf") => app.st.space.shelf_for = Some(id),
-            Some("downloads") => app.st.space.downloads_for = Some(id),
+            Some("select") => app.st.space.select = Some(app.saver.groups().iter().take(2).map(|g| g.series).collect()),
             _ => {}
         }
     }
