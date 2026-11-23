@@ -6,9 +6,9 @@
 //! the app's loop ([`crate::wake`]), which takes the answers at the start of its next frame.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use leaf_proto::{Bell, Follow, Pages, Progress, Series, SeriesDetail, Status};
@@ -193,7 +193,17 @@ impl Jobs {
                 .name(format!("leaf-net-{i}"))
                 .spawn(move || {
                     loop {
-                        let next = tasks.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                        let next = {
+                            // Counted before the queue is let go: a fetch taken after this report
+                            // always sees it out. Only reports running count, so a fetch never
+                            // waits on one still queued behind it.
+                            let queue = tasks.lock().unwrap_or_else(|e| e.into_inner());
+                            let next = queue.recv();
+                            if let Ok((_, Job::Progress(..))) = &next {
+                                *PROGRESS_OUT.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+                            }
+                            next
+                        };
                         let Ok((server, job)) = next else { break };
                         let send = |d: Done| {
                             let _ = done_tx.send(d);
@@ -201,7 +211,13 @@ impl Jobs {
                         };
                         // A job that panics (it should not) still ends: the app hears nothing,
                         // and the worker goes on.
+                        let progress = matches!(job, Job::Progress(..));
                         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&client, &data, server, job, &send)));
+                        if progress {
+                            let mut out = PROGRESS_OUT.lock().unwrap_or_else(|e| e.into_inner());
+                            *out = out.saturating_sub(1);
+                            PROGRESS_LANDED.notify_all();
+                        }
                         running.fetch_sub(1, Ordering::SeqCst);
                         crate::wake::wake();
                     }
@@ -234,18 +250,109 @@ fn library_file(data: &Path) -> PathBuf {
     data.join("library.json")
 }
 
+// Progress, in order and never lost
+
+/// Progress reports being sent. A library or series fetched while one is out
+/// would race it (the server's "done" takes a while) and show the chapter just read as unread, so
+/// those fetches wait for them first.
+static PROGRESS_OUT: Mutex<usize> = Mutex::new(0);
+static PROGRESS_LANDED: Condvar = Condvar::new();
+
+/// Waits, a while at most, until no progress report is out.
+fn wait_for_progress() {
+    let out = PROGRESS_OUT.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = PROGRESS_LANDED.wait_timeout_while(out, Duration::from_secs(20), |n| *n > 0);
+}
+
+/// Reports the server did not take (offline, or it failed): sent again before the next library or
+/// series is fetched. One per chapter, the latest; a chapter once finished stays finished.
+static OUTBOX: Mutex<()> = Mutex::new(());
+
+fn outbox_file(data: &Path) -> PathBuf {
+    data.join("progress-outbox.json")
+}
+
+fn outbox_read(data: &Path) -> Vec<(i64, Progress)> {
+    std::fs::read(outbox_file(data)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+fn outbox_write(data: &Path, list: &[(i64, Progress)]) {
+    let file = outbox_file(data);
+    let _ = if list.is_empty() { std::fs::remove_file(&file) } else { write_atomic(&file, &serde_json::to_vec(list).unwrap_or_default()) };
+}
+
+/// The report kept for later: merged with one kept for the same chapter.
+pub fn outbox_put(data: &Path, chapter: i64, p: Progress) {
+    let _g = OUTBOX.lock().unwrap_or_else(|e| e.into_inner());
+    let mut list = outbox_read(data);
+    match list.iter_mut().find(|(c, _)| *c == chapter) {
+        Some((_, old)) => *old = Progress { page: if old.done && !p.done { old.page } else { p.page }, done: old.done || p.done },
+        None => list.push((chapter, p)),
+    }
+    outbox_write(data, &list);
+}
+
+/// A later report for the chapter went through: one kept for it is moot.
+fn outbox_drop(data: &Path, chapter: i64) {
+    if !outbox_file(data).exists() {
+        return;
+    }
+    let _g = OUTBOX.lock().unwrap_or_else(|e| e.into_inner());
+    let mut list = outbox_read(data);
+    let n = list.len();
+    list.retain(|(c, _)| *c != chapter);
+    if list.len() != n {
+        outbox_write(data, &list);
+    }
+}
+
+/// Worth sending again: the server was out of reach, or failed itself (not "no such chapter").
+fn retry_later(f: &Fail) -> bool {
+    matches!(f, Fail::Unreachable | Fail::Token) || matches!(f, Fail::Answer(code, _) if *code >= 500)
+}
+
+fn post_progress(client: &Client, s: &Server, chapter: i64, p: &Progress) -> Result<(), Fail> {
+    let body = serde_json::to_string(p).map_err(|_| Fail::Garbled)?;
+    client.post(s, &format!("/v1/chapters/{chapter}/progress"), body).map(|_| ())
+}
+
+/// Sends what the outbox holds, oldest first; stops at the first that can't get through.
+fn flush_outbox(client: &Client, data: &Path, s: &Server) {
+    if !outbox_file(data).exists() {
+        return;
+    }
+    let _g = OUTBOX.lock().unwrap_or_else(|e| e.into_inner());
+    let list = outbox_read(data);
+    let mut left = Vec::new();
+    for (i, (c, p)) in list.iter().enumerate() {
+        match post_progress(client, s, *c, p) {
+            Ok(()) => {}
+            Err(f) if retry_later(&f) => {
+                left.extend_from_slice(&list[i..]);
+                break;
+            }
+            Err(_) => {}
+        }
+    }
+    outbox_write(data, &left);
+}
+
 fn series_file(data: &Path, id: i64) -> PathBuf {
     data.join("series").join(format!("{id}.json"))
 }
 
-/// Write a file whole or not at all: a crash halfway leaves the old copy.
+/// Write a file whole or not at all: a crash halfway leaves the old copy. Each write has its own
+/// temporary file, so two threads writing the same file never mix their bytes.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("part");
+    let tmp = path.with_extension(format!("part{}", NEXT.fetch_add(1, Ordering::Relaxed)));
     std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 /// No server set yet: nothing to ask.
@@ -265,6 +372,8 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
                 send(Done::Library { cached: true, result: Ok(list) });
             }
             let Some(s) = server else { return send(Done::Library { cached: false, result: no_server() }) };
+            wait_for_progress();
+            flush_outbox(client, data, &s);
             let r = client.get(&s, "/v1/library").and_then(|b| {
                 let list = serde_json::from_slice::<Vec<Series>>(&b).map_err(|_| Fail::Garbled)?;
                 let _ = write_atomic(&file, &b);
@@ -278,6 +387,8 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
                 send(Done::Series { id, cached: true, result: Ok(d) });
             }
             let Some(s) = server else { return send(Done::Series { id, cached: false, result: no_server() }) };
+            wait_for_progress();
+            flush_outbox(client, data, &s);
             let r = client.get(&s, &format!("/v1/series/{id}")).and_then(|b| {
                 let d = serde_json::from_slice::<SeriesDetail>(&b).map_err(|_| Fail::Garbled)?;
                 let _ = write_atomic(&file, &b);
@@ -316,12 +427,15 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
             // Read now: the page cache keeps this chapter a week from today.
             crate::images::touch_chapter(data, chapter);
             let r = match &server {
-                Some(s) => serde_json::to_string(&p)
-                    .map_err(|_| Fail::Garbled)
-                    .and_then(|body| client.post(s, &format!("/v1/chapters/{chapter}/progress"), body))
-                    .map(|_| ()),
+                Some(s) => post_progress(client, s, chapter, &p),
                 None => no_server(),
             };
+            // Kept and sent again later, rather than lost: reading offline still counts.
+            match &r {
+                Ok(()) => outbox_drop(data, chapter),
+                Err(f) if retry_later(f) => outbox_put(data, chapter, p),
+                Err(_) => {}
+            }
             send(Done::Progress(chapter, r));
         }
         Job::PageCount(chapter) => {
@@ -358,6 +472,25 @@ mod tests {
     fn queries_are_escaped() {
         assert_eq!(query_escape("nano machine"), "nano+machine");
         assert_eq!(query_escape("a&b=c/é"), "a%26b%3Dc%2F%C3%A9");
+    }
+
+    #[test]
+    fn the_outbox_keeps_the_latest_and_never_unfinishes() {
+        let dir = std::env::temp_dir().join(format!("leaf-outbox-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        outbox_put(&dir, 7, Progress { page: 3, done: false });
+        outbox_put(&dir, 7, Progress { page: 9, done: false });
+        outbox_put(&dir, 8, Progress { page: 29, done: true });
+        outbox_put(&dir, 8, Progress { page: 2, done: false });
+        assert_eq!(outbox_read(&dir), vec![(7, Progress { page: 9, done: false }), (8, Progress { page: 29, done: true })]);
+        outbox_drop(&dir, 7);
+        assert_eq!(outbox_read(&dir), vec![(8, Progress { page: 29, done: true })]);
+        outbox_drop(&dir, 8);
+        assert!(!outbox_file(&dir).exists(), "an empty outbox leaves no file");
+        assert!(retry_later(&Fail::Unreachable) && retry_later(&Fail::Answer(502, String::new())));
+        assert!(!retry_later(&Fail::Answer(404, String::new())));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

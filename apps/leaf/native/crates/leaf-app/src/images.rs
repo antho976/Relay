@@ -174,6 +174,8 @@ pub struct Images {
     failed: HashMap<(i64, u32), String>,
     stored: HashSet<(i64, u32)>,
     last_wants: Vec<(i64, u32, bool)>,
+    /// A reader is open: decoded pages arriving are kept. Closed, they are let go on arrival.
+    reading: bool,
     /// Pictures inside books: their sizes once decoded, and the ones that would not.
     local_sizes: HashMap<String, (u32, u32)>,
     local_failed: HashSet<String>,
@@ -222,6 +224,7 @@ impl Images {
             failed: HashMap::new(),
             stored: HashSet::new(),
             last_wants: Vec::new(),
+            reading: false,
             local_sizes: HashMap::new(),
             local_failed: HashSet::new(),
         }
@@ -412,6 +415,7 @@ impl Images {
     /// The pages the reader wants, nearest first: (chapter, page, decode). Anything else queued
     /// for pages is dropped.
     pub fn want_pages(&mut self, wants: &[(i64, u32, bool)]) {
+        self.reading = true;
         if wants == self.last_wants.as_slice() {
             return;
         }
@@ -488,7 +492,9 @@ impl Images {
                         Ok(Some(img)) => {
                             self.sizes.insert(k, (img.w, img.h));
                             self.stored.insert(k);
-                            self.decoded.insert(k, img);
+                            if self.reading {
+                                self.decoded.insert(k, img);
+                            }
                         }
                         Ok(None) => {
                             self.stored.insert(k);
@@ -579,6 +585,14 @@ impl Images {
     /// Let go of decoded pages the reader no longer needs near it.
     pub fn trim(&mut self, keep: &HashSet<(i64, u32)>) {
         self.decoded.retain(|k, _| keep.contains(k));
+    }
+
+    /// The reader closed: nothing more is fetched for it (a chapter opened by mistake is not
+    /// downloaded behind your back), and its decoded pages are let go.
+    pub fn leave_pages(&mut self) {
+        self.want_pages(&[]);
+        self.reading = false;
+        self.decoded.clear();
     }
 
     /// Something is being fetched or decoded.
@@ -883,12 +897,30 @@ fn page(client: &Client, server: Option<&Server>, data: &Path, chapter: i64, n: 
     })
 }
 
+/// The most one page's decode may allocate: a 1600 × 30000 webtoon strip fits, a malformed
+/// header asking for gigabytes does not.
+const PAGE_MAX_ALLOC: u64 = 256 << 20;
+/// A page with more pixels than this decodes alone: three of them at once could take the phone's
+/// memory.
+const BIG_PAGE_PX: u64 = 12_000_000;
+static BIG_DECODE: Mutex<()> = Mutex::new(());
+
 /// A page's bytes decoded, scaled down to at most [`PAGE_W`] wide, and cut into tiles.
 pub fn decode_page(bytes: &[u8]) -> Result<PageImg, String> {
-    let img = image::load_from_memory(bytes).map_err(|_| "This page didn't decode".to_string())?;
-    let (w0, h0) = (img.width(), img.height());
+    let bad = |_| "This page didn't decode".to_string();
+    let reader = || -> std::io::Result<image::ImageReader<std::io::Cursor<&[u8]>>> {
+        let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+        let mut limits = image::Limits::default();
+        limits.max_alloc = Some(PAGE_MAX_ALLOC);
+        r.limits(limits);
+        Ok(r)
+    };
+    let (w0, h0) = reader().map_err(bad)?.into_dimensions().map_err(|_| "This page didn't decode".to_string())?;
+    let _alone = (w0 as u64 * h0 as u64 > BIG_PAGE_PX).then(|| BIG_DECODE.lock().unwrap_or_else(|e| e.into_inner()));
+    let img = reader().map_err(bad)?.decode().map_err(|_| "This page didn't decode".to_string())?;
     let (w, h) = crate::logic::scaled_size(w0, h0);
-    let rgba = if (w, h) == (w0, h0) { img.to_rgba8() } else { image::imageops::resize(&img.to_rgba8(), w, h, image::imageops::FilterType::Triangle) };
+    // Scaled straight from the decoded picture: no full-size RGBA copy first.
+    let rgba = if (w, h) == (w0, h0) { img.into_rgba8() } else { image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle) };
     let raw = rgba.into_raw();
     let row = (w * 4) as usize;
     let tiles = crate::logic::tile_rows(h).into_iter().map(|(y, th)| raw[y as usize * row..(y + th) as usize * row].to_vec()).collect();
@@ -952,6 +984,43 @@ mod tests {
         assert_eq!(p.tiles[2].len(), 800 * 40 * 4);
         assert_eq!((tile_h(2080, 0), tile_h(2080, 2)), (1020, 40));
         assert!(decode_page(b"not an image").is_err());
+        // A PNG header claiming 60000 × 60000 is refused before anything that size is made.
+        let mut huge = Vec::new();
+        image::RgbaImage::new(1, 1).write_to(&mut std::io::Cursor::new(&mut huge), image::ImageFormat::Png).unwrap();
+        huge[16..20].copy_from_slice(&60_000u32.to_be_bytes());
+        huge[20..24].copy_from_slice(&60_000u32.to_be_bytes());
+        // The header's checksum made right again, so it is the size that is refused.
+        let crc = huge[12..29].iter().fold(!0u32, |mut c, &b| {
+            c ^= b as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { (c >> 1) ^ 0xEDB8_8320 } else { c >> 1 };
+            }
+            c
+        });
+        huge[29..33].copy_from_slice(&(!crc).to_be_bytes());
+        assert_eq!(image::ImageReader::new(std::io::Cursor::new(&huge)).with_guessed_format().unwrap().into_dimensions().unwrap(), (60_000, 60_000));
+        assert!(decode_page(&huge).is_err());
+    }
+
+    #[test]
+    fn queued_pages_go_when_the_reader_moves_or_closes() {
+        // A server that takes requests and never answers: the workers hold the first three, the
+        // rest stay queued, so what is dropped from the queue can be seen.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let dir = std::env::temp_dir().join(format!("leaf-images-hold-{}", std::process::id()));
+        let mut im = Images::new(dir.clone());
+        im.set_server(Some(Server { base, token: None }));
+        let queued = |im: &Images| -> Vec<Want> { im.shared.q.lock().unwrap().items.iter().map(|i| i.2.clone()).collect() };
+        let old: Vec<(i64, u32, bool)> = (0..8).map(|n| (1, n, true)).collect();
+        im.want_pages(&old);
+        assert!(queued(&im).iter().any(|w| matches!(w, Want::Page { chapter: 1, .. })), "some of chapter 1 waits its turn");
+        im.want_pages(&[(5, 0, true), (5, 1, true), (5, 2, true), (5, 3, true)]);
+        assert!(queued(&im).iter().all(|w| !matches!(w, Want::Page { chapter: 1, .. })), "the reader moved: chapter 1 is dropped");
+        im.leave_pages();
+        assert!(queued(&im).iter().all(|w| !matches!(w, Want::Page { .. })), "the reader closed: nothing is fetched for it");
+        drop(listener);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

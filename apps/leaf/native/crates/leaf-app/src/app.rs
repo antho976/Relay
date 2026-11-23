@@ -308,12 +308,35 @@ impl App {
         }
     }
 
-    /// The app goes to the background: the open book's place and time are kept now.
+    /// The app goes to the background (and may be killed there): the open book's place and time,
+    /// the open PDF's page and the comic reader's held-back report are kept now.
     pub fn paused(&mut self) {
         if let Some(mut r) = self.book.take() {
             crate::book::close(self, &mut r);
             self.book = Some(r);
         }
+        if let Some(mut r) = self.reader.take() {
+            if r.local.is_some() {
+                self.keep_pdf_place(&r);
+            } else if !self.shot
+                && let Some((c, p)) = r.flush(self.now_ns)
+            {
+                self.jobs.send(self.server.as_ref(), Job::Progress(c, p));
+            }
+            self.reader = Some(r);
+        }
+    }
+
+    /// A PDF's place, kept on the phone.
+    fn keep_pdf_place(&mut self, r: &crate::reader::Reader) {
+        let (Some(book), Some((place, progress))) = (r.local, r.local_place()) else { return };
+        let now = crate::shelf::now_ms();
+        if let Some(b) = self.shelf.book_mut(book) {
+            b.place = place;
+            b.progress = progress;
+            b.opened_ms = now;
+        }
+        self.shelf.send(crate::shelf::Op::Place { id: book, place, progress, opened_ms: now, chapter: String::new(), chars: 0 });
     }
 
     fn close_book(&mut self) {
@@ -391,16 +414,26 @@ impl App {
         self.series.clear();
     }
 
-    /// Keep the settings, on a thread of its own (a small file, but still a write).
+    /// Keep the settings, on a thread of its own (a small file, but still a write). Saves land in
+    /// the order they were asked: one that finds a later one already written leaves it be.
     pub fn save_config(&self) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static ASKED: AtomicU64 = AtomicU64::new(0);
+        static WRITTEN: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
         let mut oldest: Vec<i64> = self.oldest_first.iter().copied().collect();
         oldest.sort_unstable();
         let config = Config { server: self.server.clone(), oldest_first: oldest, following_sort: self.following_sort, asked_notifications: self.asked_notifications };
         let (path, host) = (self.data.join("config.json"), self.host.clone());
+        let n = ASKED.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = std::thread::Builder::new().name("leaf-config".into()).spawn(move || {
+            let mut written = WRITTEN.lock().unwrap_or_else(|e| e.into_inner());
+            if *written > n {
+                return;
+            }
             let bytes = serde_json::to_vec_pretty(&config).unwrap_or_default();
-            if let Err(e) = crate::net::write_atomic(&path, &bytes) {
-                host.log(&format!("config: {e}"));
+            match crate::net::write_atomic(&path, &bytes) {
+                Ok(()) => *written = n,
+                Err(e) => host.log(&format!("config: {e}")),
             }
         });
     }
@@ -624,17 +657,9 @@ impl App {
 
     fn close_reader(&mut self) {
         if let Some(mut r) = self.reader.take() {
-            if let Some(book) = r.local {
-                // A PDF: its place is kept on the phone.
-                if let Some((place, progress)) = r.local_place() {
-                    let now = crate::shelf::now_ms();
-                    if let Some(b) = self.shelf.book_mut(book) {
-                        b.place = place;
-                        b.progress = progress;
-                        b.opened_ms = now;
-                    }
-                    self.shelf.send(crate::shelf::Op::Place { id: book, place, progress, opened_ms: now, chapter: String::new(), chars: 0 });
-                }
+            self.images.leave_pages();
+            if r.local.is_some() {
+                self.keep_pdf_place(&r);
                 self.host.immersive(false);
                 return;
             }
