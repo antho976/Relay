@@ -269,8 +269,12 @@ public class LeafActivity extends GameActivity {
             try (PdfRenderer.Page page = r.openPage(n)) {
                 int w = Math.max(1, width);
                 int h = Math.max(1, (int) ((long) page.getHeight() * w / Math.max(1, page.getWidth())));
-                // A very long page is kept within what a texture holds.
-                h = Math.min(h, 8000);
+                // A very long page is kept within what a texture holds: drawn narrower, so it
+                // keeps its shape instead of being squashed into the height.
+                if (h > 8000) {
+                    w = Math.max(1, (int) ((long) page.getWidth() * 8000 / Math.max(1, page.getHeight())));
+                    h = 8000;
+                }
                 Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
                 bmp.eraseColor(Color.WHITE);
                 page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);

@@ -81,7 +81,10 @@ public class LeafChaptersJob extends JobService {
     }
 
     private void check() throws Exception {
-        JSONObject server = new JSONObject(read(new FileInputStream(new File(getFilesDir(), "config.json")))).optJSONObject("server");
+        // No settings yet (someone who only reads books): nothing to ask, and nothing to retry.
+        File config = new File(getFilesDir(), "config.json");
+        if (!config.isFile()) return;
+        JSONObject server = new JSONObject(read(new FileInputStream(config))).optJSONObject("server");
         if (server == null) return;
         String base = server.optString("base", "");
         String token = server.isNull("token") ? "" : server.optString("token", "");

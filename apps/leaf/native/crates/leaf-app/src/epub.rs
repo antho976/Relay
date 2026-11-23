@@ -159,11 +159,18 @@ impl Doc {
     }
 }
 
+/// The most text a book may be: a plain file, or an EPUB's chapters together. A long novel is a
+/// few MB; more is a mistake or a trick (one 16 MB chapter listed a thousand times).
+const MAX_TEXT: u64 = 64 << 20;
+
 /// Open a book's file: EPUB or plain text, by its extension.
 pub fn open(path: &Path) -> Result<Doc, String> {
     match ext(path).as_str() {
         "epub" => open_epub(path),
         "txt" => {
+            if std::fs::metadata(path).is_ok_and(|m| m.len() > MAX_TEXT) {
+                return Err("This text file is too big for Leaf (over 64 MB)".into());
+            }
             let bytes = std::fs::read(path).map_err(|e| format!("Couldn't read the file: {e}"))?;
             Ok(parse_txt(&String::from_utf8_lossy(&bytes), &stem(path)))
         }
@@ -323,7 +330,7 @@ fn read_opf(z: &mut Zip) -> Result<Opf, String> {
     let dir = parent(&opf_path);
     let mut o = Opf { dir: dir.clone(), title: String::new(), author: String::new(), manifest: HashMap::new(), spine: Vec::new(), cover_id: None, ncx: None };
     // Titles and creators are text; the rest attributes.
-    let mut reader = quick_xml::Reader::from_str(&opf);
+    let mut reader = xml_reader(&opf);
     let mut open: Option<String> = None;
     let mut text = String::new();
     loop {
@@ -339,7 +346,7 @@ fn read_opf(z: &mut Zip) -> Result<Opf, String> {
             }
             Ok(Event::Empty(e)) => opf_tag(&mut o, &local(&e), &e),
             Ok(Event::Text(t)) if open.is_some() => text.push_str(&t.decode().unwrap_or_default()),
-            Ok(Event::GeneralRef(r)) if open.is_some() => text.push_str(&entity(&r.decode().unwrap_or_default())),
+            Ok(Event::GeneralRef(r)) if open.is_some() => text.push_str(&entity_text(&r.decode().unwrap_or_default())),
             Ok(Event::End(e)) => {
                 let n = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
                 if open.as_deref() == Some(n.as_str()) {
@@ -403,7 +410,8 @@ pub fn meta(path: &Path) -> Result<Meta, String> {
     let mut cover = o.cover_id.as_ref().and_then(|id| o.manifest.get(id)).and_then(|(href, ..)| z.read(href, 16 << 20));
     if cover.is_none() {
         // No cover named: an image whose name says cover.
-        let guess = o.manifest.values().find(|(h, m, _)| m.starts_with("image/") && h.to_ascii_lowercase().contains("cover")).map(|(h, ..)| h.clone());
+        // The first by name, not whichever the map gives first: the same book, the same cover.
+        let guess = o.manifest.values().filter(|(h, m, _)| m.starts_with("image/") && h.to_ascii_lowercase().contains("cover")).map(|(h, ..)| h.clone()).min();
         cover = guess.and_then(|h| z.read(&h, 16 << 20));
     }
     let title = if o.title.is_empty() { stem(path) } else { o.title };
@@ -418,12 +426,17 @@ fn open_epub(path: &Path) -> Result<Doc, String> {
     // Parse each spine item; ids are kept per file to resolve links after.
     let mut ids: Vec<HashMap<String, u32>> = Vec::new();
     let mut raw_links: Vec<Vec<Vec<String>>> = Vec::new();
+    let mut read: u64 = 0;
     for id in &o.spine {
         let Some((href, media, _)) = o.manifest.get(id) else { continue };
         if !media.contains("html") && !media.contains("xml") {
             continue;
         }
         let Some(xhtml) = z.text(href) else { continue };
+        read += xhtml.len() as u64;
+        if read > MAX_TEXT {
+            return Err("This EPUB is too big for Leaf (over 64 MB of text)".into());
+        }
         let parsed = parse_xhtml(&xhtml, &parent(href));
         // The cover's own page (just the cover picture) is left out: the library shows it.
         if parsed.blocks.len() == 1
@@ -442,7 +455,9 @@ fn open_epub(path: &Path) -> Result<Doc, String> {
     if doc.sections.is_empty() {
         return Err("This EPUB has no text Leaf can read".into());
     }
-    let by_href: HashMap<String, usize> = doc.sections.iter().enumerate().map(|(i, s)| (s.href.clone(), i)).collect();
+    // Keyed decoded, as `resolve` looks up: a manifest href is percent-encoded ("ch%201.xhtml"),
+    // the way the EPUB spec asks for names with spaces or accents.
+    let by_href: HashMap<String, usize> = doc.sections.iter().enumerate().map(|(i, s)| (percent_decode(&s.href), i)).collect();
     let lens: Vec<usize> = doc.sections.iter().map(|s| s.blocks.len()).collect();
     let resolve = |href: &str| -> Option<(u32, u32)> {
         let (file, frag) = href.split_once('#').unwrap_or((href, ""));
@@ -482,7 +497,7 @@ fn open_epub(path: &Path) -> Result<Doc, String> {
         }
     }
     // Contents: the EPUB 3 nav, else the NCX, else the headings.
-    let nav_href = o.manifest.values().find(|(_, _, p)| p.split_whitespace().any(|x| x == "nav")).map(|(h, ..)| h.clone());
+    let nav_href = o.manifest.values().filter(|(_, _, p)| p.split_whitespace().any(|x| x == "nav")).map(|(h, ..)| h.clone()).min();
     let mut toc: Vec<(String, u8, String)> = Vec::new();
     if let Some(h) = &nav_href
         && let Some(x) = z.text(h)
@@ -677,7 +692,7 @@ impl Builder {
 
 fn parse_xhtml(x: &str, dir: &str) -> Parsed {
     let mut b = Builder { space: true, ..Builder::default() };
-    let mut reader = quick_xml::Reader::from_str(x);
+    let mut reader = xml_reader(x);
     {
         let c = reader.config_mut();
         c.check_end_names = false;
@@ -710,7 +725,7 @@ fn parse_xhtml(x: &str, dir: &str) -> Parsed {
             Event::GeneralRef(r) if b.skip == 0 => {
                 let s = match r.resolve_char_ref() {
                     Ok(Some(c)) => c.to_string(),
-                    _ => entity(&r.decode().unwrap_or_default()),
+                    _ => entity_text(&r.decode().unwrap_or_default()),
                 };
                 // An entity is a character, never collapsed whitespace (&nbsp; stays).
                 let keep = b.space;
@@ -829,6 +844,8 @@ fn close_tag(b: &mut Builder, n: &str) {
                 b.stack.truncate(i);
             }
             match n {
+                // An item with no text (empty, or a picture alone) keeps its mark to itself.
+                "li" => b.mark = None,
                 "ul" | "ol" => {
                     b.lists.pop();
                 }
@@ -843,7 +860,7 @@ fn close_tag(b: &mut Builder, n: &str) {
 /// The contents of an EPUB 3 nav document: (title, level, href).
 fn parse_nav(x: &str, dir: &str) -> Vec<(String, u8, String)> {
     let mut out = Vec::new();
-    let mut reader = quick_xml::Reader::from_str(x);
+    let mut reader = xml_reader(x);
     reader.config_mut().check_end_names = false;
     let mut in_toc = false;
     let mut ol = 0u8;
@@ -867,7 +884,7 @@ fn parse_nav(x: &str, dir: &str) -> Vec<(String, u8, String)> {
                 }
             }
             Ok(Event::Text(t)) if href.is_some() => text.push_str(&t.decode().unwrap_or_default()),
-            Ok(Event::GeneralRef(r)) if href.is_some() => text.push_str(&entity(&r.decode().unwrap_or_default())),
+            Ok(Event::GeneralRef(r)) if href.is_some() => text.push_str(&entity_text(&r.decode().unwrap_or_default())),
             Ok(Event::End(e)) => {
                 let n = String::from_utf8_lossy(e.local_name().as_ref()).to_ascii_lowercase();
                 if n == "a" {
@@ -890,7 +907,7 @@ fn parse_nav(x: &str, dir: &str) -> Vec<(String, u8, String)> {
 /// The contents of an EPUB 2 NCX: (title, level, href).
 fn parse_ncx(x: &str, dir: &str) -> Vec<(String, u8, String)> {
     let mut out = Vec::new();
-    let mut reader = quick_xml::Reader::from_str(x);
+    let mut reader = xml_reader(x);
     let mut depth = 0u8;
     let mut in_text = false;
     let mut title = String::new();
@@ -914,7 +931,7 @@ fn parse_ncx(x: &str, dir: &str) -> Vec<(String, u8, String)> {
                 }
             }
             Ok(Event::Text(t)) if in_text => title.push_str(&t.decode().unwrap_or_default()),
-            Ok(Event::GeneralRef(r)) if in_text => title.push_str(&entity(&r.decode().unwrap_or_default())),
+            Ok(Event::GeneralRef(r)) if in_text => title.push_str(&entity_text(&r.decode().unwrap_or_default())),
             Ok(Event::End(e)) => match String::from_utf8_lossy(e.local_name().as_ref()).as_ref() {
                 "navPoint" | "navpoint" => depth = depth.saturating_sub(1),
                 "text" => in_text = false,
@@ -944,7 +961,7 @@ fn attr(a: &[(String, String)], name: &str) -> Option<String> {
 
 /// Every tag's name and attributes, in order (for small files like container.xml).
 fn each_tag(x: &str, mut f: impl FnMut(&str, &[(String, String)])) {
-    let mut reader = quick_xml::Reader::from_str(x);
+    let mut reader = xml_reader(x);
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => f(&local(&e), &attrs(&e)),
@@ -955,6 +972,22 @@ fn each_tag(x: &str, mut f: impl FnMut(&str, &[(String, String)])) {
 }
 
 /// A named or numbered entity's text (HTML's common ones; XHTML books use few).
+/// A reader that takes books as they are written: a bare "&" ("AT&T", "Pride & Prejudice") is
+/// text, not the end of the chapter (quick-xml stops there by default, and everything after it
+/// was lost).
+fn xml_reader(x: &str) -> quick_xml::Reader<&[u8]> {
+    let mut r = quick_xml::Reader::from_str(x);
+    r.config_mut().allow_dangling_amp = true;
+    r
+}
+
+/// What `&name;` reads as: the character it names, or, when `name` is no entity's name at all
+/// ("Tom & Jerry;" reaches the reader as one named " Jerry"), the text as written.
+fn entity_text(name: &str) -> String {
+    let named = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '#');
+    if named { entity(name) } else { format!("&{name};") }
+}
+
 fn entity(name: &str) -> String {
     if let Some(n) = name.strip_prefix('#') {
         let c = if let Some(h) = n.strip_prefix('x').or_else(|| n.strip_prefix('X')) { u32::from_str_radix(h, 16).ok() } else { n.parse().ok() };
@@ -1007,7 +1040,7 @@ fn unescape(s: &str) -> String {
         out.push_str(&rest[..i]);
         match rest[i..].find(';') {
             Some(j) if j < 12 => {
-                out.push_str(&entity(&rest[i + 1..i + j]));
+                out.push_str(&entity_text(&rest[i + 1..i + j]));
                 rest = &rest[i + j + 1..];
             }
             _ => {
@@ -1159,6 +1192,37 @@ mod tests {
         let (title, start, end) = d.chapter_span(0, 6);
         assert_eq!(title, "Later on");
         assert!(start < end);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn books_as_they_are_written_read_whole() {
+        let dir = std::env::temp_dir().join(format!("leaf-epub-amp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write_epub(
+            &dir,
+            &[
+                ("META-INF/container.xml", r#"<container><rootfiles><rootfile full-path="content.opf"/></rootfiles></container>"#),
+                (
+                    "content.opf",
+                    r#"<package><metadata><dc:title>Pride & Prejudice</dc:title></metadata>
+                    <manifest><item id="a" href="Text/ch%201.xhtml" media-type="application/xhtml+xml"/><item id="b" href="Text/notes.xhtml" media-type="application/xhtml+xml"/></manifest>
+                    <spine><itemref idref="a"/><itemref idref="b"/></spine></package>"#,
+                ),
+                (
+                    "Text/ch 1.xhtml",
+                    r##"<html><body><p>AT&T and Tom & Jerry; later &amp; more.</p><ul><li></li></ul><p>After the list.</p><p id="x">Last.</p></body></html>"##,
+                ),
+                ("Text/notes.xhtml", r##"<html><body><p><a href="ch%201.xhtml#x">Back</a></p></body></html>"##),
+            ],
+        );
+        assert_eq!(meta(&path).unwrap().title, "Pride & Prejudice", "a bare & in the title does not lose the book");
+        let d = open(&path).unwrap();
+        let s = &d.sections[0].blocks;
+        assert_eq!(s[0].text, "AT&T and Tom & Jerry; later & more.", "nothing after a bare & is lost");
+        assert_eq!(s[1].kind, Kind::Para, "an empty item's mark stays its own");
+        assert_eq!(s[1].text, "After the list.");
+        assert_eq!(d.sections[1].blocks[0].links[0].target, Target::Inside(0, 2), "a percent-encoded name links inside");
         let _ = std::fs::remove_dir_all(dir);
     }
 

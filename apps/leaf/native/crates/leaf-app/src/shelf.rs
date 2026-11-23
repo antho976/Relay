@@ -171,6 +171,8 @@ pub struct Shelf {
     pub settings: HashMap<String, String>,
     pub imports: Vec<Import>,
     pub error: Option<String>,
+    /// Highlights removed while still being saved (id 0): taken back out when they land.
+    unsaved_removed: Vec<(i64, Place, Place)>,
 }
 
 const SCHEMA: &[&str] = &[
@@ -266,7 +268,15 @@ fn apply(c: &Connection, data: &Path, op: Op) -> rusqlite::Result<Option<Done>> 
                 let _ = std::fs::remove_file(book.path(data));
                 return Ok(Some(Done::Already(import, book.title)));
             }
-            c.prepare_cached("INSERT INTO books(kind, title, author, file, added_ms, pages, cover) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")?.execute(params![
+            // A new id each time, never a removed book's: its reading time and pictures are not
+            // this book's.
+            c.prepare_cached(
+                "INSERT INTO books(id, kind, title, author, file, added_ms, pages, cover) VALUES (
+                    1 + MAX(COALESCE((SELECT MAX(id) FROM books), 0), COALESCE((SELECT MAX(book) FROM reading), 0),
+                            COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'removed_book'), 0)),
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?
+            .execute(params![
                 book.kind.word(),
                 book.title,
                 book.author,
@@ -290,6 +300,11 @@ fn apply(c: &Connection, data: &Path, op: Op) -> rusqlite::Result<Option<Done>> 
         Op::Remove(id) => {
             let file: Option<String> = c.prepare_cached("SELECT file FROM books WHERE id = ?1")?.query_row(params![id], |r| r.get(0)).optional()?;
             c.prepare_cached("DELETE FROM books WHERE id = ?1")?.execute(params![id])?;
+            c.prepare_cached(
+                "INSERT INTO settings(key, value) VALUES ('removed_book', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = MAX(CAST(value AS INTEGER), ?1)",
+            )?
+            .execute(params![id])?;
             if let Some(f) = file {
                 let _ = std::fs::remove_file(data.join("books").join(f));
             }
@@ -412,6 +427,7 @@ impl Shelf {
             settings: HashMap::new(),
             imports: Vec::new(),
             error: None,
+            unsaved_removed: Vec::new(),
         }
     }
 
@@ -471,7 +487,14 @@ impl Shelf {
                                 self.send(Op::UpdateHighlight(copy));
                             }
                         }
-                        None => self.highlights.push(h),
+                        None => match self.unsaved_removed.iter().position(|(b, f, t)| *b == h.book && *f == h.from && *t == h.to) {
+                            // Removed before it was saved: removed from the shelf too.
+                            Some(i) => {
+                                self.unsaved_removed.swap_remove(i);
+                                self.send(Op::RemoveHighlight(h.id));
+                            }
+                            None => self.highlights.push(h),
+                        },
                     }
                 }
                 Done::Failed(e) => self.error = Some(e),
@@ -571,20 +594,29 @@ impl Shelf {
         self.send(Op::AddHighlight(h));
     }
 
+    /// The highlight `h` is, as the shelf holds it now: a copy made while it was being saved (id
+    /// 0) finds it by its place, whether or not its real id has come back since.
+    fn find_highlight(&self, h: &Highlight) -> Option<usize> {
+        self.highlights.iter().position(|x| if h.id != 0 { x.id == h.id } else { x.book == h.book && x.from == h.from && x.to == h.to })
+    }
+
     /// Change a highlight's colour or note (one still being saved changes when it lands).
-    pub fn update_highlight(&mut self, h: Highlight) {
-        if let Some(x) = self.highlights.iter_mut().find(|x| if h.id != 0 { x.id == h.id } else { x.id == 0 && x.book == h.book && x.from == h.from }) {
-            *x = h.clone();
-        }
+    pub fn update_highlight(&mut self, mut h: Highlight) {
+        let Some(i) = self.find_highlight(&h) else { return };
+        h.id = self.highlights[i].id;
+        self.highlights[i] = h.clone();
         if h.id != 0 {
             self.send(Op::UpdateHighlight(h));
         }
     }
 
     pub fn remove_highlight(&mut self, h: &Highlight) {
-        self.highlights.retain(|x| !(x.id == h.id && x.book == h.book && x.from == h.from));
-        if h.id != 0 {
-            self.send(Op::RemoveHighlight(h.id));
+        let Some(i) = self.find_highlight(h) else { return };
+        let x = self.highlights.remove(i);
+        if x.id != 0 {
+            self.send(Op::RemoveHighlight(x.id));
+        } else {
+            self.unsaved_removed.push((x.book, x.from, x.to));
         }
     }
 
@@ -938,6 +970,76 @@ mod tests {
         apply(&c, &dir, Op::Remove(b.id)).unwrap();
         let l = load(&c).unwrap();
         assert!(l.books.is_empty() && l.highlights.is_empty());
+        // The next book is not given the removed one's id (its time and cover are not this one's).
+        let Some(Done::Added(_, again)) = apply(&c, &dir, Op::Add { import: 2, book: Book { file: "2-m.epub".into(), ..book.clone() }, cover: None }).unwrap() else { panic!("added") };
+        assert!(again.id > b.id, "{} after {}", again.id, b.id);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Waits for the shelf's thread to answer everything asked so far.
+    fn settle(s: &mut Shelf) {
+        for _ in 0..400 {
+            s.take();
+            if !s.busy() {
+                s.take();
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("the shelf did not settle");
+    }
+
+    #[test]
+    fn a_note_on_a_new_highlight_is_kept_and_one_removed_at_once_stays_gone() {
+        let dir = std::env::temp_dir().join(format!("leaf-shelf-standin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("books")).unwrap();
+        {
+            let c = open_db(&dir.join("shelf.db")).unwrap();
+            let book = Book {
+                id: 0,
+                kind: Kind::Epub,
+                title: "Meditations".into(),
+                author: String::new(),
+                file: "1-m.epub".into(),
+                added_ms: 5,
+                opened_ms: 0,
+                place: Place::default(),
+                progress: 0.0,
+                cpm: 0.0,
+                pages: 0,
+                has_cover: false,
+                chapter: String::new(),
+                chars: 0,
+            };
+            apply(&c, &dir, Op::Add { import: 0, book, cover: None }).unwrap();
+        }
+        let mut s = Shelf::new(dir.clone());
+        settle(&mut s);
+        let book = s.books[0].id;
+        // Note: the sheet holds the copy made before the shelf answered with the real id.
+        let mut h = hl(0, 100, false);
+        h.book = book;
+        s.add_highlight(h.clone());
+        settle(&mut s);
+        assert_ne!(s.highlights[0].id, 0, "saved, with its real id");
+        let mut noted = h.clone();
+        noted.note = "Worth keeping".into();
+        s.update_highlight(noted);
+        // Made and removed before the shelf answered.
+        let mut gone = hl(0, 200, false);
+        gone.book = book;
+        gone.from.block += 1;
+        gone.to.block += 1;
+        s.add_highlight(gone.clone());
+        s.remove_highlight(&gone);
+        settle(&mut s);
+        assert_eq!(s.highlights.len(), 1);
+        drop(s);
+        let c = open_db(&dir.join("shelf.db")).unwrap();
+        let l = load(&c).unwrap();
+        assert_eq!(l.highlights.len(), 1, "the removed one is not back");
+        assert_eq!(l.highlights[0].note, "Worth keeping", "the note reached the shelf");
         let _ = std::fs::remove_dir_all(dir);
     }
 }
