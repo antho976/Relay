@@ -86,12 +86,21 @@ impl Suwa {
 
     /// What Leaf needs Suwayomi to do on its own: keep new chapters of followed series, and store
     /// (and serve) pages as WebP.
-    pub fn ensure_settings(&self) -> Result<(), String> {
+    /// `flaresolverr` is the address of a FlareSolverr beside Suwayomi, which passes the
+    /// Cloudflare checks some sites put in front of their pages; without one those sources answer
+    /// "Cloudflare bypass currently disabled".
+    pub fn ensure_settings(&self, flaresolverr: Option<&str>) -> Result<(), String> {
         let conv: Vec<Value> = TO_WEBP.iter().map(|m| json!({ "mimeType": m, "target": "image/webp" })).collect();
         self.gql(
             "mutation($c:[SettingsDownloadConversionTypeInput!]){ setSettings(input:{settings:{downloadConversions:$c, serveConversions:$c, downloadAsCbz:false, autoDownloadNewChapters:true, autoDownloadIgnoreReUploads:true}}){ clientMutationId } }",
             json!({ "c": conv }),
         )?;
+        if let Some(url) = flaresolverr {
+            self.gql(
+                "mutation($u:String!){ setSettings(input:{settings:{flareSolverrEnabled:true, flareSolverrUrl:$u, flareSolverrAsResponseFallback:true}}){ clientMutationId } }",
+                json!({ "u": url }),
+            )?;
+        }
         Ok(())
     }
 

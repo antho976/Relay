@@ -11,6 +11,7 @@
 //! | `LEAF_LANG` | `en` | the language of the sources searched |
 //! | `LEAF_SOURCES` | `Asura Scans,MangaDex` | preferred sources, best first; their extensions are installed at start |
 //! | `LEAF_EXTENSIONS_REPO` | Keiyoushi's `index.min.json` | the extension list added when Suwayomi has none |
+//! | `LEAF_FLARESOLVERR` | none | a FlareSolverr's address, turned on in Suwayomi for Cloudflare-checked sources |
 //! | `LEAF_AHEAD` | `5` | unread chapters kept downloaded per series |
 //! | `LEAF_TICK_SECS` | `3600` | how often the autopilot looks at what is due |
 
@@ -63,13 +64,14 @@ fn main() {
 
     // The autopilot: waits for Suwayomi, sets it up once, then a pass every `tick`.
     let pilot = ctx.clone();
+    let flaresolverr = std::env::var("LEAF_FLARESOLVERR").ok().filter(|v| !v.trim().is_empty());
     let repo = var("LEAF_EXTENSIONS_REPO", "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json");
     std::thread::spawn(move || {
         let mut ready = false;
         let mut extensions_in = false;
         loop {
             if !ready {
-                match pilot.suwa.version().and_then(|v| pilot.suwa.ensure_settings().map(|_| v)) {
+                match pilot.suwa.version().and_then(|v| pilot.suwa.ensure_settings(flaresolverr.as_deref()).map(|_| v)) {
                     Ok(v) => {
                         log(&format!("Suwayomi {v} is ready"));
                         ready = true;

@@ -21,17 +21,23 @@ services:
       - ./data/downloads:/home/suwayomi/.local/share/Tachidesk/downloads
       - ./data/suwayomi:/home/suwayomi/.local/share/Tachidesk
 
+  # Passes the Cloudflare checks some sources put in front of their pages (Suwayomi asks it).
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    restart: unless-stopped
+
   leaf-server:
     build:
       context: ../native
       dockerfile: crates/leaf-server/Dockerfile
     image: leaf-server:local
     restart: unless-stopped
-    depends_on: [suwayomi]
+    depends_on: [suwayomi, flaresolverr]
     environment:
       - SUWAYOMI_URL=http://suwayomi:4567
+      - LEAF_FLARESOLVERR=http://flaresolverr:8191
       - LEAF_TOKEN=${LEAF_TOKEN:?set LEAF_TOKEN in .env}
-      - LEAF_SOURCES=${LEAF_SOURCES:-Asura Scans,MangaDex}
+      - LEAF_SOURCES=${LEAF_SOURCES:-Asura Scans,Flame Comics,Drake Scans,Rizz Comic,MangaDex,Weeb Central,MangaFire,ManhuaUS,Webtoons.com}
     volumes:
       - ./data/leaf:/data
     networks:
