@@ -28,6 +28,8 @@ pub struct Work {
     pub note: Option<String>,
     /// New chapters are announced.
     pub bell: bool,
+    /// The shelf chosen for it ("reading", "plan", "hold", "dropped", "done").
+    pub shelf: Option<String>,
 }
 
 const SCHEMA: &str = "
@@ -54,9 +56,11 @@ CREATE TABLE IF NOT EXISTS event (
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS alias (work_id INTEGER NOT NULL, title TEXT NOT NULL, UNIQUE(work_id, title));
 CREATE TABLE IF NOT EXISTS link (work_id INTEGER NOT NULL, manga_id INTEGER NOT NULL UNIQUE, source TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS arrival (work_id INTEGER NOT NULL, number REAL NOT NULL, at INTEGER NOT NULL, UNIQUE(work_id, number));
+CREATE TABLE IF NOT EXISTS source_health (name TEXT PRIMARY KEY, ok_at INTEGER NOT NULL DEFAULT 0, err_at INTEGER NOT NULL DEFAULT 0, err TEXT);
 ";
 
-const WORK_COLS: &str = "id, title, manga_id, source, followed_at, fails, checked_at, compared_at, latest, updated_at, note, bell";
+const WORK_COLS: &str = "id, title, manga_id, source, followed_at, fails, checked_at, compared_at, latest, updated_at, note, bell, shelf";
 
 fn work_of(r: &rusqlite::Row) -> rusqlite::Result<Work> {
     Ok(Work {
@@ -72,6 +76,7 @@ fn work_of(r: &rusqlite::Row) -> rusqlite::Result<Work> {
         updated_at: r.get(9)?,
         note: r.get(10)?,
         bell: r.get::<_, i64>(11)? != 0,
+        shelf: r.get(12)?,
     })
 }
 
@@ -93,6 +98,10 @@ impl Store {
         let has_bell: bool = db.prepare("SELECT 1 FROM pragma_table_info('work') WHERE name = 'bell'").and_then(|mut s| s.exists([])).unwrap_or(false);
         if !has_bell {
             db.execute_batch("ALTER TABLE work ADD COLUMN bell INTEGER NOT NULL DEFAULT 0").map_err(|e| e.to_string())?;
+        }
+        let has_shelf: bool = db.prepare("SELECT 1 FROM pragma_table_info('work') WHERE name = 'shelf'").and_then(|mut s| s.exists([])).unwrap_or(false);
+        if !has_shelf {
+            db.execute_batch("ALTER TABLE work ADD COLUMN shelf TEXT").map_err(|e| e.to_string())?;
         }
         Ok(Store { db })
     }
@@ -191,6 +200,41 @@ impl Store {
         }
     }
 
+    pub fn set_shelf(&self, id: i64, shelf: Option<&str>) {
+        let _ = self.db.execute("UPDATE work SET shelf = ?2 WHERE id = ?1", params![id, shelf]);
+    }
+
+    /// Chapters that arrived for a work (its latest number grew), for the Updates list.
+    pub fn add_arrivals(&self, id: i64, numbers: &[f64], at: i64) {
+        for n in numbers {
+            let _ = self.db.execute("INSERT OR IGNORE INTO arrival (work_id, number, at) VALUES (?1, ?2, ?3)", params![id, n, at]);
+        }
+        let _ = self.db.execute("DELETE FROM arrival WHERE at < ?1", [at - 60 * 86_400_000]);
+    }
+
+    /// (work, number, at) since `since`, newest first.
+    pub fn arrivals_since(&self, since: i64) -> Vec<(i64, f64, i64)> {
+        let mut st = self.db.prepare_cached("SELECT work_id, number, at FROM arrival WHERE at >= ?1 ORDER BY at DESC, number DESC LIMIT 1000").expect("a statement");
+        st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).expect("arrivals").filter_map(Result::ok).collect()
+    }
+
+    pub fn source_ok(&self, name: &str, at: i64) {
+        let _ = self.db.execute("INSERT INTO source_health (name, ok_at) VALUES (?1, ?2) ON CONFLICT(name) DO UPDATE SET ok_at = excluded.ok_at", params![name, at]);
+    }
+
+    pub fn source_err(&self, name: &str, err: &str, at: i64) {
+        let _ = self.db.execute(
+            "INSERT INTO source_health (name, err_at, err) VALUES (?1, ?2, ?3) ON CONFLICT(name) DO UPDATE SET err_at = excluded.err_at, err = excluded.err",
+            params![name, at, err],
+        );
+    }
+
+    /// name → (last ok, last error time, last error).
+    pub fn health(&self) -> Vec<(String, i64, i64, Option<String>)> {
+        let mut st = self.db.prepare_cached("SELECT name, ok_at, err_at, err FROM source_health").expect("a statement");
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).expect("health").filter_map(Result::ok).collect()
+    }
+
     pub fn set_bell(&self, id: i64, on: bool) {
         let _ = self.db.execute("UPDATE work SET bell = ?2 WHERE id = ?1", params![id, on as i64]);
     }
@@ -255,6 +299,15 @@ mod tests {
         let w = s.work(id).unwrap();
         assert_eq!((w.manga_id, w.source.as_str(), w.fails), (9, "Asura Scans", 0));
         assert!(!w.bell, "adding is not following");
+        assert_eq!(w.shelf, None);
+        s.set_shelf(id, Some("hold"));
+        assert_eq!(s.work(id).unwrap().shelf.as_deref(), Some("hold"));
+        s.add_arrivals(id, &[61.0, 62.0], 1000);
+        s.add_arrivals(id, &[62.0], 2000);
+        assert_eq!(s.arrivals_since(0), vec![(id, 62.0, 1000), (id, 61.0, 1000)], "a chapter arrives once");
+        s.source_err("Asura Scans", "Cloudflare bypass currently disabled", 10);
+        s.source_ok("Asura Scans", 20);
+        assert_eq!(s.health(), vec![("Asura Scans".to_string(), 20, 10, Some("Cloudflare bypass currently disabled".to_string()))]);
         s.set_bell(id, true);
         assert!(s.work(id).unwrap().bell);
         assert_eq!(s.work_of_manga(9).unwrap().id, id);

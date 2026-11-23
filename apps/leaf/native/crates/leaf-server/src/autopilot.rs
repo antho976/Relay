@@ -48,7 +48,12 @@ pub struct Ctx {
     pub ahead: usize,
     /// Page addresses per chapter, so a page asks Suwayomi once for the list.
     pub pages: Mutex<HashMap<i64, Vec<String>>>,
+    /// leaf-server's data folder (backups go in `backups/`).
+    pub data: std::path::PathBuf,
 }
+
+/// Nightly backups kept.
+const BACKUPS_KEPT: usize = 14;
 
 pub fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
@@ -210,6 +215,7 @@ pub fn detail_of(w: &Work, m: &Manga, extras: &[Manga], prefs: &[String]) -> Ser
         updated_at: w.updated_at,
         note: w.note.clone(),
         bell: w.bell,
+        shelf: w.shelf.clone(),
         added_at: w.followed_at,
         last_read_at: m.chapters.iter().chain(extras.iter().flat_map(|e| e.chapters.iter())).map(|c| c.last_read_at).max().unwrap_or(0),
     };
@@ -266,7 +272,16 @@ impl Ctx {
     pub fn search(&self, query: &str) -> Result<Vec<Candidate>, String> {
         let sources = self.suwa.sources(&self.lang)?;
         let found: Vec<(String, Vec<crate::suwa::Found>)> = std::thread::scope(|s| {
-            let handles: Vec<_> = sources.iter().map(|src| s.spawn(move || (src.name.clone(), self.suwa.search(&src.id, query)))).collect();
+            let handles: Vec<_> = sources
+                .iter()
+                .map(|src| {
+                    s.spawn(move || {
+                        let r = self.suwa.search(&src.id, query);
+                        self.note_source(&src.name, r.as_ref().err());
+                        (src.name.clone(), r)
+                    })
+                })
+                .collect();
             handles
                 .into_iter()
                 .filter_map(|h| h.join().ok())
@@ -488,6 +503,245 @@ impl Ctx {
         }
     }
 
+    /// A source answered (`err` None) or failed: kept for the health list.
+    fn note_source(&self, name: &str, err: Option<&String>) {
+        let now = now_ms();
+        match err {
+            None => self.store().source_ok(name, now),
+            Some(e) => self.store().source_err(name, e, now),
+        }
+    }
+
+    pub fn health(&self) -> Vec<leaf_proto::SourceHealth> {
+        let names: Vec<String> = self.suwa.sources(&self.lang).map(|v| v.into_iter().map(|s| s.name).collect()).unwrap_or_default();
+        let rows = self.store().health();
+        names
+            .into_iter()
+            .map(|name| {
+                let (ok_at, err_at, err) = rows.iter().find(|r| r.0 == name).map(|r| (r.1, r.2, r.3.clone())).unwrap_or((0, 0, None));
+                let failing = err_at > ok_at;
+                leaf_proto::SourceHealth {
+                    blocked: failing && err.as_deref().is_some_and(|e| e.to_lowercase().contains("cloudflare")),
+                    ok: !failing,
+                    last_ok_at: ok_at,
+                    last_error: if failing { err } else { None },
+                    name,
+                }
+            })
+            .collect()
+    }
+
+    /// Chapters that arrived in the last `days` for series in your space, newest first.
+    pub fn updates(&self, days: i64) -> Vec<leaf_proto::Update> {
+        let since = now_ms() - days.clamp(1, 60) * 86_400_000;
+        let arrivals = self.store().arrivals_since(since);
+        let mut by_work: HashMap<i64, Vec<(f64, i64)>> = HashMap::new();
+        for (w, n, at) in arrivals {
+            by_work.entry(w).or_default().push((n, at));
+        }
+        let mut out = Vec::new();
+        for (wid, list) in by_work {
+            let work = self.store().work(wid);
+            let Some(w) = work else { continue };
+            let Ok(m) = self.suwa.manga(w.manga_id) else { continue };
+            let d = self.detail_now(&w, &m);
+            for (n, at) in list {
+                if let Some(c) = d.chapters.iter().find(|c| c.number == n) {
+                    out.push(leaf_proto::Update { series: w.id, title: w.title.clone(), chapter: c.id, number: n, name: c.name.clone(), at, read: c.read, bell: w.bell });
+                }
+            }
+        }
+        out.sort_by(|a, b| b.at.cmp(&a.at).then(b.number.total_cmp(&a.number)));
+        out
+    }
+
+    /// A chapter marked read or unread by hand: every copy of its number, on every source.
+    pub fn mark_chapter(&self, chapter_id: i64, read: bool) -> Result<(), String> {
+        let (manga_id, number) = self.suwa.chapter_place(chapter_id)?;
+        let work = self.store().work_of_any(manga_id);
+        let mangas: Vec<Manga> = match &work {
+            Some(w) => std::iter::once(w.manga_id).chain(self.store().links(w.id)).filter_map(|id| self.suwa.manga(id).ok()).collect(),
+            None => self.suwa.manga(manga_id).into_iter().collect(),
+        };
+        let ids: Vec<i64> = mangas.iter().flat_map(|m| m.chapters.iter()).filter(|c| c.number == number || c.id == chapter_id).map(|c| c.id).collect();
+        self.suwa.mark(&ids, Some(read), if read { None } else { Some(0) })
+    }
+
+    pub fn set_shelf(&self, id: i64, shelf: Option<&str>) -> Result<(), String> {
+        const SHELVES: [&str; 5] = ["reading", "plan", "hold", "dropped", "done"];
+        if let Some(s) = shelf
+            && !SHELVES.contains(&s)
+        {
+            return Err(format!("no shelf called {s}"));
+        }
+        self.store().work(id).ok_or("no such series")?;
+        self.store().set_shelf(id, shelf);
+        Ok(())
+    }
+
+    /// Other entries for the work across sources, for "Wrong series?": its titles searched on
+    /// every source, each hit read for its chapters (slow: sources are asked).
+    pub fn alternatives(&self, id: i64) -> Result<Vec<leaf_proto::Alternative>, String> {
+        let w = self.store().work(id).ok_or("no such series")?;
+        let names = self.names(&w, now_ms());
+        let names = &names;
+        let sources = self.suwa.sources(&self.lang)?;
+        let mut found: Vec<Manga> = std::thread::scope(|s| {
+            let hs: Vec<_> = sources
+                .iter()
+                .map(|src| {
+                    s.spawn(move || {
+                        let mut hits: Vec<Manga> = Vec::new();
+                        for query in names.iter().take(2) {
+                            let Ok(list) = self.suwa.search(&src.id, query) else { continue };
+                            for f in list.into_iter().filter(|f| names.iter().any(|n| same_work(&f.title, n))).take(3) {
+                                if !hits.iter().any(|h| h.id == f.id)
+                                    && let Ok(m) = self.suwa.refresh(f.id)
+                                {
+                                    hits.push(m);
+                                }
+                            }
+                        }
+                        hits
+                    })
+                })
+                .collect();
+            hs.into_iter().filter_map(|h| h.join().ok()).flatten().collect()
+        });
+        if !found.iter().any(|m| m.id == w.manga_id)
+            && let Ok(m) = self.suwa.manga(w.manga_id)
+        {
+            found.insert(0, m);
+        }
+        let mut out: Vec<leaf_proto::Alternative> = found
+            .iter()
+            .map(|m| {
+                let numbers: Vec<f64> = m.chapters.iter().map(|c| c.number).filter(|n| *n >= 0.0).collect();
+                let mut whole: Vec<i64> = numbers.iter().map(|n| n.floor() as i64).collect();
+                whole.sort_unstable();
+                whole.dedup();
+                leaf_proto::Alternative {
+                    manga_id: m.id,
+                    title: m.title.clone(),
+                    source: m.source_name.clone(),
+                    chapters: whole.len() as u32,
+                    latest: plausible_latest(&numbers),
+                    current: m.id == w.manga_id,
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| b.current.cmp(&a.current).then(b.chapters.cmp(&a.chapters)));
+        Ok(out)
+    }
+
+    /// Reads the series from another entry, chosen by hand; your place comes across.
+    pub fn repin(&self, id: i64, manga_id: i64) -> Result<leaf_proto::Series, String> {
+        let w = self.store().work(id).ok_or("no such series")?;
+        if w.manga_id == manga_id {
+            return self.detail(id).map(|d| d.series);
+        }
+        let m = self.suwa.manga(w.manga_id)?;
+        let d = self.detail_now(&w, &m);
+        let new = self.suwa.refresh(manga_id)?;
+        let now = now_ms();
+        self.switch(&w, &d, &new, now)?;
+        self.store().event(now, Some(w.id), "switched", &format!("Moved {} to {} by hand", w.title, new.source_name));
+        self.detail(id).map(|d| d.series)
+    }
+
+    /// Everything needed to rebuild your library: each series, where it is read from, what is
+    /// read, its bell and shelf, its other titles and copies.
+    fn backup_json(&self) -> serde_json::Value {
+        let works = self.store().works();
+        let mut list = Vec::new();
+        for w in &works {
+            let read: Vec<f64> = self.suwa.manga(w.manga_id).ok().map(|m| self.detail_now(w, &m).chapters.iter().filter(|c| c.read).map(|c| c.number).collect()).unwrap_or_default();
+            let aliases = self.store().aliases(w.id);
+            let links = self.store().links(w.id);
+            list.push(serde_json::json!({
+                "title": w.title, "source": w.source, "manga_id": w.manga_id, "bell": w.bell, "shelf": w.shelf,
+                "added_at": w.followed_at, "read": read, "aliases": aliases, "links": links,
+            }));
+        }
+        serde_json::json!({ "leaf_backup": 1, "made_at": now_ms(), "series": list })
+    }
+
+    /// Writes a backup now into `backups/` (14 kept) and answers its path.
+    pub fn backup_now(&self) -> Result<std::path::PathBuf, String> {
+        let dir = self.data.join("backups");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join(format!("leaf-backup-{}.json", now_ms() / 1000));
+        let body = serde_json::to_vec_pretty(&self.backup_json()).map_err(|e| e.to_string())?;
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, body).and_then(|_| std::fs::rename(&tmp, &path)).map_err(|e| e.to_string())?;
+        let mut all: Vec<_> = std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+        all.sort();
+        while all.len() > BACKUPS_KEPT {
+            let _ = std::fs::remove_file(all.remove(0));
+        }
+        Ok(path)
+    }
+
+    pub fn latest_backup(&self) -> Option<std::path::PathBuf> {
+        let mut all: Vec<_> = std::fs::read_dir(self.data.join("backups")).ok()?.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+        all.sort();
+        all.pop()
+    }
+
+    pub fn set_anilist(&self, token: Option<&str>) {
+        match token.map(str::trim).filter(|t| !t.is_empty()) {
+            Some(t) => self.store().set("anilist_token", t),
+            None => self.store().set("anilist_token", ""),
+        }
+    }
+
+    pub fn anilist_on(&self) -> bool {
+        self.store().get("anilist_token").is_some_and(|t| !t.is_empty())
+    }
+
+    /// Sends what changed to AniList: each series' last chapter read, Completed when a finished
+    /// series is read to its end. Paced to stay well under AniList's limit.
+    fn sync_anilist(&self) {
+        let token = self.store().get("anilist_token").filter(|t| !t.is_empty());
+        let Some(token) = token else { return };
+        let works = self.store().works();
+        for w in works {
+            let Ok(m) = self.suwa.manga(w.manga_id) else { continue };
+            let d = self.detail_now(&w, &m);
+            let Some(upto) = d.series.read_upto else { continue };
+            let progress = upto.floor().max(0.0) as u32;
+            let done = d.series.status == "completed" && d.series.unread == 0;
+            let sent_key = format!("al_sent:{}", w.id);
+            let want = format!("{progress}:{done}");
+            let sent = self.store().get(&sent_key);
+            if sent.as_deref() == Some(want.as_str()) {
+                continue;
+            }
+            let id_key = format!("al_id:{}", w.id);
+            let known = self.store().get(&id_key);
+            let media = match known {
+                Some(v) => v.parse::<i64>().ok(),
+                None => {
+                    std::thread::sleep(std::time::Duration::from_millis(900));
+                    let found = crate::anilist::media_id(&w.title).ok().flatten();
+                    self.store().set(&id_key, &found.map(|i| i.to_string()).unwrap_or_else(|| "none".into()));
+                    found
+                }
+            };
+            let Some(media) = media else { continue };
+            std::thread::sleep(std::time::Duration::from_millis(900));
+            match crate::anilist::save_progress(&token, media, progress, done) {
+                Ok(()) => self.store().set(&sent_key, &want),
+                Err(e) => {
+                    log(&format!("anilist {}: {e}", w.title));
+                    if e.contains("Invalid token") || e.contains("Unauthorized") {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     /// One pass over everything due. Slow (sources are asked); runs on its own thread.
     pub fn tick(&self) {
         let now = now_ms();
@@ -504,6 +758,15 @@ impl Ctx {
         for w in works.iter().filter(|w| now - w.checked_at >= CHECK_EVERY || w.fails > 0) {
             self.check(w, now_ms());
         }
+        let backed = self.store().get("backup_at").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        if now - backed >= 86_400_000 {
+            match self.backup_now() {
+                Ok(p) => log(&format!("backup: {}", p.display())),
+                Err(e) => log(&format!("backup: {e}")),
+            }
+            self.store().set("backup_at", &now.to_string());
+        }
+        self.sync_anilist();
     }
 
     fn check(&self, w: &Work, now: i64) {
@@ -521,9 +784,15 @@ impl Ctx {
                 }
             }
         };
+        let failed = "no answer".to_string();
+        self.note_source(&w.source, if ok { None } else { Some(&failed) });
         let d = self.detail_now(w, &m);
         let numbers: Vec<f64> = d.chapters.iter().map(|c| c.number).collect();
         let latest = plausible_latest(&numbers);
+        if ok && let Some(l) = latest.filter(|l| *l > w.latest && w.latest >= 0.0) {
+            let arrived: Vec<f64> = numbers.iter().copied().filter(|n| *n > w.latest && *n <= l).collect();
+            self.store().add_arrivals(w.id, &arrived, now);
+        }
         // Announced only for a series with its bell on.
         if ok && w.bell && let Some(l) = latest.filter(|l| *l > w.latest && w.latest >= 0.0) {
             let n = d.chapters.iter().filter(|c| c.number > w.latest && c.number <= l).count();
@@ -677,7 +946,7 @@ mod tests {
     }
 
     fn work() -> Work {
-        Work { id: 1, title: "Junk to King".into(), manga_id: 1, source: "MangaDex".into(), followed_at: 0, fails: 0, checked_at: 0, compared_at: 0, latest: 54.0, updated_at: 0, note: None, bell: false }
+        Work { id: 1, title: "Junk to King".into(), manga_id: 1, source: "MangaDex".into(), followed_at: 0, fails: 0, checked_at: 0, compared_at: 0, latest: 54.0, updated_at: 0, note: None, bell: false, shelf: None }
     }
 
     #[test]

@@ -57,6 +57,44 @@ fn pick(v: &Value, title: &str) -> Vec<String> {
     Vec::new()
 }
 
+fn post(token: Option<&str>, body: &Value) -> Result<Value, String> {
+    let config = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(20))).build();
+    let agent = ureq::Agent::new_with_config(config);
+    let mut req = agent.post("https://graphql.anilist.co").header("content-type", "application/json").header("accept", "application/json");
+    if let Some(t) = token {
+        req = req.header("authorization", &format!("Bearer {t}"));
+    }
+    let mut resp = req.send(&body.to_string()).map_err(|e| format!("anilist: {e}"))?;
+    let text = resp.body_mut().read_to_string().map_err(|e| format!("anilist: {e}"))?;
+    let v: Value = serde_json::from_str(&text).map_err(|e| format!("anilist: {e}"))?;
+    if let Some(e) = v["errors"].as_array().and_then(|a| a.first()) {
+        return Err(format!("anilist: {}", e["message"].as_str().unwrap_or("refused")));
+    }
+    Ok(v)
+}
+
+/// AniList's id for the work it knows as `title` (the entry that names it), if any.
+pub fn media_id(title: &str) -> Result<Option<i64>, String> {
+    const Q: &str = "query($s:String){ Page(perPage:5){ media(search:$s,type:MANGA){ id title{romaji english} synonyms } } }";
+    let v = post(None, &json!({ "query": Q, "variables": { "s": title } }))?;
+    for m in v["data"]["Page"]["media"].as_array().into_iter().flatten() {
+        let mut names: Vec<&str> = [&m["title"]["english"], &m["title"]["romaji"]].iter().filter_map(|t| t.as_str()).collect();
+        names.extend(m["synonyms"].as_array().into_iter().flatten().filter_map(|s| s.as_str()));
+        if names.iter().any(|n| leaf_proto::same_work(n, title)) {
+            return Ok(m["id"].as_i64());
+        }
+    }
+    Ok(None)
+}
+
+/// Your progress on AniList: chapters read, and Completed when the series is finished and read
+/// to its end, else Current.
+pub fn save_progress(token: &str, media: i64, progress: u32, done: bool) -> Result<(), String> {
+    const M: &str = "mutation($m:Int,$p:Int,$s:MediaListStatus){ SaveMediaListEntry(mediaId:$m, progress:$p, status:$s){ id } }";
+    post(Some(token), &json!({ "query": M, "variables": { "m": media, "p": progress, "s": if done { "COMPLETED" } else { "CURRENT" } } }))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

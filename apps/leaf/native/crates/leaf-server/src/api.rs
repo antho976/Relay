@@ -17,12 +17,20 @@
 //! | `GET /v1/events` | `[Event]`, newest first; `?since=<ms>` the ones after, oldest first |
 //! | `POST /v1/series/{id}/bell` [`Bell`] | turns its new-chapter notices on or off |
 //! | `POST /v1/series/{id}/read` [`ReadBefore`] | marks every chapter below a number read |
+//! | `GET /v1/updates?days=14` | `[Update]`, chapters that arrived, newest first |
+//! | `POST /v1/chapters/{id}/read` [`ChapterRead`] | marks that chapter number read or unread |
+//! | `POST /v1/series/{id}/shelf` [`ShelfSet`] | puts it on a shelf |
+//! | `GET /v1/series/{id}/alternatives` | `[Alternative]`: other entries for the work |
+//! | `POST /v1/series/{id}/repin` [`Repin`] | reads it from another entry; answers [`Series`] |
+//! | `GET /v1/health` | `[SourceHealth]` |
+//! | `GET` / `POST /v1/backup` | the latest nightly backup / one made now (JSON) |
+//! | `POST /v1/settings/anilist` [`AnilistToken`] | sets or removes the AniList token |
 //! | `POST` / `DELETE /v1/chapters/{id}/download` | downloads a chapter on the server, or removes it |
 
 use std::io::Read;
 use std::sync::Arc;
 
-use leaf_proto::{Bell, Follow, Pages, Progress, ReadBefore, Status};
+use leaf_proto::{AnilistToken, Bell, ChapterRead, Follow, Pages, Progress, ReadBefore, Repin, ShelfSet, Status};
 use serde::Serialize;
 use tiny_http::{Header, Method, Request, Response};
 
@@ -128,13 +136,50 @@ impl Api {
             (Method::Get, ["v1", "status"]) => {
                 let sources = ctx.suwa.sources(&ctx.lang).map(|v| v.into_iter().map(|s| s.name).collect()).unwrap_or_default();
                 let series = ctx.store.lock().map(|s| s.works().len() as u32).unwrap_or(0);
-                Ok(json(&Status { server: env!("CARGO_PKG_VERSION").into(), suwayomi: ctx.suwa.version().ok(), sources, series }))
+                Ok(json(&Status { server: env!("CARGO_PKG_VERSION").into(), suwayomi: ctx.suwa.version().ok(), sources, series, anilist: ctx.anilist_on() }))
             }
             (Method::Get, ["v1", "library"]) => Ok(json(&ctx.library())),
             (Method::Get, ["v1", "events"]) => Ok(json(&match query_param(url, "since").and_then(|v| v.parse::<i64>().ok()) {
                 Some(since) => ctx.store.lock().map(|s| s.events_since(since)).unwrap_or_default(),
                 None => ctx.store.lock().map(|s| s.events(100)).unwrap_or_default(),
             })),
+            (Method::Get, ["v1", "updates"]) => {
+                let days = query_param(url, "days").and_then(|v| v.parse::<i64>().ok()).unwrap_or(14);
+                Ok(json(&ctx.updates(days)))
+            }
+            (Method::Get, ["v1", "health"]) => Ok(json(&ctx.health())),
+            (Method::Post, ["v1", "chapters", _, "read"]) => {
+                let Some(c) = id(2) else { return fail(400, "bad id") };
+                serde_json::from_str::<ChapterRead>(body).map_err(|e| format!("read: {e}")).and_then(|r| ctx.mark_chapter(c, r.read)).map(|_| json(&serde_json::json!({ "ok": true })))
+            }
+            (Method::Post, ["v1", "series", _, "shelf"]) => {
+                let Some(i) = id(2) else { return fail(400, "bad id") };
+                serde_json::from_str::<ShelfSet>(body).map_err(|e| format!("shelf: {e}")).and_then(|s| ctx.set_shelf(i, s.shelf.as_deref())).map(|_| json(&serde_json::json!({ "ok": true })))
+            }
+            (Method::Get, ["v1", "series", _, "alternatives"]) => id(2).ok_or("bad id".to_string()).and_then(|i| ctx.alternatives(i)).map(|a| json(&a)),
+            (Method::Post, ["v1", "series", _, "repin"]) => {
+                let Some(i) = id(2) else { return fail(400, "bad id") };
+                serde_json::from_str::<Repin>(body).map_err(|e| format!("repin: {e}")).and_then(|r| ctx.repin(i, r.manga_id)).map(|s| json(&s))
+            }
+            (Method::Get, ["v1", "backup"]) | (Method::Post, ["v1", "backup"]) => {
+                let path = if matches!(method, Method::Post) { ctx.backup_now().map(Some) } else { Ok(ctx.latest_backup()) };
+                match path {
+                    Ok(Some(p)) => std::fs::read(&p).map_err(|e| e.to_string()).map(|bytes| {
+                        let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "leaf-backup.json".into());
+                        Response::from_data(bytes)
+                            .with_header(header("content-type", "application/json"))
+                            .with_header(header("content-disposition", &format!("attachment; filename=\"{name}\"")))
+                    }),
+                    Ok(None) => Err("no backup yet".to_string()),
+                    Err(e) => Err(e),
+                }
+            }
+            (Method::Post, ["v1", "settings", "anilist"]) => serde_json::from_str::<AnilistToken>(body)
+                .map_err(|e| format!("anilist: {e}"))
+                .map(|t| {
+                    ctx.set_anilist(t.token.as_deref());
+                    json(&serde_json::json!({ "ok": true, "anilist": ctx.anilist_on() }))
+                }),
             (Method::Post, ["v1", "series", _, "bell"]) => {
                 let Some(i) = id(2) else { return fail(400, "bad id") };
                 serde_json::from_str::<Bell>(body).map_err(|e| format!("bell: {e}")).and_then(|b| ctx.set_bell(i, b.on)).map(|_| json(&serde_json::json!({ "ok": true })))

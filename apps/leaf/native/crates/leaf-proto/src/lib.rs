@@ -38,6 +38,10 @@ pub struct Series {
     /// When a chapter of it was last read (ms since the epoch), 0 if never.
     #[serde(default)]
     pub last_read_at: i64,
+    /// The shelf you put it on: "reading", "plan", "hold", "dropped" or "done"; None when you
+    /// haven't chosen (the app shows Reading once started, Plan to read before).
+    #[serde(default)]
+    pub shelf: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -141,6 +145,9 @@ pub struct Status {
     pub suwayomi: Option<String>,
     pub sources: Vec<String>,
     pub series: u32,
+    /// AniList sync is set up (a token is stored on the server).
+    #[serde(default)]
+    pub anilist: bool,
 }
 
 /// A title as compared across sources: lower case, letters and digits only, words single-spaced,
@@ -333,4 +340,69 @@ mod tests {
         let ids: Vec<i64> = pick_copies(&all).iter().map(|c| c.id).collect();
         assert_eq!(ids, vec![2, 4, 5, 6]);
     }
+}
+
+
+/// A chapter that arrived for a series in your space (`GET /v1/updates`), newest first.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Update {
+    pub series: i64,
+    pub title: String,
+    pub chapter: i64,
+    pub number: f64,
+    pub name: String,
+    /// When the server first saw it (ms since the epoch).
+    pub at: i64,
+    pub read: bool,
+    pub bell: bool,
+}
+
+/// `POST /v1/chapters/{id}/read`: read or unread (every copy of that chapter number).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct ChapterRead {
+    pub read: bool,
+}
+
+/// `POST /v1/series/{id}/shelf`; None clears the choice.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ShelfSet {
+    pub shelf: Option<String>,
+}
+
+/// `POST /v1/series/{id}/repin`: read this series from this Suwayomi manga instead (a wrong
+/// match fixed by hand); your place is carried across by chapter number.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct Repin {
+    pub manga_id: i64,
+}
+
+/// One offer for "Wrong series?" (`GET /v1/series/{id}/alternatives`): a work found on a source,
+/// with how many chapters it has, so the right one is easy to tell.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Alternative {
+    pub manga_id: i64,
+    pub title: String,
+    pub source: String,
+    pub chapters: u32,
+    pub latest: Option<f64>,
+    /// It is the series' current copy.
+    pub current: bool,
+}
+
+/// A source's health (`GET /v1/health`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SourceHealth {
+    pub name: String,
+    pub ok: bool,
+    /// When it last answered (ms since the epoch), 0 if never.
+    pub last_ok_at: i64,
+    pub last_error: Option<String>,
+    /// The last error was a Cloudflare check that could not be passed.
+    pub blocked: bool,
+}
+
+/// `POST /v1/settings/anilist`: an AniList access token (None removes it).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct AnilistToken {
+    pub token: Option<String>,
 }

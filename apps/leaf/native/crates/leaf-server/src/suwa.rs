@@ -95,7 +95,7 @@ impl Suwa {
     pub fn ensure_settings(&self, flaresolverr: Option<&str>) -> Result<(), String> {
         let conv: Vec<Value> = TO_WEBP.iter().map(|m| json!({ "mimeType": m, "target": "image/webp" })).collect();
         self.gql(
-            "mutation($c:[SettingsDownloadConversionTypeInput!]){ setSettings(input:{settings:{downloadConversions:$c, serveConversions:$c, downloadAsCbz:false, autoDownloadNewChapters:false}}){ clientMutationId } }",
+            "mutation($c:[SettingsDownloadConversionTypeInput!]){ setSettings(input:{settings:{downloadConversions:$c, serveConversions:$c, downloadAsCbz:false, autoDownloadNewChapters:false, backupInterval:1, backupTTL:14}}){ clientMutationId } }",
             json!({ "c": conv }),
         )?;
         if let Some(url) = flaresolverr {

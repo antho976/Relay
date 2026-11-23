@@ -71,6 +71,7 @@ fn main() {
         prefs: var("LEAF_SOURCES", "Asura Scans,MangaDex").split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
         ahead: var("LEAF_AHEAD", "1").parse().unwrap_or(1),
         pages: Mutex::new(HashMap::new()),
+        data: data.clone(),
     });
     let tick = Duration::from_secs(var("LEAF_TICK_SECS", "3600").parse().unwrap_or(3600).max(60));
 
