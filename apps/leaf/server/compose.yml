@@ -6,12 +6,16 @@
 # (deploy/Caddyfile in antho976/Discord-bot-V2), behind the Cloudflare Tunnel already there.
 #
 #   cd ~/apps/leaf/server && cp env.example .env   # then set LEAF_TOKEN; chmod 600 .env
+#   mkdir -p data/leaf   # yours, not root's: leaf-server runs as uid 1000 and writes leaf.db there
 #   docker compose up -d --build
+#
+# The images are pinned (what `stable` and `latest` were on 2026-11-22): an upgrade is a change
+# made here and tried, not one pulled in by a restart.
 name: leaf
 
 services:
   suwayomi:
-    image: ghcr.io/suwayomi/suwayomi-server:stable
+    image: ghcr.io/suwayomi/suwayomi-server:v2.4.2373-stable
     restart: unless-stopped
     environment:
       # Suwayomi ships no sources: the community list Mihon uses.
@@ -23,7 +27,7 @@ services:
 
   # Passes the Cloudflare checks some sources put in front of their pages (Suwayomi asks it).
   flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
+    image: ghcr.io/flaresolverr/flaresolverr:v3.5.2
     restart: unless-stopped
 
   leaf-server:

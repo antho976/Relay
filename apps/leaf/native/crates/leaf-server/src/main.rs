@@ -35,10 +35,19 @@ fn var(name: &str, default: &str) -> String {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty()).unwrap_or_else(|| default.to_string())
 }
 
+/// Whether `bind` ("127.0.0.1:4580", "[::1]:4580", "localhost:4580") listens only on this machine.
+fn is_loopback(bind: &str) -> bool {
+    if let Ok(a) = bind.parse::<std::net::SocketAddr>() {
+        return a.ip().is_loopback();
+    }
+    bind.rsplit_once(':').is_some_and(|(host, _)| host.eq_ignore_ascii_case("localhost"))
+}
+
 fn main() {
     let bind = var("LEAF_BIND", "127.0.0.1:4580");
-    let token = std::env::var("LEAF_TOKEN").ok().filter(|t| !t.trim().is_empty());
-    let loopback = bind.starts_with("127.") || bind.starts_with("localhost") || bind.starts_with("[::1]");
+    // Trimmed as the phone's is: a token pasted with a newline into .env still matches.
+    let token = std::env::var("LEAF_TOKEN").ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    let loopback = is_loopback(&bind);
     if token.is_none() && !loopback {
         eprintln!("leaf-server: LEAF_TOKEN must be set to listen on {bind}");
         std::process::exit(2);
@@ -51,7 +60,7 @@ fn main() {
     let store = match store::Store::open(&data.join("leaf.db")) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("leaf-server: {e}");
+            eprintln!("leaf-server: {e} (is {} writable by this user? In Docker, the host folder must be uid 1000's)", data.display());
             std::process::exit(2);
         }
     };
@@ -74,6 +83,7 @@ fn main() {
     std::thread::spawn(move || {
         let mut ready = false;
         let mut extensions_in = false;
+        let mut next_pass = std::time::Instant::now();
         loop {
             if !ready {
                 match pilot.suwa.version().and_then(|v| pilot.suwa.ensure_settings(flaresolverr.as_deref()).map(|_| v)) {
@@ -92,25 +102,35 @@ fn main() {
             // network yet) is tried again a minute later rather than an hour.
             if !extensions_in {
                 match pilot.suwa.ensure_extensions(&pilot.prefs, &pilot.lang, &repo) {
-                    Ok(added) => {
+                    Ok((added, missing)) => {
                         if !added.is_empty() {
                             log(&format!("installed {}", added.join(", ")));
+                        }
+                        // A name the list lacks is a setting to fix, not something a retry mends.
+                        if !missing.is_empty() {
+                            log(&format!("LEAF_SOURCES: no extension called {} in the extension list", missing.join(", ")));
                         }
                         extensions_in = true;
                     }
                     Err(e) => log(&format!("extensions: {e}")),
                 }
             }
-            pilot.tick();
-            if let Some(root) = &downloads {
-                let st = &pilot.store;
-                let lock = || st.lock().unwrap_or_else(|p| p.into_inner());
-                let s = squeeze::pass(root, quality, &mut |k| lock().get(&format!("sq:{k}")).is_some(), &mut |k| lock().set(&format!("sq:{k}"), "1"));
-                if s.pages > 0 {
-                    log(&format!("pages re-encoded: {} ({} MB to {} MB)", s.pages, s.before >> 20, s.after >> 20));
+            // The pass keeps its own pace while the extensions are retried every minute: a source
+            // down for a while must not count three failures in three minutes.
+            if std::time::Instant::now() >= next_pass {
+                pilot.tick();
+                if let Some(root) = &downloads {
+                    let st = &pilot.store;
+                    let lock = || st.lock().unwrap_or_else(|p| p.into_inner());
+                    let s = squeeze::pass(root, quality, &mut |k| lock().get(&format!("sq:{k}")).is_some(), &mut |k| lock().set(&format!("sq:{k}"), "1"));
+                    if s.pages > 0 {
+                        log(&format!("pages re-encoded: {} ({} MB to {} MB)", s.pages, s.before >> 20, s.after >> 20));
+                    }
                 }
+                next_pass = std::time::Instant::now() + tick;
             }
-            std::thread::sleep(if extensions_in { tick } else { Duration::from_secs(60) });
+            let wait = next_pass.saturating_duration_since(std::time::Instant::now());
+            std::thread::sleep(if extensions_in { wait } else { wait.min(Duration::from_secs(60)) });
         }
     });
 
@@ -136,5 +156,20 @@ fn main() {
         .collect();
     for w in workers {
         let _ = w.join();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_loopback;
+
+    #[test]
+    fn only_this_machine_counts_as_loopback() {
+        assert!(is_loopback("127.0.0.1:4580"));
+        assert!(is_loopback("[::1]:4580"));
+        assert!(is_loopback("localhost:4580"));
+        assert!(!is_loopback("0.0.0.0:4580"));
+        assert!(!is_loopback("127.example.com:4580"), "a name that starts like an address is not one");
+        assert!(!is_loopback("localhost.example.com:4580"));
     }
 }

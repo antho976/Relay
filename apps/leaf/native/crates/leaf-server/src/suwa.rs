@@ -191,10 +191,11 @@ impl Suwa {
     }
 
     /// Installs the extensions named (as the extension lists name them: "MangaDex", "Asura
-    /// Scans") that are not installed yet, in `lang` or for all languages; answers those installed.
-    pub fn ensure_extensions(&self, names: &[String], lang: &str, repo: &str) -> Result<Vec<String>, String> {
+    /// Scans") that are not installed yet, in `lang` or for all languages; answers those installed
+    /// and those the list has no extension for. A name the list lacks does not stop the others.
+    pub fn ensure_extensions(&self, names: &[String], lang: &str, repo: &str) -> Result<(Vec<String>, Vec<String>), String> {
         if names.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         const LIST: &str = "mutation{ fetchExtensions(input:{}){ extensions { pkgName name lang isInstalled } } }";
         let mut d = self.gql(LIST, json!({}))?;
@@ -204,19 +205,26 @@ impl Suwa {
             self.gql("mutation($u:String!){ addExtensionStore(input:{indexUrl:$u}){ clientMutationId } }", json!({ "u": repo }))?;
             d = self.gql(LIST, json!({}))?;
         }
-        let mut done = Vec::new();
+        let (mut done, mut missing) = (Vec::new(), Vec::new());
         for want in names {
             let found = d["fetchExtensions"]["extensions"].as_array().into_iter().flatten().find(|e| {
                 e["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(want)) && matches!(e["lang"].as_str(), Some(l) if l == lang || l == "all")
             });
-            let Some(e) = found else { return Err(format!("no extension called {want} in the extension list")) };
+            let Some(e) = found else {
+                missing.push(want.clone());
+                continue;
+            };
             if e["isInstalled"].as_bool() == Some(true) {
                 continue;
             }
             self.gql("mutation($id:String!){ updateExtension(input:{id:$id,patch:{install:true}}){ clientMutationId } }", json!({ "id": e["pkgName"] }))?;
             done.push(want.clone());
         }
-        Ok(done)
+        // An empty list is one that has not loaded yet (no network): asked again, not given up on.
+        if d["fetchExtensions"]["extensions"].as_array().is_none_or(|a| a.is_empty()) {
+            return Err("the extension list is empty".into());
+        }
+        Ok((done, missing))
     }
 
     pub fn delete_downloads(&self, chapter_ids: &[i64]) -> Result<(), String> {

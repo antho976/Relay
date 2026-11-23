@@ -21,11 +21,22 @@ const HOUR: i64 = 3_600_000;
 pub const CHECK_EVERY: i64 = 6 * HOUR;
 pub const COMPARE_EVERY: i64 = 24 * HOUR;
 pub const EXTENSIONS_EVERY: i64 = 24 * HOUR;
+/// The most copies of one work a follow reads.
+const MAX_FOLLOW_COPIES: usize = 24;
 /// Failed refreshes in a row before another source is looked for at once.
 pub const FAILS_BEFORE_MOVING: u32 = 3;
 /// Downloaded chapters this many behind the last one read are removed from the server: you're
 /// unlikely to go back that far, and if you do, opening one fetches it again.
 pub const KEEP_BEHIND: f64 = 20.0;
+/// A series moves for more chapters only when its own source has fewer than this many left to
+/// read in a row: one chapter behind is filled from the linked copies, not worth a move.
+pub const NEED_LEFT: u32 = 3;
+/// And only when the other source has at least this many more: two sources that keep pace,
+/// taking turns to post first, never trade the series back and forth.
+pub const CLEAR_GAIN: u32 = 3;
+/// How far a chapter number may stand from every other one and still count as the latest: a
+/// source's misread "chapter 20241105" or a teaser numbered 1000 is not a new chapter.
+const LONE_NUMBER: f64 = 50.0;
 
 pub struct Ctx {
     pub suwa: Suwa,
@@ -101,15 +112,16 @@ pub enum Move {
 
 /// Whether to leave the current source. Only for a clear gain and only when it matters, so the
 /// translation you are reading is kept as long as it lasts: the current source has fewer than
-/// `need` chapters left to read in a row and another has more, or the current one stopped
-/// answering and another has at least as many.
+/// `need` chapters left to read in a row and another has at least [`CLEAR_GAIN`] more, or the
+/// current one stopped answering and another has at least as many, and reaches as far.
 pub fn decide(cur: &Offer, fails: u32, alts: &[Offer], read_upto: Option<f64>, prefs: &[String], need: u32) -> Move {
     let Some(alt) = best(alts, read_upto, prefs) else { return Move::Stay };
     let (mine, theirs) = (run_after(&cur.numbers, read_upto), run_after(&alt.numbers, read_upto));
-    if fails >= FAILS_BEFORE_MOVING && theirs >= mine {
+    // Both at nothing to read (you are caught up) is no reason to take a source that is behind.
+    if fails >= FAILS_BEFORE_MOVING && theirs >= mine && (theirs > 0 || alt.latest() >= cur.latest()) {
         return Move::Switch { to: alt.clone(), why: format!("{} stopped answering", cur.source) };
     }
-    if mine < need && theirs > mine {
+    if mine < need && theirs >= mine + CLEAR_GAIN {
         let more = theirs - mine;
         let why = if mine == 0 {
             format!("{} has the next {} chapter{}", alt.source, theirs, if theirs == 1 { "" } else { "s" })
@@ -119,6 +131,16 @@ pub fn decide(cur: &Offer, fails: u32, alts: &[Offer], read_upto: Option<f64>, p
         return Move::Switch { to: alt.clone(), why };
     }
     Move::Stay
+}
+
+/// The latest chapter worth announcing: the highest number that has another within
+/// [`LONE_NUMBER`] of it (the highest of all when every number stands alone).
+pub fn plausible_latest(numbers: &[f64]) -> Option<f64> {
+    let mut n: Vec<f64> = numbers.iter().copied().filter(|n| n.is_finite() && *n >= 0.0).collect();
+    n.sort_by(f64::total_cmp);
+    n.dedup();
+    let near = |i: usize| (i > 0 && n[i] - n[i - 1] <= LONE_NUMBER) || (i + 1 < n.len() && n[i + 1] - n[i] <= LONE_NUMBER);
+    (0..n.len()).rev().find(|&i| near(i)).map(|i| n[i]).or(n.last().copied())
 }
 
 /// The series as the phone shows it: one copy per chapter number, read when any copy is read.
@@ -280,9 +302,12 @@ impl Ctx {
 
     /// Follows a work found by search: each source's copy is read, the best one pinned.
     pub fn follow(&self, title: &str, manga_ids: &[i64]) -> Result<Series, String> {
-        if let Some(w) = manga_ids.iter().find_map(|id| self.store().work_of_manga(*id)) {
+        // A copy already linked to a work is that work, not a second one.
+        if let Some(w) = manga_ids.iter().find_map(|id| self.store().work_of_any(*id)) {
             return self.detail(w.id).map(|d| d.series);
         }
+        // One source asked per thread: as many as there are sources, not as many as were sent.
+        let manga_ids = &manga_ids[..manga_ids.len().min(MAX_FOLLOW_COPIES)];
         let mangas: Vec<Manga> = std::thread::scope(|s| {
             let hs: Vec<_> = manga_ids.iter().map(|id| s.spawn(move || self.suwa.refresh(*id))).collect();
             hs.into_iter()
@@ -295,7 +320,8 @@ impl Ctx {
         let m = mangas.iter().find(|m| m.id == pick.manga_id).expect("the offer's manga");
         self.suwa.set_in_library(m.id, true)?;
         let now = now_ms();
-        let id = self.store().add_work(if m.title.is_empty() { title } else { &m.title }, m.id, &m.source_name, pick.latest(), now)?;
+        let latest = plausible_latest(&pick.numbers).unwrap_or(-1.0);
+        let id = self.store().add_work(if m.title.is_empty() { title } else { &m.title }, m.id, &m.source_name, latest, now)?;
         let others: Vec<String> = offers.iter().filter(|o| o.manga_id != m.id).map(|o| format!("{} ({})", o.source, run_after(&o.numbers, None))).collect();
         let words = if others.is_empty() {
             format!("Following {} on {}", m.title, m.source_name)
@@ -496,10 +522,11 @@ impl Ctx {
             }
         };
         let d = self.detail_now(w, &m);
-        let latest = d.series.latest;
+        let numbers: Vec<f64> = d.chapters.iter().map(|c| c.number).collect();
+        let latest = plausible_latest(&numbers);
         // Announced only for a series with its bell on.
         if ok && w.bell && let Some(l) = latest.filter(|l| *l > w.latest && w.latest >= 0.0) {
-            let n = d.chapters.iter().filter(|c| c.number > w.latest).count();
+            let n = d.chapters.iter().filter(|c| c.number > w.latest && c.number <= l).count();
             self.store().event(now, Some(w.id), "new", &format!("{n} new chapter{} of {}, up to {}", if n == 1 { "" } else { "s" }, w.title, fmt_num(l)));
         }
         self.store().checked(w.id, ok, latest, now);
@@ -546,11 +573,20 @@ impl Ctx {
                 .collect();
             hs.into_iter().filter_map(|h| h.join().ok().flatten()).collect()
         });
+        let linked = self.store().links(w.id);
         for a in &alts {
             self.store().add_link(w.id, a.id, &a.source_name);
         }
+        // Chapters a newly linked copy fills in were there all along: not news for the bell.
+        if alts.iter().any(|a| !linked.contains(&a.id)) {
+            let filled = self.detail_now(w, m);
+            let numbers: Vec<f64> = filled.chapters.iter().map(|c| c.number).collect();
+            if let Some(l) = plausible_latest(&numbers) {
+                self.store().raise_latest(w.id, l);
+            }
+        }
         let offers: Vec<Offer> = alts.iter().map(Offer::of).collect();
-        let Move::Switch { to, why } = decide(&Offer::of(m), fails, &offers, d.series.read_upto, &self.prefs, self.ahead as u32) else { return false };
+        let Move::Switch { to, why } = decide(&Offer::of(m), fails, &offers, d.series.read_upto, &self.prefs, NEED_LEFT) else { return false };
         let Some(new) = alts.iter().find(|a| a.id == to.manga_id) else { return false };
         if let Err(e) = self.switch(w, d, new, now) {
             log(&format!("move {} to {}: {e}", w.title, new.source_name));
@@ -562,11 +598,16 @@ impl Ctx {
 
     fn switch(&self, w: &Work, d: &SeriesDetail, new: &Manga, now: i64) -> Result<(), String> {
         self.suwa.set_in_library(new.id, true)?;
-        if let Some(upto) = d.series.read_upto {
-            let read: Vec<i64> = new.chapters.iter().filter(|c| c.number <= upto && !c.read).map(|c| c.id).collect();
-            self.suwa.mark(&read, Some(true), None)?;
+        let (read, part) = carried(d, new);
+        self.suwa.mark(&read, Some(true), None)?;
+        for (id, page) in part {
+            self.suwa.mark(&[id], None, Some(page))?;
         }
-        self.store().move_work(w.id, new.id, &new.source_name, now)?;
+        // Unfollowed meanwhile: the new copy goes back out of the library.
+        if let Err(e) = self.store().move_work(w.id, new.id, &new.source_name, now) {
+            let _ = self.suwa.set_in_library(new.id, false);
+            return Err(e);
+        }
         let _ = self.suwa.set_in_library(w.manga_id, false);
         // The old source stays linked: it may still fill a chapter the new one lacks.
         self.store().remove_link(new.id);
@@ -579,6 +620,19 @@ impl Ctx {
         }
         Ok(())
     }
+}
+
+/// What a move carries to the new source: the chapters read there by number (exactly those, not
+/// all up to the furthest one read: a peek at the latest chapter must not mark the ones between
+/// read), and the page of each chapter begun but not finished.
+pub fn carried(d: &SeriesDetail, new: &Manga) -> (Vec<i64>, Vec<(i64, u32)>) {
+    let read: Vec<i64> = new.chapters.iter().filter(|c| !c.read && d.chapters.iter().any(|x| x.read && x.number == c.number)).map(|c| c.id).collect();
+    let part = new
+        .chapters
+        .iter()
+        .filter_map(|c| d.chapters.iter().find(|x| !x.read && x.last_page > 0 && x.number == c.number).filter(|_| c.last_page == 0).map(|x| (c.id, x.last_page)))
+        .collect();
+    (read, part)
 }
 
 pub fn fmt_num(n: f64) -> String {
@@ -690,5 +744,59 @@ mod tests {
         assert_eq!(decide(&dex, 3, &[], Some(22.0), &prefs(), 5), Move::Stay);
         let behind = offer(4, "Behind", 1..=5);
         assert_eq!(decide(&dex, 3, &[behind], Some(10.0), &prefs(), 5), Move::Stay, "not for a source with less to read");
+    }
+
+    #[test]
+    fn sources_that_keep_pace_never_trade_places() {
+        // Caught up at 101 on Asura; Flame posted 102 first. The linked copy fills 102: stay.
+        let asura = offer(1, "Asura Scans", 1..=101);
+        let flame = offer(2, "Flame Comics", 1..=102);
+        assert_eq!(decide(&asura, 0, std::slice::from_ref(&flame), Some(101.0), &prefs(), NEED_LEFT), Move::Stay);
+        // Next week, the other way round: still nothing to gain.
+        let flame = offer(2, "Flame Comics", 1..=103);
+        let asura = offer(1, "Asura Scans", 1..=104);
+        assert_eq!(decide(&flame, 0, std::slice::from_ref(&asura), Some(103.0), &prefs(), NEED_LEFT), Move::Stay);
+        // Asura has stopped at 101 while Flame went on to 110: that is a source run out.
+        let flame = offer(2, "Flame Comics", 1..=110);
+        let asura = offer(1, "Asura Scans", 1..=101);
+        assert!(matches!(decide(&asura, 0, &[flame], Some(101.0), &prefs(), NEED_LEFT), Move::Switch { .. }));
+    }
+
+    #[test]
+    fn a_caught_up_reader_is_not_moved_to_a_source_far_behind() {
+        let dex = offer(1, "MangaDex", 1..=100);
+        let behind = offer(4, "Behind", 1..=5);
+        assert_eq!(decide(&dex, 3, std::slice::from_ref(&behind), Some(100.0), &prefs(), NEED_LEFT), Move::Stay);
+        let level = offer(5, "Level", 1..=100);
+        assert!(matches!(decide(&dex, 3, &[level], Some(100.0), &prefs(), NEED_LEFT), Move::Switch { .. }), "one as far along is fine");
+    }
+
+    #[test]
+    fn a_move_carries_what_was_read_not_all_up_to_the_furthest() {
+        let mut m = manga(1, "MangaDex", &(1..=54).map(f64::from).collect::<Vec<_>>(), &[]);
+        for c in m.chapters.iter_mut() {
+            c.read = c.number <= 10.0 || c.number == 54.0;
+            if c.number == 11.0 {
+                c.last_page = 7;
+            }
+        }
+        let d = detail_of(&work(), &m, &[], &prefs());
+        let new = manga(2, "Asura Scans", &(1..=54).map(f64::from).collect::<Vec<_>>(), &[]);
+        let (read, part) = carried(&d, &new);
+        let numbers: Vec<f64> = read.iter().map(|id| new.chapters.iter().find(|c| c.id == *id).unwrap().number).collect();
+        assert_eq!(numbers, (1..=10).map(f64::from).chain([54.0]).collect::<Vec<_>>(), "11 to 53 stay unread");
+        assert_eq!(part, vec![(2000 + 10, 7)], "chapter 11's page comes along");
+    }
+
+    #[test]
+    fn a_lone_number_is_not_the_latest() {
+        let mut n: Vec<f64> = (1..=150).map(f64::from).collect();
+        assert_eq!(plausible_latest(&n), Some(150.0));
+        n.push(20241105.0);
+        n.push(1000.0);
+        assert_eq!(plausible_latest(&n), Some(150.0), "a misread number and a teaser are left out");
+        assert_eq!(plausible_latest(&[200.0]), Some(200.0), "a source with one chapter still has a latest");
+        assert_eq!(plausible_latest(&(300..=350).chain(1..=10).map(f64::from).collect::<Vec<_>>()), Some(350.0));
+        assert_eq!(plausible_latest(&[]), None);
     }
 }
