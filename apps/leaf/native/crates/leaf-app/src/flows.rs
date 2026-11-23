@@ -2161,3 +2161,33 @@ fn a_newer_app_is_asked_for_on_coming_back_at_most_every_quarter_hour() {
     assert!(app.update_checked_ms > 0);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn cancelling_downloads_empties_the_line_and_leaves_nothing_half_saved() {
+    let dir = std::env::temp_dir().join(format!("leaf-flows-cancel-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let chapters = comic(1, &[3, 2, 2]).chapters;
+    // No server: everything waits in line.
+    let saver = crate::offline::Saver::with_timing(dir.clone(), crate::offline::quick());
+    assert!(eventually(5.0, || saver.scanned()));
+    assert_eq!(saver.add(1, "Series 1", &chapters), 3);
+    // A half-saved chapter has a page on disk.
+    let part = crate::offline::chapter_dir(&dir, 1002);
+    std::fs::create_dir_all(&part).unwrap();
+    std::fs::write(part.join("0"), png()).unwrap();
+    // One stopped from its row.
+    saver.delete(&[1001]);
+    assert_eq!(saver.state(1001), crate::offline::Kept::None);
+    assert_eq!(saver.state(1002), crate::offline::Kept::Waiting);
+    // The rest from Downloads' Cancel all.
+    assert_eq!(saver.cancel_all(), 2);
+    assert_eq!((saver.state(1002), saver.state(1003)), (crate::offline::Kept::None, crate::offline::Kept::None));
+    assert_eq!(saver.running().waiting, 0);
+    assert!(eventually(5.0, || !part.exists()), "the half-saved folder is gone");
+    // Given a server now, nothing is fetched.
+    let fake = fake::Fake::start();
+    saver.set_server(Some(fake.server()));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(fake.state.lock().unwrap().hits.iter().all(|h| !h.contains("/pages/")), "nothing fetched after cancelling");
+    let _ = std::fs::remove_dir_all(dir);
+}

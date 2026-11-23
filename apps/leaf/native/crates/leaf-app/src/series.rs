@@ -127,6 +127,8 @@ enum Act {
     Open(usize, u32),
     /// Download a chapter to this phone (or try it again).
     Download(i64),
+    /// A tap on a chapter waiting or saving: it stops.
+    Cancel(i64),
     Bell(bool),
     /// A tap while selecting (a long press sweeps, [`crate::sweep`]).
     Toggle(i64),
@@ -416,6 +418,8 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                                     cx.c.circle(bx, by, 10.0, t::BG.a(0.75));
                                     let turn = (now as f64 / 1e9 * 0.9).fract() as f32;
                                     cx.c.arc(bx, by, 6.0, 1.8, turn, turn + 0.7, t::INK2, false);
+                                    // A tap on the picture stops it: the cross says so.
+                                    cx.c.icon("close", bx, by, 7.0, t::INK2);
                                 }
                                 crate::offline::Kept::Failed(_) => {
                                     cx.c.circle(bx, by, 10.0, t::BG.a(0.75));
@@ -505,8 +509,11 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                                 let can_get = matches!(kept, crate::offline::Kept::None | crate::offline::Kept::Failed(_));
                                 let retry_tap = matches!(kept, crate::offline::Kept::Failed(_)) && cx.tap(tx, ly - 8.0, tw, line_t.lh() + 16.0);
                                 let pic_tap = can_get && cx.tap(px - 6.0, py - 6.0, PIC.0 + 12.0, PIC.1 + 12.0);
+                                let busy_now = matches!(kept, crate::offline::Kept::Waiting | crate::offline::Kept::Saving(..));
                                 if pic_tap || retry_tap {
                                     act = Some(Act::Download(c.id));
+                                } else if busy_now && cx.tap(px - 6.0, py - 6.0, PIC.0 + 12.0, PIC.1 + 12.0) {
+                                    act = Some(Act::Cancel(c.id));
                                 } else if key_tap || cx.tap(0.0, y, WIDTH, h) {
                                     let page = if !c.read { logic::resume_page(c) } else { 0 };
                                     act = Some(Act::Open(i, page));
@@ -913,6 +920,10 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             if let Some(ch) = detail.as_ref().and_then(|d| d.chapters.iter().find(|k| k.id == c).cloned()) {
                 get_chapters(app, id, &[ch]);
             }
+        }
+        Some(Act::Cancel(c)) => {
+            app.saver.delete(&[c]);
+            app.toast("Download stopped");
         }
         // A preview's Follow adds it, its bell on.
         Some(Act::Bell(on)) if preview => {

@@ -128,6 +128,21 @@ enum Act {
     Shelve(i64),
 }
 
+/// "Cancel all" at the right of Downloads' saving line: its (height, width).
+fn cancel_key(cx: &mut kit::Ctx, y: f32, hit: &mut bool, off: bool) -> (f32, f32) {
+    let words = "Cancel all";
+    let tt = Text::new(12.5, t::INK).semi().right();
+    let w = cx.c.measure(words, tt);
+    if !off && cx.pressed(WIDTH - PAD - w - 12.0, y - 10.0, w + 24.0, 38.0) {
+        cx.c.rect(WIDTH - PAD - w - 8.0, y - 6.0, w + 16.0, 30.0, 8.0, t::WASH);
+    }
+    cx.c.text(words, WIDTH - PAD, y, tt);
+    if !off && cx.tap(WIDTH - PAD - w - 12.0, y - 10.0, w + 24.0, 38.0) {
+        *hit = true;
+    }
+    (tt.lh(), w)
+}
+
 /// A finger held on (x, y) since long enough to open a row's sheet: the row under it is asked
 /// with [`held_on`].
 fn held_on(held: Option<(f32, f32)>, y: f32, h: f32, dy: f32) -> bool {
@@ -193,6 +208,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let view_bottom = -cx.c.dy + cx.c.h + 140.0;
     let mut retry_updates = false;
     let mut retry_saves = false;
+    let mut cancel_saves = false;
     let mut start_select = false;
     let selecting = st.select.clone().filter(|_| tab == DOWNLOADS);
     let groups = if tab == DOWNLOADS { app.saver.groups() } else { Vec::new() };
@@ -544,9 +560,11 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 }
                 let turn = (now as f64 / 1e9 * 0.9).fract() as f32;
                 cx.c.arc(x0 + 7.0, y + 9.0, 6.0, 1.8, turn, turn + 0.7, t::ACCENT, false);
-                y += cx.c.para(&words, x0 + 22.0, y, w - 22.0, Text::new(12.5, t::INK2).line(1.4), 2) + 10.0;
+                let (kt, kw) = cancel_key(&mut cx, y, &mut cancel_saves, covered || selecting.is_some());
+                y += cx.c.para(&words, x0 + 22.0, y, w - 22.0 - kw - 16.0, Text::new(12.5, t::INK2).line(1.4), 2).max(kt) + 10.0;
             } else if running.waiting > 0 {
-                cx.c.text_fit(&format!("{} waiting to download", logic::chapters_words(running.waiting)), x0, y, w, Text::new(12.5, t::INK3));
+                let (_, kw) = cancel_key(&mut cx, y, &mut cancel_saves, covered || selecting.is_some());
+                cx.c.text_fit(&format!("{} waiting to download", logic::chapters_words(running.waiting)), x0, y, w - kw - 16.0, Text::new(12.5, t::INK3));
                 y += 26.0;
             }
             if running.failed > 0 {
@@ -822,6 +840,10 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     }
     if retry_saves {
         app.saver.retry(&[]);
+    }
+    if cancel_saves {
+        let n = app.saver.cancel_all();
+        app.toast(&format!("{} stopped", if n == 1 { "1 download".to_string() } else { format!("{n} downloads") }));
     }
     if let Some(s) = new_sort {
         app.set_following_sort(s);

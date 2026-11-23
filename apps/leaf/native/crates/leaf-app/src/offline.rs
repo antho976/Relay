@@ -262,6 +262,13 @@ impl Saver {
         (n, bytes)
     }
 
+    /// Stop every download not finished yet: the line emptied, half-saved folders removed (the
+    /// worker drops the chapter it is on at its next page). How many were stopped.
+    pub fn cancel_all(&self) -> usize {
+        let ids: Vec<i64> = self.sh.lock().queue.iter().map(|i| i.chapter.id).collect();
+        self.delete(&ids).0
+    }
+
     /// The line changed: kept on disk, the worker told.
     fn changed(&self) {
         persist(&self.sh);
