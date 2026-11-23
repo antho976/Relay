@@ -20,6 +20,10 @@ pub struct Server {
     /// "http://192.168.1.20:4580", as [`crate::logic::normalize_server`] makes it.
     pub base: String,
     pub token: Option<String>,
+    /// A second address for the same server (its Tailscale one), asked when `base` can't be
+    /// reached; none here falls back to the one built in ([`ALT_BASE`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt: Option<String>,
 }
 
 /// Why a request failed, in the words the app shows.
@@ -58,6 +62,30 @@ impl Fail {
     }
 }
 
+type Resp = ureq::http::Response<ureq::Body>;
+
+/// The server's second address, built in (`LEAF_ALT_BASE` at build time, e.g. its Tailscale
+/// address): asked when the first can't be reached. None in a build without one.
+pub const ALT_BASE: Option<&str> = option_env!("LEAF_ALT_BASE");
+/// How long the second address is asked first once it answered for the first.
+const ALT_STICK_MS: i64 = 10 * 60 * 1000;
+/// Until when (ms since the epoch) the second address is asked first.
+static PREFER_ALT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// The second address for this server, when there is one and it isn't this one.
+fn alt_for(s: &Server) -> Option<String> {
+    s.alt.as_deref().or(ALT_BASE).map(str::trim).filter(|a| !a.is_empty() && a.trim_end_matches('/') != s.base.trim_end_matches('/')).map(str::to_string)
+}
+
+/// A gateway's own "the server behind me didn't answer" (502–504, Cloudflare's 520–530).
+fn gateway(code: u16) -> bool {
+    matches!(code, 502..=504 | 520..=530)
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
 /// The HTTP client, shared by every worker.
 #[derive(Clone)]
 pub struct Client {
@@ -86,6 +114,28 @@ impl Client {
         format!("{}{path}", s.base.trim_end_matches('/'))
     }
 
+    /// Sends a request to the server's address, or to its second one ([`ALT_BASE`], over
+    /// Tailscale) when the first can't be reached (a network that blocks it): the one that
+    /// answered is asked first for the next [`ALT_STICK_MS`].
+    fn go(&self, s: &Server, path: &str, send: impl Fn(String) -> Result<Resp, ureq::Error>) -> Result<Resp, Fail> {
+        let Some(alt) = alt_for(s) else { return send(Client::url(s, path)).map_err(|_| Fail::Unreachable) };
+        let alt_first = PREFER_ALT.load(Ordering::Relaxed) > now_ms();
+        let bases = if alt_first { [alt.as_str(), s.base.as_str()] } else { [s.base.as_str(), alt.as_str()] };
+        for (k, base) in bases.into_iter().enumerate() {
+            match send(format!("{}{path}", base.trim_end_matches('/'))) {
+                // A gateway that answers for a server it can't reach is no answer either.
+                Ok(r) if k == 0 && gateway(r.status().as_u16()) => continue,
+                Ok(r) => {
+                    let on_alt = base == alt.as_str();
+                    PREFER_ALT.store(if on_alt { now_ms() + ALT_STICK_MS } else { 0 }, Ordering::Relaxed);
+                    return Ok(r);
+                }
+                Err(_) => continue,
+            }
+        }
+        Err(Fail::Unreachable)
+    }
+
     fn read(r: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Result<Vec<u8>, Fail> {
         let mut r = r.map_err(|_| Fail::Unreachable)?;
         let status = r.status().as_u16();
@@ -105,21 +155,21 @@ impl Client {
 
     /// A file: its bytes, its name (from `Content-Disposition`) and its type.
     pub fn file(&self, s: &Server, path: &str, post: bool) -> Result<BackupFile, Fail> {
-        let url = Client::url(s, path);
-        let r = if post {
-            let mut req = self.agent.post(url);
-            if let Some(t) = &s.token {
-                req = req.header("Authorization", format!("Bearer {t}"));
+        let r = self.go(s, path, |url| {
+            if post {
+                let mut req = self.agent.post(url);
+                if let Some(t) = &s.token {
+                    req = req.header("Authorization", format!("Bearer {t}"));
+                }
+                req.send_empty()
+            } else {
+                let mut req = self.agent.get(url);
+                if let Some(t) = &s.token {
+                    req = req.header("Authorization", format!("Bearer {t}"));
+                }
+                req.call()
             }
-            req.send_empty()
-        } else {
-            let mut req = self.agent.get(url);
-            if let Some(t) = &s.token {
-                req = req.header("Authorization", format!("Bearer {t}"));
-            }
-            req.call()
-        };
-        let r = r.map_err(|_| Fail::Unreachable)?;
+        })?;
         let header = |name: &str| r.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
         let name = header("content-disposition").and_then(|h| crate::logic::disposition_name(&h)).unwrap_or_else(|| "leaf-backup.json".into());
         let mime = header("content-type").map(|m| m.split(';').next().unwrap_or("").trim().to_string()).filter(|m| !m.is_empty()).unwrap_or_else(|| "application/json".into());
@@ -128,21 +178,25 @@ impl Client {
     }
 
     pub fn get(&self, s: &Server, path: &str) -> Result<Vec<u8>, Fail> {
-        let mut req = self.agent.get(Client::url(s, path));
-        if let Some(t) = &s.token {
-            req = req.header("Authorization", format!("Bearer {t}"));
-        }
-        Client::read(req.call())
+        Client::read(Ok(self.go(s, path, |url| {
+            let mut req = self.agent.get(url);
+            if let Some(t) = &s.token {
+                req = req.header("Authorization", format!("Bearer {t}"));
+            }
+            req.call()
+        })?))
     }
 
     /// A page's picture, or None when the server skips it (a scanlator's promo page: `204` with
     /// `x-leaf-skip: 1`).
     pub fn get_page(&self, s: &Server, path: &str) -> Result<Option<Vec<u8>>, Fail> {
-        let mut req = self.agent.get(Client::url(s, path));
-        if let Some(t) = &s.token {
-            req = req.header("Authorization", format!("Bearer {t}"));
-        }
-        let r = req.call().map_err(|_| Fail::Unreachable)?;
+        let r = self.go(s, path, |url| {
+            let mut req = self.agent.get(url);
+            if let Some(t) = &s.token {
+                req = req.header("Authorization", format!("Bearer {t}"));
+            }
+            req.call()
+        })?;
         if r.headers().get("x-leaf-skip").is_some_and(|v| v.as_bytes() == b"1") {
             return Ok(None);
         }
@@ -150,28 +204,34 @@ impl Client {
     }
 
     pub fn post(&self, s: &Server, path: &str, body: String) -> Result<Vec<u8>, Fail> {
-        let mut req = self.agent.post(Client::url(s, path)).header("content-type", "application/json");
-        if let Some(t) = &s.token {
-            req = req.header("Authorization", format!("Bearer {t}"));
-        }
-        Client::read(req.send(body))
+        Client::read(Ok(self.go(s, path, |url| {
+            let mut req = self.agent.post(url).header("content-type", "application/json");
+            if let Some(t) = &s.token {
+                req = req.header("Authorization", format!("Bearer {t}"));
+            }
+            req.send(body.as_str())
+        })?))
     }
 
     pub fn delete(&self, s: &Server, path: &str) -> Result<Vec<u8>, Fail> {
-        let mut req = self.agent.delete(Client::url(s, path));
-        if let Some(t) = &s.token {
-            req = req.header("Authorization", format!("Bearer {t}"));
-        }
-        Client::read(req.call())
+        Client::read(Ok(self.go(s, path, |url| {
+            let mut req = self.agent.delete(url);
+            if let Some(t) = &s.token {
+                req = req.header("Authorization", format!("Bearer {t}"));
+            }
+            req.call()
+        })?))
     }
 
     /// DELETE with a JSON body (`/v1/pages/hide`).
     pub fn delete_json(&self, s: &Server, path: &str, body: String) -> Result<Vec<u8>, Fail> {
-        let mut req = self.agent.delete(Client::url(s, path)).force_send_body().header("content-type", "application/json");
-        if let Some(t) = &s.token {
-            req = req.header("Authorization", format!("Bearer {t}"));
-        }
-        Client::read(req.send(body))
+        Client::read(Ok(self.go(s, path, |url| {
+            let mut req = self.agent.delete(url).force_send_body().header("content-type", "application/json");
+            if let Some(t) = &s.token {
+                req = req.header("Authorization", format!("Bearer {t}"));
+            }
+            req.send(body.as_str())
+        })?))
     }
 
     /// A large file streamed to `to` (written as `to.part`, then renamed), `got` counting the
@@ -179,11 +239,13 @@ impl Client {
     pub fn download(&self, s: &Server, path: &str, to: &Path, got: &AtomicU64) -> Result<String, Fail> {
         use std::io::{Read, Write};
         let agent: ureq::Agent = ureq::Agent::config_builder().timeout_connect(Some(Duration::from_secs(10))).timeout_global(Some(Duration::from_secs(20 * 60))).http_status_as_error(false).build().into();
-        let mut req = agent.get(Client::url(s, path));
-        if let Some(t) = &s.token {
-            req = req.header("Authorization", format!("Bearer {t}"));
-        }
-        let mut r = req.call().map_err(|_| Fail::Unreachable)?;
+        let mut r = self.go(s, path, |url| {
+            let mut req = agent.get(url);
+            if let Some(t) = &s.token {
+                req = req.header("Authorization", format!("Bearer {t}"));
+            }
+            req.call()
+        })?;
         match r.status().as_u16() {
             200..=299 => {}
             401 | 403 => return Err(Fail::Token),

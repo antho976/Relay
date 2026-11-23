@@ -255,7 +255,7 @@ fn the_spotlight_turns_slowly_by_itself_and_a_dot_chooses_one() {
 
 /// A server nothing answers at: the app asks, nothing comes, nothing is written anywhere.
 fn nowhere(app: &mut App) {
-    app.server = Some(crate::net::Server { base: "http://127.0.0.1:9".into(), token: None });
+    app.server = Some(crate::net::Server { base: "http://127.0.0.1:9".into(), token: None, alt: None });
 }
 
 /// `n` made-up picks, each `in_space` when given, with two genres.
@@ -650,7 +650,7 @@ mod fake {
         }
 
         pub fn server(&self) -> crate::net::Server {
-            crate::net::Server { base: self.base.clone(), token: None }
+            crate::net::Server { base: self.base.clone(), token: None, alt: None }
         }
 
         pub fn hits(&self, path: &str) -> usize {
@@ -2212,4 +2212,17 @@ fn a_chapter_opened_by_mistake_does_not_move_continue() {
     let c = crate::places::resume(&places, &d).unwrap();
     assert_eq!((c.index, c.page), (2, 0));
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_server_out_of_reach_is_asked_at_its_second_address() {
+    let fake = fake::Fake::start();
+    // The public address blocked (nothing listens there); the Tailscale one answers.
+    let s = crate::net::Server { base: "http://127.0.0.1:9".into(), token: None, alt: Some(fake.server().base) };
+    let client = crate::net::Client::new();
+    assert!(client.get(&s, "/v1/library").is_ok(), "answered at the second address");
+    assert!(fake.hits("/v1/library") >= 1);
+    // With no second address, out of reach stays out of reach.
+    let lone = crate::net::Server { alt: None, ..s.clone() };
+    assert_eq!(client.get(&lone, "/v1/library").err(), Some(crate::net::Fail::Unreachable));
 }

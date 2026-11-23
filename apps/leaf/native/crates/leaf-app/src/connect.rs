@@ -230,7 +230,7 @@ pub fn start(app: &mut App) {
     match logic::normalize_server(&st.address) {
         Ok(base) => {
             let token = st.token.trim();
-            let s = Server { base: base.clone(), token: (!token.is_empty()).then(|| token.to_string()) };
+            let s = Server { base: base.clone(), token: (!token.is_empty()).then(|| token.to_string()), alt: None };
             st.tried = base;
             st.checking = true;
             st.result = None;

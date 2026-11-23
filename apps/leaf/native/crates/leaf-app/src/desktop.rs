@@ -509,7 +509,7 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
     // Roughly a phone's status bar and gesture bar.
     app.resize(w as f32, h as f32, w as f32 * 0.085, w as f32 * 0.04);
     let base = arg(args, "--server").unwrap_or_else(|| "http://127.0.0.1:4580".into());
-    let server = Server { base: crate::logic::normalize_server(&base).map_err(|e| e.to_string())?, token: arg(args, "--token") };
+    let server = Server { base: crate::logic::normalize_server(&base).map_err(|e| e.to_string())?, token: arg(args, "--token"), alt: None };
     let id = arg(args, "--id").and_then(|v| v.parse::<i64>().ok()).unwrap_or(1);
     match screen.as_str() {
         "connect-empty" => {}

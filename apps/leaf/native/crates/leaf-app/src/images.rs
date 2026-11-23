@@ -1309,7 +1309,7 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let dir = std::env::temp_dir().join(format!("leaf-images-hold-{}", std::process::id()));
         let mut im = Images::new(dir.clone());
-        im.set_server(Some(Server { base, token: None }));
+        im.set_server(Some(Server { base, token: None, alt: None }));
         let queued = |im: &Images| -> Vec<Want> { im.shared.q.lock().unwrap().items.iter().map(|i| i.2.clone()).collect() };
         let old: Vec<(i64, u32, bool)> = (0..8).map(|n| (1, n, true)).collect();
         im.want_pages(&old);

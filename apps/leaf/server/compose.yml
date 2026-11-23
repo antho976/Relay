@@ -37,6 +37,10 @@ services:
     image: leaf-server:local
     restart: unless-stopped
     depends_on: [suwayomi, flaresolverr]
+    # Loopback only: `tailscale serve --bg --http 4580 http://127.0.0.1:4580` on the host lets the
+    # phone in over Tailscale when a network blocks the public address (README, "Over Tailscale").
+    ports:
+      - "127.0.0.1:4580:4580"
     environment:
       - SUWAYOMI_URL=http://suwayomi:4567
       - LEAF_FLARESOLVERR=http://flaresolverr:8191
