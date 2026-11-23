@@ -4,6 +4,11 @@
     <!-- The owner's leaf-server: the library, covers and pages. No other host. Books come from the
          system's file picker, which needs no permission. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- New chapters of a series whose bell is on: an hourly job asks the server and posts a
+         notice per new chapter run (Android 13+ asks the person first, the first time a bell is
+         turned on). The job is kept across restarts. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- Plain http is allowed: a server on the home network (192.168.x.x:4580) has no certificate.
          Leaf talks to the one server the person typed in, and nothing else. -->
@@ -30,6 +35,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service
+            android:name="com.quietsoftware.leaf.LeafChaptersJob"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false" />
         <!-- Lends a book's notes (Markdown under the cache's shared/ folder) to the app picked in
              the share sheet. -->
         <provider

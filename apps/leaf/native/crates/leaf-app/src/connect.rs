@@ -109,7 +109,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 y += cx.c.para(&l, x + 28.0, y, w - 28.0, Text::new(ty::UI, t::INK2).line(1.45), 3) + 2.0;
             }
             y += 18.0;
-            if kit::plain(&mut cx, x, y, w, 48.0, if first_run { "Open your library" } else { "Back to your library" }, None) {
+            if kit::plain(&mut cx, x, y, w, 48.0, if first_run { "Open Leaf" } else { "Done" }, None) {
                 open_library = true;
             }
             y += 48.0;
@@ -144,7 +144,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         start(app);
     }
     if open_library {
-        app.reset_to(Route::Library);
+        app.reset_to(Route::Home);
     }
     if back {
         app.pop();

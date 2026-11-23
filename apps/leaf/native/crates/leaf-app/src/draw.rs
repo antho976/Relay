@@ -866,10 +866,26 @@ fn path_commands(d: &str) -> Vec<zeno::Command> {
         .collect()
 }
 
+/// Leaf's own glyphs beside Relay's generated set (`glyphs.rs`, which is regenerated, not edited):
+/// the bell filled, for a series whose bell is on.
+fn own_glyph(name: &str) -> Option<&'static glyphs::Glyph> {
+    use glyphs::{Glyph, Shape};
+    match name {
+        "bell-on" => Some(&Glyph {
+            scale: 1.0,
+            shapes: &[
+                Shape { d: "M6.85 14a1.33 1.33 0 0 0 2.3 0", fill: false, stroke: true, rotate: 0.0 },
+                Shape { d: "M2.17 10.22A.67.67 0 0 0 2.67 11.33h10.67a.67.67 0 0 0 .49-1.12C12.94 9.3 12 8.33 12 5.33a4 4 0 0 0-8 0c0 3-.94 3.97-1.83 4.89z", fill: true, stroke: true, rotate: 0.0 },
+            ],
+        }),
+        _ => None,
+    }
+}
+
 /// A glyph as an alpha mask `px` pixels square.
 fn raster_icon(name: &str, px: u32, size_units: f32) -> Vec<u8> {
     use zeno::{Angle, Cap, Fill, Join, Mask, Stroke, Transform};
-    let g = glyphs::get(name);
+    let g = own_glyph(name).unwrap_or_else(|| glyphs::get(name));
     let n = (px * px) as usize;
     let mut out = vec![0u8; n];
     let s = px as f32 / 16.0 * g.scale;

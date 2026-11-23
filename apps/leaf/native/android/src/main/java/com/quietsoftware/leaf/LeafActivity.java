@@ -40,7 +40,9 @@ import java.util.List;
  *   handed to Rust ({@link #nativeBookPicked}), so no book's bytes cross JNI;
  * - the share sheet needs {@link FileProvider}, an app class JNI's FindClass cannot reach from
  *   Rust's own threads;
- * - PDF pages are drawn by the platform's {@link PdfRenderer} ({@link #pdfRender}).
+ * - PDF pages are drawn by the platform's {@link PdfRenderer} ({@link #pdfRender});
+ * - notices of new chapters come from a periodic job ({@link LeafChaptersJob}), scheduled here, and
+ *   posting them needs the person's leave on Android 13 and later ({@link #askNotifications}).
  * Nothing here decides anything: it moves files, bytes and intents.
  */
 public class LeafActivity extends GameActivity {
@@ -64,6 +66,7 @@ public class LeafActivity extends GameActivity {
         // Light icons: the app is dark.
         c.setAppearanceLightStatusBars(false);
         c.setAppearanceLightNavigationBars(false);
+        LeafChaptersJob.schedule(this);
         getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
@@ -81,6 +84,18 @@ public class LeafActivity extends GameActivity {
                 c.hide(WindowInsetsCompat.Type.systemBars());
             } else {
                 c.show(WindowInsetsCompat.Type.systemBars());
+            }
+        });
+    }
+
+    // Notices
+
+    /** Asks to post notifications (Android 13 and later), once a bell is first turned on. */
+    public void askNotifications() {
+        runOnUiThread(() -> {
+            if (android.os.Build.VERSION.SDK_INT >= 33
+                    && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[] {android.Manifest.permission.POST_NOTIFICATIONS}, 0x4c46);
             }
         });
     }

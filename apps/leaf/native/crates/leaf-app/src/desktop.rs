@@ -4,9 +4,12 @@
 //! - `--shot out.png --screen NAME` draws one screen to a file, against a real server
 //!   (`--server`, default `http://127.0.0.1:4580`; `--token`), on a data folder of its own that
 //!   is removed after. Screens: `connect` (the first run, the address checked), `connect-empty`,
-//!   `library`, `library-empty` (the list answered empty), `search` (`--query`, default "nano"), `series` (`--id`, default 1), `reader`
+//!   `home` (`--hero N` for the spotlight's Nth), `library-empty` (the list answered empty),
+//!   `space` (`--tab recent|following|downloads`, `--sort 0..2` for Following), `search`
+//!   (`--query`, default "nano"), `series` (`--id`, default 1; `--tab about`), `reader`
 //!   (`--id`, `--chapter` number, default 1; `--scroll UNITS` down the strip; `--overlay 1`).
-//!   `--size WxH` (default 1080x2340). Nothing is written to the server: no progress is reported.
+//!   `--size WxH` (default 1080x2340). `--bell ID` and `--seen ID` mark a series on the shot's own
+//!   copy only (its bell on; read up to two chapters before its newest). Nothing is written to the server: no progress is reported.
 //! - `--data DIR` keeps Leaf's files somewhere else than `~/.local/share/leaf` (and, with
 //!   `--shot`, keeps the shot's files there instead of removing them).
 //! - Books: `--books a.epub,b.txt` imports those files first (into the shot's own folder), and
@@ -178,16 +181,23 @@ fn books_shot(app: &mut App, gfx: &Gfx, clock: &mut u64, args: &[String], screen
     }
     let view_h = app.canvas.h;
     match screen {
-        "books" | "books-empty" => app.reset_to(Route::Library),
+        "books" | "books-empty" => app.reset_to(Route::Home),
         "imports" => {}
-        "notes" => app.reset_to(Route::Notes),
-        "stats" => app.reset_to(Route::Stats),
+        "notes" => {
+            app.reset_to(Route::Space);
+            app.push(Route::Notes);
+        }
+        "stats" => {
+            app.reset_to(Route::Space);
+            app.push(Route::Stats);
+        }
         "review" => {
-            app.reset_to(Route::Notes);
+            app.reset_to(Route::Space);
+            app.push(Route::Notes);
             app.push(Route::Review);
         }
         "find" => {
-            app.reset_to(Route::Library);
+            app.reset_to(Route::Home);
             app.push(Route::Find);
             app.frame(*clock);
             let q = arg(args, "--query").unwrap_or_else(|| "nature".into());
@@ -197,12 +207,12 @@ fn books_shot(app: &mut App, gfx: &Gfx, clock: &mut u64, args: &[String], screen
         }
         "book-notes" => {
             let id = first.ok_or("no book imported")?;
-            app.reset_to(Route::Notes);
+            app.reset_to(Route::Home);
             app.push(Route::BookNotes(id));
         }
         "book" | "in-search" => {
             let id = first.ok_or("no book imported")?;
-            app.reset_to(Route::Library);
+            app.reset_to(Route::Home);
             app.open_book(id);
             settle(app, gfx, clock, 30.0);
             let r = app.book.as_mut().ok_or("the book didn't open")?;
@@ -343,23 +353,36 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.st.connect.token = server.token.clone().unwrap_or_default();
             crate::connect::start(&mut app);
         }
-        "library" | "library-empty" => {
+        "home" | "library" | "library-empty" => {
             app.set_server(server);
-            app.reset_to(Route::Library);
+            app.reset_to(Route::Home);
+            app.st.home.shot_spot = arg(args, "--hero").and_then(|v| v.parse::<usize>().ok());
+        }
+        "space" => {
+            app.set_server(server);
+            app.st.space.tab = match arg(args, "--tab").as_deref() {
+                Some("following") => 1,
+                Some("downloads") => 2,
+                _ => 0,
+            };
+            app.following_sort = arg(args, "--sort").and_then(|v| v.parse::<u8>().ok()).unwrap_or(0).min(2);
+            app.reset_to(Route::Space);
         }
         "search" => {
             app.set_server(server);
-            app.reset_to(Route::Library);
-            app.push(Route::Search);
+            app.reset_to(Route::Search);
             app.frame(clock);
+            app.focus.id = Some("search");
             app.st.search.query = arg(args, "--query").unwrap_or_else(|| "nano".into());
             app.focus.text = app.st.search.query.clone();
             app.finish_typing();
         }
         "series" | "reader" => {
             app.set_server(server);
-            app.reset_to(Route::Library);
+            app.reset_to(Route::Home);
             app.push(Route::Series(id));
+            app.frame(clock);
+            app.st.series.about = arg(args, "--tab").as_deref() == Some("about");
         }
         _ if BOOK_SCREENS.contains(&screen.as_str()) => {
             books_shot(&mut app, &gfx, &mut clock, args, &screen)?;
@@ -367,6 +390,44 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
         other => return Err(format!("unknown screen: {other}")),
     }
     settle(&mut app, &gfx, &mut clock, 30.0);
+    // Shot-only marks, made on the phone's copy and never sent: `--bell ID` shows a series' bell
+    // on; `--seen ID` makes it read up to two chapters before its newest, a moment before they came
+    // (to see NEW and the spotlight's news).
+    let marks = [arg(args, "--bell").and_then(|v| v.parse::<i64>().ok()), arg(args, "--seen").and_then(|v| v.parse::<i64>().ok())];
+    if marks.iter().any(Option::is_some) {
+        let mark = |s: &mut leaf_proto::Series, d: Option<&mut leaf_proto::SeriesDetail>| {
+            if Some(s.id) == marks[0] {
+                s.bell = true;
+            }
+            if Some(s.id) == marks[1] {
+                let latest = s.latest.unwrap_or(0.0);
+                s.read_upto = Some(latest - 2.0);
+                s.unread = 2;
+                s.last_read_at = s.updated_at - 60_000;
+                s.added_at = s.added_at.min(s.updated_at - 120_000);
+                if let Some(d) = d {
+                    for c in &mut d.chapters {
+                        c.read = c.number <= latest - 2.0;
+                        if c.number > latest - 2.0 {
+                            c.uploaded_at = s.updated_at;
+                        }
+                    }
+                }
+            }
+        };
+        if let Some(list) = &mut app.library.data {
+            for s in list.iter_mut() {
+                let d = app.series.get_mut(&s.id).and_then(|l| l.data.as_mut());
+                if let Some(d) = d {
+                    mark(s, Some(d));
+                    d.series = s.clone();
+                } else {
+                    mark(s, None);
+                }
+            }
+        }
+        settle(&mut app, &gfx, &mut clock, 5.0);
+    }
     if screen == "library-empty" {
         // What a first library looks like, before anything is followed (the owner's server
         // follows two series already).
@@ -540,7 +601,7 @@ impl ApplicationHandler<()> for Windowed {
     /// The reader's place goes to the server before the window closes.
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(app) = &mut self.app {
-            app.reset_to(Route::Library);
+            app.reset_to(Route::Home);
             std::thread::sleep(std::time::Duration::from_millis(300));
         }
     }

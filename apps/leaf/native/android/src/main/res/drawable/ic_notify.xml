@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The notice icon: the launcher's leaf, white on clear, as the status bar wants it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M84,24 C84,24 40,18 28,50 C19,74 31,86 31,86 C31,86 43,92 64,80 C88,65 84,24 84,24 Z" />
+</vector>

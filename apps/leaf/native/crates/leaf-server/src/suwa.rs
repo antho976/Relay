@@ -290,7 +290,8 @@ fn manga_of(m: &Value, chapters: &Value) -> Manga {
                 last_page: c["lastPageRead"].as_i64().unwrap_or(0).max(0) as u32,
                 downloaded: c["isDownloaded"].as_bool().unwrap_or(false),
                 uploaded_at: c["uploadDate"].as_str().and_then(|s| s.parse().ok()).or_else(|| c["uploadDate"].as_i64()).unwrap_or(0),
-                last_read_at: c["lastReadAt"].as_str().and_then(|s| s.parse().ok()).or_else(|| c["lastReadAt"].as_i64()).unwrap_or(0),
+                // Suwayomi keeps lastReadAt in seconds (uploadDate is in ms): ms, like the rest.
+                last_read_at: c["lastReadAt"].as_str().and_then(|s| s.parse::<i64>().ok()).or_else(|| c["lastReadAt"].as_i64()).unwrap_or(0) * 1000,
             })
             .collect(),
     }

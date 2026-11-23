@@ -14,7 +14,7 @@ run cargo from there, and plain `cargo test` at the root never builds it.
 |---|---|
 | `leaf-proto` | The wire types the phone and the server share, and the rules both must read alike: title matching, gaps, which copy of a chapter to read. |
 | `leaf-server` | The comics autopilot beside a Suwayomi it drives (`server/compose.yml`). Headless. |
-| `leaf-app` | The phone app (wgpu; renderer copied from Tally RS): books (`shelf`, `epub`, `typeset`, `book`, `notes`, `stats`) and comics. |
+| `leaf-app` | The phone app (wgpu; renderer copied from Tally RS): tabs Home, Search, My space (`home`, `search`, `space`); books (`shelf`, `epub`, `typeset`, `book`, `notes`, `stats`) and comics (`series`, `reader`, `thumb` for chapter pictures). |
 
 ```fish
 cd apps/leaf/native
@@ -43,6 +43,13 @@ anywhere but loopback.
   `systemd-run --user --scope -q -p MemoryMax=3G -p MemorySwapMax=0 target/debug/leaf --shot ...`.
 - Reading time counts only while the page moves (`book::ReadClock`); don't count frames.
 - Shots of books use public-domain EPUBs downloaded into `.dev/` (never committed).
+
+## The phone's UI: settled (design 42, 2026-11-22)
+
+- Tabs are Home, Search and My space only; Notes and Stats are not tabs (My space's ⋯ reaches
+  them). No source names anywhere in the UI. Adding a series is not following it: the bell is.
+- Nothing downloads without being asked, apart from the server's one next chapter.
+- While a menu is open, the page under it takes no tap (`kit::hold`; `flows.rs` tests it).
 
 ## Developing against a real Suwayomi
 

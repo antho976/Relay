@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use leaf_proto::{Chapter, Gap, Progress, Series};
+use leaf_proto::{Chapter, Gap, Progress, Series, SeriesDetail};
 
 // The server
 
@@ -156,12 +156,34 @@ pub fn showable(s: &str, can: impl Fn(char) -> bool) -> String {
     kept.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// A series' description as worth reading: without a source's leading ranking ("Rank: #4 •
+/// Rating: 9.25 • Bookmarks: 156.5K") and its trailing list of other titles.
+pub fn clean_description(d: &str) -> String {
+    let mut t = d.trim();
+    if t.starts_with("Rank:")
+        && let Some(i) = t.find("Bookmarks:")
+    {
+        let rest = t[i + "Bookmarks:".len()..].trim_start();
+        let n = rest.find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | ',' | 'K' | 'k' | 'M'))).unwrap_or(rest.len());
+        t = rest[n..].trim_start();
+    }
+    if let Some(i) = t.find("Alternative Title") {
+        t = t[..i].trim_end();
+    }
+    t.to_string()
+}
+
 /// A day as "Mar 4, 2024", from milliseconds since the epoch (UTC).
 pub fn date(ms: i64) -> String {
     let days = ms.div_euclid(86_400_000);
     let (y, m, d) = civil(days);
     const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     format!("{} {d}, {y}", MONTHS[(m - 1) as usize])
+}
+
+/// The local day ("Nov 22, 2026") a moment falls on, in this phone's time zone.
+pub fn local_date(ms: i64) -> String {
+    date(crate::shelf::day_of(ms) * 86_400_000)
 }
 
 /// Year, month and day of a day counted from 1970-01-01 (Howard Hinnant's civil_from_days).
@@ -177,6 +199,128 @@ pub fn civil(days: i64) -> (i64, u32, u32) {
     let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
     (y, m, d)
 }
+
+/// How long ago, said shortly: "just now", "12 min ago", "2 h ago", "yesterday", "3 days ago",
+/// then the day ("Mar 4, 2024").
+pub fn ago(ms: i64, now_ms: i64) -> String {
+    let d = (now_ms - ms).max(0);
+    let min = d / 60_000;
+    if min < 1 {
+        "just now".into()
+    } else if min < 60 {
+        format!("{min} min ago")
+    } else if min < 24 * 60 {
+        format!("{} h ago", min / 60)
+    } else if min < 48 * 60 {
+        "yesterday".into()
+    } else if min < 7 * 24 * 60 {
+        format!("{} days ago", min / (24 * 60))
+    } else {
+        local_date(ms)
+    }
+}
+
+/// "1 chapter", "339 chapters".
+pub fn chapters_words(n: usize) -> String {
+    if n == 1 { "1 chapter".into() } else { format!("{n} chapters") }
+}
+
+// What is new, and what is next
+
+/// Chapters that came since the series was last read and are not read yet. With the series'
+/// chapters at hand, counted (those published after the last read); without, 1 when the newest
+/// arrived after the last read and something is unread (the library says no more). Nothing for
+/// a series never read: all of it is new, which is not news.
+pub fn new_chapters(s: &Series, d: Option<&SeriesDetail>) -> u32 {
+    if s.read_upto.is_none() || s.unread == 0 {
+        return 0;
+    }
+    let since = s.last_read_at.max(s.added_at);
+    match d {
+        Some(d) if since > 0 => d.chapters.iter().filter(|c| !c.read && c.uploaded_at > since).count() as u32,
+        _ if s.updated_at > since && since > 0 => 1,
+        _ => 0,
+    }
+}
+
+/// A time the server sent as ms since the epoch, mended when it came in seconds (the server's
+/// `last_read_at` did, 2026-11-22: Suwayomi keeps it in seconds). Anything before 1973 in ms is
+/// taken for seconds.
+pub fn as_ms(t: i64) -> i64 {
+    if t > 0 && t < 100_000_000_000 { t * 1000 } else { t }
+}
+
+/// The series' times, mended ([`as_ms`]).
+pub fn mend_times(s: &mut Series) {
+    s.last_read_at = as_ms(s.last_read_at);
+    s.added_at = as_ms(s.added_at);
+    s.updated_at = as_ms(s.updated_at);
+}
+
+/// The chapter you are on: where Continue opens when the chapters are at hand, else the one after
+/// the last read. None when nothing was opened yet.
+pub fn at_chapter(s: &Series, d: Option<&SeriesDetail>) -> Option<f64> {
+    if let Some(d) = d
+        && d.chapters.iter().any(|c| c.read || c.last_page > 0)
+    {
+        return continue_point(&d.chapters).map(|c| d.chapters[c.index].number);
+    }
+    next_chapter(s)
+}
+
+/// The chapter to read next as the library knows it: the one after the last read to its end
+/// (never past the newest). None when nothing is read yet.
+pub fn next_chapter(s: &Series) -> Option<f64> {
+    let r = s.read_upto?;
+    let n = r.floor() + 1.0;
+    Some(match s.latest {
+        Some(l) if n > l => l,
+        _ => n,
+    })
+}
+
+/// What the "Recently updated" list says a series got: its newest chapter, or the run of new
+/// ones ("Chapters 338–339").
+pub fn updated_words(s: &Series, new: u32) -> String {
+    match s.latest {
+        Some(l) if new >= 2 => format!("Chapters {}–{}", num(l - new as f64 + 1.0), num(l)),
+        Some(l) => format!("Chapter {}", num(l)),
+        None => "No chapters yet".into(),
+    }
+}
+
+/// Something the home page's spotlight may show.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spot {
+    /// The series' bell is on and chapters came since it was read.
+    pub rings: bool,
+    /// When it last changed (a new chapter), ms.
+    pub updated_at: i64,
+    /// When it was last read (or opened), ms; 0 if never.
+    pub read_at: i64,
+}
+
+/// The spotlight's order, as indexes into `spots`: belled series with new chapters first (newest
+/// first), then what was read most recently; at most `max`. Never-read things lead nothing.
+pub fn spotlight(spots: &[Spot], max: usize) -> Vec<usize> {
+    let mut ringing: Vec<usize> = (0..spots.len()).filter(|&i| spots[i].rings).collect();
+    ringing.sort_by_key(|&i| std::cmp::Reverse(spots[i].updated_at));
+    let mut read: Vec<usize> = (0..spots.len()).filter(|&i| !spots[i].rings && spots[i].read_at > 0).collect();
+    read.sort_by_key(|&i| std::cmp::Reverse(spots[i].read_at));
+    ringing.into_iter().chain(read).take(max).collect()
+}
+
+/// My space's Following, sorted: 0 recently read, 1 recently updated, 2 recently followed (when
+/// added). Never-read series go last in the first, by when they were added.
+pub fn sort_following(list: &mut [Series], by: u8) {
+    match by {
+        1 => list.sort_by_key(|s| std::cmp::Reverse(s.updated_at)),
+        2 => list.sort_by_key(|s| std::cmp::Reverse(s.added_at)),
+        _ => list.sort_by_key(|s| (std::cmp::Reverse(s.last_read_at), std::cmp::Reverse(s.added_at))),
+    }
+}
+
+pub const FOLLOWING_SORTS: [&str; 3] = ["Recently read", "Recently updated", "Recently followed"];
 
 // The chapter list
 
@@ -194,6 +338,13 @@ pub fn chapter_rows(chapters: &[Chapter], gaps: &[Gap]) -> Vec<Row> {
     keyed.extend(gaps.iter().map(|g| (g.to + 0.5, 0, Row::Gap(*g))));
     keyed.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
     keyed.into_iter().map(|(_, _, r)| r).collect()
+}
+
+/// The next `n` chapters from where reading stopped (the Continue point on) that the server has
+/// not downloaded: what "Download next 5" asks for. Chapter ids.
+pub fn next_to_download(chapters: &[Chapter], n: usize) -> Vec<i64> {
+    let from = continue_point(chapters).map_or(0, |c| c.index);
+    chapters[from..].iter().filter(|c| !c.read && !c.downloaded).take(n).map(|c| c.id).collect()
 }
 
 /// What a gap row says.
@@ -447,6 +598,120 @@ mod tests {
         assert_eq!(showable("LEE Dong Wook/ PARK Saenal", latin), "LEE Dong Wook/ PARK Saenal");
         assert_eq!(showable("Solo (Redice) 我", latin), "Solo (Redice)");
         assert_eq!(showable("有马文化", latin), "");
+    }
+
+    fn series(read_upto: Option<f64>, unread: u32, updated_at: i64, last_read_at: i64) -> Series {
+        Series {
+            id: 1,
+            title: "T".into(),
+            author: None,
+            source: "S".into(),
+            status: "ongoing".into(),
+            chapters: 10,
+            read_upto,
+            unread,
+            latest: Some(10.0),
+            gaps: vec![],
+            updated_at,
+            note: None,
+            bell: false,
+            added_at: 1,
+            last_read_at,
+        }
+    }
+
+    #[test]
+    fn new_means_since_you_last_read() {
+        let day = 86_400_000;
+        // Never read: nothing is news.
+        assert_eq!(new_chapters(&series(None, 10, 5 * day, 0), None), 0);
+        // Read on day 3, a chapter came on day 5: from the library alone, one.
+        let s = series(Some(8.0), 2, 5 * day, 3 * day);
+        assert_eq!(new_chapters(&s, None), 1);
+        // With the chapters: those published after day 3 and unread.
+        let mut chapters: Vec<Chapter> = (1..=10).map(|n| ch(n, n as f64, n <= 8, 0)).collect();
+        chapters[8].uploaded_at = 4 * day;
+        chapters[9].uploaded_at = 5 * day;
+        let d = SeriesDetail { series: s.clone(), description: None, chapters };
+        assert_eq!(new_chapters(&s, Some(&d)), 2);
+        // Caught up, or nothing came since: none.
+        assert_eq!(new_chapters(&series(Some(10.0), 0, 5 * day, 3 * day), None), 0);
+        assert_eq!(new_chapters(&series(Some(8.0), 2, 2 * day, 3 * day), None), 0);
+        assert_eq!(next_chapter(&s), Some(9.0));
+        assert_eq!(next_chapter(&series(Some(10.0), 0, 0, 0)), Some(10.0));
+        assert_eq!(next_chapter(&series(None, 10, 0, 0)), None);
+        assert_eq!(updated_words(&s, 2), "Chapters 9–10");
+        assert_eq!(updated_words(&s, 0), "Chapter 10");
+        assert_eq!(as_ms(1_795_398_420), 1_795_398_420_000);
+        assert_eq!(as_ms(1_795_398_420_000), 1_795_398_420_000);
+        assert_eq!(as_ms(0), 0);
+        // Opened part way, nothing finished: the library can't say, the chapters can.
+        let mut fresh = series(None, 10, 0, 5);
+        let mut cs: Vec<Chapter> = (1..=10).map(|n| ch(n, n as f64, false, 0)).collect();
+        assert_eq!(at_chapter(&fresh, None), None);
+        cs[0].last_page = 2;
+        fresh.last_read_at = 5;
+        let d = SeriesDetail { series: fresh.clone(), description: None, chapters: cs };
+        assert_eq!(at_chapter(&fresh, Some(&d)), Some(1.0));
+    }
+
+    #[test]
+    fn the_spotlight_leads_with_belled_news_then_reading() {
+        let sp = |rings, updated_at, read_at| Spot { rings, updated_at, read_at };
+        let spots = [sp(false, 9, 50), sp(true, 30, 10), sp(false, 0, 0), sp(true, 40, 5), sp(false, 1, 70)];
+        assert_eq!(spotlight(&spots, 5), vec![3, 1, 4, 0]);
+        assert_eq!(spotlight(&spots, 2), vec![3, 1]);
+        assert!(spotlight(&[], 5).is_empty());
+    }
+
+    #[test]
+    fn following_sorts_three_ways() {
+        let mut a = series(None, 0, 10, 0);
+        a.id = 1;
+        a.added_at = 3;
+        let mut b = series(None, 0, 30, 20);
+        b.id = 2;
+        b.added_at = 1;
+        let mut c = series(None, 0, 20, 5);
+        c.id = 3;
+        c.added_at = 2;
+        let mut l = vec![a, b, c];
+        let ids = |l: &[Series]| l.iter().map(|s| s.id).collect::<Vec<_>>();
+        sort_following(&mut l, 0);
+        assert_eq!(ids(&l), vec![2, 3, 1]);
+        sort_following(&mut l, 1);
+        assert_eq!(ids(&l), vec![2, 3, 1]);
+        sort_following(&mut l, 2);
+        assert_eq!(ids(&l), vec![1, 3, 2]);
+    }
+
+    #[test]
+    fn times_read_shortly() {
+        let now = 100 * 86_400_000i64;
+        assert_eq!(ago(now - 20_000, now), "just now");
+        assert_eq!(ago(now - 12 * 60_000, now), "12 min ago");
+        assert_eq!(ago(now - 2 * 3_600_000, now), "2 h ago");
+        assert_eq!(ago(now - 30 * 3_600_000, now), "yesterday");
+        assert_eq!(ago(now - 3 * 86_400_000, now), "3 days ago");
+        assert!(ago(0, now).ends_with("1970") || ago(0, now).ends_with("1969"));
+        assert_eq!(chapters_words(1), "1 chapter");
+    }
+
+    #[test]
+    fn download_next_starts_where_reading_stopped() {
+        let mut chapters: Vec<Chapter> = (1..=10).map(|n| ch(n, n as f64, n <= 3, 0)).collect();
+        for c in &mut chapters {
+            c.downloaded = false;
+        }
+        chapters[4].downloaded = true;
+        assert_eq!(next_to_download(&chapters, 5), vec![4, 6, 7, 8, 9]);
+        assert_eq!(next_to_download(&chapters[..5], 5), vec![4]);
+    }
+
+    #[test]
+    fn descriptions_lose_the_sources_furniture() {
+        assert_eq!(clean_description("Rank: #4 • Rating: 9.25 • Bookmarks: 156.5KNanotechnology meets martial arts.Alternative Titles:- NM"), "Nanotechnology meets martial arts.");
+        assert_eq!(clean_description("  A plain one. "), "A plain one.");
     }
 
     #[test]

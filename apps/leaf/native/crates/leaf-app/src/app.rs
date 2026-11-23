@@ -5,7 +5,7 @@
 //! true while something on it is still moving. Nothing animates at rest: after an input the app
 //! draws until scrolling settles, then sleeps until the next input or a worker's wake.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -45,6 +45,8 @@ pub trait Host: Send + Sync {
     fn pdf_page(&self, _path: &std::path::Path, _n: u32, _width: u32) -> Option<(u32, u32, Vec<u8>)> {
         None
     }
+    /// Ask to post notifications (Android 13 and later), for a bell just turned on.
+    fn ask_notifications(&self) {}
 }
 
 /// When the next frame is wanted.
@@ -74,8 +76,12 @@ const MAX_TYPED: usize = 300;
 pub enum Route {
     /// The server's address and token: the first run, and Settings.
     Connect,
-    Library,
+    /// The first tab: the spotlight, Continue reading, Recently updated.
+    Home,
+    /// The second tab: comics on the server's sources.
     Search,
+    /// The third tab: Recent, Following, Downloads.
+    Space,
     Series(i64),
     /// The reader, over the series it was opened from ([`App::reader`]); a PDF too.
     Reader,
@@ -125,16 +131,26 @@ pub struct States {
     pub connect: crate::connect::State,
     pub search: crate::search::State,
     pub series: crate::series::State,
-    pub library: crate::library::State,
+    pub home: crate::home::State,
+    pub space: crate::space::State,
     pub notes: crate::notes::State,
     pub review: crate::notes::Review,
     pub find: crate::notes::Find,
 }
 
-/// The settings kept in `config.json`.
-#[derive(serde::Serialize, serde::Deserialize, Default)]
+/// The settings kept in `config.json` (Android's chapter notices read `server` from it too).
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
 struct Config {
     server: Option<Server>,
+    /// Series whose chapters are listed oldest first.
+    #[serde(default)]
+    oldest_first: Vec<i64>,
+    /// How Following is sorted ([`crate::logic::FOLLOWING_SORTS`]).
+    #[serde(default)]
+    following_sort: u8,
+    /// Notifications were asked for once (the first bell turned on).
+    #[serde(default)]
+    asked_notifications: bool,
 }
 
 pub struct App {
@@ -160,6 +176,12 @@ pub struct App {
     /// Books read lately, kept so opening one again is instant.
     pub docs: HashMap<i64, Arc<crate::epub::Doc>>,
     pub reading_type: crate::typeset::Type,
+    /// Series listed oldest first (Newest ⇅ on the series page).
+    pub oldest_first: HashSet<i64>,
+    pub following_sort: u8,
+    asked_notifications: bool,
+    /// Chapters asked to download on the server and not yet downloaded there.
+    pub downloading: HashSet<i64>,
     /// A short message at the bottom, until this time.
     toast: Option<(String, u64)>,
     /// A field just let go of its keyboard with Done: its page acts on it (Search searches).
@@ -184,8 +206,9 @@ impl App {
         let images = Images::new(data.clone());
         images.set_server(config.server.clone());
         images.set_host(host.clone());
-        // Books need no server: the library is always the first page.
-        let start = Route::Library;
+        images.scan_cache();
+        // Books need no server: Home is always the first page.
+        let start = Route::Home;
         let mut app = App {
             canvas: Canvas::new(FONTS),
             ui: Ui::default(),
@@ -205,6 +228,10 @@ impl App {
             book: None,
             docs: HashMap::new(),
             reading_type: crate::typeset::Type::default(),
+            oldest_first: config.oldest_first.iter().copied().collect(),
+            following_sort: config.following_sort.min(2),
+            asked_notifications: config.asked_notifications,
+            downloading: HashSet::new(),
             toast: None,
             typed_done: None,
             keyboard_up: false,
@@ -265,6 +292,22 @@ impl App {
         self.host.immersive(true);
     }
 
+    /// Open a series' chapter in the reader, at a page.
+    pub fn open_chapter(&mut self, d: &SeriesDetail, index: usize, page: u32) {
+        self.reader = Some(crate::reader::Reader::open(d, index, page));
+        self.host.immersive(true);
+        self.push(Route::Reader);
+    }
+
+    /// Continue a series where it was left, when its chapters are at hand; else open its page.
+    pub fn continue_series(&mut self, id: i64) {
+        let d = self.series.get(&id).and_then(|l| l.data.clone());
+        match d.as_ref().and_then(|d| logic::continue_point(&d.chapters).map(|c| (d, c))) {
+            Some((d, c)) => self.open_chapter(d, c.index, c.page),
+            None => self.push(Route::Series(id)),
+        }
+    }
+
     /// The app goes to the background: the open book's place and time are kept now.
     pub fn paused(&mut self) {
         if let Some(mut r) = self.book.take() {
@@ -278,6 +321,16 @@ impl App {
             crate::book::close(self, &mut r);
             self.host.immersive(false);
         }
+    }
+
+    /// The page showing is one of the three tabs (they keep the tab bar).
+    pub fn tabbed(&self) -> bool {
+        self.nav.len() == 1 && matches!(self.route(), Route::Home | Route::Search | Route::Space)
+    }
+
+    /// Go to tab `i`: Home, Search, My space.
+    pub fn go_tab(&mut self, i: usize) {
+        self.reset_to([Route::Home, Route::Search, Route::Space][i.min(2)].clone());
     }
 
     pub fn route(&self) -> &Route {
@@ -332,13 +385,71 @@ impl App {
         self.server = Some(s.clone());
         self.images.set_server(Some(s));
         self.images.retry_failed();
-        let bytes = serde_json::to_vec_pretty(&Config { server: self.server.clone() }).unwrap_or_default();
-        if let Err(e) = crate::net::write_atomic(&self.data.join("config.json"), &bytes) {
-            self.host.log(&format!("config: {e}"));
-        }
+        self.save_config();
         // What came from another server is not this one's.
         self.library = Loaded::default();
         self.series.clear();
+    }
+
+    /// Keep the settings, on a thread of its own (a small file, but still a write).
+    pub fn save_config(&self) {
+        let mut oldest: Vec<i64> = self.oldest_first.iter().copied().collect();
+        oldest.sort_unstable();
+        let config = Config { server: self.server.clone(), oldest_first: oldest, following_sort: self.following_sort, asked_notifications: self.asked_notifications };
+        let (path, host) = (self.data.join("config.json"), self.host.clone());
+        let _ = std::thread::Builder::new().name("leaf-config".into()).spawn(move || {
+            let bytes = serde_json::to_vec_pretty(&config).unwrap_or_default();
+            if let Err(e) = crate::net::write_atomic(&path, &bytes) {
+                host.log(&format!("config: {e}"));
+            }
+        });
+    }
+
+    /// Turn a series' bell on or off: shown at once, told to the server, put back if it says no.
+    /// The first bell turned on asks to post notifications.
+    pub fn set_bell(&mut self, id: i64, on: bool) {
+        self.mark_bell(id, on);
+        self.ask(Job::Bell(id, on));
+        if on && !self.asked_notifications {
+            self.asked_notifications = true;
+            self.host.ask_notifications();
+            self.save_config();
+        }
+        self.toast(if on { "You'll hear when new chapters come" } else { "No more notices for this series" });
+    }
+
+    fn mark_bell(&mut self, id: i64, on: bool) {
+        if let Some(list) = &mut self.library.data
+            && let Some(s) = list.iter_mut().find(|s| s.id == id)
+        {
+            s.bell = on;
+        }
+        if let Some(d) = self.series.get_mut(&id).and_then(|l| l.data.as_mut()) {
+            d.series.bell = on;
+        }
+    }
+
+    /// Download chapters on the server, or remove them there.
+    pub fn download(&mut self, chapters: &[i64], on: bool) {
+        for &c in chapters {
+            if on {
+                self.downloading.insert(c);
+            }
+            self.ask(Job::Download(c, on));
+        }
+    }
+
+    /// Newest or oldest first on a series page, kept.
+    pub fn flip_order(&mut self, id: i64) {
+        if !self.oldest_first.remove(&id) {
+            self.oldest_first.insert(id);
+        }
+        self.save_config();
+    }
+
+    pub fn set_following_sort(&mut self, by: u8) {
+        self.following_sort = by.min(2);
+        self.save_config();
     }
 
     pub fn ask(&mut self, job: Job) {
@@ -372,7 +483,8 @@ impl App {
                 Done::Library { cached, result } => {
                     let l = &mut self.library;
                     match result {
-                        Ok(list) => {
+                        Ok(mut list) => {
+                            list.iter_mut().for_each(logic::mend_times);
                             l.data = Some(list);
                             if !cached {
                                 l.live = true;
@@ -388,9 +500,19 @@ impl App {
                     }
                 }
                 Done::Series { id, cached, result } => {
+                    if let Ok(d) = &result
+                        && !cached
+                    {
+                        for c in &d.chapters {
+                            if c.downloaded {
+                                self.downloading.remove(&c.id);
+                            }
+                        }
+                    }
                     let l = self.series.entry(id).or_default();
                     match result {
-                        Ok(d) => {
+                        Ok(mut d) => {
+                            logic::mend_times(&mut d.series);
                             l.data = Some(d);
                             if !cached {
                                 l.live = true;
@@ -447,6 +569,26 @@ impl App {
                         rd.page_count(chapter, r.ok());
                     }
                 }
+                Done::Bell(id, on, r) => {
+                    if let Err(f) = r {
+                        self.mark_bell(id, !on);
+                        self.toast(&f.words(&label));
+                    }
+                }
+                Done::Download(chapter, on, r) => match r {
+                    Ok(()) if !on => {
+                        for l in self.series.values_mut() {
+                            if let Some(c) = l.data.as_mut().and_then(|d| d.chapters.iter_mut().find(|c| c.id == chapter)) {
+                                c.downloaded = false;
+                            }
+                        }
+                    }
+                    Ok(()) => {}
+                    Err(f) => {
+                        self.downloading.remove(&chapter);
+                        self.toast(&f.words(&label));
+                    }
+                },
             }
         }
     }
@@ -525,11 +667,19 @@ impl App {
         true
     }
 
-    /// Back: typing stops first, then a menu or dialog closes, then the page. False when there
-    /// was nowhere to go back to.
+    /// Back: typing stops first, then a menu or dialog closes, then the page, then Search and My
+    /// space go to Home. False when there was nowhere to go back to.
     pub fn back(&mut self) -> bool {
         if self.focus.id.is_some() {
             self.finish_typing();
+            return true;
+        }
+        if self.route() == &Route::Space && self.st.space.close_over() {
+            self.ui.reset();
+            return true;
+        }
+        if self.nav.len() == 1 && matches!(self.route(), Route::Search | Route::Space) {
+            self.reset_to(Route::Home);
             return true;
         }
         if matches!(self.route(), Route::Series(_)) && self.st.series.close_over() {
@@ -659,8 +809,9 @@ impl App {
         let route = self.route().clone();
         let mut moving = match route {
             Route::Connect => crate::connect::draw(self, dt),
-            Route::Library => crate::library::draw(self, dt),
+            Route::Home => crate::home::draw(self, dt),
             Route::Search => crate::search::draw(self, dt),
+            Route::Space => crate::space::draw(self, dt),
             Route::Series(id) => crate::series::draw(self, id, dt),
             Route::Reader => crate::reader::draw(self, dt),
             Route::Book => crate::book::draw(self, dt),
@@ -674,7 +825,7 @@ impl App {
         };
         if let Some((words, until)) = self.toast.clone() {
             if now_ns < until {
-                let bottom = self.canvas.h - self.canvas.inset_bottom - if matches!(self.route(), Route::Library | Route::Notes | Route::Stats) { kit::TABS_H } else { 0.0 };
+                let bottom = self.canvas.h - self.canvas.inset_bottom - if self.tabbed() { kit::TABS_H } else { 0.0 };
                 kit::toast(&mut self.canvas, &words, bottom);
                 self.wake_at(until);
             } else {

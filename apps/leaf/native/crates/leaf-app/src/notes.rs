@@ -249,18 +249,14 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             y += rh;
         }
     }
-    let bottom = y + kit::TABS_H;
-    let mut find = false;
-    {
+    let bottom = y;
+    let (back, find) = {
         let top = cx.c.inset_top;
         cx.c.dy = 0.0;
         cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + top_h, 0.0, t::BG);
-        cx.c.text("Notes", PAD, top + 14.0, Text::new(ty::TITLE, t::INK).brand());
-        if kit::icon_key(&mut cx, WIDTH - 6.0 - 44.0, top + 10.0, "search") {
-            find = true;
-        }
-    }
-    let tab = kit::tabs(&mut cx, 1);
+        let (back, key, _) = kit::top_bar(&mut cx, top + 8.0, "Notes", &["search"]);
+        (back, key == Some(0))
+    };
     app.page_end(&pg, bottom);
     if let Some(f) = set_filter {
         app.st.notes.colour = f;
@@ -271,8 +267,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         app.push(Route::BookNotes(id));
     } else if find {
         app.push(Route::Find);
-    } else if let Some(i) = tab {
-        app.reset_to([Route::Library, Route::Notes, Route::Stats][i].clone());
+    } else if back {
+        app.pop();
     }
     pg.moving
 }

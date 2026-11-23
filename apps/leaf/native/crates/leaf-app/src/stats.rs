@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::app::{App, Route};
+use crate::app::App;
 use crate::cx;
 use crate::draw::{Text, WIDTH};
 use crate::kit;
@@ -106,17 +106,16 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         }
         _ => {}
     }
-    let bottom = y + kit::TABS_H;
-    {
+    let bottom = y;
+    let back = {
         let top = cx.c.inset_top;
         cx.c.dy = 0.0;
         cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + top_h, 0.0, t::BG);
-        cx.c.text("Stats", PAD, top + 14.0, Text::new(ty::TITLE, t::INK).brand());
-    }
-    let tab = kit::tabs(&mut cx, 2);
+        kit::top_bar(&mut cx, top + 8.0, "Reading time", &[]).0
+    };
     app.page_end(&pg, bottom);
-    if let Some(i) = tab {
-        app.reset_to([Route::Library, Route::Notes, Route::Stats][i].clone());
+    if back {
+        app.pop();
     }
     pg.moving
 }

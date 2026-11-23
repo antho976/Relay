@@ -76,6 +76,10 @@ impl Host for AndroidHost {
         with_activity(&self.app, |env, activity| env.call_method(activity, "setImmersive", "(Z)V", &[JValue::Bool(on as u8)]).map(|_| ()));
     }
 
+    fn ask_notifications(&self) {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "askNotifications", "()V", &[]).map(|_| ()));
+    }
+
     fn pick_books(&self) {
         with_activity(&self.app, |env, activity| env.call_method(activity, "pickBooks", "()V", &[]).map(|_| ()));
     }

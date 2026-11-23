@@ -11,7 +11,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use leaf_proto::{Follow, Pages, Progress, Series, SeriesDetail, Status};
+use leaf_proto::{Bell, Follow, Pages, Progress, Series, SeriesDetail, Status};
 use serde::{Deserialize, Serialize};
 
 /// Where the server is, and its token if it has one.
@@ -146,6 +146,11 @@ pub enum Job {
     Unfollow(i64),
     Progress(i64, Progress),
     PageCount(i64),
+    /// Turn a series' bell on or off (`POST /v1/series/{id}/bell`).
+    Bell(i64, bool),
+    /// Download a chapter on the server, or remove it (`POST` / `DELETE
+    /// /v1/chapters/{id}/download`).
+    Download(i64, bool),
 }
 
 /// An answer. `cached` ones come from the copy on disk, before (or instead of) the server's.
@@ -159,6 +164,8 @@ pub enum Done {
     Unfollowed(i64, Result<(), Fail>),
     Progress(i64, Result<(), Fail>),
     PageCount(i64, Result<u32, Fail>),
+    Bell(i64, bool, Result<(), Fail>),
+    Download(i64, bool, Result<(), Fail>),
 }
 
 type Task = (Option<Server>, Job);
@@ -323,6 +330,22 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
                 None => no_server(),
             };
             send(Done::PageCount(chapter, r));
+        }
+        Job::Bell(id, on) => {
+            let r = match &server {
+                Some(s) => serde_json::to_string(&Bell { on }).map_err(|_| Fail::Garbled).and_then(|body| client.post(s, &format!("/v1/series/{id}/bell"), body)).map(|_| ()),
+                None => no_server(),
+            };
+            send(Done::Bell(id, on, r));
+        }
+        Job::Download(chapter, on) => {
+            let path = format!("/v1/chapters/{chapter}/download");
+            let r = match &server {
+                Some(s) if on => client.post(s, &path, String::new()).map(|_| ()),
+                Some(s) => client.delete(s, &path).map(|_| ()),
+                None => no_server(),
+            };
+            send(Done::Download(chapter, on, r));
         }
     }
 }

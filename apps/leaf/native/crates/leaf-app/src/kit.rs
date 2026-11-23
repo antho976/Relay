@@ -379,15 +379,15 @@ pub fn chip(cx: &mut Ctx, x: f32, y: f32, words: &str, on: bool, dot: Option<Rgb
     (w, cx.tap(x, y - 6.0, w, h + 12.0))
 }
 
-/// The tabs along the bottom of the three home pages: Library, Notes, Stats. Returns the one
-/// tapped. Drawn over the page (call last).
+/// The tabs along the bottom: Home, Search, My space. Returns the one tapped. Drawn over the
+/// page (call last).
 pub fn tabs(cx: &mut Ctx, on: usize) -> Option<usize> {
     let saved = cx.c.dy;
     cx.c.dy = 0.0;
     let h = TABS_H + cx.c.inset_bottom;
     let y = cx.c.h - h;
     cx.c.rect(-1000.0, y, WIDTH + 2000.0, h, 0.0, t::S1);
-    let items: [(&str, &'static str); 3] = [("Library", "grid"), ("Notes", "notes"), ("Stats", "bars")];
+    let items: [(&str, &'static str); 3] = [("Home", "home"), ("Search", "search"), ("My space", "modules")];
     let iw = WIDTH / items.len() as f32;
     let mut hit = None;
     for (i, (words, glyph)) in items.iter().enumerate() {

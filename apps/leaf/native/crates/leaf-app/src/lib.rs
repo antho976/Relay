@@ -18,6 +18,7 @@ pub mod draw;
 pub mod epub;
 pub mod gfx;
 pub mod glyphs;
+pub mod home;
 pub mod images;
 pub mod kit;
 pub mod library;
@@ -28,9 +29,11 @@ pub mod reader;
 pub mod search;
 pub mod series;
 pub mod shelf;
+pub mod space;
 pub mod stats;
 pub mod strip;
 pub mod theme;
+pub mod thumb;
 pub mod typeset;
 pub mod ui;
 pub mod wake;
@@ -39,3 +42,6 @@ pub mod wake;
 mod android;
 #[cfg(not(target_os = "android"))]
 pub mod desktop;
+
+#[cfg(test)]
+mod flows;

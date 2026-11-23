@@ -61,9 +61,28 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
   "Junk to King: I Am A Scavenger" is Drake Scans' "Became the King by Scavenging"). Extensions
   update daily. Checked live 2026-11-22: Junk to King moved from MangaDex (chapters 23–44 missing)
   to Drake Scans (all 84) with chapters 1–22 still read and 23–26 already downloading.
-- **The phone** (`native/crates/leaf-app`): Connect, Library, Search and Follow, Series (with
-  rows for missing chapters), and a continuous vertical reader that chains chapters, caches pages
-  on disk and reports progress. The last library and series are kept for offline.
+- **The phone** (`native/crates/leaf-app`), three tabs (design 42, pages 12 to 14):
+  - **Home** (`home.rs`): a spotlight over a cover that turns every 6 s (swipe to turn it), belled
+    series with new chapters first, then what you read last, books too; Continue reading (covers
+    with how far each is read, "Ch. 338 · 2 new"); Recently updated.
+  - **Search**: every source at once. **Add** puts a series in My space with its bell off: adding
+    is not following. Sources are never named anywhere in the app.
+  - **My space** (`space.rs`): Recent (last read first, Continue or Start), Following (webtoon's
+    Subscribed list: the bell is the follow, sorted by Recently read, updated or followed) and
+    Downloads (per series, what the server keeps and what is on this phone, and removing it).
+    Highlights and Reading time are in its ⋯ menu, no longer tabs; a book's notes stay in the
+    reader's menu.
+  - **Series** (`series.rs`): banner, facts, Continue, Chapters / About; Newest ⇅ kept per series.
+    Each chapter row has a picture cut from its own pages once downloaded (`thumb.rs`: the most
+    colourful 4:3 crop of a few random pages, near-white weighed hard against, kept in `thumbs/`),
+    a cloud tile until then that downloads it when tapped, and Read, Continue or a check. ⋯ has
+    "Download next 5" and "Remove from My space". Nothing downloads by itself: the server keeps
+    only the chapter after the last one read.
+  - **Notices** (Android): `LeafChaptersJob` asks `/v1/events?since=` about hourly and posts one
+    notice per run of new chapters of a belled series; the first bell turned on asks to post
+    notifications.
+  - The reader chains chapters, caches pages on disk and reports progress. The last library and
+    series are kept for offline.
 
 ## Building
 
@@ -73,6 +92,7 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 cargo run -p leaf-app                                  # desktop window
 cargo run -p leaf-app -- --shot out.png --screen reader --id 1   # headless shot vs a local leaf-server
+cargo run -p leaf-app -- --shot out.png --screen space --tab following --sort 1   # home, space, series --tab about, search
 cargo run -p leaf-app -- --shot out.png --screen book --books a.epub --seed 1 --at 0.5   # a book (see desktop.rs)
 tools/build-lib.sh                                     # libleaf.so (needs ~/.local/share/rust-android + NDK)
 cd .. && ./gradlew assembleDebug                       # native/android/build/outputs/apk/debug/app-debug.apk
