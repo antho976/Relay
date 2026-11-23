@@ -127,7 +127,8 @@ struct HeroPics {
 }
 
 enum Got {
-    Cover { of: CoverOf, img: Option<Pixels>, banner: Option<Pixels> },
+    /// `src`: the cover's own size in pixels, which says whether it can fill the spotlight.
+    Cover { of: CoverOf, img: Option<Pixels>, banner: Option<Pixels>, src: Option<(u32, u32)> },
     Page { chapter: i64, n: u32, decode: bool, result: Result<Option<PageImg>, String> },
     Local { key: String, book: PathBuf, entry: String, img: Option<Pixels> },
     Hero { of: CoverOf, img: Option<HeroPics> },
@@ -179,6 +180,8 @@ pub struct Images {
     hero_failed: HashMap<CoverOf, u64>,
     /// Covers too small to fill the spotlight: their poster's size (pixels).
     posters: HashMap<CoverOf, (u32, u32)>,
+    /// Covers' own sizes, as they were decoded.
+    cover_src: HashMap<CoverOf, (u32, u32)>,
     thumb_failed: HashMap<i64, u64>,
     /// The chapters whose pages are on this phone, with their bytes, once the cache was looked at.
     pub cached: Option<HashMap<i64, u64>>,
@@ -205,6 +208,7 @@ impl Images {
         Images {
             hero_failed: HashMap::new(),
             posters: HashMap::new(),
+            cover_src: HashMap::new(),
             thumb_failed: HashMap::new(),
             cached: None,
             tx,
@@ -230,6 +234,20 @@ impl Images {
 
     /// The cover is too small to fill the spotlight: the size of its poster ([`CoverOf::poster_key`],
     /// pixels), drawn sharp over the blurred [`CoverOf::hero_key`]. None when the hero fills it.
+    /// Whether the cover can fill the spotlight sharp (no more than [`MAX_UPSCALE`]): None until
+    /// its cover or spotlight picture has been decoded once.
+    pub fn hero_fits(&self, of: CoverOf) -> Option<bool> {
+        let screen_w = self.shared.screen_w.load(std::sync::atomic::Ordering::Relaxed).clamp(320, 1440) as f32;
+        if let Some(&(w, h)) = self.cover_src.get(&of) {
+            let cw = (w as f32).min(h as f32 * HERO_ASPECT);
+            return Some(cw * MAX_UPSCALE >= screen_w);
+        }
+        if self.posters.contains_key(&of) {
+            return Some(false);
+        }
+        None
+    }
+
     pub fn hero_poster(&self, of: CoverOf) -> Option<(u32, u32)> {
         self.posters.get(&of).copied()
     }
@@ -439,8 +457,11 @@ impl Images {
         while let Ok(got) = self.rx.try_recv() {
             arrived = true;
             match got {
-                Got::Cover { of, img, banner } => {
+                Got::Cover { of, img, banner, src } => {
                     self.asked.remove(&Want::Cover(of));
+                    if let Some(wh) = src {
+                        self.cover_src.insert(of, wh);
+                    }
                     match img {
                         Some(p) => {
                             if !c.add_image_slot(&of.key(), p.w, p.h, (COVER_W, COVER_H), p.px) && !c.image_waiting(&of.key()) {
@@ -592,7 +613,7 @@ fn worker(shared: &Shared, tx: &Sender<Got>, client: &Client, data: &Path) {
             Want::Thumb { chapter, pages } => Got::Thumb { chapter: *chapter, pages: *pages, img: thumb(client, server.as_ref(), data, *chapter, *pages) },
         }));
         let got = got.unwrap_or_else(|_| match want {
-            Want::Cover(of) => Got::Cover { of, img: None, banner: None },
+            Want::Cover(of) => Got::Cover { of, img: None, banner: None, src: None },
             Want::Page { chapter, n, decode } => Got::Page { chapter, n, decode, result: Err("This page didn't decode".into()) },
             Want::Local { key, book, entry } => Got::Local { key, book, entry, img: None },
             Want::Hero(of) => Got::Hero { of, img: None },
@@ -622,11 +643,12 @@ fn cover(client: &Client, server: Option<&Server>, data: &Path, of: CoverOf) -> 
     let file = of.file(data);
     // A book's cover is only ever its file's.
     let server = if matches!(of, CoverOf::Book(_)) { None } else { server };
-    let Ok(bytes) = fetch(client, server, &file, &of.path()) else { return Got::Cover { of, img: None, banner: None } };
+    let Ok(bytes) = fetch(client, server, &file, &of.path()) else { return Got::Cover { of, img: None, banner: None, src: None } };
     let Ok(img) = image::load_from_memory(&bytes) else {
         let _ = std::fs::remove_file(&file);
-        return Got::Cover { of, img: None, banner: None };
+        return Got::Cover { of, img: None, banner: None, src: None };
     };
+    let src = Some((img.width(), img.height()));
     let filled = img.resize_to_fill(COVER_W, COVER_H, image::imageops::FilterType::Triangle).to_rgba8();
     let small = image::imageops::resize(&filled, BANNER.0, BANNER.1, image::imageops::FilterType::Triangle);
     let (w, h) = filled.dimensions();
@@ -634,6 +656,7 @@ fn cover(client: &Client, server: Option<&Server>, data: &Path, of: CoverOf) -> 
         of,
         img: Some(Pixels { w, h, px: filled.into_raw() }),
         banner: Some(Pixels { w: BANNER.0, h: BANNER.1, px: small.into_raw() }),
+        src,
     }
 }
 

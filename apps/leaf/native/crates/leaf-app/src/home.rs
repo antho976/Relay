@@ -23,6 +23,8 @@ pub const TURN_NS: u64 = 18_000_000_000;
 const SLIDE_NS: u64 = 1_200_000_000;
 /// At most this many things take turns in it.
 const SPOTS: usize = 5;
+/// How far down the order the spotlight looks for covers big enough to fill it sharp.
+const SPOT_CANDIDATES: usize = 15;
 /// The spotlight's height under the status bar.
 const HERO: f32 = 436.0;
 
@@ -121,7 +123,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         spots.push(Spot { rings: false, updated_at: 0, read_at: b.opened_ms });
         items.push(Item::Book(b.clone()));
     }
-    let mut order = logic::spotlight(&spots, SPOTS);
+    let mut order = logic::spotlight(&spots, SPOT_CANDIDATES);
     // Room left: what was added or updated last takes it, so the spotlight still turns.
     {
         let mut added: Vec<(i64, usize)> = items
@@ -134,13 +136,36 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             .collect();
         added.sort_by_key(|a| std::cmp::Reverse(a.0));
         for (_, i) in added {
-            if order.len() >= SPOTS {
+            if order.len() >= SPOT_CANDIDATES {
                 break;
             }
             if !order.contains(&i) {
                 order.push(i);
             }
         }
+    }
+    // Full-bleed only (the owner's call, 2026-11-22): a cover too small to fill the spotlight sharp
+    // is skipped, not shown blurred or as a poster. Covers not decoded yet are asked for (small
+    // ones, cheap); until any is known to fit, the order as it stands is shown.
+    let now_c = app.now_ns;
+    let mut fits: Vec<usize> = Vec::new();
+    for &i in &order {
+        let of = items[i].cover();
+        match app.images.hero_fits(of) {
+            Some(true) => fits.push(i),
+            Some(false) => {}
+            None => {
+                app.images.cover(&mut app.canvas, of, now_c);
+            }
+        }
+        if fits.len() >= SPOTS {
+            break;
+        }
+    }
+    if !fits.is_empty() {
+        order = fits;
+    } else {
+        order.truncate(SPOTS);
     }
     let hero: Vec<Item> = order.iter().map(|&i| items[i].clone()).collect();
     // What is being read: series part way, books part way, last read first.
