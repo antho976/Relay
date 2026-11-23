@@ -481,6 +481,11 @@ impl ProgressGate {
         Some(self.mark(c, p, now_ns))
     }
 
+    /// The latest word on a chapter: held back, else sent, else what the server held.
+    pub fn place(&self, chapter: i64) -> Option<Progress> {
+        self.pending.filter(|(c, _)| *c == chapter).map(|(_, p)| p).or_else(|| self.sent.get(&chapter).copied())
+    }
+
     /// When the held-back report is due, if one is.
     pub fn due_at(&self) -> Option<u64> {
         self.pending.map(|_| self.last_ns.unwrap_or(0) + PROGRESS_EVERY_NS)

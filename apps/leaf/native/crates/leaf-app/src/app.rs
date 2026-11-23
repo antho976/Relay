@@ -261,6 +261,9 @@ pub struct App {
     pub keyboard_up: bool,
     /// Screenshots: nothing is written to the server (no progress reported).
     pub shot: bool,
+    /// Tests: every progress report sent, in order.
+    #[cfg(test)]
+    pub reported: Vec<(i64, leaf_proto::Progress)>,
     size: (f32, f32),
     insets: (f32, f32),
     last_ns: u64,
@@ -312,6 +315,8 @@ impl App {
             health: Loaded::default(),
             alternatives: HashMap::new(),
             open_after: None,
+            #[cfg(test)]
+            reported: Vec::new(),
             read_undo: HashMap::new(),
             shelf_undo: HashMap::new(),
             backing_up: false,
@@ -378,13 +383,19 @@ impl App {
         self.host.immersive(true);
     }
 
-    /// Open a series' chapter in the reader, at a page.
+    /// Open a series' chapter in the reader, at a page. A reader already open is closed first, as
+    /// Back would (its held-back place sent), and the new one takes its place on the stack.
     pub fn open_chapter(&mut self, d: &SeriesDetail, index: usize, page: u32) {
         let mut r = crate::reader::Reader::open(d, index, page);
         r.speed = self.speed_of(d.series.id);
+        self.close_reader();
         self.reader = Some(r);
         self.host.immersive(true);
-        self.push(Route::Reader);
+        if self.route() == &Route::Reader {
+            self.shown();
+        } else {
+            self.push(Route::Reader);
+        }
     }
 
     /// Continue a series where it was left, when its chapters are at hand; else open its page.
@@ -406,13 +417,21 @@ impl App {
         if let Some(mut r) = self.reader.take() {
             if r.local.is_some() {
                 self.keep_pdf_place(&r);
-            } else if !self.shot
-                && let Some((c, p)) = r.flush(self.now_ns)
-            {
-                self.jobs.send(self.server.as_ref(), Job::Progress(c, p));
+            } else if let Some((c, p)) = r.flush(self.now_ns) {
+                self.report_progress(c, p);
             }
             self.reader = Some(r);
         }
+    }
+
+    /// Tell the server how far a chapter was read (a screenshot tells it nothing).
+    pub fn report_progress(&mut self, chapter: i64, p: leaf_proto::Progress) {
+        if self.shot {
+            return;
+        }
+        #[cfg(test)]
+        self.reported.push((chapter, p));
+        self.jobs.send(self.server.as_ref(), Job::Progress(chapter, p));
     }
 
     /// A PDF's place, kept on the phone.
@@ -641,6 +660,9 @@ impl App {
                 Done::Library { cached, result } => {
                     let l = &mut self.library;
                     match result {
+                        // The copy on disk is never newer than the one in hand, which may already
+                        // show what was just read or moved.
+                        Ok(_) if cached && l.data.is_some() => {}
                         Ok(mut list) => {
                             list.iter_mut().for_each(logic::mend_times);
                             l.data = Some(list);
@@ -669,6 +691,8 @@ impl App {
                     }
                     let l = self.series.entry(id).or_default();
                     match result {
+                        // As the library: the copy in hand may already show what was just read.
+                        Ok(_) if cached && l.data.is_some() => {}
                         Ok(mut d) => {
                             logic::mend_times(&mut d.series);
                             // A move on its way to the server shows already.
@@ -730,7 +754,7 @@ impl App {
                 }
                 Done::PageCount(chapter, r) => {
                     if let Some(rd) = &mut self.reader {
-                        rd.page_count(chapter, r.ok());
+                        rd.page_count(chapter, r.ok(), self.now_ns);
                     }
                 }
                 Done::Bell(id, on, r) => {
@@ -1021,6 +1045,9 @@ impl App {
     fn shown(&mut self) {
         self.fresh = true;
         self.ui.reset();
+        // An update tapped before its series came opens only if the person is still where they
+        // tapped it: once they have gone elsewhere it would open over what they are doing.
+        self.open_after = None;
         // The bars hide only while a book or a strip is on screen (not over its notes or search).
         let reading = matches!(self.route(), Route::Book | Route::Reader);
         self.host.immersive(reading);
@@ -1054,13 +1081,19 @@ impl App {
                 self.host.immersive(false);
                 return;
             }
-            if !self.shot
-                && let Some((c, p)) = r.flush(self.now_ns)
-            {
-                self.jobs.send(self.server.as_ref(), Job::Progress(c, p));
+            if let Some((c, p)) = r.flush(self.now_ns) {
+                self.report_progress(c, p);
             }
             self.host.immersive(false);
-            // What was read shows as read on the pages under it.
+            // What was read shows as read on the pages under it at once, before the server answers
+            // (and when it can't: reading offline).
+            for (chapter, p) in r.places() {
+                if p.done {
+                    self.mark_read(chapter, true);
+                } else if let Some(c) = self.series.get_mut(&r.series).and_then(|l| l.data.as_mut()).and_then(|d| d.chapters.iter_mut().find(|c| c.id == chapter && !c.read)) {
+                    c.last_page = p.page;
+                }
+            }
             let id = r.series;
             self.ask(Job::Series(id));
             self.ask(Job::Library);
@@ -1099,6 +1132,15 @@ impl App {
             return true;
         }
         if matches!(self.route(), Route::Series(_)) && self.st.series.close_over() {
+            self.ui.reset();
+            return true;
+        }
+        // The comic reader's overlay goes first, as the book's chrome does.
+        if self.route() == &Route::Reader
+            && let Some(r) = &mut self.reader
+            && r.overlay
+        {
+            r.overlay = false;
             self.ui.reset();
             return true;
         }

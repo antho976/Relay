@@ -88,9 +88,9 @@ pub fn thumb_file(data: &Path, chapter: i64) -> PathBuf {
     data.join("thumbs").join(format!("{chapter}.jpg"))
 }
 
-/// The atlas key of tile `i` of a page.
-pub fn tile_key(chapter: i64, n: u32, i: usize) -> String {
-    format!("p{chapter}:{n}:{i}")
+/// The atlas key of tile `i` of a page, as cut the `cut`th way ([`Images::tile_key`]).
+fn tile_key(chapter: i64, n: u32, i: usize, cut: u32) -> String {
+    format!("p{chapter}:{n}:{i}:{cut}")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -173,7 +173,14 @@ pub struct Images {
     /// Every page's size once decoded (scaled), kept for good.
     sizes: HashMap<(i64, u32), (u32, u32)>,
     decoded: HashMap<(i64, u32), PageImg>,
+    /// Pages that would not load when they were to be shown: drawn with a Retry.
     failed: HashMap<(i64, u32), String>,
+    /// Pages that would not load when only kept ahead on disk: not kept ahead again, but fetched
+    /// when they come near, as any other (the server tries another source for them meanwhile).
+    ahead_failed: HashSet<(i64, u32)>,
+    /// How many times the trim setting changed: a page's tiles are keyed by it, so tiles cut the
+    /// old way, still in the atlas, are never drawn for a page cut the new way.
+    cut: u32,
     stored: HashSet<(i64, u32)>,
     last_wants: Vec<(i64, u32, bool)>,
     /// A reader is open: decoded pages arriving are kept. Closed, they are let go on arrival.
@@ -225,6 +232,8 @@ impl Images {
             sizes: HashMap::new(),
             decoded: HashMap::new(),
             failed: HashMap::new(),
+            ahead_failed: HashSet::new(),
+            cut: 0,
             stored: HashSet::new(),
             last_wants: Vec::new(),
             reading: false,
@@ -267,6 +276,7 @@ impl Images {
     /// The setting changed while no reader is open: forget the pages' sizes.
     pub fn retrim(&mut self, on: bool) {
         self.set_trim(on);
+        self.cut += 1;
         self.sizes.clear();
         self.decoded.clear();
         self.last_wants.clear();
@@ -453,7 +463,7 @@ impl Images {
         for (i, &(chapter, n, decode)) in wants.iter().enumerate() {
             let k = (chapter, n);
             let done = if decode { self.decoded.contains_key(&k) } else { self.stored.contains(&k) || self.sizes.contains_key(&k) };
-            if done || self.failed.contains_key(&k) {
+            if done || self.failed.contains_key(&k) || (!decode && self.ahead_failed.contains(&k)) {
                 continue;
             }
             let want = Want::Page { chapter, n, decode };
@@ -516,8 +526,11 @@ impl Images {
                         Ok(None) => {
                             self.stored.insert(k);
                         }
-                        Err(e) => {
+                        Err(e) if decode => {
                             self.failed.insert(k, e);
+                        }
+                        Err(_) => {
+                            self.ahead_failed.insert(k);
                         }
                     }
                     // The reader's list may now ask for something it skipped while this was out.
@@ -590,9 +603,15 @@ impl Images {
         self.failed.get(&(chapter, n)).map(String::as_str)
     }
 
+    /// The atlas key of tile `i` of page `n` of a chapter.
+    pub fn tile_key(&self, chapter: i64, n: u32, i: usize) -> String {
+        tile_key(chapter, n, i, self.cut)
+    }
+
     /// Try the pages that failed again (Retry, or the server came back).
     pub fn retry_failed(&mut self) {
         self.failed.clear();
+        self.ahead_failed.clear();
         self.cover_failed.clear();
         self.hero_failed.clear();
         self.thumb_failed.clear();
@@ -605,17 +624,29 @@ impl Images {
     }
 
     /// The reader closed: nothing more is fetched for it (a chapter opened by mistake is not
-    /// downloaded behind your back), and its decoded pages are let go.
+    /// downloaded behind your back), and its decoded pages are let go. Pages that failed are
+    /// tried again when they are next read.
     pub fn leave_pages(&mut self) {
         self.want_pages(&[]);
         self.reading = false;
         self.decoded.clear();
+        self.failed.clear();
+        self.ahead_failed.clear();
     }
 
     /// Tests: a page measured as if it had been decoded.
     #[cfg(test)]
     pub fn fake_size(&mut self, chapter: i64, n: u32, w: u32, h: u32) {
         self.sizes.insert((chapter, n), (w, h));
+    }
+
+    /// Tests: a page decoded (blank tiles) as if it had come from the server.
+    #[cfg(test)]
+    pub fn fake_page(&mut self, chapter: i64, n: u32, w: u32, h: u32) {
+        let tiles = crate::logic::tile_rows(h).into_iter().map(|(_, th)| vec![0u8; (w * th * 4) as usize]).collect();
+        self.sizes.insert((chapter, n), (w, h));
+        self.stored.insert((chapter, n));
+        self.decoded.insert((chapter, n), PageImg { w, h, tiles });
     }
 
     /// Something is being fetched or decoded.

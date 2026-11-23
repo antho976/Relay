@@ -14,14 +14,14 @@
 //! to keep on disk ahead (the rest of this chapter and the whole next one). The place goes to the
 //! server as the person reads ([`crate::logic::ProgressGate`]).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use leaf_proto::{Chapter, Progress, SeriesDetail};
 
 use crate::app::App;
 use crate::cx;
 use crate::draw::{Text, WIDTH};
-use crate::images::{Images, tile_h, tile_key};
+use crate::images::{Images, tile_h};
 use crate::kit;
 use crate::logic::{self, PAGE_W, ProgressGate, TILE_H};
 use crate::net::Job;
@@ -38,6 +38,10 @@ const PLACEHOLDER_H: f32 = 560.0;
 /// A page that would not load.
 const FAILED_H: f32 = 240.0;
 const END_H: f32 = 240.0;
+/// A chapter whose length did not come is asked again after this long, doubling each time up to
+/// [`COUNT_RETRY_MAX_NS`]: never once a frame.
+const COUNT_RETRY_NS: u64 = 5_000_000_000;
+const COUNT_RETRY_MAX_NS: u64 = 60_000_000_000;
 
 pub struct Reader {
     pub series: i64,
@@ -46,6 +50,12 @@ pub struct Reader {
     /// Page counts as the server gave them, or none while unknown.
     counts: Vec<Option<u32>>,
     counts_asked: HashSet<usize>,
+    /// Chapters whose length did not come: when to ask again, and how many times it failed.
+    count_failed: HashMap<usize, (u64, u32)>,
+    /// Chapters whose last page's top has been on screen: once its bottom is too, the chapter is
+    /// finished. A glance up at the end of the chapter before, from the next one's heading, is not
+    /// reading it.
+    end_seen: HashSet<usize>,
     pub pos: Pos,
     /// Drives the momentum: its offset is reset each frame, the change is the strip's.
     fling: Scroll,
@@ -67,6 +77,8 @@ pub struct Reader {
 
 /// How far ahead of the screen's bottom auto-scroll wants pages loaded before it moves on.
 const AHEAD: f32 = 0.6;
+/// How far past the screen (in screens) a page's tiles go to the atlas ahead of being shown.
+const TILE_AHEAD: f32 = 0.25;
 
 /// The strip as the images know it now.
 struct View<'a> {
@@ -127,6 +139,8 @@ impl Reader {
             chapters,
             counts,
             counts_asked: HashSet::new(),
+            count_failed: HashMap::new(),
+            end_seen: HashSet::new(),
             pos: Pos { item, off: 0.0 },
             fling: fling(),
             overlay: false,
@@ -162,6 +176,8 @@ impl Reader {
             counts: vec![Some(b.pages)],
             chapters: vec![chapter],
             counts_asked: HashSet::new(),
+            count_failed: HashMap::new(),
+            end_seen: HashSet::new(),
             pos: Pos { item, off: 0.0 },
             fling: fling(),
             overlay: false,
@@ -186,11 +202,18 @@ impl Reader {
         Some((crate::shelf::Place { section: 0, block: page, byte: 0 }, (page + 1) as f32 / pages.max(1) as f32))
     }
 
-    pub fn page_count(&mut self, chapter: i64, count: Option<u32>) {
+    /// Chapter `c`'s page count, once known.
+    pub fn count(&self, c: usize) -> Option<u32> {
+        self.counts.get(c).copied().flatten()
+    }
+
+    /// A chapter's length came (or did not, at `now_ns`).
+    pub fn page_count(&mut self, chapter: i64, count: Option<u32>, now_ns: u64) {
         if let Some(i) = self.chapters.iter().position(|c| c.id == chapter) {
             match count {
                 Some(n) => {
                     self.counts[i] = Some(n);
+                    self.count_failed.remove(&i);
                     // Opened at a page before the length was known: kept inside the chapter.
                     if let Item::Page(c, p) = self.pos.item
                         && c == i
@@ -199,9 +222,11 @@ impl Reader {
                         self.pos = Pos { item: if n > 0 { Item::Page(c, n - 1) } else { Item::Head(c) }, off: 0.0 };
                     }
                 }
-                // Asked again the next time it comes near.
+                // Asked again a little later, if it is still near then; each failure waits longer.
                 None => {
-                    self.counts_asked.remove(&i);
+                    let tries = self.count_failed.get(&i).map_or(0, |f| f.1) + 1;
+                    let wait = (COUNT_RETRY_NS << (tries - 1).min(4)).min(COUNT_RETRY_MAX_NS);
+                    self.count_failed.insert(i, (now_ns + wait, tries));
                 }
             }
         }
@@ -217,6 +242,11 @@ impl Reader {
         let v = View { r: self, im };
         let p = strip::scroll(&v, self.pos, dy, view_h);
         self.pos = p;
+    }
+
+    /// What the reader last told (or holds back to tell) the server of each chapter.
+    pub fn places(&self) -> Vec<(i64, Progress)> {
+        self.chapters.iter().filter_map(|c| self.gate.place(c.id).map(|p| (c.id, p))).collect()
     }
 
     /// The report held back, as the reader closes.
@@ -243,15 +273,36 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         return true;
     };
     let (moving, leave) = frame(app, &mut r, dt);
+    let series = (r.local.is_none()).then_some(r.series);
     app.reader = Some(r);
-    if leave {
-        app.pop();
+    match leave {
+        Leave::Stay => {}
+        Leave::Back => {
+            app.pop();
+        }
+        // The end's key says "Back to the series": there, also when the reader was opened from
+        // Home or an update.
+        Leave::ToSeries => {
+            app.pop();
+            if let Some(id) = series
+                && app.route() != &crate::app::Route::Series(id)
+            {
+                app.push(crate::app::Route::Series(id));
+            }
+        }
     }
     moving
 }
 
-/// One frame of the reader. Returns (still moving, leave).
-fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
+/// Where a frame of the reader goes next.
+enum Leave {
+    Stay,
+    Back,
+    ToSeries,
+}
+
+/// One frame of the reader. Returns (still moving, where to go).
+fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave) {
     let view_h = app.canvas.h;
     let now = app.now_ns;
     r.top_pad = app.canvas.inset_top;
@@ -310,8 +361,20 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
         strip::chapter_of(&v, r.pos.item)
     };
     for c in [near_chapter, near_chapter + 1] {
-        if r.local.is_none() && c < r.chapters.len() && r.counts[c].is_none() && r.counts_asked.insert(c) {
-            app.ask(Job::PageCount(r.chapters[c].id));
+        if r.local.is_none() && c < r.chapters.len() && r.counts[c].is_none() {
+            match r.count_failed.get(&c) {
+                Some(&(at, _)) if now < at => {
+                    app.wake_at(at);
+                    continue;
+                }
+                Some(_) => {
+                    r.counts_asked.remove(&c);
+                }
+                None => {}
+            }
+            if r.counts_asked.insert(c) {
+                app.ask(Job::PageCount(r.chapters[c].id));
+            }
         }
     }
     // What to fetch: what is on screen and two screens below first, then one above; then, only
@@ -369,7 +432,13 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
                     c.rect(PAD, mid, WIDTH / 2.0 - tw / 2.0 - 14.0 - PAD, 1.0, 0.0, t::LINE);
                     c.rect(WIDTH / 2.0 + tw / 2.0 + 14.0, mid, WIDTH / 2.0 - tw / 2.0 - 14.0 - PAD, 1.0, 0.0, t::LINE);
                     if r.counts[ci].is_none() {
-                        c.text(&format!("Opening chapter {}", logic::num(ch.number)), WIDTH / 2.0, y + HEAD_H + LOADING_H / 2.0 - 10.0, Text::new(ty::UI, t::INK3).center());
+                        let mid = y + HEAD_H + LOADING_H / 2.0 - 10.0;
+                        if r.count_failed.contains_key(&ci) {
+                            c.text(&format!("Chapter {} didn't open", logic::num(ch.number)), WIDTH / 2.0, mid - 12.0, Text::new(ty::BODY, t::INK2).center());
+                            c.text("Trying again in a moment", WIDTH / 2.0, mid + 14.0, Text::new(ty::CAPTION, t::INK3).center());
+                        } else {
+                            c.text(&format!("Opening chapter {}", logic::num(ch.number)), WIDTH / 2.0, mid, Text::new(ty::UI, t::INK3).center());
+                        }
                     }
                 }
                 Item::Page(ci, n) => {
@@ -380,16 +449,21 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
                         drawn = true;
                         let scale = WIDTH / pw as f32;
                         for i in 0..ph.div_ceil(TILE_H) as usize {
-                            let key = tile_key(id, n, i);
+                            let key = v_im.tile_key(id, n, i);
                             let th = tile_h(ph, i);
+                            let top = y + (i as u32 * TILE_H) as f32 * scale;
+                            let bottom = y + ((i as u32 * TILE_H) + th) as f32 * scale;
+                            // Only tiles on screen or about to be go to the atlas: a webtoon strip's
+                            // dozen tiles would otherwise go up at once, and push out the ones shown.
+                            if bottom < -view_h * TILE_AHEAD || top > view_h * (1.0 + TILE_AHEAD) {
+                                continue;
+                            }
                             if !c.has_image(&key)
                                 && let Some(img) = v_im.page(id, n)
                                 && let Some(px) = img.tiles.get(i)
                             {
                                 c.add_image_slot(&key, pw, th, (PAGE_W, TILE_H), px.clone());
                             }
-                            let top = y + (i as u32 * TILE_H) as f32 * scale;
-                            let bottom = y + ((i as u32 * TILE_H) + th) as f32 * scale;
                             if bottom < 0.0 || top > view_h {
                                 continue;
                             }
@@ -449,13 +523,16 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
     };
     if !app.shot && !r.chapters.is_empty() && r.local.is_none() {
         let mut reports = r.gate.see(r.chapters[ci].id, page, false, now);
-        // A chapter whose last page's bottom is on screen is finished.
+        // A chapter is finished once its last page has been on screen from its top to its bottom.
         for (item, y) in &shown {
             if let Item::Page(c, n) = *item
                 && r.counts[c].is_some_and(|p| n + 1 == p)
             {
+                if *y >= -1.0 {
+                    r.end_seen.insert(c);
+                }
                 let h = View { r, im: &app.images }.height(*item);
-                if y + h <= view_h + 1.0 && app.images.size(r.chapters[c].id, n).is_some() {
+                if y + h <= view_h + 1.0 && r.end_seen.contains(&c) && app.images.size(r.chapters[c].id, n).is_some() {
                     reports.extend(r.gate.see(r.chapters[c].id, n, true, now));
                 }
             }
@@ -467,7 +544,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
             {
                 c.read = true;
             }
-            app.jobs.send(app.server.as_ref(), Job::Progress(chapter, p));
+            app.report_progress(chapter, p);
         }
         if let Some(at) = r.gate.due_at() {
             app.wake_at(at);
@@ -592,11 +669,20 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
     }
     if let Some(c) = jump {
         r.pos = Pos { item: Item::Head(c), off: 0.0 };
+        // A page turn still gliding would carry the new chapter past its heading.
         r.fling.stop();
+        r.glide = 0.0;
         r.overlay = false;
     }
     moving |= app.images.pages_pending() && !crate::wake::has();
-    (moving, back || to_series)
+    let leave = if to_series {
+        Leave::ToSeries
+    } else if back {
+        Leave::Back
+    } else {
+        Leave::Stay
+    };
+    (moving, leave)
 }
 
 /// The overlay's bottom bar, above the gesture bar: the chapter keys and auto-scroll, then the
@@ -617,6 +703,8 @@ fn ahead(v: &View, pos: Pos, view_h: f32) -> Ahead {
     let mut out = Ahead::Ready;
     for (item, _) in strip::visible(v, pos, view_h, view_h * AHEAD) {
         match item {
+            // A chapter whose length would not come: stop at it, as at a page that would not load.
+            Item::Head(c) if v.pages(c).is_none() && v.r.count_failed.contains_key(&c) => return Ahead::Failed,
             Item::Head(c) if v.pages(c).is_none() => out = Ahead::Loading,
             Item::Page(c, n) => {
                 let id = v.r.chapters[c].id;
