@@ -50,6 +50,9 @@ pub const FOLLOWING: u8 = 2;
 pub const DOWNLOADS: u8 = 3;
 /// How far back Updates looks, in days.
 pub const UPDATE_DAYS: u32 = 14;
+/// A series' row in Recent, Following and Downloads: its square cover flush left is as tall. The
+/// owner found the drawn 112 too big (2026-11-23): more series fit at 88.
+pub const ROW_H: f32 = 88.0;
 
 #[derive(Default)]
 pub struct State {
@@ -66,6 +69,8 @@ pub struct State {
     chips: crate::ui::HScroll,
     /// The shelf sheet is open for this series (a long press on its row).
     pub shelf_for: Option<i64>,
+    /// The downloads sheet is open for this series (a long press on its row in Downloads).
+    pub downloads_for: Option<i64>,
 }
 
 impl State {
@@ -76,11 +81,12 @@ impl State {
         self.more_menu = false;
         self.sort_menu = false;
         self.shelf_for = None;
+        self.downloads_for = None;
         open
     }
 
     fn covered(&self) -> bool {
-        self.add_menu || self.more_menu || self.sort_menu || self.shelf_for.is_some()
+        self.add_menu || self.more_menu || self.sort_menu || self.shelf_for.is_some() || self.downloads_for.is_some()
     }
 }
 
@@ -104,6 +110,10 @@ enum Act {
     Book(i64),
     Bell(i64, bool),
     Remove(i64),
+    /// A series' read chapters, removed from this phone and the server.
+    RemoveRead(Option<i64>),
+    /// A long press on a row in Downloads: its sheet.
+    Downloads(i64),
     /// An update: its chapter in the reader.
     Chapter(i64, i64),
     /// A long press on a series' row: the shelf sheet.
@@ -172,6 +182,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let view_top = -cx.c.dy - 140.0;
     let view_bottom = -cx.c.dy + cx.c.h + 140.0;
     let mut retry_updates = false;
+    let mut remove_read = false;
     let mut set_all: Option<bool> = None;
     let held_at = if covered { None } else { cx.ui.resting(now).filter(|(_, ns)| *ns >= crate::series::LONG_PRESS_NS).map(|(p, _)| p) };
     match tab {
@@ -249,13 +260,14 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     if cx.pressed(0.0, y, WIDTH, rh) {
                         cx.c.rect(0.0, y, WIDTH, rh, 0.0, t::WASH);
                     }
-                    let (cw, ch) = (44.0, 60.0);
+                    // A square cover flush left, as every row of My space (design 42, page 16).
+                    let cw = rh;
                     let of = CoverOf::Series(u.series);
-                    cx.c.rect(x0, y + (rh - ch) / 2.0, cw, ch, 6.0, t::S1);
+                    cx.c.rect(0.0, y, cw, rh, 0.0, t::S1);
                     if app.images.cover(cx.c, of, now) {
-                        cx.c.image_cover(&of.key(), x0, y + (rh - ch) / 2.0, cw, ch, 6.0, Rgba::WHITE.a(if u.read { 0.5 } else { 1.0 }));
+                        cx.c.image_cover(&of.key(), 0.0, y, cw, rh, 0.0, Rgba::WHITE.a(if u.read { 0.5 } else { 1.0 }));
                     }
-                    let tx = x0 + cw + 14.0;
+                    let tx = cw + 14.0;
                     let time = logic::clock_words(u.at, offset);
                     let tt_ = Text::new(12.5, t::INK3).right();
                     let tw_ = cx.c.measure(&time, tt_);
@@ -314,7 +326,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 }
                 y += 46.0;
             }
-            let rh = 104.0;
+            let rh = ROW_H;
             for (_, _, r) in rows {
                 if y + rh < view_top || y > view_bottom {
                     y += rh;
@@ -323,7 +335,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 if cx.pressed(0.0, y, WIDTH, rh) {
                     cx.c.rect(0.0, y, WIDTH, rh, 0.0, t::WASH);
                 }
-                let cw = 96.0;
+                let cw = rh;
                 let tx = cw + 14.0;
                 let (title, line, new, last, key, f, row_act, key_act) = match r {
                     Ok(s) => {
@@ -348,22 +360,22 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 if f > 0.0 {
                     cx.c.rect(0.0, y + rh - 3.0, cw * f.min(1.0), 3.0, 0.0, t::ACCENT);
                 }
-                let kt = Text::new(ty::UI, t::INK).semi();
-                let kw = cx.c.measure(key, kt) + 28.0;
-                let (kx, ky) = (WIDTH - PAD - kw, y + (rh - 36.0) / 2.0);
-                if cx.pressed(kx, ky, kw, 36.0) {
-                    cx.c.rect(kx, ky, kw, 36.0, 8.0, t::WASH);
+                let kt = Text::new(13.0, t::INK).semi();
+                let (kw, kh) = (cx.c.measure(key, kt) + 24.0, 34.0);
+                let (kx, ky) = (WIDTH - PAD - kw, y + (rh - kh) / 2.0);
+                if cx.pressed(kx, ky, kw, kh) {
+                    cx.c.rect(kx, ky, kw, kh, 8.0, t::WASH);
                 }
-                cx.c.outline(kx, ky, kw, 36.0, 8.0, 1.0, t::INK.a(0.28));
-                cx.c.text(key, kx + 14.0, ky + (36.0 - kt.lh()) / 2.0, kt);
+                cx.c.outline(kx, ky, kw, kh, 8.0, 1.0, t::INK.a(0.28));
+                cx.c.text(key, kx + 12.0, ky + (kh - kt.lh()) / 2.0, kt);
                 let tw = kx - 12.0 - tx;
-                let title_t = Text::new(16.5, t::INK).semi();
-                let line_t = Text::new(ty::UI, t::INK);
-                let last_t = Text::new(12.5, t::INK3);
-                let block = title_t.lh() + 6.0 + 18.0 + 6.0 + last_t.lh();
+                let title_t = Text::new(15.5, t::INK).semi();
+                let line_t = Text::new(13.0, t::INK2);
+                let last_t = Text::new(12.0, t::INK3);
+                let block = title_t.lh() + 3.0 + 18.0 + 2.0 + last_t.lh();
                 let ty0 = y + (rh - block) / 2.0;
                 cx.c.text_fit(title, tx, ty0, tw, title_t);
-                let ly = ty0 + title_t.lh() + 6.0;
+                let ly = ty0 + title_t.lh() + 3.0;
                 // NEW beside the chapter, the chapter said shorter when both don't fit.
                 let tag = format!("{new} NEW");
                 let tag_w = cx.c.measure(&tag, Text::new(10.5, t::ON_ACCENT).semi()) + 18.0;
@@ -373,11 +385,11 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 if new > 0 {
                     new_tag(cx.c, tx + lw + 8.0, ly, &tag);
                 }
-                cx.c.text_fit(&last, tx, ly + 18.0 + 6.0, tw, last_t);
+                cx.c.text_fit(&last, tx, ly + 18.0 + 2.0, tw, last_t);
                 if let (true, Act::Series(id)) = (held_on(held_at, y, rh, cx.c.dy), &row_act) {
                     cx.ui.swallow();
                     act = Some(Act::Shelve(*id));
-                } else if cx.tap(kx - 6.0, ky - 8.0, kw + 12.0, 52.0) {
+                } else if cx.tap(kx - 6.0, ky - 8.0, kw + 12.0, kh + 16.0) {
                     act = Some(key_act);
                 } else if cx.tap(0.0, y, WIDTH, rh) {
                     act = Some(row_act);
@@ -443,7 +455,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 }
                 y += 46.0;
             }
-            let rh = 128.0;
+            let rh = ROW_H;
             for s in &list {
                 if y + rh < view_top || y > view_bottom {
                     y += rh;
@@ -452,11 +464,10 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 if cx.pressed(0.0, y, WIDTH, rh) {
                     cx.c.rect(0.0, y, WIDTH, rh, 0.0, t::WASH);
                 }
-                let (cw, ch) = (120.0, 112.0);
-                let cy = y + (rh - ch) / 2.0;
-                cover(&mut cx, &mut app.images, s, x0, cy, cw, ch, 6.0, now);
+                let cw = rh;
+                cover(&mut cx, &mut app.images, s, 0.0, y, cw, rh, 0.0, now);
                 if new_of[&s.id] > 0 {
-                    new_tag(cx.c, x0 + 6.0, cy + 6.0, "New chapter");
+                    new_tag(cx.c, 5.0, y + 5.0, "NEW");
                 }
                 let bx = WIDTH - 6.0 - 44.0;
                 let by = y + (rh - 44.0) / 2.0;
@@ -464,19 +475,15 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 if bell {
                     act = Some(Act::Bell(s.id, !s.bell));
                 }
-                let tx = x0 + cw + 14.0;
+                let tx = cw + 14.0;
                 let tw = bx - 4.0 - tx;
-                let title_t = Text::new(16.0, t::INK).semi().line(1.3);
-                let lines = cx.c.wrap(&s.title, tw, title_t, 2);
+                let title_t = Text::new(15.5, t::INK).semi();
                 let line_t = Text::new(12.5, t::INK3);
-                let block = lines.len() as f32 * title_t.lh() + 6.0 + line_t.lh();
-                let mut ly = y + (rh - block) / 2.0;
-                for l in &lines {
-                    cx.c.text(l, tx, ly, title_t);
-                    ly += title_t.lh();
-                }
+                let block = title_t.lh() + 5.0 + line_t.lh();
+                let ty0 = y + (rh - block) / 2.0;
+                cx.c.text_fit(&s.title, tx, ty0, tw, title_t);
                 let updated = if s.updated_at > 0 { format!("{} Updated", logic::local_date(s.updated_at)) } else { format!("Added {}", logic::local_date(s.added_at)) };
-                cx.c.text_fit(&updated, tx, ly + 6.0, tw, line_t);
+                cx.c.text_fit(&updated, tx, ty0 + title_t.lh() + 5.0, tw, line_t);
                 if held_on(held_at, y, rh, cx.c.dy) {
                     cx.ui.swallow();
                     act = Some(Act::Shelve(s.id));
@@ -488,30 +495,39 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         }
         _ => {
             let cached = app.images.cached.clone().unwrap_or_default();
-            // Per series: the chapters the server keeps, and those on this phone with their bytes.
+            // Per series: the chapters the server keeps, those on this phone with their bytes, and
+            // the newest download's day.
             let mut rows: Vec<(&Series, usize, usize, u64)> = Vec::new();
+            let mut read_kept = 0usize;
             for s in &series {
                 let Some(d) = app.series.get(&s.id).and_then(|l| l.data.as_ref()) else { continue };
                 let server = d.chapters.iter().filter(|c| c.downloaded).count();
                 let phone: Vec<u64> = d.chapters.iter().filter_map(|c| cached.get(&c.id).copied()).collect();
+                read_kept += d.chapters.iter().filter(|c| c.read && (c.downloaded || cached.contains_key(&c.id))).count();
                 if server > 0 || !phone.is_empty() {
                     rows.push((s, server, phone.len(), phone.iter().sum()));
                 }
             }
             let total: u64 = rows.iter().map(|r| r.3).sum();
             let on_server: usize = rows.iter().map(|r| r.1).sum();
-            y += 14.0;
-            let ft = Text::new(26.0, t::INK).semi();
-            let fw = cx.c.text(&size_words(total), x0, y, ft);
-            cx.c.text("on this phone", x0 + fw + 8.0, y + ft.lh() - 20.0, Text::new(ty::UI, t::INK2));
-            y += ft.lh() + 4.0;
-            cx.c.text_fit(
-                &format!("{} kept on your server, ready to read", logic::chapters_words(on_server)),
-                x0,
-                y,
-                w,
-                Text::new(12.5, t::INK3),
-            );
+            y += 12.0;
+            let ht = Text::new(ty::UI, t::INK2);
+            let head_h = 36.0;
+            let words = format!("On this phone: {}", size_words(total));
+            cx.c.text(&words, x0, y + (head_h - ht.lh()) / 2.0, ht);
+            if read_kept > 0 {
+                let rt = Text::new(ty::UI, t::INK).semi().right();
+                let rw = cx.c.measure("Remove read", rt);
+                if cx.pressed(WIDTH - PAD - rw - 10.0, y, rw + 20.0, head_h) {
+                    cx.c.rect(WIDTH - PAD - rw - 10.0, y, rw + 20.0, head_h, 8.0, t::WASH);
+                }
+                cx.c.text("Remove read", WIDTH - PAD, y + (head_h - rt.lh()) / 2.0, rt);
+                if cx.tap(WIDTH - PAD - rw - 14.0, y - 4.0, rw + 14.0 + PAD, head_h + 8.0) {
+                    remove_read = true;
+                }
+            }
+            y += head_h;
+            cx.c.text_fit(&format!("{} kept on your server, ready to read", logic::chapters_words(on_server)), x0, y, w, Text::new(12.5, t::INK3));
             y += 30.0;
             if rows.is_empty() && app.images.cached.is_some() && !loading {
                 y += 20.0;
@@ -524,30 +540,41 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     4,
                 );
             }
-            let rh = 84.0;
+            let rh = ROW_H;
             for (s, server, phone, bytes) in rows {
+                if y + rh < view_top || y > view_bottom {
+                    y += rh;
+                    continue;
+                }
                 if cx.pressed(0.0, y, WIDTH, rh) {
                     cx.c.rect(0.0, y, WIDTH, rh, 0.0, t::WASH);
                 }
-                let (cw, ch) = (48.0, 66.0);
-                cover(&mut cx, &mut app.images, s, x0, y + (rh - ch) / 2.0, cw, ch, 6.0, now);
-                let tx = x0 + cw + 14.0;
-                let bx = WIDTH - 6.0 - 44.0;
-                let tw = bx - 4.0 - tx;
-                let title_t = Text::new(ty::BODY, t::INK).medium();
+                let cw = rh;
+                cover(&mut cx, &mut app.images, s, 0.0, y, cw, rh, 0.0, now);
+                let tx = cw + 14.0;
+                let tw = WIDTH - PAD - tx;
+                let title_t = Text::new(15.5, t::INK).semi();
                 let line_t = Text::new(12.5, t::INK3);
-                let ty0 = y + (rh - title_t.lh() - 4.0 - line_t.lh()) / 2.0;
-                cx.c.text_fit(&s.title, tx, ty0, tw, title_t);
+                let author = s.author.as_deref().map(|a| logic::showable(a, |c| cx.c.can_show(c))).filter(|a| !a.is_empty());
+                let block = title_t.lh() + 4.0 + if author.is_some() { line_t.lh() + 2.0 } else { 0.0 } + line_t.lh();
+                let mut ly = y + (rh - block) / 2.0;
+                cx.c.text_fit(&s.title, tx, ly, tw, title_t);
+                ly += title_t.lh() + 4.0;
+                if let Some(a) = &author {
+                    cx.c.text_fit(a, tx, ly, tw, line_t.color(t::INK2));
+                    ly += line_t.lh() + 2.0;
+                }
                 let mut words = Vec::new();
                 if server > 0 {
                     words.push(format!("{server} on your server"));
                 }
                 if phone > 0 {
-                    words.push(format!("{phone} on this phone, {}", size_words(bytes)));
+                    words.push(format!("{phone} here · {}", size_words(bytes)));
                 }
-                cx.c.text_fit(&words.join(" · "), tx, ty0 + title_t.lh() + 4.0, tw, line_t);
-                if kit::icon_key_ink(&mut cx, bx, y + (rh - 44.0) / 2.0, "trash", t::INK2) {
-                    act = Some(Act::Remove(s.id));
+                cx.c.text_fit(&words.join(" · "), tx, ly, tw, line_t);
+                if held_on(held_at, y, rh, cx.c.dy) {
+                    cx.ui.swallow();
+                    act = Some(Act::Downloads(s.id));
                 } else if cx.tap(0.0, y, WIDTH, rh) {
                     act = Some(Act::Series(s.id));
                 }
@@ -660,6 +687,22 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 Some(_) => st.sort_menu = false,
                 None => {}
             }
+        } else if let Some(id) = st.downloads_for {
+            match series.iter().find(|s| s.id == id) {
+                Some(s) => match kit::choices(&mut cx, &s.title, Some("Removed from this phone and your server"), &[("Remove every download", false), ("Remove the read ones", false)]) {
+                    Some(0) => {
+                        st.downloads_for = None;
+                        act = Some(Act::Remove(id));
+                    }
+                    Some(1) => {
+                        st.downloads_for = None;
+                        act = Some(Act::RemoveRead(Some(id)));
+                    }
+                    Some(_) => st.downloads_for = None,
+                    None => {}
+                },
+                None => st.downloads_for = None,
+            }
         } else if let Some(id) = st.shelf_for {
             match series.iter().find(|s| s.id == id) {
                 Some(s) => {
@@ -709,10 +752,14 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         Some(Act::Book(id)) => app.open_book(id),
         Some(Act::Bell(id, on)) => app.set_bell(id, on),
         Some(Act::Remove(id)) => remove_downloads(app, id),
+        Some(Act::RemoveRead(of)) => remove_read_downloads(app, of),
+        Some(Act::Downloads(id)) => app.st.space.downloads_for = Some(id),
         Some(Act::Chapter(series, chapter)) => app.open_chapter_of(series, chapter),
         Some(Act::Shelve(id)) => app.st.space.shelf_for = Some(id),
         None => {
-            if to_search {
+            if remove_read {
+                remove_read_downloads(app, None);
+            } else if to_search {
                 app.go_tab(1);
             } else if to_notes {
                 app.push(Route::Notes);
@@ -741,8 +788,42 @@ fn remove_downloads(app: &mut App, id: i64) {
     let server: Vec<i64> = d.chapters.iter().filter(|c| c.downloaded).map(|c| c.id).collect();
     let n = phone.iter().chain(server.iter()).collect::<std::collections::HashSet<_>>().len();
     app.images.remove_chapters(phone);
+    for c in &server {
+        app.mark_downloaded(*c, false);
+    }
     app.download(&server, false);
     app.toast(&format!("Removed {} of {}", logic::chapters_words(n), d.series.title));
+}
+
+/// Remove the chapters already read from this phone and the server: one series', or all.
+fn remove_read_downloads(app: &mut App, of: Option<i64>) {
+    let cached = app.images.cached.clone().unwrap_or_default();
+    let (mut phone, mut server) = (Vec::new(), Vec::new());
+    for l in app.series.values() {
+        let Some(d) = &l.data else { continue };
+        if of.is_some_and(|id| id != d.series.id) {
+            continue;
+        }
+        for c in d.chapters.iter().filter(|c| c.read) {
+            if cached.contains_key(&c.id) {
+                phone.push(c.id);
+            }
+            if c.downloaded {
+                server.push(c.id);
+            }
+        }
+    }
+    let n = phone.iter().chain(server.iter()).collect::<std::collections::HashSet<_>>().len();
+    if n == 0 {
+        app.toast("No read chapters are kept");
+        return;
+    }
+    app.images.remove_chapters(phone);
+    for c in &server {
+        app.mark_downloaded(*c, false);
+    }
+    app.download(&server, false);
+    app.toast(&format!("Removed {} you've read", logic::chapters_words(n)));
 }
 
 #[cfg(test)]

@@ -13,11 +13,23 @@ use crate::ui::{Phase, Touch};
 
 struct TestHost(PathBuf);
 
+/// Links each test's app asked the platform to open, by its data folder (tests run at once).
+static OPENED: std::sync::Mutex<Vec<(PathBuf, String)>> = std::sync::Mutex::new(Vec::new());
+
 impl Host for TestHost {
     fn data_dir(&self) -> PathBuf {
         self.0.clone()
     }
     fn log(&self, _text: &str) {}
+    fn open_url(&self, url: &str) -> bool {
+        OPENED.lock().unwrap().push((self.0.clone(), url.to_string()));
+        true
+    }
+}
+
+/// The links this app asked the platform to open.
+fn opened(app: &App) -> Vec<String> {
+    OPENED.lock().unwrap().iter().filter(|(d, _)| *d == app.data).map(|(_, u)| u.clone()).collect()
 }
 
 fn series(id: i64, title: &str) -> Series {
@@ -134,8 +146,10 @@ fn tab_over_content(app: &mut App, t: &mut u64, from: Route, off: f32, to: usize
 
 #[test]
 fn a_tab_tap_never_reaches_the_page_under_the_tab_bar() {
-    // Recently updated's rows lie under the bar on a tall screen.
+    // Top picks lie under the bar on a tall screen (picks already yours open their series).
     let (mut app, mut t, dir) = app_with("tabs-rows", 12, 2340.0);
+    nowhere(&mut app);
+    app.recs.data = Some(picks(9, Some(5)));
     tab_over_content(&mut app, &mut t, Route::Home, 0.0, 2, Route::Space);
     tab_over_content(&mut app, &mut t, Route::Home, 120.0, 1, Route::Search);
     // My space's Recent list and Following's series rows.
@@ -176,6 +190,10 @@ fn a_tap_on_a_fixed_top_never_reaches_what_scrolled_under_it() {
 #[test]
 fn the_spotlight_cannot_be_dragged_and_a_vertical_drag_on_it_scrolls_the_page() {
     let (mut app, mut t, dir) = app_with("swipe", 12, 2340.0);
+    // Picks under it, so the page is long enough to scroll.
+    nowhere(&mut app);
+    app.recs.data = Some(picks(9, Some(5)));
+    step(&mut app, &mut t);
     assert_eq!(app.route(), &Route::Home);
     let (pos, target) = (app.st.home.pos, app.st.home.target);
     let u = app.canvas.u;
@@ -221,9 +239,9 @@ fn the_spotlight_turns_slowly_by_itself_and_a_dot_chooses_one() {
         step(&mut app, &mut t);
     }
     assert_eq!(app.st.home.pos, 1.0, "and settles on it");
-    // Three dots, right-aligned under the spotlight's words: the last one, tapped, is shown.
-    let hero_h = app.canvas.inset_top + 436.0;
-    tap(&mut app, &mut t, WIDTH - crate::theme::PAD - 4.0 - 2.0, hero_h - 50.0 + 2.0);
+    // Three dots, centred under the card: the last one, tapped, is shown.
+    let dots_y = app.canvas.inset_top + 56.0 + 4.0 + 412.0 + 14.0;
+    tap(&mut app, &mut t, WIDTH / 2.0 + 18.0, dots_y + 2.0);
     assert_eq!(app.st.home.target, 2.0, "the dot tapped");
     assert_eq!(app.route(), &Route::Home, "a dot is not the picture");
     for _ in 0..90 {
@@ -231,6 +249,27 @@ fn the_spotlight_turns_slowly_by_itself_and_a_dot_chooses_one() {
     }
     assert_eq!(app.st.home.pos, 2.0);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A server nothing answers at: the app asks, nothing comes, nothing is written anywhere.
+fn nowhere(app: &mut App) {
+    app.server = Some(crate::net::Server { base: "http://127.0.0.1:9".into(), token: None });
+}
+
+/// `n` made-up picks, each `in_space` when given, with two genres.
+fn picks(n: i64, in_space: Option<i64>) -> leaf_proto::Recs {
+    let rec = |i: i64| leaf_proto::Rec {
+        anilist_id: 100 + i,
+        title: format!("Pick {i}"),
+        reason: "More like Series 1".into(),
+        genres: vec!["Action".into(), "Murim".into()],
+        chapters: Some(80),
+        status: "ongoing".into(),
+        hits: vec![leaf_proto::Hit { manga_id: 500 + i, source: "S".into() }],
+        cover: String::new(),
+        in_space,
+    };
+    leaf_proto::Recs { top: (1..=n).map(rec).collect(), made_at: 1, ..Default::default() }
 }
 
 /// A series' chapters, 1 to `n`, the first four read, as the series page has them.
@@ -361,25 +400,138 @@ fn a_long_press_on_a_row_puts_it_on_a_shelf_and_the_chips_filter_by_it() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Where the series page's first chapter row starts for a series from [`detail`] (no cover, no
+/// description; the status tag), and where the bottom bar's keys are.
+fn first_row(app: &App) -> f32 {
+    // Back row 56, the poster 6 + 212, 22 under it, the title, 12, the tag 28 + 20, the tabs 43,
+    // 14, "N chapters" and 12.
+    let title = crate::draw::Text::new(24.0, crate::theme::INK).brand().line(1.18).lh();
+    let head = crate::draw::Text::new(crate::theme::ty::UI, crate::theme::INK).semi().lh();
+    app.canvas.inset_top + 56.0 + 6.0 + 212.0 + 22.0 + title + 12.0 + 48.0 + 43.0 + 14.0 + head + 12.0
+}
+
 #[test]
-fn a_long_press_on_a_chapter_opens_its_sheet_and_marks_it() {
+fn a_long_press_on_a_chapter_selects_it_and_the_bar_marks_the_selection() {
     let (mut app, mut t, dir) = app("chapter");
     app.series.insert(1, loaded(detail(1, 10)));
     app.push(Route::Series(1));
     step(&mut app, &mut t);
     step(&mut app, &mut t);
-    // Newest first: chapter 10's row, then 9's (rows 84 tall from about 509).
-    hold(&mut app, &mut t, 200.0, 640.0);
-    let c = app.st.series.chapter.expect("the chapter's sheet is open");
+    let y0 = first_row(&app);
+    let row = crate::series::ROW_H;
+    // Newest first: chapter 10, 9, 8... Hold the third (chapter 8).
+    hold(&mut app, &mut t, 200.0, y0 + row * 2.0 + row / 2.0);
     assert_eq!(app.route(), &Route::Series(1), "the long press did not open the reader");
-    // Mark as read, the sheet's first row (no date: no line under its title).
+    let sel = app.st.series.select.clone().expect("selecting");
+    assert_eq!(sel.into_iter().collect::<Vec<_>>(), vec![1008]);
+    // A tap now adds a chapter instead of opening it.
+    tap(&mut app, &mut t, 200.0, y0 + row * 3.0 + row / 2.0);
+    assert_eq!(app.route(), &Route::Series(1));
+    assert_eq!(app.st.series.select.as_ref().unwrap().len(), 2, "chapter 7 too");
+    // Mark read, the bar's third key: rows lie under the bar, and none of them takes the tap.
     let h = app.canvas.h;
-    let top = h - (58.0 + 52.0 * 3.0 + 12.0);
-    tap(&mut app, &mut t, 120.0, top + 58.0 + 26.0);
+    let ky = h - (50.0 + 24.0) + 8.0 + 25.0;
+    let gw = (WIDTH - 2.0 * crate::theme::PAD - 16.0) / 3.0;
+    tap(&mut app, &mut t, crate::theme::PAD + 2.0 * (gw + 8.0) + gw / 2.0, ky);
     let d = app.series[&1].data.as_ref().unwrap();
-    assert!(d.chapters.iter().find(|x| x.id == c).unwrap().read, "marked read at once");
-    assert_eq!(app.st.series.chapter, None);
-    assert_eq!(app.route(), &Route::Series(1), "the row under the sheet was not opened");
+    assert!(d.chapters.iter().filter(|c| c.id == 1007 || c.id == 1008).all(|c| c.read), "both marked read at once");
+    assert!(!d.chapters.iter().find(|c| c.id == 1006).unwrap().read, "and nothing else");
+    assert_eq!(app.st.series.select, None, "the selection is done");
+    assert_eq!(app.route(), &Route::Series(1));
+    // Back stops selecting before it leaves the page.
+    hold(&mut app, &mut t, 200.0, y0 + row / 2.0);
+    assert!(app.st.series.select.is_some());
+    assert!(app.back());
+    assert_eq!((app.st.series.select.clone(), app.route().clone()), (None, Route::Series(1)));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_continue_key_at_the_bottom_takes_its_tap_not_the_row_under_it() {
+    let (mut app, mut t, dir) = app("continue-key");
+    app.series.insert(1, loaded(detail(1, 10)));
+    app.push(Route::Series(1));
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    let h = app.canvas.h;
+    tap(&mut app, &mut t, 60.0, h - (50.0 + 24.0) + 8.0 + 25.0);
+    assert_eq!(app.route(), &Route::Reader);
+    let r = app.reader.as_ref().unwrap();
+    assert!(matches!(r.pos.item, crate::strip::Item::Head(4)), "chapter 5, after the four read: {:?}", r.pos);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn paid_episodes_ahead_open_their_link_from_a_row_at_the_newest_end() {
+    let (mut app, mut t, dir) = app("paid");
+    app.series.insert(1, loaded(detail(1, 10)));
+    app.paid.insert(1, leaf_proto::PaidAhead { from: 11.0, to: 23.0, url: "https://www.webtoons.com/x".into() });
+    app.push(Route::Series(1));
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    let y0 = first_row(&app);
+    // The paid row is first; Open at its right.
+    tap(&mut app, &mut t, WIDTH - crate::theme::PAD - 30.0, y0 + 35.0);
+    assert_eq!(opened(&app), vec!["https://www.webtoons.com/x".to_string()]);
+    assert_eq!(app.route(), &Route::Series(1), "no chapter opened");
+    // The chapters come after it: chapter 10 is the second row.
+    tap(&mut app, &mut t, 200.0, y0 + 70.0 + crate::series::ROW_H / 2.0);
+    assert_eq!(app.route(), &Route::Reader);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_pick_opens_its_sheet_and_the_sheet_takes_every_tap() {
+    let (mut app, mut t, dir) = app("picks");
+    nowhere(&mut app);
+    app.recs.data = Some(picks(6, None));
+    app.reset_to(Route::Home);
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    // The first pick, under the spotlight and its heading.
+    let grid_top = app.canvas.inset_top + 56.0 + 4.0 + 412.0 + 14.0 + 32.0 + 22.5 + 14.0;
+    tap(&mut app, &mut t, 60.0, grid_top + 60.0);
+    assert_eq!(app.st.recs.sheet.as_ref().map(|s| s.rec.anilist_id), Some(101), "the sheet, not a page");
+    assert_eq!(app.route(), &Route::Home);
+    // A tap above the sheet, on the spotlight, only closes it.
+    tap(&mut app, &mut t, 200.0, 200.0);
+    assert!(app.st.recs.sheet.is_none());
+    assert_eq!((app.route(), app.nav.len()), (&Route::Home, 1), "the spotlight under it did not open");
+    step(&mut app, &mut t);
+    // Again, then Not interested, the row above the last (Fewer like Action): gone from the picks.
+    tap(&mut app, &mut t, 60.0, grid_top + 60.0);
+    assert!(app.st.recs.sheet.is_some());
+    let h = app.canvas.h;
+    tap(&mut app, &mut t, 120.0, h - 8.0 - 52.0 - 26.0);
+    assert!(app.st.recs.sheet.is_none());
+    let top: Vec<i64> = app.recs.data.as_ref().unwrap().top.iter().map(|r| r.anilist_id).collect();
+    assert!(!top.contains(&101), "hidden: {top:?}");
+    assert_eq!((app.route(), app.nav.len()), (&Route::Home, 1));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_update_sheet_holds_the_page_and_later_puts_that_build_off() {
+    let (mut app, mut t, dir) = app("update");
+    let build = crate::update::BUILD + 1;
+    crate::update::offered(&mut app, leaf_proto::AppLatest { build, version: String::new(), size: 18_000_000, sha256: String::new(), made_at: 0 });
+    assert!(app.st.update.open);
+    step(&mut app, &mut t);
+    // The gear under the sheet's veil takes nothing.
+    tap(&mut app, &mut t, WIDTH - 6.0 - 22.0, 28.0);
+    assert_eq!(app.route(), &Route::Home, "the gear under the sheet did not open Settings");
+    assert!(!app.st.update.open, "a tap outside it closes it");
+    crate::update::offered(&mut app, leaf_proto::AppLatest { build, version: String::new(), size: 18_000_000, sha256: String::new(), made_at: 0 });
+    step(&mut app, &mut t);
+    // Later, the left key at the sheet's foot.
+    let h = app.canvas.h;
+    tap(&mut app, &mut t, 60.0, h - 18.0 - 24.0);
+    assert!(!app.st.update.open);
+    assert_eq!(app.update_later.map(|l| l.0), Some(build), "that build is put off");
+    crate::update::offered(&mut app, leaf_proto::AppLatest { build, version: String::new(), size: 1, sha256: String::new(), made_at: 0 });
+    assert!(!app.st.update.open, "and not offered again today");
+    crate::update::offered(&mut app, leaf_proto::AppLatest { build: build + 1, version: String::new(), size: 1, sha256: String::new(), made_at: 0 });
+    assert!(app.st.update.open, "a newer one is");
     let _ = std::fs::remove_dir_all(dir);
 }
 

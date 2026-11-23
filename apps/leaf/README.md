@@ -95,32 +95,57 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
 - **App updates**: the server keeps the newest APK (`data/app/`, put there by
   `tools/publish-apk.sh <apk> <build> <version>`), `GET /v1/app/latest` and `/v1/app/apk`.
 - **The phone** (`native/crates/leaf-app`), three tabs (design 42, pages 12 to 14):
-  - **Home** (`home.rs`): a spotlight over a cover that slides gently to the next every 18 s (it
-    is not dragged; its dots choose one; a cover too small to fill it sharp is a poster over a
-    blurred copy of itself), belled series with new chapters first, then what you read last, books too; Continue reading (covers
-    with how far each is read, "Ch. 338 · 2 new"); Recently updated.
+  - **Home** (`home.rs`, design 42 page 15): the spotlight, a rounded card of big art (only covers
+    that fill it sharp) with the title centred, Continue or Start and the bell as Follow; it slides
+    gently to the next every 18 s (it is not dragged; its dots under it choose one); belled series
+    with new chapters first, then what you read last, books too. Then **Top picks for you** (three
+    across, each with why in the accent), **Continue reading** (square covers, "1 new chapter" in
+    the accent or "Ch. 12 · 58 to go"), **Because you read X** rails, **Collections** (a tile per
+    tag, each opening its list) and one **Finished, to binge**. Picks (`recs.rs`) come from
+    `/v1/recs`, kept on disk and asked again at most every 30 minutes; until the server has made
+    them the section says so. A tap or a long press on a pick opens its sheet: why it is there,
+    Add to My space (`/v1/follow` with its sources' entries, bell off), Read chapter 1 (added,
+    then opened), Not interested (hidden for good) and Fewer like a tag.
   - **Search**: every source at once. **Add** puts a series in My space with its bell off: adding
     is not following. Sources are never named anywhere in the app.
-  - **My space** (`space.rs`): Updates (chapters that came over the last 14 days, `/v1/updates`,
-    by day, unread in full ink and read dimmed, Belled only or All; a row opens the reader at that
-    chapter), Recent (last read first, Continue or Start), Following (webtoon's Subscribed list:
-    the bell is the follow, sorted by Recently read, updated or followed, with a row of shelves:
-    Reading, Plan to read, On hold, Dropped, Done, and their counts) and Downloads (per series,
-    what the server keeps and what is on this phone, and removing it). Updates, Recent and
-    Following have a field that narrows the list by title as you type (any case or accent, inside
-    words). A long press on a series' row puts it on another shelf; Dropped series stay out of
-    Home's spotlight and Continue reading. Highlights and Reading time are in its ⋯ menu, no
-    longer tabs; a book's notes stay in the reader's menu.
-  - **Series** (`series.rs`): banner, facts, Continue, Chapters / About; Newest ⇅ kept per series.
-    Each chapter row has a picture cut from its own pages once downloaded (`thumb.rs`: the most
-    colourful 4:3 crop of a few random pages, near-white weighed hard against, kept in `thumbs/`),
-    a cloud tile until then that downloads it when tapped, and Read, Continue or a check. ⋯ has
-    "Download next 5" and "Remove from My space". Nothing downloads by itself: the server keeps
-    only the chapter after the last one read.
-  - A long press on a chapter's row: Mark as read or unread, Mark all before as read, Download or
-    Remove download, each shown at once and put back with a toast if the server says no. The
-    series' ⋯ also has its shelf and "Wrong series?" (the other entries for the work with their
-    chapter counts, `/v1/series/{id}/alternatives`; picking one repins the series, place carried).
+  - **My space** (`space.rs`, design 42 page 16): rows with a square cover flush left (88, smaller
+    than drawn, so more fit), the title, a line, when, and a key. Updates (chapters that came over
+    the last 14 days, `/v1/updates`, by day, unread in full ink and read dimmed, Belled only or All;
+    a row opens the reader at that chapter), Recent (last read first, Continue or Start),
+    Following (webtoon's Subscribed list: the bell is the follow, sorted by Recently read, updated
+    or followed, with a row of shelves: Reading, Plan to read, On hold, Dropped, Done, and their
+    counts) and Downloads (per series, what the server keeps and what is on this phone; Remove
+    read clears chapters you have finished, a long press removes one series' downloads). Updates,
+    Recent and Following have a field that narrows the list by title as you type (any case or
+    accent, inside words). A long press on a series' row puts it on another shelf; Dropped series
+    stay out of Home's spotlight and Continue reading. Highlights and Reading time are in its ⋯
+    menu, no longer tabs; a book's notes stay in the reader's menu.
+  - **Series** (`series.rs`, design 42 page 17): Back, the bell as a Follow pill, info and ⋯; the
+    cover centred over a wash of its colours; title, authors, three lines of synopsis (info shows
+    it all with the facts), tags; tabs **Chapters** / **Readers also like**; a fixed key at the
+    bottom, "Continue chapter N". Chapter rows have the server's picture of the chapter (72 × 54,
+    `/v1/chapters/{id}/thumb`, kept on disk; `thumb` on each chapter says one exists; the phone no
+    longer cuts pictures from pages), a cloud tile until it is downloaded (tapping it downloads
+    it), "Ch. 339 · title", the date or the page you are on, and Read or Continue; read rows are
+    dimmed. When Webtoon sells episodes ahead (`paid`), a row at the newest end says "Chapters
+    9–23 are on Webtoon (paid)" and Open hands its link to the Webtoon app or the browser.
+    Readers also like is `/v1/series/{id}/also`, three across, "Yours" on ones in My space.
+  - **Select** (a long press on a chapter, or ⋯ → Select chapters): taps add or take chapters away,
+    and the bottom key becomes Download N / Remove N / Mark read; "Select range…" takes a first and
+    last chapter to select or download (`/v1/series/{id}/download`); ⋯ also has "Download next 5"
+    and "Download all unread". Several chapters go through the server's line (`/v1/downloads`);
+    rows waiting say "queued", the two being fetched "downloading". ⋯ also has the shelf, "Wrong
+    series?" (the other entries for the work with their chapter counts,
+    `/v1/series/{id}/alternatives`; picking one repins the series, place carried) and "Remove from
+    My space".
+  - **App updates** (`update.rs`): the app knows its build (`LEAF_BUILD`, the commit count
+    `tools/build-lib.sh` builds at; Gradle's `versionCode` is the same number, `versionName`
+    "0.<build>"). When it opens, and at most every 6 h, it asks `/v1/app/latest`; a newer build is
+    offered in a sheet, "Leaf 0.N is ready · 18 MB", Update or Later (Later hides that build for a
+    day). Update downloads `/v1/app/apk` into the cache on a thread, checks its SHA-256, and hands
+    it to Android's installer through `LeafActivity` (a FileProvider link); when Leaf may not
+    install apps yet, Android's "Install unknown apps" page opens first. The desktop shows the
+    sheet; its Update only logs.
   - **Notices** (Android): `LeafChaptersJob` asks `/v1/events?since=` about hourly and posts one
     notice per run of new chapters of a belled series; the first bell turned on asks to post
     notifications. When to post is `notices.rs`'s (called through JNI): quiet hours (default
@@ -150,10 +175,10 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 cargo run -p leaf-app                                  # desktop window
 cargo run -p leaf-app -- --shot out.png --screen reader --id 1   # headless shot vs a local leaf-server
-cargo run -p leaf-app -- --shot out.png --screen space --tab following --sort 1   # home, space, series --tab about, search
+cargo run -p leaf-app -- --shot out.png --screen space --tab following --sort 1   # home, space, series --tab also, picks, search
 cargo run -p leaf-app -- --shot out.png --screen book --books a.epub --seed 1 --at 0.5   # a book (see desktop.rs)
-tools/build-lib.sh                                     # libleaf.so (needs ~/.local/share/rust-android + NDK)
-cd .. && ./gradlew assembleDebug                       # native/android/build/outputs/apk/debug/app-debug.apk
+tools/build-lib.sh                                     # libleaf.so (needs ~/.local/share/rust-android + NDK), LEAF_BUILD = commit count
+cd .. && ./gradlew assembleDebug                       # native/android/build/outputs/apk/debug/app-debug.apk, versionCode = the same count
 ```
 
 Shots and anything that opens a window: headless only (`--shot`), never on the desktop.
@@ -193,6 +218,6 @@ Until leaf-server is on main with an image of its own, a new version is copied o
 - The phone does not yet download chapters ahead on its own while closed; it prefetches while
   reading.
 - leaf-server is not built by CI or published as an image.
-- The phone does not read the server's round-3 answers yet: recommendations (`/v1/recs`,
-  `/also`), chapter pictures made on the server (`thumb`), paid episodes (`paid`), batch
-  downloads and app updates (`/v1/app/latest`) are served, not shown.
+- `paid` and `thumb` are read by the phone beside leaf-proto's `Series` and `Chapter`
+  (`net::Extras`): leaf-server builds those structs field by field, so they gain the fields only
+  with a change on both sides.

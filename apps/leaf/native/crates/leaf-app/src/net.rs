@@ -11,7 +11,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use leaf_proto::{Alternative, AnilistToken, Bell, ChapterRead, Follow, Pages, Progress, ReadBefore, Repin, Series, SeriesDetail, ShelfSet, SourceHealth, Status, Update};
+use leaf_proto::{Alternative, AnilistToken, AppLatest, Bell, ChapterRead, DownloadIds, Follow, PaidAhead, Pages, Progress, ReadBefore, Rec, RecTag, Recs, Repin, Series, SeriesDetail, SeriesDownload, ShelfSet, SourceHealth, Status, Update};
 use serde::{Deserialize, Serialize};
 
 /// Where the server is, and its token if it has one.
@@ -141,6 +141,53 @@ impl Client {
         Client::read(req.call())
     }
 
+    /// DELETE with a JSON body (`/v1/downloads`).
+    pub fn delete_json(&self, s: &Server, path: &str, body: String) -> Result<Vec<u8>, Fail> {
+        let mut req = self.agent.delete(Client::url(s, path)).force_send_body().header("content-type", "application/json");
+        if let Some(t) = &s.token {
+            req = req.header("Authorization", format!("Bearer {t}"));
+        }
+        Client::read(req.send(body))
+    }
+
+    /// A large file streamed to `to` (written as `to.part`, then renamed), `got` counting the
+    /// bytes as they come; its SHA-256, in lower-case hex. Slow networks get the time they need.
+    pub fn download(&self, s: &Server, path: &str, to: &Path, got: &AtomicU64) -> Result<String, Fail> {
+        use std::io::{Read, Write};
+        let agent: ureq::Agent = ureq::Agent::config_builder().timeout_connect(Some(Duration::from_secs(10))).timeout_global(Some(Duration::from_secs(20 * 60))).http_status_as_error(false).build().into();
+        let mut req = agent.get(Client::url(s, path));
+        if let Some(t) = &s.token {
+            req = req.header("Authorization", format!("Bearer {t}"));
+        }
+        let mut r = req.call().map_err(|_| Fail::Unreachable)?;
+        match r.status().as_u16() {
+            200..=299 => {}
+            401 | 403 => return Err(Fail::Token),
+            code => return Err(Fail::Answer(code, String::new())),
+        }
+        let part = to.with_extension("part");
+        if let Some(dir) = to.parent() {
+            std::fs::create_dir_all(dir).map_err(|_| Fail::Garbled)?;
+        }
+        let mut out = std::io::BufWriter::new(std::fs::File::create(&part).map_err(|_| Fail::Garbled)?);
+        let mut body = r.body_mut().with_config().limit(400 << 20).reader();
+        let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = body.read(&mut buf).map_err(|_| Fail::Unreachable)?;
+            if n == 0 {
+                break;
+            }
+            hash.update(&buf[..n]);
+            out.write_all(&buf[..n]).map_err(|_| Fail::Garbled)?;
+            got.fetch_add(n as u64, Ordering::Relaxed);
+        }
+        out.flush().map_err(|_| Fail::Garbled)?;
+        drop(out);
+        std::fs::rename(&part, to).map_err(|_| Fail::Garbled)?;
+        Ok(hash.finish().as_ref().iter().map(|b| format!("{b:02x}")).collect())
+    }
+
     pub fn json<T: for<'de> Deserialize<'de>>(&self, s: &Server, path: &str) -> Result<T, Fail> {
         serde_json::from_slice(&self.get(s, path)?).map_err(|_| Fail::Garbled)
     }
@@ -201,6 +248,71 @@ pub enum Job {
     Alternatives(i64),
     /// Read a series from another entry (`POST /v1/series/{id}/repin`).
     Repin(i64, i64),
+    /// The recommendations (`/v1/recs`), from the copy on disk when it is younger than
+    /// [`RECS_FRESH_MS`] unless `true` (asked again by hand).
+    Recs(bool),
+    /// "Not interested" (`POST /v1/recs/{anilist_id}/hide`).
+    HideRec(i64),
+    /// Fewer recommendations with a tag, or as before (`POST /v1/recs/tags`).
+    RecTag(String, bool),
+    /// "Readers also like" for a series (`/v1/series/{id}/also`).
+    Also(i64),
+    /// Chapters queued to download on the server, or removed there (`POST` / `DELETE
+    /// /v1/downloads`).
+    Downloads(Vec<i64>, bool),
+    /// A run of a series' chapters, or every unread one, queued (`POST /v1/series/{id}/download`).
+    SeriesDownload(i64, SeriesDownload),
+    /// The newest app the server holds (`/v1/app/latest`).
+    AppLatest,
+}
+
+/// The recommendations on disk are asked for again after this long (they are made once a day).
+pub const RECS_FRESH_MS: i64 = 30 * 60_000;
+
+/// What `/v1/library` and `/v1/series/{id}` send beyond leaf-proto's [`Series`] and
+/// [`leaf_proto::Chapter`]: `paid` on each series and `thumb` on each chapter. leaf-server builds
+/// those structs field by field, so they gain these only once it does; until then the phone reads
+/// them from the same JSON.
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct SeriesExtra {
+    #[serde(default)]
+    pub id: i64,
+    #[serde(default)]
+    pub paid: Option<PaidAhead>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+struct ChapterExtra {
+    #[serde(default)]
+    id: i64,
+    #[serde(default)]
+    thumb: bool,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+struct DetailExtra {
+    #[serde(default)]
+    series: SeriesExtra,
+    #[serde(default)]
+    chapters: Vec<ChapterExtra>,
+}
+
+/// A series page's extras: its paid episodes ahead, and which chapters have a picture.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Extras {
+    pub paid: Option<PaidAhead>,
+    pub thumbs: Vec<(i64, bool)>,
+}
+
+/// The extras of a `/v1/series/{id}` answer.
+pub fn detail_extras(bytes: &[u8]) -> Extras {
+    let d: DetailExtra = serde_json::from_slice(bytes).unwrap_or_default();
+    Extras { paid: d.series.paid, thumbs: d.chapters.into_iter().map(|c| (c.id, c.thumb)).collect() }
+}
+
+/// Each series' paid episodes ahead, from a `/v1/library` answer.
+pub fn library_extras(bytes: &[u8]) -> Vec<SeriesExtra> {
+    serde_json::from_slice(bytes).unwrap_or_default()
 }
 
 impl Job {
@@ -208,7 +320,21 @@ impl Job {
     pub fn writes(&self) -> bool {
         matches!(
             self,
-            Job::Follow(_) | Job::Unfollow(_) | Job::Progress(..) | Job::Bell(..) | Job::Download(..) | Job::ChapterRead(..) | Job::ReadBefore(..) | Job::Shelf(..) | Job::Backup(true) | Job::Anilist(_) | Job::Repin(..)
+            Job::Follow(_)
+                | Job::Unfollow(_)
+                | Job::Progress(..)
+                | Job::Bell(..)
+                | Job::Download(..)
+                | Job::ChapterRead(..)
+                | Job::ReadBefore(..)
+                | Job::Shelf(..)
+                | Job::Backup(true)
+                | Job::Anilist(_)
+                | Job::Repin(..)
+                | Job::HideRec(_)
+                | Job::RecTag(..)
+                | Job::Downloads(..)
+                | Job::SeriesDownload(..)
         )
     }
 }
@@ -217,8 +343,8 @@ impl Job {
 #[derive(Debug)]
 pub enum Done {
     Status(Server, Result<Status, Fail>),
-    Library { cached: bool, result: Result<Vec<Series>, Fail> },
-    Series { id: i64, cached: bool, result: Result<SeriesDetail, Fail> },
+    Library { cached: bool, result: Result<(Vec<Series>, Vec<SeriesExtra>), Fail> },
+    Series { id: i64, cached: bool, result: Result<(SeriesDetail, Extras), Fail> },
     Search(String, Result<Vec<leaf_proto::Candidate>, Fail>),
     Followed(Result<Series, Fail>),
     Unfollowed(i64, Result<(), Fail>),
@@ -236,6 +362,15 @@ pub enum Done {
     Anilist(bool, Result<(), Fail>),
     Alternatives(i64, Result<Vec<Alternative>, Fail>),
     Repinned(i64, Result<Series, Fail>),
+    Recs { cached: bool, result: Result<Recs, Fail> },
+    RecHidden(i64, Result<(), Fail>),
+    RecTag(String, bool, Result<(), Fail>),
+    Also(i64, Result<Vec<Rec>, Fail>),
+    /// How many chapters the server queued (or removed).
+    Downloads(Vec<i64>, bool, Result<u32, Fail>),
+    SeriesDownload(i64, SeriesDownload, Result<u32, Fail>),
+    /// None: the server holds no app.
+    AppLatest(Result<Option<AppLatest>, Fail>),
 }
 
 type Task = (Option<Server>, Job);
@@ -449,8 +584,10 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
         }
         Job::Library => {
             let file = library_file(data);
-            if let Some(list) = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice::<Vec<Series>>(&b).ok()) {
-                send(Done::Library { cached: true, result: Ok(list) });
+            if let Some(b) = std::fs::read(&file).ok()
+                && let Ok(list) = serde_json::from_slice::<Vec<Series>>(&b)
+            {
+                send(Done::Library { cached: true, result: Ok((list, library_extras(&b))) });
             }
             let Some(s) = server else { return send(Done::Library { cached: false, result: no_server() }) };
             wait_for_progress();
@@ -458,14 +595,16 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
             let r = client.get(&s, "/v1/library").and_then(|b| {
                 let list = serde_json::from_slice::<Vec<Series>>(&b).map_err(|_| Fail::Garbled)?;
                 let _ = write_atomic(&file, &b);
-                Ok(list)
+                Ok((list, library_extras(&b)))
             });
             send(Done::Library { cached: false, result: r });
         }
         Job::Series(id) => {
             let file = series_file(data, id);
-            if let Some(d) = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice::<SeriesDetail>(&b).ok()) {
-                send(Done::Series { id, cached: true, result: Ok(d) });
+            if let Some(b) = std::fs::read(&file).ok()
+                && let Ok(d) = serde_json::from_slice::<SeriesDetail>(&b)
+            {
+                send(Done::Series { id, cached: true, result: Ok((d, detail_extras(&b))) });
             }
             let Some(s) = server else { return send(Done::Series { id, cached: false, result: no_server() }) };
             wait_for_progress();
@@ -473,7 +612,7 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
             let r = client.get(&s, &format!("/v1/series/{id}")).and_then(|b| {
                 let d = serde_json::from_slice::<SeriesDetail>(&b).map_err(|_| Fail::Garbled)?;
                 let _ = write_atomic(&file, &b);
-                Ok(d)
+                Ok((d, detail_extras(&b)))
             });
             send(Done::Series { id, cached: false, result: r });
         }
@@ -598,7 +737,71 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
             let r = post_json(client, &server, &format!("/v1/series/{id}/repin"), &Repin { manga_id }).and_then(|b| serde_json::from_slice::<Series>(&b).map_err(|_| Fail::Garbled));
             send(Done::Repinned(id, r));
         }
+        Job::Recs(force) => {
+            let file = data.join("recs.json");
+            let disk = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice::<Recs>(&b).ok());
+            let age = std::fs::metadata(&file).ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).map_or(i64::MAX, |d| d.as_millis() as i64);
+            if let Some(r) = &disk {
+                // Young enough: the copy on disk is the answer, and the server is not asked.
+                let fresh = !force && age < RECS_FRESH_MS;
+                send(Done::Recs { cached: !fresh, result: Ok(r.clone()) });
+                if fresh {
+                    return;
+                }
+            }
+            let Some(s) = server else { return send(Done::Recs { cached: false, result: no_server() }) };
+            let r = client.get(&s, "/v1/recs").and_then(|b| {
+                let recs = serde_json::from_slice::<Recs>(&b).map_err(|_| Fail::Garbled)?;
+                let _ = write_atomic(&file, &b);
+                Ok(recs)
+            });
+            send(Done::Recs { cached: false, result: r });
+        }
+        Job::HideRec(id) => {
+            let r = post_json(client, &server, &format!("/v1/recs/{id}/hide"), &serde_json::json!({})).map(|_| ());
+            send(Done::RecHidden(id, r));
+        }
+        Job::RecTag(tag, less) => {
+            let r = post_json(client, &server, "/v1/recs/tags", &RecTag { tag: tag.clone(), less }).map(|_| ());
+            send(Done::RecTag(tag, less, r));
+        }
+        Job::Also(id) => {
+            let r = match &server {
+                Some(s) => client.json(s, &format!("/v1/series/{id}/also")),
+                None => no_server(),
+            };
+            send(Done::Also(id, r));
+        }
+        Job::Downloads(ids, on) => {
+            let body = DownloadIds { ids: ids.clone() };
+            let r = match &server {
+                Some(s) if on => serde_json::to_string(&body).map_err(|_| Fail::Garbled).and_then(|b| client.post(s, "/v1/downloads", b)),
+                Some(s) => serde_json::to_string(&body).map_err(|_| Fail::Garbled).and_then(|b| client.delete_json(s, "/v1/downloads", b)),
+                None => no_server(),
+            };
+            send(Done::Downloads(ids, on, r.map(|b| count_of(&b))));
+        }
+        Job::SeriesDownload(id, what) => {
+            let r = post_json(client, &server, &format!("/v1/series/{id}/download"), &what).map(|b| count_of(&b));
+            send(Done::SeriesDownload(id, what, r));
+        }
+        Job::AppLatest => {
+            let r = match &server {
+                Some(s) => match client.json::<AppLatest>(s, "/v1/app/latest") {
+                    Ok(l) => Ok(Some(l)),
+                    Err(Fail::Answer(404, _)) => Ok(None),
+                    Err(f) => Err(f),
+                },
+                None => no_server(),
+            };
+            send(Done::AppLatest(r));
+        }
     }
+}
+
+/// `{"ok":true,"count":n}`: n.
+fn count_of(body: &[u8]) -> u32 {
+    serde_json::from_slice::<serde_json::Value>(body).ok().and_then(|v| v.get("count").and_then(|c| c.as_u64())).unwrap_or(0) as u32
 }
 
 #[cfg(test)]
@@ -628,6 +831,20 @@ mod tests {
         assert!(retry_later(&Fail::Unreachable) && retry_later(&Fail::Answer(502, String::new())));
         assert!(!retry_later(&Fail::Answer(404, String::new())));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_extras_are_read_beside_the_structs() {
+        let detail = br#"{"series":{"id":7,"title":"T","author":null,"source":"S","status":"ongoing","chapters":2,"read_upto":null,"unread":2,"latest":2,"gaps":[],"updated_at":0,"note":null,"paid":{"from":9,"to":23,"url":"https://w"}},"description":null,"chapters":[{"id":70,"number":1,"name":"","group":null,"pages":3,"read":false,"last_page":0,"downloaded":true,"uploaded_at":0,"thumb":true},{"id":71,"number":2,"name":"","group":null,"pages":3,"read":false,"last_page":0,"downloaded":false,"uploaded_at":0}]}"#;
+        assert!(serde_json::from_slice::<SeriesDetail>(detail).is_ok(), "the struct ignores what it lacks");
+        let e = detail_extras(detail);
+        assert_eq!(e.paid, Some(PaidAhead { from: 9.0, to: 23.0, url: "https://w".into() }));
+        assert_eq!(e.thumbs, vec![(70, true), (71, false)], "no thumb field: none");
+        let lib = br#"[{"id":7,"paid":null},{"id":8,"paid":{"from":1,"to":2,"url":"u"}}]"#;
+        let l = library_extras(lib);
+        assert_eq!((l[0].paid.is_none(), l[1].paid.as_ref().map(|p| p.to)), (true, Some(2.0)));
+        assert_eq!(detail_extras(b"not json"), Extras::default());
+        assert_eq!(count_of(br#"{"ok":true,"count":12}"#), 12);
     }
 
     #[test]

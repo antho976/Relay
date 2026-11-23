@@ -169,9 +169,18 @@ pub fn taste(read: &[&Media], less: &HashSet<String>) -> Taste {
     t
 }
 
-/// The tags you read most, most first, leaving out those you asked to see less of.
+/// Tags that describe the format or the cast, not what a story is about: nearly every manhwa has
+/// them, so a collection of them says nothing ("Full Color", "Male Protagonist").
+const PLAIN_TAGS: [&str; 14] = [
+    "full color", "male protagonist", "female protagonist", "long strip", "web comic", "primarily male cast",
+    "primarily female cast", "primarily adult cast", "primarily teen cast", "ensemble cast", "episodic",
+    "adapted from web novel", "coming of age", "heterosexual",
+];
+
+/// The tags you read most, most first, leaving out those you asked to see less of and the ones
+/// every series carries.
 pub fn top_tags(t: &Taste, n: usize) -> Vec<String> {
-    let mut v: Vec<(&String, &f64)> = t.tags.iter().filter(|(k, _)| !t.less.contains(*k)).collect();
+    let mut v: Vec<(&String, &f64)> = t.tags.iter().filter(|(k, _)| !t.less.contains(*k) && !PLAIN_TAGS.contains(&k.to_lowercase().as_str())).collect();
     v.sort_by(|a, b| b.1.total_cmp(a.1).then(a.0.cmp(b.0)));
     v.into_iter().take(n).map(|(k, _)| k.clone()).collect()
 }

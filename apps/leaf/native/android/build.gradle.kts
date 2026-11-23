@@ -7,6 +7,16 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+// The build number: the commit count, the same one tools/build-lib.sh builds the library with
+// (LEAF_BUILD, which the app compares with the server's /v1/app/latest). LEAF_BUILD wins when set.
+val leafBuild: Int = (System.getenv("LEAF_BUILD")?.trim()?.toIntOrNull()
+    ?: providers.exec {
+        commandLine("git", "rev-list", "--count", "HEAD")
+        workingDir = rootDir
+        isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim().toIntOrNull()
+    ?: 1)
+
 android {
     namespace = "com.quietsoftware.leaf"
     compileSdk = 37
@@ -15,8 +25,8 @@ android {
         applicationId = "com.quietsoftware.leaf"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = leafBuild
+        versionName = "0.$leafBuild"
     }
 
     buildTypes {

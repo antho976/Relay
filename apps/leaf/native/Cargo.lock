@@ -932,6 +932,7 @@ dependencies = [
  "pollster",
  "quick-xml",
  "raw-window-handle",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",

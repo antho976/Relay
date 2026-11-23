@@ -44,7 +44,11 @@ import java.util.List;
  * - notices of new chapters come from a periodic job ({@link LeafChaptersJob}), scheduled here, and
  *   posting them needs the person's leave on Android 13 and later ({@link #askNotifications});
  * - while reading, the screen stays on and the volume keys turn pages ({@link #setReading}):
- *   GameActivity never passes volume keys to native code, so they are taken here.
+ *   GameActivity never passes volume keys to native code, so they are taken here;
+ * - a link opens in the app that takes it ({@link #openUrl}: Webtoon's paid episodes open the
+ *   Webtoon app when it is installed);
+ * - an app update Rust downloaded and checked is handed to Android's installer
+ *   ({@link #installApk}), through the FileProvider, after the person allows Leaf to install apps.
  * Nothing here decides anything: it moves files, bytes and intents.
  */
 public class LeafActivity extends GameActivity {
@@ -252,6 +256,62 @@ public class LeafActivity extends GameActivity {
                 // No app takes files: nothing to hand it to.
             }
         });
+    }
+
+    // Links and app updates
+
+    /** Opens {@code url} in the app that takes it. False when none does. */
+    public boolean openUrl(final String url) {
+        Intent view = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        // The manifest's <queries> lets this see the apps that open web links (Android 11+).
+        if (view.resolveActivity(getPackageManager()) == null) {
+            return false;
+        }
+        runOnUiThread(() -> {
+            try {
+                startActivity(view);
+            } catch (ActivityNotFoundException ignored) {
+                // Gone between the check and now.
+            }
+        });
+        return true;
+    }
+
+    /**
+     * Hands the APK Rust downloaded (under the cache's {@code updates} folder, checked against its
+     * SHA-256) to Android's installer: 1 when it opened, 0 when Leaf may not install apps yet (the
+     * "Install unknown apps" page for Leaf opens instead), -1 when it failed.
+     */
+    public int installApk(final String path) {
+        if (android.os.Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+            runOnUiThread(() -> {
+                Intent allow = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()));
+                try {
+                    startActivity(allow);
+                } catch (ActivityNotFoundException ignored) {
+                    // No such page on this phone: the sheet still says what to allow.
+                }
+            });
+            return 0;
+        }
+        try {
+            File file = new File(path);
+            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".files", file);
+            Intent install = new Intent(Intent.ACTION_VIEW);
+            install.setDataAndType(uri, "application/vnd.android.package-archive");
+            install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            runOnUiThread(() -> {
+                try {
+                    startActivity(install);
+                } catch (ActivityNotFoundException ignored) {
+                    // No installer: nothing opens.
+                }
+            });
+            return 1;
+        } catch (Throwable e) {
+            return -1;
+        }
     }
 
     // PDF pages, drawn by the platform

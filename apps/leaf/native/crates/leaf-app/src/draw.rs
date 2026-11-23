@@ -867,7 +867,7 @@ fn path_commands(d: &str) -> Vec<zeno::Command> {
 }
 
 /// Leaf's own glyphs beside Relay's generated set (`glyphs.rs`, which is regenerated, not edited):
-/// the bell filled, for a series whose bell is on.
+/// the bell filled, for a series whose bell is on, and the info key (a ringed i).
 fn own_glyph(name: &str) -> Option<&'static glyphs::Glyph> {
     use glyphs::{Glyph, Shape};
     match name {
@@ -876,6 +876,14 @@ fn own_glyph(name: &str) -> Option<&'static glyphs::Glyph> {
             shapes: &[
                 Shape { d: "M6.85 14a1.33 1.33 0 0 0 2.3 0", fill: false, stroke: true, rotate: 0.0 },
                 Shape { d: "M2.17 10.22A.67.67 0 0 0 2.67 11.33h10.67a.67.67 0 0 0 .49-1.12C12.94 9.3 12 8.33 12 5.33a4 4 0 0 0-8 0c0 3-.94 3.97-1.83 4.89z", fill: true, stroke: true, rotate: 0.0 },
+            ],
+        }),
+        "info" => Some(&Glyph {
+            scale: 1.0,
+            shapes: &[
+                Shape { d: "M8 1.67a6.33 6.33 0 1 0 0 12.66a6.33 6.33 0 1 0 0-12.66z", fill: false, stroke: true, rotate: 0.0 },
+                Shape { d: "M8 7.33v3.67", fill: false, stroke: true, rotate: 0.0 },
+                Shape { d: "M8 4.4a.8.8 0 1 0 0 1.6a.8.8 0 1 0 0-1.6z", fill: true, stroke: false, rotate: 0.0 },
             ],
         }),
         _ => None,

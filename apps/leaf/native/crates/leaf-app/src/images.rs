@@ -44,6 +44,8 @@ pub enum CoverOf {
     Manga(i64),
     /// A book's, taken from its file at import (never from the server).
     Book(i64),
+    /// A recommendation's, by its AniList id (`/v1/recs/cover/{id}`).
+    Rec(i64),
 }
 
 impl CoverOf {
@@ -52,6 +54,7 @@ impl CoverOf {
             CoverOf::Series(id) => format!("c:s{id}"),
             CoverOf::Manga(id) => format!("c:m{id}"),
             CoverOf::Book(id) => format!("c:k{id}"),
+            CoverOf::Rec(id) => format!("c:r{id}"),
         }
     }
     pub fn banner_key(self) -> String {
@@ -71,6 +74,7 @@ impl CoverOf {
             CoverOf::Series(id) => format!("/v1/series/{id}/cover"),
             CoverOf::Manga(id) => format!("/v1/covers/{id}"),
             CoverOf::Book(_) => String::new(),
+            CoverOf::Rec(id) => format!("/v1/recs/cover/{id}"),
         }
     }
     pub fn file(self, data: &Path) -> PathBuf {
@@ -78,14 +82,18 @@ impl CoverOf {
     }
 }
 
-/// The atlas key of a chapter's picture ([`crate::thumb`]).
+/// A chapter's picture as the server makes it (`/v1/chapters/{id}/thumb`, WebP).
+pub const THUMB_W: u32 = 240;
+pub const THUMB_H: u32 = 180;
+
+/// The atlas key of a chapter's picture.
 pub fn thumb_key(chapter: i64) -> String {
     format!("t:{chapter}")
 }
 
-/// Where a chapter's picture is kept.
+/// Where a chapter's picture is kept, as the server sent it.
 pub fn thumb_file(data: &Path, chapter: i64) -> PathBuf {
-    data.join("thumbs").join(format!("{chapter}.jpg"))
+    data.join("thumbs").join(format!("{chapter}.webp"))
 }
 
 /// The atlas key of tile `i` of a page, as cut the `cut`th way ([`Images::tile_key`]).
@@ -102,8 +110,8 @@ enum Want {
     Local { key: String, book: PathBuf, entry: String },
     /// A cover at the spotlight's size.
     Hero(CoverOf),
-    /// A chapter's picture, cut from one of its `pages` (0: ask the server how many).
-    Thumb { chapter: i64, pages: u32 },
+    /// A chapter's picture, from disk or the server.
+    Thumb { chapter: i64 },
 }
 
 /// A decoded page: its size after scaling, and its rows of tiles (RGBA).
@@ -132,7 +140,7 @@ enum Got {
     Page { chapter: i64, n: u32, decode: bool, result: Result<Option<PageImg>, String> },
     Local { key: String, book: PathBuf, entry: String, img: Option<Pixels> },
     Hero { of: CoverOf, img: Option<HeroPics> },
-    Thumb { chapter: i64, pages: u32, img: Option<Pixels> },
+    Thumb { chapter: i64, img: Option<Pixels> },
     /// What the page cache holds: bytes per chapter.
     Cached(HashMap<i64, u64>),
 }
@@ -161,8 +169,9 @@ struct Shared {
 const WORKERS: usize = 3;
 /// A cover that failed is asked for again after this long.
 const COVER_RETRY_NS: u64 = 30_000_000_000;
-/// A chapter's picture that could not be made is tried again after this long.
-const THUMB_RETRY_NS: u64 = 60_000_000_000;
+/// A chapter's picture the server didn't have (404) is asked for again after this long: it makes
+/// one within a minute of being asked, from a chapter it has downloaded.
+const THUMB_RETRY_NS: u64 = 300_000_000_000;
 
 pub struct Images {
     shared: Arc<Shared>,
@@ -193,7 +202,8 @@ pub struct Images {
     posters: HashMap<CoverOf, (u32, u32)>,
     /// Covers' own sizes, as they were decoded.
     cover_src: HashMap<CoverOf, (u32, u32)>,
-    thumb_failed: HashMap<i64, u64>,
+    /// Pictures the server had none of: when, and whether it said then that it had one.
+    thumb_failed: HashMap<i64, (u64, bool)>,
     /// The chapters whose pages are on this phone, with their bytes, once the cache was looked at.
     pub cached: Option<HashMap<i64, u64>>,
     tx: Sender<Got>,
@@ -367,16 +377,25 @@ impl Images {
         c.has_image(&thumb_key(chapter))
     }
 
-    /// The chapters whose pictures the page shows now, (chapter, its page count): those not in
-    /// the atlas are made or read from disk, and anything queued for pictures no longer on screen
-    /// is dropped.
-    pub fn want_thumbs(&mut self, c: &Canvas, wants: &[(i64, u32)], now_ns: u64) {
+    /// The chapters whose pictures the page shows now, (chapter, the server says it has one):
+    /// those not in the atlas are read from disk or asked of the server, and anything queued for
+    /// pictures no longer on screen is dropped. One the server had none of is asked again after
+    /// a while, or at once when the server says it has one now.
+    pub fn want_thumbs(&mut self, c: &Canvas, wants: &[(i64, bool)], now_ns: u64) {
         let fresh: Vec<Want> = wants
             .iter()
             .filter(|(ch, _)| !c.has_image(&thumb_key(*ch)) && !c.image_waiting(&thumb_key(*ch)))
-            .filter(|(ch, _)| self.thumb_failed.get(ch).is_none_or(|t| now_ns.saturating_sub(*t) >= THUMB_RETRY_NS))
-            .map(|&(chapter, pages)| Want::Thumb { chapter, pages })
+            .filter(|(ch, has)| self.thumb_failed.get(ch).is_none_or(|(t, had)| now_ns.saturating_sub(*t) >= THUMB_RETRY_NS || (*has && !*had)))
+            .map(|&(chapter, _)| Want::Thumb { chapter })
             .collect();
+        for (ch, has) in wants {
+            if let Some(f) = self.thumb_failed.get_mut(ch)
+                && *has
+            {
+                // Asked again now that the server says it has one: a second 404 waits the while.
+                f.1 = true;
+            }
+        }
         let mut q = self.shared.q.lock().unwrap_or_else(|e| e.into_inner());
         let mut dropped = Vec::new();
         q.items.retain(|(_, _, w)| {
@@ -558,14 +577,16 @@ impl Images {
                         }
                     }
                 }
-                Got::Thumb { chapter, pages, img } => {
-                    self.asked.remove(&Want::Thumb { chapter, pages });
+                Got::Thumb { chapter, img } => {
+                    self.asked.remove(&Want::Thumb { chapter });
                     match img {
                         Some(p) => {
-                            c.add_image_slot(&thumb_key(chapter), p.w, p.h, (crate::thumb::THUMB_W, crate::thumb::THUMB_H), p.px);
+                            self.thumb_failed.remove(&chapter);
+                            c.add_image_slot(&thumb_key(chapter), p.w, p.h, (THUMB_W, THUMB_H), p.px);
                         }
                         None => {
-                            self.thumb_failed.insert(chapter, now_ns);
+                            let had = self.thumb_failed.get(&chapter).is_some_and(|f| f.1);
+                            self.thumb_failed.insert(chapter, (now_ns, had));
                         }
                     }
                 }
@@ -678,14 +699,14 @@ fn worker(shared: &Shared, tx: &Sender<Got>, client: &Client, data: &Path) {
             Want::Page { chapter, n, decode } => Got::Page { chapter: *chapter, n: *n, decode: *decode, result: page(client, server.as_ref(), data, *chapter, *n, *decode, shared.trim.load(std::sync::atomic::Ordering::Relaxed)) },
             Want::Local { key, book, entry } => Got::Local { key: key.clone(), book: book.clone(), entry: entry.clone(), img: local_picture(book, entry) },
             Want::Hero(of) => Got::Hero { of: *of, img: hero(client, server.as_ref(), data, *of, shared.screen_w.load(std::sync::atomic::Ordering::Relaxed)) },
-            Want::Thumb { chapter, pages } => Got::Thumb { chapter: *chapter, pages: *pages, img: thumb(client, server.as_ref(), data, *chapter, *pages) },
+            Want::Thumb { chapter } => Got::Thumb { chapter: *chapter, img: thumb(client, server.as_ref(), data, *chapter) },
         }));
         let got = got.unwrap_or_else(|_| match want {
             Want::Cover(of) => Got::Cover { of, img: None, banner: None, src: None },
             Want::Page { chapter, n, decode } => Got::Page { chapter, n, decode, result: Err("This page didn't decode".into()) },
             Want::Local { key, book, entry } => Got::Local { key, book, entry, img: None },
             Want::Hero(of) => Got::Hero { of, img: None },
-            Want::Thumb { chapter, pages } => Got::Thumb { chapter, pages, img: None },
+            Want::Thumb { chapter } => Got::Thumb { chapter, img: None },
         });
         if tx.send(got).is_err() {
             return;
@@ -805,62 +826,19 @@ fn blur(img: &mut image::RgbaImage, r: u32, passes: u32) {
     }
 }
 
-/// A chapter's picture: from disk when it was made before, else cut from the most colourful of
-/// a few random pages ([`crate::thumb`]), from the phone's cache when the chapter is there, else
-/// from the server (not kept: looking is not reading), and kept on disk.
-fn thumb(client: &Client, server: Option<&Server>, data: &Path, chapter: i64, pages: u32) -> Option<Pixels> {
-    use crate::thumb::{LOOK_W, THUMB_H, THUMB_W, best_crop, pick_pages};
-    let file = thumb_file(data, chapter);
-    if let Ok(b) = std::fs::read(&file)
-        && let Ok(img) = image::load_from_memory(&b)
-    {
-        let img = img.to_rgba8();
-        return Some(Pixels { w: img.width(), h: img.height(), px: img.into_raw() });
-    }
-    let dir = chapter_dir(data, chapter);
-    let mut local: Vec<u32> = std::fs::read_dir(&dir).into_iter().flatten().flatten().filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok()).collect();
-    local.sort_unstable();
-    let count = if !local.is_empty() {
-        local.len() as u32
-    } else if pages > 0 {
-        pages
-    } else {
-        client.json::<leaf_proto::Pages>(server?, &format!("/v1/chapters/{chapter}/pages")).ok()?.count
-    };
-    let seed = (chapter as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ crate::clock::now_ns() ^ (now_ms() as u64);
-    let mut best: Option<(crate::thumb::Crop, image::RgbaImage)> = None;
-    for i in pick_pages(count, seed) {
-        let n = if local.is_empty() { i } else { local[i as usize] };
-        let path = dir.join(n.to_string());
-        let bytes = match std::fs::read(&path) {
-            Ok(b) if !b.is_empty() => b,
-            _ => match server {
-                Some(s) => match client.get(s, &format!("/v1/chapters/{chapter}/pages/{n}")) {
-                    Ok(b) => b,
-                    Err(_) => continue,
-                },
-                None => continue,
-            },
-        };
-        let Ok(img) = image::load_from_memory(&bytes) else { continue };
-        let (w0, h0) = (img.width().max(1), img.height().max(1));
-        let h = ((h0 as u64 * LOOK_W as u64) / w0 as u64).max(1) as u32;
-        let look = image::imageops::resize(&img.to_rgba8(), LOOK_W, h, image::imageops::FilterType::Triangle);
-        if let Some(c) = best_crop(look.as_raw(), LOOK_W, h)
-            && best.as_ref().is_none_or(|(b, _)| c.score > b.score)
-        {
-            best = Some((c, look));
+/// A chapter's picture: from disk, else the server's (`/v1/chapters/{id}/thumb`, about 10 KB of
+/// WebP, kept on disk for good). None while the server has none (404): the row shows its cloud.
+/// No page is ever fetched for a picture.
+fn thumb(client: &Client, server: Option<&Server>, data: &Path, chapter: i64) -> Option<Pixels> {
+    let bytes = fetch(client, server, &thumb_file(data, chapter), &format!("/v1/chapters/{chapter}/thumb")).ok()?;
+    let img = match image::load_from_memory(&bytes) {
+        Ok(i) => i.to_rgba8(),
+        Err(_) => {
+            let _ = std::fs::remove_file(thumb_file(data, chapter));
+            return None;
         }
-    }
-    let (c, look) = best?;
-    let cut = image::imageops::crop_imm(&look, c.x, c.y, c.w, c.h).to_image();
-    let out = image::imageops::resize(&cut, THUMB_W, THUMB_H, image::imageops::FilterType::Triangle);
-    let rgb = image::DynamicImage::ImageRgba8(out.clone()).to_rgb8();
-    let mut jpg = Vec::new();
-    if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpg, 85).encode_image(&rgb).is_ok() {
-        let _ = write_atomic(&file, &jpg);
-    }
-    Some(Pixels { w: THUMB_W, h: THUMB_H, px: out.into_raw() })
+    };
+    Some(Pixels { w: img.width(), h: img.height(), px: img.into_raw() })
 }
 
 /// The page cache's chapters: (chapter, bytes, when last used in ms).
@@ -999,6 +977,13 @@ pub fn prune_cache(data: PathBuf, keep: Vec<i64>) {
         let cached: Vec<crate::logic::CachedChapter> = cache_dirs(&data).into_iter().map(|(chapter, bytes, used_ms)| crate::logic::CachedChapter { chapter, bytes, used_ms }).collect();
         for chapter in crate::logic::prune_choice(&cached, now_ms(), crate::logic::CACHE_CAP, &keep) {
             let _ = std::fs::remove_dir_all(root.join(chapter.to_string()));
+        }
+        // Pictures the phone once cut from pages itself (`<chapter>.jpg`, before the server made
+        // them): nothing reads them now.
+        for e in std::fs::read_dir(data.join("thumbs")).into_iter().flatten().flatten() {
+            if e.file_name().to_string_lossy().ends_with(".jpg") {
+                let _ = std::fs::remove_file(e.path());
+            }
         }
     });
 }

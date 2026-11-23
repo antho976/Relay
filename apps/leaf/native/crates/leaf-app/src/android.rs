@@ -99,15 +99,48 @@ impl Host for AndroidHost {
         });
     }
 
-    fn share_file(&self, name: &str, mime: &str, bytes: &[u8]) -> Option<String> {
-        // Written under the cache's `shared` folder, which the FileProvider (AndroidManifest.xml,
-        // res/xml/file_paths.xml) lends to the app the person picks.
-        let cache: String = with_activity(&self.app, |env, activity| {
+    fn open_url(&self, url: &str) -> bool {
+        with_activity(&self.app, |env, activity| {
+            let u = env.new_string(url)?;
+            env.call_method(activity, "openUrl", "(Ljava/lang/String;)Z", &[JValue::Object(&u)])?.z()
+        })
+        .unwrap_or(false)
+    }
+
+    /// The app's cache folder (`getCacheDir`): the FileProvider lends its `shared/` and
+    /// `updates/` folders.
+    fn cache_dir(&self) -> PathBuf {
+        let cache: Option<String> = with_activity(&self.app, |env, activity| {
             let dir = env.call_method(activity, "getCacheDir", "()Ljava/io/File;", &[])?.l()?;
             let path = env.call_method(&dir, "getAbsolutePath", "()Ljava/lang/String;", &[])?.l()?;
             Ok(env.get_string(&JString::from(path))?.into())
-        })?;
-        let dir = PathBuf::from(cache).join("shared");
+        });
+        cache.map(PathBuf::from).unwrap_or_else(|| self.data_dir().join("scratch"))
+    }
+
+    fn can_install(&self) -> bool {
+        true
+    }
+
+    /// `LeafActivity.installApk`: 1 the installer opened, 0 Leaf may not install apps yet (the
+    /// settings to allow it opened instead), -1 it failed.
+    fn install_apk(&self, path: &std::path::Path) -> crate::app::Install {
+        let p = path.to_string_lossy().into_owned();
+        let r = with_activity(&self.app, |env, activity| {
+            let ps = env.new_string(&p)?;
+            env.call_method(activity, "installApk", "(Ljava/lang/String;)I", &[JValue::Object(&ps)])?.i()
+        });
+        match r {
+            Some(1) => crate::app::Install::Started,
+            Some(0) => crate::app::Install::NeedsLeave,
+            _ => crate::app::Install::Failed,
+        }
+    }
+
+    fn share_file(&self, name: &str, mime: &str, bytes: &[u8]) -> Option<String> {
+        // Written under the cache's `shared` folder, which the FileProvider (AndroidManifest.xml,
+        // res/xml/file_paths.xml) lends to the app the person picks.
+        let dir = self.cache_dir().join("shared");
         let _ = std::fs::remove_dir_all(&dir);
         let safe: String = name.chars().map(|c| if c.is_alphanumeric() || " .-_".contains(c) { c } else { '-' }).collect();
         let path = dir.join(if safe.trim_matches('.').is_empty() { "notes.md".to_string() } else { safe });

@@ -16,6 +16,11 @@ NDK="${ANDROID_NDK_HOME:-$(ls -d "$SDK"/ndk/* | sort -V | tail -1)}"
 BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 API=26
 ABIS=("$@"); [ ${#ABIS[@]} -eq 0 ] && ABIS=(arm64-v8a)
+# The build number the app knows itself by (update.rs reads it with option_env!), the commit count;
+# Gradle's versionCode takes the same number. Set LEAF_BUILD to choose another.
+export LEAF_BUILD="${LEAF_BUILD:-$(git rev-list --count HEAD)}"
+echo "LEAF_BUILD=$LEAF_BUILD"
+
 
 for abi in "${ABIS[@]}"; do
   case "$abi" in

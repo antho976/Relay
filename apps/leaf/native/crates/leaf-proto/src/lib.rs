@@ -407,10 +407,10 @@ pub struct AnilistToken {
     pub token: Option<String>,
 }
 
-// Round 3 (2026-11-23). New types only: `Series` and `Chapter` are built field by field in the
-// phone app, so a new field there breaks its build. The server sends these extra fields in the
-// same JSON (serde ignores what a struct lacks); the app reads them by adding the field with
-// `#[serde(default)]` when it is ready:
+// Round 3 (2026-11-23). New types only: `Series` and `Chapter` are built field by field in
+// leaf-server (`autopilot.rs`) and in the phone app's tests, so a new field there breaks both
+// builds. The server sends these extra fields in the same JSON (serde ignores what a struct
+// lacks), and the phone reads them beside the structs (leaf-app's `net::Extras`):
 //
 // - every `Series` (`/v1/library`, `/v1/series/{id}`): `"paid": PaidAhead | null`;
 // - every `Chapter` (`/v1/series/{id}`): `"thumb": bool`, a picture at `/v1/chapters/{id}/thumb`;

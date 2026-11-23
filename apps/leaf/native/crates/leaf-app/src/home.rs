@@ -1,15 +1,21 @@
-//! Home (design 42, page 12, artboard A): a full-bleed spotlight over a cover that turns by
-//! itself every eighteen seconds, sliding gently (it is not dragged: its dots choose one), then
-//! Continue reading, a rail of covers with how far each is read, then Recently updated. A cover
-//! too small to fill the spotlight sharp is a poster over a blurred copy of itself. The spotlight leads with belled series that have new
-//! chapters, then what was read most recently, books too ([`logic::spotlight`]).
+//! Home (design 42, page 15, "Home, webtoon's layout"): the spotlight, a rounded card of big art
+//! with the title centred over it, Continue or Start and the bell (Follow), turning by itself
+//! every eighteen seconds and sliding gently (it is not dragged: its dots under it choose one);
+//! only covers that fill it sharp take a turn. The spotlight leads with belled series that have
+//! new chapters, then what was read most recently, books too ([`logic::spotlight`]).
+//!
+//! Under it: Top picks for you (three across, each with why in the accent), Continue reading
+//! (square covers, "1 new chapter" in the accent), "Because you read X" rails, Collections (a tile
+//! per tag you read most, each opening its list) and one finished series to binge. Picks are
+//! [`crate::recs`]': a tap or a long press opens a pick's sheet. Until the server has made them
+//! (its first day) the section says so.
 
-use leaf_proto::Series;
+use leaf_proto::{Rec, Recs, Series};
 
 use crate::app::{App, Route};
 use crate::cx;
 use crate::draw::{Rgba, Text, WIDTH};
-use crate::images::{CoverOf, MAX_UPSCALE};
+use crate::images::CoverOf;
 use crate::kit::{self, Ctx};
 use crate::logic::{self, Spot};
 use crate::net::Job;
@@ -25,8 +31,14 @@ const SLIDE_NS: u64 = 1_200_000_000;
 const SPOTS: usize = 5;
 /// How far down the order the spotlight looks for covers big enough to fill it sharp.
 const SPOT_CANDIDATES: usize = 15;
-/// The spotlight's height under the status bar.
-const HERO: f32 = 436.0;
+/// The spotlight card's height, and its top under the fixed top.
+const CARD_H: f32 = 412.0;
+/// The fixed top: "Leaf" and the gear.
+const TOP_H: f32 = 56.0;
+/// The card's corners.
+const CARD_R: f32 = 14.0;
+/// Top picks shown on Home (the rest are a tap away).
+const TOP_PICKS: usize = 6;
 
 #[derive(Default)]
 pub struct State {
@@ -40,6 +52,9 @@ pub struct State {
     /// When the thing showing came to rest, for the next turn.
     pub since_ns: u64,
     pub rail: HScroll,
+    /// "Because you read" rails, and the collections' tiles.
+    pub because: Vec<HScroll>,
+    pub tiles: HScroll,
     /// The shot asks for this one in the spotlight.
     pub shot_spot: Option<usize>,
 }
@@ -105,6 +120,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             app.ask(Job::Library);
         }
         app.st.home.since_ns = app.now_ns;
+        app.want_recs(false);
+        app.check_update();
     }
     let now = app.now_ns;
     let now_ms = shelf::now_ms();
@@ -174,9 +191,6 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let mut rail: Vec<(i64, Item)> = series.iter().filter(|s| s.last_read_at > 0 && s.unread > 0).map(|s| (s.last_read_at, Item::Series(s.clone()))).collect();
     rail.extend(books.iter().filter(|b| b.opened_ms > 0 && b.progress < 0.995).map(|b| (b.opened_ms, Item::Book(b.clone()))));
     rail.sort_by_key(|a| std::cmp::Reverse(a.0));
-    let mut updated: Vec<&Series> = all_series.iter().filter(|s| s.updated_at > 0).collect();
-    updated.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
-    updated.truncate(8);
     // The chapters of what the spotlight and the rail show, so Continue opens the reader and new
     // chapters are counted: asked once each, from the copy on disk first.
     let want: Vec<i64> = hero.iter().chain(rail.iter().map(|r| &r.1)).filter_map(|it| if let Item::Series(s) = it { Some(s.id) } else { None }).collect();
@@ -191,27 +205,39 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         .map(|it| if let Item::Series(s) = it { app.series.get(&s.id).and_then(|l| l.data.as_ref()).and_then(|d| logic::continue_point(&d.chapters)) } else { None })
         .collect();
     let rail_new: Vec<u32> = rail.iter().map(|(_, it)| if let Item::Series(s) = it { logic::new_chapters(s, app.series.get(&s.id).and_then(|l| l.data.as_ref())) } else { 0 }).collect();
-    let updated_new: Vec<u32> = updated.iter().map(|s| logic::new_chapters(s, app.series.get(&s.id).and_then(|l| l.data.as_ref()))).collect();
     let (loading, offline) = (app.library.loading && app.library.data.is_none(), app.library.offline());
     let error = app.library.error.clone().filter(|_| !offline);
     let shot = app.shot;
+    // Picks: shown once comics are part of the app (a server, and something in My space or picks).
+    let recs: Option<Recs> = app.recs.data.clone();
+    let picks_shown = app.server.is_some() && (!all_series.is_empty() || recs.as_ref().is_some_and(|r| !r.top.is_empty()));
+    let recs_loading = app.recs.loading && recs.is_none();
+    let recs_error = app.recs.error.clone().filter(|_| recs.is_none());
+    let covered = app.st.recs.sheet.is_some();
 
-    let pg = app.page_begin(dt, 0.0);
+    let pg = app.page_begin(dt, TOP_H);
     let st = &mut app.st.home;
     let mut cx = cx!(app);
+    let held = if covered { kit::hold(&mut cx) } else { None };
     let top = cx.c.inset_top;
     let n = hero.len();
     let mut open_series: Option<i64> = None;
     let mut continue_series: Option<i64> = None;
+    let mut bell: Option<(i64, bool)> = None;
     let mut open_book: Option<i64> = None;
     let mut book_notes: Option<i64> = None;
     let mut to_space = false;
     let mut add_books = false;
     let mut to_search = false;
     let mut to_connect = false;
+    let mut to_picks: Option<String> = None;
+    let mut rec_hit: Option<(crate::recs::Hit, Vec<Rec>, Option<String>)> = None;
+    let mut retry_recs = false;
     let mut moving = false;
     let mut wake: Option<u64> = None;
-    let hero_h = top + HERO;
+    let (card_x, card_w) = (PAD, WIDTH - 2.0 * PAD);
+    let card_y = top + TOP_H + 4.0;
+    let card_bottom = card_y + CARD_H;
     let mut y;
     if n > 0 {
         // Turning: by itself, or to a dot tapped; a slide that eases in and out.
@@ -241,12 +267,11 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             st.target = 0.0;
         }
         let first = st.pos.floor();
-        // The pictures stop at the spotlight's edge: a backdrop drawn larger must not show as a
-        // band under the fade.
-        cx.c.push_clip(0.0, cx.c.dy, WIDTH, hero_h);
+        // The pictures stay inside the card; the next slides in from its right edge.
+        cx.c.push_clip(card_x, card_y + cx.c.dy, card_w, CARD_H);
         for k in [first, first + 1.0] {
-            let off = (k - st.pos) * WIDTH;
-            if off.abs() >= WIDTH - 0.5 {
+            let off = (k - st.pos) * card_w;
+            if off.abs() >= card_w - 0.5 {
                 continue;
             }
             let i = (k as i64).rem_euclid(n as i64) as usize;
@@ -256,70 +281,52 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 Item::Book(b) => b.has_cover && app.images.hero(cx.c, of, now),
                 Item::Series(_) => app.images.hero(cx.c, of, now),
             };
+            let x = card_x + off;
             if has_hero && app.images.hero_poster(of).is_some() {
-                cx.c.image_cover(&of.hero_key(), off - 16.0, -16.0, WIDTH + 32.0, hero_h + 16.0, 0.0, Rgba::WHITE);
+                // Not one that fills it: its own colours, blurred (shown only until a sharp one is known).
+                cx.c.image_cover(&of.hero_key(), x, card_y, card_w, CARD_H, CARD_R, Rgba::WHITE);
             } else if has_hero {
-                cx.c.image_cover(&of.hero_key(), off, 0.0, WIDTH, hero_h, 0.0, Rgba::WHITE);
+                cx.c.image_cover_at(&of.hero_key(), x, card_y, card_w, CARD_H, CARD_R, Rgba::WHITE, (0.5, 0.3));
             } else if app.images.cover(cx.c, of, now) && cx.c.has_image(&of.banner_key()) {
-                cx.c.image_cover(&of.banner_key(), off - 20.0, -20.0, WIDTH + 40.0, hero_h + 40.0, 0.0, Rgba::WHITE.a(0.7));
+                cx.c.image_cover(&of.banner_key(), x, card_y, card_w, CARD_H, CARD_R, Rgba::WHITE.a(0.7));
             } else {
                 let tone = match it {
                     Item::Book(b) => book_tone(b),
                     Item::Series(_) => t::S1,
                 };
-                cx.c.rect(off, 0.0, WIDTH, hero_h, 0.0, tone);
+                cx.c.rect(x, card_y, card_w, CARD_H, CARD_R, tone);
             }
+            // Dark under the words, so they read over any picture.
+            cx.c.rect_grad(x, card_y + CARD_H * 0.42, card_w, CARD_H * 0.58, CARD_R, t::BG.a(0.0), t::BG.a(0.9));
         }
         cx.c.pop_clip();
-        // Dark at the top for the status bar and the name, and a long fade into the ground.
-        cx.c.rect_grad(-1000.0, 0.0, WIDTH + 2000.0, top + 90.0, 0.0, t::BG.a(0.55), t::BG.a(0.0));
-        cx.c.rect_grad(-1000.0, hero_h * 0.3, WIDTH + 2000.0, hero_h * 0.7 + 1.0, 0.0, t::BG.a(0.0), t::BG);
         for k in [first, first + 1.0] {
-            let off = (k - st.pos) * WIDTH;
-            if off.abs() >= WIDTH - 0.5 {
+            let off = (k - st.pos) * card_w;
+            if off.abs() >= card_w - 0.5 {
                 continue;
             }
             let i = (k as i64).rem_euclid(n as i64) as usize;
             let it = &hero[i];
-            let x = PAD + 4.0 + off;
-            let w = WIDTH - 2.0 * (PAD + 4.0);
-            let keys_y = hero_h - 70.0;
-            let line_t = Text::new(13.0, t::INK.a(0.78));
-            let line_y = keys_y - 18.0 - line_t.lh();
-            let title_t = Text::new(30.0, t::INK).brand().line(1.12);
+            let inner = 16.0;
+            let x = card_x + inner + off;
+            let w = card_w - 2.0 * inner;
+            let mid = card_x + card_w / 2.0 + off;
+            let keys_y = card_bottom - inner - 44.0;
+            let line_t = Text::new(13.0, t::INK.a(0.8)).center();
+            let line_y = keys_y - 16.0 - line_t.lh();
+            let title_t = Text::new(25.0, t::INK).brand().line(1.12).center();
             let lines = cx.c.wrap(it.title(), w, title_t, 2);
-            let title_y = line_y - 8.0 - lines.len() as f32 * title_t.lh();
-            // A cover too small to fill the spotlight: itself, sharp, at the upper right, never
-            // drawn past [`MAX_UPSCALE`] its own pixels, above the words.
-            let of = it.cover();
-            if let Some((pw, ph)) = app.images.hero_poster(of)
-                && cx.c.has_image(&of.hero_key())
-                && cx.c.has_image(&of.poster_key())
-            {
-                let (pw, ph) = (pw as f32, ph as f32);
-                let top_y = top + 64.0;
-                let room_h = (title_y - 22.0 - 18.0 - top_y).max(60.0);
-                let pw_u = (room_h * pw / ph).min(pw * MAX_UPSCALE / cx.c.u).min(WIDTH * 0.5);
-                let ph_u = pw_u * ph / pw;
-                let px = WIDTH - PAD - 4.0 - pw_u + off;
-                let py = top_y + (room_h - ph_u) * 0.35;
-                cx.c.shadow(px, py + 8.0, pw_u, ph_u, COVER_R, 26.0, Rgba::hex(0x000000).a(0.6));
-                cx.c.image_cover(&of.poster_key(), px, py, pw_u, ph_u, COVER_R, Rgba::WHITE);
-                cx.c.outline(px, py, pw_u, ph_u, COVER_R, 1.0, t::INK.a(0.1));
-            }
-            let (label, label_ink, line, key, sub): (String, Rgba, String, String, &str) = match it {
+            let title_y = line_y - 6.0 - lines.len() as f32 * title_t.lh();
+            let (news_words, line, key, sub, sub_glyph, sub_on): (Option<String>, String, String, &str, &'static str, bool) = match it {
                 Item::Series(s) => {
                     let new = news[i];
-                    let label = if new > 0 {
-                        (if new == 1 { "1 new chapter".to_string() } else { format!("{new} new chapters") }, t::ACCENT)
-                    } else if s.last_read_at > 0 {
-                        (format!("Last read {}", logic::ago(s.last_read_at, now_ms)), t::INK)
-                    } else {
-                        (format!("Added {}", logic::ago(s.added_at, now_ms)), t::INK)
-                    };
+                    let news_words = (new > 0).then(|| if new == 1 { "1 new chapter".to_string() } else { format!("{new} new chapters") });
                     let mut line: Vec<String> = Vec::new();
                     line.extend(logic::status_word(&s.status));
                     line.push(logic::chapters_words(s.chapters as usize));
+                    if s.last_read_at > 0 {
+                        line.push(format!("read {}", logic::ago(s.last_read_at, now_ms)));
+                    }
                     let key = match &continues[i] {
                         Some(c) => c.label.clone(),
                         None => match logic::at_chapter(s, None) {
@@ -327,10 +334,10 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                             None => "Start reading".into(),
                         },
                     };
-                    (label.0, label.1, line.join(" · "), key, "Details")
+                    let (sub, glyph) = if s.bell { ("Following", "bell-on") } else { ("Follow", "bell") };
+                    (news_words, line.join(" · "), key, sub, glyph, s.bell)
                 }
                 Item::Book(b) => {
-                    let label = if b.opened_ms > 0 { format!("Last read {}", logic::ago(b.opened_ms, now_ms)) } else { format!("Added {}", logic::ago(b.added_ms, now_ms)) };
                     let mut line: Vec<String> = Vec::new();
                     if !b.author.is_empty() {
                         line.push(b.author.clone());
@@ -338,65 +345,72 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     line.push(crate::library::book_line(b));
                     line.dedup();
                     let key = if b.progress > 0.0 { "Continue" } else { "Start reading" };
-                    (label, t::INK, line.join(" · "), key.into(), "Notes")
+                    (None, line.join(" · "), key.into(), "Notes", "notes", false)
                 }
             };
-            cx.c.text_fit(&label.to_uppercase(), x, title_y - 22.0, w, Text::new(11.5, label_ink).semi());
-            for (j, l) in lines.iter().enumerate() {
-                cx.c.text(l, x, title_y + j as f32 * title_t.lh(), title_t);
+            if let Some(nw) = &news_words {
+                cx.c.text_fit(&nw.to_uppercase(), mid, title_y - 20.0, w, Text::new(11.5, t::ACCENT).semi().center());
             }
-            cx.c.text_fit(&line, x, line_y, w, line_t);
-            // The white key, then Details outlined.
-            let kt = Text::new(ty::BODY, t::BG).semi();
-            let kw = cx.c.measure(&key, kt) + 26.0 + 36.0;
+            for (j, l) in lines.iter().enumerate() {
+                cx.c.text(l, mid, title_y + j as f32 * title_t.lh(), title_t);
+            }
+            cx.c.text_fit(&line, mid, line_y, w, line_t);
+            // The white key, then the bell (or a book's Notes) outlined, side by side.
+            let kw = (w - 10.0) / 2.0;
+            let kt = Text::new(ty::BODY, t::BG).semi().center();
             let pressed = cx.pressed(x, keys_y, kw, 44.0);
             cx.c.rect(x, keys_y, kw, 44.0, t::KEY_R, if pressed { t::INK.mix(t::BG, 0.15) } else { t::INK });
-            cx.c.icon("play", x + 18.0 + 8.0, keys_y + 22.0, 16.0, t::BG);
-            cx.c.text(&key, x + 18.0 + 24.0, keys_y + (44.0 - kt.lh()) / 2.0, kt);
-            let dt_ = Text::new(ty::BODY, t::INK).medium();
+            cx.c.text_fit(&key, x + kw / 2.0, keys_y + (44.0 - kt.lh()) / 2.0, kw - 16.0, kt);
             let dx = x + kw + 10.0;
-            let dw = cx.c.measure(sub, dt_) + 36.0;
-            if cx.pressed(dx, keys_y, dw, 44.0) {
-                cx.c.rect(dx, keys_y, dw, 44.0, t::KEY_R, t::WASH);
+            let dt_ = Text::new(ty::BODY, t::INK).medium();
+            if cx.pressed(dx, keys_y, kw, 44.0) {
+                cx.c.rect(dx, keys_y, kw, 44.0, t::KEY_R, t::WASH);
             }
-            cx.c.outline(dx, keys_y, dw, 44.0, t::KEY_R, 1.0, t::INK.a(0.3));
-            cx.c.text(sub, dx + 18.0, keys_y + (44.0 - dt_.lh()) / 2.0, dt_);
-            if off.abs() < 1.0 {
+            cx.c.rect(dx, keys_y, kw, 44.0, t::KEY_R, t::BG.a(0.35));
+            cx.c.outline(dx, keys_y, kw, 44.0, t::KEY_R, 1.0, t::INK.a(0.3));
+            let sw = cx.c.measure(sub, dt_) + 24.0;
+            let sx = dx + (kw - sw) / 2.0;
+            cx.c.icon(sub_glyph, sx + 8.0, keys_y + 22.0, 15.0, if sub_on { t::ACCENT } else { t::INK });
+            cx.c.text(sub, sx + 24.0, keys_y + (44.0 - dt_.lh()) / 2.0, dt_);
+            if off.abs() < 1.0 && !covered {
                 let main = cx.tap(x, keys_y, kw, 44.0);
-                let details = cx.tap(dx, keys_y, dw, 44.0);
-                let picture = !main && !details && cx.tap(0.0, top + 56.0, WIDTH, keys_y - top - 60.0);
+                let second = cx.tap(dx, keys_y, kw, 44.0);
+                let picture = !main && !second && cx.tap(card_x, card_y, card_w, keys_y - card_y - 4.0);
                 match it {
                     Item::Series(s) if main => continue_series = Some(s.id),
-                    Item::Series(s) if details || picture => open_series = Some(s.id),
+                    Item::Series(s) if second => bell = Some((s.id, !s.bell)),
+                    Item::Series(s) if picture => open_series = Some(s.id),
                     Item::Book(b) if main || picture => open_book = Some(b.id),
-                    Item::Book(b) if details => book_notes = Some(b.id),
+                    Item::Book(b) if second => book_notes = Some(b.id),
                     _ => {}
                 }
             }
         }
-        // Which one, of how many.
+        // Which one, of how many: dots under the card.
+        y = card_bottom + 14.0;
         if n > 1 {
             let cur = (st.pos.round() as i64).rem_euclid(n as i64) as usize;
-            let mut dx = WIDTH - PAD - 4.0;
-            let dy_ = hero_h - 70.0 + 20.0;
-            let right = dx;
+            let total = 16.0 + (n - 1) as f32 * 4.0 + (n - 1) as f32 * 6.0;
+            let mut dx = WIDTH / 2.0 - total / 2.0;
+            let left = dx;
             let mut centres = vec![0.0; n];
-            for i in (0..n).rev() {
+            for (i, c) in centres.iter_mut().enumerate() {
                 if i == cur {
-                    dx -= 16.0;
-                    cx.c.rect(dx, dy_, 16.0, 4.0, 2.0, t::INK);
-                    centres[i] = dx + 8.0;
+                    cx.c.rect(dx, y, 16.0, 4.0, 2.0, t::INK);
+                    *c = dx + 8.0;
+                    dx += 16.0;
                 } else {
-                    dx -= 4.0;
-                    cx.c.circle(dx + 2.0, dy_ + 2.0, 2.0, t::INK.a(0.4));
-                    centres[i] = dx + 2.0;
+                    cx.c.circle(dx + 2.0, y + 2.0, 2.0, t::INK.a(0.4));
+                    *c = dx + 2.0;
+                    dx += 4.0;
                 }
-                dx -= 6.0;
+                dx += 6.0;
             }
             // A dot is too small to aim at: a tap along them picks the nearest.
-            let (sx, sw) = (dx - 10.0, right - dx + 20.0);
-            if let Some((tx, _)) = cx.ui.tap
-                && cx.tap(sx, dy_ - 20.0, sw, 44.0)
+            let (sx, sw) = (left - 16.0, dx - left + 32.0);
+            if !covered
+                && let Some((tx, _)) = cx.ui.tap
+                && cx.tap(sx, y - 18.0, sw, 40.0)
                 && let Some(j) = (0..n).min_by(|&a, &b| (centres[a] - tx).abs().total_cmp(&(centres[b] - tx).abs()))
                 && j != cur
             {
@@ -408,11 +422,10 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 wake = Some(st.since_ns + TURN_NS);
             }
         }
-        y = hero_h + 24.0;
+        y += 4.0 + 28.0;
     } else if loading {
-        cx.c.rect(0.0, 0.0, WIDTH, hero_h, 0.0, t::S1);
-        cx.c.rect_grad(-1000.0, hero_h * 0.36, WIDTH + 2000.0, hero_h * 0.64 + 1.0, 0.0, t::BG.a(0.0), t::BG);
-        y = hero_h + 24.0;
+        cx.c.rect(card_x, card_y, card_w, CARD_H, CARD_R, t::S1);
+        y = card_bottom + 32.0;
     } else {
         // Honest at zero: nothing to read yet, and where things come from.
         y = top + 140.0;
@@ -443,96 +456,195 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             y += 16.0;
             y += cx.c.para(e, x0, y, w, Text::new(ty::CAPTION, t::INK3).center(), 3);
         }
+        y += 32.0;
+    }
+    let head_t = Text::new(18.0, t::INK).semi();
+    // A section's heading, with a chevron when it opens a page of its own. True when tapped.
+    let heading = |cx: &mut Ctx, y: f32, words: &str, more: bool| -> (f32, bool) {
+        let lines = cx.c.wrap(words, WIDTH - 2.0 * PAD - if more { 28.0 } else { 0.0 }, head_t.line(1.25), 2);
+        let lh = head_t.line(1.25).lh();
+        for (j, l) in lines.iter().enumerate() {
+            cx.c.text(l, PAD, y + j as f32 * lh, head_t.line(1.25));
+        }
+        let h = lines.len() as f32 * lh;
+        if more {
+            cx.c.icon("chevron-right", WIDTH - PAD - 8.0, y + lh / 2.0, 18.0, t::INK2);
+        }
+        let tapped = more && cx.tap(0.0, y - 10.0, WIDTH, h + 20.0);
+        (h, tapped)
+    };
+    // Top picks for you.
+    if picks_shown {
+        let top_recs: Vec<Rec> = recs.as_ref().map(|r| r.top.iter().take(TOP_PICKS).cloned().collect()).unwrap_or_default();
+        let more = recs.as_ref().is_some_and(|r| r.top.len() > TOP_PICKS);
+        let (h, tapped) = heading(&mut cx, y, "Top picks for you", more);
+        if tapped {
+            to_picks = Some("top".into());
+        }
+        y += h + 14.0;
+        if !top_recs.is_empty() {
+            let (h, hit) = crate::recs::grid(&mut cx, &mut app.images, &top_recs, y, now, covered, true);
+            if let Some(hit) = hit {
+                rec_hit = Some((hit, top_recs.clone(), None));
+            }
+            y += h + 32.0;
+        } else if recs_loading {
+            let cw = (WIDTH - 2.0 * PAD - 20.0) / 3.0;
+            for i in 0..3 {
+                cx.c.rect(PAD + i as f32 * (cw + 10.0), y, cw, (cw * 1.3).round(), COVER_R, t::S1);
+            }
+            y += (cw * 1.3).round() + 43.0 + 32.0;
+        } else {
+            let made = recs.as_ref().is_some_and(|r| r.made_at > 0);
+            let words = match (&recs_error, made) {
+                (Some(e), _) => format!("Picks didn't load. {e}"),
+                (None, false) => "Picks are being made from what you read; back in a few hours.".to_string(),
+                (None, true) => "No picks for now. They come from series you've read a few chapters of, and only ones your sources carry.".to_string(),
+            };
+            let pt = Text::new(ty::UI, t::INK2).line(1.45);
+            y += cx.c.para(&words, PAD, y, WIDTH - 2.0 * PAD, pt, 4);
+            if recs_error.is_some() {
+                y += 12.0;
+                let rw = cx.c.measure("Retry", Text::new(ty::BODY, t::INK).semi()) + 40.0;
+                if kit::plain(&mut cx, PAD, y, rw, 40.0, "Retry", None) {
+                    retry_recs = true;
+                }
+                y += 40.0;
+            }
+            y += 32.0;
+        }
     }
     if !rail.is_empty() {
-        let tt = Text::new(18.0, t::INK).semi();
-        cx.c.text("Continue reading", PAD, y, tt);
-        cx.c.icon("chevron-right", WIDTH - PAD - 8.0, y + tt.lh() / 2.0, 18.0, t::INK2);
-        if cx.tap(0.0, y - 10.0, WIDTH, tt.lh() + 20.0) {
+        let (h, tapped) = heading(&mut cx, y, "Continue reading", true);
+        if tapped {
             to_space = true;
         }
-        y += tt.lh() + 14.0;
-        let (cw, ch) = (116.0, 164.0);
+        y += h + 14.0;
+        let side = 128.0;
         let title_t = Text::new(13.5, t::INK).semi();
         let line_t = Text::new(12.5, t::INK3);
-        let cell_h = ch + 8.0 + title_t.lh() + 2.0 + line_t.lh();
+        let cell_h = side + 8.0 + title_t.lh() + 3.0 + line_t.lh();
         let area = [0.0, y + cx.c.dy, WIDTH, cell_h];
         cx.ui.claim_h(area);
         moving |= st.rail.update(cx.ui, area, dt);
         let mut x = PAD - st.rail.off;
         for (j, (_, it)) in rail.iter().enumerate() {
-            if x + cw > -10.0 && x < WIDTH + 10.0 {
-                cover(&mut cx, &mut app.images, it, x, y, cw, ch, COVER_R, now);
-                if cx.pressed(x, y, cw, cell_h) {
-                    cx.c.rect(x, y, cw, ch, COVER_R, t::WASH);
+            if x + side > -10.0 && x < WIDTH + 10.0 {
+                cover(&mut cx, &mut app.images, it, x, y, side, side, COVER_R, now);
+                if cx.pressed(x, y, side, cell_h) {
+                    cx.c.rect(x, y, side, side, COVER_R, t::WASH);
                 }
                 let (f, words, new) = match it {
                     Item::Series(s) => {
-                        let at = logic::at_chapter(s, app.series.get(&s.id).and_then(|l| l.data.as_ref())).map_or("Ch. 1".into(), |n| format!("Ch. {}", logic::num(n)));
                         let new = rail_new[j];
-                        let words = if new > 0 { format!("{at} · ") } else { format!("{at} · {} unread", s.unread) };
-                        (logic::read_fraction(s), words, (new > 0).then(|| format!("{new} new")))
+                        let words = if new > 0 {
+                            if new == 1 { "1 new chapter".to_string() } else { format!("{new} new chapters") }
+                        } else {
+                            let at = logic::at_chapter(s, app.series.get(&s.id).and_then(|l| l.data.as_ref())).map_or("Ch. 1".into(), |n| format!("Ch. {}", logic::num(n)));
+                            format!("{at} · {} to go", s.unread)
+                        };
+                        (logic::read_fraction(s), words, new > 0)
                     }
-                    Item::Book(b) => (b.progress, crate::library::book_line(b), None),
+                    Item::Book(b) => (b.progress, crate::library::book_line(b), false),
                 };
-                if new.is_some() {
-                    new_tag(cx.c, x + 6.0, y + 6.0, "NEW");
+                if new {
+                    new_tag(cx.c, x + 6.0, y + 6.0, "NEW CHAPTER");
                 }
                 // How far: the accent along the cover's foot.
                 if f > 0.0 {
-                    cx.c.rect(x + 1.0, y + ch - 4.0, cw - 2.0, 3.0, 1.5, Rgba::hex(0x000000).a(0.55));
-                    cx.c.rect(x + 1.0, y + ch - 4.0, ((cw - 2.0) * f).max(3.0), 3.0, 1.5, t::ACCENT);
+                    cx.c.rect(x + 1.0, y + side - 4.0, side - 2.0, 3.0, 1.5, Rgba::hex(0x000000).a(0.55));
+                    cx.c.rect(x + 1.0, y + side - 4.0, ((side - 2.0) * f).max(3.0), 3.0, 1.5, t::ACCENT);
                 }
-                cx.c.text_fit(it.title(), x, y + ch + 8.0, cw, title_t);
-                let ly = y + ch + 8.0 + title_t.lh() + 2.0;
-                let lw = cx.c.text_fit(&words, x, ly, cw, line_t);
-                if let Some(nw) = &new {
-                    cx.c.text_fit(nw, x + lw, ly, cw - lw, line_t.color(t::ACCENT));
-                }
-                if cx.tap(x, y, cw, cell_h) {
+                cx.c.text_fit(it.title(), x, y + side + 8.0, side, title_t);
+                cx.c.text_fit(&words, x, y + side + 8.0 + title_t.lh() + 3.0, side, if new { line_t.color(t::ACCENT) } else { line_t });
+                if !covered && cx.tap(x, y, side, cell_h) {
                     match it {
                         Item::Series(s) => open_series = Some(s.id),
                         Item::Book(b) => open_book = Some(b.id),
                     }
                 }
             }
-            x += cw + 12.0;
+            x += side + 10.0;
         }
-        st.rail.max = x + st.rail.off - 12.0 + PAD - WIDTH;
+        st.rail.max = x + st.rail.off - 10.0 + PAD - WIDTH;
         y += cell_h + 32.0;
     }
-    if !updated.is_empty() {
-        let tt = Text::new(18.0, t::INK).semi();
-        cx.c.text("Recently updated", PAD, y, tt);
-        y += tt.lh() + 8.0;
-        let rh = 80.0;
-        for (j, s) in updated.iter().enumerate() {
+    if picks_shown && let Some(r) = &recs {
+        // Because you read X: a rail each.
+        let because: Vec<&leaf_proto::Because> = r.because.iter().filter(|b| !b.recs.is_empty()).collect();
+        st.because.resize(because.len(), HScroll::default());
+        for (k, b) in because.iter().enumerate() {
+            let (h, tapped) = heading(&mut cx, y, &format!("Because you read {}", b.title), b.recs.len() > 3);
+            if tapped {
+                to_picks = Some(format!("because:{}", b.series));
+            }
+            y += h + 14.0;
+            let (h, hit, m) = crate::recs::rail(&mut cx, &mut app.images, &mut st.because[k], &b.recs, y, dt, now, covered);
+            moving |= m;
+            if let Some(hit) = hit {
+                rec_hit = Some((hit, b.recs.clone(), None));
+            }
+            y += h + 32.0;
+        }
+        // Collections: a tile per tag, each opening its list.
+        let cols: Vec<&leaf_proto::Collection> = r.collections.iter().filter(|c| !c.recs.is_empty()).collect();
+        if !cols.is_empty() {
+            let (h, _) = heading(&mut cx, y, "Collections", false);
+            y += h + 14.0;
+            let (tw, th) = (150.0, 84.0);
+            let area = [0.0, y + cx.c.dy, WIDTH, th];
+            cx.ui.claim_h(area);
+            moving |= st.tiles.update(cx.ui, area, dt);
+            let mut x = PAD - st.tiles.off;
+            for c in &cols {
+                if x + tw > -10.0 && x < WIDTH + 10.0 {
+                    let tone = crate::recs::tone(&c.tag);
+                    cx.c.rect_hgrad(x, y, tw, th, 10.0, tone, tone.mix(Rgba::hex(0x000000), 0.35));
+                    if cx.pressed(x, y, tw, th) {
+                        cx.c.rect(x, y, tw, th, 10.0, t::WASH);
+                    }
+                    let tt = Text::new(17.0, Rgba::WHITE).semi().line(1.2);
+                    let lines = cx.c.wrap(&c.tag, tw - 24.0, tt, 2);
+                    let mut ty_ = y + (th - lines.len() as f32 * tt.lh()) / 2.0;
+                    for l in &lines {
+                        cx.c.text(l, x + 12.0, ty_, tt);
+                        ty_ += tt.lh();
+                    }
+                    if !covered && cx.tap(x, y, tw, th) {
+                        to_picks = Some(format!("tag:{}", c.tag));
+                    }
+                }
+                x += tw + 10.0;
+            }
+            st.tiles.max = x + st.tiles.off - 10.0 + PAD - WIDTH;
+            y += th + 32.0;
+        }
+        // One finished series, to read in one go.
+        if let Some(b) = &r.binge {
+            let (h, _) = heading(&mut cx, y, "Finished, to binge", false);
+            y += h + 14.0;
+            let rh = 128.0;
             if cx.pressed(0.0, y, WIDTH, rh) {
                 cx.c.rect(0.0, y, WIDTH, rh, 0.0, t::WASH);
             }
-            let (cw, ch) = (48.0, 66.0);
-            cover(&mut cx, &mut app.images, &Item::Series((*s).clone()), PAD, y + (rh - ch) / 2.0, cw, ch, 6.0, now);
-            let tx = PAD + cw + 14.0;
-            let when = logic::ago(s.updated_at, now_ms);
-            let wt = Text::new(12.5, t::INK3).right();
-            let ww = cx.c.measure(&when, wt);
-            let title_t = Text::new(ty::BODY, t::INK).medium();
-            let line_t = Text::new(12.5, t::INK3);
-            let block = title_t.lh() + 4.0 + 18.0;
-            let ty0 = y + (rh - block) / 2.0;
-            cx.c.text_fit(&s.title, tx, ty0, WIDTH - PAD - ww - 12.0 - tx, title_t);
-            cx.c.text(&when, WIDTH - PAD, ty0 + 2.0, wt);
-            let new = updated_new[j];
-            let lw = cx.c.text_fit(&logic::updated_words(s, new), tx, ty0 + title_t.lh() + 4.0 + (18.0 - line_t.lh()) / 2.0, WIDTH - PAD - tx - 50.0, line_t);
-            if new > 0 {
-                new_tag(cx.c, tx + lw + 8.0, ty0 + title_t.lh() + 4.0, "NEW");
+            let (cw, ch) = (96.0, 128.0);
+            crate::recs::cover(cx.c, &mut app.images, b, PAD, y, cw, ch, COVER_R, now);
+            let tx = PAD + cw + 16.0;
+            let tw = WIDTH - PAD - tx;
+            let tt = Text::new(ty::SECTION, t::INK).semi().line(1.25);
+            let lines = cx.c.wrap(&b.title, tw, tt, 2);
+            let mut ty_ = y + 10.0;
+            for l in &lines {
+                cx.c.text(l, tx, ty_, tt);
+                ty_ += tt.lh();
             }
-            if cx.tap(0.0, y, WIDTH, rh) {
-                open_series = Some(s.id);
+            cx.c.text_fit(&b.reason, tx, ty_ + 6.0, tw, Text::new(12.5, t::ACCENT));
+            cx.c.text_fit(&crate::recs::facts(b), tx, ty_ + 6.0 + 20.0, tw, Text::new(12.5, t::INK3));
+            if !covered && cx.tap(0.0, y, WIDTH, rh) {
+                rec_hit = Some((crate::recs::Hit::Open(0), vec![b.clone()], None));
             }
-            y += rh;
+            y += rh + 24.0;
         }
-        y += 8.0;
     }
     if n > 0
         && let Some(e) = &error
@@ -540,14 +652,13 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         y += cx.c.para(e, PAD, y, WIDTH - 2.0 * PAD, Text::new(ty::CAPTION, t::DANGER), 3) + 8.0;
     }
     let bottom = y + kit::TABS_H;
-    // The fixed top: the name over the spotlight, a band of ground once the page scrolls.
+    // The fixed top: the name and the gear, on the ground.
     let mut settings = false;
     let mut retry = false;
     {
-        let scrolled = (-cx.c.dy).clamp(0.0, 60.0) / 60.0;
         cx.c.dy = 0.0;
-        cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + 56.0, 0.0, t::BG.a(scrolled));
-        kit::fixed_top(&mut cx, 56.0);
+        cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + TOP_H, 0.0, t::BG);
+        kit::fixed_top(&mut cx, TOP_H);
         let tt = Text::new(22.0, t::INK).brand();
         let tw = cx.c.text("Leaf", PAD + 4.0, top + 6.0 + (44.0 - tt.lh()) / 2.0, tt);
         if offline {
@@ -561,12 +672,18 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 retry = true;
             }
         }
-        cx.c.circle(WIDTH - 6.0 - 22.0, top + 28.0, 18.0, t::BG.a(0.32 * (1.0 - scrolled)));
         if kit::icon_key(&mut cx, WIDTH - 6.0 - 44.0, top + 6.0, "gear") {
             settings = true;
         }
     }
     let tab = kit::tabs(&mut cx, 0);
+    let mut sheet_act = None;
+    if covered {
+        kit::release(&mut cx, held);
+        if let Some(s) = &app.st.recs.sheet {
+            sheet_act = crate::recs::sheet(&mut cx, &mut app.images, s, now);
+        }
+    }
     app.page_end(&pg, bottom);
     if let Some(at) = wake {
         app.wake_at(at);
@@ -575,11 +692,24 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         app.images.retry_failed();
         app.ask(Job::Library);
     }
+    if retry_recs {
+        app.want_recs(true);
+    }
     if add_books {
         app.host.pick_books();
     }
-    if let Some(id) = continue_series {
+    if let Some(a) = sheet_act {
+        crate::recs::act(app, a);
+    } else if covered {
+        // The sheet holds every tap.
+    } else if let Some((h, list, tag)) = rec_hit {
+        crate::recs::on_hit(app, h, &list, tag.as_deref());
+    } else if let Some(of) = to_picks {
+        app.push(Route::Picks(of));
+    } else if let Some(id) = continue_series {
         app.continue_series(id);
+    } else if let Some((id, on)) = bell {
+        app.set_bell(id, on);
     } else if let Some(id) = open_series {
         app.push(Route::Series(id));
     } else if let Some(id) = open_book {
@@ -596,7 +726,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     } else if let Some(i) = tab {
         app.go_tab(i);
     }
-    pg.moving || moving || app.library.loading && !crate::wake::has()
+    pg.moving || moving || (app.library.loading || app.recs.loading) && !crate::wake::has()
 }
 
 /// The deep tone a drawn book cover has, for a spotlight with no picture.

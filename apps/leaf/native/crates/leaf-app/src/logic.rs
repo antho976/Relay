@@ -179,7 +179,8 @@ pub fn showable(s: &str, can: impl Fn(char) -> bool) -> String {
 }
 
 /// A series' description as worth reading: without a source's leading ranking ("Rank: #4 •
-/// Rating: 9.25 • Bookmarks: 156.5K") and its trailing list of other titles.
+/// Rating: 9.25 • Bookmarks: 156.5K") and its trailing lists of other titles and links
+/// ("Associated Name(s):- …", "Tracker(s):- [AniList](https://…)").
 pub fn clean_description(d: &str) -> String {
     let mut t = d.trim();
     if t.starts_with("Rank:")
@@ -189,8 +190,10 @@ pub fn clean_description(d: &str) -> String {
         let n = rest.find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | ',' | 'K' | 'k' | 'M'))).unwrap_or(rest.len());
         t = rest[n..].trim_start();
     }
-    if let Some(i) = t.find("Alternative Title") {
-        t = t[..i].trim_end();
+    for tail in ["Alternative Title", "Associated Name", "Tracker(s)", "Official Source", "Links:", "\n---"] {
+        if let Some(i) = t.find(tail) {
+            t = t[..i].trim_end();
+        }
     }
     t.to_string()
 }
@@ -1013,6 +1016,7 @@ mod tests {
     fn descriptions_lose_the_sources_furniture() {
         assert_eq!(clean_description("Rank: #4 • Rating: 9.25 • Bookmarks: 156.5KNanotechnology meets martial arts.Alternative Titles:- NM"), "Nanotechnology meets martial arts.");
         assert_eq!(clean_description("  A plain one. "), "A plain one.");
+        assert_eq!(clean_description("Hajin begins to uncover the truth behind his death...Associated Name(s):- Reborn As The Heavenly DemonTracker(s):- [Official Source](https://www.webtoons.com/en/x)"), "Hajin begins to uncover the truth behind his death...");
     }
 
     #[test]

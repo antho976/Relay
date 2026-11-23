@@ -31,6 +31,9 @@ pollster = "0.4"
 # Android build needs no cmake or NASM.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 raw-window-handle = "0.6"
+# An app update's SHA-256, checked before Android is asked to install it. Already built for
+# rustls (ureq's TLS), so it adds nothing.
+ring = "0.17"
 # Books: the shelf, places, highlights and reading time, on the phone. SQLite built in, as Tally RS.
 rusqlite = { version = "0.40", features = ["bundled"] }
 # EPUBs are zip files of XHTML. Only reading, only deflate (flate2 on miniz_oxide: pure Rust).

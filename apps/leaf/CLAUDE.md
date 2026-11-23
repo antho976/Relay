@@ -14,7 +14,7 @@ run cargo from there, and plain `cargo test` at the root never builds it.
 |---|---|
 | `leaf-proto` | The wire types the phone and the server share, and the rules both must read alike: title matching, gaps, which copy of a chapter to read. |
 | `leaf-server` | The comics autopilot beside a Suwayomi it drives (`server/compose.yml`). Headless: `autopilot` (the pass), `budget` (per-source requests), `thumbs`, `recs` (AniList), `webtoon` (paid episodes), `api`. |
-| `leaf-app` | The phone app (wgpu; renderer copied from Tally RS): tabs Home, Search, My space (`home`, `search`, `space`); books (`shelf`, `epub`, `typeset`, `book`, `notes`, `stats`) and comics (`series`, `reader`, `thumb` for chapter pictures). |
+| `leaf-app` | The phone app (wgpu; renderer copied from Tally RS): tabs Home, Search, My space (`home`, `search`, `space`); books (`shelf`, `epub`, `typeset`, `book`, `notes`, `stats`), comics (`series`, `reader`), picks (`recs`) and app updates (`update`). |
 
 ```fish
 cd apps/leaf/native
@@ -45,8 +45,10 @@ straight to Suwayomi. An error starting with `PAUSED` is not the source's failur
 toward moving a series. Chapter pictures come only from Suwayomi's downloaded files. Tests of
 these rules pass time in; none sleep.
 
-`Series` and `Chapter` gain fields only through JSON the server adds (`paid`, `thumb`), until the
-phone adds them with `#[serde(default)]`: a new field on those structs breaks leaf-app's build.
+`Series` and `Chapter` gain fields only through JSON the server adds (`paid`, `thumb`): leaf-server
+builds both structs field by field (`autopilot.rs`), and leaf-app in its tests, so a new field on
+them breaks both builds. The phone reads `paid` and `thumb` beside the structs, from the same JSON
+(`net::Extras`, 2026-11-23); moving them into the structs is a change to both crates at once.
 
 ## Books: what is easy to break
 
@@ -70,8 +72,14 @@ phone adds them with `#[serde(default)]`: a new field on those structs breaks le
   does a tap on fixed chrome drawn after the page (the tab bar, a fixed top): `Ui::begin_frame`
   holds it and `kit::chrome` / `kit::fixed_top` give it back; new fixed chrome registers itself so.
 - The spotlight is never dragged: it rests 18 s on each, slides gently, and its dots choose one.
-  No cover is drawn past 1.3× its own pixels (`images::MAX_UPSCALE`): a smaller one is a sharp
-  poster over a blurred, darkened copy of itself (the series banner too).
+  It is a rounded card on Home (design 42 page 15, 2026-11-23), and only covers that fill it sharp
+  take a turn. No cover is drawn past 1.3× its own pixels (`images::MAX_UPSCALE`).
+- My space rows and chapter rows use smaller pictures than the artboards draw (the owner,
+  2026-11-23): square covers 88 (`space::ROW_H`), chapter pictures 72 × 54 (`series::PIC`).
+- Chapter pictures come only from the server (`/v1/chapters/{id}/thumb`): the phone never fetches
+  pages to make one. A pick (`recs`) is not in your space: its sheet adds it, bell off.
+- A sheet over a page (a pick's, the app update's) holds every tap from the page under it; the
+  series page's bottom key is fixed chrome (`kit::chrome`). `flows.rs` tests each.
 
 ## Developing against a real Suwayomi
 

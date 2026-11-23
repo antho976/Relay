@@ -9,10 +9,15 @@
 //!   WORDS` typed in its field, `--shelf 0..4` for one shelf, `--shelve ID:dropped` to put a
 //!   series on a shelf in the shot's copy, `--fake-updates 1` for a made-up Updates list built from
 //!   the library, `--all 1` for Updates' All, `--sheet shelf` with `--id` for the shelf sheet),
-//!   `search` (`--query`, default "nano"), `series` (`--id`, default 1; `--tab about`; `--sheet
-//!   chapter|shelf|wrong|menu`), `reader` (`--id`, `--chapter` number, default 1; `--scroll UNITS`
+//!   `--sheet downloads` with `--id`), `search` (`--query`, default "nano"), `series` (`--id`,
+//!   default 1; `--tab also`; `--sheet shelf|wrong|menu|info|range|rec`; `--select N` selects N
+//!   chapters from where you are; `--paid FROM-TO` shows paid episodes ahead on the shot's copy),
+//!   `picks` (`--of top|binge|tag:<tag>|because:<id>`), `reader` (`--id`, `--chapter` number, default 1; `--scroll UNITS`
 //!   down the strip; `--overlay 1`; `--auto 1` auto-scroll on; `--dim 0..0.85`), `settings` (the
 //!   Settings page, `--scroll UNITS`, `--backup 1` to export the latest backup).
+//!   `--fake-recs 1` makes Home's picks (and a series' Readers also like) from the library, for the
+//!   days the server has none (covers are the series' own, fetched once into `--data`);
+//!   `--sheet rec` on `home` opens the first pick's sheet; `--update 1` offers a made-up newer app.
 //!   `--size WxH` (default 1080x2340). `--bell ID` and `--seen ID` mark a series on the shot's own
 //!   copy only (its bell on; read up to two chapters before its newest). Nothing is written to the server: no progress is reported.
 //! - `--data DIR` keeps Leaf's files somewhere else than `~/.local/share/leaf` (and, with
@@ -349,6 +354,62 @@ fn fake_updates(app: &mut App) {
     app.updates.loading = false;
 }
 
+/// Picks made up from the library for a shot (the server makes its own once a day, from its
+/// first day on): each a series you have, shown as if it were not yours, its cover copied from
+/// the series' own (fetched once into the data folder). Readers also like for `series` too, two
+/// of them marked yours.
+fn fake_recs(app: &mut App, series: i64) -> Result<(), String> {
+    let lib = app.library.data.clone().ok_or("the library did not load")?;
+    let server = app.server.clone().ok_or("no server")?;
+    let client = crate::net::Client::new();
+    let mut lib: Vec<leaf_proto::Series> = lib.into_iter().filter(|s| s.id != series).collect();
+    lib.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
+    let reasons = ["More like Nano Machine", "3 of yours point here", "Murim · finished", "More like Return of the Mount Hua Sect", "2 of yours point here", "Regression · ongoing"];
+    let genres = [["Action", "Murim"], ["Fantasy", "Regression"], ["Action", "Martial Arts"], ["Drama", "Romance"], ["Action", "Hunters"], ["Fantasy", "Magic"]];
+    let mut recs = Vec::new();
+    for (i, s) in lib.iter().take(18).enumerate() {
+        let anilist = 900_000 + s.id;
+        let file = crate::images::CoverOf::Rec(anilist).file(&app.data);
+        if !file.exists() {
+            let own = crate::images::CoverOf::Series(s.id).file(&app.data);
+            let bytes = match std::fs::read(&own) {
+                Ok(b) => b,
+                Err(_) => client.get(&server, &format!("/v1/series/{}/cover", s.id)).map_err(|f| f.words("the server"))?,
+            };
+            crate::net::write_atomic(&file, &bytes).map_err(|e| e.to_string())?;
+        }
+        recs.push(leaf_proto::Rec {
+            anilist_id: anilist,
+            title: s.title.clone(),
+            reason: reasons[i % reasons.len()].into(),
+            genres: genres[i % genres.len()].iter().map(|g| g.to_string()).collect(),
+            chapters: Some(s.chapters),
+            status: s.status.clone(),
+            hits: vec![leaf_proto::Hit { manga_id: -1, source: String::new() }; 1 + i % 3],
+            cover: format!("/v1/recs/cover/{anilist}"),
+            in_space: None,
+        });
+    }
+    let pick = |from: usize, n: usize| -> Vec<leaf_proto::Rec> { recs.iter().skip(from).take(n).cloned().collect() };
+    let read: Vec<&leaf_proto::Series> = app.library.data.as_ref().map(|l| l.iter().filter(|s| s.last_read_at > 0).collect()).unwrap_or_default();
+    let because: Vec<leaf_proto::Because> = read.iter().take(2).enumerate().map(|(k, s)| leaf_proto::Because { series: s.id, title: s.title.clone(), recs: pick(6 + k * 4, 5) }).collect();
+    let collections = ["Murim", "Regression", "Hunters", "Magic"].iter().enumerate().map(|(k, tag)| leaf_proto::Collection { tag: tag.to_string(), recs: pick(k * 3, 6) }).collect();
+    let mut binge = recs.iter().find(|r| r.status == "completed").cloned().or_else(|| recs.last().cloned());
+    if let Some(b) = &mut binge {
+        b.reason = "Finished, and 9 in 10 of its readers rate it well".into();
+    }
+    app.recs.data = Some(leaf_proto::Recs { top: pick(0, 9), because, collections, binge, made_at: crate::shelf::now_ms() });
+    app.recs.loading = false;
+    let mut also = pick(3, 9);
+    for (k, r) in also.iter_mut().enumerate() {
+        if k == 1 || k == 4 {
+            r.in_space = Some(r.anilist_id - 900_000);
+        }
+    }
+    app.also.insert(series, crate::app::Loaded { data: Some(also), live: true, error: None, loading: false });
+    Ok(())
+}
+
 /// One frame of a screen, drawn with no window.
 fn shot(args: &[String], out: &str) -> Result<(), String> {
     let (w, h) = arg(args, "--size")
@@ -418,7 +479,12 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.reset_to(Route::Home);
             app.push(Route::Series(id));
             app.frame(clock);
-            app.st.series.about = arg(args, "--tab").as_deref() == Some("about");
+            app.st.series.also = arg(args, "--tab").as_deref() == Some("also");
+        }
+        "picks" => {
+            app.set_server(server);
+            app.reset_to(Route::Home);
+            app.push(Route::Picks(arg(args, "--of").unwrap_or_else(|| "top".into())));
         }
         _ if BOOK_SCREENS.contains(&screen.as_str()) => {
             books_shot(&mut app, &gfx, &mut clock, args, &screen)?;
@@ -476,6 +542,28 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
         }
         settle(&mut app, &gfx, &mut clock, 10.0);
     }
+    if arg(args, "--fake-recs").is_some() {
+        fake_recs(&mut app, id)?;
+        settle(&mut app, &gfx, &mut clock, 30.0);
+    }
+    if let Some((from, to)) = arg(args, "--paid").and_then(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<f64>().ok()?, b.parse::<f64>().ok()?)))) {
+        app.paid.insert(id, leaf_proto::PaidAhead { from, to, url: "https://www.webtoons.com/".into() });
+    }
+    if arg(args, "--update").is_some() {
+        let build = crate::update::BUILD + 3;
+        crate::update::offered(&mut app, leaf_proto::AppLatest { build, version: crate::update::version_of(build), size: 18_400_000, sha256: String::new(), made_at: 0 });
+    }
+    if screen == "home"
+        && arg(args, "--sheet").as_deref() == Some("rec")
+        && let Some(r) = app.recs.data.as_ref().and_then(|r| r.top.first().cloned())
+    {
+        crate::recs::hit(&mut app, &r, None, true);
+    }
+    if let Some(n) = arg(args, "--select").and_then(|v| v.parse::<usize>().ok()) {
+        let d = app.series.get(&id).and_then(|l| l.data.clone()).ok_or("the series did not load")?;
+        let from = crate::logic::continue_point(&d.chapters).map_or(0, |c| c.index);
+        app.st.series.select = Some(d.chapters.iter().rev().skip(d.chapters.len().saturating_sub(from + 1)).take(n).map(|c| c.id).collect());
+    }
     if arg(args, "--fake-updates").is_some() {
         fake_updates(&mut app);
         settle(&mut app, &gfx, &mut clock, 20.0);
@@ -487,10 +575,12 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
         app.ask(crate::net::Job::Backup(false));
         settle(&mut app, &gfx, &mut clock, 30.0);
     }
-    if screen == "space"
-        && arg(args, "--sheet").as_deref() == Some("shelf")
-    {
-        app.st.space.shelf_for = Some(id);
+    if screen == "space" {
+        match arg(args, "--sheet").as_deref() {
+            Some("shelf") => app.st.space.shelf_for = Some(id),
+            Some("downloads") => app.st.space.downloads_for = Some(id),
+            _ => {}
+        }
     }
     if screen == "series"
         && let Some(sheet) = arg(args, "--sheet")
@@ -503,11 +593,18 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
                 st.alternatives = true;
                 app.ask(crate::net::Job::Alternatives(id));
             }
-            _ => {
-                let d = app.series.get(&id).and_then(|l| l.data.clone()).ok_or("the series did not load")?;
-                let c = crate::logic::continue_point(&d.chapters).map(|c| d.chapters[c.index].id);
-                app.st.series.chapter = c.or(d.chapters.last().map(|c| c.id));
+            "info" => st.info = true,
+            "range" => {
+                st.range = true;
+                st.range_from = "12".into();
+                st.range_to = "30".into();
             }
+            "rec" => {
+                if let Some(r) = app.also.get(&id).and_then(|l| l.data.as_ref()).and_then(|l| l.iter().find(|r| r.in_space.is_none()).cloned()) {
+                    crate::recs::hit(&mut app, &r, None, true);
+                }
+            }
+            other => return Err(format!("unknown sheet: {other}")),
         }
         settle(&mut app, &gfx, &mut clock, 30.0);
     }

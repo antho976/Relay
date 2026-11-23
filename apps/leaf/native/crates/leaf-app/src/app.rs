@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use leaf_proto::{Alternative, Series, SeriesDetail, SourceHealth, Status, Update};
+use leaf_proto::{Alternative, PaidAhead, Rec, Recs, Series, SeriesDetail, SourceHealth, Status, Update};
 
 use crate::draw::{Canvas, WIDTH};
 use crate::images::Images;
@@ -50,6 +50,35 @@ pub trait Host: Send + Sync {
     /// A book or a strip is on screen (or no longer): keep the screen on, and let the volume keys
     /// turn pages when `volume_keys`.
     fn reading(&self, _on: bool, _volume_keys: bool) {}
+    /// Open a web address in the app that takes it (Android: the Webtoon app when it is
+    /// installed, else the browser). False when nothing could.
+    fn open_url(&self, url: &str) -> bool {
+        self.log(&format!("open {url}"));
+        false
+    }
+    /// A folder for files that may be thrown away (an app update being downloaded).
+    fn cache_dir(&self) -> PathBuf {
+        self.data_dir().join("scratch")
+    }
+    /// This platform installs app updates ([`Host::install_apk`]).
+    fn can_install(&self) -> bool {
+        false
+    }
+    /// Ask the system to install this APK (Android's installer, which asks the person).
+    fn install_apk(&self, _path: &std::path::Path) -> Install {
+        Install::Unsupported
+    }
+}
+
+/// What asking to install an update did.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Install {
+    /// The system's installer is showing it.
+    Started,
+    /// Leaf may not install apps yet: the settings to allow it were opened instead.
+    NeedsLeave,
+    Unsupported,
+    Failed,
 }
 
 /// When the next frame is wanted.
@@ -103,6 +132,8 @@ pub enum Route {
     Find,
     /// Files being brought in.
     Imports,
+    /// A list of recommendations: "top", "binge", "tag:<tag>" (a collection) or "because:<id>".
+    Picks(String),
 }
 
 /// Something the server is asked for: what it last said, and whether it is being asked again.
@@ -139,6 +170,8 @@ pub struct States {
     pub notes: crate::notes::State,
     pub review: crate::notes::Review,
     pub find: crate::notes::Find,
+    pub recs: crate::recs::State,
+    pub update: crate::update::State,
 }
 
 /// The settings kept in `config.json` (Android's chapter notices read `server` from it too).
@@ -164,6 +197,12 @@ struct Config {
     updates_all: bool,
     #[serde(default)]
     backup: Option<BackupInfo>,
+    /// When the server was last asked for a newer app (ms).
+    #[serde(default)]
+    update_checked_ms: i64,
+    /// "Later" on an update: that build is not offered again until then (ms).
+    #[serde(default)]
+    update_later: Option<(u32, i64)>,
 }
 
 /// How reading feels, kept in `config.json`.
@@ -253,6 +292,21 @@ pub struct App {
     late_toast: Arc<std::sync::Mutex<Option<String>>>,
     /// Chapters asked to download on the server and not yet downloaded there.
     pub downloading: HashSet<i64>,
+    /// Paid episodes ahead on Webtoon, per series (`paid`, read beside [`Series`]).
+    pub paid: HashMap<i64, PaidAhead>,
+    /// Chapters the server has a picture of (`thumb`).
+    pub thumbs: HashSet<i64>,
+    /// Recommendations (`/v1/recs`), and when they were last asked for (ms).
+    pub recs: Loaded<Recs>,
+    recs_asked_ms: i64,
+    /// "Readers also like", per series.
+    pub also: HashMap<i64, Loaded<Vec<Rec>>>,
+    /// A recommendation being added (its AniList id), and whether its first chapter opens then.
+    pub rec_follow: Option<(i64, bool)>,
+    /// A series just added to open at its first chapter once its chapters come.
+    pub open_start: Option<i64>,
+    pub update_checked_ms: i64,
+    pub update_later: Option<(u32, i64)>,
     /// A short message at the bottom, until this time.
     toast: Option<(String, u64)>,
     /// A field just let go of its keyboard with Done: its page acts on it (Search searches).
@@ -323,6 +377,15 @@ impl App {
             dim_dirty: false,
             late_toast: Arc::new(std::sync::Mutex::new(None)),
             downloading: HashSet::new(),
+            paid: HashMap::new(),
+            thumbs: HashSet::new(),
+            recs: Loaded::default(),
+            recs_asked_ms: 0,
+            also: HashMap::new(),
+            rec_follow: None,
+            open_start: None,
+            update_checked_ms: config.update_checked_ms,
+            update_later: config.update_later,
             toast: None,
             typed_done: None,
             keyboard_up: false,
@@ -523,6 +586,11 @@ impl App {
         self.status = Loaded::default();
         self.health = Loaded::default();
         self.alternatives.clear();
+        self.recs = Loaded::default();
+        self.recs_asked_ms = 0;
+        self.also.clear();
+        self.paid.clear();
+        self.thumbs.clear();
     }
 
     /// Keep the settings, on a thread of its own (a small file, but still a write). Saves land in
@@ -542,6 +610,8 @@ impl App {
             notify: self.notify,
             updates_all: self.updates_all,
             backup: self.backup.clone(),
+            update_checked_ms: self.update_checked_ms,
+            update_later: self.update_later,
         };
         let (path, host) = (self.data.join("config.json"), self.host.clone());
         let n = ASKED.fetch_add(1, Ordering::SeqCst) + 1;
@@ -582,14 +652,79 @@ impl App {
         }
     }
 
-    /// Download chapters on the server, or remove them there.
+    /// Download chapters on the server, or remove them there: one at once, several through the
+    /// server's line (`/v1/downloads`, drained a few at a time per source).
     pub fn download(&mut self, chapters: &[i64], on: bool) {
-        for &c in chapters {
-            if on {
-                self.downloading.insert(c);
-            }
-            self.ask(Job::Download(c, on));
+        if on {
+            self.downloading.extend(chapters.iter().copied());
         }
+        match chapters {
+            [] => {}
+            [c] => self.ask(Job::Download(*c, on)),
+            _ => self.ask(Job::Downloads(chapters.to_vec(), on)),
+        }
+    }
+
+    /// Ask for the recommendations, at most every [`crate::net::RECS_FRESH_MS`] (or now).
+    pub fn want_recs(&mut self, now: bool) {
+        if self.server.is_none() || self.recs.loading {
+            return;
+        }
+        let ms = crate::shelf::now_ms();
+        if !now && self.recs.data.is_some() && ms - self.recs_asked_ms < crate::net::RECS_FRESH_MS {
+            return;
+        }
+        self.recs_asked_ms = ms;
+        self.recs.loading = true;
+        self.ask(Job::Recs(now));
+    }
+
+    /// Ask whether the server holds a newer app: at most every [`crate::update::CHECK_EVERY_MS`].
+    pub fn check_update(&mut self) {
+        let ms = crate::shelf::now_ms();
+        if self.shot || self.server.is_none() || ms - self.update_checked_ms < crate::update::CHECK_EVERY_MS {
+            return;
+        }
+        self.update_checked_ms = ms;
+        self.save_config();
+        self.ask(Job::AppLatest);
+    }
+
+    /// Take a recommendation out of every list it is shown in (added, or not interesting).
+    pub fn drop_rec(&mut self, anilist: i64) {
+        if let Some(r) = &mut self.recs.data {
+            r.top.retain(|x| x.anilist_id != anilist);
+            for b in &mut r.because {
+                b.recs.retain(|x| x.anilist_id != anilist);
+            }
+            for c in &mut r.collections {
+                c.recs.retain(|x| x.anilist_id != anilist);
+            }
+            if r.binge.as_ref().is_some_and(|x| x.anilist_id == anilist) {
+                r.binge = None;
+            }
+        }
+        for l in self.also.values_mut() {
+            if let Some(list) = &mut l.data {
+                list.retain(|x| x.anilist_id != anilist);
+            }
+        }
+    }
+
+    /// Add a recommended series to My space (its bell off, as from Search); `read` opens its first
+    /// chapter once it is there.
+    pub fn add_rec(&mut self, r: &Rec, read: bool) {
+        if let Some(id) = r.in_space {
+            self.push(Route::Series(id));
+            return;
+        }
+        if r.hits.is_empty() {
+            self.toast("None of your sources carries it any more");
+            return;
+        }
+        self.rec_follow = Some((r.anilist_id, read));
+        self.ask(Job::Follow(leaf_proto::Follow { title: r.title.clone(), manga_ids: r.hits.iter().map(|h| h.manga_id).collect(), quiet: false }));
+        self.toast(&format!("Adding {}", r.title));
     }
 
     /// Newest or oldest first on a series page, kept.
@@ -663,8 +798,15 @@ impl App {
                         // The copy on disk is never newer than the one in hand, which may already
                         // show what was just read or moved.
                         Ok(_) if cached && l.data.is_some() => {}
-                        Ok(mut list) => {
+                        Ok((mut list, extras)) => {
                             list.iter_mut().for_each(logic::mend_times);
+                            for e in extras {
+                                match e.paid {
+                                    Some(p) => self.paid.insert(e.id, p),
+                                    None => self.paid.remove(&e.id),
+                                };
+                            }
+                            let l = &mut self.library;
                             l.data = Some(list);
                             if !cached {
                                 l.live = true;
@@ -680,7 +822,24 @@ impl App {
                     }
                 }
                 Done::Series { id, cached, result } => {
-                    if let Ok(d) = &result
+                    // What the server adds beside the series (paid episodes, pictures), from the
+                    // copy on disk only when nothing better is in hand.
+                    if let Ok((_, extras)) = &result
+                        && (!cached || !self.series.get(&id).is_some_and(|l| l.data.is_some()))
+                    {
+                        match &extras.paid {
+                            Some(p) => self.paid.insert(id, p.clone()),
+                            None => self.paid.remove(&id),
+                        };
+                        for (c, has) in &extras.thumbs {
+                            if *has {
+                                self.thumbs.insert(*c);
+                            } else {
+                                self.thumbs.remove(c);
+                            }
+                        }
+                    }
+                    if let Ok((d, _)) = &result
                         && !cached
                     {
                         for c in &d.chapters {
@@ -693,7 +852,7 @@ impl App {
                     match result {
                         // As the library: the copy in hand may already show what was just read.
                         Ok(_) if cached && l.data.is_some() => {}
-                        Ok(mut d) => {
+                        Ok((mut d, _)) => {
                             logic::mend_times(&mut d.series);
                             // A move on its way to the server shows already.
                             if self.shelf_undo.contains_key(&id)
@@ -725,11 +884,25 @@ impl App {
                         {
                             list.push(s);
                         }
-                        if self.route() == &Route::Search {
+                        if let Some((anilist, read)) = self.rec_follow.take() {
+                            self.drop_rec(anilist);
+                            self.st.recs.sheet = None;
+                            self.push(Route::Series(id));
+                            if read {
+                                self.open_start = Some(id);
+                            }
+                            self.toast("Added to My space");
+                        } else if self.route() == &Route::Search {
                             self.push(Route::Series(id));
                         }
                     }
-                    Err(f) => self.st.search.follow_failed(f.words(&label)),
+                    Err(f) => {
+                        if self.rec_follow.take().is_some() {
+                            self.toast(&format!("Not added: {}", lower_first(&f.words(&label))));
+                        } else {
+                            self.st.search.follow_failed(f.words(&label));
+                        }
+                    }
                 },
                 Done::Unfollowed(id, r) => match r {
                     Ok(()) => {
@@ -875,6 +1048,75 @@ impl App {
                         Err(f) => l.error = Some(f.words(&label)),
                     }
                 }
+                Done::Recs { cached, result } => {
+                    let l = &mut self.recs;
+                    match result {
+                        Ok(_) if cached && l.data.is_some() => {}
+                        Ok(r) => {
+                            l.data = Some(r);
+                            if !cached {
+                                l.live = true;
+                                l.error = None;
+                                l.loading = false;
+                            }
+                        }
+                        Err(f) => {
+                            l.loading = false;
+                            l.live = false;
+                            l.error = Some(f.words(&label));
+                        }
+                    }
+                }
+                Done::RecHidden(_, r) => {
+                    if let Err(f) = r {
+                        self.toast(&format!("Not hidden: {}", lower_first(&f.words(&label))));
+                        self.want_recs(true);
+                    }
+                }
+                Done::RecTag(tag, less, r) => match r {
+                    Ok(()) if less => self.toast(&format!("Fewer {tag} picks from the next ones")),
+                    Ok(()) => {}
+                    Err(f) => self.toast(&format!("Not changed: {}", lower_first(&f.words(&label)))),
+                },
+                Done::Also(id, r) => {
+                    let l = self.also.entry(id).or_default();
+                    l.loading = false;
+                    match r {
+                        Ok(list) => {
+                            l.data = Some(list);
+                            l.live = true;
+                            l.error = None;
+                        }
+                        Err(f) => l.error = Some(f.words(&label)),
+                    }
+                }
+                Done::Downloads(ids, on, r) => match r {
+                    Ok(_) => {}
+                    Err(f) => {
+                        for c in &ids {
+                            self.downloading.remove(c);
+                            if !on {
+                                self.mark_downloaded(*c, true);
+                            }
+                        }
+                        self.toast(&f.words(&label));
+                    }
+                },
+                Done::SeriesDownload(id, _, r) => match r {
+                    Ok(0) => self.toast("Nothing to download there: those chapters are kept already"),
+                    Ok(n) => {
+                        self.toast(&format!("Downloading {}, a few at a time", logic::chapters_words(n as usize)));
+                        self.st.series.polled_ns = self.now_ns;
+                        self.st.series.polls = 0;
+                        self.ask(Job::Series(id));
+                    }
+                    Err(f) => self.toast(&format!("Not downloaded: {}", lower_first(&f.words(&label)))),
+                },
+                Done::AppLatest(r) => match r {
+                    Ok(Some(l)) => crate::update::offered(self, l),
+                    Ok(None) => {}
+                    Err(f) => self.host.log(&format!("app update: {}", f.words(&label))),
+                },
                 Done::Repinned(id, r) => {
                     self.st.series.repinning = false;
                     match r {
@@ -895,6 +1137,20 @@ impl App {
                 }
             }
         }
+    }
+
+    /// A series just added with "Read chapter 1": its first chapter, once its chapters came.
+    fn open_started(&mut self) {
+        let Some(id) = self.open_start else { return };
+        let Some(d) = self.series.get(&id).and_then(|l| l.data.clone()) else { return };
+        if d.chapters.is_empty() {
+            if !self.series.get(&id).is_some_and(|l| l.loading) {
+                self.open_start = None;
+            }
+            return;
+        }
+        self.open_start = None;
+        self.open_chapter(&d, 0, 0);
     }
 
     /// An update tapped before its series had loaded: open it now that it has.
@@ -937,7 +1193,7 @@ impl App {
 
     // Marks shown at once, put back if the server says no
 
-    fn mark_downloaded(&mut self, chapter: i64, on: bool) {
+    pub fn mark_downloaded(&mut self, chapter: i64, on: bool) {
         for l in self.series.values_mut() {
             if let Some(c) = l.data.as_mut().and_then(|d| d.chapters.iter_mut().find(|c| c.id == chapter)) {
                 c.downloaded = on;
@@ -1048,6 +1304,7 @@ impl App {
         // An update tapped before its series came opens only if the person is still where they
         // tapped it: once they have gone elsewhere it would open over what they are doing.
         self.open_after = None;
+        self.open_start = None;
         // The bars hide only while a book or a strip is on screen (not over its notes or search).
         let reading = matches!(self.route(), Route::Book | Route::Reader);
         self.host.immersive(reading);
@@ -1121,6 +1378,15 @@ impl App {
     pub fn back(&mut self) -> bool {
         if self.focus.id.is_some() {
             self.finish_typing();
+            return true;
+        }
+        if self.st.update.open {
+            self.st.update.open = false;
+            self.ui.reset();
+            return true;
+        }
+        if self.st.recs.sheet.take().is_some() {
+            self.ui.reset();
             return true;
         }
         if self.route() == &Route::Space && self.st.space.close_over() {
@@ -1258,6 +1524,7 @@ impl App {
         self.wake = None;
         self.take_answers();
         self.open_waiting();
+        self.open_started();
         let late = self.late_toast.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(words) = late {
             self.toast(&words);
@@ -1278,6 +1545,14 @@ impl App {
         kit::ground(&mut self.canvas);
         let arrived = self.images.drain(&mut self.canvas, now_ns);
         let route = self.route().clone();
+        // An app update's sheet lies over the page: the page takes no tap while it shows.
+        let update = self.st.update.open && crate::update::shows_over(&route);
+        let held = if update {
+            self.ui.cover();
+            self.ui.tap.take()
+        } else {
+            None
+        };
         let mut moving = match route {
             Route::Connect => crate::connect::draw(self, dt),
             Route::Home => crate::home::draw(self, dt),
@@ -1293,7 +1568,13 @@ impl App {
             Route::Stats => crate::stats::draw(self, dt),
             Route::Find => crate::notes::draw_find(self, dt),
             Route::Imports => crate::library::draw_imports(self, dt),
+            Route::Picks(ref of) => crate::recs::draw_picks(self, of, dt),
         };
+        if update && self.route() == &route {
+            self.canvas.dy = 0.0;
+            self.ui.tap = held;
+            crate::update::draw(self);
+        }
         if let Some((words, until)) = self.toast.clone() {
             if now_ns < until {
                 let bottom = self.canvas.h - self.canvas.inset_bottom - if self.tabbed() { kit::TABS_H } else { 0.0 };
