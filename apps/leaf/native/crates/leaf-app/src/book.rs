@@ -1576,6 +1576,7 @@ fn search_page(app: &mut App, r: &mut BookReader, dt: f32) -> bool {
         let top = cx.c.inset_top;
         cx.c.dy = 0.0;
         cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + top_h, 0.0, t::BG);
+        kit::fixed_top(&mut cx, top_h);
         let back = kit::icon_key(&mut cx, 6.0, top + 10.0, "arrow-left");
         let fx = 56.0;
         let fw = WIDTH - fx - PAD;

@@ -23,6 +23,9 @@ pub const COMPARE_EVERY: i64 = 24 * HOUR;
 pub const EXTENSIONS_EVERY: i64 = 24 * HOUR;
 /// Failed refreshes in a row before another source is looked for at once.
 pub const FAILS_BEFORE_MOVING: u32 = 3;
+/// Downloaded chapters this many behind the last one read are removed from the server: you're
+/// unlikely to go back that far, and if you do, opening one fetches it again.
+pub const KEEP_BEHIND: f64 = 20.0;
 
 pub struct Ctx {
     pub suwa: Suwa,
@@ -326,6 +329,26 @@ impl Ctx {
         names
     }
 
+    /// Marks every chapter numbered below `before` read, on the series' own source and its linked
+    /// copies; the chapter you're on is then the one downloaded ahead.
+    pub fn read_before(&self, id: i64, before: f64) -> Result<u32, String> {
+        let w = self.store().work(id).ok_or("no such series")?;
+        let m = self.suwa.manga(w.manga_id)?;
+        let extras = self.extras(&w);
+        let ids: Vec<i64> = m.chapters.iter().chain(extras.iter().flat_map(|e| e.chapters.iter())).filter(|c| c.number >= 0.0 && c.number < before && !c.read).map(|c| c.id).collect();
+        for part in ids.chunks(200) {
+            self.suwa.mark(part, Some(true), None)?;
+        }
+        let m = self.suwa.manga(w.manga_id)?;
+        self.keep_ahead(&self.detail_now(&w, &m));
+        Ok(ids.len() as u32)
+    }
+
+    /// Due for a comparison at the next hourly pass.
+    pub fn compare_soon(&self, id: i64) {
+        self.store().compared(id, 0);
+    }
+
     pub fn set_bell(&self, id: i64, on: bool) -> Result<(), String> {
         let w = self.store().work(id).ok_or("no such series")?;
         self.store().set_bell(w.id, on);
@@ -363,11 +386,42 @@ impl Ctx {
         Ok(())
     }
 
+    /// The same chapter number from the work's other copies, preferred sources first: a source
+    /// that refuses (rate limits, a Cloudflare check, a site down) doesn't stop the reading.
+    fn pages_elsewhere(&self, chapter_id: i64) -> Option<Vec<String>> {
+        let (manga_id, number) = self.suwa.chapter_place(chapter_id).ok()?;
+        let work = self.store().work_of_any(manga_id)?;
+        let mut copies: Vec<Manga> = std::iter::once(work.manga_id).chain(self.store().links(work.id)).filter(|id| *id != manga_id).filter_map(|id| self.suwa.manga(id).ok()).collect();
+        copies.sort_by_key(|m| rank(&m.source_name, &self.prefs));
+        for m in copies {
+            for c in m.chapters.iter().filter(|c| c.number == number) {
+                if let Ok(p) = self.suwa.pages(c.id)
+                    && !p.is_empty()
+                {
+                    log(&format!("chapter {chapter_id}: read from {} instead", m.source_name));
+                    return Some(p);
+                }
+            }
+        }
+        None
+    }
+
+    /// Forgets a chapter's page list, so the next request asks again (and may fall back).
+    pub fn forget_pages(&self, chapter_id: i64) {
+        self.pages.lock().unwrap_or_else(|p| p.into_inner()).remove(&chapter_id);
+    }
+
     pub fn pages(&self, chapter_id: i64) -> Result<Vec<String>, String> {
         if let Some(p) = self.pages.lock().unwrap_or_else(|p| p.into_inner()).get(&chapter_id) {
             return Ok(p.clone());
         }
-        let p = self.suwa.pages(chapter_id)?;
+        let p = match self.suwa.pages(chapter_id) {
+            Ok(p) => p,
+            Err(e) => {
+                log(&format!("chapter {chapter_id}: {e}; trying its other sources"));
+                self.pages_elsewhere(chapter_id).ok_or(e)?
+            }
+        };
         let mut cache = self.pages.lock().unwrap_or_else(|p| p.into_inner());
         if cache.len() > 512 {
             cache.clear();
@@ -384,6 +438,27 @@ impl Ctx {
         let want: Vec<i64> = d.chapters.iter().filter(|c| c.number > upto && !c.read).take(self.ahead).filter(|c| !c.downloaded).map(|c| c.id).collect();
         if let Err(e) = self.suwa.enqueue(&want) {
             log(&format!("download {}: {e}", d.series.title));
+        }
+    }
+
+    /// Removes downloads of chapters `KEEP_BEHIND` or more behind the last one read, on the
+    /// series' own source and its linked copies.
+    fn trim_behind(&self, w: &Work, m: &Manga, d: &SeriesDetail) {
+        let Some(upto) = d.series.read_upto else { return };
+        let extras = self.extras(w);
+        let old: Vec<i64> = m
+            .chapters
+            .iter()
+            .chain(extras.iter().flat_map(|e| e.chapters.iter()))
+            .filter(|c| c.downloaded && c.number >= 0.0 && c.number <= upto - KEEP_BEHIND)
+            .map(|c| c.id)
+            .collect();
+        if old.is_empty() {
+            return;
+        }
+        match self.suwa.delete_downloads(&old) {
+            Ok(()) => log(&format!("{}: removed {} chapters read long ago", w.title, old.len())),
+            Err(e) => log(&format!("{}: removing old chapters: {e}", w.title)),
         }
     }
 
@@ -443,6 +518,7 @@ impl Ctx {
         if ok {
             self.keep_ahead(&d);
         }
+        self.trim_behind(w, &m, &d);
     }
 
     /// Looks at the other sources; moves the series when one is clearly better. True if moved.

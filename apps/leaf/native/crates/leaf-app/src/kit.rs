@@ -256,6 +256,22 @@ fn tail(c: &mut Canvas, s: &str, max_w: f32, tt: Text) -> String {
 
 // Over the page
 
+/// Fixed chrome (a top bar, the tabs) is drawn here over the page, in content units: a tap on it
+/// was held from the page under it ([`crate::ui::Ui::begin_frame`]) and is the chrome's again.
+/// Call after the page has drawn and before the chrome's own controls.
+pub fn chrome(cx: &mut Ctx, x: f32, y: f32, w: f32, h: f32) {
+    let dy = cx.c.dy;
+    cx.ui.chrome([x, y + dy, w, h]);
+}
+
+/// The fixed top of a page, `h` units under the status bar, as chrome ([`chrome`]): the ground
+/// behind it is the caller's (it fades in on some pages).
+pub fn fixed_top(cx: &mut Ctx, h: f32) {
+    cx.c.dy = 0.0;
+    let bottom = cx.c.inset_top + h;
+    chrome(cx, -1000.0, 0.0, WIDTH + 2000.0, bottom);
+}
+
 /// Take this frame's tap away from what is under a dialog or menu. Call before drawing the page.
 pub fn hold(cx: &mut Ctx) -> Option<(f32, f32)> {
     cx.ui.cover();
@@ -384,8 +400,8 @@ pub fn chip(cx: &mut Ctx, x: f32, y: f32, words: &str, on: bool, dot: Option<Rgb
 pub fn tabs(cx: &mut Ctx, on: usize) -> Option<usize> {
     let saved = cx.c.dy;
     cx.c.dy = 0.0;
-    let h = TABS_H + cx.c.inset_bottom;
-    let y = cx.c.h - h;
+    let (y, h) = tabs_area(cx.c);
+    chrome(cx, -1000.0, y, WIDTH + 2000.0, h);
     cx.c.rect(-1000.0, y, WIDTH + 2000.0, h, 0.0, t::S1);
     let items: [(&str, &'static str); 3] = [("Home", "home"), ("Search", "search"), ("My space", "modules")];
     let iw = WIDTH / items.len() as f32;
@@ -408,6 +424,12 @@ pub fn tabs(cx: &mut Ctx, on: usize) -> Option<usize> {
 
 /// The bottom tabs' height, above the gesture bar.
 pub const TABS_H: f32 = 60.0;
+
+/// Where the tabs sit on screen: their top and height (with the gesture bar under them), units.
+pub fn tabs_area(c: &Canvas) -> (f32, f32) {
+    let h = TABS_H + c.inset_bottom;
+    (c.h - h, h)
+}
 
 /// A sheet over the bottom of the page, `h` tall (the keyboard and gesture bar added below it):
 /// the veil, the panel and its grip. Returns the panel's top and whether a tap fell outside it.

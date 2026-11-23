@@ -13,11 +13,14 @@
 //! | `LEAF_EXTENSIONS_REPO` | Keiyoushi's `index.min.json` | the extension list added when Suwayomi has none |
 //! | `LEAF_FLARESOLVERR` | none | a FlareSolverr's address, turned on in Suwayomi for Cloudflare-checked sources |
 //! | `LEAF_AHEAD` | `1` | chapters after the last one read kept downloaded |
+//! | `LEAF_DOWNLOADS` | none | Suwayomi's download folder; its WebP pages are re-encoded smaller |
+//! | `LEAF_WEBP_QUALITY` | `60` | the quality they are re-encoded at |
 //! | `LEAF_TICK_SECS` | `3600` | how often the autopilot looks at what is due |
 
 mod anilist;
 mod api;
 mod autopilot;
+mod squeeze;
 mod store;
 mod suwa;
 
@@ -64,6 +67,8 @@ fn main() {
 
     // The autopilot: waits for Suwayomi, sets it up once, then a pass every `tick`.
     let pilot = ctx.clone();
+    let downloads = std::env::var("LEAF_DOWNLOADS").ok().filter(|v| !v.trim().is_empty()).map(PathBuf::from);
+    let quality: f32 = var("LEAF_WEBP_QUALITY", "60").parse().unwrap_or(60.0);
     let flaresolverr = std::env::var("LEAF_FLARESOLVERR").ok().filter(|v| !v.trim().is_empty());
     let repo = var("LEAF_EXTENSIONS_REPO", "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json");
     std::thread::spawn(move || {
@@ -97,6 +102,14 @@ fn main() {
                 }
             }
             pilot.tick();
+            if let Some(root) = &downloads {
+                let st = &pilot.store;
+                let lock = || st.lock().unwrap_or_else(|p| p.into_inner());
+                let s = squeeze::pass(root, quality, &mut |k| lock().get(&format!("sq:{k}")).is_some(), &mut |k| lock().set(&format!("sq:{k}"), "1"));
+                if s.pages > 0 {
+                    log(&format!("pages re-encoded: {} ({} MB to {} MB)", s.pages, s.before >> 20, s.after >> 20));
+                }
+            }
             std::thread::sleep(if extensions_in { tick } else { Duration::from_secs(60) });
         }
     });

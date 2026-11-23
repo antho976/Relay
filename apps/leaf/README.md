@@ -62,8 +62,9 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
   update daily. Checked live 2026-11-22: Junk to King moved from MangaDex (chapters 23–44 missing)
   to Drake Scans (all 84) with chapters 1–22 still read and 23–26 already downloading.
 - **The phone** (`native/crates/leaf-app`), three tabs (design 42, pages 12 to 14):
-  - **Home** (`home.rs`): a spotlight over a cover that turns every 6 s (swipe to turn it), belled
-    series with new chapters first, then what you read last, books too; Continue reading (covers
+  - **Home** (`home.rs`): a spotlight over a cover that slides gently to the next every 18 s (it
+    is not dragged; its dots choose one; a cover too small to fill it sharp is a poster over a
+    blurred copy of itself), belled series with new chapters first, then what you read last, books too; Continue reading (covers
     with how far each is read, "Ch. 338 · 2 new"); Recently updated.
   - **Search**: every source at once. **Add** puts a series in My space with its bell off: adding
     is not following. Sources are never named anywhere in the app.

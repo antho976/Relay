@@ -95,9 +95,13 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let top = cx.c.inset_top;
     let of = CoverOf::Series(id);
     let has_cover = app.images.cover(cx.c, of, now);
-    // The banner: the cover itself, wide, fading into the ground.
+    // The banner: the cover itself, wide, fading into the ground; a cover too small to be
+    // stretched that wide is a blurred, darkened copy of itself (it shows sharp beside the title).
     let banner_h = top + 300.0;
-    if app.images.hero(cx.c, of, now) {
+    let hero = app.images.hero(cx.c, of, now);
+    if hero && app.images.hero_poster(of).is_some() {
+        cx.c.image_cover(&of.hero_key(), -24.0, -24.0, WIDTH + 48.0, banner_h + 24.0, 0.0, Rgba::WHITE);
+    } else if hero {
         cx.c.image_cover_at(&of.hero_key(), 0.0, 0.0, WIDTH, banner_h, 0.0, Rgba::WHITE, (0.5, 0.25));
     } else if cx.c.has_image(&of.banner_key()) {
         cx.c.image_cover(&of.banner_key(), -40.0, -40.0, WIDTH + 80.0, banner_h + 40.0, 0.0, Rgba::WHITE.a(0.6));
@@ -362,6 +366,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         let scrolled = (-cx.c.dy).clamp(0.0, 60.0) / 60.0;
         cx.c.dy = 0.0;
         cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + 56.0, 0.0, t::BG.a(scrolled));
+        kit::fixed_top(&mut cx, 56.0);
         // Over the picture the keys sit on a soft dark disc, so a bright cover doesn't swallow them.
         for kx in [6.0, WIDTH - 6.0 - 88.0, WIDTH - 6.0 - 44.0] {
             cx.c.circle(kx + 22.0, top + 28.0, 18.0, t::BG.a(0.32 * (1.0 - scrolled)));

@@ -126,6 +126,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         let dy = cx.c.dy;
         cx.c.dy = 0.0;
         cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + 56.0, 0.0, t::BG);
+        kit::fixed_top(&mut cx, 56.0);
         if first_run {
             cx.c.text("Leaf", PAD, top + 12.0, Text::new(24.0, t::INK).brand());
         } else {

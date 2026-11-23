@@ -803,6 +803,14 @@ impl App {
         let tapped = self.ui.tap.is_some();
         let (w, h) = self.size;
         self.canvas.begin(w, h, self.insets.0, self.insets.1);
+        self.images.set_screen_w(w);
+        // A tap on the tab bar (or any fixed chrome drawn after the page) is the chrome's: the
+        // page under it never sees it. The tab bar's place is known before it draws.
+        let tabs = self.tabbed().then(|| {
+            let (y, h) = kit::tabs_area(&self.canvas);
+            [-1000.0, y, WIDTH + 2000.0, h]
+        });
+        self.ui.begin_frame(tabs);
         self.focus.at = None;
         kit::ground(&mut self.canvas);
         let arrived = self.images.drain(&mut self.canvas, now_ns);

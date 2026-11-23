@@ -183,6 +183,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         let top = cx.c.inset_top;
         cx.c.dy = 0.0;
         cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + TOP, 0.0, t::BG);
+        kit::fixed_top(&mut cx, TOP);
         let fx = if tabbed {
             PAD
         } else {
@@ -212,7 +213,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     if let Some(c) = follow {
         app.st.search.following = Some(c.title.clone());
         app.st.search.follow_error = None;
-        app.ask(Job::Follow(Follow { title: c.title.clone(), manga_ids: c.hits.iter().map(|h| h.manga_id).collect() }));
+        app.ask(Job::Follow(Follow { title: c.title.clone(), manga_ids: c.hits.iter().map(|h| h.manga_id).collect(), quiet: false }));
     }
     if let Some(id) = open {
         app.push(Route::Series(id));

@@ -94,6 +94,16 @@ pub struct Hit {
 pub struct Follow {
     pub title: String,
     pub manga_ids: Vec<i64>,
+    /// Added in bulk (an import): the other sources are looked at by the next hourly pass, not
+    /// at once, so a hundred adds don't become thousands of requests to the sites in a minute.
+    #[serde(default)]
+    pub quiet: bool,
+}
+
+/// Every chapter numbered below `before` is marked read: where you are, brought from elsewhere.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct ReadBefore {
+    pub before: f64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
