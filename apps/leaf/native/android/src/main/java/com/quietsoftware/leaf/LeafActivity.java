@@ -1,10 +1,31 @@
 package com.quietsoftware.leaf;
 
+import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Intent;
+import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.pdf.PdfRenderer;
+import android.net.Uri;
+import android.os.ParcelFileDescriptor;
+import android.provider.OpenableColumns;
+
+import androidx.core.content.FileProvider;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
 import com.google.androidgamesdk.GameActivity;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Leaf's activity: GameActivity, plus what Android gives an app only through Java.
@@ -13,12 +34,25 @@ import com.google.androidgamesdk.GameActivity;
  * - Back: AndroidX's back dispatcher finishes the activity before the key reaches native code, so
  *   a callback here hands every Back to Rust, which goes back a page or leaves;
  * - the reader hides the status and navigation bars ({@link #setImmersive}), which must happen on
- *   the UI thread through the window's insets controller.
- * Nothing here decides anything.
+ *   the UI thread through the window's insets controller;
+ * - the file picker answers through {@link #onActivityResult}, a callback only an Activity
+ *   subclass receives: each picked book is copied into the app's inbox folder here and its path
+ *   handed to Rust ({@link #nativeBookPicked}), so no book's bytes cross JNI;
+ * - the share sheet needs {@link FileProvider}, an app class JNI's FindClass cannot reach from
+ *   Rust's own threads;
+ * - PDF pages are drawn by the platform's {@link PdfRenderer} ({@link #pdfRender}).
+ * Nothing here decides anything: it moves files, bytes and intents.
  */
 public class LeafActivity extends GameActivity {
     /** The Back gesture or key, to Rust. */
     private static native void nativeBack();
+
+    /** A picked book, copied to {@code path} in the inbox; {@code name} is what it was called. */
+    private static native void nativeBookPicked(String path, String name);
+
+    private static final int PICK_BOOKS = 0x4c45;
+    /** The largest book copied in. */
+    private static final long MAX_BYTES = 400L * 1024 * 1024;
 
     @Override
     protected void onCreate(android.os.Bundle saved) {
@@ -49,5 +83,200 @@ public class LeafActivity extends GameActivity {
                 c.show(WindowInsetsCompat.Type.systemBars());
             }
         });
+    }
+
+    // Books from the phone
+
+    /** The system's picker, for one or many EPUB, PDF and text files. */
+    public void pickBooks() {
+        runOnUiThread(() -> {
+            Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            pick.addCategory(Intent.CATEGORY_OPENABLE);
+            pick.setType("*/*");
+            // Some file managers call an EPUB application/octet-stream.
+            pick.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {"application/epub+zip", "application/pdf", "text/plain", "application/octet-stream"});
+            pick.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            try {
+                startActivityForResult(pick, PICK_BOOKS);
+            } catch (ActivityNotFoundException ignored) {
+                // No picker on this phone: nothing comes back.
+            }
+        });
+    }
+
+    @Override
+    protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request != PICK_BOOKS || result != RESULT_OK || data == null) {
+            return;
+        }
+        final List<Uri> uris = new ArrayList<>();
+        ClipData clip = data.getClipData();
+        if (clip != null) {
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                Uri u = clip.getItemAt(i).getUri();
+                if (u != null) uris.add(u);
+            }
+        } else if (data.getData() != null) {
+            uris.add(data.getData());
+        }
+        if (uris.isEmpty()) return;
+        // Copied off the main thread; Rust brings each in as it lands.
+        new Thread(() -> {
+            File inbox = new File(getFilesDir(), "inbox");
+            inbox.mkdirs();
+            long stamp = System.currentTimeMillis();
+            for (int i = 0; i < uris.size(); i++) {
+                Uri uri = uris.get(i);
+                String name = nameOf(uri);
+                String safe = name.replaceAll("[^A-Za-z0-9._ -]", "_");
+                File part = new File(inbox, stamp + "" + i + "-" + safe + ".part");
+                File done = new File(inbox, stamp + "" + i + "-" + safe);
+                if (copy(uri, part) && part.renameTo(done)) {
+                    nativeBookPicked(done.getAbsolutePath(), name);
+                } else {
+                    part.delete();
+                    // Rust says plainly that it could not be read: an empty file stands for it.
+                    try {
+                        new FileOutputStream(done).close();
+                        nativeBookPicked(done.getAbsolutePath(), name);
+                    } catch (Exception ignored) {
+                        // Nothing to tell it with.
+                    }
+                }
+            }
+        }, "leaf-pick").start();
+    }
+
+    private String nameOf(Uri uri) {
+        try (Cursor c = getContentResolver().query(uri, new String[] {OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                String name = c.getString(0);
+                if (name != null) return name;
+            }
+        } catch (Exception ignored) {
+            // Only shown; the bytes are what matter.
+        }
+        return "book";
+    }
+
+    /** Streams the file to {@code to}, at most MAX_BYTES. False when it could not be read. */
+    private boolean copy(Uri uri, File to) {
+        try (InputStream in = getContentResolver().openInputStream(uri); OutputStream out = new FileOutputStream(to)) {
+            if (in == null) return false;
+            byte[] buf = new byte[64 * 1024];
+            long total = 0;
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                total += n;
+                if (total > MAX_BYTES) return false;
+                out.write(buf, 0, n);
+            }
+            return true;
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    // The clipboard and the share sheet
+
+    public void copyText(final String text) {
+        runOnUiThread(() -> {
+            ClipboardManager cm = getSystemService(ClipboardManager.class);
+            if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("Leaf", text));
+        });
+    }
+
+    /** Hands the file Rust wrote under the cache's {@code shared} folder to the share sheet. */
+    public void shareFile(final String path, final String mime) {
+        runOnUiThread(() -> {
+            File file = new File(path);
+            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".files", file);
+            Intent send = new Intent(Intent.ACTION_SEND);
+            send.setType(mime);
+            send.putExtra(Intent.EXTRA_STREAM, uri);
+            send.setClipData(ClipData.newRawUri(file.getName(), uri));
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            try {
+                startActivity(Intent.createChooser(send, file.getName()));
+            } catch (ActivityNotFoundException ignored) {
+                // No app takes files: nothing to hand it to.
+            }
+        });
+    }
+
+    // PDF pages, drawn by the platform
+
+    private String pdfPath;
+    private ParcelFileDescriptor pdfFd;
+    private PdfRenderer pdf;
+
+    /** The renderer for {@code path}, kept open for the next page. Call holding the lock. */
+    private PdfRenderer open(String path) throws java.io.IOException {
+        if (pdf != null && path.equals(pdfPath)) return pdf;
+        closePdf();
+        pdfFd = ParcelFileDescriptor.open(new File(path), ParcelFileDescriptor.MODE_READ_ONLY);
+        pdf = new PdfRenderer(pdfFd);
+        pdfPath = path;
+        return pdf;
+    }
+
+    private void closePdf() {
+        try {
+            if (pdf != null) pdf.close();
+            if (pdfFd != null) pdfFd.close();
+        } catch (Exception ignored) {
+            // Closing what is already gone.
+        }
+        pdf = null;
+        pdfFd = null;
+        pdfPath = null;
+    }
+
+    /** A PDF's page count, or -1 when it can't be opened (a locked PDF). */
+    public synchronized int pdfPageCount(String path) {
+        try {
+            return open(path).getPageCount();
+        } catch (Throwable e) {
+            closePdf();
+            return -1;
+        }
+    }
+
+    /**
+     * Page {@code n} drawn {@code width} pixels wide on white: 4 bytes of width, 4 of height (big
+     * endian), then RGBA rows. Null when it can't be drawn.
+     */
+    public synchronized byte[] pdfRender(String path, int n, int width) {
+        try {
+            PdfRenderer r = open(path);
+            if (n < 0 || n >= r.getPageCount()) return null;
+            try (PdfRenderer.Page page = r.openPage(n)) {
+                int w = Math.max(1, width);
+                int h = Math.max(1, (int) ((long) page.getHeight() * w / Math.max(1, page.getWidth())));
+                // A very long page is kept within what a texture holds.
+                h = Math.min(h, 8000);
+                Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                bmp.eraseColor(Color.WHITE);
+                page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                ByteBuffer out = ByteBuffer.allocate(8 + w * h * 4);
+                out.putInt(w).putInt(h);
+                // ARGB_8888 is laid out R, G, B, A in memory.
+                bmp.copyPixelsToBuffer(out);
+                bmp.recycle();
+                return out.array();
+            }
+        } catch (Throwable e) {
+            closePdf();
+            return null;
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        synchronized (this) {
+            closePdf();
+        }
+        super.onDestroy();
     }
 }

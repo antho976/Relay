@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the FileProvider lends to the app a book's notes are shared with: only the cache's shared/
+     folder, where Leaf writes the Markdown it is sharing. -->
+<paths>
+    <cache-path name="shared" path="shared/" />
+</paths>

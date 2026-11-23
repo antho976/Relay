@@ -165,7 +165,7 @@ pub fn date(ms: i64) -> String {
 }
 
 /// Year, month and day of a day counted from 1970-01-01 (Howard Hinnant's civil_from_days).
-fn civil(days: i64) -> (i64, u32, u32) {
+pub fn civil(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;

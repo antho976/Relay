@@ -56,14 +56,21 @@ pub enum Align {
     Right,
 }
 
-/// The faces: Geist at three weights, and Sora for the wordmark.
-#[derive(Clone, Copy, PartialEq, Debug)]
+/// The faces: Geist at three weights, Sora for the wordmark, and Literata (a reading serif) for
+/// books: regular, italic and semibold.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Weight {
     Regular = 0,
     Medium = 1,
     Semi = 2,
     Brand = 3,
+    Serif = 4,
+    SerifItalic = 5,
+    SerifBold = 6,
 }
+
+/// How many faces the canvas holds ([`Weight`]).
+pub const FACES: usize = 7;
 
 /// How a run of text is set. Text is placed by the top of its line box (`size` × `line`).
 #[derive(Clone, Copy, Debug)]
@@ -90,6 +97,10 @@ impl Text {
     }
     pub fn brand(mut self) -> Text {
         self.weight = Weight::Brand;
+        self
+    }
+    pub fn face(mut self, w: Weight) -> Text {
+        self.weight = w;
         self
     }
     pub fn center(mut self) -> Text {
@@ -256,7 +267,7 @@ pub struct Canvas {
     /// A waiting picture was placed after the frame was drawn, or the glyph atlas started over
     /// mid-frame: draw another.
     image_late: bool,
-    fonts: [fontdue::Font; 4],
+    fonts: [fontdue::Font; FACES],
     glyphs: HashMap<(u8, u16, u16), Glyph>,
     icons: HashMap<(&'static str, u16), Glyph>,
     shelf_x: u32,
@@ -281,7 +292,7 @@ pub struct Canvas {
 }
 
 impl Canvas {
-    pub fn new(fonts: [&[u8]; 4]) -> Canvas {
+    pub fn new(fonts: [&[u8]; FACES]) -> Canvas {
         let load = |bytes: &[u8]| {
             fontdue::Font::from_bytes(bytes, fontdue::FontSettings { scale: 48.0, ..Default::default() })
                 .expect("the bundled font is valid")
@@ -294,7 +305,7 @@ impl Canvas {
             images: ImageAtlas::new(gfx::IMAGES_SIZE),
             image_waiting: Vec::new(),
             image_late: false,
-            fonts: [load(fonts[0]), load(fonts[1]), load(fonts[2]), load(fonts[3])],
+            fonts: fonts.map(load),
             glyphs: HashMap::with_capacity(512),
             icons: HashMap::with_capacity(64),
             shelf_x: 1,

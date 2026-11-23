@@ -27,6 +27,24 @@ pub trait Host: Send + Sync {
     fn keyboard(&self, _show: bool, _text: &str, _kind: Kb) {}
     /// Hide the system bars while reading (and bring them back after).
     fn immersive(&self, _on: bool) {}
+    /// Ask the person for books (EPUB, PDF, text), several at once. Each file comes back through
+    /// [`crate::shelf::deliver`].
+    fn pick_books(&self) {}
+    /// Put words on the clipboard.
+    fn copy_text(&self, _text: &str) {}
+    /// Hand a file to another app (Android's share sheet). The desktop saves it instead and
+    /// answers where, in words.
+    fn share_file(&self, _name: &str, _mime: &str, _bytes: &[u8]) -> Option<String> {
+        None
+    }
+    /// A PDF's page count, where the platform can read PDFs (Android).
+    fn pdf_pages(&self, _path: &std::path::Path) -> Option<u32> {
+        None
+    }
+    /// A PDF's page `n` drawn `width` pixels wide, as RGBA: (width, height, pixels).
+    fn pdf_page(&self, _path: &std::path::Path, _n: u32, _width: u32) -> Option<(u32, u32, Vec<u8>)> {
+        None
+    }
 }
 
 /// When the next frame is wanted.
@@ -38,11 +56,15 @@ pub enum Next {
     At(u64),
 }
 
-pub const FONTS: [&[u8]; 4] = [
+pub const FONTS: [&[u8]; crate::draw::FACES] = [
     include_bytes!("../assets/fonts/geist_400.ttf"),
     include_bytes!("../assets/fonts/geist_500.ttf"),
     include_bytes!("../assets/fonts/geist_600.ttf"),
     include_bytes!("../assets/fonts/sora_600.ttf"),
+    // Literata (OFL, assets/fonts/Literata-OFL.txt): the books' reading face.
+    include_bytes!("../assets/fonts/literata_400.ttf"),
+    include_bytes!("../assets/fonts/literata_400i.ttf"),
+    include_bytes!("../assets/fonts/literata_600.ttf"),
 ];
 
 /// The most a field holds, in characters.
@@ -55,8 +77,23 @@ pub enum Route {
     Library,
     Search,
     Series(i64),
-    /// The reader, over the series it was opened from ([`App::reader`]).
+    /// The reader, over the series it was opened from ([`App::reader`]); a PDF too.
     Reader,
+    /// A book open ([`App::book`]).
+    Book,
+    /// Search inside the open book.
+    InSearch,
+    /// Every highlight, by book.
+    Notes,
+    /// One book's highlights and notes.
+    BookNotes(i64),
+    /// The daily review of highlights.
+    Review,
+    Stats,
+    /// Search the library: titles, authors and your notes.
+    Find,
+    /// Files being brought in.
+    Imports,
 }
 
 /// Something the server is asked for: what it last said, and whether it is being asked again.
@@ -88,6 +125,10 @@ pub struct States {
     pub connect: crate::connect::State,
     pub search: crate::search::State,
     pub series: crate::series::State,
+    pub library: crate::library::State,
+    pub notes: crate::notes::State,
+    pub review: crate::notes::Review,
+    pub find: crate::notes::Find,
 }
 
 /// The settings kept in `config.json`.
@@ -113,6 +154,14 @@ pub struct App {
     pub series: HashMap<i64, Loaded<SeriesDetail>>,
     pub st: States,
     pub reader: Option<crate::reader::Reader>,
+    /// The books on the phone.
+    pub shelf: crate::shelf::Shelf,
+    pub book: Option<crate::book::BookReader>,
+    /// Books read lately, kept so opening one again is instant.
+    pub docs: HashMap<i64, Arc<crate::epub::Doc>>,
+    pub reading_type: crate::typeset::Type,
+    /// A short message at the bottom, until this time.
+    toast: Option<(String, u64)>,
     /// A field just let go of its keyboard with Done: its page acts on it (Search searches).
     pub typed_done: Option<&'static str>,
     /// The soft keyboard covers the bottom of the window (its height is in the bottom inset).
@@ -134,7 +183,9 @@ impl App {
         let config: Config = std::fs::read(data.join("config.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         let images = Images::new(data.clone());
         images.set_server(config.server.clone());
-        let start = if config.server.is_some() { Route::Library } else { Route::Connect };
+        images.set_host(host.clone());
+        // Books need no server: the library is always the first page.
+        let start = Route::Library;
         let mut app = App {
             canvas: Canvas::new(FONTS),
             ui: Ui::default(),
@@ -150,6 +201,11 @@ impl App {
             series: HashMap::new(),
             st: States::default(),
             reader: None,
+            shelf: crate::shelf::Shelf::new(data.clone()),
+            book: None,
+            docs: HashMap::new(),
+            reading_type: crate::typeset::Type::default(),
+            toast: None,
             typed_done: None,
             keyboard_up: false,
             shot: false,
@@ -160,8 +216,68 @@ impl App {
             wake: None,
         };
         app.st.connect.load(app.server.as_ref());
+        // Files a picker brought in just before the app last stopped are brought in now.
+        let inbox = data.join("inbox");
+        let _ = std::thread::Builder::new().name("leaf-inbox".into()).spawn(move || {
+            for e in std::fs::read_dir(&inbox).into_iter().flatten().flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if !name.ends_with(".part") {
+                    // "<n>-<name>": the name the person's file had.
+                    let shown = name.split_once('-').map_or(name.clone(), |(_, n)| n.to_string());
+                    crate::shelf::deliver(e.path(), shown);
+                }
+            }
+        });
         crate::images::prune_cache(data, Vec::new());
         app
+    }
+
+    /// Show a short message at the bottom for a few seconds.
+    pub fn toast(&mut self, words: &str) {
+        let until = self.now_ns + 2_600_000_000;
+        self.toast = Some((words.to_string(), until));
+        self.wake_at(until);
+    }
+
+    /// Open a book from the shelf at its place.
+    pub fn open_book(&mut self, id: i64) {
+        let Some(b) = self.shelf.book(id).cloned() else { return };
+        if b.kind == crate::shelf::Kind::Pdf {
+            if b.pages == 0 || !cfg!(target_os = "android") {
+                self.toast("PDFs open on the phone: the desktop can't draw them");
+                return;
+            }
+            self.images.set_pdf(b.id, b.path(&self.data));
+            self.reader = Some(crate::reader::Reader::open_pdf(&b));
+            self.push(Route::Reader);
+            self.host.immersive(true);
+            return;
+        }
+        let ty_ = crate::book::saved_type(self);
+        self.reading_type = ty_;
+        let doc = self.docs.get(&id).cloned();
+        // Only the last few books stay read.
+        if self.docs.len() > 3 {
+            self.docs.retain(|k, _| *k == id);
+        }
+        self.book = Some(crate::book::BookReader::open(&b, &self.data, ty_, doc));
+        self.push(Route::Book);
+        self.host.immersive(true);
+    }
+
+    /// The app goes to the background: the open book's place and time are kept now.
+    pub fn paused(&mut self) {
+        if let Some(mut r) = self.book.take() {
+            crate::book::close(self, &mut r);
+            self.book = Some(r);
+        }
+    }
+
+    fn close_book(&mut self) {
+        if let Some(mut r) = self.book.take() {
+            crate::book::close(self, &mut r);
+            self.host.immersive(false);
+        }
     }
 
     pub fn route(&self) -> &Route {
@@ -187,6 +303,13 @@ impl App {
     /// The mouse wheel (desktop), in pixels down.
     pub fn wheel(&mut self, dy_px: f32) {
         let units = dy_px / self.canvas.u.max(0.01);
+        if self.route() == &Route::Book {
+            let h = self.canvas.h;
+            if let Some(r) = &mut self.book {
+                r.scroll_by(&mut self.canvas, &self.images, units, h);
+            }
+            return;
+        }
         if self.route() == &Route::Reader {
             let h = self.canvas.h;
             if let Some(r) = &mut self.reader {
@@ -219,6 +342,10 @@ impl App {
     }
 
     pub fn ask(&mut self, job: Job) {
+        // Without a server there is nothing to ask (books need none).
+        if self.server.is_none() && !matches!(job, Job::Status(..)) {
+            return;
+        }
         match &job {
             Job::Library => self.library.loading = true,
             Job::Series(id) => self.series.entry(*id).or_default().loading = true,
@@ -229,6 +356,15 @@ impl App {
 
     /// Take what the workers answered.
     fn take_answers(&mut self) {
+        self.shelf.take();
+        let picked = crate::shelf::take_delivered();
+        if !picked.is_empty() {
+            let files = picked.into_iter().map(|(p, n)| (p, n, true)).collect();
+            self.shelf.import(files, self.host.clone());
+            if self.route() != &Route::Imports && self.route() != &Route::Book {
+                self.push(Route::Imports);
+            }
+        }
         let label = self.server_label();
         for done in self.jobs.take() {
             match done {
@@ -320,6 +456,9 @@ impl App {
     fn shown(&mut self) {
         self.fresh = true;
         self.ui.reset();
+        // The bars hide only while a book or a strip is on screen (not over its notes or search).
+        let reading = matches!(self.route(), Route::Book | Route::Reader);
+        self.host.immersive(reading);
         if self.focus.id.take().is_some() {
             self.host.keyboard(false, "", Kb::Text);
         }
@@ -336,12 +475,27 @@ impl App {
     /// Replace everything open with `route` (Connect's "Open your library").
     pub fn reset_to(&mut self, route: Route) {
         self.close_reader();
+        self.close_book();
         self.nav = vec![(route, Scroll::default())];
         self.shown();
     }
 
     fn close_reader(&mut self) {
         if let Some(mut r) = self.reader.take() {
+            if let Some(book) = r.local {
+                // A PDF: its place is kept on the phone.
+                if let Some((place, progress)) = r.local_place() {
+                    let now = crate::shelf::now_ms();
+                    if let Some(b) = self.shelf.book_mut(book) {
+                        b.place = place;
+                        b.progress = progress;
+                        b.opened_ms = now;
+                    }
+                    self.shelf.send(crate::shelf::Op::Place { id: book, place, progress, opened_ms: now, chapter: String::new(), chars: 0 });
+                }
+                self.host.immersive(false);
+                return;
+            }
             if !self.shot
                 && let Some((c, p)) = r.flush(self.now_ns)
             {
@@ -363,6 +517,9 @@ impl App {
         if self.route() == &Route::Reader {
             self.close_reader();
         }
+        if self.route() == &Route::Book {
+            self.close_book();
+        }
         self.nav.pop();
         self.shown();
         true
@@ -376,6 +533,21 @@ impl App {
             return true;
         }
         if matches!(self.route(), Route::Series(_)) && self.st.series.close_over() {
+            self.ui.reset();
+            return true;
+        }
+        if self.route() == &Route::Book
+            && let Some(h) = self.book.as_mut().and_then(|b| b.take_note())
+        {
+            self.shelf.update_highlight(h);
+        }
+        if self.route() == &Route::Book
+            && let Some(b) = &mut self.book
+            && b.close_over(&mut self.reading_type)
+        {
+            if let Ok(j) = serde_json::to_string(&self.reading_type) {
+                self.shelf.set_setting("type", j);
+            }
             self.ui.reset();
             return true;
         }
@@ -424,7 +596,10 @@ impl App {
     }
 
     pub fn clear_colour(&self) -> [f32; 3] {
-        crate::theme::BG.rgb_f32()
+        match (self.route(), &self.book) {
+            (Route::Book, Some(b)) => crate::book::theme(&b.ty).bg.rgb_f32(),
+            _ => crate::theme::BG.rgb_f32(),
+        }
     }
 
     // Pages
@@ -488,13 +663,30 @@ impl App {
             Route::Search => crate::search::draw(self, dt),
             Route::Series(id) => crate::series::draw(self, id, dt),
             Route::Reader => crate::reader::draw(self, dt),
+            Route::Book => crate::book::draw(self, dt),
+            Route::InSearch => crate::book::draw_search(self, dt),
+            Route::Notes => crate::notes::draw(self, dt),
+            Route::BookNotes(id) => crate::notes::draw_book(self, id, dt),
+            Route::Review => crate::notes::draw_review(self, dt),
+            Route::Stats => crate::stats::draw(self, dt),
+            Route::Find => crate::notes::draw_find(self, dt),
+            Route::Imports => crate::library::draw_imports(self, dt),
         };
+        if let Some((words, until)) = self.toast.clone() {
+            if now_ns < until {
+                let bottom = self.canvas.h - self.canvas.inset_bottom - if matches!(self.route(), Route::Library | Route::Notes | Route::Stats) { kit::TABS_H } else { 0.0 };
+                kit::toast(&mut self.canvas, &words, bottom);
+                self.wake_at(until);
+            } else {
+                self.toast = None;
+            }
+        }
         if self.route() == &route {
             self.fresh = false;
         }
         self.typed_done = None;
         // With no waker (a test, the screenshot), frames keep coming while work is out.
-        let working = self.images.pending() || self.jobs.running() > 0;
+        let working = self.images.pending() || self.jobs.running() > 0 || self.shelf.busy();
         moving |= arrived;
         moving |= working && !crate::wake::has();
         self.canvas.finish();

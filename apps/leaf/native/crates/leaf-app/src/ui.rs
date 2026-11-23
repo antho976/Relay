@@ -60,6 +60,8 @@ pub struct Ui {
     /// A sheet or dialog is over the page this frame ([`Ui::cover`]), and was last frame.
     covered: bool,
     covered_last: bool,
+    /// When the finger now down came down, on [`crate::clock::now_ns`] (for a long press).
+    down_ns: u64,
 }
 
 impl Ui {
@@ -78,6 +80,7 @@ impl Ui {
                 self.last_move_ns = t.t_ns;
                 self.landed = Some((x, y));
                 self.caught.set(false);
+                self.down_ns = crate::clock::now_ns();
             }
             Phase::Move if self.id == Some(t.id) => {
                 let dy = y - self.pos.1;
@@ -136,6 +139,24 @@ impl Ui {
 
     pub fn busy(&self) -> bool {
         self.id.is_some()
+    }
+
+    /// Where the finger is now, while one is down (units).
+    pub fn finger(&self) -> Option<(f32, f32)> {
+        self.id.map(|_| self.pos)
+    }
+
+    /// A finger resting without moving: where, and for how long (ns) by `now`.
+    pub fn resting(&self, now: u64) -> Option<((f32, f32), u64)> {
+        if self.caught.get() {
+            return None;
+        }
+        self.down.map(|p| (p, now.saturating_sub(self.down_ns)))
+    }
+
+    /// The touch now down is taken (a long press): lifting it is not a tap.
+    pub fn swallow(&self) {
+        self.caught.set(true);
     }
 
     /// Forget one-frame events. Call after the screen has drawn.

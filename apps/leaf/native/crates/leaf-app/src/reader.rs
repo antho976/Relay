@@ -47,6 +47,9 @@ pub struct Reader {
     gate: ProgressGate,
     /// The status bar's height (with the bars hidden, the camera cut-out's): headings keep clear of it.
     top_pad: f32,
+    /// A PDF from the shelf (its book id), not a series: pages come from the platform's renderer
+    /// and the place is kept on the phone, never sent to the server.
+    pub local: Option<i64>,
 }
 
 /// The strip as the images know it now.
@@ -113,7 +116,49 @@ impl Reader {
             overlay: false,
             gate,
             top_pad: 0.0,
+            local: None,
         }
+    }
+
+    /// A PDF from the shelf, as one chapter of pages (chapter id `-book`), at its place.
+    pub fn open_pdf(b: &crate::shelf::Book) -> Reader {
+        let chapter = Chapter {
+            id: -b.id,
+            number: 1.0,
+            name: b.title.clone(),
+            group: None,
+            pages: b.pages,
+            read: false,
+            last_page: b.place.block,
+            downloaded: true,
+            uploaded_at: 0,
+        };
+        let page = b.place.block.min(b.pages.saturating_sub(1));
+        let item = if page > 0 { Item::Page(0, page) } else { Item::Head(0) };
+        Reader {
+            series: -b.id,
+            title: b.title.clone(),
+            counts: vec![Some(b.pages)],
+            chapters: vec![chapter],
+            counts_asked: HashSet::new(),
+            pos: Pos { item, off: 0.0 },
+            fling: fling(),
+            overlay: false,
+            gate: ProgressGate::default(),
+            top_pad: 0.0,
+            local: Some(b.id),
+        }
+    }
+
+    /// A PDF's place (the page at the top) and how far through.
+    pub fn local_place(&self) -> Option<(crate::shelf::Place, f32)> {
+        let pages = self.counts.first().copied().flatten()?;
+        let page = match self.pos.item {
+            Item::Head(_) => 0,
+            Item::Page(_, n) => n,
+            Item::End => pages.saturating_sub(1),
+        };
+        Some((crate::shelf::Place { section: 0, block: page, byte: 0 }, (page + 1) as f32 / pages.max(1) as f32))
     }
 
     pub fn page_count(&mut self, chapter: i64, count: Option<u32>) {
@@ -193,7 +238,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
         strip::chapter_of(&v, r.pos.item)
     };
     for c in [near_chapter, near_chapter + 1] {
-        if c < r.chapters.len() && r.counts[c].is_none() && r.counts_asked.insert(c) {
+        if r.local.is_none() && c < r.chapters.len() && r.counts[c].is_none() && r.counts_asked.insert(c) {
             app.ask(Job::PageCount(r.chapters[c].id));
         }
     }
@@ -242,7 +287,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
             match *item {
                 Item::Head(ci) => {
                     let ch = &r.chapters[ci];
-                    let words = format!("Chapter {}", logic::num(ch.number));
+                    let words = if r.local.is_some() { ch.name.clone() } else { format!("Chapter {}", logic::num(ch.number)) };
                     let tt = Text::new(ty::CAPTION, t::INK3).medium().center();
                     let y = &(y + r.top_pad);
                     let ty_ = y + (HEAD_H - tt.lh()) / 2.0;
@@ -306,16 +351,18 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
                 Item::End => {
                     let last = r.chapters.last();
                     let words = match last {
+                        _ if r.local.is_some() => "The end".to_string(),
                         Some(ch) => format!("That's the latest chapter, {}", logic::num(ch.number)),
                         None => "No chapters yet".into(),
                     };
                     c.text(&words, WIDTH / 2.0, y + 56.0, Text::new(ty::BODY, t::INK).semi().center());
-                    c.text("New ones arrive in your library as your server finds them.", WIDTH / 2.0, y + 84.0, Text::new(ty::CAPTION, t::INK3).center());
+                    let sub = if r.local.is_some() { "Back to your library when you're done." } else { "New ones arrive in your library as your server finds them." };
+                    c.text(sub, WIDTH / 2.0, y + 84.0, Text::new(ty::CAPTION, t::INK3).center());
                     let (kw, kh) = (180.0, 44.0);
                     let (kx, ky) = (WIDTH / 2.0 - kw / 2.0, y + 124.0);
                     c.rect(kx, ky, kw, kh, t::KEY_R, t::S2);
                     let kt = Text::new(ty::UI, t::INK).semi().center();
-                    c.text("Back to the series", WIDTH / 2.0, ky + (kh - kt.lh()) / 2.0, kt);
+                    c.text(if r.local.is_some() { "Back to your library" } else { "Back to the series" }, WIDTH / 2.0, ky + (kh - kt.lh()) / 2.0, kt);
                     if !overlay_tap && ui.tapped(kx, ky, kw, kh) {
                         to_series = true;
                     }
@@ -328,7 +375,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
         let v = View { r, im: &app.images };
         r.place(&v)
     };
-    if !app.shot && !r.chapters.is_empty() {
+    if !app.shot && !r.chapters.is_empty() && r.local.is_none() {
         let mut reports = r.gate.see(r.chapters[ci].id, page, false, now);
         // A chapter whose last page's bottom is on screen is finished.
         for (item, y) in &shown {
@@ -368,6 +415,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, bool) {
         cx.c.text_fit(&r.title, 56.0, top + 9.0, WIDTH - 56.0 - PAD, Text::new(ty::UI, t::INK).semi());
         let pages = r.counts[ci];
         let sub = match pages {
+            Some(n) if r.local.is_some() => format!("Page {} of {n}", (page + 1).min(n)),
             Some(n) => format!("Chapter {} · page {} of {n}", logic::num(ch.number), (page + 1).min(n)),
             None => format!("Chapter {}", logic::num(ch.number)),
         };

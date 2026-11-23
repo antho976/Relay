@@ -32,6 +32,8 @@ pub enum CoverOf {
     Series(i64),
     /// A search result's (`/v1/covers/{manga_id}`).
     Manga(i64),
+    /// A book's, taken from its file at import (never from the server).
+    Book(i64),
 }
 
 impl CoverOf {
@@ -39,6 +41,7 @@ impl CoverOf {
         match self {
             CoverOf::Series(id) => format!("c:s{id}"),
             CoverOf::Manga(id) => format!("c:m{id}"),
+            CoverOf::Book(id) => format!("c:k{id}"),
         }
     }
     pub fn banner_key(self) -> String {
@@ -48,9 +51,10 @@ impl CoverOf {
         match self {
             CoverOf::Series(id) => format!("/v1/series/{id}/cover"),
             CoverOf::Manga(id) => format!("/v1/covers/{id}"),
+            CoverOf::Book(_) => String::new(),
         }
     }
-    fn file(self, data: &Path) -> PathBuf {
+    pub fn file(self, data: &Path) -> PathBuf {
         data.join("covers").join(self.key().replace(':', "-"))
     }
 }
@@ -65,6 +69,8 @@ enum Want {
     Cover(CoverOf),
     /// `decode` false: only to have it on disk, for later (the next chapter).
     Page { chapter: i64, n: u32, decode: bool },
+    /// A picture inside a book's file (an EPUB's figure), by its atlas key.
+    Local { key: String, book: PathBuf, entry: String },
 }
 
 /// A decoded page: its size after scaling, and its rows of tiles (RGBA).
@@ -83,6 +89,7 @@ struct Pixels {
 enum Got {
     Cover { of: CoverOf, img: Option<Pixels>, banner: Option<Pixels> },
     Page { chapter: i64, n: u32, decode: bool, result: Result<Option<PageImg>, String> },
+    Local { key: String, book: PathBuf, entry: String, img: Option<Pixels> },
 }
 
 struct Queue {
@@ -95,6 +102,10 @@ struct Shared {
     q: Mutex<Queue>,
     cv: Condvar,
     server: Mutex<Option<Server>>,
+    /// PDFs open in the strip reader: their pages come from the platform's renderer, under the
+    /// chapter id `-book`.
+    pdfs: Mutex<HashMap<i64, PathBuf>>,
+    host: Mutex<Option<std::sync::Arc<dyn crate::app::Host>>>,
 }
 
 /// How many fetches and decodes run at once.
@@ -114,11 +125,20 @@ pub struct Images {
     failed: HashMap<(i64, u32), String>,
     stored: HashSet<(i64, u32)>,
     last_wants: Vec<(i64, u32, bool)>,
+    /// Pictures inside books: their sizes once decoded, and the ones that would not.
+    local_sizes: HashMap<String, (u32, u32)>,
+    local_failed: HashSet<String>,
 }
 
 impl Images {
     pub fn new(data: PathBuf) -> Images {
-        let shared = Arc::new(Shared { q: Mutex::new(Queue { items: Vec::new(), seq: 0 }), cv: Condvar::new(), server: Mutex::new(None) });
+        let shared = Arc::new(Shared {
+            q: Mutex::new(Queue { items: Vec::new(), seq: 0 }),
+            cv: Condvar::new(),
+            server: Mutex::new(None),
+            pdfs: Mutex::new(HashMap::new()),
+            host: Mutex::new(None),
+        });
         let (tx, rx) = channel();
         let client = Client::new();
         for i in 0..WORKERS {
@@ -135,7 +155,39 @@ impl Images {
             failed: HashMap::new(),
             stored: HashSet::new(),
             last_wants: Vec::new(),
+            local_sizes: HashMap::new(),
+            local_failed: HashSet::new(),
         }
+    }
+
+    /// The platform, for PDF pages.
+    pub fn set_host(&self, h: std::sync::Arc<dyn crate::app::Host>) {
+        *self.shared.host.lock().unwrap_or_else(|e| e.into_inner()) = Some(h);
+    }
+
+    /// A PDF's pages are asked for under chapter `-book`.
+    pub fn set_pdf(&self, book: i64, path: PathBuf) {
+        self.shared.pdfs.lock().unwrap_or_else(|e| e.into_inner()).insert(-book, path);
+    }
+
+    /// A picture inside a book: its size once known, and asked for (decoded off the UI thread)
+    /// when it is not in the atlas. Draw it with the key when [`Canvas::has_image`].
+    pub fn local(&mut self, c: &Canvas, key: &str, book: &Path, entry: &str) -> Option<(u32, u32)> {
+        let size = self.local_sizes.get(key).copied();
+        if !c.has_image(key) && !c.image_waiting(key) && !self.local_failed.contains(key) {
+            self.push(60, Want::Local { key: key.to_string(), book: book.to_path_buf(), entry: entry.to_string() });
+        }
+        size
+    }
+
+    /// A picture inside a book's size, once decoded.
+    pub fn local_size(&self, key: &str) -> Option<(u32, u32)> {
+        self.local_sizes.get(key).copied()
+    }
+
+    /// A picture inside a book that would not decode.
+    pub fn local_failed(&self, key: &str) -> bool {
+        self.local_failed.contains(key)
     }
 
     pub fn set_server(&self, s: Option<Server>) {
@@ -253,6 +305,18 @@ impl Images {
                     // The reader's list may now ask for something it skipped while this was out.
                     self.last_wants.clear();
                 }
+                Got::Local { key, book, entry, img } => {
+                    self.asked.remove(&Want::Local { key: key.clone(), book, entry });
+                    match img {
+                        Some(p) => {
+                            self.local_sizes.insert(key.clone(), (p.w, p.h));
+                            c.add_image_slot(&key, p.w, p.h, (crate::logic::PAGE_W, TILE_H), p.px);
+                        }
+                        None => {
+                            self.local_failed.insert(key);
+                        }
+                    }
+                }
             }
         }
         arrived
@@ -309,11 +373,14 @@ fn worker(shared: &Shared, tx: &Sender<Got>, client: &Client, data: &Path) {
         let server = shared.server.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match &want {
             Want::Cover(of) => cover(client, server.as_ref(), data, *of),
+            Want::Page { chapter, n, decode } if *chapter < 0 => Got::Page { chapter: *chapter, n: *n, decode: *decode, result: pdf_page(shared, *chapter, *n, *decode) },
             Want::Page { chapter, n, decode } => Got::Page { chapter: *chapter, n: *n, decode: *decode, result: page(client, server.as_ref(), data, *chapter, *n, *decode) },
+            Want::Local { key, book, entry } => Got::Local { key: key.clone(), book: book.clone(), entry: entry.clone(), img: local_picture(book, entry) },
         }));
         let got = got.unwrap_or_else(|_| match want {
             Want::Cover(of) => Got::Cover { of, img: None, banner: None },
             Want::Page { chapter, n, decode } => Got::Page { chapter, n, decode, result: Err("This page didn't decode".into()) },
+            Want::Local { key, book, entry } => Got::Local { key, book, entry, img: None },
         });
         if tx.send(got).is_err() {
             return;
@@ -337,6 +404,8 @@ fn fetch(client: &Client, server: Option<&Server>, file: &Path, path: &str) -> R
 
 fn cover(client: &Client, server: Option<&Server>, data: &Path, of: CoverOf) -> Got {
     let file = of.file(data);
+    // A book's cover is only ever its file's.
+    let server = if matches!(of, CoverOf::Book(_)) { None } else { server };
     let Ok(bytes) = fetch(client, server, &file, &of.path()) else { return Got::Cover { of, img: None, banner: None } };
     let Ok(img) = image::load_from_memory(&bytes) else {
         let _ = std::fs::remove_file(&file);
@@ -350,6 +419,33 @@ fn cover(client: &Client, server: Option<&Server>, data: &Path, of: CoverOf) -> 
         img: Some(Pixels { w, h, px: filled.into_raw() }),
         banner: Some(Pixels { w: BANNER.0, h: BANNER.1, px: small.into_raw() }),
     }
+}
+
+/// A PDF's page, drawn by the platform at the strip's width (none on the desktop).
+fn pdf_page(shared: &Shared, chapter: i64, n: u32, decode: bool) -> Result<Option<PageImg>, String> {
+    if !decode {
+        return Ok(None);
+    }
+    let path = shared.pdfs.lock().unwrap_or_else(|e| e.into_inner()).get(&chapter).cloned().ok_or("This PDF isn't open")?;
+    let host = shared.host.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or("PDFs open on the phone")?;
+    let (w, h, px) = host.pdf_page(&path, n, crate::logic::PAGE_W).ok_or("This page didn't draw")?;
+    if w == 0 || h == 0 || px.len() != (w * h * 4) as usize {
+        return Err("This page didn't draw".into());
+    }
+    let row = (w * 4) as usize;
+    let tiles = crate::logic::tile_rows(h).into_iter().map(|(y, th)| px[y as usize * row..(y + th) as usize * row].to_vec()).collect();
+    Ok(Some(PageImg { w, h, tiles }))
+}
+
+/// A picture inside a book, scaled to fit one tile's room.
+fn local_picture(book: &Path, entry: &str) -> Option<Pixels> {
+    let bytes = crate::epub::read_entry(book, entry)?;
+    let img = image::load_from_memory(&bytes).ok()?;
+    let (w0, h0) = (img.width().max(1), img.height().max(1));
+    let scale = (crate::logic::PAGE_W as f32 / w0 as f32).min(TILE_H as f32 / h0 as f32).min(1.0);
+    let (w, h) = (((w0 as f32 * scale) as u32).max(1), ((h0 as f32 * scale) as u32).max(1));
+    let rgba = if (w, h) == (w0, h0) { img.to_rgba8() } else { image::imageops::resize(&img.to_rgba8(), w, h, image::imageops::FilterType::Triangle) };
+    Some(Pixels { w, h, px: rgba.into_raw() })
 }
 
 /// The folder a chapter's pages are kept in.

@@ -335,3 +335,129 @@ pub fn menu(cx: &mut Ctx, top: f32, items: &[&str]) -> Option<usize> {
     cx.c.dy = saved_dy;
     out
 }
+
+// Choosing
+
+/// Choices side by side on a quiet track, the one on raised (Spacing: Tight, Normal, Loose).
+/// Returns the one tapped.
+pub fn segmented(cx: &mut Ctx, x: f32, y: f32, w: f32, items: &[&str], on: usize) -> Option<usize> {
+    let h = 36.0;
+    cx.c.rect(x, y, w, h, 9.0, t::S1);
+    let iw = w / items.len().max(1) as f32;
+    let mut hit = None;
+    for (i, item) in items.iter().enumerate() {
+        let ix = x + iw * i as f32;
+        if i == on {
+            cx.c.rect(ix + 3.0, y + 3.0, iw - 6.0, h - 6.0, 7.0, t::S3);
+        } else if cx.pressed(ix, y, iw, h) {
+            cx.c.rect(ix + 3.0, y + 3.0, iw - 6.0, h - 6.0, 7.0, t::WASH);
+        }
+        let tt = Text::new(ty::UI, if i == on { t::INK } else { t::INK2 }).medium().center();
+        cx.c.text_fit(item, ix + iw / 2.0, y + (h - tt.lh()) / 2.0, iw - 8.0, tt);
+        if cx.tap(ix, y, iw, h) {
+            hit = Some(i);
+        }
+    }
+    hit
+}
+
+/// A filter chip ("All 47", "Key idea 21"), with a colour dot when it stands for one. Returns its
+/// width and whether it was tapped.
+pub fn chip(cx: &mut Ctx, x: f32, y: f32, words: &str, on: bool, dot: Option<Rgba>) -> (f32, bool) {
+    let h = 32.0;
+    let tt = Text::new(ty::UI, if on { t::BG } else { t::INK2 }).medium();
+    let lead = if dot.is_some() { 18.0 } else { 0.0 };
+    let w = cx.c.measure(words, tt) + 24.0 + lead;
+    cx.c.rect(x, y, w, h, 8.0, if on { t::INK } else { t::S2 });
+    if !on && cx.pressed(x, y, w, h) {
+        cx.c.rect(x, y, w, h, 8.0, t::WASH);
+    }
+    if let Some(d) = dot {
+        cx.c.circle(x + 16.0, y + h / 2.0, 4.0, d);
+    }
+    cx.c.text(words, x + 12.0 + lead, y + (h - tt.lh()) / 2.0, tt);
+    (w, cx.tap(x, y - 6.0, w, h + 12.0))
+}
+
+/// The tabs along the bottom of the three home pages: Library, Notes, Stats. Returns the one
+/// tapped. Drawn over the page (call last).
+pub fn tabs(cx: &mut Ctx, on: usize) -> Option<usize> {
+    let saved = cx.c.dy;
+    cx.c.dy = 0.0;
+    let h = TABS_H + cx.c.inset_bottom;
+    let y = cx.c.h - h;
+    cx.c.rect(-1000.0, y, WIDTH + 2000.0, h, 0.0, t::S1);
+    let items: [(&str, &'static str); 3] = [("Library", "grid"), ("Notes", "notes"), ("Stats", "bars")];
+    let iw = WIDTH / items.len() as f32;
+    let mut hit = None;
+    for (i, (words, glyph)) in items.iter().enumerate() {
+        let x = iw * i as f32;
+        let ink = if i == on { t::INK } else { t::INK3 };
+        if i == on {
+            cx.c.rect(x + iw / 2.0 - 24.0, y + 8.0, 48.0, 26.0, 13.0, t::ACCENT_DIM);
+        }
+        cx.c.icon(glyph, x + iw / 2.0, y + 21.0, 17.0, if i == on { t::ACCENT } else { ink });
+        cx.c.text(words, x + iw / 2.0, y + 37.0, Text::new(ty::SMALL, ink).medium().center());
+        if cx.tap(x, y, iw, TABS_H) {
+            hit = Some(i);
+        }
+    }
+    cx.c.dy = saved;
+    hit.filter(|i| *i != on)
+}
+
+/// The bottom tabs' height, above the gesture bar.
+pub const TABS_H: f32 = 60.0;
+
+/// A sheet over the bottom of the page, `h` tall (the keyboard and gesture bar added below it):
+/// the veil, the panel and its grip. Returns the panel's top and whether a tap fell outside it.
+pub fn sheet(cx: &mut Ctx, h: f32) -> (f32, bool) {
+    cx.c.dy = 0.0;
+    cx.ui.cover();
+    let screen = cx.c.h;
+    cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, screen, 0.0, t::SCRIM.a(0.6));
+    let full = h + cx.c.inset_bottom;
+    let top = (screen - full).max(cx.c.inset_top + 24.0);
+    cx.c.rect(0.0, top, WIDTH, screen - top + 40.0, 18.0, t::S1);
+    cx.c.rect(WIDTH / 2.0 - 18.0, top + 8.0, 36.0, 4.0, 2.0, t::S3);
+    let outside = cx.ui.tap.is_some_and(|(_, y)| y < top);
+    if outside {
+        cx.ui.tap = None;
+    }
+    (top, outside)
+}
+
+/// A short message at the bottom of the screen ("Copied").
+pub fn toast(c: &mut Canvas, words: &str, bottom: f32) {
+    let saved = c.dy;
+    c.dy = 0.0;
+    let tt = Text::new(ty::UI, t::INK).medium();
+    let w = (c.measure(words, tt) + 32.0).min(WIDTH - 32.0);
+    let (x, y) = ((WIDTH - w) / 2.0, bottom - 44.0 - 16.0);
+    c.rect(x, y, w, 44.0, 12.0, t::S3);
+    c.text_fit(words, x + 16.0, y + (44.0 - tt.lh()) / 2.0, w - 32.0, tt);
+    c.dy = saved;
+}
+
+/// A row of filter chips that scrolls sideways when they don't fit. Each item is (words, on,
+/// colour dot). Returns the one tapped.
+pub fn chip_row(cx: &mut Ctx, hs: &mut crate::ui::HScroll, y: f32, items: &[(String, bool, Option<Rgba>)], dt: f32) -> Option<usize> {
+    let h = 32.0;
+    let screen_y = y + cx.c.dy;
+    let area = [0.0, screen_y - 6.0, WIDTH, h + 12.0];
+    cx.ui.claim_h(area);
+    hs.update(cx.ui, area, dt);
+    cx.c.push_clip(0.0, screen_y - 8.0, WIDTH, h + 16.0);
+    let mut x = t::PAD - hs.off;
+    let mut hit = None;
+    for (i, (words, on, dot)) in items.iter().enumerate() {
+        let (w, tapped) = chip(cx, x, y, words, *on, *dot);
+        if tapped {
+            hit = Some(i);
+        }
+        x += w + 8.0;
+    }
+    cx.c.pop_clip();
+    hs.max = x + hs.off - 8.0 + t::PAD - WIDTH;
+    hit
+}

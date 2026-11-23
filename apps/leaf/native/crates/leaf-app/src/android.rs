@@ -1,5 +1,9 @@
 //! The Android build: GameActivity (for the keyboard), everything else in Rust. Modelled on
-//! Tally RS's `android.rs`, without its file picker, share sheet or launcher icons.
+//! Tally RS's `android.rs`, without its launcher icons. Books come from the system's file picker:
+//! `LeafActivity` copies each picked file into the app's inbox and hands its path here
+//! (`nativeBookPicked`); a book's notes go out through the share sheet, words to the clipboard,
+//! and PDF pages are drawn by the platform's `PdfRenderer` (`LeafActivity.pdfRender`), called from
+//! the import and picture threads.
 //!
 //! One thread runs the app. Each turn of the loop takes pending system events, then every pending
 //! touch and keyboard event, then draws a frame if anything asked for one: input, a system event,
@@ -23,7 +27,7 @@ use std::time::Duration;
 use android_activity::input::{ImeOptions, InputEvent, InputType, KeyAction, Keycode, MotionAction, TextInputAction, TextInputState, TextSpan};
 use android_activity::{AndroidApp, AndroidAppWaker, InputStatus, MainEvent, PollEvent};
 use jni::JNIEnv;
-use jni::objects::{JClass, JObject, JValue};
+use jni::objects::{JByteArray, JClass, JObject, JString, JValue};
 use raw_window_handle::{AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle, RawWindowHandle};
 
 use crate::app::{App, Host, Next};
@@ -71,6 +75,69 @@ impl Host for AndroidHost {
     fn immersive(&self, on: bool) {
         with_activity(&self.app, |env, activity| env.call_method(activity, "setImmersive", "(Z)V", &[JValue::Bool(on as u8)]).map(|_| ()));
     }
+
+    fn pick_books(&self) {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "pickBooks", "()V", &[]).map(|_| ()));
+    }
+
+    fn copy_text(&self, text: &str) {
+        with_activity(&self.app, |env, activity| {
+            let t = env.new_string(text)?;
+            env.call_method(activity, "copyText", "(Ljava/lang/String;)V", &[JValue::Object(&t)]).map(|_| ())
+        });
+    }
+
+    fn share_file(&self, name: &str, mime: &str, bytes: &[u8]) -> Option<String> {
+        // Written under the cache's `shared` folder, which the FileProvider (AndroidManifest.xml,
+        // res/xml/file_paths.xml) lends to the app the person picks.
+        let cache: String = with_activity(&self.app, |env, activity| {
+            let dir = env.call_method(activity, "getCacheDir", "()Ljava/io/File;", &[])?.l()?;
+            let path = env.call_method(&dir, "getAbsolutePath", "()Ljava/lang/String;", &[])?.l()?;
+            Ok(env.get_string(&JString::from(path))?.into())
+        })?;
+        let dir = PathBuf::from(cache).join("shared");
+        let _ = std::fs::remove_dir_all(&dir);
+        let safe: String = name.chars().map(|c| if c.is_alphanumeric() || " .-_".contains(c) { c } else { '-' }).collect();
+        let path = dir.join(if safe.trim_matches('.').is_empty() { "notes.md".to_string() } else { safe });
+        if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, bytes)) {
+            return Some(format!("Couldn't write the file: {e}"));
+        }
+        let p = path.to_string_lossy().into_owned();
+        let done = with_activity(&self.app, |env, activity| {
+            let ps = env.new_string(&p)?;
+            let m = env.new_string(mime)?;
+            env.call_method(activity, "shareFile", "(Ljava/lang/String;Ljava/lang/String;)V", &[JValue::Object(&ps), JValue::Object(&m)]).map(|_| ())
+        });
+        if done.is_none() { Some("The share sheet didn't open".into()) } else { None }
+    }
+
+    fn pdf_pages(&self, path: &std::path::Path) -> Option<u32> {
+        let p = path.to_string_lossy().into_owned();
+        let n = with_activity(&self.app, |env, activity| {
+            let ps = env.new_string(&p)?;
+            env.call_method(activity, "pdfPageCount", "(Ljava/lang/String;)I", &[JValue::Object(&ps)])?.i()
+        })?;
+        (n > 0).then_some(n as u32)
+    }
+
+    fn pdf_page(&self, path: &std::path::Path, n: u32, width: u32) -> Option<(u32, u32, Vec<u8>)> {
+        let p = path.to_string_lossy().into_owned();
+        let bytes = with_activity(&self.app, |env, activity| {
+            let ps = env.new_string(&p)?;
+            let arr = env.call_method(activity, "pdfRender", "(Ljava/lang/String;II)[B", &[JValue::Object(&ps), JValue::Int(n as i32), JValue::Int(width as i32)])?.l()?;
+            if arr.is_null() {
+                return Ok(Vec::new());
+            }
+            env.convert_byte_array(JByteArray::from(arr))
+        })?;
+        if bytes.len() < 8 {
+            return None;
+        }
+        let w = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let h = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        let px = bytes[8..].to_vec();
+        (px.len() == (w * h * 4) as usize).then_some((w, h, px))
+    }
 }
 
 /// Runs `f` with this thread attached to the VM and the activity at hand, inside a local frame.
@@ -99,6 +166,17 @@ fn wake() {
     if let Some(w) = WAKER.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
         w.wake();
     }
+}
+
+/// A book the picker brought in, copied by `LeafActivity` into the inbox.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_leaf_LeafActivity_nativeBookPicked<'local>(mut env: JNIEnv<'local>, _class: JClass<'local>, path: JString<'local>, name: JString<'local>) {
+    let path: String = if path.is_null() { return } else { env.get_string(&path).map(Into::into).unwrap_or_default() };
+    let name: String = if name.is_null() { String::new() } else { env.get_string(&name).map(Into::into).unwrap_or_default() };
+    if !path.is_empty() {
+        crate::shelf::deliver(PathBuf::from(path), name);
+    }
+    wake();
 }
 
 /// Back, from LeafActivity's back callback.
@@ -302,6 +380,7 @@ fn android_main(android: AndroidApp) {
                 }
                 MainEvent::GainedFocus => dirty = true,
                 MainEvent::Pause => {
+                    app.paused();
                     if multi_resume {
                         foreground = false;
                     }

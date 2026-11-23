@@ -1,7 +1,8 @@
 // Leaf's Android shell. The app is Rust (native/crates/leaf-app, built into src/main/jniLibs by
 // tools/build-lib.sh); Gradle packs it with GameActivity, the AndroidX activity that gives a native
-// app the soft keyboard. The one Java class, LeafActivity, hands Back to Rust and hides the system
-// bars while reading. No Kotlin.
+// app the soft keyboard. The one Java class, LeafActivity, hands Back to Rust, hides the system
+// bars while reading, brings picked books in, shares notes, copies words and draws PDF pages
+// (PdfRenderer). No Kotlin.
 plugins {
     alias(libs.plugins.android.application)
 }
