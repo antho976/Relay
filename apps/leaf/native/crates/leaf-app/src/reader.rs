@@ -165,7 +165,16 @@ impl Reader {
     pub fn page_count(&mut self, chapter: i64, count: Option<u32>) {
         if let Some(i) = self.chapters.iter().position(|c| c.id == chapter) {
             match count {
-                Some(n) => self.counts[i] = Some(n),
+                Some(n) => {
+                    self.counts[i] = Some(n);
+                    // Opened at a page before the length was known: kept inside the chapter.
+                    if let Item::Page(c, p) = self.pos.item
+                        && c == i
+                        && p >= n
+                    {
+                        self.pos = Pos { item: if n > 0 { Item::Page(c, n - 1) } else { Item::Head(c) }, off: 0.0 };
+                    }
+                }
                 // Asked again the next time it comes near.
                 None => {
                     self.counts_asked.remove(&i);

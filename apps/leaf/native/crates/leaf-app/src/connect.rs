@@ -30,10 +30,8 @@ impl State {
     /// Fill the fields with the server in use.
     pub fn load(&mut self, s: Option<&Server>) {
         if let Some(s) = s {
+            // The label keeps the scheme whenever typing it bare would give another address.
             self.address = logic::server_label(&s.base);
-            if s.base.starts_with("http://") && !self.address.contains(':') {
-                self.address = s.base.clone();
-            }
             self.token = s.token.clone().unwrap_or_default();
         }
     }
@@ -97,8 +95,11 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 Some(v) => format!("Suwayomi {v}"),
                 None => "Suwayomi isn't answering your server".into(),
             });
-            if !status.sources.is_empty() {
-                lines.push(format!("Sources: {}", status.sources.join(", ")));
+            // How many, not which: no source is named anywhere in the app.
+            match status.sources.len() {
+                0 => lines.push("No sources installed yet".into()),
+                1 => lines.push("1 source".into()),
+                n => lines.push(format!("{n} sources")),
             }
             lines.push(match status.series {
                 0 => "No series followed yet".to_string(),
