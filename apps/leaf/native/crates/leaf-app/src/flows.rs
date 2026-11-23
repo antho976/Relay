@@ -73,10 +73,11 @@ fn a_tap_on_the_plus_menu_never_reaches_the_row_under_it() {
     app.reset_to(Route::Space);
     step(&mut app, &mut t);
     step(&mut app, &mut t);
-    // The + key, then the menu's second item, which lies over the first row's cover and title.
+    // The + key, then the menu's second item low down, where it lies over the first row (rows
+    // start at 146; the item spans 108 to 156).
     tap(&mut app, &mut t, 390.0 - 6.0 - 88.0 + 22.0, 10.0 + 22.0);
     assert!(app.st.space.add_menu, "the + opened its menu");
-    tap(&mut app, &mut t, 390.0 - 12.0 - 100.0, 56.0 + 4.0 + 48.0 + 24.0);
+    tap(&mut app, &mut t, 390.0 - 12.0 - 100.0, 56.0 + 4.0 + 48.0 + 42.0);
     assert_eq!(app.route(), &Route::Search, "the menu's own item took the tap");
     // And a tap outside it, on a row, only closes it.
     app.reset_to(Route::Space);

@@ -91,6 +91,12 @@ struct ReadClock {
 }
 
 impl ReadClock {
+    /// The reader stopped (closed, or the app went to the background): the gap up to the next
+    /// move is not counted, however short.
+    fn pause(&mut self) {
+        self.last_ns = 0;
+    }
+
     fn moved(&mut self, now: u64, at_char: u64) {
         if self.last_ns > 0 {
             let gap = now.saturating_sub(self.last_ns) as f64 / 1e9;
@@ -812,6 +818,8 @@ pub fn close(app: &mut App, r: &mut BookReader) {
         save(app, r, &doc, place);
     }
     flush_time(app, r);
+    // Time away (in another app, the phone asleep) is not reading: the next move starts afresh.
+    r.clock.pause();
 }
 
 pub fn time_left(chars: u64, cpm: f32) -> String {
@@ -957,6 +965,9 @@ fn draw_block(app: &mut App, r: &BookReader, block: &Block, laid: &Laid, s: u32,
         ranges.push((a, z, t::ACCENT.a(if th.dark { 0.32 } else { 0.38 })));
     }
     for (a, z, col) in ranges {
+        // A stored highlight's bytes are trusted no further than the text's own characters: a
+        // book read differently since must not panic the page, every time it is drawn.
+        let (a, z) = (block.text.floor_char_boundary(a as usize) as u32, block.text.floor_char_boundary(z as usize) as u32);
         for l in &laid.lines {
             let (la, lz) = (a.max(l.start), z.min(l.end));
             if la >= lz {
@@ -1152,6 +1163,8 @@ fn chrome(app: &mut App, r: &mut BookReader, doc: &Doc, chapter: &str, left_word
     let th = theme(&r.ty);
     let bar = th.bg.mix(th.ink, 0.06);
     let mut cx = cx!(app);
+    // While the menu or the dialog is open, the keys under it take no tap: it is the menu's.
+    let held = if r.more || r.confirm_remove { kit::hold(&mut cx) } else { None };
     let top = cx.c.inset_top;
     cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + 60.0, 0.0, bar);
     let back = kit::icon_key_ink(&mut cx, 6.0, top + 8.0, "arrow-left", th.ink);
@@ -1187,6 +1200,7 @@ fn chrome(app: &mut App, r: &mut BookReader, doc: &Doc, chapter: &str, left_word
             hit = Some(i);
         }
     }
+    kit::release(&mut cx, held);
     if r.more {
         match kit::menu(&mut cx, top + 56.0, &["Remove from library"]) {
             Some(0) => {
@@ -1706,5 +1720,11 @@ mod tests {
         // Left open for ten minutes: none of it counts.
         c.moved(631_000_000_000, 600);
         assert!((c.secs - 30.0).abs() < 1e-6);
+        // Eighty seconds in another app, then a scroll: not reading either.
+        c.pause();
+        c.moved(711_000_000_000, 700);
+        assert!((c.secs - 30.0).abs() < 1e-6, "{}", c.secs);
+        c.moved(712_000_000_000, 750);
+        assert!((c.secs - 31.0).abs() < 1e-6, "and reading again counts");
     }
 }

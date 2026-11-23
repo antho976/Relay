@@ -930,6 +930,7 @@ dependencies = [
  "serde",
  "serde_json",
  "svgtypes",
+ "unicode-segmentation",
  "ureq",
  "wgpu",
  "winit",

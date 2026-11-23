@@ -9,8 +9,8 @@
 //! touch and keyboard event, then draws a frame if anything asked for one: input, a system event,
 //! a wake from a worker thread (a page decoded, a list fetched), or the app itself (`Next`).
 //! Otherwise it sleeps until there is input, or until the time the app named. The system bars and
-//! the keyboard are read from the window's insets when they change, and a few times a second while
-//! the keyboard may be moving.
+//! the keyboard are read from the window's insets when they change, a few times a second while
+//! the keyboard may be moving, and twice a second while it stays up.
 //!
 //! JNI from this thread: it is attached for as long as `android_main` runs, and never returns to
 //! Java, so every JNI sequence runs inside a local frame ([`with_activity`]), which frees its
@@ -285,6 +285,9 @@ fn leave(app: &AndroidApp) {
 
 const KEYBOARD_POLL: Duration = Duration::from_millis(120);
 const KEYBOARD_SETTLE_NS: u64 = 1_500_000_000;
+/// While the keyboard stays up and nothing moves, its insets are only looked at this often: in
+/// case it was put away by the system (a back gesture) without an insets event.
+const KEYBOARD_UP_POLL: Duration = Duration::from_millis(500);
 const RETRY_NS: u64 = 16_000_000;
 
 #[unsafe(no_mangle)]
@@ -309,9 +312,6 @@ fn android_main(android: AndroidApp) {
     while !quit {
         let drawing = screen.is_some() && foreground;
         let now = now_ns();
-        if app.keyboard_up {
-            watch_until = now + KEYBOARD_SETTLE_NS;
-        }
         watch_until = watch_until.max(host.keyboard_at.load(Ordering::SeqCst).saturating_add(KEYBOARD_SETTLE_NS));
         let timeout = if !drawing {
             None
@@ -322,7 +322,11 @@ fn android_main(android: AndroidApp) {
                 Next::At(at) => Some(Duration::from_nanos(at.saturating_sub(now))),
                 _ => None,
             };
-            let watch = (now < watch_until).then_some(KEYBOARD_POLL);
+            let watch = if now < watch_until {
+                Some(KEYBOARD_POLL)
+            } else {
+                app.keyboard_up.then_some(KEYBOARD_UP_POLL)
+            };
             match (due, watch) {
                 (Some(a), Some(b)) => Some(a.min(b)),
                 (a, b) => a.or(b),
@@ -389,13 +393,17 @@ fn android_main(android: AndroidApp) {
                         foreground = false;
                     }
                 }
-                MainEvent::Destroy => quit = true,
+                MainEvent::Destroy => {
+                    // Pause came first on every Android Leaf runs on; kept again in case it did not.
+                    app.paused();
+                    quit = true;
+                }
                 _ => {}
             },
             _ => {}
         });
 
-        let watching = now_ns() < watch_until;
+        let watching = now_ns() < watch_until || app.keyboard_up;
         if (resized || watching)
             && let (Some(g), Some(s), Some(native)) = (&gfx, &mut screen, &window)
         {
