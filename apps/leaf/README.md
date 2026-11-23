@@ -153,6 +153,10 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
     9–23 are on Webtoon (paid)" and Open hands its link to the Webtoon app or the browser.
     Readers also like is `/v1/series/{id}/also`, three across, "Yours" on ones in My space.
   - **Select** (a long press on a chapter, or ⋯ → Select chapters): taps add or take chapters away,
+    and a long press dragged without lifting sweeps every chapter the finger passes (`sweep.rs`:
+    the range from where it began to the finger, dragging back lets go, starting on a selected row
+    de-selects, the list scrolls by itself near its top and bottom edges, a haptic tick per row;
+    Downloads and a series' downloads select the same way),
     and the bottom key becomes Download N / Delete N / Mark read (Delete removes this phone's
     copies only); "Select range…" takes a first and last chapter to select or download; ⋯ also
     has "Download next 5" and "Download all unread". ⋯ also has the shelf, "Wrong
@@ -161,7 +165,8 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
     My space".
   - **App updates** (`update.rs`): the app knows its build (`LEAF_BUILD`, the commit count
     `tools/build-lib.sh` builds at; Gradle's `versionCode` is the same number, `versionName`
-    "0.<build>"). When it opens, and at most every 6 h, it asks `/v1/app/latest`; a newer build is
+    "0.<build>"). When it opens and whenever it comes back to the front, at most every 15
+    minutes, it asks `/v1/app/latest`; a newer build is
     offered in a sheet, "Leaf 0.N is ready · 18 MB", Update or Later (Later hides that build for a
     day). Update downloads `/v1/app/apk` into the cache on a thread, checks its SHA-256, and hands
     it to Android's installer through `LeafActivity` (a FileProvider link); when Leaf may not
@@ -207,6 +212,13 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
     Select or ⋯) picks series and the bar deletes them or only their read chapters, after a
     confirm with the count and the room freed; ⋯ → "Delete read chapters" does it everywhere; a
     series' downloads page selects chapters the same way. Deleting never asks the server.
+  - **Offline** (`online.rs`): every live answer says whether the server could be reached (no
+    answer at all, or a proxy's gateway error with none of the server's words). Once per spell out
+    of reach, a sheet over the page (never over a strip or book being read) says "You're offline"
+    with a cloud struck through and "Your downloads still open: 15 chapters on this phone", Open
+    downloads (My space › Downloads) and Not now; with nothing downloaded it says so and offers OK.
+    The server is tried again every 20 s (`/v1/status`) and on coming back to the front; when it
+    answers, "Back online" shows as a toast and the library is asked again.
   - **The exact place** (`places.rs`): chapter, page and how far down it, kept in `places.json` on
     each page change and at most every 2 s while the strip moves (a thread writes it), and at once
     when the app pauses, stops, loses focus or the reader closes (progress to the server then too;
@@ -230,6 +242,8 @@ cargo run -p leaf-app                                  # desktop window
 cargo run -p leaf-app -- --shot out.png --screen reader --id 1   # headless shot vs a local leaf-server
 cargo run -p leaf-app -- --shot out.png --screen space --tab following --sort 1   # home, space, series --tab also, picks, search
 cargo run -p leaf-app -- --shot out.png --screen book --books a.epub --seed 1 --at 0.5   # a book (see desktop.rs)
+cargo run -p leaf-app -- --shot out.png --screen series --id 3 --scroll 600 --sweep 4  # a sweep, the finger still down
+cargo run -p leaf-app -- --shot out.png --screen home --data DIR --server http://127.0.0.1:9   # the offline prompt (DIR from an earlier shot)
 tools/build-lib.sh                                     # libleaf.so (needs ~/.local/share/rust-android + NDK), LEAF_BUILD = commit count
 cd .. && ./gradlew assembleDebug                       # native/android/build/outputs/apk/debug/app-debug.apk, versionCode = the same count
 ```

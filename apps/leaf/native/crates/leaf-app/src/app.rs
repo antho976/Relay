@@ -67,6 +67,8 @@ pub trait Host: Send + Sync {
     fn install_apk(&self, _path: &std::path::Path) -> Install {
         Install::Unsupported
     }
+    /// A light haptic tick (a row caught by a sweep), where the platform has one.
+    fn tick(&self) {}
 }
 
 /// What asking to install an update did.
@@ -202,6 +204,8 @@ pub struct States {
     pub recs: crate::recs::State,
     pub update: crate::update::State,
     pub saved: crate::saved::State,
+    /// Whether the server answers, and the prompt when it stops ([`crate::online`]).
+    pub online: crate::online::State,
 }
 
 /// The settings kept in `config.json` (Android's chapter notices read `server` from it too).
@@ -268,6 +272,8 @@ pub struct BackupInfo {
 pub struct App {
     pub canvas: Canvas,
     pub ui: Ui,
+    /// A long press and drag selecting rows in bulk, on the page showing ([`crate::sweep`]).
+    pub sweep: crate::sweep::Sweep,
     pub host: Arc<dyn Host>,
     pub focus: Focus,
     /// The pages open, the current one last, each with its scroll.
@@ -379,6 +385,7 @@ impl App {
         let mut app = App {
             canvas: Canvas::new(FONTS),
             ui: Ui::default(),
+            sweep: Default::default(),
             host,
             focus: Focus::default(),
             nav: vec![(start, Scroll::default())],
@@ -463,6 +470,11 @@ impl App {
         self.wake_at(until);
     }
 
+    /// The toast's words, while one shows.
+    pub fn toast_words(&self) -> Option<&str> {
+        self.toast.as_ref().map(|(w, _)| w.as_str())
+    }
+
     /// Open a book from the shelf at its place.
     pub fn open_book(&mut self, id: i64) {
         let Some(b) = self.shelf.book(id).cloned() else { return };
@@ -531,6 +543,26 @@ impl App {
             self.book = Some(r);
         }
         self.keep_place();
+    }
+
+    /// The app came back to the front: a newer app is asked for (at most every 15 minutes), and,
+    /// out of reach before, the server is tried again at once.
+    pub fn resumed(&mut self) {
+        self.check_update();
+        crate::online::probe(self, true);
+    }
+
+    /// A list that selects drew its `rows` ([`crate::sweep`]): a long press and drag on them
+    /// selects in bulk, the list scrolling by itself at `band`'s edges (its visible top and bottom
+    /// on screen). `sel` picks the list's selection. Call after [`App::page_end`]. True while the
+    /// list scrolls by itself.
+    pub fn sweep_rows(&mut self, rows: Vec<crate::sweep::Row>, band: (f32, f32), covered: bool, dt: f32, sel: impl FnOnce(&mut States) -> &mut Option<std::collections::BTreeSet<i64>>) -> bool {
+        let sc = &mut self.nav.last_mut().expect("a page is always open").1;
+        let out = self.sweep.update(&mut self.ui, sc, sel(&mut self.st), rows, band, covered, self.now_ns, dt);
+        if out.ticks > 0 {
+            self.host.tick();
+        }
+        out.moving
     }
 
     /// The window lost focus, or the app is stopping: the comic reader's exact place goes to disk
@@ -805,10 +837,11 @@ impl App {
         self.ask(Job::Recs(now));
     }
 
-    /// Ask whether the server holds a newer app: at most every [`crate::update::CHECK_EVERY_MS`].
+    /// Ask whether the server holds a newer app: when the app opens and whenever it comes back to
+    /// the front ([`App::resumed`]), at most every [`crate::update::CHECK_EVERY_MS`].
     pub fn check_update(&mut self) {
         let ms = crate::shelf::now_ms();
-        if self.shot || self.server.is_none() || ms - self.update_checked_ms < crate::update::CHECK_EVERY_MS {
+        if self.shot || self.server.is_none() || !crate::update::due(self.update_checked_ms, ms) {
             return;
         }
         self.update_checked_ms = ms;
@@ -939,6 +972,9 @@ impl App {
         }
         let label = self.server_label();
         for done in self.jobs.take() {
+            if let Some(reached) = done.reach(self.server.as_ref()) {
+                crate::online::heard(self, reached);
+            }
             match done {
                 Done::Status(s, r) => {
                     if self.server.as_ref().is_some_and(|mine| mine.base == s.base) {
@@ -1489,6 +1525,7 @@ impl App {
     fn shown(&mut self) {
         self.fresh = true;
         self.ui.reset();
+        self.sweep.reset();
         // An update tapped before its series came opens only if the person is still where they
         // tapped it: once they have gone elsewhere it would open over what they are doing.
         self.open_after = None;
@@ -1573,6 +1610,11 @@ impl App {
     pub fn back(&mut self) -> bool {
         if self.focus.id.is_some() {
             self.finish_typing();
+            return true;
+        }
+        if self.st.online.open {
+            self.st.online.open = false;
+            self.ui.reset();
             return true;
         }
         if self.st.update.open {
@@ -1748,6 +1790,7 @@ impl App {
         self.focus.keyboard_up = self.keyboard_up;
         let tapped = self.ui.tap.is_some();
         self.ui.dt = dt;
+        self.ui.now_ns = now_ns;
         let (w, h) = self.size;
         self.canvas.begin(w, h, self.insets.0, self.insets.1);
         self.images.set_screen_w(w);
@@ -1762,9 +1805,13 @@ impl App {
         kit::ground(&mut self.canvas);
         let arrived = self.images.drain(&mut self.canvas, now_ns);
         let route = self.route().clone();
-        // An app update's sheet lies over the page: the page takes no tap while it shows.
-        let update = self.st.update.open && crate::update::shows_over(&route);
-        let held = if update {
+        // Out of reach: the server is tried again now and then, and the prompt shows once a spell.
+        crate::online::probe(self, false);
+        let online = crate::online::shows(self, &route);
+        // An app update's sheet lies over the page: the page takes no tap while it shows (the
+        // offline prompt first, when both are up).
+        let update = !online && self.st.update.open && crate::update::shows_over(&route);
+        let held = if update || online {
             self.ui.cover();
             self.ui.tap.take()
         } else {
@@ -1788,10 +1835,14 @@ impl App {
             Route::Imports => crate::library::draw_imports(self, dt),
             Route::Picks(ref of) => crate::recs::draw_picks(self, of, dt),
         };
-        if update && self.route() == &route {
+        if (update || online) && self.route() == &route {
             self.canvas.dy = 0.0;
             self.ui.tap = held;
-            crate::update::draw(self);
+            if online {
+                crate::online::draw(self);
+            } else {
+                crate::update::draw(self);
+            }
         }
         if let Some((words, until)) = self.toast.clone() {
             if now_ns < until {

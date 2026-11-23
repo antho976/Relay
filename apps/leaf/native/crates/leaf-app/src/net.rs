@@ -36,6 +36,16 @@ pub enum Fail {
 }
 
 impl Fail {
+    /// The server could not be reached: no answer at all, or a proxy in front of it answering for
+    /// it that it is down (a gateway error with none of the server's own words).
+    pub fn out_of_reach(&self) -> bool {
+        match self {
+            Fail::Unreachable => true,
+            Fail::Answer(code, msg) => msg.is_empty() && matches!(code, 502..=504 | 520..=530),
+            _ => false,
+        }
+    }
+
     pub fn words(&self, server: &str) -> String {
         match self {
             Fail::Unreachable => format!("Can't reach your server at {server}"),
@@ -393,6 +403,49 @@ pub enum Done {
     HidePage(i64, u32, bool, Result<u32, Fail>),
     /// The count of pages hidden by hand (asked, or after Clear).
     HiddenPages(Result<u32, Fail>),
+}
+
+impl Done {
+    /// What this answer says of the server's reach: Some(true) it answered (even with an error of
+    /// its own), Some(false) it could not be reached, None for a copy from disk or the check of
+    /// another server (Connect's).
+    pub fn reach(&self, server: Option<&Server>) -> Option<bool> {
+        fn of<T>(r: &Result<T, Fail>) -> Option<bool> {
+            Some(match r {
+                Ok(_) => true,
+                Err(f) => !f.out_of_reach(),
+            })
+        }
+        match self {
+            Done::Status(s, r) => server.filter(|mine| mine.base == s.base).and_then(|_| of(r)),
+            Done::Library { cached: true, .. } | Done::Series { cached: true, .. } | Done::Updates { cached: true, .. } | Done::Recs { cached: true, .. } => None,
+            Done::Library { result, .. } => of(result),
+            Done::Series { result, .. } => of(result),
+            Done::Search { result, .. } => of(result),
+            Done::Followed(r) => of(r),
+            Done::Suggested(_, r) => of(r),
+            Done::Unfollowed(_, r) => of(r),
+            Done::Progress(_, r) => of(r),
+            Done::PageCount(_, r) => of(r),
+            Done::Bell(_, _, r) => of(r),
+            Done::Updates { result, .. } => of(result),
+            Done::ChapterRead(_, _, r) => of(r),
+            Done::ReadBefore(_, r) => of(r),
+            Done::Shelf(_, r) => of(r),
+            Done::Health(r) => of(r),
+            Done::Backup(r) => of(r),
+            Done::Anilist(_, r) => of(r),
+            Done::Alternatives(_, r) => of(r),
+            Done::Repinned(_, r) => of(r),
+            Done::Recs { result, .. } => of(result),
+            Done::RecHidden(_, r) => of(r),
+            Done::RecTag(_, _, r) => of(r),
+            Done::Also(_, r) => of(r),
+            Done::AppLatest(r) => of(r),
+            Done::HidePage(_, _, _, r) => of(r),
+            Done::HiddenPages(r) => of(r),
+        }
+    }
 }
 
 type Task = (Option<Server>, Job);
@@ -933,6 +986,9 @@ mod tests {
     #[test]
     fn failures_read_as_words() {
         assert_eq!(Fail::Unreachable.words("192.168.1.5:4580"), "Can't reach your server at 192.168.1.5:4580");
+        // A proxy saying the server is down is out of reach; the server's own 502 is an answer.
+        assert!(Fail::Unreachable.out_of_reach() && Fail::Answer(502, String::new()).out_of_reach() && Fail::Answer(530, String::new()).out_of_reach());
+        assert!(!Fail::Answer(502, "source failed".into()).out_of_reach() && !Fail::Token.out_of_reach() && !Fail::Answer(404, String::new()).out_of_reach());
         assert_eq!(Fail::Answer(502, "suwayomi: timed out".into()).words("x"), "Your server says: suwayomi: timed out");
     }
 }

@@ -24,7 +24,10 @@
 //!   days the server has none (covers are the series' own, fetched once into `--data`);
 //!   `--sheet rec` on `home` opens the first pick's sheet (`--sheet drag`: pulled down by a finger
 //!   still on it); `--tagart DIR` takes the collections' pictures from `DIR/<slug>.webp`;
-//!   `--update 1` offers a made-up newer app.
+//!   `--update 1` offers a made-up newer app. `--sweep N` (`series`, `saved`, `space --tab
+//!   downloads`): a long press on the first row on screen dragged down over N more, the finger
+//!   still down. Pointed at a server that isn't there (`--server http://127.0.0.1:9`, with a
+//!   `--data` folder an earlier shot filled), a page shows the offline prompt.
 //!   `--fake-saved N` shows chapters as downloaded to this phone on the shot's copy (N series' in
 //!   `space`; a few of `--id`'s on `series` and `saved`), their manifests written to the shot's
 //!   folder with no page, so a later shot with `--data` and no server finds them;
@@ -859,6 +862,29 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.frame(clock);
         }
     }
+    // `--sweep N`: a long press on the first row on screen of a list that selects, dragged down
+    // over N more without lifting (the finger is still down in the shot).
+    if let Some(n) = arg(args, "--sweep").and_then(|v| v.parse::<usize>().ok()) {
+        let off = app.scroll().off;
+        let rows = app.sweep.rows.clone();
+        let top = app.canvas.inset_top + 120.0;
+        let k = rows.iter().position(|r| r.y - off >= top).ok_or("no row to sweep on this screen")?;
+        let (from, to) = (rows[k], rows[(k + n).min(rows.len() - 1)]);
+        let u = app.canvas.u;
+        let x = ((app.canvas.px_w - crate::draw::WIDTH * u) * 0.5).max(0.0) + 200.0 * u;
+        let at = |r: crate::sweep::Row| (r.y - off + r.h / 2.0) * u;
+        let finger = |app: &mut App, phase: crate::ui::Phase, y: f32, clock: &mut u64, wait: u64| {
+            app.touch(crate::ui::Touch { id: 1, phase, x, y, t_ns: *clock });
+            *clock += 16_666_666 + wait;
+            app.frame(*clock);
+        };
+        finger(&mut app, crate::ui::Phase::Down, at(from), &mut clock, 0);
+        finger(&mut app, crate::ui::Phase::Move, at(from), &mut clock, crate::series::LONG_PRESS_NS);
+        for i in 1..=12 {
+            let y = at(from) + (at(to) - at(from)) * i as f32 / 12.0;
+            finger(&mut app, crate::ui::Phase::Move, y, &mut clock, 0);
+        }
+    }
     clock += 16_666_666;
     app.frame(clock);
     gfx.upload_glyphs(&mut app.canvas.uploads);
@@ -924,6 +950,7 @@ impl ApplicationHandler<()> for Windowed {
             WindowEvent::CloseRequested => event_loop.exit(),
             // Another window took focus: the reader's place is kept, as on the phone.
             WindowEvent::Focused(false) => app.keep_place(),
+            WindowEvent::Focused(true) => app.resumed(),
             WindowEvent::Resized(size) => {
                 if let Some((gfx, screen)) = &mut self.gfx {
                     screen.resize(gfx, size.width, size.height);

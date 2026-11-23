@@ -28,7 +28,8 @@
 //! entries found for the work, to read from instead) and "Remove from My space" (behind a
 //! confirm). Sources are never named.
 //!
-//! **Select**: a long press on a chapter (or ⋯ → Select chapters) selects; taps add or take
+//! **Select**: a long press on a chapter (or ⋯ → Select chapters) selects, and dragging on without
+//! lifting sweeps every chapter passed ([`crate::sweep`]); taps add or take
 //! chapters away, and the bottom key becomes Download N / Delete N / Mark read (Delete removes
 //! this phone's copies only). "Select range…" takes a first and last chapter, to select them or
 //! download them all at once.
@@ -127,9 +128,7 @@ enum Act {
     /// Download a chapter to this phone (or try it again).
     Download(i64),
     Bell(bool),
-    /// A long press: select this chapter.
-    Select(i64),
-    /// A tap while selecting.
+    /// A tap while selecting (a long press sweeps, [`crate::sweep`]).
     Toggle(i64),
     Paid(String),
 }
@@ -201,6 +200,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     cx.c.outline(px, py, pw, ph, COVER_R, 1.0, t::INK.a(0.08));
     let mut y = py + ph + 22.0;
     let mut act: Option<Act> = None;
+    let mut sweep_rows: Vec<crate::sweep::Row> = Vec::new();
     let mut retry = false;
     let mut flip = false;
     let mut set_also = None;
@@ -342,8 +342,6 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                 let view_bottom = -cx.c.dy + cx.c.h + 60.0;
                 let current = cont.as_ref().map(|c| c.index);
                 let mut thumbs: Vec<(i64, bool)> = Vec::new();
-                // A finger held on a row starts selecting.
-                let held_at = if covered { None } else { cx.ui.resting(now).filter(|(_, ns)| *ns >= LONG_PRESS_NS).map(|(p, _)| p) };
                 // Paid episodes ahead: a row at the newest end.
                 let paid_row = |cx: &mut kit::Ctx, y: f32, p: &leaf_proto::PaidAhead| -> Option<String> {
                     let (px, py) = (x0, y + (PAID_H - PIC.1) / 2.0);
@@ -370,6 +368,9 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                 }
                 for row in rows {
                     let h = if matches!(row, Row::Gap(_)) { GAP_H } else { ROW_H };
+                    if let Row::Chapter(i) = &row {
+                        sweep_rows.push(crate::sweep::Row { id: d.chapters[*i].id, y, h });
+                    }
                     if y + h < view_top || y > view_bottom {
                         y += h;
                         continue;
@@ -493,13 +494,6 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                                     lx += cx.c.text(" · ", lx, ly, line_t);
                                 }
                                 cx.c.text_fit(&words, lx, ly, (tx + tw - lx).max(0.0), line_t.color(ink));
-                            }
-                            if let Some((_, hy)) = held_at
-                                && hy >= y + cx.c.dy
-                                && hy < y + h + cx.c.dy
-                            {
-                                cx.ui.swallow();
-                                act = Some(Act::Select(c.id));
                             }
                             if selecting.is_some() {
                                 if !covered && cx.tap(0.0, y, WIDTH, h) {
@@ -805,6 +799,14 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     }
     let waiting_alts = st.alternatives && app.alternatives.get(&id).is_some_and(|l| l.loading) || st.repinning;
     app.page_end(&pg, bottom);
+    // A long press and drag on the chapters selects (or lets go of) every one it passes; not while
+    // Readers also like shows.
+    let swept = if also_tab {
+        false
+    } else {
+        let band = (app.canvas.inset_top + 56.0, app.canvas.h - app.canvas.inset_bottom - BAR_H);
+        app.sweep_rows(sweep_rows, band, covered, dt, |st| &mut st.series.select)
+    };
     if let Some(a) = rec_act {
         crate::recs::act(app, a);
     }
@@ -919,7 +921,6 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             }
         }
         Some(Act::Bell(on)) => app.set_bell(id, on),
-        Some(Act::Select(c)) => app.st.series.select = Some([c].into_iter().collect()),
         Some(Act::Toggle(c)) => {
             if let Some(sel) = &mut app.st.series.select
                 && !sel.remove(&c)
@@ -942,7 +943,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             }
         }
     }
-    pg.moving || loading && !crate::wake::has()
+    pg.moving || swept || loading && !crate::wake::has()
 }
 
 /// Download chapters of the series shown to this phone; a preview is added first, and its

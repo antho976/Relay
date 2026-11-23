@@ -1,6 +1,7 @@
 //! App updates from the owner's server: the app knows its own build number (`LEAF_BUILD`, the
 //! commit count `tools/build-lib.sh` builds at, the same number Gradle's `versionCode` takes), asks
-//! `GET /v1/app/latest` when it opens and at most every [`CHECK_EVERY_MS`], and offers a newer
+//! `GET /v1/app/latest` when it opens and whenever it comes back to the front, at most every
+//! [`CHECK_EVERY_MS`] (15 minutes; it was 6 h, and an update went unseen), and offers a newer
 //! build in a calm sheet: "Leaf 0.N is ready · 18 MB", Update or Later (Later hides that build for
 //! a day).
 //!
@@ -27,7 +28,7 @@ use crate::theme::{self as t, PAD, ty};
 pub const BUILD: u32 = parse(option_env!("LEAF_BUILD"));
 
 /// The server is asked for a newer app at most this often.
-pub const CHECK_EVERY_MS: i64 = 6 * 3_600_000;
+pub const CHECK_EVERY_MS: i64 = 15 * 60_000;
 /// "Later" hides a build this long.
 const LATER_MS: i64 = 24 * 3_600_000;
 
@@ -45,6 +46,12 @@ const fn parse(s: Option<&str>) -> u32 {
         i += 1;
     }
     n
+}
+
+/// Time to ask for a newer app again: the last ask was `CHECK_EVERY_MS` ago or more (or the clock
+/// went back past it).
+pub fn due(last_ms: i64, now_ms: i64) -> bool {
+    now_ms - last_ms >= CHECK_EVERY_MS || now_ms < last_ms
 }
 
 /// "0.312": what a build is called (Gradle's `versionName` says the same).
@@ -229,5 +236,15 @@ mod tests {
         assert_eq!(version_of(312), "0.312");
         assert_eq!(size_words(18_400_000), "18 MB");
         assert_eq!(size_words(4_260_000), "4.3 MB");
+    }
+
+    #[test]
+    fn a_newer_app_is_asked_for_every_quarter_hour_at_most() {
+        let t = 1_700_000_000_000;
+        assert!(due(0, t), "never asked");
+        assert!(!due(t, t + 60_000), "a minute after");
+        assert!(!due(t, t + 14 * 60_000));
+        assert!(due(t, t + 15 * 60_000), "a quarter of an hour after");
+        assert!(due(t, t - 60_000), "the clock went back");
     }
 }

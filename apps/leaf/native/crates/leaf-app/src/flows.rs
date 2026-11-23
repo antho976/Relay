@@ -64,6 +64,8 @@ fn app_with(name: &str, n: i64, h_px: f32) -> (App, u64, PathBuf) {
     let _ = std::fs::remove_dir_all(&dir);
     let mut app = App::new(Arc::new(TestHost(dir.clone())), 0);
     app.shot = true;
+    // The offline prompt has tests of its own: on a server that isn't there it stays out of these.
+    app.st.online.off = true;
     app.resize(1080.0, h_px, 0.0, 0.0);
     app.library.data = Some((1..=n).map(|i| series(i, &format!("Series {i}"))).collect());
     let mut t = 1_000_000_000;
@@ -298,7 +300,7 @@ fn hold(app: &mut App, t: &mut u64, x: f32, y: f32) {
     let x0 = ((app.canvas.px_w - WIDTH * u) * 0.5).max(0.0);
     app.touch(Touch { id: 1, phase: Phase::Down, x: x0 + x * u, y: y * u, t_ns: *t });
     step(app, t);
-    std::thread::sleep(std::time::Duration::from_millis(crate::series::LONG_PRESS_NS / 1_000_000 + 80));
+    *t += crate::series::LONG_PRESS_NS + 80_000_000;
     step(app, t);
     step(app, t);
     app.touch(Touch { id: 1, phase: Phase::Up, x: x0 + x * u, y: y * u, t_ns: *t + 600_000_000 });
@@ -1340,6 +1342,7 @@ fn app_on(name: &str, fill: impl Fn(&std::path::Path)) -> (App, u64, PathBuf) {
     fill(&dir);
     let mut app = App::new(Arc::new(TestHost(dir.clone())), 0);
     app.shot = true;
+    app.st.online.off = true;
     nowhere(&mut app);
     app.resize(1080.0, 2340.0, 0.0, 0.0);
     let mut t = 1_000_000_000;
@@ -1869,5 +1872,292 @@ fn home_shows_no_binge_and_no_because_rail_of_one() {
     step(&mut app, &mut t);
     step(&mut app, &mut t);
     assert_eq!(app.st.home.because.len(), 1, "only the rail of two or more");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// Out of reach: the prompt
+
+/// The offline prompt's keys at the sheet's foot: (y, the left key's x, the right key's x).
+fn prompt_keys(app: &App) -> (f32, f32, f32) {
+    let x = crate::theme::PAD + 4.0;
+    let bw = (WIDTH - 2.0 * x - 10.0) / 2.0;
+    (app.canvas.h - app.canvas.inset_bottom - 18.0 - 24.0, x + bw / 2.0, x + bw + 10.0 + bw / 2.0)
+}
+
+#[test]
+fn out_of_reach_the_prompt_shows_once_a_spell_and_opens_downloads() {
+    let (mut app, mut t, dir) = app_on("offline-prompt", |d| {
+        saved_on_disk(d, 5, 5001, 1.0, 2, false);
+        saved_on_disk(d, 5, 5002, 2.0, 2, false);
+    });
+    app.st.online.off = false;
+    app.reset_to(Route::Home);
+    assert!(until(&mut app, &mut t, 10.0, |a| a.st.online.open), "the server out of reach: the prompt");
+    assert_eq!(app.route(), &Route::Home);
+    // It holds every tap: the gear under its veil opens nothing (the tap only closes it).
+    tap(&mut app, &mut t, WIDTH - 6.0 - 22.0, 28.0);
+    assert_eq!((app.route(), app.nav.len()), (&Route::Home, 1), "the gear under the prompt did not open Settings");
+    assert!(!app.st.online.open);
+    // Not again in this spell, however many asks fail.
+    app.ask(crate::net::Job::Library);
+    assert!(until(&mut app, &mut t, 10.0, |a| !a.library.loading));
+    step(&mut app, &mut t);
+    assert!(!app.st.online.open, "once a spell");
+    // The server answers: a quiet word, and the next loss shows it again.
+    crate::online::heard(&mut app, true);
+    step(&mut app, &mut t);
+    assert_eq!(app.toast_words(), Some("Back online"));
+    assert!(!app.st.online.open);
+    crate::online::heard(&mut app, false);
+    step(&mut app, &mut t);
+    assert!(app.st.online.open, "lost again: shown again");
+    // Open downloads goes to My space › Downloads.
+    let (y, _, right) = prompt_keys(&app);
+    tap(&mut app, &mut t, right, y);
+    assert!(!app.st.online.open);
+    assert_eq!((app.route(), app.nav.len(), app.st.space.tab), (&Route::Space, 1, crate::space::DOWNLOADS));
+    // A third spell: Not now only closes it.
+    crate::online::heard(&mut app, true);
+    crate::online::heard(&mut app, false);
+    step(&mut app, &mut t);
+    assert!(app.st.online.open);
+    let (y, left, _) = prompt_keys(&app);
+    tap(&mut app, &mut t, left, y);
+    assert!(!app.st.online.open);
+    assert_eq!(app.route(), &Route::Space);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_offline_prompt_leaves_the_reader_alone_and_says_ok_with_nothing_downloaded() {
+    let (mut app, mut t, dir) = app_on("offline-reader", |d| {
+        saved_on_disk(d, 5, 5001, 1.0, 2, false);
+    });
+    assert!(until(&mut app, &mut t, 10.0, |a| a.st.online.offline()), "the server is out of reach");
+    // Reading a saved chapter when it is noticed: nothing over the strip.
+    crate::saved::open(&mut app, 5, 5001);
+    assert_eq!(app.route(), &Route::Reader);
+    app.st.online.off = false;
+    for _ in 0..5 {
+        step(&mut app, &mut t);
+    }
+    assert!(!app.st.online.open && !app.st.online.prompted, "the reader is left alone");
+    while app.route() == &Route::Reader {
+        app.back();
+        step(&mut app, &mut t);
+    }
+    step(&mut app, &mut t);
+    assert!(app.st.online.open, "out of the reader, it shows");
+    let _ = std::fs::remove_dir_all(dir);
+    // Nothing downloaded: the line says so, and its one key is OK.
+    let (mut app, mut t, dir) = app_on("offline-none", |_| {});
+    app.st.online.off = false;
+    assert!(until(&mut app, &mut t, 10.0, |a| a.st.online.open));
+    assert_eq!(crate::online::line(0, false), "Nothing is downloaded on this phone yet.");
+    let (y, _, _) = prompt_keys(&app);
+    tap(&mut app, &mut t, WIDTH / 2.0, y);
+    assert!(!app.st.online.open);
+    assert_eq!(app.route(), &Route::Home);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// Drag to select in bulk
+
+/// A long press at (x, y), then, without lifting, the finger through each of `path` (layout units),
+/// a frame every 10 units.
+fn press_and_drag(app: &mut App, t: &mut u64, x: f32, y: f32, path: &[f32]) {
+    let u = app.canvas.u;
+    let x0 = ((app.canvas.px_w - WIDTH * u) * 0.5).max(0.0);
+    app.touch(Touch { id: 1, phase: Phase::Down, x: x0 + x * u, y: y * u, t_ns: *t });
+    step(app, t);
+    *t += crate::series::LONG_PRESS_NS + 80_000_000;
+    step(app, t);
+    step(app, t);
+    let mut at = y;
+    for &to in path {
+        let n = ((to - at).abs() / 10.0).ceil().max(1.0) as usize;
+        for i in 1..=n {
+            let yy = at + (to - at) * i as f32 / n as f32;
+            app.touch(Touch { id: 1, phase: Phase::Move, x: x0 + x * u, y: yy * u, t_ns: *t });
+            step(app, t);
+        }
+        at = to;
+    }
+}
+
+/// The finger lifts at (x, y).
+fn lift(app: &mut App, t: &mut u64, x: f32, y: f32) {
+    let u = app.canvas.u;
+    let x0 = ((app.canvas.px_w - WIDTH * u) * 0.5).max(0.0);
+    app.touch(Touch { id: 1, phase: Phase::Up, x: x0 + x * u, y: y * u, t_ns: *t + 200_000_000 });
+    step(app, t);
+}
+
+fn selected(app: &App) -> Vec<i64> {
+    app.st.series.select.clone().unwrap_or_default().into_iter().collect()
+}
+
+/// How far [`forty`] scrolls its page, so its first rows are on screen under the fixed top.
+const FORTY_OFF: f32 = 350.0;
+
+/// A series page of 40 chapters (newest first: row `k` is chapter 40 − k, id 1040 − k), scrolled
+/// [`FORTY_OFF`]: where its first row is on screen.
+fn forty(name: &str) -> (App, u64, PathBuf, f32) {
+    let (mut app, mut t, dir) = app(name);
+    app.series.insert(1, loaded(detail(1, 40)));
+    app.push(Route::Series(1));
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    app.scroll().off = FORTY_OFF;
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    let y0 = first_row(&app) - FORTY_OFF;
+    (app, t, dir, y0)
+}
+
+#[test]
+fn a_long_press_and_drag_selects_the_chapters_it_passes_and_dragging_back_lets_go() {
+    let (mut app, mut t, dir, y0) = forty("sweep");
+    let row = crate::series::ROW_H;
+    let mid = |k: f32| y0 + row * k + row / 2.0;
+    // From chapter 38 down to 35.
+    press_and_drag(&mut app, &mut t, 200.0, mid(2.0), &[mid(5.0)]);
+    assert_eq!(selected(&app), vec![1035, 1036, 1037, 1038]);
+    // Back up to 37: 36 and 35 let go.
+    press_and_drag_on(&mut app, &mut t, 200.0, &[mid(3.0)]);
+    assert_eq!(selected(&app), vec![1037, 1038]);
+    lift(&mut app, &mut t, 200.0, mid(3.0));
+    assert_eq!(selected(&app), vec![1037, 1038], "lifting is not a tap");
+    let off = app.scroll().off;
+    assert_eq!((app.route(), off), (&Route::Series(1), FORTY_OFF), "nothing opened, nothing scrolled");
+    // Taps add 34 and 33; a sweep starting on 33 (selected) lets go of 33 and 34.
+    tap(&mut app, &mut t, 200.0, mid(6.0));
+    tap(&mut app, &mut t, 200.0, mid(7.0));
+    assert_eq!(selected(&app), vec![1033, 1034, 1037, 1038]);
+    press_and_drag(&mut app, &mut t, 200.0, mid(7.0), &[mid(6.0)]);
+    lift(&mut app, &mut t, 200.0, mid(6.0));
+    assert_eq!(selected(&app), vec![1037, 1038], "a sweep from a selected row de-selects");
+    // The bar still takes its own taps: Mark read, its third key.
+    let h = app.canvas.h;
+    let gw = (WIDTH - 2.0 * crate::theme::PAD - 16.0) / 3.0;
+    tap(&mut app, &mut t, crate::theme::PAD + 2.0 * (gw + 8.0) + gw / 2.0, h - (50.0 + 24.0) + 8.0 + 25.0);
+    let d = app.series[&1].data.as_ref().unwrap();
+    assert!(d.chapters.iter().filter(|c| c.id == 1037 || c.id == 1038).all(|c| c.read));
+    assert!(!d.chapters.iter().find(|c| c.id == 1036).unwrap().read);
+    assert_eq!(app.st.series.select, None);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The finger already down moves on through `path`.
+fn press_and_drag_on(app: &mut App, t: &mut u64, x: f32, path: &[f32]) {
+    let u = app.canvas.u;
+    let x0 = ((app.canvas.px_w - WIDTH * u) * 0.5).max(0.0);
+    let mut at = app.ui.finger().expect("a finger down").1;
+    for &to in path {
+        let n = ((to - at).abs() / 10.0).ceil().max(1.0) as usize;
+        for i in 1..=n {
+            let yy = at + (to - at) * i as f32 / n as f32;
+            app.touch(Touch { id: 1, phase: Phase::Move, x: x0 + x * u, y: yy * u, t_ns: *t });
+            step(app, t);
+        }
+        at = to;
+    }
+}
+
+#[test]
+fn a_sweep_held_at_the_bottom_edge_scrolls_the_list_and_takes_what_comes() {
+    let (mut app, mut t, dir, y0) = forty("sweep-edge");
+    let row = crate::series::ROW_H;
+    let edge = app.canvas.h - (50.0 + 24.0) - 10.0;
+    press_and_drag(&mut app, &mut t, 200.0, y0 + row * 2.0 + row / 2.0, &[edge]);
+    let fit = selected(&app).len();
+    for _ in 0..40 {
+        step(&mut app, &mut t);
+    }
+    let off = app.scroll().off;
+    assert!(off > FORTY_OFF + 200.0, "the list scrolled by itself: {off}");
+    let sel = selected(&app);
+    assert!(sel.len() > fit + 3, "and the rows it brought were taken: {} after {fit}", sel.len());
+    assert_eq!(sel.last(), Some(&1038), "from where it began");
+    assert!(sel.windows(2).all(|w| w[1] == w[0] + 1), "one run: {sel:?}");
+    lift(&mut app, &mut t, 200.0, edge);
+    step(&mut app, &mut t);
+    let after = app.scroll().off;
+    step(&mut app, &mut t);
+    assert_eq!(app.scroll().off, after, "it stops with the finger, and doesn't coast");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_plain_drag_on_the_chapters_scrolls_and_selects_nothing() {
+    let (mut app, mut t, dir, y0) = forty("sweep-plain");
+    pull(&mut app, &mut t, 200.0, y0 + crate::series::ROW_H * 4.0, -300.0, 10, 60);
+    assert!(app.scroll().off > FORTY_OFF + 250.0, "scrolled: {}", app.scroll().off);
+    assert_eq!(app.st.series.select, None);
+    assert_eq!(app.route(), &Route::Series(1));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn downloads_and_a_series_downloads_select_by_sweeping_too() {
+    let (mut app, mut t, dir) = app_on("sweep-downloads", |d| {
+        for s in 1..=6 {
+            saved_on_disk(d, s, s * 1000 + 1, 1.0, 1, false);
+        }
+        for n in 2..=5 {
+            saved_on_disk(d, 6, 6000 + n, n as f64, 1, false);
+        }
+    });
+    app.st.space.tab = crate::space::DOWNLOADS;
+    app.reset_to(Route::Space);
+    step(&mut app, &mut t);
+    // Rows: 6, 5, 4, 3, 2, 1 (saved last first). From the first to the third.
+    let row = crate::space::ROW_H;
+    press_and_drag(&mut app, &mut t, 200.0, DOWNLOADS_ROW + row / 2.0, &[DOWNLOADS_ROW + 2.0 * row + row / 2.0]);
+    lift(&mut app, &mut t, 200.0, DOWNLOADS_ROW + 2.0 * row + row / 2.0);
+    assert_eq!(app.st.space.select.clone().unwrap().into_iter().collect::<Vec<_>>(), vec![4, 5, 6]);
+    assert_eq!(app.route(), &Route::Space, "nothing opened");
+    // The bar's Delete takes its tap: their chapters wait for the confirm.
+    let key_y = app.canvas.h - crate::saved::BAR_H + 12.0 + 25.0;
+    tap(&mut app, &mut t, crate::theme::PAD + 40.0, key_y);
+    let mut asked = app.st.space.confirm.clone().expect("the confirm");
+    asked.sort();
+    assert_eq!(asked, vec![4001, 5001, 6001, 6002, 6003, 6004, 6005]);
+    app.st.space.confirm = None;
+    app.st.space.select = None;
+    // Series 6's own downloads: newest first, 5 down to 1.
+    app.push(Route::Saved(6));
+    step(&mut app, &mut t);
+    let line = crate::draw::Text::new(crate::theme::ty::UI, crate::theme::INK).lh();
+    let top = 60.0 + 8.0 + line + 14.0;
+    let r = 70.0;
+    press_and_drag(&mut app, &mut t, 150.0, top + r / 2.0, &[top + 3.0 * r + r / 2.0]);
+    lift(&mut app, &mut t, 150.0, top + 3.0 * r + r / 2.0);
+    assert_eq!(app.st.saved.select.clone().unwrap().into_iter().collect::<Vec<_>>(), vec![6002, 6003, 6004, 6005]);
+    assert_eq!(app.route(), &Route::Saved(6));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_newer_app_is_asked_for_on_coming_back_at_most_every_quarter_hour() {
+    let (mut app, mut t, dir) = app("update-check");
+    nowhere(&mut app);
+    app.shot = false;
+    app.update_checked_ms = 0;
+    app.resumed();
+    let first = app.update_checked_ms;
+    assert!(first > 0, "back to the front: asked");
+    step(&mut app, &mut t);
+    app.update_checked_ms = first - 14 * 60_000;
+    app.resumed();
+    assert_eq!(app.update_checked_ms, first - 14 * 60_000, "14 minutes after: not again");
+    app.update_checked_ms = first - 15 * 60_000;
+    app.resumed();
+    assert!(app.update_checked_ms >= first, "a quarter of an hour after: asked again");
+    // Opening the app (Home's first frame) asks too.
+    app.update_checked_ms = 0;
+    app.reset_to(Route::Home);
+    step(&mut app, &mut t);
+    assert!(app.update_checked_ms > 0);
     let _ = std::fs::remove_dir_all(dir);
 }

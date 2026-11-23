@@ -1,6 +1,6 @@
 //! A series' chapters downloaded to this phone (My space › Downloads, a row tapped): each with its
 //! picture, its size and Read; a tap reads it, with no network. Select (a long press, or ⋯ →
-//! Select) picks chapters and the bar at the bottom deletes them from this phone; ⋯ → "Delete read
+//! Select; a long press and drag sweeps many, [`crate::sweep`]) picks chapters and the bar at the bottom deletes them from this phone; ⋯ → "Delete read
 //! chapters" deletes those read. Deleting never touches the server's copies. Built from what is
 //! on disk ([`crate::offline`]), so it works with no server at all.
 
@@ -100,7 +100,6 @@ pub fn select_bar(cx: &mut kit::Ctx, keys: &[(&str, bool, bool)]) -> Option<usiz
 
 enum Act {
     Open(i64),
-    Select(i64),
     Toggle(i64),
 }
 
@@ -129,13 +128,14 @@ pub fn draw(app: &mut App, series: i64, dt: f32) -> bool {
         let (h, _) = kit::notice(&mut cx, x0 + 16.0, y, w - 32.0, "Nothing of it on this phone", Some("Download chapters from the series page to read them offline."), None);
         y += h;
     }
-    let held_at = if covered { None } else { cx.ui.resting(now).filter(|(_, ns)| *ns >= crate::series::LONG_PRESS_NS).map(|(p, _)| p) };
     let mut act: Option<Act> = None;
+    let mut rows: Vec<crate::sweep::Row> = Vec::with_capacity(list.len());
     let mut thumbs: Vec<(i64, bool)> = Vec::new();
     let (view_top, view_bottom) = (-cx.c.dy - 80.0, -cx.c.dy + cx.c.h + 80.0);
     // Newest first, as the series page lists them.
     for (m, read) in list.iter().zip(reads.iter()).rev() {
         let h = ROW_H;
+        rows.push(crate::sweep::Row { id: m.chapter.id, y, h });
         if y + h < view_top || y > view_bottom {
             y += h;
             continue;
@@ -191,10 +191,7 @@ pub fn draw(app: &mut App, series: i64, dt: f32) -> bool {
             format!("{} pages · {size}", m.pages)
         };
         cx.c.text_fit(&line, tx, ty0 + title_t.lh() + 3.0, tw, line_t);
-        if held_on(held_at, y, h, cx.c.dy) && selecting.is_none() {
-            cx.ui.swallow();
-            act = Some(Act::Select(c.id));
-        } else if !covered && (key_tap || cx.tap(0.0, y, WIDTH, h)) {
+        if !covered && (key_tap || cx.tap(0.0, y, WIDTH, h)) {
             act = Some(if selecting.is_some() { Act::Toggle(c.id) } else { Act::Open(c.id) });
         }
         y += h;
@@ -282,6 +279,9 @@ pub fn draw(app: &mut App, series: i64, dt: f32) -> bool {
         }
     }
     app.page_end(&pg, bottom);
+    // A long press and drag selects (or lets go of) every row it passes.
+    let band = (app.canvas.inset_top + top_h, app.canvas.h - app.canvas.inset_bottom - BAR_H);
+    let swept = app.sweep_rows(rows, band, covered, dt, |st| &mut st.saved.select);
     if let Some(ids) = confirmed {
         delete(app, &ids);
         app.st.saved.select = None;
@@ -289,7 +289,6 @@ pub fn draw(app: &mut App, series: i64, dt: f32) -> bool {
     match act {
         Some(_) if covered => {}
         Some(Act::Open(id)) => open(app, series, id),
-        Some(Act::Select(id)) => app.st.saved.select = Some([id].into_iter().collect()),
         Some(Act::Toggle(id)) => {
             if let Some(sel) = &mut app.st.saved.select
                 && !sel.remove(&id)
@@ -303,7 +302,7 @@ pub fn draw(app: &mut App, series: i64, dt: f32) -> bool {
             }
         }
     }
-    pg.moving
+    pg.moving || swept
 }
 
 /// Read a saved chapter: in the series' list when it is at hand (online), else among the saved
@@ -316,11 +315,6 @@ pub fn open(app: &mut App, series: i64, chapter: i64) {
     let c = &d.chapters[i];
     let page = if c.read { 0 } else { logic::resume_page(c) };
     app.open_chapter(&d, i, page);
-}
-
-/// A finger held long enough on the row at `y`, `h` tall.
-pub fn held_on(held: Option<(f32, f32)>, y: f32, h: f32, dy: f32) -> bool {
-    held.is_some_and(|(_, hy)| hy >= y + dy && hy < y + h + dy)
 }
 
 /// A word as a key at the top right ("All"). True when tapped.

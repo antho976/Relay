@@ -93,6 +93,11 @@ public class LeafActivity extends GameActivity {
         });
     }
 
+    /** A light tick (a row caught by a drag that selects), as the system's touch feedback allows. */
+    public void tick() {
+        runOnUiThread(() -> getWindow().getDecorView().performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK));
+    }
+
     /** A book or a strip is open: the screen stays on. */
     public void setReading(final boolean on) {
         runOnUiThread(() -> {

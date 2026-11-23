@@ -120,8 +120,7 @@ enum Act {
     Bell(i64, bool),
     /// A row in Downloads: that series' saved chapters.
     Saved(i64),
-    /// Downloads: a long press starts selecting with this series; a tap while selecting.
-    Select(i64),
+    /// Downloads: a tap while selecting (a long press sweeps, [`crate::sweep`]).
     Toggle(i64),
     /// An update: its chapter in the reader.
     Chapter(i64, i64),
@@ -198,6 +197,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let selecting = st.select.clone().filter(|_| tab == DOWNLOADS);
     let groups = if tab == DOWNLOADS { app.saver.groups() } else { Vec::new() };
     let mut set_all: Option<bool> = None;
+    let mut rows: Vec<crate::sweep::Row> = Vec::new();
     let held_at = if covered { None } else { cx.ui.resting(now).filter(|(_, ns)| *ns >= crate::series::LONG_PRESS_NS).map(|(p, _)| p) };
     match tab {
         UPDATES => {
@@ -569,6 +569,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             }
             let rh = ROW_H;
             for g in &groups {
+                rows.push(crate::sweep::Row { id: g.series, y, h: rh });
                 if y + rh < view_top || y > view_bottom {
                     y += rh;
                     continue;
@@ -607,10 +608,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 cx.c.text_fit(&format!("{} · {}", logic::chapters_words(g.chapters), size_words(g.bytes)), tx, ty0 + title_t.lh() + 4.0, tw, line_t);
                 let newest = format!("Up to chapter {} · saved {}", logic::num(g.newest), logic::ago(g.saved_at, now_ms));
                 cx.c.text_fit(&newest, tx, ty0 + title_t.lh() + 4.0 + line_t.lh() + 2.0, tw, last_t);
-                if held_on(held_at, y, rh, cx.c.dy) && selecting.is_none() {
-                    cx.ui.swallow();
-                    act = Some(Act::Select(g.series));
-                } else if cx.tap(0.0, y, WIDTH, rh) {
+                if cx.tap(0.0, y, WIDTH, rh) {
                     act = Some(if selecting.is_some() { Act::Toggle(g.series) } else { Act::Saved(g.series) });
                 }
                 y += rh;
@@ -782,6 +780,11 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         }
     }
     app.page_end(&pg, bottom);
+    // Downloads: a long press and drag selects (or lets go of) every row it passes.
+    let swept = tab == DOWNLOADS && {
+        let band = (app.canvas.inset_top + top_h, app.canvas.h - app.canvas.inset_bottom - crate::saved::BAR_H);
+        app.sweep_rows(rows, band, covered, dt, |st| &mut st.space.select)
+    };
     // Downloads: what selecting asked for.
     if !covered {
         if stop_select {
@@ -849,7 +852,6 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         Some(Act::Book(id)) => app.open_book(id),
         Some(Act::Bell(id, on)) => app.set_bell(id, on),
         Some(Act::Saved(id)) => app.push(Route::Saved(id)),
-        Some(Act::Select(id)) => app.st.space.select = Some([id].into_iter().collect()),
         Some(Act::Toggle(id)) => {
             if let Some(sel) = &mut app.st.space.select
                 && !sel.remove(&id)
@@ -874,7 +876,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     if tab == UPDATES && updates_state.0 {
         app.wake_at(now + 50_000_000);
     }
-    pg.moving || (app.library.loading || app.updates.loading) && !crate::wake::has()
+    pg.moving || swept || (app.library.loading || app.updates.loading) && !crate::wake::has()
 }
 
 fn now_ms_() -> i64 {

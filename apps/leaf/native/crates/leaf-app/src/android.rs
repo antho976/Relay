@@ -87,6 +87,10 @@ impl Host for AndroidHost {
         with_activity(&self.app, |env, activity| env.call_method(activity, "askNotifications", "()V", &[]).map(|_| ()));
     }
 
+    fn tick(&self) {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "tick", "()V", &[]).map(|_| ()));
+    }
+
     fn pick_books(&self) {
         with_activity(&self.app, |env, activity| env.call_method(activity, "pickBooks", "()V", &[]).map(|_| ()));
     }
@@ -445,8 +449,10 @@ fn android_main(android: AndroidApp) {
                 MainEvent::Resume { .. } => {
                     foreground = true;
                     dirty = true;
-                    // Back to the front: the open page reads the server again.
+                    // Back to the front: the open page reads the server again, a newer app is
+                    // asked for (at most every 15 minutes), and out of reach, the server is tried.
                     app.fresh = true;
+                    app.resumed();
                 }
                 MainEvent::GainedFocus => dirty = true,
                 MainEvent::Pause => {

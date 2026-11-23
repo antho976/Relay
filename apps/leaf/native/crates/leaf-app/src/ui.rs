@@ -64,8 +64,12 @@ pub struct Ui {
     /// A sheet or dialog is over the page this frame ([`Ui::cover`]), and was last frame.
     covered: bool,
     covered_last: bool,
-    /// When the finger now down came down, on [`crate::clock::now_ns`] (for a long press).
-    down_ns: u64,
+    /// When the finger now down came down, on the frames' clock (for a long press): the time of
+    /// the first frame that saw it ([`Ui::begin_frame`]), so a long press is timed by the same
+    /// clock the frames pass it.
+    down_at: Option<u64>,
+    /// This frame's time (set by the app before [`Ui::begin_frame`]).
+    pub now_ns: u64,
     /// Fixed chrome drawn over the page (tab bar, fixed tops) this frame and the last, screen
     /// units: a tap inside one is held from the page ([`Ui::begin_frame`]) and given back only to
     /// that chrome ([`Ui::chrome`]).
@@ -82,6 +86,8 @@ pub struct Ui {
     sheet_seen: bool,
     /// The time this frame stands for, in seconds (set by the app before drawing).
     pub dt: f32,
+    /// The finger now down sweeps a selection ([`crate::sweep`]): no list scrolls with it.
+    claimed: bool,
 }
 
 impl Ui {
@@ -100,7 +106,8 @@ impl Ui {
                 self.last_move_ns = t.t_ns;
                 self.landed = Some((x, y));
                 self.caught.set(false);
-                self.down_ns = crate::clock::now_ns();
+                self.claimed = false;
+                self.down_at = None;
             }
             Phase::Move if self.id == Some(t.id) => {
                 let dy = y - self.pos.1;
@@ -162,6 +169,9 @@ impl Ui {
     /// the chrome gets it back as it draws ([`Ui::chrome`]). While a dialog or menu was over the
     /// page, every tap is held for it ([`Ui::cover`]).
     pub fn begin_frame(&mut self, also: Option<[f32; 4]>) {
+        if self.id.is_some() && self.down_at.is_none() {
+            self.down_at = Some(self.now_ns);
+        }
         self.held = None;
         self.held_for_cover = false;
         let Some((x, y)) = self.tap else { return };
@@ -197,12 +207,24 @@ impl Ui {
         if self.caught.get() {
             return None;
         }
-        self.down.map(|p| (p, now.saturating_sub(self.down_ns)))
+        self.down.zip(self.down_at).map(|(p, at)| (p, now.saturating_sub(at)))
     }
 
     /// The touch now down is taken (a long press): lifting it is not a tap.
     pub fn swallow(&self) {
         self.caught.set(true);
+    }
+
+    /// The finger now down sweeps a selection from here on: it is not a tap, and no list
+    /// scrolls or coasts with it ([`crate::sweep`]).
+    pub fn claim(&mut self) {
+        self.caught.set(true);
+        self.claimed = true;
+    }
+
+    /// A sweep holds the finger now down (or held the one lifted this frame).
+    pub fn claimed(&self) -> bool {
+        self.claimed
     }
 
     /// A sheet resting with its top at `rest_top` (screen units), `height` tall: a drag down that
@@ -258,6 +280,7 @@ impl Ui {
         if self.id.is_none() {
             self.drag_from = None;
             self.horizontal = false;
+            self.claimed = false;
         }
     }
 
@@ -348,7 +371,7 @@ impl HScroll {
     pub fn update(&mut self, ui: &Ui, area: [f32; 4], dt: f32) -> bool {
         let [x, y, w, h] = area;
         // Under a sheet or a menu nothing moves sideways: the drag is the sheet's.
-        let mine = !ui.covered_last && ui.swiping_in(x, y, w, h);
+        let mine = !ui.covered_last && !ui.claimed && ui.swiping_in(x, y, w, h);
         if ui.catch(area, self.vel.abs() > CATCH) {
             self.vel = 0.0;
         }
@@ -397,7 +420,7 @@ impl Scroll {
     /// Returns true while it is still moving.
     pub fn update(&mut self, ui: &Ui, viewport: [f32; 4], dt: f32) -> bool {
         let [x, y, w, h] = viewport;
-        let mine = !ui.horizontal && ui.drag_from.is_some_and(|(px, py)| px >= x && px < x + w && py >= y && py < y + h);
+        let mine = !ui.horizontal && !ui.claimed && ui.drag_from.is_some_and(|(px, py)| px >= x && px < x + w && py >= y && py < y + h);
         // A finger on a coasting list stops it, as a phone's lists do.
         if ui.catch(viewport, self.vel.abs() > CATCH) {
             self.vel = 0.0;

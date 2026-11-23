@@ -14,7 +14,7 @@ run cargo from there, and plain `cargo test` at the root never builds it.
 |---|---|
 | `leaf-proto` | The wire types the phone and the server share, and the rules both must read alike: title matching, gaps, which copy of a chapter to read. |
 | `leaf-server` | The comics autopilot beside a Suwayomi it drives (`server/compose.yml`). Headless: `autopilot` (the pass), `budget` (per-source requests), `thumbs`, `recs` (AniList), `webtoon` (paid episodes), `api`. |
-| `leaf-app` | The phone app (wgpu; renderer copied from Tally RS): tabs Home, Search, My space (`home`, `search`, `space`); books (`shelf`, `epub`, `typeset`, `book`, `notes`, `stats`), comics (`series`, `reader`), picks (`recs`) and app updates (`update`). |
+| `leaf-app` | The phone app (wgpu; renderer copied from Tally RS): tabs Home, Search, My space (`home`, `search`, `space`); books (`shelf`, `epub`, `typeset`, `book`, `notes`, `stats`), comics (`series`, `reader`), picks (`recs`), app updates (`update`), the offline prompt (`online`) and drag to select (`sweep`). |
 
 ```fish
 cd apps/leaf/native
@@ -107,6 +107,23 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
   two picks. Collections are 16:9 tiles with the tag's picture (`/v1/recs/tagart/{slug}`, kept on
   disk), else a still collage of the collection's covers; each Because rail has a banner, a still
   collage of its covers. Nothing there moves (2026-11-23).
+- Out of reach (no network, the server off, or a proxy saying it is down: `Fail::out_of_reach`,
+  read from every live answer by `Done::reach`), a sheet says "You're offline" once a spell
+  (`online.rs`): the cloud struck through, what still opens, Open downloads (My space › Downloads)
+  and Not now, or OK alone when nothing is downloaded. Never over a strip or a book being read (it
+  waits until the reader closes); not again until the server answered and was lost again; "Back
+  online" is a toast. While out of reach the server is tried every 20 s and on coming back to the
+  front; the platform's network state is not read (2026-11-23).
+- Every select mode selects in bulk by sweeping (`sweep.rs`, the owner, 2026-11-23): a long press on
+  a row and a drag without lifting selects the range from that row to the finger, dragging back lets
+  go, a long press on a selected row de-selects, the list scrolls by itself in a 72-unit band at its
+  edges, and a haptic tick marks each row caught. A drag that did not start with a long press
+  scrolls (`Ui::claim` holds lists still only for a sweep). A list that selects records its rows
+  and calls `App::sweep_rows` after `page_end`; `flows.rs` tests each list.
+- Long presses are timed on the frames' clock (`Ui::begin_frame` stamps the touch), so tests pass
+  time in rather than sleep.
+- The app asks for a newer build when it opens and whenever it comes back to the front, at most
+  every 15 minutes (`update::due`); Later still hides that build for a day (2026-11-23).
 - Series ids are never reused by the server (`work_next_id` in `kv`); the phone still lets go of
   what it kept for an id that comes back naming another series (`known.rs`, 2026-11-23).
 
