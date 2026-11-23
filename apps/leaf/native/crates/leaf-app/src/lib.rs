@@ -1,0 +1,47 @@
+//! Leaf, the phone app: books from the phone's own files (EPUB, PDF, text) and comics from the
+//! owner's leaf-server, each read as one continuous column, drawn with wgpu on Tally RS's renderer.
+//!
+//! Books: `shelf` (the local SQLite store and the import), `epub` (reading a book's file),
+//! `typeset` (setting text in lines), `book` (the reader), `notes` (highlights, review, find) and
+//! `stats`.
+//!
+//! `app` holds the state and draws a frame; `library`, `search`, `series`, `reader` and `connect`
+//! are the screens; `strip` and `logic` the rules they read (tested); `net` and `images` the
+//! worker threads that talk to the server and decode; `draw` and `gfx` the canvas and the GPU;
+//! `desktop` and `android` the two front ends.
+
+pub mod app;
+pub mod book;
+pub mod clock;
+pub mod connect;
+pub mod draw;
+pub mod epub;
+pub mod gfx;
+pub mod glyphs;
+pub mod home;
+pub mod images;
+pub mod kit;
+pub mod library;
+pub mod logic;
+pub mod net;
+pub mod notes;
+pub mod reader;
+pub mod search;
+pub mod series;
+pub mod shelf;
+pub mod space;
+pub mod stats;
+pub mod strip;
+pub mod theme;
+pub mod thumb;
+pub mod typeset;
+pub mod ui;
+pub mod wake;
+
+#[cfg(target_os = "android")]
+mod android;
+#[cfg(not(target_os = "android"))]
+pub mod desktop;
+
+#[cfg(test)]
+mod flows;

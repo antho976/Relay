@@ -1,0 +1,15 @@
+[package]
+name = "leaf-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Leaf's comics autopilot: follows series across Suwayomi's sources and serves them to the phone."
+
+[dependencies]
+leaf-proto = { path = "../leaf-proto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+tiny_http = "0.12"

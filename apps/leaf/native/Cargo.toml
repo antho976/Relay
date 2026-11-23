@@ -1,0 +1,23 @@
+# Leaf: a reading app in Rust, drawn with wgpu (like Tally RS), and the small server that feeds it
+# comics through Suwayomi. Its own workspace with its own Cargo.lock, not a member of the root one.
+[workspace]
+resolver = "2"
+members = ["crates/leaf-proto", "crates/leaf-server", "crates/leaf-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+
+[profile.dev]
+opt-level = 1
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+strip = "debuginfo"

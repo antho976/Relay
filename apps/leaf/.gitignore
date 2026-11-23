@@ -1,0 +1,14 @@
+.dev/
+native/target/
+# The Android shell (Gradle runs from here; the library is built by native/tools/build-lib.sh).
+.gradle/
+.kotlin/
+build/
+/local.properties
+native/android/build/
+native/android/src/main/jniLibs/
+*.apk
+*.aab
+*.jks
+*.keystore
+keystore.properties

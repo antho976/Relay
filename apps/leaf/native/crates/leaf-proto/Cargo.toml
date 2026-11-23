@@ -1,0 +1,10 @@
+[package]
+name = "leaf-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "What Leaf's phone app and leaf-server say to each other, and the rules both read the same way."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

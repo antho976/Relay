@@ -1,0 +1,50 @@
+[package]
+name = "leaf-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Leaf, the phone app: books from the phone's own files and comics from leaf-server, drawn with wgpu (Tally RS's renderer), for Android and the desktop."
+
+[lib]
+name = "leaf"
+crate-type = ["lib", "cdylib"]
+
+[[bin]]
+name = "leaf"
+path = "src/main.rs"
+
+[dependencies]
+leaf-proto = { path = "../leaf-proto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wgpu = "30"
+bytemuck = { version = "1", features = ["derive"] }
+fontdue = "0.9"
+zeno = "0.3"
+# Icon paths go through svgtypes first: zeno's own parser stops early on some compact arcs.
+svgtypes = "0.16"
+# Pages come as WebP, sometimes JPEG or PNG; covers the same.
+image = { version = "0.25", default-features = false, features = ["webp", "jpeg", "png"] }
+pollster = "0.4"
+# The server, over HTTP or HTTPS. Pure-Rust TLS with ring and Mozilla's roots, as Tally RS, so the
+# Android build needs no cmake or NASM.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+raw-window-handle = "0.6"
+# Books: the shelf, places, highlights and reading time, on the phone. SQLite built in, as Tally RS.
+rusqlite = { version = "0.40", features = ["bundled"] }
+# EPUBs are zip files of XHTML. Only reading, only deflate (flate2 on miniz_oxide: pure Rust).
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+flate2 = "1"
+quick-xml = "0.41"
+# The local day (reading time is counted per day): the zone's offset from localtime_r.
+libc = "0.2"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+winit = "0.30"
+png = "0.17"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["game-activity"] }
+ndk = "0.9"
+jni = "0.21"
