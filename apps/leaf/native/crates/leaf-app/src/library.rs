@@ -83,6 +83,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let mut set_filter = None;
     let mut to_imports = false;
     let mut to_connect = false;
+    let mut to_search = false;
     let mut cx = cx!(app);
     let x0 = PAD;
     let w = WIDTH - PAD * 2.0;
@@ -127,6 +128,16 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             y += 20.0;
             cx.c.para(e, x0 + 24.0, y, w - 48.0, Text::new(ty::CAPTION, t::INK3).center(), 3);
             y += 40.0;
+        } else if let Some(s) = &app.server {
+            // Connected, nothing followed yet: say so, and where comics come from.
+            y += 12.0;
+            if kit::plain(&mut cx, x0 + 24.0, y, w - 48.0, 46.0, "Find comics to follow", Some("search")) {
+                to_search = true;
+            }
+            y += 46.0 + 16.0;
+            let words = format!("Comics come from {}", crate::logic::server_label(&s.base));
+            cx.c.para(&words, x0 + 24.0, y, w - 48.0, Text::new(ty::CAPTION, t::INK3).center(), 2);
+            y += 24.0;
         }
     } else {
         // The book read last leads.
@@ -326,6 +337,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         app.push(Route::Series(id));
     } else if follow {
         app.push(if app.server.is_some() { Route::Search } else { Route::Connect });
+    } else if to_search {
+        app.push(Route::Search);
     } else if find {
         app.push(Route::Find);
     } else if settings || to_connect {
