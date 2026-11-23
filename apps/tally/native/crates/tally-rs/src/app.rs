@@ -750,6 +750,8 @@ impl App {
         // under it, which for a whole pull asks the person about entries nobody made.
         self.post_bills(today);
         crate::sync::tick(self, now_ns);
+        // Whether a bank wants a sign-in soon, for Overview: a listing every few hours.
+        crate::banks::watch(self);
         // A whole ledger a sync took in place of this one brings bills of its own, and rows a sync
         // brought can be a bill made, resumed or moved to today on another device: those due
         // today post now, not tomorrow. (`|`, not `||`: both are said once, and both are taken.)
@@ -1155,6 +1157,8 @@ impl App {
     /// and this month's categories.
     fn draw_drawer(&mut self, dt: f32) -> bool {
         let d = self.drawer;
+        // Banks that want a sign-in, as last listed (none shown on a phone not paired).
+        let to_sign = if self.st.sync.paired(&self.store) { crate::banks::renewals(self).len() } else { 0 };
         let sync = self.st.sync.line(&self.store, crate::sync::now_ms());
         let (sync_line, sync_dot) = (sync.text, sync.tone.colour(&self.palette));
         let home = self.home.as_ref();
@@ -1233,7 +1237,7 @@ impl App {
                 (
                     "Setup",
                     vec![
-                        ("sync", "Connected banks", Route::Banks, String::new(), None),
+                        ("sync", "Connected banks", Route::Banks, if to_sign > 0 { format!("{to_sign} to sign in") } else { String::new() }, Some(p.waiting_text)),
                         ("download", "Import a statement", Route::Import, String::new(), None),
                         ("gear", "Settings", Route::Settings, String::new(), None),
                     ],

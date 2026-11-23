@@ -32,6 +32,9 @@ pub struct Bank {
     pub last_sync: Option<i64>,
     /// The connection's own state in words when it needs the person.
     pub problem: Option<String>,
+    /// When the bank's consent runs out and it asks for a sign-in again, epoch ms, as the server
+    /// last heard from Plaid; none when the bank sets no end (or the server is older).
+    pub expires_at: Option<i64>,
 }
 
 /// What the server said about bank connections.
@@ -74,7 +77,14 @@ pub fn parse_bank(v: &Value) -> Option<Bank> {
                 .collect()
         })
         .unwrap_or_default();
-    Some(Bank { id, institution: s(v, "institution").unwrap_or_else(|| "A bank".into()), accounts, last_sync: v.get("last_sync").and_then(Value::as_i64), problem: s(v, "problem") })
+    Some(Bank {
+        id,
+        institution: s(v, "institution").unwrap_or_else(|| "A bank".into()),
+        accounts,
+        last_sync: v.get("last_sync").and_then(Value::as_i64),
+        problem: s(v, "problem"),
+        expires_at: v.get("expires_at").and_then(Value::as_i64),
+    })
 }
 
 pub fn parse_banks(v: &Value) -> Vec<Bank> {
@@ -342,16 +352,122 @@ pub fn follow_label(followed: usize) -> String {
 /// Where the phone asks Plaid to send the browser once the person is done: back into Tally RS.
 pub const COMPLETION_URI: &str = "tallyrs://banks";
 
-pub fn hosted_link_payload() -> Value {
-    json!({ "client_name": "Tally", "completion_redirect_uri": COMPLETION_URI })
+/// `money.bank.hosted_link`'s payload: a new bank, or with `bank_id` a sign-in again to that one
+/// (Plaid's update mode: the same connection, its accounts and choices kept).
+pub fn hosted_link_payload(bank_id: Option<&str>) -> Value {
+    let mut v = json!({ "client_name": "Tally", "completion_redirect_uri": COMPLETION_URI });
+    if let Some(id) = bank_id {
+        v["bank_id"] = json!(id);
+    }
+    v
 }
 
-/// What a bank that needs signing in again says when its Fix is tapped. `money.bank.hosted_link`
-/// takes no bank id (docs/PLAID.md), so the server can only open a new connection, not Plaid's
-/// update mode for this one; going through it would add the same bank a second time. Until the
-/// server can reopen a sign-in, the honest way is to disconnect and connect again.
+/// A server from before the sign-in again refuses `bank_id` as not in the op's schema.
+pub fn fix_not_on_server(f: &Failure) -> bool {
+    f.code == "bus.schema" && f.message.contains("bank_id")
+}
+
+/// What Fix says on a server from before the sign-in again ([`fix_not_on_server`]): it can only
+/// open a new connection, which would add the same bank a second time, so the honest way there is
+/// to disconnect and connect again.
 pub fn sign_in_again_line(institution: &str) -> String {
     format!("Your server can't reopen the sign-in for {institution} yet. Disconnect it below, then connect it again; its entries stay.")
+}
+
+/// How long before a bank's consent runs out Tally starts saying so: Plaid's own warning comes a
+/// week ahead.
+pub const RENEW_AHEAD_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
+/// A bank that wants the person: signed out now, or asking for a sign-in within the week.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Renew {
+    pub id: String,
+    pub institution: String,
+    /// Signed out already: nothing arrives until the person signs in.
+    pub signed_out: bool,
+    /// When its consent runs out, epoch ms.
+    pub by: Option<i64>,
+}
+
+/// The banks that want a sign-in now or within [`RENEW_AHEAD_MS`], signed-out ones first.
+pub fn renewals(banks: &[Bank], now_ms: i64) -> Vec<Renew> {
+    let mut out: Vec<Renew> = banks
+        .iter()
+        .filter(|b| b.problem.is_some() || b.expires_at.is_some_and(|at| at - now_ms <= RENEW_AHEAD_MS))
+        .map(|b| Renew { id: b.id.clone(), institution: b.institution.clone(), signed_out: b.problem.is_some() || b.expires_at.is_some_and(|at| at <= now_ms), by: b.expires_at })
+        .collect();
+    out.sort_by_key(|r| (!r.signed_out, r.by.unwrap_or(i64::MAX)));
+    out
+}
+
+/// The bank is one [`renewals`] names.
+pub fn wants_sign_in(b: &Bank, now_ms: i64) -> bool {
+    !renewals(std::slice::from_ref(b), now_ms).is_empty()
+}
+
+/// "today", "tomorrow", "by Fri", "by Nov 28": when a consent runs out, in the phone's own time.
+pub fn by_words(at_ms: i64, now_ms: i64) -> String {
+    let tz = jiff::tz::TimeZone::system();
+    let day = |ms: i64| jiff::Timestamp::from_millisecond(ms).map(|t| t.to_zoned(tz.clone()).date()).ok();
+    let (Some(at), Some(today)) = (day(at_ms), day(now_ms)) else { return "soon".into() };
+    let days = (at - today).get_days();
+    match days {
+        ..=0 => "today".into(),
+        1 => "tomorrow".into(),
+        2..=6 => format!("by {}", at.strftime("%a")),
+        _ => format!("by {}", at.strftime("%b %-d")),
+    }
+}
+
+/// What a bank that wants a sign-in says on its row and on Overview.
+pub fn renew_line(r: &Renew, now_ms: i64) -> String {
+    match (r.signed_out, r.by) {
+        (true, _) => "Signed out: sign in to bring new purchases in".into(),
+        (false, Some(at)) => format!("Asks you to sign in again {}", by_words(at, now_ms)),
+        (false, None) => "Asks you to sign in again soon".into(),
+    }
+}
+
+/// What Overview says of a bank that wants a sign-in: a title naming the act, and why.
+pub fn home_words(r: &Renew, now_ms: i64) -> (String, String) {
+    match (r.signed_out, r.by) {
+        (true, _) => (format!("Sign in to {} again", r.institution), "New purchases are paused until you do".into()),
+        (false, by) => {
+            let when = by.map(|at| by_words(at, now_ms)).unwrap_or_else(|| "soon".into());
+            let mut line = format!("{when}, or new purchases pause");
+            line[..1].make_ascii_uppercase();
+            (format!("Sign in to {} again", r.institution), line)
+        }
+    }
+}
+
+/// The preference holding [`renewals`] as the server last listed the banks (a JSON list), so
+/// Overview can say so without asking.
+pub const RENEW_PREF: &str = "bank_renewals";
+/// When the banks were last listed (epoch ms), by the Banks page or the check in the background.
+pub const CHECKED_PREF: &str = "bank_checked_ms";
+/// How often the banks are listed in the background while Tally is open.
+pub const CHECK_EVERY_MS: i64 = 6 * 60 * 60 * 1000;
+
+pub fn renew_pref(store: &crate::model::Store) -> Vec<Renew> {
+    store.pref(RENEW_PREF).and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+}
+
+/// Keeps what wants a sign-in in `banks`, and when they were listed.
+pub fn remember_renewals(store: &mut crate::model::Store, banks: &[Bank], now_ms: i64) -> Vec<Renew> {
+    let now = renewals(banks, now_ms);
+    let _ = store.set_pref(RENEW_PREF, &json!(now).to_string());
+    let _ = store.set_pref(CHECKED_PREF, &now_ms.to_string());
+    now
+}
+
+/// Whether the banks are due a listing in the background: never listed, or not for
+/// [`CHECK_EVERY_MS`] (a clock set back counts as due).
+pub fn check_due(store: &crate::model::Store, now_ms: i64) -> bool {
+    match store.pref(CHECKED_PREF).and_then(|v| v.parse::<i64>().ok()) {
+        Some(at) => now_ms - at >= CHECK_EVERY_MS || at > now_ms,
+        None => true,
+    }
 }
 
 /// The server's answer to `money.bank.hosted_link`: the link token and the page to open.

@@ -28,7 +28,7 @@ fn bank_account(id: &str, kind: &str) -> BankAccount {
 }
 
 fn bank(institution: &str, accounts: Vec<BankAccount>) -> Bank {
-    Bank { id: "b1".into(), institution: institution.into(), accounts, last_sync: None, problem: None }
+    Bank { id: "b1".into(), institution: institution.into(), accounts, last_sync: None, problem: None, expires_at: None }
 }
 
 #[test]
