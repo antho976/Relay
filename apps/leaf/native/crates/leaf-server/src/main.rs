@@ -20,8 +20,9 @@
 //! | `LEAF_REC_SOURCES` | `MangaDex,Weeb Central,MangaFire` | the sources searched to tell whether a recommendation can be read |
 //! | `LEAF_REC_SEARCHES` | `80` | recommended titles looked for on them per day at most (each kept a week) |
 //! | `LEAF_SEARCH_SOURCES` | `MangaDex,Asura Scans,Weeb Central,MangaFire` | the broad sources a search asks; the others only on "Search all sources" |
+//! | `LEAF_TAGART` | `<LEAF_DATA>/tagart` | the collections' pictures, `<slug>.webp` (`apps/leaf/tools/tagart.sh` makes them) |
 //!
-//! Data (`LEAF_DATA`): `leaf.db`, `backups/`, `thumbs/<chapter>.webp`, `recs/covers/`, and
+//! Data (`LEAF_DATA`): `leaf.db`, `backups/`, `thumbs/<chapter>.webp`, `recs/covers/`, `tagart/`, and
 //! `app/` (`leaf.apk` and `latest.json`, put there by `apps/leaf/tools/publish-apk.sh`).
 
 mod anilist;
@@ -95,6 +96,9 @@ fn main() {
         search_sources: var("LEAF_SEARCH_SOURCES", "MangaDex,Asura Scans,Weeb Central,MangaFire").split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
         search_cache: Mutex::new(HashMap::new()),
         promo: Mutex::new(promo::Seen::default()),
+        preview_cache: Mutex::new(HashMap::new()),
+        suggest_cache: Mutex::new(HashMap::new()),
+        tagart: std::env::var("LEAF_TAGART").ok().filter(|v| !v.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data.join("tagart")),
     });
     ctx.restore_pauses();
     ctx.load_thumbs();

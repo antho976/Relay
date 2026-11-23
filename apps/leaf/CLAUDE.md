@@ -88,9 +88,27 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
 - My space rows and chapter rows use smaller pictures than the artboards draw (the owner,
   2026-11-23): square covers 88 (`space::ROW_H`), chapter pictures 72 × 54 (`series::PIC`).
 - Chapter pictures come only from the server (`/v1/chapters/{id}/thumb`): the phone never fetches
-  pages to make one. A pick (`recs`) is not in your space: its sheet adds it, bell off.
-- A sheet over a page (a pick's, the app update's) holds every tap from the page under it; the
-  series page's bottom key is fixed chrome (`kit::chrome`). `flows.rs` tests each.
+  pages to make one.
+- A tap in the reader (comics and books) only shows or hides the overlay: no tap zones and no
+  volume-key paging, and no setting for either (the owner, 2026-11-23).
+- A search result or a pick (Top picks, Because you read, Collections, Readers also like) opens its
+  page on a tap: a preview (`/v1/preview`, a negative id, `App::open_preview`) with Follow and the
+  download key beside it, nothing added. Reading a chapter, Follow or a download adds it
+  (`App::adopt`: `/v1/follow` with its entries, then the chapter or the downloads by number). A
+  long press on a pick opens its sheet (why, Follow, Read chapter 1, Not interested, Fewer like).
+  A series shows in My space and on Home only once a chapter is read, it is followed or something
+  is downloaded (`logic::in_space`); opening a page adds nothing (2026-11-23).
+- Every sheet with a grab bar is pulled down by it (`kit::sheet`, `Ui::drag_sheet`): it follows
+  the finger, closes when let go past 30% of its height or flicked, else springs back; a sheet with
+  a list inside is pulled by its head (`kit::sheet_grab`). A drag on a sheet never moves the page or
+  a rail under it. A sheet holds every tap from the page under it; the series page's bottom key is
+  fixed chrome (`kit::chrome`). `flows.rs` tests each.
+- Home has no "Finished, to binge" (the server may still make it) and no Because rail of fewer than
+  two picks. Collections are 16:9 tiles with the tag's picture (`/v1/recs/tagart/{slug}`, kept on
+  disk), else a still collage of the collection's covers; each Because rail has a banner, a still
+  collage of its covers. Nothing there moves (2026-11-23).
+- Series ids are never reused by the server (`work_next_id` in `kv`); the phone still lets go of
+  what it kept for an id that comes back naming another series (`known.rs`, 2026-11-23).
 
 ## Developing against a real Suwayomi
 

@@ -518,6 +518,15 @@ impl Canvas {
         false
     }
 
+    /// Let a picture go now (its slot is free for the next one): it no longer stands for what it
+    /// showed.
+    pub fn forget_image(&mut self, key: &str) {
+        if let Some(p) = self.images.pics.remove(key) {
+            self.images.free.push(p.slot);
+        }
+        self.image_waiting.retain(|(k, ..)| k != key);
+    }
+
     pub fn has_image(&self, key: &str) -> bool {
         self.images.pics.contains_key(key)
     }

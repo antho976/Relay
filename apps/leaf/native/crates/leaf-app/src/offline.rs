@@ -304,6 +304,43 @@ impl Saver {
         out
     }
 
+    /// Downloads kept under series `old` are kept under `new` from now on (an id the server gave
+    /// to another series: [`crate::known`]), in memory now and in their manifests on a thread.
+    pub fn rekey(&self, old: i64, new: i64) {
+        let mut g = self.sh.lock();
+        let mut moved = 0;
+        for m in g.saved.values_mut().filter(|m| m.series == old) {
+            m.series = new;
+            moved += 1;
+        }
+        for i in g.queue.iter_mut().filter(|i| i.series == old) {
+            i.series = new;
+            moved += 1;
+        }
+        drop(g);
+        let data = self.sh.data.clone();
+        let _ = std::thread::Builder::new().name("leaf-rekey".into()).spawn(move || {
+            for d in std::fs::read_dir(data.join("offline")).into_iter().flatten().flatten() {
+                let file = d.path().join("manifest.json");
+                if let Some(mut m) = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice::<Manifest>(&b).ok())
+                    && m.series == old
+                {
+                    m.series = new;
+                    let _ = write_atomic(&file, &serde_json::to_vec(&m).unwrap_or_default());
+                }
+            }
+        });
+        if moved > 0 {
+            self.changed();
+        }
+    }
+
+    /// Every series with a chapter on this phone or in the line.
+    pub fn series_ids(&self) -> std::collections::HashSet<i64> {
+        let g = self.sh.lock();
+        g.saved.values().map(|m| m.series).chain(g.queue.iter().map(|i| i.series)).collect()
+    }
+
     /// Every saved chapter's (id, series), for choosing what to delete.
     pub fn saved_ids(&self) -> Vec<(i64, i64)> {
         self.sh.lock().saved.values().map(|m| (m.chapter.id, m.series)).collect()

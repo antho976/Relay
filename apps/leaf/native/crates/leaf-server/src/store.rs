@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS page_hash (chapter_id INTEGER NOT NULL, page INTEGER 
 CREATE TABLE IF NOT EXISTS page_hidden (chapter_id INTEGER NOT NULL, page INTEGER NOT NULL, hash INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (chapter_id, page));
 ";
 
+/// The `kv` key of the next work id ([`Store::add_work`]).
+const WORK_NEXT_ID: &str = "work_next_id";
+
 const WORK_COLS: &str = "id, title, manga_id, source, followed_at, fails, checked_at, compared_at, latest, updated_at, note, bell, shelf";
 
 fn work_of(r: &rusqlite::Row) -> rusqlite::Result<Work> {
@@ -124,14 +127,37 @@ impl Store {
         self.db.prepare_cached(&format!("SELECT {WORK_COLS} FROM work WHERE manga_id = ?1")).ok()?.query_row([manga_id], work_of).optional().ok()?
     }
 
+    /// The id the next work gets: never one a work had before. `work.id` is a plain `INTEGER
+    /// PRIMARY KEY`, which SQLite hands out again once the newest work is removed, and the phone
+    /// keeps covers and places by id: a reused id showed the old series' cover (2026-11-23). The
+    /// high-water mark is kept in `kv` (`work_next_id`) and, for a store from before it, seeded
+    /// from every id the store still names (works, events, links, aliases, arrivals).
+    fn next_work_id(&self) -> i64 {
+        let kept = self.get(WORK_NEXT_ID).and_then(|v| v.parse::<i64>().ok()).unwrap_or(1);
+        let seen: i64 = self
+            .db
+            .query_row(
+                "SELECT MAX(m) FROM (SELECT MAX(id) AS m FROM work UNION ALL SELECT MAX(work_id) FROM event UNION ALL SELECT MAX(work_id) FROM link
+                 UNION ALL SELECT MAX(work_id) FROM alias UNION ALL SELECT MAX(work_id) FROM arrival)",
+                [],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+        kept.max(seen + 1).max(1)
+    }
+
     pub fn add_work(&self, title: &str, manga_id: i64, source: &str, latest: f64, now: i64) -> Result<i64, String> {
+        let id = self.next_work_id();
         self.db
             .execute(
-                "INSERT INTO work (title, manga_id, source, followed_at, checked_at, compared_at, latest, updated_at) VALUES (?1, ?2, ?3, ?4, ?4, ?4, ?5, ?4)",
-                params![title, manga_id, source, now, latest],
+                "INSERT INTO work (id, title, manga_id, source, followed_at, checked_at, compared_at, latest, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?5, ?6, ?5)",
+                params![id, title, manga_id, source, now, latest],
             )
             .map_err(|e| e.to_string())?;
-        Ok(self.db.last_insert_rowid())
+        self.set(WORK_NEXT_ID, &(id + 1).to_string());
+        Ok(id)
     }
 
     pub fn remove_work(&self, id: i64) {
@@ -386,6 +412,28 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_removed_works_id_is_never_given_again() {
+        let s = Store::in_memory();
+        let a = s.add_work("Invincible Romance", 1, "MangaDex", 10.0, 100).unwrap();
+        let b = s.add_work("Solo Leveling", 2, "MangaDex", 10.0, 100).unwrap();
+        assert!(b > a);
+        // The newest removed: SQLite alone would give its id to the next one.
+        s.remove_work(b);
+        let c = s.add_work("The Awakening Contract", 3, "MangaDex", 10.0, 100).unwrap();
+        assert!(c > b, "{c} after {b}");
+        // A store from before the mark: seeded from the ids its events still name.
+        let old = Store::in_memory();
+        old.event(1, Some(172), "info", "Following Invincible Romance");
+        old.del(WORK_NEXT_ID);
+        assert_eq!(old.add_work("The Awakening Contract", 4, "MangaDex", 1.0, 2).unwrap(), 173);
+        old.remove_work(173);
+        old.del(WORK_NEXT_ID);
+        old.db.execute("DELETE FROM event", []).unwrap();
+        assert_eq!(old.add_work("Next", 5, "MangaDex", 1.0, 2).unwrap(), 1, "nothing named: from 1");
+        assert_eq!(old.add_work("After", 6, "MangaDex", 1.0, 2).unwrap(), 2);
+    }
 
     #[test]
     fn a_work_moves_and_keeps_its_id() {

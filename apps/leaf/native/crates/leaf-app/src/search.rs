@@ -2,12 +2,16 @@
 //! (`/v1/search?source=`, one request each, so results show as they come) and keeps only titles
 //! with every word searched; "Search all sources" under the results asks the rest. A search goes
 //! once the typing pauses ([`PAUSE_NS`]) or on Enter, never for fewer than [`MIN_CHARS`]
-//! characters, never twice for the same words. Add sends every hit's manga id (`POST
-//! /v1/follow`), which puts the series in My space with its bell off (adding is not following),
-//! and opens it; one already added opens. Sources are not named: which one a series comes from is
-//! the server's business.
+//! characters, never twice for the same words. A word may be off by a letter or two
+//! ([`leaf_proto::title_has_words`]); when nothing is found, AniList is asked once what the words
+//! probably meant (`/v1/search/suggest`), offered as "Did you mean …?", which searches that.
+//!
+//! A row opens the title's page: a series already added opens as it is; any other as a preview
+//! (`/v1/preview`, [`App::open_preview`]), with Follow and Download, nothing added until a chapter
+//! is read, it is followed or something is downloaded (the owner, 2026-11-23). Sources are not
+//! named: which one a series comes from is the server's business.
 
-use leaf_proto::{Candidate, Follow, Series};
+use leaf_proto::{Candidate, Series};
 
 use crate::app::{App, Route};
 use crate::cx;
@@ -39,9 +43,10 @@ pub struct State {
     /// The words as last seen, and when they last changed.
     typed: String,
     typed_ns: u64,
-    /// The title being followed now, and why the last follow failed.
-    pub following: Option<String>,
-    pub follow_error: Option<String>,
+    /// "Did you mean": the words it was asked for, and what AniList said they meant.
+    pub suggest: Option<(String, Option<String>)>,
+    /// Words that found nothing, to ask AniList about (the page sends it).
+    pub suggest_due: Option<String>,
 }
 
 /// One source's works joined to those shown: the same work (as the server tells works apart)
@@ -98,6 +103,11 @@ impl State {
             if self.results.is_none() {
                 self.results = Some(Ok(Vec::new()));
             }
+            // Nothing at all: what did the words mean? Asked once for the same words.
+            if matches!(&self.results, Some(Ok(l)) if l.is_empty()) && self.suggest.as_ref().is_none_or(|(sq, _)| *sq != q) {
+                self.suggest = Some((q.clone(), None));
+                self.suggest_due = Some(q);
+            }
         } else if self.results.is_some() {
             self.replace = false;
         }
@@ -109,7 +119,6 @@ impl State {
         self.asked = Some(q.to_string());
         self.all = all;
         self.more = true;
-        self.follow_error = None;
         if all {
             self.replace = true;
         } else {
@@ -118,9 +127,21 @@ impl State {
         }
     }
 
+    /// AniList's answer for words that found nothing.
+    pub fn suggested(&mut self, q: String, title: Option<String>) {
+        if self.suggest.as_ref().is_some_and(|(sq, _)| *sq == q) {
+            self.suggest = Some((q, title));
+        }
+    }
+
+    /// The title "Did you mean" offers for the words shown, if any.
+    pub fn meant(&self) -> Option<&str> {
+        let (q, t) = self.suggest.as_ref()?;
+        (self.asked.as_deref() == Some(q.as_str())).then_some(())?;
+        t.as_deref()
+    }
+
     pub fn followed(&mut self, s: &Series) {
-        self.following = None;
-        self.follow_error = None;
         if let Some(Ok(list)) = &mut self.results {
             for c in list.iter_mut() {
                 if leaf_proto::same_work(&c.title, &s.title) || c.title == s.title {
@@ -128,11 +149,6 @@ impl State {
                 }
             }
         }
-    }
-
-    pub fn follow_failed(&mut self, why: String) {
-        self.following = None;
-        self.follow_error = Some(why);
     }
 
     fn searching(&self) -> bool {
@@ -159,15 +175,14 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let x0 = PAD;
     let w = WIDTH - PAD * 2.0;
     let mut y = pg.top + 8.0;
-    let mut follow: Option<Candidate> = None;
+    let mut preview: Option<Candidate> = None;
     let mut open: Option<i64> = None;
+    let mut meant: Option<String> = None;
     let mut retry = false;
     let mut search_all = false;
     let mut connect = false;
     let no_server = app.server.is_none();
-    if let Some(e) = &st.follow_error {
-        y += cx.c.para(e, x0, y, w, Text::new(ty::UI, t::DANGER).line(1.4), 3) + 12.0;
-    }
+    let did_you_mean = st.meant().map(str::to_string);
     match (&st.asked, &st.results) {
         _ if no_server => {
             y += 60.0;
@@ -178,7 +193,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         (None, _) => {
             y += 24.0;
             cx.c.para(
-                "Type a title: Leaf searches your server's main sources as you type. Adding a series puts it in My space; turn on its bell to hear when new chapters come.",
+                "Type a title: Leaf searches your server's main sources as you type. A title opens its page; reading a chapter, following it or downloading one puts it in My space.",
                 x0 + 8.0,
                 y,
                 w - 16.0,
@@ -202,6 +217,13 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             y += 40.0;
             let (h, _) = kit::notice(&mut cx, x0 + 16.0, y, w - 32.0, &format!("Nothing found for \u{201C}{q}\u{201D}"), Some("Try the title as a source spells it, or a shorter part of it."), None);
             y += h + 16.0;
+            if let Some(t) = &did_you_mean {
+                let (h, tapped) = did_you_mean_row(&mut cx, x0, y, w, t);
+                if tapped {
+                    meant = Some(t.clone());
+                }
+                y += h + 12.0;
+            }
             if !st.all && kit::plain(&mut cx, x0 + 40.0, y, w - 80.0, 46.0, "Search all sources", Some("search")) {
                 search_all = true;
             }
@@ -236,15 +258,13 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                         cx.c.image_cover(&of.key(), x0, cy, cw, ch, COVER_R - 2.0, Rgba::WHITE);
                     }
                 }
-                let busy = st.following.as_deref() == Some(c.title.as_str());
-                let words = if c.followed.is_some() {
-                    "In My space"
-                } else if busy {
-                    "Adding…"
+                // Added already: said quietly. Any row opens the title's page.
+                let pw = if c.followed.is_some() {
+                    kit::pill(&mut cx, WIDTH - PAD, y + (ROW_H - 32.0) / 2.0, "Added", true).0
                 } else {
-                    "Add"
+                    cx.c.icon("chevron-right", WIDTH - PAD - 10.0, y + ROW_H / 2.0, 16.0, t::INK3);
+                    24.0
                 };
-                let (pw, pill_tap) = kit::pill(&mut cx, WIDTH - PAD, y + (ROW_H - 32.0) / 2.0, words, c.followed.is_some() || busy);
                 let tx = x0 + cw + 14.0;
                 let tw = WIDTH - PAD - pw - 12.0 - tx;
                 let title_t = Text::new(ty::BODY, t::INK).medium().line(1.3);
@@ -261,11 +281,11 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     n => format!("Found on {n} sources"),
                 };
                 cx.c.text_fit(&found, tx, ly + 6.0, tw, line_t);
-                let row_tap = !pill_tap && cx.tap(0.0, y, WIDTH, ROW_H);
-                match c.followed {
-                    Some(id) if pill_tap || row_tap => open = Some(id),
-                    None if (pill_tap || row_tap) && st.following.is_none() => follow = Some(c.clone()),
-                    _ => {}
+                if cx.tap(0.0, y, WIDTH, ROW_H) {
+                    match c.followed {
+                        Some(id) => open = Some(id),
+                        None => preview = Some(c.clone()),
+                    }
                 }
                 y += ROW_H;
             }
@@ -329,12 +349,26 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         let at = st.typed_ns + PAUSE_NS;
         app.wake_at(at);
     }
-    if let Some(c) = follow {
-        app.st.search.following = Some(c.title.clone());
-        app.st.search.follow_error = None;
-        app.ask(Job::Follow(Follow { title: c.title.clone(), manga_ids: c.hits.iter().map(|h| h.manga_id).collect(), quiet: false }));
+    if let Some(q) = app.st.search.suggest_due.take() {
+        app.ask(Job::Suggest(q));
     }
-    if let Some(id) = open {
+    if let Some(t) = meant {
+        // "Did you mean": those words, searched now (in the field too, as if typed).
+        app.st.search.query = t.clone();
+        if app.focus.is("search") {
+            app.focus.text = t.clone();
+            app.host.keyboard(true, &t, Kb::Text);
+        }
+        let st = &mut app.st.search;
+        st.typed = t.clone();
+        st.typed_ns = now;
+        st.ask(&t, false);
+        app.nav.last_mut().expect("a page").1 = Default::default();
+        app.ask(Job::Search(t, false));
+    }
+    if let Some(c) = preview {
+        app.open_preview(&c.title, &c.hits, None);
+    } else if let Some(id) = open {
         app.push(Route::Series(id));
     } else if connect {
         app.push(Route::Connect);
@@ -344,6 +378,26 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         app.go_tab(i);
     }
     pg.moving || searching && !crate::wake::has()
+}
+
+/// "Did you mean The Awakening Contract?", the title in the accent, the whole line a key. Returns
+/// its height and whether it was tapped.
+fn did_you_mean_row(cx: &mut kit::Ctx, x: f32, y: f32, w: f32, title: &str) -> (f32, bool) {
+    let lead = "Did you mean ";
+    let tt = Text::new(ty::BODY, t::INK2);
+    let at = tt.color(t::ACCENT).semi();
+    let h = 44.0;
+    let lw = cx.c.measure(lead, tt);
+    let shown = cx.c.fit(&format!("{title}?"), (w - lw).max(40.0), at);
+    let total = lw + cx.c.measure(&shown, at);
+    let x0 = x + ((w - total) / 2.0).max(0.0);
+    if cx.pressed(x, y, w, h) {
+        cx.c.rect(x, y, w, h, t::KEY_R, t::WASH);
+    }
+    let ty0 = y + (h - tt.lh()) / 2.0;
+    cx.c.text(lead, x0, ty0, tt);
+    cx.c.text(&shown, x0 + lw, ty0, at);
+    (h, cx.tap(x, y, w, h))
 }
 
 #[cfg(test)]

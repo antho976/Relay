@@ -11,8 +11,9 @@
 //!   the library, `--all 1` for Updates' All, `--sheet shelf` with `--id` for the shelf sheet,
 //!   `--sheet select` for Downloads selecting its first two series), `saved` (`--id`: a series'
 //!   downloads), `search` (`--query`, default "nano"; `--fake-search N`
-//!   answers with N works made from the library instead of asking the server's sources), `series` (`--id`,
-//!   default 1; `--tab also`; `--sheet shelf|wrong|menu|info|range|rec`; `--select N` selects N
+//!   answers with N works made from the library instead of asking the server's sources; `--meant
+//!   TITLE` offers "Did you mean TITLE?"), `series` (`--id`, default 1; `--preview 1` shows it as a
+//!   title not added yet; `--tab also`; `--sheet shelf|wrong|menu|info|range|rec`; `--select N` selects N
 //!   chapters from where you are; `--paid FROM-TO` shows paid episodes ahead on the shot's copy),
 //!   `picks` (`--of top|binge|tag:<tag>|because:<id>`), `reader` (`--id`, `--chapter` number, default 1; `--scroll UNITS`
 //!   down the strip; `--overlay 1`; `--auto 1` auto-scroll on; `--dim 0..0.85`; `--fake-pages 1`
@@ -21,7 +22,9 @@
 //!   Settings page, `--scroll UNITS`, `--backup 1` to export the latest backup).
 //!   `--fake-recs 1` makes Home's picks (and a series' Readers also like) from the library, for the
 //!   days the server has none (covers are the series' own, fetched once into `--data`);
-//!   `--sheet rec` on `home` opens the first pick's sheet; `--update 1` offers a made-up newer app.
+//!   `--sheet rec` on `home` opens the first pick's sheet (`--sheet drag`: pulled down by a finger
+//!   still on it); `--tagart DIR` takes the collections' pictures from `DIR/<slug>.webp`;
+//!   `--update 1` offers a made-up newer app.
 //!   `--fake-saved N` shows chapters as downloaded to this phone on the shot's copy (N series' in
 //!   `space`; a few of `--id`'s on `series` and `saved`), their manifests written to the shot's
 //!   folder with no page, so a later shot with `--data` and no server finds them;
@@ -39,8 +42,7 @@
 //!   (`--query`), `stats`.
 //! - A window picks books from `LEAF_PICK` (paths separated by `:`), as Tally RS's `TALLY_PICK`.
 //!
-//! Keys: Escape goes back, Enter is the keyboard's Done, Backspace deletes, Page Down and Page Up
-//! turn a page as the phone's volume keys do.
+//! Keys: Escape goes back, Enter is the keyboard's Done, Backspace deletes.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -466,7 +468,7 @@ fn fake_recs(app: &mut App, series: i64) -> Result<(), String> {
     let pick = |from: usize, n: usize| -> Vec<leaf_proto::Rec> { recs.iter().skip(from).take(n).cloned().collect() };
     let read: Vec<&leaf_proto::Series> = app.library.data.as_ref().map(|l| l.iter().filter(|s| s.last_read_at > 0).collect()).unwrap_or_default();
     let because: Vec<leaf_proto::Because> = read.iter().take(2).enumerate().map(|(k, s)| leaf_proto::Because { series: s.id, title: s.title.clone(), recs: pick(6 + k * 4, 5) }).collect();
-    let collections = ["Murim", "Regression", "Hunters", "Magic"].iter().enumerate().map(|(k, tag)| leaf_proto::Collection { tag: tag.to_string(), recs: pick(k * 3, 6) }).collect();
+    let collections = ["Murim", "Magic", "Hunters", "Necromancy"].iter().enumerate().map(|(k, tag)| leaf_proto::Collection { tag: tag.to_string(), recs: pick(k * 3, 6) }).collect();
     let mut binge = recs.iter().find(|r| r.status == "completed").cloned().or_else(|| recs.last().cloned());
     if let Some(b) = &mut binge {
         b.reason = "Finished, and 9 in 10 of its readers rate it well".into();
@@ -554,6 +556,12 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
                 Some(n) => fake_search(&mut app, n, &gfx, &mut clock),
                 None => app.finish_typing(),
             }
+            // `--meant TITLE`: "Did you mean" offers it (with `--fake-search 0`).
+            if let Some(m) = arg(args, "--meant") {
+                settle(&mut app, &gfx, &mut clock, 5.0);
+                let q = app.st.search.asked.clone().unwrap_or_default();
+                app.st.search.suggest = Some((q, Some(m)));
+            }
         }
         "series" | "reader" => {
             app.set_server(server);
@@ -625,6 +633,17 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
     }
     if arg(args, "--fake-recs").is_some() {
         fake_recs(&mut app, id)?;
+        // `--tagart DIR`: the collections' pictures from a folder (`<slug>.webp`), as if the
+        // server had sent them; a tag with none there shows its collage.
+        if let Some(src) = arg(args, "--tagart") {
+            let tags: Vec<String> = app.recs.data.iter().flat_map(|r| r.collections.iter().map(|c| c.tag.clone())).collect();
+            for tag in tags {
+                let slug = crate::images::tag_slug(&tag);
+                if let Ok(b) = std::fs::read(std::path::Path::new(&src).join(format!("{slug}.webp"))) {
+                    crate::net::write_atomic(&dir.join("covers").join(format!("tag-{slug}.webp")), &b).map_err(|e| e.to_string())?;
+                }
+            }
+        }
         settle(&mut app, &gfx, &mut clock, 30.0);
     }
     if let Some((from, to)) = arg(args, "--paid").and_then(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<f64>().ok()?, b.parse::<f64>().ok()?)))) {
@@ -635,10 +654,51 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
         crate::update::offered(&mut app, leaf_proto::AppLatest { build, version: crate::update::version_of(build), size: 18_400_000, sha256: String::new(), made_at: 0 });
     }
     if screen == "home"
-        && arg(args, "--sheet").as_deref() == Some("rec")
+        && matches!(arg(args, "--sheet").as_deref(), Some("rec" | "drag"))
         && let Some(r) = app.recs.data.as_ref().and_then(|r| r.top.first().cloned())
     {
         crate::recs::hit(&mut app, &r, None, true);
+        // `--sheet drag`: a finger pulling it down 140 units, still down as the shot is taken.
+        if arg(args, "--sheet").as_deref() == Some("drag") {
+            settle(&mut app, &gfx, &mut clock, 5.0);
+            let u = app.canvas.u;
+            let x0 = ((w as f32 - crate::draw::WIDTH * u) * 0.5).max(0.0);
+            let (fx, fy) = (x0 + 200.0 * u, app.canvas.h - 200.0);
+            app.touch(Touch { id: 1, phase: Phase::Down, x: fx, y: fy * u, t_ns: clock });
+            for i in 1..=8u64 {
+                clock += 16_666_666;
+                app.touch(Touch { id: 1, phase: Phase::Move, x: fx, y: (fy + 140.0 * i as f32 / 8.0) * u, t_ns: clock });
+                app.frame(clock);
+            }
+        }
+    }
+    // `--preview 1` on `series`: the series shown as a title not added yet (its page from
+    // Search or a pick), from the shot's copy: nothing read, no bell, Follow and the download key.
+    if screen == "series" && arg(args, "--preview").is_some() {
+        let mut d = app.series.get(&id).and_then(|l| l.data.clone()).ok_or("the series did not load")?;
+        let pid = -(1_000_000 + id);
+        d.series.id = pid;
+        d.series.bell = false;
+        d.series.read_upto = None;
+        d.series.last_read_at = 0;
+        d.series.shelf = None;
+        for c in &mut d.chapters {
+            c.read = false;
+            c.last_page = 0;
+        }
+        if let Ok(b) = std::fs::read(crate::images::CoverOf::Series(id).file(&dir)) {
+            let _ = crate::net::write_atomic(&crate::images::CoverOf::Series(pid).file(&dir), &b);
+        }
+        app.previews.insert(pid, crate::app::Preview { title: d.series.title.clone(), hits: vec![leaf_proto::Hit { manga_id: 1_000_000 + id, source: String::new() }], anilist: None });
+        app.series.insert(pid, crate::app::Loaded { data: Some(d), live: true, error: None, loading: false });
+        app.push(Route::Series(pid));
+        settle(&mut app, &gfx, &mut clock, 20.0);
+        // The server this shot reads has no preview of a made-up entry: its answer is not shown.
+        if let Some(l) = app.series.get_mut(&pid) {
+            l.error = None;
+            l.live = true;
+        }
+        settle(&mut app, &gfx, &mut clock, 5.0);
     }
     if let Some(n) = arg(args, "--select").and_then(|v| v.parse::<usize>().ok()) {
         let d = app.series.get(&id).and_then(|l| l.data.clone()).ok_or("the series did not load")?;
@@ -905,13 +965,6 @@ impl ApplicationHandler<()> for Windowed {
                     }
                 }
                 Key::Named(NamedKey::Backspace) => app.backspace(),
-                // The volume keys' stand-ins.
-                Key::Named(NamedKey::PageDown) => {
-                    app.volume(true);
-                }
-                Key::Named(NamedKey::PageUp) => {
-                    app.volume(false);
-                }
                 Key::Named(NamedKey::Space) => app.type_text(" "),
                 _ => {
                     if let Some(text) = &event.text {

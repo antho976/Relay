@@ -461,17 +461,30 @@ pub fn tabs_area(c: &Canvas) -> (f32, f32) {
 }
 
 /// A sheet over the bottom of the page, `h` tall (the keyboard and gesture bar added below it):
-/// the veil, the panel and its grip. Returns the panel's top and whether a tap fell outside it.
+/// the veil, the panel and its grip. Pulled down, it follows the finger and closes when let go
+/// past [`crate::ui::SHEET_CLOSE`] of its height or flicked, else springs back. Returns the panel's
+/// top and whether it closes: a tap outside it, or pulled down.
 pub fn sheet(cx: &mut Ctx, h: f32) -> (f32, bool) {
+    sheet_grab(cx, h, f32::INFINITY)
+}
+
+/// [`sheet`], pulled down only by a drag that began within `grab` of its top: for a sheet with a
+/// list that scrolls inside it.
+pub fn sheet_grab(cx: &mut Ctx, h: f32, grab: f32) -> (f32, bool) {
     cx.c.dy = 0.0;
     cx.ui.cover();
     let screen = cx.c.h;
-    cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, screen, 0.0, t::SCRIM.a(0.6));
     let full = h + cx.c.inset_bottom;
-    let top = (screen - full).max(cx.c.inset_top + 24.0);
+    let rest = (screen - full).max(cx.c.inset_top + 24.0);
+    // Its grab bar means it: pulled down, it follows the finger, and closes when let go far
+    // enough down or flicked (`Ui::drag_sheet`).
+    let (pulled, closes) = cx.ui.drag_sheet(rest, screen - rest, grab);
+    let top = rest + pulled;
+    let shown = 1.0 - (pulled / (screen - rest).max(1.0)).clamp(0.0, 1.0);
+    cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, screen, 0.0, t::SCRIM.a(0.6 * shown));
     cx.c.rect(0.0, top, WIDTH, screen - top + 40.0, 18.0, t::S1);
     cx.c.rect(WIDTH / 2.0 - 18.0, top + 8.0, 36.0, 4.0, 2.0, t::S3);
-    let outside = cx.ui.tap.is_some_and(|(_, y)| y < top);
+    let outside = closes || cx.ui.tap.is_some_and(|(_, y)| y < top);
     if outside {
         cx.ui.tap = None;
     }

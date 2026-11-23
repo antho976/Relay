@@ -22,6 +22,7 @@ pub mod glyphs;
 pub mod home;
 pub mod images;
 pub mod kit;
+pub mod known;
 pub mod library;
 pub mod logic;
 pub mod net;

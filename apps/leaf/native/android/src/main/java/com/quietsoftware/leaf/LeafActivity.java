@@ -43,8 +43,7 @@ import java.util.List;
  * - PDF pages are drawn by the platform's {@link PdfRenderer} ({@link #pdfRender});
  * - notices of new chapters come from a periodic job ({@link LeafChaptersJob}), scheduled here, and
  *   posting them needs the person's leave on Android 13 and later ({@link #askNotifications});
- * - while reading, the screen stays on and the volume keys turn pages ({@link #setReading}):
- *   GameActivity never passes volume keys to native code, so they are taken here;
+ * - while reading, the screen stays on ({@link #setReading});
  * - a link opens in the app that takes it ({@link #openUrl}: Webtoon's paid episodes open the
  *   Webtoon app when it is installed);
  * - an app update Rust downloaded and checked is handed to Android's installer
@@ -57,12 +56,6 @@ public class LeafActivity extends GameActivity {
 
     /** A picked book, copied to {@code path} in the inbox; {@code name} is what it was called. */
     private static native void nativeBookPicked(String path, String name);
-
-    /** A volume key pressed while reading: down turns the page down. */
-    private static native void nativeVolume(boolean down);
-
-    /** The volume keys turn pages now (a book or a strip is open, and the setting is on). */
-    private volatile boolean volumePages;
 
     private static final int PICK_BOOKS = 0x4c45;
     /** The largest book copied in. */
@@ -100,9 +93,8 @@ public class LeafActivity extends GameActivity {
         });
     }
 
-    /** A book or a strip is open: the screen stays on; the volume keys turn its pages when asked. */
-    public void setReading(final boolean on, final boolean volumeKeys) {
-        volumePages = volumeKeys;
+    /** A book or a strip is open: the screen stays on. */
+    public void setReading(final boolean on) {
         runOnUiThread(() -> {
             if (on) {
                 getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -110,20 +102,6 @@ public class LeafActivity extends GameActivity {
                 getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             }
         });
-    }
-
-    @Override
-    public boolean dispatchKeyEvent(android.view.KeyEvent e) {
-        int code = e.getKeyCode();
-        if (volumePages && (code == android.view.KeyEvent.KEYCODE_VOLUME_DOWN || code == android.view.KeyEvent.KEYCODE_VOLUME_UP)) {
-            // Each press (and its repeats while held) turns a page; the release is swallowed too,
-            // so the system's volume panel never shows.
-            if (e.getAction() == android.view.KeyEvent.ACTION_DOWN) {
-                nativeVolume(code == android.view.KeyEvent.KEYCODE_VOLUME_DOWN);
-            }
-            return true;
-        }
-        return super.dispatchKeyEvent(e);
     }
 
     // Notices

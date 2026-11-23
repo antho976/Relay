@@ -98,6 +98,12 @@ pub struct Ctx {
     pub search_cache: Mutex<SearchCache>,
     /// Pages near chapters' edges by their pictures, and the ones hidden by hand (`promo.rs`).
     pub promo: Mutex<crate::promo::Seen>,
+    /// Titles shown before they are added (`/v1/preview`): the entries asked, to (when, the detail).
+    pub preview_cache: Mutex<HashMap<String, (i64, Value)>>,
+    /// "Did you mean": a search's words to (when, AniList's title for them, if any).
+    pub suggest_cache: Mutex<HashMap<String, (i64, Option<String>)>>,
+    /// The collections' pictures, `<slug>.webp` (`LEAF_TAGART`).
+    pub tagart: PathBuf,
 }
 
 /// Each source's answers to searches: (normalised query, source) to (when, what it found).
@@ -105,6 +111,12 @@ pub type SearchCache = HashMap<(String, String), (i64, Vec<crate::suwa::Found>)>
 
 /// A source's answer to a search is used again for this long.
 pub const SEARCH_KEEP_MS: i64 = 10 * 60_000;
+/// A preview of a title not added yet is used again for this long.
+pub const PREVIEW_KEEP_MS: i64 = 10 * 60_000;
+/// The most entries one preview tries, in the order the phone sent them.
+const PREVIEW_TRIES: usize = 3;
+/// AniList's answer to "did you mean" is used again for this long.
+pub const SUGGEST_KEEP_MS: i64 = 24 * HOUR;
 /// The most works a search answers with.
 pub const SEARCH_MAX: usize = 20;
 
@@ -237,6 +249,34 @@ pub fn plausible_latest(numbers: &[f64]) -> Option<f64> {
 /// The series as the phone shows it: one copy per chapter number, read when any copy is read.
 /// Chapters come from the series' own source; a whole number it lacks is filled from the linked
 /// copies on other sources (`extras`), preferred sources first, and says where it came from.
+/// A title not added yet as `/v1/series/{id}` answers it: id 0, nothing read, no bell, no
+/// pictures of chapters.
+pub fn preview_of(m: &Manga, prefs: &[String]) -> Value {
+    let w = Work {
+        id: 0,
+        title: m.title.clone(),
+        manga_id: m.id,
+        source: m.source_name.clone(),
+        followed_at: 0,
+        fails: 0,
+        checked_at: 0,
+        compared_at: 0,
+        latest: -1.0,
+        updated_at: 0,
+        note: None,
+        bell: false,
+        shelf: None,
+    };
+    let d = detail_of(&w, m, &[], prefs);
+    let mut v = serde_json::to_value(&d).unwrap_or(Value::Null);
+    if let Some(list) = v["chapters"].as_array_mut() {
+        for c in list {
+            c["thumb"] = Value::Bool(false);
+        }
+    }
+    v
+}
+
 pub fn detail_of(w: &Work, m: &Manga, extras: &[Manga], prefs: &[String]) -> SeriesDetail {
     use std::collections::HashSet;
     let floor = |n: f64| n.floor() as i64;
@@ -497,6 +537,79 @@ impl Ctx {
         out.sort_by_key(|c| std::cmp::Reverse(c.hits.len()));
         out.truncate(SEARCH_MAX);
         Ok(out)
+    }
+
+    /// `GET /v1/preview?manga_id=a,b`: a title not in My space, in the shape `/v1/series/{id}`
+    /// answers (its id 0), so the phone shows its page before anything is added. The entries are
+    /// tried in the order sent until one answers with chapters, each asked as the phone waits
+    /// (`Lane::Fore`, through its source's budget); the answer is kept ten minutes. Nothing is
+    /// added, to My space or to Suwayomi's library. An entry already linked to a work answers that
+    /// work's own detail (its id set), and the phone opens that page instead.
+    pub fn preview_json(&self, manga_ids: &[i64]) -> Result<Value, String> {
+        if manga_ids.is_empty() {
+            return Err("preview what?".into());
+        }
+        let linked = manga_ids.iter().find_map(|id| self.store().work_of_any(*id));
+        if let Some(w) = linked {
+            return self.detail_json(w.id);
+        }
+        let key = manga_ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+        let now = now_ms();
+        let kept = self.preview_cache.lock().unwrap_or_else(|p| p.into_inner()).get(&key).filter(|(at, _)| now - at < PREVIEW_KEEP_MS).map(|(_, v)| v.clone());
+        if let Some(v) = kept {
+            return Ok(v);
+        }
+        let mut last = Err("none of its entries answered".to_string());
+        for &m in manga_ids.iter().take(PREVIEW_TRIES) {
+            match self.refresh(m, None, Lane::Fore) {
+                Ok(manga) if !manga.chapters.is_empty() => {
+                    self.note_source(&manga.source_name, None);
+                    let v = preview_of(&manga, &self.prefs);
+                    let mut cache = self.preview_cache.lock().unwrap_or_else(|p| p.into_inner());
+                    cache.retain(|_, (at, _)| now - *at < PREVIEW_KEEP_MS);
+                    cache.insert(key, (now, v.clone()));
+                    return Ok(v);
+                }
+                Ok(_) => last = Err("no chapters there yet".into()),
+                Err(e) => {
+                    log(&format!("preview {m}: {e}"));
+                    last = Err(e);
+                }
+            }
+        }
+        last
+    }
+
+    /// `GET /v1/search/suggest?q=`: a title AniList knows that the words were probably meant to
+    /// spell ("aweking contract": The Awakening Contract), for a search that found nothing. AniList's
+    /// own search takes no typos, so each of the two longest words is searched alone and the titles
+    /// (and their other names) are scored against all the words ([`crate::anilist::closest`]). At
+    /// most two requests, as the phone waits, through AniList's budget; kept a day.
+    pub fn suggest(&self, query: &str) -> Result<Option<String>, String> {
+        let key = leaf_proto::norm_title(query);
+        if key.chars().count() < 3 {
+            return Ok(None);
+        }
+        let now = now_ms();
+        let kept = self.suggest_cache.lock().unwrap_or_else(|p| p.into_inner()).get(&key).filter(|(at, _)| now - at < SUGGEST_KEEP_MS).map(|(_, v)| v.clone());
+        if let Some(v) = kept {
+            return Ok(v);
+        }
+        let mut words: Vec<&str> = key.split(' ').filter(|w| w.chars().count() >= 4).collect();
+        words.sort_by_key(|w| std::cmp::Reverse(w.chars().count()));
+        words.dedup();
+        let mut found = None;
+        for w in words.into_iter().take(2) {
+            let names = self.ask("AniList", Lane::Fore, || crate::anilist::names_for(w))?;
+            if let Some(t) = crate::anilist::closest(&names, query) {
+                found = Some(t);
+                break;
+            }
+        }
+        let mut cache = self.suggest_cache.lock().unwrap_or_else(|p| p.into_inner());
+        cache.retain(|_, (at, _)| now - *at < SUGGEST_KEEP_MS);
+        cache.insert(key, (now, found.clone()));
+        Ok(found)
     }
 
     /// Follows a work found by search: each source's copy is read, the best one pinned.

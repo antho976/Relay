@@ -1,5 +1,8 @@
 //! My space (design 42, page 14): what you read, in four tabs.
 //!
+//! A series is in My space once a chapter of it is read, its bell is on or a chapter is downloaded
+//! ([`logic::in_space`]): one added and left alone shows nowhere here (the owner, 2026-11-23).
+//!
 //! - **Updates**: chapters that came for series in My space over the last two weeks, by day
 //!   (Today, Yesterday, then dates), newest first: a small cover, the series, "Chapter 132" and the
 //!   time; unread in full ink, read dimmed. A tap opens the reader at that chapter. Belled only
@@ -151,7 +154,11 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             app.ask(Job::Updates(UPDATE_DAYS));
         }
     }
-    let updates: Vec<Update> = app.updates.data.clone().unwrap_or_default();
+    // Only what you have done something with: read, followed or downloaded (`logic::in_space`).
+    let downloaded = app.saver.series_ids();
+    let series: Vec<Series> = app.library.data.iter().flatten().filter(|s| logic::in_space(s, downloaded.contains(&s.id))).cloned().collect();
+    let mine: std::collections::HashSet<i64> = series.iter().map(|s| s.id).collect();
+    let updates: Vec<Update> = app.updates.data.iter().flatten().filter(|u| mine.contains(&u.series)).cloned().collect();
     let updates_state = (app.updates.loading && app.updates.data.is_none(), app.updates.error.clone().filter(|_| app.updates.data.is_none()));
     let belled_only = !app.updates_all;
     let query = app.st.space.query.clone();
@@ -159,7 +166,6 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let top_h = if filtered { TOP + FIELD } else { TOP };
     let today = shelf::day_of(now_ms_());
     let offset = shelf::zone_offset();
-    let series: Vec<Series> = app.library.data.clone().unwrap_or_default();
     let books: Vec<Book> = app.shelf.books.clone();
     // Downloads need every series' chapters; Recent and Following count new ones with them.
     for s in &series {
@@ -333,7 +339,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 y += h;
             } else if rows.is_empty() && !loading {
                 y += 40.0;
-                let (h, _) = kit::notice(&mut cx, x0 + 16.0, y, w - 32.0, "Nothing here yet", Some("Books you add and series you add from Search show here, last read first."), None);
+                let (h, _) = kit::notice(&mut cx, x0 + 16.0, y, w - 32.0, "Nothing here yet", Some("Books you add, and series you read, follow or download, show here, last read first."), None);
                 y += h + 20.0;
                 if kit::plain(&mut cx, x0 + 40.0, y, w - 80.0, 46.0, "Find a series", Some("search")) {
                     to_search = true;
@@ -465,7 +471,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     y,
                     w - 32.0,
                     "No series yet",
-                    Some("Add a series from Search, then turn on its bell to hear when new chapters come."),
+                    Some("Open a series from Search and tap Follow to hear when new chapters come."),
                     None,
                 );
                 y += h + 20.0;

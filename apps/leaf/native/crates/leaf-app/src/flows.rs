@@ -481,7 +481,7 @@ fn paid_episodes_ahead_open_their_link_from_a_row_at_the_newest_end() {
 }
 
 #[test]
-fn a_pick_opens_its_sheet_and_the_sheet_takes_every_tap() {
+fn a_picks_sheet_takes_every_tap() {
     let (mut app, mut t, dir) = app("picks");
     nowhere(&mut app);
     app.recs.data = Some(picks(6, None));
@@ -490,8 +490,8 @@ fn a_pick_opens_its_sheet_and_the_sheet_takes_every_tap() {
     step(&mut app, &mut t);
     // The first pick, under the spotlight and its heading.
     let grid_top = app.canvas.inset_top + 56.0 + 4.0 + 412.0 + 14.0 + 32.0 + 22.5 + 14.0;
-    tap(&mut app, &mut t, 60.0, grid_top + 60.0);
-    assert_eq!(app.st.recs.sheet.as_ref().map(|s| s.rec.anilist_id), Some(101), "the sheet, not a page");
+    hold(&mut app, &mut t, 60.0, grid_top + 60.0);
+    assert_eq!(app.st.recs.sheet.as_ref().map(|s| s.rec.anilist_id), Some(101), "held: the sheet, not a page");
     assert_eq!(app.route(), &Route::Home);
     // A tap above the sheet, on the spotlight, only closes it.
     tap(&mut app, &mut t, 200.0, 200.0);
@@ -499,7 +499,7 @@ fn a_pick_opens_its_sheet_and_the_sheet_takes_every_tap() {
     assert_eq!((app.route(), app.nav.len()), (&Route::Home, 1), "the spotlight under it did not open");
     step(&mut app, &mut t);
     // Again, then Not interested, the row above the last (Fewer like Action): gone from the picks.
-    tap(&mut app, &mut t, 60.0, grid_top + 60.0);
+    hold(&mut app, &mut t, 60.0, grid_top + 60.0);
     assert!(app.st.recs.sheet.is_some());
     let h = app.canvas.h;
     tap(&mut app, &mut t, 120.0, h - 8.0 - 52.0 - 26.0);
@@ -536,7 +536,7 @@ fn an_update_sheet_holds_the_page_and_later_puts_that_build_off() {
 }
 
 #[test]
-fn the_reader_turns_pages_by_thirds_and_auto_scrolls_until_tapped() {
+fn a_tap_in_the_reader_only_shows_the_overlay_and_auto_scrolls_until_tapped() {
     let (mut app, mut t, dir) = app("reader");
     let d = detail(1, 3);
     for c in &d.chapters {
@@ -549,25 +549,19 @@ fn the_reader_turns_pages_by_thirds_and_auto_scrolls_until_tapped() {
     step(&mut app, &mut t);
     let h = app.canvas.h;
     let at = |app: &App| app.reader.as_ref().map(|r| r.pos).unwrap();
-    // The bottom third: most of a screen down, gliding there.
-    let before = at(&app);
-    tap(&mut app, &mut t, 200.0, h * 0.85);
-    for _ in 0..60 {
-        step(&mut app, &mut t);
+    // The top and bottom thirds turn no page (the owner, 2026-11-23): a tap there shows the
+    // overlay, and the next one puts it away.
+    for y in [h * 0.1, h * 0.85] {
+        let before = at(&app);
+        tap(&mut app, &mut t, 200.0, y);
+        for _ in 0..30 {
+            step(&mut app, &mut t);
+        }
+        assert_eq!(at(&app), before, "the page stays put");
+        assert!(app.reader.as_ref().unwrap().overlay, "the overlay shows");
+        tap(&mut app, &mut t, 200.0, h * 0.5);
+        assert!(!app.reader.as_ref().unwrap().overlay, "and goes away");
     }
-    assert_ne!(at(&app), before, "the page turned");
-    assert!(!app.reader.as_ref().unwrap().overlay, "and no overlay");
-    // A volume key the same way, then back up with the top third.
-    let mid = at(&app);
-    assert!(app.volume(true));
-    for _ in 0..60 {
-        step(&mut app, &mut t);
-    }
-    tap(&mut app, &mut t, 200.0, h * 0.1);
-    for _ in 0..60 {
-        step(&mut app, &mut t);
-    }
-    assert_eq!(at(&app).item, mid.item, "down and up again");
     // The middle shows the overlay; its play key starts auto-scroll and puts the overlay away.
     tap(&mut app, &mut t, 200.0, h * 0.5);
     assert!(app.reader.as_ref().unwrap().overlay);
@@ -614,6 +608,19 @@ mod fake {
         pub details: HashMap<i64, leaf_proto::SeriesDetail>,
         /// Chapters put in the server's download line (`POST /v1/downloads`): downloaded at once.
         pub queued: Vec<i64>,
+        /// What a search finds (each broad source, "A" and "B", answers the same).
+        pub found: Vec<leaf_proto::Candidate>,
+        /// "Did you mean".
+        pub meant: Option<String>,
+        /// What `/v1/preview` answers (id 0, as the server sends one).
+        pub preview: Option<leaf_proto::SeriesDetail>,
+        /// The series a follow makes (added to `details` too), and the follows asked.
+        pub follow_as: Option<leaf_proto::SeriesDetail>,
+        pub follows: Vec<leaf_proto::Follow>,
+        /// Bells set: (series, on).
+        pub bells: Vec<(i64, bool)>,
+        /// Collections' pictures, by slug (the rest are a 404).
+        pub tagart: HashSet<String>,
     }
 
     pub struct Fake {
@@ -713,6 +720,39 @@ mod fake {
                     }
                     (200, "application/json", format!("{{\"ok\":true,\"count\":{}}}", ids.len()).into_bytes())
                 }
+                ("GET", ["v1", "library"]) => {
+                    let list: Vec<&leaf_proto::Series> = st.details.values().map(|d| &d.series).collect();
+                    (200, "application/json", serde_json::to_vec(&list).unwrap())
+                }
+                ("GET", ["v1", "search", q]) if q.starts_with("sources") => (200, "application/json", br#"{"broad":["A","B"],"all":3}"#.to_vec()),
+                ("GET", ["v1", "search", q]) if q.starts_with("suggest") => (200, "application/json", serde_json::to_vec(&serde_json::json!({ "title": st.meant })).unwrap()),
+                ("GET", ["v1", q]) if q.starts_with("search?") => (200, "application/json", serde_json::to_vec(&st.found).unwrap()),
+                ("GET", ["v1", q]) if q.starts_with("preview?") => match &st.preview {
+                    Some(d) => (200, "application/json", serde_json::to_vec(d).unwrap()),
+                    None => (502, "application/json", br#"{"error":"no entry answered"}"#.to_vec()),
+                },
+                ("POST", ["v1", "follow"]) => {
+                    if let Ok(f) = serde_json::from_slice::<leaf_proto::Follow>(&body) {
+                        st.follows.push(f);
+                    }
+                    match st.follow_as.clone() {
+                        Some(d) => {
+                            st.details.insert(d.series.id, d.clone());
+                            (200, "application/json", serde_json::to_vec(&d.series).unwrap())
+                        }
+                        None => (502, "application/json", br#"{"error":"no source has chapters of it"}"#.to_vec()),
+                    }
+                }
+                ("POST", ["v1", "series", id, "bell"]) => {
+                    let on = serde_json::from_slice::<leaf_proto::Bell>(&body).map(|b| b.on).unwrap_or(false);
+                    let id: i64 = id.parse().unwrap_or(0);
+                    st.bells.push((id, on));
+                    if let Some(d) = st.details.get_mut(&id) {
+                        d.series.bell = on;
+                    }
+                    (200, "application/json", b"{\"ok\":true}".to_vec())
+                }
+                ("GET", ["v1", "recs", "tagart", slug]) if st.tagart.contains(*slug) => (200, "image/png", png.to_vec()),
                 ("POST", ["v1", "chapters", id, "progress"]) => {
                     if let Ok(p) = serde_json::from_slice::<leaf_proto::Progress>(&body) {
                         st.progress.push((id.parse().unwrap_or(0), p));
@@ -838,7 +878,7 @@ fn the_reader_never_reports_a_chapter_it_has_left() {
 }
 
 #[test]
-fn a_chapter_key_lands_on_the_chapter_heading_even_mid_page_turn() {
+fn a_chapter_key_lands_on_the_chapter_heading() {
     let (mut app, mut t, dir) = app("reader-jump");
     let d = comic(1, &[5, 5]);
     measure(&mut app, &d);
@@ -846,8 +886,6 @@ fn a_chapter_key_lands_on_the_chapter_heading_even_mid_page_turn() {
     step(&mut app, &mut t);
     let h = app.canvas.h;
     tap(&mut app, &mut t, 200.0, h * 0.5);
-    // A volume key turns the page as the next key is tapped.
-    assert!(app.volume(true));
     tap(&mut app, &mut t, WIDTH - crate::theme::PAD - 20.0, h - 112.0 + 10.0 + 22.0);
     for _ in 0..40 {
         step(&mut app, &mut t);
@@ -1555,5 +1593,281 @@ fn the_confirm_deletes_and_the_select_bars_hold_their_taps() {
     tap(&mut app, &mut t, 200.0, bar_top + 4.0);
     assert_eq!(app.route(), &Route::Saved(29));
     assert!(app.st.saved.select.as_ref().is_some_and(|s| s.is_empty()));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// Search, previews and picks
+
+/// An app on a fake server that writes (not a screenshot), with Search open and its field focused.
+fn searching(name: &str, fake: &fake::Fake) -> (App, u64, PathBuf) {
+    let (mut app, mut t, dir) = app(name);
+    app.shot = false;
+    app.server = Some(fake.server());
+    app.reset_to(Route::Search);
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    assert!(app.focus.is("search"), "the field takes the keyboard");
+    (app, t, dir)
+}
+
+/// The keyboard sends the field's whole text (Android's input state), then the typing pauses.
+fn type_words(app: &mut App, t: &mut u64, words: &str) {
+    app.set_text(words);
+    step(app, t);
+}
+
+#[test]
+fn the_field_still_takes_typing_after_nothing_was_found() {
+    let fake = fake::Fake::start();
+    fake.state.lock().unwrap().meant = Some("The Awakening Contract".into());
+    let (mut app, mut t, dir) = searching("search-type", &fake);
+    type_words(&mut app, &mut t, "aweking contract");
+    assert!(until(&mut app, &mut t, 5.0, |a| matches!(&a.st.search.results, Some(Ok(l)) if l.is_empty()) && !a.st.search.more), "nothing found");
+    assert!(until(&mut app, &mut t, 5.0, |a| a.st.search.meant().is_some()), "AniList was asked what it meant");
+    step(&mut app, &mut t);
+    // The empty state and its keys are up: typing goes on reaching the field.
+    for words in ["aweking contrac", "aweking contra", "awakening contra"] {
+        type_words(&mut app, &mut t, words);
+        assert!(app.focus.is("search"), "the field kept the keyboard");
+        assert_eq!(app.st.search.query, words);
+    }
+    // Enter searches and lets the keyboard go; text the keyboard still sends after that (some
+    // keep it up) reaches the field again, rather than nowhere.
+    app.done_typing();
+    step(&mut app, &mut t);
+    type_words(&mut app, &mut t, "awakening contract");
+    assert!(app.focus.is("search"), "focused again by what was typed");
+    assert_eq!(app.st.search.query, "awakening contract");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn did_you_mean_searches_what_it_offers() {
+    let fake = fake::Fake::start();
+    fake.state.lock().unwrap().meant = Some("The Awakening Contract".into());
+    let (mut app, mut t, dir) = searching("search-meant", &fake);
+    type_words(&mut app, &mut t, "aweking contract");
+    assert!(until(&mut app, &mut t, 5.0, |a| a.st.search.meant() == Some("The Awakening Contract")));
+    let asked = fake.hits("/v1/search/suggest?q=aweking+contract");
+    assert_eq!(asked, 1, "AniList asked once");
+    // The line sits under the notice: find it by tapping down the page until the search changes.
+    let mut y = 120.0;
+    while app.st.search.asked.as_deref() == Some("aweking contract") && y < 500.0 {
+        tap(&mut app, &mut t, WIDTH / 2.0, y);
+        y += 8.0;
+    }
+    assert_eq!(app.st.search.asked.as_deref(), Some("The Awakening Contract"), "the title it offered, searched");
+    assert_eq!(app.st.search.query, "The Awakening Contract", "and in the field");
+    assert_eq!(app.route(), &Route::Search, "nothing else under it took the tap");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A title the fake finds: entry 77 previews with chapters 1–5 (ids 7701…); following it makes
+/// series 9, whose chapters (ids 9001…) are another entry's.
+fn awakening(fake: &fake::Fake) {
+    let mut st = fake.state.lock().unwrap();
+    st.found = vec![leaf_proto::Candidate { title: "The Awakening Contract".into(), cover_of: Some(77), hits: vec![leaf_proto::Hit { manga_id: 77, source: "A".into() }, leaf_proto::Hit { manga_id: 78, source: "B".into() }], followed: None }];
+    let mut d = comic(0, &[20; 5]);
+    d.series.title = "The Awakening Contract".into();
+    for c in &mut d.chapters {
+        c.id += 6700;
+    }
+    d.series.read_upto = None;
+    d.series.last_read_at = 0;
+    st.preview = Some(d.clone());
+    let mut f = d;
+    f.series.id = 9;
+    for c in &mut f.chapters {
+        c.id += 9000 - 7700;
+    }
+    st.follow_as = Some(f);
+}
+
+#[test]
+fn a_search_result_opens_a_preview_that_adds_nothing_until_a_download() {
+    let fake = fake::Fake::start();
+    awakening(&fake);
+    let (mut app, mut t, dir) = searching("preview-get", &fake);
+    let before = app.library.data.as_ref().map(|l| l.len());
+    type_words(&mut app, &mut t, "awakening contract");
+    assert!(until(&mut app, &mut t, 5.0, |a| matches!(&a.st.search.results, Some(Ok(l)) if l.len() == 1) && !a.st.search.more));
+    // The row opens the title's page: a preview, under its first entry.
+    tap(&mut app, &mut t, 200.0, 60.0 + 8.0 + 26.0 + 54.0);
+    assert_eq!(app.route(), &Route::Series(-77));
+    assert!(until(&mut app, &mut t, 5.0, |a| a.series.get(&-77).is_some_and(|l| l.data.as_ref().is_some_and(|d| d.chapters.len() == 5))));
+    assert!(fake.hits("/v1/preview?manga_id=77,78") >= 1, "its entries, in order");
+    assert!(fake.state.lock().unwrap().follows.is_empty(), "opening it added nothing");
+    assert_eq!(app.library.data.as_ref().map(|l| l.len()), before);
+    // The download key beside Follow, then "The next 5 chapters".
+    tap(&mut app, &mut t, WIDTH - 6.0 - 88.0 + 22.0, 28.0);
+    assert!(app.st.series.download, "the download choices");
+    let top = app.canvas.h - (76.0 + 52.0 * 4.0 + 12.0);
+    tap(&mut app, &mut t, 200.0, top + 76.0 + 52.0 * 2.0 + 26.0);
+    // Added now, and its page is the series' own; the chapters go by number into the line.
+    assert!(until(&mut app, &mut t, 5.0, |a| a.route() == &Route::Series(9)), "the page became the series': {:?}", app.route());
+    let f = fake.state.lock().unwrap().follows.clone();
+    assert_eq!(f.iter().map(|f| f.manga_ids.clone()).collect::<Vec<_>>(), vec![vec![77, 78]], "added once, with its entries");
+    assert!(until(&mut app, &mut t, 5.0, |a| (9001..=9005).all(|c| a.saver.state(c) != crate::offline::Kept::None)), "the series' own chapters are in the line");
+    assert!(app.saver.series_ids().contains(&9));
+    assert!(!app.previews.contains_key(&-77));
+    let _ = app.saver.delete(&(9001..=9005).collect::<Vec<_>>());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_preview_followed_is_added_with_its_bell_on() {
+    let fake = fake::Fake::start();
+    awakening(&fake);
+    let (mut app, mut t, dir) = searching("preview-follow", &fake);
+    app.open_preview("The Awakening Contract", &fake.state.lock().unwrap().found[0].hits.clone(), None);
+    assert!(until(&mut app, &mut t, 5.0, |a| a.series.get(&-77).is_some_and(|l| l.data.is_some())));
+    // Follow: the pill left of the download key.
+    let ft = crate::draw::Text::new(13.5, crate::theme::INK).medium();
+    let fw = app.canvas.measure("Follow", ft) + 44.0;
+    tap(&mut app, &mut t, WIDTH - 6.0 - 88.0 - 4.0 - fw / 2.0, 28.0);
+    assert!(until(&mut app, &mut t, 5.0, |a| a.route() == &Route::Series(9)));
+    assert!(until(&mut app, &mut t, 5.0, |_| fake.state.lock().unwrap().bells == vec![(9, true)]), "its bell on: {:?}", fake.state.lock().unwrap().bells);
+    let s = app.library.data.as_ref().and_then(|l| l.iter().find(|s| s.id == 9).cloned()).expect("in the library");
+    assert!(s.bell && crate::logic::in_space(&s, false), "in My space by its bell");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_pick_tapped_opens_its_page_and_held_opens_its_sheet() {
+    let (mut app, mut t, dir) = app("pick-tap");
+    nowhere(&mut app);
+    app.recs.data = Some(picks(6, None));
+    app.reset_to(Route::Home);
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    let grid_top = app.canvas.inset_top + 56.0 + 4.0 + 412.0 + 14.0 + 32.0 + 22.5 + 14.0;
+    tap(&mut app, &mut t, 60.0, grid_top + 60.0);
+    assert_eq!(app.route(), &Route::Series(-501), "its page, a preview of its first entry");
+    assert!(app.st.recs.sheet.is_none());
+    assert_eq!(app.previews.get(&-501).and_then(|p| p.anilist), Some(101));
+    app.pop();
+    step(&mut app, &mut t);
+    hold(&mut app, &mut t, 60.0, grid_top + 60.0);
+    assert_eq!(app.st.recs.sheet.as_ref().map(|s| s.rec.anilist_id), Some(101), "held: the sheet");
+    assert_eq!(app.route(), &Route::Home);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A finger put down at (x, y), moved `dy` in `steps` moves `ms` apart, then lifted.
+fn pull(app: &mut App, t: &mut u64, x: f32, y: f32, dy: f32, steps: u64, ms: u64) {
+    let u = app.canvas.u;
+    let x0 = ((app.canvas.px_w - WIDTH * u) * 0.5).max(0.0);
+    let start = *t;
+    app.touch(Touch { id: 1, phase: Phase::Down, x: x0 + x * u, y: y * u, t_ns: start });
+    step(app, t);
+    for i in 1..=steps {
+        let f = i as f32 / steps as f32;
+        app.touch(Touch { id: 1, phase: Phase::Move, x: x0 + x * u, y: (y + dy * f) * u, t_ns: start + i * ms * 1_000_000 });
+        step(app, t);
+    }
+    // A slow pull rests before it lifts (no fling); a flick lifts at once.
+    let lift = start + steps * ms * 1_000_000 + if ms >= 50 { 200_000_000 } else { 5_000_000 };
+    app.touch(Touch { id: 1, phase: Phase::Up, x: x0 + x * u, y: (y + dy) * u, t_ns: lift });
+    step(app, t);
+}
+
+#[test]
+fn a_sheet_follows_its_grip_down_and_closes_or_springs_back() {
+    let (mut app, mut t, dir) = app_with("sheet-drag", 12, 2340.0);
+    nowhere(&mut app);
+    app.recs.data = Some(picks(9, None));
+    app.reset_to(Route::Home);
+    step(&mut app, &mut t);
+    let open = |app: &mut App, t: &mut u64| {
+        let r = app.recs.data.as_ref().unwrap().top[0].clone();
+        crate::recs::hit(app, &r, None, true);
+        step(app, t);
+        step(app, t);
+    };
+    open(&mut app, &mut t);
+    let h = app.canvas.h;
+    let scrolled = app.scroll().off;
+    let rail = app.st.home.rail.off;
+    // A short pull from the sheet's middle: it follows, then springs back and stays open.
+    pull(&mut app, &mut t, 200.0, h - 150.0, 60.0, 6, 60);
+    assert!(app.st.recs.sheet.is_some(), "a short pull springs back");
+    for _ in 0..60 {
+        step(&mut app, &mut t);
+    }
+    assert!(app.st.recs.sheet.is_some());
+    // Mid-pull it is drawn lower, with the finger.
+    let u = app.canvas.u;
+    let x0 = ((app.canvas.px_w - WIDTH * u) * 0.5).max(0.0);
+    app.touch(Touch { id: 1, phase: Phase::Down, x: x0 + 200.0 * u, y: (h - 150.0) * u, t_ns: t });
+    step(&mut app, &mut t);
+    app.touch(Touch { id: 1, phase: Phase::Move, x: x0 + 200.0 * u, y: (h - 90.0) * u, t_ns: t + 100_000_000 });
+    step(&mut app, &mut t);
+    app.touch(Touch { id: 1, phase: Phase::Cancel, x: 0.0, y: 0.0, t_ns: t + 200_000_000 });
+    for _ in 0..60 {
+        step(&mut app, &mut t);
+    }
+    assert!(app.st.recs.sheet.is_some());
+    // Past a third of its height, let go slowly: it closes.
+    pull(&mut app, &mut t, 200.0, h - 300.0, 280.0, 8, 60);
+    assert!(app.st.recs.sheet.is_none(), "pulled far enough, it closes");
+    assert_eq!(app.route(), &Route::Home, "and nothing under it opened");
+    assert_eq!(app.scroll().off, scrolled, "the page under it never moved");
+    assert_eq!(app.st.home.rail.off, rail);
+    // A quick flick down a little way closes it too.
+    open(&mut app, &mut t);
+    pull(&mut app, &mut t, 200.0, h - 150.0, 50.0, 3, 8);
+    assert!(app.st.recs.sheet.is_none(), "flicked, it closes");
+    assert_eq!(app.scroll().off, scrolled);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_id_given_to_another_series_lets_go_of_what_was_kept_for_the_old_one() {
+    let fake = fake::Fake::start();
+    let (mut app, mut t, dir) = app("reused-id");
+    app.shot = false;
+    app.server = Some(fake.server());
+    // The phone knew 172 as Invincible Romance: its cover, its place.
+    let mut old = detail(172, 3);
+    old.series.title = "Invincible Romance".into();
+    app.known.see(&old.series, true);
+    let cover = crate::images::CoverOf::Series(172).file(&app.data);
+    std::fs::create_dir_all(cover.parent().unwrap()).unwrap();
+    std::fs::write(&cover, png()).unwrap();
+    app.places.put(crate::places::Place { series: 172, chapter: 172_002, number: 2.0, page: 4, head: false, off: 0.0, at_ms: 1 });
+    app.oldest_first.insert(172);
+    // The server now names 172 The Awakening Contract.
+    let mut new = detail(172, 3);
+    new.series.title = "The Awakening Contract".into();
+    new.series.added_at += 99;
+    fake.state.lock().unwrap().details.insert(172, new);
+    app.library.data = None;
+    app.ask(crate::net::Job::Library);
+    assert!(until(&mut app, &mut t, 5.0, |a| a.library.live));
+    assert!(!cover.exists(), "the old cover is gone");
+    assert!(app.places.get(172).is_none(), "and its place");
+    assert!(!app.oldest_first.contains(&172));
+    // Told once: the new one's own cover, kept from now on, stays.
+    std::fs::write(&cover, png()).unwrap();
+    app.ask(crate::net::Job::Library);
+    step(&mut app, &mut t);
+    assert!(until(&mut app, &mut t, 5.0, |a| !a.library.loading));
+    assert!(cover.exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn home_shows_no_binge_and_no_because_rail_of_one() {
+    let (mut app, mut t, dir) = app("home-rails");
+    nowhere(&mut app);
+    let mut r = picks(3, None);
+    let one = r.top[0].clone();
+    r.because = vec![leaf_proto::Because { series: 1, title: "Series 1".into(), recs: vec![one.clone()] }, leaf_proto::Because { series: 2, title: "Series 2".into(), recs: r.top.clone() }];
+    r.binge = Some(one);
+    app.recs.data = Some(r);
+    app.reset_to(Route::Home);
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    assert_eq!(app.st.home.because.len(), 1, "only the rail of two or more");
     let _ = std::fs::remove_dir_all(dir);
 }

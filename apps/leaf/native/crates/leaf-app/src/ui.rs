@@ -5,6 +5,10 @@
 const SLOP: f32 = 8.0;
 /// A list coasting faster than this (units per second) is stopped by a touch, not tapped through.
 const CATCH: f32 = 40.0;
+/// A sheet let go after being pulled down past this share of its height closes.
+pub const SHEET_CLOSE: f32 = 0.3;
+/// So does one flicked down faster than this (units per second).
+pub const SHEET_FLICK: f32 = 900.0;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Phase {
@@ -71,6 +75,13 @@ pub struct Ui {
     /// page last frame: then only the dialog gets it back, through [`Ui::cover`]).
     held: Option<(f32, f32)>,
     held_for_cover: bool,
+    /// The sheet over the page, pulled down this far by a finger (units), springing back to 0
+    /// when let go short of closing ([`Ui::drag_sheet`]).
+    sheet_off: f32,
+    /// A sheet drew this frame: a pull belongs to it until none is drawn.
+    sheet_seen: bool,
+    /// The time this frame stands for, in seconds (set by the app before drawing).
+    pub dt: f32,
 }
 
 impl Ui {
@@ -194,8 +205,45 @@ impl Ui {
         self.caught.set(true);
     }
 
+    /// A sheet resting with its top at `rest_top` (screen units), `height` tall: a drag down that
+    /// began on it pulls it down with the finger; let go past [`SHEET_CLOSE`] of its height, or
+    /// flicked down, it closes (true); else it springs back. Returns how far down it is now and
+    /// whether it closes. A drag that began on it is the sheet's alone: the page under it is held
+    /// still ([`Ui::cover`]), and nothing sideways under it moves either ([`HScroll::update`]).
+    /// Only a drag that began within `grab` of its top pulls it (a sheet whose list scrolls
+    /// inside it is pulled by its head).
+    pub fn drag_sheet(&mut self, rest_top: f32, height: f32, grab: f32) -> (f32, bool) {
+        self.sheet_seen = true;
+        let mine = !self.horizontal && self.drag_from.is_some_and(|(_, y)| y >= rest_top && y < rest_top + grab);
+        if mine {
+            self.sheet_off = (self.sheet_off + self.drag_dy).max(0.0);
+            self.drag_dy = 0.0;
+            if let Some(v) = self.fling {
+                let pulled = self.sheet_off;
+                if pulled > height * SHEET_CLOSE || (v > SHEET_FLICK && pulled > 0.0) {
+                    self.sheet_off = 0.0;
+                    return (pulled, true);
+                }
+            }
+        } else if self.sheet_off > 0.0 {
+            self.sheet_off *= (-self.dt.max(0.0) * 16.0).exp();
+            if self.sheet_off < 0.5 {
+                self.sheet_off = 0.0;
+            }
+        }
+        (self.sheet_off, false)
+    }
+
+    /// A sheet is still springing back: frames keep coming.
+    pub fn sheet_moving(&self) -> bool {
+        self.sheet_off > 0.0
+    }
+
     /// Forget one-frame events. Call after the screen has drawn.
     pub fn end_frame(&mut self) {
+        if !std::mem::take(&mut self.sheet_seen) {
+            self.sheet_off = 0.0;
+        }
         self.tap = None;
         self.landed = None;
         self.drag_dy = 0.0;
@@ -299,7 +347,8 @@ impl HScroll {
     /// Follow a sideways drag that began in `area` (screen units), then coast. True while moving.
     pub fn update(&mut self, ui: &Ui, area: [f32; 4], dt: f32) -> bool {
         let [x, y, w, h] = area;
-        let mine = ui.swiping_in(x, y, w, h);
+        // Under a sheet or a menu nothing moves sideways: the drag is the sheet's.
+        let mine = !ui.covered_last && ui.swiping_in(x, y, w, h);
         if ui.catch(area, self.vel.abs() > CATCH) {
             self.vel = 0.0;
         }

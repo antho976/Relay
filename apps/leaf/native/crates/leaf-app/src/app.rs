@@ -47,9 +47,8 @@ pub trait Host: Send + Sync {
     }
     /// Ask to post notifications (Android 13 and later), for a bell just turned on.
     fn ask_notifications(&self) {}
-    /// A book or a strip is on screen (or no longer): keep the screen on, and let the volume keys
-    /// turn pages when `volume_keys`.
-    fn reading(&self, _on: bool, _volume_keys: bool) {}
+    /// A book or a strip is on screen (or no longer): keep the screen on.
+    fn reading(&self, _on: bool) {}
     /// Open a web address in the app that takes it (Android: the Webtoon app when it is
     /// installed, else the browser). False when nothing could.
     fn open_url(&self, url: &str) -> bool {
@@ -138,6 +137,34 @@ pub enum Route {
     Picks(String),
 }
 
+/// A title not added yet, shown on its own page under its preview id (`-manga_id` of its first
+/// entry; [`App::open_preview`]): what adds it, and what to ask the server.
+#[derive(Clone, Debug)]
+pub struct Preview {
+    pub title: String,
+    /// Its entries on your sources, best first (a search result's or a pick's).
+    pub hits: Vec<leaf_proto::Hit>,
+    /// A pick's AniList id: added, it leaves the picks.
+    pub anilist: Option<i64>,
+}
+
+/// What adding a previewed title goes on to do once it is in ([`App::adopt`]): reading a chapter,
+/// following and downloading are what add one (the owner, 2026-11-23).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Then {
+    /// Its bell on.
+    Follow,
+    /// Open the chapter with this number, at this page.
+    Read(f64, u32),
+    /// Download the chapters with these numbers to this phone.
+    Download(Vec<f64>),
+}
+
+/// The id a preview is shown under.
+pub fn preview_id(hits: &[leaf_proto::Hit]) -> Option<i64> {
+    hits.first().map(|h| -h.manga_id.abs()).filter(|id| *id < 0)
+}
+
 /// Something the server is asked for: what it last said, and whether it is being asked again.
 #[derive(Debug)]
 pub struct Loaded<T> {
@@ -212,10 +239,6 @@ struct Config {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct ReadPrefs {
-    /// A tap in the top or bottom third of a page turns it (the middle shows the controls).
-    pub tap_zones: bool,
-    /// The volume keys turn pages while reading (Android).
-    pub volume_keys: bool,
     /// Blank white or black runs at a comic page's top and bottom are cut short.
     pub trim_gutters: bool,
     /// The dimmer: a black veil over the page this opaque, 0 when off.
@@ -228,14 +251,12 @@ pub struct ReadPrefs {
 
 impl Default for ReadPrefs {
     fn default() -> ReadPrefs {
-        ReadPrefs { tap_zones: true, volume_keys: true, trim_gutters: true, dim: 0.0, speeds: Default::default(), skip_promo: true }
+        ReadPrefs { trim_gutters: true, dim: 0.0, speeds: Default::default(), skip_promo: true }
     }
 }
 
 /// The dimmer goes no darker than this.
 pub const DIM_MAX: f32 = 0.85;
-/// A tap in a third, a volume key: the page moves this much of the screen.
-pub const PAGE_TURN: f32 = 0.85;
 
 /// The last backup exported: its file name, and when the server made it (ms; 0 if unknown).
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
@@ -263,6 +284,8 @@ pub struct App {
     pub reader: Option<crate::reader::Reader>,
     /// The exact place in each series, kept on the phone (`places.json`).
     pub places: crate::places::Places,
+    /// Which series each id named ([`crate::known`]).
+    pub known: crate::known::Known,
     /// The books on the phone.
     pub shelf: crate::shelf::Shelf,
     pub book: Option<crate::book::BookReader>,
@@ -310,16 +333,21 @@ pub struct App {
     recs_asked_ms: i64,
     /// "Readers also like", per series.
     pub also: HashMap<i64, Loaded<Vec<Rec>>>,
-    /// A recommendation being added (its AniList id), and whether its first chapter opens then.
-    pub rec_follow: Option<(i64, bool)>,
-    /// A series just added to open at its first chapter once its chapters come.
-    pub open_start: Option<i64>,
+    /// Titles not added yet, by preview id ([`Preview`]).
+    pub previews: HashMap<i64, Preview>,
+    /// A preview being added (its id), and what follows once it is in.
+    pub adopting: Option<(i64, Then)>,
+    /// A series just added, and what to do once its chapters come.
+    pub pending: Option<(i64, Then)>,
     pub update_checked_ms: i64,
     pub update_later: Option<(u32, i64)>,
     /// A short message at the bottom, until this time.
     toast: Option<(String, u64)>,
     /// A field just let go of its keyboard with Done: its page acts on it (Search searches).
     pub typed_done: Option<&'static str>,
+    /// The field that last let go of its keyboard with Done, on the page it was on: text the
+    /// keyboard still sends there goes back to it ([`App::set_text`]).
+    let_go: Option<(&'static str, Route)>,
     /// The soft keyboard covers the bottom of the window (its height is in the bottom inset).
     pub keyboard_up: bool,
     /// Screenshots: nothing is written to the server (no progress reported).
@@ -364,6 +392,7 @@ impl App {
             st: States::default(),
             reader: None,
             places: crate::places::Places::load(&data),
+            known: crate::known::Known::load(&data),
             shelf: crate::shelf::Shelf::new(data.clone()),
             book: None,
             docs: HashMap::new(),
@@ -394,12 +423,14 @@ impl App {
             recs: Loaded::default(),
             recs_asked_ms: 0,
             also: HashMap::new(),
-            rec_follow: None,
-            open_start: None,
+            previews: HashMap::new(),
+            adopting: None,
+            pending: None,
             update_checked_ms: config.update_checked_ms,
             update_later: config.update_later,
             toast: None,
             typed_done: None,
+            let_go: None,
             keyboard_up: false,
             shot: false,
             size: (1080.0, 2340.0),
@@ -806,20 +837,51 @@ impl App {
         }
     }
 
-    /// Add a recommended series to My space (its bell off, as from Search); `read` opens its first
-    /// chapter once it is there.
-    pub fn add_rec(&mut self, r: &Rec, read: bool) {
+    /// Open a title not added yet on its own page (a search result, a pick): nothing is added
+    /// until a chapter is read, it is followed or something is downloaded ([`App::adopt`]).
+    pub fn open_preview(&mut self, title: &str, hits: &[leaf_proto::Hit], anilist: Option<i64>) {
+        let Some(id) = preview_id(hits) else {
+            self.toast("None of your sources carries it any more");
+            return;
+        };
+        self.previews.insert(id, Preview { title: title.to_string(), hits: hits.to_vec(), anilist });
+        self.push(Route::Series(id));
+    }
+
+    /// Add a previewed title (`POST /v1/follow` with its entries, as Search's Add did), then do
+    /// `then` with the series it becomes; its page, if open, becomes that series' page.
+    pub fn adopt(&mut self, preview: i64, then: Then) {
+        let Some(p) = self.previews.get(&preview).cloned() else { return };
+        if self.adopting.is_some() {
+            self.toast("Still adding the last one");
+            return;
+        }
+        if p.hits.is_empty() {
+            self.toast("None of your sources carries it any more");
+            return;
+        }
+        self.adopting = Some((preview, then));
+        self.ask(Job::Follow(leaf_proto::Follow { title: p.title.clone(), manga_ids: p.hits.iter().map(|h| h.manga_id).collect(), quiet: false }));
+        self.toast(&format!("Adding {}", p.title));
+    }
+
+    /// A pick held: its sheet's Follow or Read chapter 1, as from its page.
+    pub fn adopt_rec(&mut self, r: &Rec, then: Then) {
         if let Some(id) = r.in_space {
             self.push(Route::Series(id));
             return;
         }
-        if r.hits.is_empty() {
+        let Some(id) = preview_id(&r.hits) else {
             self.toast("None of your sources carries it any more");
             return;
+        };
+        self.previews.insert(id, Preview { title: r.title.clone(), hits: r.hits.clone(), anilist: Some(r.anilist_id) });
+        let read = matches!(then, Then::Read(..));
+        self.adopt(id, then);
+        if read {
+            // Its page shows while it is added, then the chapter opens over it.
+            self.push(Route::Series(id));
         }
-        self.rec_follow = Some((r.anilist_id, read));
-        self.ask(Job::Follow(leaf_proto::Follow { title: r.title.clone(), manga_ids: r.hits.iter().map(|h| h.manga_id).collect(), quiet: false }));
-        self.toast(&format!("Adding {}", r.title));
     }
 
     /// Newest or oldest first on a series page, kept.
@@ -844,8 +906,17 @@ impl App {
         if self.shot && job.writes() {
             return;
         }
+        // A preview's page asks for it like any series': its entries go instead.
+        let job = match job {
+            Job::Series(id) if id < 0 => match self.previews.get(&id) {
+                Some(p) => Job::Preview(id, p.hits.iter().map(|h| h.manga_id).take(3).collect()),
+                None => return,
+            },
+            j => j,
+        };
         match &job {
             Job::Library => self.library.loading = true,
+            Job::Preview(id, _) => self.series.entry(*id).or_default().loading = true,
             Job::Series(id) => self.series.entry(*id).or_default().loading = true,
             Job::Updates(_) => self.updates.loading = true,
             Job::Health => self.health.loading = true,
@@ -895,6 +966,10 @@ impl App {
                         Ok(_) if cached && l.data.is_some() => {}
                         Ok((mut list, extras)) => {
                             list.iter_mut().for_each(logic::mend_times);
+                            let reused: Vec<i64> = list.iter().filter(|s| self.known.see(s, !cached)).map(|s| s.id).collect();
+                            for id in reused {
+                                self.forget_series(id);
+                            }
                             for e in extras {
                                 match e.paid {
                                     Some(p) => self.paid.insert(e.id, p),
@@ -916,7 +991,25 @@ impl App {
                         }
                     }
                 }
-                Done::Series { id, cached, result } => {
+                Done::Series { id, cached, mut result } => {
+                    if id < 0
+                        && let Ok((d, _)) = &mut result
+                    {
+                        // A preview of a title in My space already: that series' page instead.
+                        if d.series.id > 0 {
+                            let real = d.series.id;
+                            for (r, _) in self.nav.iter_mut().filter(|(r, _)| *r == Route::Series(id)) {
+                                *r = Route::Series(real);
+                            }
+                            self.fresh = true;
+                        }
+                        d.series.id = id;
+                    }
+                    if let Ok((d, _)) = &result
+                        && self.known.see(&d.series, !cached)
+                    {
+                        self.forget_series(id);
+                    }
                     // What the server adds beside the series (paid episodes, pictures), from the
                     // copy on disk only when nothing better is in hand.
                     if let Ok((_, extras)) = &result
@@ -970,25 +1063,19 @@ impl App {
                         {
                             list.push(s);
                         }
-                        if let Some((anilist, read)) = self.rec_follow.take() {
-                            self.drop_rec(anilist);
-                            self.st.recs.sheet = None;
-                            self.push(Route::Series(id));
-                            if read {
-                                self.open_start = Some(id);
-                            }
-                            self.toast("Added to My space");
-                        } else if self.route() == &Route::Search {
-                            self.push(Route::Series(id));
+                        if let Some((preview, then)) = self.adopting.take() {
+                            self.adopted(preview, id, then);
                         }
                     }
                     Err(f) => {
-                        if self.rec_follow.take().is_some() {
+                        if self.adopting.take().is_some() {
                             self.toast(&format!("Not added: {}", lower_first(&f.words(&label))));
-                        } else {
-                            self.st.search.follow_failed(f.words(&label));
                         }
                     }
+                },
+                Done::Suggested(q, r) => match r {
+                    Ok(t) => self.st.search.suggested(q, t),
+                    Err(f) => self.host.log(&format!("did you mean {q}: {}", f.words(&label))),
                 },
                 Done::Unfollowed(id, r) => match r {
                     Ok(()) => {
@@ -1214,18 +1301,82 @@ impl App {
         }
     }
 
-    /// A series just added with "Read chapter 1": its first chapter, once its chapters came.
-    fn open_started(&mut self) {
-        let Some(id) = self.open_start else { return };
-        let Some(d) = self.series.get(&id).and_then(|l| l.data.clone()) else { return };
-        if d.chapters.is_empty() {
-            if !self.series.get(&id).is_some_and(|l| l.loading) {
-                self.open_start = None;
+    /// The server gave this id to another series than the one the phone kept things for: the old
+    /// one's cover, banner and spotlight pictures, its place, its copy on disk and what else is
+    /// kept by its id go; its downloads stay, under an id of their own, its title with them.
+    pub fn forget_series(&mut self, id: i64) {
+        self.host.log(&format!("series {id} now names another series: what was kept for the old one goes"));
+        self.images.forget_cover(&mut self.canvas, crate::images::CoverOf::Series(id));
+        self.places.forget(id);
+        crate::net::forget_series_copy(&self.data, id);
+        self.series.remove(&id);
+        self.paid.remove(&id);
+        self.also.remove(&id);
+        self.alternatives.remove(&id);
+        let order = self.oldest_first.remove(&id);
+        let speed = self.prefs.speeds.remove(&id).is_some();
+        if order || speed {
+            self.save_config();
+        }
+        self.saver.rekey(id, crate::known::orphan_id(id));
+    }
+
+    /// A previewed title is in now, as series `id`: its page (where one is open) becomes the
+    /// series', a pick leaves the picks, and `then` runs once its chapters come.
+    fn adopted(&mut self, preview: i64, id: i64, then: Then) {
+        let p = self.previews.remove(&preview);
+        if let Some(a) = p.as_ref().and_then(|p| p.anilist) {
+            self.drop_rec(a);
+        }
+        self.st.recs.sheet = None;
+        let shown = self.route() == &Route::Series(preview);
+        for (r, _) in self.nav.iter_mut().filter(|(r, _)| *r == Route::Series(preview)) {
+            *r = Route::Series(id);
+        }
+        self.series.remove(&preview);
+        if shown {
+            // Its page draws again as the series' (asked for, as a page shown is).
+            self.fresh = true;
+        } else if !self.series.get(&id).is_some_and(|l| l.loading) {
+            self.ask(Job::Series(id));
+        }
+        match then {
+            Then::Follow => self.set_bell(id, true),
+            // The chapter opens only over its own page: elsewhere it would open over what you
+            // went on to.
+            Then::Read(..) if !shown => self.toast("Added to My space"),
+            then => self.pending = Some((id, then)),
+        }
+    }
+
+    /// A series just added from a preview: the chapter to read, or the ones to download, once its
+    /// chapters came (by number: the entry it was added from may not be the one it reads from).
+    fn run_pending(&mut self) {
+        let Some((id, then)) = self.pending.clone() else { return };
+        let Some(d) = self.series.get(&id).and_then(|l| l.data.clone()).filter(|d| !d.chapters.is_empty()) else {
+            if self.series.get(&id).is_some_and(|l| !l.loading && l.error.is_some()) {
+                self.pending = None;
+                self.toast("Added, but its chapters didn't load");
             }
             return;
+        };
+        self.pending = None;
+        match then {
+            Then::Read(number, page) => {
+                let i = d.chapters.iter().position(|c| c.number == number).or_else(|| d.chapters.iter().position(|c| c.number > number)).unwrap_or(0);
+                let page = if d.chapters[i].number == number { page } else { 0 };
+                self.open_chapter(&d, i, page);
+            }
+            Then::Download(numbers) => {
+                let get: Vec<leaf_proto::Chapter> = d.chapters.iter().filter(|c| numbers.contains(&c.number)).cloned().collect();
+                if get.is_empty() {
+                    self.toast("Added, but those chapters aren't there");
+                } else {
+                    self.download(id, &get);
+                }
+            }
+            Then::Follow => {}
         }
-        self.open_start = None;
-        self.open_chapter(&d, 0, 0);
     }
 
     /// An update tapped before its series had loaded: open it now that it has.
@@ -1333,28 +1484,6 @@ impl App {
         self.save_config();
     }
 
-    /// A volume key while reading: the page moves down (or up) most of a screen. False when no
-    /// book or strip is showing (the key is the system's then).
-    pub fn volume(&mut self, down: bool) -> bool {
-        let h = self.canvas.h;
-        let by = if down { h * PAGE_TURN } else { -h * PAGE_TURN };
-        match self.route() {
-            Route::Reader => {
-                if let Some(r) = &mut self.reader {
-                    r.turn(by);
-                }
-            }
-            Route::Book => {
-                if let Some(b) = &mut self.book {
-                    b.turn(by);
-                }
-            }
-            _ => return false,
-        }
-        self.wake_at(self.now_ns);
-        true
-    }
-
     // Navigation
 
     fn shown(&mut self) {
@@ -1363,11 +1492,15 @@ impl App {
         // An update tapped before its series came opens only if the person is still where they
         // tapped it: once they have gone elsewhere it would open over what they are doing.
         self.open_after = None;
-        self.open_start = None;
+        self.let_go = None;
+        // So does a chapter waiting for the series just added.
+        if matches!(self.pending, Some((_, Then::Read(..)))) {
+            self.pending = None;
+        }
         // The bars hide only while a book or a strip is on screen (not over its notes or search).
         let reading = matches!(self.route(), Route::Book | Route::Reader);
         self.host.immersive(reading);
-        self.host.reading(reading, self.prefs.volume_keys);
+        self.host.reading(reading);
         if self.focus.id.take().is_some() {
             self.host.keyboard(false, "", Kb::Text);
         }
@@ -1498,8 +1631,18 @@ impl App {
 
     // Typing
 
-    /// Text the keyboard sent: the field's whole text (Android's input state).
+    /// Text the keyboard sent: the field's whole text (Android's input state). Sent with no field
+    /// focused, right after Done let one go on this page, it is that field's again: a keyboard
+    /// that stays up after Done (Search's Enter, then "Nothing found") kept typing into nothing,
+    /// and the field looked frozen (the owner, 2026-11-23).
     pub fn set_text(&mut self, text: &str) {
+        if self.focus.id.is_none()
+            && let Some((id, route)) = self.let_go.clone()
+            && &route == self.route()
+        {
+            self.focus.id = Some(id);
+            self.focus.kind = Kb::Text;
+        }
         if self.focus.id.is_some() {
             self.focus.text = text.chars().take(MAX_TYPED).collect();
         }
@@ -1510,6 +1653,7 @@ impl App {
         if let Some(id) = self.focus.id.take() {
             self.focus.at = None;
             self.typed_done = Some(id);
+            self.let_go = Some((id, self.route().clone()));
             self.host.keyboard(false, "", Kb::Text);
         }
     }
@@ -1591,17 +1735,19 @@ impl App {
         self.now_ns = now_ns;
         self.wake = None;
         self.take_answers();
+        self.known.save();
         // A screenshot fetches nothing for downloads.
         self.saver.set_server(if self.shot { None } else { self.server.clone() });
         self.saver.set_show_promo(!self.prefs.skip_promo);
         self.open_waiting();
-        self.open_started();
+        self.run_pending();
         let late = self.late_toast.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(words) = late {
             self.toast(&words);
         }
         self.focus.keyboard_up = self.keyboard_up;
         let tapped = self.ui.tap.is_some();
+        self.ui.dt = dt;
         let (w, h) = self.size;
         self.canvas.begin(w, h, self.insets.0, self.insets.1);
         self.images.set_screen_w(w);
@@ -1668,6 +1814,7 @@ impl App {
             self.dim_dirty = false;
             self.save_config();
         }
+        moving |= self.ui.sheet_moving();
         self.canvas.finish();
         self.ui.end_frame();
         if moving || tapped || self.ui.busy() || self.fresh {

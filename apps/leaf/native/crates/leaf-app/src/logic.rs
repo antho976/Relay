@@ -450,6 +450,14 @@ pub fn resume_page(c: &Chapter) -> u32 {
     if c.pages == 0 { c.last_page } else { c.last_page.min(c.pages - 1) }
 }
 
+/// A series shows in My space (Recent, Following, Updates) and on Home only once you have done
+/// something with it: read a chapter, turned its bell on, or downloaded one to this phone
+/// (`downloads`: it has chapters on the phone or in the line). One added and left alone (a
+/// preview opened, "Wrong series?" elsewhere) stays out (the owner, 2026-11-23).
+pub fn in_space(s: &Series, downloads: bool) -> bool {
+    s.bell || s.last_read_at > 0 || s.read_upto.is_some() || downloads
+}
+
 /// Continue where the person stopped: a chapter left part way (after the last one finished),
 /// else the one after the last finished, else the first. When everything is read, the newest.
 pub fn continue_point(chapters: &[Chapter]) -> Option<Continue> {
@@ -975,6 +983,17 @@ mod tests {
             last_read_at,
             shelf: None,
         }
+    }
+
+    #[test]
+    fn only_what_you_did_something_with_is_in_your_space() {
+        let mut s = series(None, 10, 0, 0);
+        assert!(!in_space(&s, false), "added and left alone");
+        assert!(in_space(&s, true), "a chapter downloaded");
+        s.bell = true;
+        assert!(in_space(&s, false), "followed");
+        assert!(in_space(&series(Some(1.0), 9, 0, 0), false), "a chapter read");
+        assert!(in_space(&series(None, 10, 0, 5), false), "opened in the reader");
     }
 
     #[test]

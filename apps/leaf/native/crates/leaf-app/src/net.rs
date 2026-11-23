@@ -234,6 +234,11 @@ pub enum Job {
     Status(Server),
     Library,
     Series(i64),
+    /// A title not added yet (`/v1/preview?manga_id=`), shown under its preview id
+    /// (`-manga_id` of the first entry) with the entries to try, in order.
+    Preview(i64, Vec<i64>),
+    /// "Did you mean": AniList's title for words that found nothing (`/v1/search/suggest`).
+    Suggest(String),
     /// A search: the broad sources one by one (each answer as it comes), or every source (`true`,
     /// "Search all sources") at once.
     Search(String, bool),
@@ -362,6 +367,8 @@ pub enum Done {
     /// A search's answer, or one source's part of it: (query, every source, result, the last part).
     Search { q: String, all: bool, result: Result<Vec<leaf_proto::Candidate>, Fail>, last: bool },
     Followed(Result<Series, Fail>),
+    /// (the words, the title they probably meant).
+    Suggested(String, Result<Option<String>, Fail>),
     Unfollowed(i64, Result<(), Fail>),
     Progress(i64, Result<(), Fail>),
     PageCount(i64, Result<u32, Fail>),
@@ -568,6 +575,11 @@ fn post_json<T: Serialize>(client: &Client, server: &Option<Server>, path: &str,
     client.post(s, path, body)
 }
 
+/// Forget the copy of a series kept on disk (its id now names another series).
+pub fn forget_series_copy(data: &Path, id: i64) {
+    let _ = std::fs::remove_file(series_file(data, id));
+}
+
 fn series_file(data: &Path, id: i64) -> PathBuf {
     data.join("series").join(format!("{id}.json"))
 }
@@ -630,6 +642,27 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
                 Ok((d, detail_extras(&b)))
             });
             send(Done::Series { id, cached: false, result: r });
+        }
+        Job::Preview(id, ids) => {
+            // Never kept on disk: a preview is only for now.
+            let Some(s) = server else { return send(Done::Series { id, cached: false, result: no_server() }) };
+            let list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+            let r = client.get(&s, &format!("/v1/preview?manga_id={list}")).and_then(|b| {
+                let d = serde_json::from_slice::<SeriesDetail>(&b).map_err(|_| Fail::Garbled)?;
+                Ok((d, detail_extras(&b)))
+            });
+            send(Done::Series { id, cached: false, result: r });
+        }
+        Job::Suggest(q) => {
+            #[derive(Deserialize)]
+            struct Said {
+                title: Option<String>,
+            }
+            let r = match &server {
+                Some(s) => client.json::<Said>(s, &format!("/v1/search/suggest?q={}", query_escape(&q))).map(|v| v.title),
+                None => no_server(),
+            };
+            send(Done::Suggested(q, r));
         }
         Job::Search(q, all) => {
             let Some(s) = &server else { return send(Done::Search { q, all, result: no_server(), last: true }) };

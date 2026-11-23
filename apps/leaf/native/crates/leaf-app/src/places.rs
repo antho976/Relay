@@ -121,6 +121,13 @@ impl Places {
         self.map.get(&series)
     }
 
+    /// Forget a series' place (its id now names another series: [`crate::known`]).
+    pub fn forget(&mut self, series: i64) {
+        if self.map.remove(&series).is_some() {
+            let _ = self.tx.send(self.map.values().copied().collect());
+        }
+    }
+
     /// Keep a place: in memory now, on disk from the writer's thread.
     pub fn put(&mut self, p: Place) {
         self.map.insert(p.series, p);

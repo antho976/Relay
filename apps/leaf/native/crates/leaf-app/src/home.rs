@@ -5,9 +5,13 @@
 //! new chapters, then what was read most recently, books too ([`logic::spotlight`]).
 //!
 //! Under it: Top picks for you (three across, each with why in the accent), Continue reading
-//! (square covers, "1 new chapter" in the accent), "Because you read X" rails, Collections (a tile
-//! per tag you read most, each opening its list) and one finished series to binge. Picks are
-//! [`crate::recs`]': a tap or a long press opens a pick's sheet. Until the server has made them
+//! (square covers, "1 new chapter" in the accent), "Because you read X" rails, each under a banner
+//! (a still collage of its covers), and Collections (a 16:9 tile per tag you read most, each opening
+//! its list: the tag's picture from the server, `/v1/recs/tagart/{slug}`, else a still collage of
+//! its covers). Nothing in them moves. The server's finished series to binge is not
+//! shown (the owner, 2026-11-23), nor a Because rail of one pick. Picks are
+//! [`crate::recs`]': a tap opens a pick's page (a preview, nothing added), a long press its sheet.
+//! Until the server has made them
 //! (its first day) the section says so.
 
 use leaf_proto::{Rec, Recs, Series};
@@ -41,6 +45,13 @@ const CARD_R: f32 = 14.0;
 const BOOK_DONE: f32 = 0.995;
 /// Top picks shown on Home (the rest are a tap away).
 const TOP_PICKS: usize = 6;
+/// A collection's tile: the tag's picture is 16:9.
+const TILE_W: f32 = 200.0;
+const TILE_H: f32 = 112.0;
+/// The banner over a "Because you read" rail.
+const BANNER_H: f32 = 76.0;
+/// A "Because you read" rail shows only with at least this many picks.
+pub const MIN_BECAUSE: usize = 2;
 
 #[derive(Default)]
 pub struct State {
@@ -128,8 +139,10 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let now = app.now_ns;
     let now_ms = shelf::now_ms();
     let all_series: Vec<Series> = app.library.data.clone().unwrap_or_default();
-    // Dropped series stay out of the spotlight and Continue reading.
-    let series: Vec<Series> = all_series.iter().filter(|s| logic::shelf_of(s) != logic::Shelf::Dropped).cloned().collect();
+    // Dropped series stay out of the spotlight and Continue reading, and so does one added and
+    // left alone: nothing read, no bell, nothing downloaded (`logic::in_space`).
+    let downloaded = app.saver.series_ids();
+    let series: Vec<Series> = all_series.iter().filter(|s| logic::shelf_of(s) != logic::Shelf::Dropped && logic::in_space(s, downloaded.contains(&s.id))).cloned().collect();
     let books: Vec<Book> = app.shelf.books.clone();
     let detail = |id: i64| app.series.get(&id).and_then(|l| l.data.as_ref());
     let new_of = |s: &Series| logic::new_chapters(s, detail(s.id));
@@ -599,14 +612,31 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     }
     if picks_shown && let Some(r) = &recs {
         // Because you read X: a rail each.
-        let because: Vec<&leaf_proto::Because> = r.because.iter().filter(|b| !b.recs.is_empty()).collect();
+        // One pick is not a rail (the owner, 2026-11-23): fewer than two, and it is left out.
+        let because: Vec<&leaf_proto::Because> = r.because.iter().filter(|b| b.recs.len() >= MIN_BECAUSE).collect();
         st.because.resize(because.len(), HScroll::default());
         for (k, b) in because.iter().enumerate() {
-            let (h, tapped) = heading(&mut cx, y, &format!("Because you read {}", b.title), b.recs.len() > 3);
-            if tapped {
-                to_picks = Some(format!("because:{}", b.series));
+            // Its header: a banner, a still collage of the rail's covers, with the words over it.
+            let (bx, bw, bh) = (PAD, WIDTH - 2.0 * PAD, BANNER_H);
+            crate::recs::collage(cx.c, &mut app.images, &b.recs, bx, y, bw, bh, 12.0, 5, crate::recs::tone(&b.title).mix(t::BG, 0.4), 0.42, now);
+            crate::recs::scrim(cx.c, bx, y, bw, bh, 12.0);
+            let more = b.recs.len() > 3;
+            let small = Text::new(ty::SMALL, Rgba::WHITE.a(0.78)).semi();
+            let big = Text::new(17.0, Rgba::WHITE).semi();
+            let tw = bw - 28.0 - if more { 24.0 } else { 0.0 };
+            let ty0 = y + bh - 14.0 - big.lh();
+            cx.c.text("BECAUSE YOU READ", bx + 14.0, ty0 - small.lh() - 2.0, small);
+            cx.c.text_fit(&b.title, bx + 14.0, ty0, tw, big);
+            if more {
+                cx.c.icon("chevron-right", bx + bw - 18.0, ty0 + big.lh() / 2.0, 18.0, Rgba::WHITE);
+                if cx.pressed(bx, y, bw, bh) {
+                    cx.c.rect(bx, y, bw, bh, 12.0, t::WASH);
+                }
+                if !covered && cx.tap(bx, y, bw, bh) {
+                    to_picks = Some(format!("because:{}", b.series));
+                }
             }
-            y += h + 14.0;
+            y += bh + 14.0;
             let (h, hit, m) = crate::recs::rail(&mut cx, &mut app.images, &mut st.because[k], &b.recs, y, dt, now, covered);
             moving |= m;
             if let Some(hit) = hit {
@@ -619,25 +649,31 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         if !cols.is_empty() {
             let (h, _) = heading(&mut cx, y, "Collections", false);
             y += h + 14.0;
-            let (tw, th) = (150.0, 84.0);
+            let (tw, th) = (TILE_W, TILE_H);
             let area = [0.0, y + cx.c.dy, WIDTH, th];
             cx.ui.claim_h(area);
             moving |= st.tiles.update(cx.ui, area, dt);
             let mut x = PAD - st.tiles.off;
             for c in &cols {
                 if x + tw > -10.0 && x < WIDTH + 10.0 {
+                    // The tag's picture; until it comes, its tone; with none on the server, a
+                    // still collage of the collection's covers. The name over a dark foot.
                     let tone = crate::recs::tone(&c.tag);
-                    cx.c.rect_hgrad(x, y, tw, th, 10.0, tone, tone.mix(Rgba::hex(0x000000), 0.35));
+                    let slug = crate::images::tag_slug(&c.tag);
+                    match app.images.art(cx.c, &slug, now) {
+                        crate::images::Art::Ready => {
+                            cx.c.rect(x, y, tw, th, 10.0, tone);
+                            cx.c.image_cover(&crate::images::art_key(&slug), x, y, tw, th, 10.0, Rgba::WHITE);
+                        }
+                        crate::images::Art::Coming => cx.c.rect_hgrad(x, y, tw, th, 10.0, tone, tone.mix(Rgba::hex(0x000000), 0.35)),
+                        crate::images::Art::None => crate::recs::collage(cx.c, &mut app.images, &c.recs, x, y, tw, th, 10.0, 4, tone, 0.7, now),
+                    }
+                    crate::recs::scrim(cx.c, x, y, tw, th, 10.0);
                     if cx.pressed(x, y, tw, th) {
                         cx.c.rect(x, y, tw, th, 10.0, t::WASH);
                     }
-                    let tt = Text::new(17.0, Rgba::WHITE).semi().line(1.2);
-                    let lines = cx.c.wrap(&c.tag, tw - 24.0, tt, 2);
-                    let mut ty_ = y + (th - lines.len() as f32 * tt.lh()) / 2.0;
-                    for l in &lines {
-                        cx.c.text(l, x + 12.0, ty_, tt);
-                        ty_ += tt.lh();
-                    }
+                    let tt = Text::new(16.0, Rgba::WHITE).semi();
+                    cx.c.text_fit(&c.tag, x + 12.0, y + th - 10.0 - tt.lh(), tw - 24.0, tt);
                     if !covered && cx.tap(x, y, tw, th) {
                         to_picks = Some(format!("tag:{}", c.tag));
                     }
@@ -646,32 +682,6 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             }
             st.tiles.max = x + st.tiles.off - 10.0 + PAD - WIDTH;
             y += th + 32.0;
-        }
-        // One finished series, to read in one go.
-        if let Some(b) = &r.binge {
-            let (h, _) = heading(&mut cx, y, "Finished, to binge", false);
-            y += h + 14.0;
-            let rh = 128.0;
-            if cx.pressed(0.0, y, WIDTH, rh) {
-                cx.c.rect(0.0, y, WIDTH, rh, 0.0, t::WASH);
-            }
-            let (cw, ch) = (96.0, 128.0);
-            crate::recs::cover(cx.c, &mut app.images, b, PAD, y, cw, ch, COVER_R, now);
-            let tx = PAD + cw + 16.0;
-            let tw = WIDTH - PAD - tx;
-            let tt = Text::new(ty::SECTION, t::INK).semi().line(1.25);
-            let lines = cx.c.wrap(&b.title, tw, tt, 2);
-            let mut ty_ = y + 10.0;
-            for l in &lines {
-                cx.c.text(l, tx, ty_, tt);
-                ty_ += tt.lh();
-            }
-            cx.c.text_fit(&b.reason, tx, ty_ + 6.0, tw, Text::new(12.5, t::ACCENT));
-            cx.c.text_fit(&crate::recs::facts(b), tx, ty_ + 6.0 + 20.0, tw, Text::new(12.5, t::INK3));
-            if !covered && cx.tap(0.0, y, WIDTH, rh) {
-                rec_hit = Some((crate::recs::Hit::Open(0), vec![b.clone()], None));
-            }
-            y += rh + 24.0;
         }
     }
     if n > 0

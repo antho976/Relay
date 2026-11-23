@@ -71,6 +71,8 @@ impl CoverOf {
     }
     fn path(self) -> String {
         match self {
+            // A title not added yet (a preview, `-manga_id`): its entry's cover.
+            CoverOf::Series(id) if id < 0 => format!("/v1/covers/{}", -id),
             CoverOf::Series(id) => format!("/v1/series/{id}/cover"),
             CoverOf::Manga(id) => format!("/v1/covers/{id}"),
             CoverOf::Book(_) => String::new(),
@@ -80,6 +82,42 @@ impl CoverOf {
     pub fn file(self, data: &Path) -> PathBuf {
         data.join("covers").join(self.key().replace(':', "-"))
     }
+}
+
+/// A collection's picture (`/v1/recs/tagart/{slug}`, 640 × 360 WebP), kept in the atlas this size.
+pub const ART_W: u32 = 448;
+pub const ART_H: u32 = 252;
+/// A tag the server had no picture for is asked again after this long (the files come at deploy).
+const ART_NONE_MS: u128 = 24 * 3_600_000;
+
+/// A tag's slug, as the server names its picture: lower-cased, spaces as `-`, nothing else but
+/// letters and digits ("Martial Arts": `martial-arts`).
+pub fn tag_slug(tag: &str) -> String {
+    let mut out = String::new();
+    for c in tag.trim().to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if (c == ' ' || c == '-' || c == '_') && !out.ends_with('-') && !out.is_empty() {
+            out.push('-');
+        }
+    }
+    out.trim_end_matches('-').to_string()
+}
+
+/// The atlas key of a collection's picture.
+pub fn art_key(slug: &str) -> String {
+    format!("a:{slug}")
+}
+
+/// Whether a collection has its picture.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Art {
+    /// In the atlas: draw it with [`art_key`].
+    Ready,
+    /// On its way (from disk or the server).
+    Coming,
+    /// The server has none (404): the collage stands in.
+    None,
 }
 
 /// A chapter's picture as the server makes it (`/v1/chapters/{id}/thumb`, WebP).
@@ -112,6 +150,8 @@ enum Want {
     Hero(CoverOf),
     /// A chapter's picture, from disk or the server.
     Thumb { chapter: i64 },
+    /// A collection's picture, by its tag's slug.
+    Art(String),
 }
 
 /// A decoded page: its size after scaling, and its rows of tiles (RGBA).
@@ -148,6 +188,8 @@ enum Got {
     Local { key: String, book: PathBuf, entry: String, img: Option<Pixels> },
     Hero { of: CoverOf, img: Option<HeroPics> },
     Thumb { chapter: i64, img: Option<Pixels> },
+    /// `none`: the server has no picture for the tag (not a failure to reach it).
+    Art { slug: String, img: Option<Pixels>, none: bool },
 }
 
 struct Queue {
@@ -213,6 +255,9 @@ pub struct Images {
     cover_src: HashMap<CoverOf, (u32, u32)>,
     /// Pictures the server had none of: when, and whether it said then that it had one.
     thumb_failed: HashMap<i64, (u64, bool)>,
+    /// Tags with no picture on the server, and pictures that failed (when, ns).
+    art_none: HashSet<String>,
+    art_failed: HashMap<String, u64>,
     /// Pages left out of the strip: scanlators' promo pages the server skips, and pages hidden by
     /// hand. Kept on disk beside the page (`<n>.skip`).
     skipped: HashSet<(i64, u32)>,
@@ -243,6 +288,8 @@ impl Images {
             posters: HashMap::new(),
             cover_src: HashMap::new(),
             thumb_failed: HashMap::new(),
+            art_none: HashSet::new(),
+            art_failed: HashMap::new(),
             skipped: HashSet::new(),
             data,
             shared,
@@ -364,6 +411,19 @@ impl Images {
         false
     }
 
+    /// Let go of a cover: its copy on disk, its pictures in the atlas, and what was learnt of it
+    /// (its id now names another series: [`crate::known`]).
+    pub fn forget_cover(&mut self, c: &mut Canvas, of: CoverOf) {
+        for key in [of.key(), of.banner_key(), of.hero_key(), of.poster_key()] {
+            c.forget_image(&key);
+        }
+        let _ = std::fs::remove_file(of.file(&self.data));
+        self.cover_failed.remove(&of);
+        self.hero_failed.remove(&of);
+        self.cover_src.remove(&of);
+        self.posters.remove(&of);
+    }
+
     /// Make sure a cover's large copy is in the atlas or on its way. True when it can be drawn
     /// now (with [`CoverOf::hero_key`]).
     pub fn hero(&mut self, c: &mut Canvas, of: CoverOf, now_ns: u64) -> bool {
@@ -380,6 +440,27 @@ impl Images {
         }
         self.push(90, Want::Hero(of));
         false
+    }
+
+    /// A collection's picture: in the atlas, on its way (asked for now if need be), or none on the
+    /// server. Kept on disk once fetched; a 404 is remembered a day.
+    pub fn art(&mut self, c: &Canvas, slug: &str, now_ns: u64) -> Art {
+        if slug.is_empty() || self.art_none.contains(slug) {
+            return Art::None;
+        }
+        let key = art_key(slug);
+        if c.has_image(&key) {
+            return Art::Ready;
+        }
+        let want = Want::Art(slug.to_string());
+        if c.image_waiting(&key) || self.asked.contains(&want) {
+            return Art::Coming;
+        }
+        if self.art_failed.get(slug).is_some_and(|t| now_ns.saturating_sub(*t) < COVER_RETRY_NS) {
+            return Art::None;
+        }
+        self.push(80, want);
+        Art::Coming
     }
 
     /// A chapter's picture can be drawn now (with [`thumb_key`]).
@@ -548,6 +629,22 @@ impl Images {
                         }
                         None => {
                             self.hero_failed.insert(of, now_ns);
+                        }
+                    }
+                }
+                Got::Art { slug, img, none } => {
+                    self.asked.remove(&Want::Art(slug.clone()));
+                    match img {
+                        Some(p) => {
+                            if !c.add_image_slot(&art_key(&slug), p.w, p.h, (ART_W, ART_H), p.px) && !c.image_waiting(&art_key(&slug)) {
+                                self.art_failed.insert(slug, now_ns);
+                            }
+                        }
+                        None if none => {
+                            self.art_none.insert(slug);
+                        }
+                        None => {
+                            self.art_failed.insert(slug, now_ns);
                         }
                     }
                 }
@@ -741,6 +838,7 @@ fn worker(shared: &Shared, tx: &Sender<Got>, client: &Client, data: &Path) {
             Want::Local { key, book, entry } => Got::Local { key: key.clone(), book: book.clone(), entry: entry.clone(), img: local_picture(book, entry) },
             Want::Hero(of) => Got::Hero { of: *of, img: hero(client, server.as_ref(), data, *of, shared.screen_w.load(std::sync::atomic::Ordering::Relaxed)) },
             Want::Thumb { chapter } => Got::Thumb { chapter: *chapter, img: thumb(client, server.as_ref(), data, *chapter) },
+            Want::Art(slug) => art(client, server.as_ref(), data, slug),
         }));
         let got = got.unwrap_or_else(|_| match want {
             Want::Cover(of) => Got::Cover { of, img: None, banner: None, src: None },
@@ -748,6 +846,7 @@ fn worker(shared: &Shared, tx: &Sender<Got>, client: &Client, data: &Path) {
             Want::Local { key, book, entry } => Got::Local { key, book, entry, img: None },
             Want::Hero(of) => Got::Hero { of, img: None },
             Want::Thumb { chapter } => Got::Thumb { chapter, img: None },
+            Want::Art(slug) => Got::Art { slug, img: None, none: false },
         });
         if tx.send(got).is_err() {
             return;
@@ -865,6 +964,41 @@ fn blur(img: &mut image::RgbaImage, r: u32, passes: u32) {
         p.0[1] = b[1].round() as u8;
         p.0[2] = b[2].round() as u8;
     }
+}
+
+/// A collection's picture: from disk (`covers/tag-<slug>.webp`), else the server's, kept. A 404 is
+/// marked on disk (`tag-<slug>.none`) and not asked again for a day.
+fn art(client: &Client, server: Option<&Server>, data: &Path, slug: &str) -> Got {
+    let dir = data.join("covers");
+    let (file, none) = (dir.join(format!("tag-{slug}.webp")), dir.join(format!("tag-{slug}.none")));
+    let recent_none = std::fs::metadata(&none).ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|d| d.as_millis() < ART_NONE_MS);
+    let bytes = match std::fs::read(&file) {
+        Ok(b) if !b.is_empty() => b,
+        _ if recent_none => return Got::Art { slug: slug.to_string(), img: None, none: true },
+        _ => {
+            let Some(s) = server else { return Got::Art { slug: slug.to_string(), img: None, none: false } };
+            match client.get(s, &format!("/v1/recs/tagart/{slug}")) {
+                Ok(b) => {
+                    let _ = write_atomic(&file, &b);
+                    let _ = std::fs::remove_file(&none);
+                    b
+                }
+                Err(crate::net::Fail::Answer(404, _)) => {
+                    let _ = write_atomic(&none, b"");
+                    return Got::Art { slug: slug.to_string(), img: None, none: true };
+                }
+                Err(_) => return Got::Art { slug: slug.to_string(), img: None, none: false },
+            }
+        }
+    };
+    let img = match image::load_from_memory(&bytes) {
+        Ok(i) => i.resize_to_fill(ART_W, ART_H, image::imageops::FilterType::Triangle).to_rgba8(),
+        Err(_) => {
+            let _ = std::fs::remove_file(&file);
+            return Got::Art { slug: slug.to_string(), img: None, none: false };
+        }
+    };
+    Got::Art { slug: slug.to_string(), img: Some(Pixels { w: img.width(), h: img.height(), px: img.into_raw() }), none: false }
 }
 
 /// A chapter's picture: from disk, else the server's (`/v1/chapters/{id}/thumb`, about 10 KB of
@@ -1090,6 +1224,15 @@ pub fn prune_cache(data: PathBuf, keep: Vec<i64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tags_picture_is_named_by_its_slug() {
+        assert_eq!(tag_slug("Martial Arts"), "martial-arts");
+        assert_eq!(tag_slug("Post-Apocalyptic"), "post-apocalyptic");
+        assert_eq!(tag_slug(" Boys' Love "), "boys-love");
+        assert_eq!(tag_slug("Murim"), "murim");
+        assert_eq!(tag_slug("Age  Regression"), "age-regression");
+    }
 
     #[test]
     fn a_small_cover_is_a_poster_and_a_big_one_fills_without_upscaling() {

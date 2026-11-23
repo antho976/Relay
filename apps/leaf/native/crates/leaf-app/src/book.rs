@@ -168,8 +168,6 @@ pub struct BookReader {
     note_for: Option<Highlight>,
     confirm_remove: bool,
     more: bool,
-    /// What is left of a page turn (a tap in a third, a volume key), in units.
-    glide: f32,
 }
 
 /// The book as the strip sees it.
@@ -275,19 +273,12 @@ impl BookReader {
             note_for: None,
             confirm_remove: false,
             more: false,
-            glide: 0.0,
         }
     }
 
     fn view<'a>(&'a mut self, c: &'a mut Canvas, im: &'a Images) -> Option<View<'a>> {
         let doc = self.doc.as_deref()?;
         Some(View { doc, cache: RefCell::new(&mut self.cache), c: RefCell::new(c), im, ty: self.ty, top_pad: self.top_pad, book: self.id })
-    }
-
-    /// Turn the page: glide `by` units down (up when negative).
-    pub fn turn(&mut self, by: f32) {
-        self.glide += by;
-        self.fling.stop();
     }
 
     /// The mouse wheel or a screenshot's scroll.
@@ -461,21 +452,14 @@ fn frame(app: &mut App, r: &mut BookReader, dt: f32) -> (bool, bool) {
     if scrolling_allowed {
         let before = r.fling.off;
         moving = r.fling.update(&app.ui, [0.0, 0.0, WIDTH, view_h], dt);
-        let mut dy = r.fling.off - before;
+        let dy = r.fling.off - before;
         r.fling.off = FLING_MID;
-        if r.glide != 0.0 {
-            let step = if r.glide.abs() < 1.0 { r.glide } else { r.glide * (1.0 - (-dt * 14.0).exp()) };
-            r.glide -= step;
-            dy += step;
-            moving = true;
-        }
         if dy != 0.0 {
             let pos = r.pos;
             if let Some(v) = r.view(&mut app.canvas, &app.images) {
                 let p = strip::scroll(&v, pos, dy, view_h);
                 if p == pos {
                     r.fling.stop();
-                    r.glide = 0.0;
                 }
                 r.pos = p;
             }
@@ -483,7 +467,6 @@ fn frame(app: &mut App, r: &mut BookReader, dt: f32) -> (bool, bool) {
     } else {
         r.fling.stop();
         r.fling.off = FLING_MID;
-        r.glide = 0.0;
     }
     // What shows.
     let pos = r.pos;
@@ -633,15 +616,8 @@ fn frame(app: &mut App, r: &mut BookReader, dt: f32) -> (bool, bool) {
                 }
             }
             if !handled {
-                // The top and bottom thirds turn the page (a setting); the middle, or any tap while
-                // the controls show, shows or hides them.
-                if !r.chrome && app.prefs.tap_zones && ty_ < view_h / 3.0 {
-                    r.turn(-view_h * crate::app::PAGE_TURN);
-                } else if !r.chrome && app.prefs.tap_zones && ty_ > view_h * 2.0 / 3.0 {
-                    r.turn(view_h * crate::app::PAGE_TURN);
-                } else {
-                    r.chrome = !r.chrome;
-                }
+                // Any other tap shows or hides the controls: no tap zones (2026-11-23).
+                r.chrome = !r.chrome;
             }
         }
     }
@@ -1397,7 +1373,8 @@ fn contents_sheet(app: &mut App, r: &mut BookReader, doc: &Doc, place: Place, vi
     let dt = 1.0 / 60.0;
     let mut cx = cx!(app);
     let h = (view_h * 0.82).min(view_h - cx.c.inset_top - 24.0);
-    let (top, outside) = kit::sheet(&mut cx, h);
+    // The list scrolls inside: only its head pulls the sheet down.
+    let (top, outside) = kit::sheet_grab(&mut cx, h, 64.0);
     cx.c.text("Contents", PAD + 4.0, top + 24.0, Text::new(ty::HEADING, t::INK).semi());
     cx.c.text(&format!("{} entries", doc.toc.len()), WIDTH - PAD - 4.0, top + 30.0, Text::new(ty::CAPTION, t::INK3).right());
     let list_top = top + 64.0;

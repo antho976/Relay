@@ -1,8 +1,8 @@
 //! The reader: every chapter of the series as one strip, full bleed, scrolled with momentum. The
-//! end of a chapter flows into the next past a slim heading. A tap in the middle of the screen
+//! end of a chapter flows into the next past a slim heading. A tap anywhere on the strip
 //! shows or hides a small overlay (Back, the series and chapter, a thin progress line, the
-//! chapters before and after, auto-scroll and the dimmer); a tap in the top or bottom third turns
-//! the page up or down most of a screen (a setting), as the volume keys do.
+//! chapters before and after, auto-scroll and the dimmer). A tap does nothing else: no tap zones
+//! and no volume keys (the owner, 2026-11-23).
 //!
 //! Auto-scroll moves the strip at the series' own speed (kept in `config.json`); it waits while
 //! the page ahead is not loaded yet and goes on when it is, a tap stops it, and it stops by itself
@@ -71,8 +71,6 @@ pub struct Reader {
     pub speed: u8,
     /// Auto-scroll is waiting for the page ahead.
     pub waiting: bool,
-    /// What is left of a page turn (a tap in a third, a volume key), in units: it glides there.
-    glide: f32,
     /// Opened at a place kept on the phone: how far down its item, once that item's height is
     /// known (a page decoded, a chapter's length come). A move before then lets it go.
     pending_off: Option<f32>,
@@ -168,7 +166,6 @@ impl Reader {
             auto: false,
             speed: logic::DEFAULT_SPEED,
             waiting: false,
-            glide: 0.0,
             pending_off: None,
             save: Default::default(),
             saved: None,
@@ -210,7 +207,6 @@ impl Reader {
             auto: false,
             speed: logic::DEFAULT_SPEED,
             waiting: false,
-            glide: 0.0,
             pending_off: None,
             save: Default::default(),
             saved: None,
@@ -347,12 +343,6 @@ impl Reader {
         }
     }
 
-    /// Turn the page: glide `by` units down (up when negative).
-    pub fn turn(&mut self, by: f32) {
-        self.glide += by;
-        self.fling.stop();
-    }
-
     pub fn scroll_by(&mut self, im: &Images, dy: f32, view_h: f32) {
         let v = View { r: self, im };
         let p = strip::scroll(&v, self.pos, dy, view_h);
@@ -465,18 +455,12 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
     let (top_bar, bottom_bar) = (app.canvas.inset_top + 60.0, BAR_H + app.canvas.inset_bottom);
     // A drag on the overlay's bars (the dimmer) is theirs, not the strip's.
     let on_bars = sheet_open || (r.overlay && app.ui.drag_from.is_some_and(|(_, y)| y < top_bar || y > view_h - bottom_bar));
-    // Scroll: the finger, then the momentum it left, a page turn gliding, auto-scroll.
+    // Scroll: the finger, then the momentum it left, auto-scroll.
     let before = r.fling.off;
     let coasting = if on_bars { false } else { r.fling.update(&app.ui, [0.0, 0.0, WIDTH, view_h], dt) };
     let mut dy = r.fling.off - before;
     r.fling.off = FLING_MID;
     let mut moving = coasting;
-    if r.glide != 0.0 {
-        let step = if r.glide.abs() < 1.0 { r.glide } else { r.glide * (1.0 - (-dt * 14.0).exp()) };
-        r.glide -= step;
-        dy += step;
-        moving = true;
-    }
     if r.auto && !sheet_open {
         let v = View { r, im: &app.images };
         match ahead(&v, r.pos, view_h) {
@@ -532,7 +516,6 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
         r.pos = p;
         if stuck {
             r.fling.stop();
-            r.glide = 0.0;
             // The end of the last chapter: nothing more to scroll to.
             if r.auto && dy > 0.0 {
                 r.auto = false;
@@ -715,7 +698,6 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
                     app.ui.swallow();
                     r.hide_sheet = Some((c, n));
                     r.fling.stop();
-                    r.glide = 0.0;
                     break;
                 }
             }
@@ -878,17 +860,11 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
         if !on_bar && cx.ui.tapped(-1e5, -1e5, 2e5, 2e5) {
             r.overlay = false;
         }
-    } else if let Some((_, ty_)) = app.ui.tap
-        && app.ui.tapped(-1e5, -1e5, 2e5, 2e5)
-    {
+    } else if app.ui.tap.is_some() && app.ui.tapped(-1e5, -1e5, 2e5, 2e5) {
         if r.auto {
             // A tap stops auto-scroll, and shows the overlay to start it again.
             r.auto = false;
             r.overlay = true;
-        } else if app.prefs.tap_zones && ty_ < view_h / 3.0 {
-            r.turn(-view_h * crate::app::PAGE_TURN);
-        } else if app.prefs.tap_zones && ty_ > view_h * 2.0 / 3.0 {
-            r.turn(view_h * crate::app::PAGE_TURN);
         } else {
             r.overlay = true;
         }
@@ -907,9 +883,8 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
     }
     if let Some(c) = jump {
         r.pos = Pos { item: Item::Head(c), off: 0.0 };
-        // A page turn still gliding would carry the new chapter past its heading.
+        // A fling still coasting would carry the new chapter past its heading.
         r.fling.stop();
-        r.glide = 0.0;
         r.overlay = false;
     }
     moving |= app.images.pages_pending() && !crate::wake::has();

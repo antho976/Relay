@@ -11,6 +11,8 @@
 //! | `GET /v1/series/{id}/cover` | the cover image |
 //! | `GET /v1/search?q=` | `[Candidate]`: the broad sources (`LEAF_SEARCH_SOURCES`); `&all=1` every source, `&source=<name>` one; only titles with every word searched, at most 20, each source's answer kept 10 min |
 //! | `GET /v1/search/sources` | [`SearchSources`]: the broad sources, asked one by one by the phone |
+//! | `GET /v1/search/suggest?q=` | `{"title":…}`: AniList's title the words probably meant ("Did you mean"), or null; kept a day |
+//! | `GET /v1/preview?manga_id=a,b` | a title not added yet, as [`SeriesDetail`] (id 0): the first entry that answers, asked now, kept 10 min; nothing is added. An entry already in My space answers its series (its id) |
 //! | `POST /v1/follow` [`Follow`] | [`Series`] |
 //! | `GET /v1/chapters/{id}/pages` | [`Pages`] |
 //! | `GET /v1/chapters/{id}/pages/{n}` | the page image (WebP when Suwayomi converted it); `204` with `x-leaf-skip: 1` for a scanlator's promo page (`promo.rs`) unless `?promo=1` |
@@ -34,6 +36,7 @@
 //! | `GET /v1/chapters/{id}/thumb` | the chapter's picture (WebP, 240 × 180); 404 at once while there is none |
 //! | `GET /v1/recs` | [`Recs`], made once a day |
 //! | `GET /v1/recs/cover/{anilist_id}` | a recommendation's cover |
+//! | `GET /v1/recs/tagart/{slug}` | a collection's picture (`<slug>.webp` in `LEAF_TAGART`, 640 × 360; the slug is the tag lower-cased, spaces as `-`); 404 when there is none |
 //! | `POST /v1/recs/{anilist_id}/hide` | "Not interested", for good |
 //! | `POST /v1/recs/tags` [`RecTag`] | fewer recommendations with a tag, or as before |
 //! | `GET /v1/series/{id}/also` | `[Rec]`: "Readers also like", kept a day |
@@ -108,6 +111,13 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A collection's picture: `<slug>.webp` in `dir`, for a slug of lower-case letters, digits and
+/// `-` only (nothing that climbs out of the folder).
+fn tagart_file(dir: &std::path::Path, slug: &str) -> Option<std::path::PathBuf> {
+    let ok = !slug.is_empty() && slug.len() <= 64 && slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') && !slug.starts_with('-');
+    ok.then(|| dir.join(format!("{slug}.webp")))
 }
 
 /// Same length and same bytes, compared without stopping at the first difference, and over the
@@ -245,6 +255,17 @@ impl Api {
                 None => Err("search for what?".into()),
             },
             (Method::Get, ["v1", "search", "sources"]) => ctx.search_names(&Scope::Broad).map(|(broad, all)| json(&SearchSources { broad, all })),
+            (Method::Get, ["v1", "search", "suggest"]) => match query_param(url, "q").filter(|q| !q.trim().is_empty()) {
+                Some(q) => ctx.suggest(q.trim()).map(|t| json(&serde_json::json!({ "title": t }))),
+                None => Err("suggest for what?".into()),
+            },
+            (Method::Get, ["v1", "preview"]) => {
+                let ids: Vec<i64> = query_param(url, "manga_id").unwrap_or_default().split(',').filter_map(|v| v.trim().parse().ok()).collect();
+                if ids.is_empty() {
+                    return fail(400, "preview what?");
+                }
+                ctx.preview_json(&ids).map(|v| json(&v))
+            }
             (Method::Get, ["v1", "pages", "hidden"]) => Ok(json(&HiddenPages { count: ctx.hidden_count() })),
             (Method::Post, ["v1", "pages", "hide"]) => serde_json::from_str::<PageHide>(body)
                 .map_err(|e| format!("hide: {e}"))
@@ -321,6 +342,10 @@ impl Api {
                 Err(e) if e == crate::recs::NO_COVER => return fail(404, &e),
                 r => r.map(|(b, k)| image(b, &k)),
             },
+            (Method::Get, ["v1", "recs", "tagart", slug]) => match tagart_file(&ctx.tagart, slug).and_then(|p| std::fs::read(p).ok()) {
+                Some(b) => Ok(image(b, "image/webp")),
+                None => return fail(404, "no picture for that tag"),
+            },
             (Method::Post, ["v1", "recs", "tags"]) => serde_json::from_str::<RecTag>(body).map_err(|e| format!("tags: {e}")).map(|t| {
                 ctx.rec_tag(&t.tag, t.less);
                 json(&serde_json::json!({ "ok": true }))
@@ -360,6 +385,16 @@ mod tests {
         assert_eq!(query_param("/v1/search?x=1&q=caf%C3%A9", "q").as_deref(), Some("café"));
         assert_eq!(query_param("/v1/search?q=100%", "q").as_deref(), Some("100%"));
         assert_eq!(query_param("/v1/search", "q"), None);
+    }
+
+    #[test]
+    fn tag_pictures_stay_in_their_folder() {
+        let d = std::path::Path::new("/data/tagart");
+        assert_eq!(tagart_file(d, "martial-arts"), Some(d.join("martial-arts.webp")));
+        assert_eq!(tagart_file(d, "../leaf"), None);
+        assert_eq!(tagart_file(d, "Murim"), None, "slugs are lower-cased by the phone");
+        assert_eq!(tagart_file(d, ""), None);
+        assert_eq!(tagart_file(d, "a/b"), None);
     }
 
     #[test]

@@ -87,6 +87,66 @@ pub fn picture(url: &str) -> Result<Vec<u8>, String> {
     resp.body_mut().with_config().limit(8 << 20).read_to_vec().map_err(|e| format!("anilist: {e}"))
 }
 
+/// Every name (English, romaji, other names in Latin script) of the comics AniList finds for one
+/// word, best matches first: what "did you mean" picks from ([`closest`]).
+pub fn names_for(word: &str) -> Result<Vec<String>, String> {
+    const Q: &str = "query($s:String){ Page(perPage:50){ media(search:$s,type:MANGA,isAdult:false){ title{romaji english} synonyms } } }";
+    let v = post(None, &json!({ "query": Q, "variables": { "s": word } }))?;
+    let mut out: Vec<String> = Vec::new();
+    for m in v["data"]["Page"]["media"].as_array().into_iter().flatten() {
+        let mut names: Vec<&str> = [&m["title"]["english"], &m["title"]["romaji"]].iter().filter_map(|t| t.as_str()).collect();
+        names.extend(m["synonyms"].as_array().into_iter().flatten().filter_map(|s| s.as_str()));
+        out.extend(names.into_iter().filter(|n| latin(n)).map(str::to_string));
+    }
+    Ok(out)
+}
+
+/// How alike two words are, 0 to 1: one less their edit distance over the longer's length.
+fn alike(a: &str, b: &str) -> f32 {
+    let n = a.chars().count().max(b.chars().count()).max(1);
+    1.0 - leaf_proto::edit_distance(a, b) as f32 / n as f32
+}
+
+/// The name among `names` the words of `query` most likely meant: every word of the query close
+/// to a word of the name (two thirds alike at least, a word typed part way counting whole), and
+/// the name's words mostly accounted for; the best one, or None. A name that is the query already
+/// is no suggestion.
+pub fn closest(names: &[String], query: &str) -> Option<String> {
+    let q = leaf_proto::norm_title(query);
+    let qw: Vec<&str> = q.split(' ').filter(|w| !w.is_empty()).collect();
+    if qw.is_empty() {
+        return None;
+    }
+    let mut best: Option<(f32, &String)> = None;
+    for n in names {
+        let t = leaf_proto::norm_title(n);
+        if t == q || t.is_empty() {
+            continue;
+        }
+        let tw: Vec<&str> = t.split(' ').collect();
+        let mut sum = 0.0;
+        let mut ok = true;
+        for w in &qw {
+            let s = tw.iter().map(|x| if x.starts_with(w) && w.chars().count() >= 3 { 1.0 } else { alike(w, x) }).fold(0.0f32, f32::max);
+            if s < 0.66 {
+                ok = false;
+                break;
+            }
+            sum += s;
+        }
+        if !ok {
+            continue;
+        }
+        // Words of the name the query left out ("the", a subtitle) cost a little.
+        let left = tw.len().saturating_sub(qw.len()) as f32;
+        let score = sum / qw.len() as f32 - 0.04 * left;
+        if best.is_none_or(|(b, _)| score > b) {
+            best = Some((score, n));
+        }
+    }
+    best.filter(|(s, _)| *s >= 0.75).map(|(_, n)| n.clone())
+}
+
 /// AniList's id for the work it knows as `title` (the entry that names it), if any.
 pub fn media_id(title: &str) -> Result<Option<i64>, String> {
     const Q: &str = "query($s:String){ Page(perPage:5){ media(search:$s,type:MANGA){ id title{romaji english} synonyms } } }";
@@ -112,6 +172,15 @@ pub fn save_progress(token: &str, media: i64, progress: u32, done: bool) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn did_you_mean_finds_the_title_under_its_typos() {
+        let names: Vec<String> = ["Contracting Myself", "Wo Qiyue Le Wo Ziji", "The Awakening Contract", "I Contract Myself", "Angel x Contract", "The Perfect Contract", "Contract Sisters"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(closest(&names, "aweking contract").as_deref(), Some("The Awakening Contract"));
+        assert_eq!(closest(&names, "perfect contrct").as_deref(), Some("The Perfect Contract"));
+        assert_eq!(closest(&names, "solo leveling"), None, "nothing like it");
+        assert_eq!(closest(&names, "The Awakening Contract"), None, "already spelled right");
+    }
 
     #[test]
     fn only_the_entry_that_names_the_title_lends_its_names() {

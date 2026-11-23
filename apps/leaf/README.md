@@ -86,7 +86,7 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
   for tags you asked fewer of), without what you have, hid ("Not interested", kept for good),
   adult titles or non-comics, and only titles a few broad sources carry (searched as background
   work, kept a week): Top picks, Because you read X (your last three), Collections (your four
-  most read tags), one finished series to binge (`GET /v1/recs`); "Readers also like" per series
+  most read tags, each with its picture from `LEAF_TAGART`, `GET /v1/recs/tagart/{slug}`), one finished series to binge, which the phone no longer shows (`GET /v1/recs`); "Readers also like" per series
   (`/v1/series/{id}/also`, kept a day, searches no source).
 - **Paid on Webtoon** (`webtoon.rs`): Webtoons.com's source lists only free episodes; once a day
   the series' own list page says how many the app sells ahead ("Read 15 new episodes"), and a
@@ -104,18 +104,28 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
     belled series' new chapter bringing it back to the front; finished ones only fill it up to 15,
     after the others, "Read" dimmed; `logic::continue_order`; the spotlight and My space's Recent
     put finished ones last too), **Because you read X** rails, **Collections** (a tile per
-    tag, each opening its list) and one **Finished, to binge**. Picks (`recs.rs`) come from
-    `/v1/recs`, kept on disk and asked again at most every 30 minutes; until the server has made
-    them the section says so. A tap or a long press on a pick opens its sheet: why it is there,
-    Add to My space (`/v1/follow` with its sources' entries, bell off), Read chapter 1 (added,
-    then opened), Not interested (hidden for good) and Fewer like a tag.
+    tag, each opening its list). Each Because rail sits under a banner, a still collage of its
+    covers; a rail of fewer than two picks is left out, and the server's finished series to binge
+    is not shown. A collection's tile is 16:9: the tag's picture (`/v1/recs/tagart/{slug}`, kept on
+    disk; a 404 asked again a day later), else a still collage of its covers, the name over a dark
+    foot. Picks (`recs.rs`) come from `/v1/recs`, kept on disk and asked again at most every 30
+    minutes; until the server has made them the section says so. A tap on a pick opens its page as
+    a preview (see Search); a long press opens its sheet: why it is there, Follow (added, bell on),
+    Read chapter 1 (added, then opened), Not interested (hidden for good) and Fewer like a tag.
   - **Search**: a few broad sources (`LEAF_SEARCH_SOURCES`, default MangaDex, Asura Scans, Weeb
     Central, MangaFire), each asked apart (`/v1/search?source=`) so results show as they come; only
     titles with every word searched (or the same work, `leaf_proto::title_has_words`), at most 20,
-    each source's answer kept 10 minutes on the server. It goes once typing pauses (700 ms) or on
-    Enter, never under 3 characters, never twice for the same words; "Search all sources" under
-    the results asks the rest. **Add** puts a series in My space with its bell off: adding is not
-    following. Sources are never named anywhere in the app.
+    each source's answer kept 10 minutes on the server; a word may be a letter off (two in words of
+    six letters or more). It goes once typing pauses (700 ms) or on Enter, never under 3
+    characters, never twice for the same words; "Search all sources" under the results asks the
+    rest. When nothing is found, AniList is asked once what the words meant
+    (`/v1/search/suggest`, kept a day): "Did you mean The Awakening Contract?" searches that. Text
+    the keyboard sends after Enter let the field go goes back to it. A row opens the title's page:
+    a series added already as it is, any other as a **preview** (`/v1/preview`, under a negative
+    id): its chapters, Follow and a download key beside it (Select chapters, Select range…, the
+    next 5, every unread one), nothing added. Reading a chapter, Follow or a download adds it
+    (`/v1/follow` with its entries), and the page becomes the series'. Sources are never named
+    anywhere in the app.
   - **My space** (`space.rs`, design 42 page 16): rows with a square cover flush left (88, smaller
     than drawn, so more fit), the title, a line, when, and a key. Updates (chapters that came over
     the last 14 days, `/v1/updates`, by day, unread in full ink and read dimmed, Belled only or All;
@@ -127,7 +137,10 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
     accent, inside words). A long press on a series' row puts it on another shelf; Dropped series
     stay out of Home's spotlight and Continue reading. Highlights and Reading time are in its ⋯
     menu, no longer tabs; a book's notes stay in the reader's menu.
-  - **Series** (`series.rs`, design 42 page 17): Back, the bell as a Follow pill, info and ⋯; the
+  - **My space holds** only series with a chapter read, the bell on or a chapter downloaded
+    (`logic::in_space`); one added and left alone shows in none of its tabs, nor on Home.
+  - **Series** (`series.rs`, design 42 page 17): Back, the bell as a Follow pill, the download key
+    (Select chapters, Select range…, the next 5, every unread one), info and ⋯; the
     cover centred over a wash of its colours; title, authors, three lines of synopsis (info shows
     it all with the facts), tags; tabs **Chapters** / **Readers also like**; a fixed key at the
     bottom, "Continue chapter N". Chapter rows have the server's picture of the chapter (72 × 54,
@@ -160,9 +173,9 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
     23:00 to 08:00) hold notices until they end, and "One summary a day" posts a single "12 new
     chapters in 5 series" at its time (default 09:00). Both are in Settings, kept in
     `files/config.json` under `notify`.
-  - **Reading comfort** (comics, and books where it applies): a tap in the top or bottom third
-    turns the page by 85% of a screen (a setting), as the volume keys do (`LeafActivity` takes
-    them while reading: GameActivity never passes them on); the screen stays on while reading; a
+  - **Reading comfort** (comics, and books where it applies): a tap only shows or hides the
+    overlay (no tap zones, no volume keys: the owner, 2026-11-23); the screen stays on while
+    reading; a
     dimmer below the phone's lowest brightness (the reader's overlay, the book's type sheet);
     long white or black runs at a comic page's top and bottom are cut to 16 px when it is decoded
     (`logic::gutter_cuts`, a setting). Comics auto-scroll from the overlay's play key at the
@@ -174,6 +187,10 @@ phone (Leaf) ──https──▶ anthobot.bid/leaf ──Cloudflare Tunnel─�
     `exports/`; or one made now).
   - The reader chains chapters, caches pages on disk and reports progress. The last library and
     series are kept for offline.
+  - **Ids** (`known.rs`): the phone remembers which series each id named (`known.json`); an id
+    that comes back naming another series lets go of the old one's cover, banner, spotlight
+    pictures, place, copy on disk and settings, and its downloads move under an id of their own.
+    leaf-server never gives an id twice (`work_next_id`).
   - **Downloads** (`offline.rs`, `saved.rs`): a download is a chapter kept on this phone to read
     with no connection; what the server keeps is its own business and never shown. Pages go to
     `offline/<chapter>/` (a promo page the server skips as `<n>.skip`) with `manifest.json`
@@ -225,8 +242,8 @@ Shots and anything that opens a window: headless only (`--shot`), never on the d
 `.env` with `LEAF_TOKEN` and `LEAF_SOURCES`). Nothing is published: leaf-server joins the bot's
 network as `leaf-server`, and the bot's Caddy routes `/leaf/*` to it (Discord-bot-V2 #44).
 leaf-server's settings are its environment (the table at the top of `main.rs`); its data folder
-(`data/leaf`, `/data` in the container) holds `leaf.db`, `backups/`, `thumbs/`, `recs/covers/`
-and `app/`.
+(`data/leaf`, `/data` in the container) holds `leaf.db`, `backups/`, `thumbs/`, `recs/covers/`,
+`tagart/` and `app/`.
 
 ```fish
 apps/leaf/tools/publish-apk.sh native/android/build/outputs/apk/release/app-release.apk 12 0.3.0
@@ -234,6 +251,16 @@ apps/leaf/tools/publish-apk.sh native/android/build/outputs/apk/release/app-rele
 
 puts a new app there (`app/leaf.apk` and `app/latest.json`, copied under a temporary name and
 renamed, so the phone never sees one without the other).
+
+The collections' pictures (one PNG per tag, `<slug>.png`) become 640 × 360 WebP with
+`apps/leaf/tools/tagart.sh <src_dir>` (into `apps/leaf/server/tagart/`), and are copied into the
+data folder's `tagart/` (`LEAF_TAGART`, default `<LEAF_DATA>/tagart`, `/data/tagart` in the
+container):
+
+```fish
+ssh server1 'mkdir -p apps/leaf/server/data/leaf/tagart'
+scp apps/leaf/server/tagart/*.webp server1:apps/leaf/server/data/leaf/tagart/
+```
 
 ```fish
 ssh server1

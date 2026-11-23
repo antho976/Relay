@@ -3,15 +3,17 @@
 //! Home shows Top picks, "Because you read X", Collections and one finished series to binge;
 //! a series page shows "Readers also like" (`/v1/series/{id}/also`).
 //!
-//! A pick is not in your space: a tap (or a long press) opens its sheet (artboard wtH3): why it is
-//! there, Add to My space (`POST /v1/follow` with its sources' entries, bell off: adding is not
-//! following), Read chapter 1 (added, then opened), Not interested (hidden for good) and Fewer
-//! like a tag. One already yours opens its page. A list of picks (a collection, all Top picks,
-//! the binge) is its own page, [`draw_picks`].
+//! A pick is not in your space. A tap opens its page as a preview (`/v1/preview`, nothing added:
+//! [`App::open_preview`]), with Follow and Download as any series page; reading a chapter,
+//! following or downloading is what adds it (the owner, 2026-11-23). A long press opens its sheet
+//! (artboard wtH3): why it is there, Follow (added with its bell on), Read chapter 1 (added, then
+//! opened), Not interested (hidden for good) and Fewer like a tag. One already yours opens its
+//! page. A list of picks (a collection, all Top picks, the ones because you read one) is its own
+//! page, [`draw_picks`].
 
 use leaf_proto::Rec;
 
-use crate::app::{App, Route};
+use crate::app::{App, Route, Then};
 use crate::cx;
 use crate::draw::{Rgba, Text, WIDTH};
 use crate::images::{CoverOf, Images};
@@ -35,20 +37,21 @@ pub struct Sheet {
 
 /// What a tap on a pick asked for.
 pub enum Hit {
-    /// A tap: the sheet, or the series when it is yours already.
+    /// A tap: its page (a preview, or the series when it is yours already).
     Open(usize),
     /// A long press: the sheet.
     Hold(usize),
 }
 
-/// A pick tapped or held: its sheet, or its page when it is yours.
+/// A pick tapped (its page: the series when it is yours, else a preview) or held (its sheet).
 pub fn hit(app: &mut App, rec: &Rec, tag: Option<&str>, held: bool) {
     match rec.in_space {
-        Some(id) if !held => app.push(Route::Series(id)),
-        _ => {
+        _ if held => {
             let tag = tag.map(str::to_string).or_else(|| rec.genres.first().cloned());
             app.st.recs.sheet = Some(Sheet { rec: rec.clone(), tag });
         }
+        Some(id) => app.push(Route::Series(id)),
+        None => app.open_preview(&rec.title, &rec.hits, Some(rec.anilist_id)),
     }
 }
 
@@ -60,6 +63,37 @@ pub fn cover(c: &mut crate::draw::Canvas, im: &mut Images, r: &Rec, x: f32, y: f
     if im.cover(c, of, now) {
         c.image_cover(&of.key(), x, y, w, h, radius, Rgba::WHITE);
     }
+}
+
+/// A static collage of picks' covers filling a rounded box (Steam's collection tiles): up to
+/// `most` covers side by side, each a slice cut from its middle, on the tone `base` while they
+/// come, dimmed to `light` (1 as they are) so words over it read. Nothing moves.
+#[allow(clippy::too_many_arguments)]
+pub fn collage(c: &mut crate::draw::Canvas, im: &mut Images, recs: &[Rec], x: f32, y: f32, w: f32, h: f32, radius: f32, most: usize, base: Rgba, light: f32, now: u64) {
+    c.rect(x, y, w, h, radius, base);
+    let n = recs.len().min(most);
+    if n == 0 {
+        return;
+    }
+    let cw = w / n as f32;
+    for (i, r) in recs.iter().take(n).enumerate() {
+        let of = CoverOf::Rec(r.anilist_id);
+        if !im.cover(c, of, now) {
+            continue;
+        }
+        // Each slice runs under the next by a corner's width, so the seams are straight and only
+        // the box's own corners are round.
+        let sx = x + i as f32 * cw;
+        let sw = if i + 1 < n { cw + radius } else { x + w - sx };
+        let l = (light.clamp(0.0, 1.0) * 255.0) as u32;
+        c.image_cover(&of.key(), sx, y, sw, h, radius, Rgba::hex((l << 16) | (l << 8) | l));
+    }
+}
+
+/// A dark veil up from the bottom of a picture, for words over it.
+pub fn scrim(c: &mut crate::draw::Canvas, x: f32, y: f32, w: f32, h: f32, radius: f32) {
+    c.rect(x, y, w, h, radius, Rgba::hex(0x000000).a(0.12));
+    c.rect_grad(x, y + h * 0.3, w, h * 0.7, radius, Rgba::hex(0x000000).a(0.0), Rgba::hex(0x000000).a(0.85));
 }
 
 /// "Yours": a check on a pick already in your space.
@@ -195,7 +229,8 @@ pub fn facts(r: &Rec) -> String {
 
 /// What a pick's sheet asked for.
 pub enum Act {
-    Add,
+    /// Added, its bell on.
+    Follow,
     Read,
     Hide,
     Fewer(String),
@@ -214,7 +249,7 @@ pub fn sheet(cx: &mut Ctx, im: &mut Images, s: &Sheet, now: u64) -> Option<Act> 
     match r.in_space {
         Some(id) => rows.push(("chevron-right", "Open in My space".into(), Act::Open(id))),
         None => {
-            rows.push(("plus", "Add to My space".into(), Act::Add));
+            rows.push(("bell", "Follow".into(), Act::Follow));
             rows.push(("file-text", "Read chapter 1".into(), Act::Read));
         }
     }
@@ -284,8 +319,9 @@ pub fn act(app: &mut App, a: Act) {
     match a {
         Act::Close => {}
         Act::Open(id) => app.push(Route::Series(id)),
-        Act::Add => app.add_rec(&r, false),
-        Act::Read => app.add_rec(&r, true),
+        Act::Follow => app.adopt_rec(&r, Then::Follow),
+        // Its first chapter, whatever it is numbered.
+        Act::Read => app.adopt_rec(&r, Then::Read(f64::NEG_INFINITY, 0)),
         Act::Hide => {
             app.drop_rec(r.anilist_id);
             app.ask(Job::HideRec(r.anilist_id));
@@ -330,7 +366,6 @@ pub fn draw_picks(app: &mut App, of: &str, dt: f32) -> bool {
     let held = if covered { kit::hold(&mut cx) } else { None };
     let mut y = pg.top + 8.0;
     let mut picked: Option<(usize, bool)> = None;
-    let mut add: Option<usize> = None;
     if recs.is_empty() {
         y += 40.0;
         let (h, _) = kit::notice(&mut cx, PAD + 16.0, y, WIDTH - 2.0 * PAD - 32.0, "Nothing here now", Some("Picks you added or hid leave this list. New ones come with the next day's picks."), None);
@@ -350,12 +385,13 @@ pub fn draw_picks(app: &mut App, of: &str, dt: f32) -> bool {
         let (cw, ch) = (72.0, 96.0);
         cover(cx.c, &mut app.images, r, PAD, y + (rh - ch) / 2.0, cw, ch, 6.0, now);
         let tx = PAD + cw + 14.0;
-        let (kw, tapped) = if r.in_space.is_some() {
+        // Yours already: a check. Else the row opens its page.
+        let kw = 24.0;
+        if r.in_space.is_some() {
             cx.c.icon("check", WIDTH - PAD - 10.0, y + rh / 2.0, 16.0, t::ACCENT);
-            (24.0, false)
         } else {
-            kit::pill(&mut cx, WIDTH - PAD, y + (rh - 32.0) / 2.0, "Add", false)
-        };
+            cx.c.icon("chevron-right", WIDTH - PAD - 10.0, y + rh / 2.0, 16.0, t::INK3);
+        }
         let tw = WIDTH - PAD - kw - 12.0 - tx;
         let tt = Text::new(ty::BODY, t::INK).semi();
         let rt = Text::new(12.5, t::ACCENT);
@@ -367,8 +403,6 @@ pub fn draw_picks(app: &mut App, of: &str, dt: f32) -> bool {
         cx.c.text_fit(&facts(r), tx, ty0 + tt.lh() + 4.0 + rt.lh() + 4.0, tw, ft);
         if !covered && held_on(&mut cx, now, 0.0, y, WIDTH, rh) {
             picked = Some((i, true));
-        } else if tapped {
-            add = Some(i);
         } else if cx.tap(0.0, y, WIDTH, rh) {
             picked = Some((i, false));
         }
@@ -395,8 +429,6 @@ pub fn draw_picks(app: &mut App, of: &str, dt: f32) -> bool {
         act(app, a);
     } else if let Some((i, held)) = picked.filter(|_| !covered) {
         hit(app, &recs[i], tag.as_deref(), held);
-    } else if let Some(i) = add.filter(|_| !covered) {
-        app.add_rec(&recs[i], false);
     } else if back && !covered {
         app.pop();
     }

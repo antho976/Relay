@@ -15,6 +15,14 @@
 //! - **Readers also like**: AniList's recommendations from this series' readers that your sources
 //!   carry, three across, "Yours" on ones in My space ([`crate::recs`]).
 //!
+//! The download key beside Follow opens the download choices (to this phone): Select chapters,
+//! Select range…, the next 5, every unread one.
+//!
+//! **A preview** (a negative id, [`App::open_preview`]): a title from Search or the picks not added
+//! yet, shown from `/v1/preview` with its chapters, Follow, the download key and info, no ⋯ and no
+//! Readers also like. Nothing is added by opening it: reading a chapter, Follow or a download adds
+//! it ([`App::adopt`]), and the page becomes the series' own.
+//!
 //! The bell is the follow: new chapters are announced while it is on. ⋯ holds Select chapters,
 //! "Download next 5" and "Download all unread" (to this phone), the shelf it sits on, "Wrong series?" (the other
 //! entries found for the work, to read from instead) and "Remove from My space" (behind a
@@ -32,7 +40,7 @@ use std::collections::BTreeSet;
 
 use leaf_proto::{Chapter, SeriesDetail};
 
-use crate::app::App;
+use crate::app::{App, Then};
 use crate::cx;
 use crate::draw::{Rgba, Text, WIDTH};
 use crate::images::{CoverOf, thumb_key};
@@ -63,6 +71,8 @@ pub struct State {
     pub range_to: String,
     /// The synopsis and the facts (the info key).
     pub info: bool,
+    /// The download choices (the key beside Follow).
+    pub download: bool,
 }
 
 impl State {
@@ -78,11 +88,12 @@ impl State {
         self.alternatives = false;
         self.range = false;
         self.info = false;
+        self.download = false;
         open
     }
 
     fn covered(&self) -> bool {
-        self.menu || self.confirm || self.shelf || self.alternatives || self.range || self.info
+        self.menu || self.confirm || self.shelf || self.alternatives || self.range || self.info || self.download
     }
 }
 
@@ -142,6 +153,8 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             app.ask(Job::Series(id));
         }
     }
+    // A title not added yet: nothing here asks the server to change anything until it is added.
+    let preview = id < 0;
     // What the library knows stands in until the series itself arrives. Offline, the chapters
     // downloaded to this phone are the list.
     let saved_n = app.saver.saved_of(id).len();
@@ -150,8 +163,9 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let from_library = app.library.data.as_ref().and_then(|l| l.iter().find(|s| s.id == id).cloned());
     let loaded = app.series.get(&id);
     let (loading, error) = (loaded.is_some_and(|l| l.loading), loaded.and_then(|l| l.error.clone()));
-    let offline = saved_only || loaded.is_some_and(|l| l.offline());
-    let also_tab = app.st.series.also;
+    // A preview kept from a moment ago is not "offline": a failed ask says so in words.
+    let offline = !preview && (saved_only || loaded.is_some_and(|l| l.offline()));
+    let also_tab = app.st.series.also && !preview;
     if also_tab && !app.also.contains_key(&id) && app.server.is_some() {
         app.also.entry(id).or_default().loading = true;
         app.ask(Job::Also(id));
@@ -255,10 +269,11 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             if let Some(e) = &app.st.series.error {
                 y += cx.c.para(e, x0, y, w, Text::new(ty::UI, t::DANGER).line(1.4), 3) + 12.0;
             }
-            // Chapters | Readers also like
+            // Chapters | Readers also like (a preview has its chapters only).
             let tt = Text::new(15.5, t::INK3).medium();
             let mut tabx = x0;
-            for (i, words) in ["Chapters", "Readers also like"].iter().enumerate() {
+            let tab_words: &[&str] = if preview { &["Chapters"] } else { &["Chapters", "Readers also like"] };
+            for (i, words) in tab_words.iter().enumerate() {
                 let on = (i == 1) == also_tab;
                 let tw_ = cx.c.text(words, tabx, y + (42.0 - tt.lh()) / 2.0, if on { tt.color(t::INK).semi() } else { tt });
                 if on {
@@ -553,7 +568,8 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                 let get_words = if to_get.is_empty() { "Download".to_string() } else { format!("Download {}", to_get.len()) };
                 let drop_words = if to_drop.is_empty() { "Delete".to_string() } else { format!("Delete {}", to_drop.len()) };
                 let mark_words = if read { "Mark read" } else { "Mark unread" };
-                for (k, (words, live)) in [(get_words.as_str(), !to_get.is_empty()), (drop_words.as_str(), !to_drop.is_empty()), (mark_words, n > 0)].iter().enumerate() {
+                // A preview has nothing on this phone, and marks nothing read until it is added.
+                for (k, (words, live)) in [(get_words.as_str(), !to_get.is_empty()), (drop_words.as_str(), !to_drop.is_empty() && !preview), (mark_words, n > 0 && !preview)].iter().enumerate() {
                     let kx = x0 + k as f32 * (gw + 8.0);
                     let tapped = if !live {
                         cx.c.rect(kx, ky, gw, KEY_H, t::KEY_R, t::S1);
@@ -587,6 +603,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     // The fixed top: Back, the bell as Follow, info and ⋯ (or, selecting: how many, and the range).
     let mut back = false;
     let mut more = false;
+    let mut open_download = false;
     let mut stop_select = false;
     let mut to_range = false;
     {
@@ -614,8 +631,12 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                 }
             }
             None => {
-                // Over the picture the keys sit on a soft dark disc, so a bright cover doesn't swallow them.
-                for kx in [6.0, WIDTH - 6.0 - 88.0, WIDTH - 6.0 - 44.0] {
+                // Back at the left; at the right ⋯ (not on a preview), info, the download key and
+                // Follow. Over the picture the keys sit on a soft dark disc, so a bright cover
+                // doesn't swallow them.
+                let keys = if preview { 2.0 } else { 3.0 };
+                let (info_x, get_x) = (WIDTH - 6.0 - 44.0 * (keys - 1.0), WIDTH - 6.0 - 44.0 * keys);
+                for kx in [6.0, get_x, info_x].into_iter().chain((!preview).then_some(WIDTH - 6.0 - 44.0)) {
                     cx.c.circle(kx + 22.0, top + 28.0, 18.0, t::BG.a(0.32 * (1.0 - scrolled)));
                 }
                 if kit::icon_key(&mut cx, 6.0, top + 6.0, "arrow-left") {
@@ -626,7 +647,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                     let (words, glyph, ink) = if s.bell { ("Following", "bell-on", t::ACCENT) } else { ("Follow", "bell", t::INK) };
                     let ft = Text::new(13.5, t::INK).medium();
                     let fw = cx.c.measure(words, ft) + 44.0;
-                    let (fx, fy, fh) = (WIDTH - 6.0 - 88.0 - 4.0 - fw, top + 11.0, 34.0);
+                    let (fx, fy, fh) = (get_x - 4.0 - fw, top + 11.0, 34.0);
                     cx.c.rect(fx, fy, fw, fh, fh / 2.0, if s.bell { t::ACCENT_DIM } else { t::BG.a(0.45) });
                     if !s.bell {
                         cx.c.outline(fx, fy, fw, fh, fh / 2.0, 1.0, t::INK.a(0.3));
@@ -640,10 +661,13 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                         act = Some(Act::Bell(!s.bell));
                     }
                 }
-                if kit::icon_key(&mut cx, WIDTH - 6.0 - 88.0, top + 6.0, "info") {
+                if detail.is_some() && kit::icon_key(&mut cx, get_x, top + 6.0, "download") {
+                    open_download = true;
+                }
+                if kit::icon_key(&mut cx, info_x, top + 6.0, "info") {
                     open_info = true;
                 }
-                if kit::icon_key(&mut cx, WIDTH - 6.0 - 44.0, top + 6.0, "more") {
+                if !preview && kit::icon_key(&mut cx, WIDTH - 6.0 - 44.0, top + 6.0, "more") {
                     more = true;
                 }
                 if offline && scrolled <= 0.5 {
@@ -717,6 +741,28 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             if info_sheet(&mut cx, detail.as_ref()) {
                 st.info = false;
             }
+        } else if st.download {
+            let items = [("Select chapters", false), ("Select range…", false), ("The next 5 chapters", false), ("Every unread chapter", false)];
+            match kit::choices(&mut cx, "Download to this phone", Some("Kept here, to read with no connection"), &items) {
+                Some(0) => {
+                    st.download = false;
+                    st.select = Some(BTreeSet::new());
+                }
+                Some(1) => {
+                    st.download = false;
+                    to_range = true;
+                }
+                Some(2) => {
+                    st.download = false;
+                    next5 = true;
+                }
+                Some(3) => {
+                    st.download = false;
+                    all_unread = true;
+                }
+                Some(_) => st.download = false,
+                None => {}
+            }
         } else if st.alternatives {
             let alts = app.alternatives.get(&id);
             match alternatives_sheet(&mut cx, alts, st.repinning, now) {
@@ -738,11 +784,14 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         }
     } else if more {
         st.menu = true;
+    } else if open_download {
+        st.download = true;
     } else if open_info {
         st.info = true;
     } else if stop_select {
         st.select = None;
-    } else if to_range {
+    }
+    if to_range {
         st.range = true;
         // Filled in from where you are: the first unread chapter to the newest.
         if let Some(d) = &detail {
@@ -788,7 +837,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             app.toast(&format!("No chapters from {} to {}", logic::num(lo), logic::num(hi)));
         } else if download {
             let get: Vec<Chapter> = d.chapters.iter().filter(|c| c.number >= lo && c.number <= hi).cloned().collect();
-            app.download(id, &get);
+            get_chapters(app, id, &get);
             app.st.series.select = None;
         } else {
             app.st.series.select = Some(ids.into_iter().collect());
@@ -798,7 +847,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         Some(Batch::Download(ids)) => {
             if let Some(d) = &detail {
                 let get: Vec<Chapter> = d.chapters.iter().filter(|c| ids.contains(&c.id)).cloned().collect();
-                app.download(id, &get);
+                get_chapters(app, id, &get);
             }
             app.st.series.select = None;
         }
@@ -832,7 +881,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                 app.toast("The next 5 chapters are on this phone already");
             } else {
                 let get: Vec<Chapter> = d.chapters.iter().filter(|c| ids.contains(&c.id)).cloned().collect();
-                app.download(id, &get);
+                get_chapters(app, id, &get);
             }
         }
         if all_unread {
@@ -840,7 +889,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             if get.is_empty() {
                 app.toast("Every chapter is read");
             } else {
-                app.download(id, &get);
+                get_chapters(app, id, &get);
             }
         }
     }
@@ -855,12 +904,18 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         Some(_) if covered => {}
         Some(Act::Open(index, page)) => {
             if let Some(d) = &detail {
-                app.open_chapter(d, index, page);
+                read_chapter(app, id, d, index, page);
             }
         }
         Some(Act::Download(c)) => {
             if let Some(ch) = detail.as_ref().and_then(|d| d.chapters.iter().find(|k| k.id == c).cloned()) {
-                app.download(id, &[ch]);
+                get_chapters(app, id, &[ch]);
+            }
+        }
+        // A preview's Follow adds it, its bell on.
+        Some(Act::Bell(on)) if preview => {
+            if on {
+                app.adopt(id, Then::Follow);
             }
         }
         Some(Act::Bell(on)) => app.set_bell(id, on),
@@ -881,13 +936,34 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             if let Some((index, page)) = open_cont.filter(|_| !covered)
                 && let Some(d) = &detail
             {
-                app.open_chapter(d, index, page);
+                read_chapter(app, id, d, index, page);
             } else if back && !covered {
                 app.pop();
             }
         }
     }
     pg.moving || loading && !crate::wake::has()
+}
+
+/// Download chapters of the series shown to this phone; a preview is added first, and its
+/// chapters downloaded by number once it is in.
+fn get_chapters(app: &mut App, id: i64, chapters: &[Chapter]) {
+    if id < 0 {
+        app.adopt(id, Then::Download(chapters.iter().map(|c| c.number).collect()));
+    } else {
+        app.download(id, chapters);
+    }
+}
+
+/// Read a chapter of the series shown; a preview is added first, and the chapter opens once it is.
+fn read_chapter(app: &mut App, id: i64, d: &SeriesDetail, index: usize, page: u32) {
+    if id < 0 {
+        if let Some(c) = d.chapters.get(index) {
+            app.adopt(id, Then::Read(c.number, page));
+        }
+    } else {
+        app.open_chapter(d, index, page);
+    }
 }
 
 /// Mark chapters read or unread, at once on the phone. A run from the first chapter is one request

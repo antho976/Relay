@@ -1,5 +1,5 @@
-//! Settings, under the server's address and token (`connect.rs`): reading (tap thirds, volume
-//! keys, trimmed page edges), notices (quiet hours, one summary a day), how each source is doing,
+//! Settings, under the server's address and token (`connect.rs`): reading (trimmed page
+//! edges, promo pages), notices (quiet hours, one summary a day), how each source is doing,
 //! AniList, and exporting a backup. Settings read and write `config.json`; the ones the server
 //! keeps (AniList) go to it.
 
@@ -130,18 +130,6 @@ pub fn draw(cx: &mut Ctx, p: Parts, x: f32, mut y: f32, w: f32, now_ns: u64) -> 
     let mut acts = Vec::new();
     // Reading
     y += heading(cx, x, y, "READING");
-    let (h, tap) = toggle_row(cx, x, y, w, "Turn pages with a tap", "A tap in the top or bottom third of a page turns it. The middle shows the controls.", p.prefs.tap_zones);
-    if tap {
-        p.prefs.tap_zones = !p.prefs.tap_zones;
-        acts.push(Act::Save);
-    }
-    y += h;
-    let (h, tap) = toggle_row(cx, x, y, w, "Turn pages with the volume keys", "While a book or a comic is open.", p.prefs.volume_keys);
-    if tap {
-        p.prefs.volume_keys = !p.prefs.volume_keys;
-        acts.push(Act::Save);
-    }
-    y += h;
     let (h, tap) = toggle_row(cx, x, y, w, "Trim blank page edges", "Long white or black runs at the top and bottom of a comic's pages are cut short.", p.prefs.trim_gutters);
     if tap {
         p.prefs.trim_gutters = !p.prefs.trim_gutters;

@@ -16,9 +16,8 @@
 //! Java, so every JNI sequence runs inside a local frame ([`with_activity`]), which frees its
 //! local references. Back comes from `LeafActivity` (AndroidX would finish the activity first),
 //! and the reader hides the system bars through `LeafActivity.setImmersive`. While a book or a
-//! strip is open, `LeafActivity.setReading` keeps the screen on and takes the volume keys
-//! (GameActivity's own filter never passes them to native code), handing each press here
-//! (`nativeVolume`). `LeafChaptersJob` asks `nativePlan` which chapter notices to post
+//! strip is open, `LeafActivity.setReading` keeps the screen on; the volume keys stay
+//! the system's. `LeafChaptersJob` asks `nativePlan` which chapter notices to post
 //! ([`crate::notices`]).
 
 use std::ffi::CString;
@@ -80,8 +79,8 @@ impl Host for AndroidHost {
         with_activity(&self.app, |env, activity| env.call_method(activity, "setImmersive", "(Z)V", &[JValue::Bool(on as u8)]).map(|_| ()));
     }
 
-    fn reading(&self, on: bool, volume_keys: bool) {
-        with_activity(&self.app, |env, activity| env.call_method(activity, "setReading", "(ZZ)V", &[JValue::Bool(on as u8), JValue::Bool((on && volume_keys) as u8)]).map(|_| ()));
+    fn reading(&self, on: bool) {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "setReading", "(Z)V", &[JValue::Bool(on as u8)]).map(|_| ()));
     }
 
     fn ask_notifications(&self) {
@@ -230,15 +229,6 @@ static BACK: AtomicBool = AtomicBool::new(false);
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_quietsoftware_leaf_LeafActivity_nativeBack<'local>(_env: JNIEnv<'local>, _class: JClass<'local>) {
     BACK.store(true, Ordering::SeqCst);
-    wake();
-}
-
-/// Volume key presses while reading, from LeafActivity: down (+1) or up (-1), summed.
-static VOLUME: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_com_quietsoftware_leaf_LeafActivity_nativeVolume<'local>(_env: JNIEnv<'local>, _class: JClass<'local>, down: jni::sys::jboolean) {
-    VOLUME.fetch_add(if down != 0 { 1 } else { -1 }, Ordering::SeqCst);
     wake();
 }
 
@@ -495,12 +485,6 @@ fn android_main(android: AndroidApp) {
         }
 
         let mut go_back = BACK.swap(false, Ordering::SeqCst);
-        let mut volume = VOLUME.swap(0, Ordering::SeqCst);
-        while volume != 0 {
-            app.volume(volume > 0);
-            volume -= volume.signum();
-            dirty = true;
-        }
         let mut text: Option<String> = None;
         let mut done_typing = false;
         if let Ok(mut events) = android.input_events_iter() {

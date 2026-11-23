@@ -543,16 +543,50 @@ pub struct SearchSources {
     pub all: u32,
 }
 
-/// A search's words found in a title: every word of the query inside the title (both
-/// normalised, [`norm_title`]), or the two naming the same work ([`same_work`]). What a source
-/// answers beyond that ("Solo Leveling" bringing back every title with "level" in its synopsis) is
-/// not shown.
+/// The edit distance between two words (Levenshtein, over characters): letters added, taken
+/// away or changed to turn one into the other.
+pub fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut diag = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let next = (diag + usize::from(ca != cb)).min(row[j] + 1).min(row[j + 1] + 1);
+            diag = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    row[b.len()]
+}
+
+/// A word of a search found in a title's words, typos allowed: inside the title, the start of one
+/// of its words, or within one letter of one (for words of three to five letters) or two (longer).
+/// Words of one or two letters must be there as typed.
+pub fn word_in_title(word: &str, title_words: &[&str], title: &str) -> bool {
+    if title.contains(word) {
+        return true;
+    }
+    let n = word.chars().count();
+    let k = match n {
+        0..=2 => return false,
+        3..=5 => 1,
+        _ => 2,
+    };
+    title_words.iter().any(|t| t.starts_with(word) || edit_distance(word, t) <= k)
+}
+
+/// A search's words found in a title: every word of the query in the title, typos allowed
+/// ([`word_in_title`], both normalised, [`norm_title`]), or the two naming the same work
+/// ([`same_work`]). What a source answers beyond that ("Solo Leveling" bringing back every title
+/// with "level" in its synopsis) is not shown.
 pub fn title_has_words(title: &str, query: &str) -> bool {
     let (t, q) = (norm_title(title), norm_title(query));
     if q.is_empty() || t.is_empty() {
         return false;
     }
-    q.split(' ').all(|w| t.contains(w)) || same_work(title, query)
+    let words: Vec<&str> = t.split(' ').collect();
+    q.split(' ').all(|w| word_in_title(w, &words, &t)) || same_work(title, query)
 }
 
 #[cfg(test)]
@@ -570,5 +604,22 @@ mod search_tests {
         assert!(title_has_words("I Became the King by Scavenging", "Became the King by Scavenging"));
         assert!(!title_has_words("", "solo"));
         assert!(!title_has_words("Solo Leveling", "  "));
+    }
+
+    #[test]
+    fn a_typo_or_two_still_finds_the_title() {
+        assert!(title_has_words("Solo Leveling", "solo levleing"), "two letters swapped in a long word");
+        assert!(title_has_words("Nano Machine", "nano machin"), "typed part way");
+        assert!(title_has_words("Nano Machine", "nanp machine"), "one wrong in a short word");
+        assert!(title_has_words("The Awakening Contract", "awakenng contract"));
+        assert!(!title_has_words("The Awakening Contract", "aweking contract"), "three letters off: that is for Did you mean");
+        assert!(!title_has_words("Nano Machine", "nnao mechanic"));
+        assert!(title_has_words("Tower of God", "tower of good"), "one letter off in a short word");
+        assert!(!title_has_words("Tower of God", "tower of gaad"), "but not two");
+        assert!(title_has_words("Tower of God", "tower of gods"));
+        assert!(!title_has_words("Tower of God", "tower on god"), "two-letter words exactly");
+        assert_eq!(super::edit_distance("aweking", "awakening"), 3);
+        assert_eq!(super::edit_distance("", "abc"), 3);
+        assert_eq!(super::edit_distance("kitten", "sitting"), 3);
     }
 }
