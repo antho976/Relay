@@ -1,0 +1,111 @@
+name: Leaf
+
+# Everything that must be true before Leaf (apps/leaf: the reading app and its comics server) is
+# installable or deployable. Its Cargo workspace is apps/leaf/native, apart from the root one, so
+# the root CI never builds it. Every `run:` step works from apps/leaf or apps/leaf/native (defaults
+# below); paths given to actions start at the repository root and carry the apps/leaf/ prefix.
+#
+# Cheapest first, each gating the next:
+#
+#   guard     ~30s  Wrapper checksum, no signing material, no build output in the tree.
+#   test      ~8m   cargo test (the autopilot's rules, the shelf, EPUB reading, flows) and clippy.
+#   android   ~6m   The Android library type-checks for arm64 (android.rs, GameActivity, JNI).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/leaf/**"
+      - "!apps/leaf/**.md"
+      - ".github/workflows/leaf.yml"
+  pull_request:
+    paths:
+      - "apps/leaf/**"
+      - ".github/workflows/leaf.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  guard:
+    name: Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        # git ls-files from here lists only Leaf's files, so the checks below stay Leaf's.
+        working-directory: apps/leaf
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Validate Gradle wrapper checksum
+        uses: gradle/actions/wrapper-validation@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
+
+      - name: No signing material in the tree
+        run: |
+          found=$(git ls-files -- '*.jks' '*.keystore' '*.p12' 'keystore.properties' '**/keystore.properties' | grep -v '\.example$' || true)
+          if [ -n "$found" ]; then
+            echo "::error::Signing material is committed:"; echo "$found"; exit 1
+          fi
+          echo "No keystores."
+
+      - name: No build output or dev data in the tree
+        run: |
+          found=$(git ls-files | grep -E '(^|/)(build|\.gradle|target|\.dev)/|\.so$|(^|/)\.env$' || true)
+          if [ -n "$found" ]; then
+            echo "::error::Build output or local data is committed:"; echo "$found"; exit 1
+          fi
+          echo "Clean."
+
+  test:
+    name: Test (host)
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/leaf/native
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal -c clippy && rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: apps/leaf/native
+      - name: Tests
+        run: cargo test --locked
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+  android:
+    name: Android (arm64 type-check)
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/leaf/native
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal -t aarch64-linux-android && rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: apps/leaf/native
+          key: android
+      - name: Check
+        run: |
+          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$bin/aarch64-linux-android26-clang"
+          export CXX_aarch64_linux_android="$bin/aarch64-linux-android26-clang++"
+          export AR_aarch64_linux_android="$bin/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$bin/aarch64-linux-android26-clang"
+          cargo check --locked -p leaf-app --lib --target aarch64-linux-android
