@@ -24,7 +24,8 @@ pub const ATLAS_SIZE: u32 = 2048;
 /// The picture atlas's side where the GPU allows it ([`Gfx::images_size`]): nine page tiles of
 /// 800 × 1020. Some GLES 3.0 phones stop at 2048: there the canvas keeps pictures at half size
 /// ([`crate::draw::Canvas::add_image`]).
-pub const IMAGES_SIZE: u32 = 3072;
+/// 4096 since 2026-11-22: with 170 series the spotlight's posters were pushed out at 3072.
+pub const IMAGES_SIZE: u32 = 4096;
 
 /// A run of instances drawn under one clip rectangle (pixels: x, y, w, h), or none.
 #[derive(Clone, Copy, Debug)]

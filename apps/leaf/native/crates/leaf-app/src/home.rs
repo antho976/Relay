@@ -214,6 +214,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             st.target = 0.0;
         }
         let first = st.pos.floor();
+        // The pictures stop at the spotlight's edge: a backdrop drawn larger must not show as a
+        // band under the fade.
+        cx.c.push_clip(0.0, cx.c.dy, WIDTH, hero_h);
         for k in [first, first + 1.0] {
             let off = (k - st.pos) * WIDTH;
             if off.abs() >= WIDTH - 0.5 {
@@ -240,6 +243,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 cx.c.rect(off, 0.0, WIDTH, hero_h, 0.0, tone);
             }
         }
+        cx.c.pop_clip();
         // Dark at the top for the status bar and the name, and a long fade into the ground.
         cx.c.rect_grad(-1000.0, 0.0, WIDTH + 2000.0, top + 90.0, 0.0, t::BG.a(0.55), t::BG.a(0.0));
         cx.c.rect_grad(-1000.0, hero_h * 0.3, WIDTH + 2000.0, hero_h * 0.7 + 1.0, 0.0, t::BG.a(0.0), t::BG);
