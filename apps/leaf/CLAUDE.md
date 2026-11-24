@@ -45,6 +45,12 @@ straight to Suwayomi. An error starting with `PAUSED` is not the source's failur
 toward moving a series. Chapter pictures come only from Suwayomi's downloaded files. Tests of
 these rules pass time in; none sleep.
 
+Every source has ceilings below what its provider publishes, and modest ones where it publishes
+nothing (`budget::limits_for`, tested against the published numbers): per second and per minute for
+both lanes together, with pictures, page lists and the rest counted apart, and a day's share for the
+background. The phone's request waits a moment over a ceiling and is told "busy" past 5 s; while a
+source is paused it gets a quarter of its ceilings. A new provider gets its own row there.
+
 Search asks only the broad sources (`LEAF_SEARCH_SOURCES`) unless the owner asks for all, keeps
 each source's answer 10 minutes, and the phone searches only after typing pauses. Promo pages are
 recognised only from page bytes already passing through (`promo.rs`): never fetch a page to hash it,

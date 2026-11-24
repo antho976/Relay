@@ -23,7 +23,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use leaf_proto::{Candidate, Chapter, Copy, Hit, PaidAhead, Series, SeriesDetail, SeriesDownload, gaps, pick_copies, same_work};
 use serde_json::Value;
 
-use crate::budget::{Budget, Lane};
+use crate::budget::{Budget, Kind, Lane};
 use crate::store::{Store, Work};
 use crate::suwa::{Manga, Suwa};
 
@@ -362,14 +362,17 @@ impl Ctx {
     /// answers [`PAUSED`] while the source asked for fewer requests. A rate limit in the answer
     /// pauses the source's background work (kept across restarts).
     pub(crate) fn ask<T>(&self, source: &str, lane: Lane, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
-        match lane {
-            Lane::Fore => self.budget.fore(source, now_ms()),
-            Lane::Back => {
-                let wait = self.budget.book(source, now_ms()).map_err(|until| format!("{PAUSED}{source} asked for fewer requests (until {until})"))?;
-                if wait > 0 {
-                    std::thread::sleep(Duration::from_millis(wait as u64));
-                }
-            }
+        self.ask_as(source, lane, Kind::Api, f)
+    }
+
+    /// [`Ctx::ask`] for a kind of request counted apart (a page list, a picture).
+    pub(crate) fn ask_as<T>(&self, source: &str, lane: Lane, kind: Kind, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        let wait = match lane {
+            Lane::Fore => self.budget.fore(source, kind, now_ms()).map_err(|_| format!("{source} is busy: too many requests this minute, try again shortly"))?,
+            Lane::Back => self.budget.book_as(source, kind, now_ms()).map_err(|until| format!("{PAUSED}{source} asked for fewer requests (until {until})"))?,
+        };
+        if wait > 0 {
+            std::thread::sleep(Duration::from_millis(wait as u64));
         }
         let r = f();
         if let Err(e) = &r
@@ -906,7 +909,7 @@ impl Ctx {
         copies.sort_by_key(|m| rank(&m.source_name, &self.prefs));
         for m in copies {
             for c in m.chapters.iter().filter(|c| c.number == number) {
-                if let Ok(p) = self.ask(&m.source_name, Lane::Fore, || self.suwa.pages(c.id))
+                if let Ok(p) = self.ask_as(&m.source_name, Lane::Fore, Kind::Pages, || self.suwa.pages(c.id))
                     && !p.is_empty()
                 {
                     log(&format!("chapter {chapter_id}: read from {} instead", m.source_name));
@@ -930,7 +933,7 @@ impl Ctx {
             return Ok(p);
         }
         let info = self.suwa.chapter_info(chapter_id)?;
-        let asked = if info.downloaded { self.suwa.pages(chapter_id) } else { self.ask(&info.source, Lane::Fore, || self.suwa.pages(chapter_id)) };
+        let asked = if info.downloaded { self.suwa.pages(chapter_id) } else { self.ask_as(&info.source, Lane::Fore, Kind::Pages, || self.suwa.pages(chapter_id)) };
         let p = match asked {
             Ok(urls) => PageList { urls, source: info.source, local: info.downloaded },
             Err(e) => {
@@ -950,7 +953,7 @@ impl Ctx {
     pub fn page(&self, chapter_id: i64, n: usize) -> Result<(Vec<u8>, String), String> {
         let list = self.pages(chapter_id)?;
         let url = list.urls.get(n).ok_or("no such page")?;
-        if list.local { self.suwa.bytes(url) } else { self.ask(&list.source, Lane::Fore, || self.suwa.bytes(url)) }
+        if list.local { self.suwa.bytes(url) } else { self.ask_as(&list.source, Lane::Fore, Kind::Images, || self.suwa.bytes(url)) }
     }
 
     /// The chapter after the last one you read (`ahead` of them, 1 by default), downloaded before

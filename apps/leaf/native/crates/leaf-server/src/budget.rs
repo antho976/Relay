@@ -1,13 +1,22 @@
 //! Each source asked politely: a per-source request budget for everything that reaches a site
-//! through Suwayomi (a search, a refresh, a chapter's page list, a download handed over).
+//! through Suwayomi (a search, a refresh, a chapter's page list, a page's picture, a download
+//! handed over) and AniList.
 //!
 //! - **Background** work (the hourly pass, comparisons, recommendations, the download queue)
 //!   books the source's next slot and waits for it: one request every [`DEFAULT_GAP_MS`]
-//!   (MangaDex every 1.5 s), `LEAF_SOURCE_GAP_MS` to change them.
-//! - **Foreground** work the phone is waiting on (pages, a search typed, a follow) is never
-//!   delayed, only counted; the background waits a gap after it.
+//!   (MangaDex every 1.5 s, AniList every 3 s), `LEAF_SOURCE_GAP_MS` to change them, and at most
+//!   [`Limits::back_per_day`] a day (then it waits for tomorrow, as for a pause).
+//! - **Foreground** work the phone is waiting on (pages, a search typed, a follow) goes at once
+//!   while the source is under its ceilings; over one it waits for the next free moment (a
+//!   second or two), and is refused as busy if that is more than [`FORE_MAX_WAIT_MS`] away. The
+//!   background waits a gap after it.
+//! - **Ceilings** ([`Limits`], [`limits_for`]) count both lanes together, per second and per
+//!   minute, with pictures, page lists and the rest counted apart: below what each provider
+//!   publishes (MangaDex: 5 a second and 40 page lists a minute; AniList: 90 a minute, 30 while
+//!   degraded), and modest where a site publishes nothing.
 //! - An answer that looks like a rate limit (429, "Too Many Requests") or a Cloudflare check that
-//!   failed pauses the source for background work for an hour, doubling on repeats up to 12 h.
+//!   failed pauses the source's background work for an hour, doubling on repeats up to 12 h;
+//!   meanwhile the foreground is held to a quarter of its ceilings.
 //!
 //! Time is passed in (ms since the epoch), so the rules are tested without sleeping.
 
@@ -16,8 +25,68 @@ use std::sync::Mutex;
 
 pub const DEFAULT_GAP_MS: i64 = 3_000;
 /// MangaDex asks clients for at most five requests a second; 1.5 s is well under it.
-/// AniList allows 90 requests a minute, 30 while it says it is degraded: one every 2 s stays under both.
-const KNOWN_GAPS: [(&str, i64); 2] = [("MangaDex", 1_500), ("AniList", 2_000)];
+/// AniList allows 90 requests a minute, 30 while it says it is degraded: one every 3 s is 20.
+const KNOWN_GAPS: [(&str, i64); 2] = [("MangaDex", 1_500), ("AniList", 3_000)];
+/// The longest the phone's request waits for a source's ceiling before it is told "busy".
+pub const FORE_MAX_WAIT_MS: i64 = 5_000;
+
+/// What a request is, for its source's ceilings: pictures come from image servers and are counted
+/// apart from the site's pages and API.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Kind {
+    /// A search, a series refreshed, a download handed over, a list page, an AniList query.
+    Api,
+    /// A chapter's list of pages (MangaDex's at-home server allows 40 a minute).
+    Pages,
+    /// One page's picture.
+    Images,
+}
+
+/// A ceiling: at most this many a second and a minute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rate {
+    pub per_sec: usize,
+    pub per_min: usize,
+}
+
+/// A source's ceilings, both lanes together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    pub api: Rate,
+    pub pages: Rate,
+    pub images: Rate,
+    /// Background requests a day (UTC), every kind: past it the autopilot waits for tomorrow.
+    pub back_per_day: u64,
+}
+
+impl Limits {
+    pub fn rate(&self, kind: Kind) -> Rate {
+        match kind {
+            Kind::Api => self.api,
+            Kind::Pages => self.pages,
+            Kind::Images => self.images,
+        }
+    }
+}
+
+/// The ceilings for a source.
+/// - MangaDex publishes 5 requests a second per address and 40 a minute for page lists: we stay
+///   at 2 a second, 60 a minute, and 20 page lists a minute.
+/// - AniList publishes 90 a minute (30 while degraded): 1 a second, 20 a minute.
+/// - Webtoons.com publishes nothing and is read only for its list pages: 1 a second, 10 a minute.
+/// - Every other site publishes nothing: 1 a second, 20 a minute for its pages and API, and a
+///   steady 4 pictures a second (a chapter read as it comes, not downloaded first).
+pub fn limits_for(source: &str) -> Limits {
+    let s = source.to_lowercase();
+    // Pictures: a steady 4 a second (a browser asks for a whole chapter's at once).
+    let pics = Rate { per_sec: 4, per_min: 240 };
+    match s.as_str() {
+        "mangadex" => Limits { api: Rate { per_sec: 2, per_min: 60 }, pages: Rate { per_sec: 1, per_min: 20 }, images: pics, back_per_day: 5_000 },
+        "anilist" => Limits { api: Rate { per_sec: 1, per_min: 20 }, pages: Rate { per_sec: 1, per_min: 20 }, images: pics, back_per_day: 3_000 },
+        "webtoons.com" => Limits { api: Rate { per_sec: 1, per_min: 10 }, pages: Rate { per_sec: 1, per_min: 20 }, images: pics, back_per_day: 1_000 },
+        _ => Limits { api: Rate { per_sec: 1, per_min: 20 }, pages: Rate { per_sec: 1, per_min: 20 }, images: pics, back_per_day: 3_000 },
+    }
+}
 pub const PAUSE_FIRST_MS: i64 = 3_600_000;
 pub const PAUSE_MAX_MS: i64 = 12 * 3_600_000;
 /// A rate limit this long after the last one starts again at an hour.
@@ -55,6 +124,38 @@ struct Line {
     pause: Pause,
     day: i64,
     count: Count,
+    /// When requests went (or are booked to go) in the last minute, by kind.
+    sent: HashMap<Kind, Vec<i64>>,
+}
+
+impl Line {
+    /// The first moment from `at` when one more request of `kind` stays under `rate`.
+    fn free_at(&mut self, kind: Kind, rate: Rate, at: i64) -> i64 {
+        let sent = self.sent.entry(kind).or_default();
+        let mut at = at;
+        // Each step moves past the oldest request that keeps it over, so this ends.
+        for _ in 0..(rate.per_min + rate.per_sec + 2) {
+            let late = |span: i64, max: usize| -> Option<i64> {
+                let mut inside: Vec<i64> = sent.iter().copied().filter(|t| *t > at - span && *t <= at).collect();
+                if inside.len() < max.max(1) {
+                    return None;
+                }
+                inside.sort_unstable();
+                Some(inside[inside.len() - max.max(1)] + span)
+            };
+            match late(1_000, rate.per_sec).or_else(|| late(60_000, rate.per_min)) {
+                Some(t) => at = t,
+                None => break,
+            }
+        }
+        at
+    }
+
+    fn sent(&mut self, kind: Kind, at: i64, now: i64) {
+        let v = self.sent.entry(kind).or_default();
+        v.retain(|t| *t > now - 60_000);
+        v.push(at);
+    }
 }
 
 pub struct Budget {
@@ -113,28 +214,52 @@ impl Budget {
         }
     }
 
-    /// Background: books the source's next slot and answers how long to wait for it (0: go now),
-    /// or `Err(until)` while the source is paused (nothing is booked).
+    /// Background: books the source's next slot (an API request) and answers how long to wait for
+    /// it (0: go now), or `Err(until)` while the source is paused or has had its day's share
+    /// (nothing is booked).
+    #[cfg(test)]
     pub fn book(&self, source: &str, now: i64) -> Result<i64, i64> {
+        self.book_as(source, Kind::Api, now)
+    }
+
+    pub fn book_as(&self, source: &str, kind: Kind, now: i64) -> Result<i64, i64> {
         let gap = self.gap(source);
+        let limits = limits_for(source);
         let mut lines = self.lines();
         let line = lines.entry(source.to_string()).or_default();
         if line.pause.until > now {
             return Err(line.pause.until);
         }
-        let at = line.next_at.max(now);
+        if line.day == now / DAY_MS && line.count.back >= limits.back_per_day {
+            return Err((now / DAY_MS + 1) * DAY_MS);
+        }
+        let at = line.free_at(kind, limits.rate(kind), line.next_at.max(now));
         line.next_at = at + gap;
+        line.sent(kind, at, now);
         Self::count(line, Lane::Back, now);
         Ok(at - now)
     }
 
-    /// Foreground: counted and never delayed; the next background request waits a gap after it.
-    pub fn fore(&self, source: &str, now: i64) {
+    /// Foreground: goes at once under the source's ceilings, else answers how long to wait for
+    /// the next free moment; `Err(at)` (nothing counted) when that is more than
+    /// [`FORE_MAX_WAIT_MS`] away. While the source is paused, a quarter of its ceilings. The next
+    /// background request waits a gap after it.
+    pub fn fore(&self, source: &str, kind: Kind, now: i64) -> Result<i64, i64> {
         let gap = self.gap(source);
+        let mut rate = limits_for(source).rate(kind);
         let mut lines = self.lines();
         let line = lines.entry(source.to_string()).or_default();
-        line.next_at = line.next_at.max(now + gap);
+        if line.pause.until > now {
+            rate = Rate { per_sec: 1, per_min: (rate.per_min / 4).max(2) };
+        }
+        let at = line.free_at(kind, rate, now);
+        if at - now > FORE_MAX_WAIT_MS {
+            return Err(at);
+        }
+        line.sent(kind, at, now);
+        line.next_at = line.next_at.max(at + gap);
         Self::count(line, Lane::Fore, now);
+        Ok(at - now)
     }
 
     /// What the source answered. A rate limit pauses it (an hour, twice as long on each repeat,
@@ -203,16 +328,76 @@ mod tests {
     }
 
     #[test]
-    fn foreground_is_never_delayed_but_counted() {
+    fn foreground_goes_at_once_under_the_ceilings_and_is_counted() {
         let b = Budget::new(None);
         let t = 5_000_000;
-        for _ in 0..5 {
-            b.fore("Asura Scans", t);
-        }
-        assert_eq!(b.today("Asura Scans", t), Count { fore: 5, back: 0 });
+        assert_eq!(b.fore("Asura Scans", Kind::Api, t), Ok(0));
+        assert_eq!(b.fore("Asura Scans", Kind::Images, t), Ok(0), "pictures are counted apart");
+        assert_eq!(b.fore("Asura Scans", Kind::Pages, t), Ok(0));
+        assert_eq!(b.today("Asura Scans", t), Count { fore: 3, back: 0 });
         assert_eq!(b.book("Asura Scans", t + 1_000), Ok(2_000), "the background waits a gap after the reader");
         // Counts start again each day.
         assert_eq!(b.today("Asura Scans", t + DAY_MS), Count::default());
+    }
+
+    #[test]
+    fn the_phone_waits_for_a_source_over_its_ceiling_and_is_told_busy_past_a_few_seconds() {
+        let b = Budget::new(None);
+        let t = 7_000_000;
+        // Pictures: 4 a second.
+        let waits: Vec<i64> = (0..9).map(|_| b.fore("Asura Scans", Kind::Images, t).unwrap()).collect();
+        assert_eq!(waits, vec![0, 0, 0, 0, 1_000, 1_000, 1_000, 1_000, 2_000]);
+        // A page list a second: the next is a second away; five seconds of them, then busy.
+        assert_eq!(b.fore("Asura Scans", Kind::Pages, t), Ok(0));
+        for s in 1..=5 {
+            assert_eq!(b.fore("Asura Scans", Kind::Pages, t), Ok(s * 1_000));
+        }
+        assert_eq!(b.fore("Asura Scans", Kind::Pages, t), Err(t + 6_000), "too far off: busy, and not counted");
+        assert_eq!(b.today("Asura Scans", t).fore, 15);
+        // A minute's share: twenty searches spread, the twenty-first waits for the first to age out.
+        let b = Budget::new(None);
+        for i in 0..20 {
+            assert_eq!(b.fore("Weeb Central", Kind::Api, t + i * 1_000), Ok(0));
+        }
+        assert_eq!(b.fore("Weeb Central", Kind::Api, t + 59_000), Ok(1_000));
+    }
+
+    #[test]
+    fn every_ceiling_is_below_what_the_provider_publishes() {
+        let md = limits_for("MangaDex");
+        assert!(md.api.per_sec < 5 && md.api.per_min < 5 * 60, "MangaDex: 5 a second");
+        assert!(md.pages.per_min < 40, "MangaDex at-home: 40 page lists a minute");
+        let al = limits_for("AniList");
+        assert!(al.api.per_min < 30, "AniList: 90 a minute, 30 while degraded");
+        assert!(60_000 / Budget::new(None).gap("AniList") < 30);
+        assert!(60_000 / Budget::new(None).gap("MangaDex") < 5 * 60);
+        let other = limits_for("Asura Scans");
+        assert!(other.api.per_min <= 20 && other.images.per_sec <= 4);
+    }
+
+    #[test]
+    fn the_background_stops_at_its_days_share() {
+        let b = Budget::new(Some("0"));
+        let t = 20 * DAY_MS + 1_000;
+        let day = limits_for("Webtoons.com").back_per_day;
+        let mut at = t;
+        for _ in 0..day {
+            let w = b.book("Webtoons.com", at).unwrap();
+            at += w;
+        }
+        assert_eq!(b.book("Webtoons.com", at), Err(21 * DAY_MS), "tomorrow");
+        assert!(b.fore("Webtoons.com", Kind::Api, at + 60_000).is_ok(), "the phone still goes");
+        assert_eq!(b.book("Webtoons.com", 21 * DAY_MS), Ok(0), "a new day");
+    }
+
+    #[test]
+    fn while_paused_the_phone_gets_a_quarter() {
+        let b = Budget::new(None);
+        let t = 30 * DAY_MS;
+        let at_once = |b: &Budget, t: i64| (0..10).filter(|i| b.fore("Asura Scans", Kind::Api, t + i * 1_000) == Ok(0)).count();
+        assert_eq!(at_once(&b, t), 10, "a search a second is under its ceiling");
+        b.answer("Asura Scans", Some("429"), t + 61_000).unwrap();
+        assert_eq!(at_once(&b, t + 122_000), 5, "paused: five a minute");
     }
 
     #[test]
@@ -221,7 +406,7 @@ mod tests {
         assert_eq!(b.gap("Asura Scans"), 5_000);
         assert_eq!(b.gap("mangadex"), 800);
         assert_eq!(b.gap("Weeb Central"), 10_000);
-        assert_eq!(b.gap("AniList"), 2_000);
+        assert_eq!(b.gap("AniList"), 3_000);
         assert_eq!(Budget::new(Some("")).gap("Asura Scans"), DEFAULT_GAP_MS);
     }
 
@@ -237,7 +422,7 @@ mod tests {
         let p = b.answer("Asura Scans", Some("HTTP error 429"), t).expect("paused");
         assert_eq!((p.until, p.level), (t + h, 1));
         assert_eq!(b.book("Asura Scans", t + 10), Err(t + h), "background waits out the pause");
-        b.fore("Asura Scans", t + 10);
+        let _ = b.fore("Asura Scans", Kind::Api, t + 10);
         assert!(b.answer("Asura Scans", Some("Too Many Requests"), t + 20).is_none(), "a late answer does not double it");
         assert_eq!(b.book("Asura Scans", t + h), Ok(0), "over after an hour");
         let p = b.answer("Asura Scans", Some("Failed to bypass Cloudflare"), t + h + 5).unwrap();
