@@ -427,7 +427,7 @@ pub fn next_unread(d: &SeriesDetail, n: usize) -> Vec<Chapter> {
 /// Of two follows of one work, which to keep and which goes into it: the one read further, then
 /// the one read more lately, then the older follow.
 pub fn merge_keep(a: &Series, b: &Series) -> (i64, i64) {
-    let key = |s: &Series| (s.read_upto.map_or(-1.0, |r| r), s.last_read_at, -s.added_at);
+    let key = |s: &Series| (s.read_upto.unwrap_or(-1.0), s.last_read_at, -s.added_at);
     let (ka, kb) = (key(a), key(b));
     if ka.partial_cmp(&kb).is_some_and(|o| o == std::cmp::Ordering::Less) { (b.id, a.id) } else { (a.id, b.id) }
 }
