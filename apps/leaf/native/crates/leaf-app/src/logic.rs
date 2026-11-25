@@ -405,6 +405,14 @@ pub fn next_up(list: &[Series], current: i64, in_space: impl Fn(&Series) -> bool
         .min_by_key(|(s, n)| (*n, std::cmp::Reverse(s.last_read_at), std::cmp::Reverse(s.added_at)))
 }
 
+/// Of two follows of one work, which to keep and which goes into it: the one read further, then
+/// the one read more lately, then the older follow.
+pub fn merge_keep(a: &Series, b: &Series) -> (i64, i64) {
+    let key = |s: &Series| (s.read_upto.map_or(-1.0, |r| r), s.last_read_at, -s.added_at);
+    let (ka, kb) = (key(a), key(b));
+    if ka.partial_cmp(&kb).is_some_and(|o| o == std::cmp::Ordering::Less) { (b.id, a.id) } else { (a.id, b.id) }
+}
+
 /// Where a series stands in Recent, as a sort key (the owner, 2026-11-25): what you read here,
 /// last read first; then what you are partway through but never opened here (its progress came
 /// with it), the fewest chapters left first, so one or two from the newest come up top; then what
@@ -1147,6 +1155,16 @@ mod tests {
         assert_eq!(pick(9), Some((1, 1)));
         assert_eq!(pick(1), Some((2, 2)), "not the one being read; not dropped, on hold, caught up or unstarted");
         assert_eq!(next_up(&list, 9, |s| s.id != 1).map(|(s, _)| s.id), Some(2), "only what is in My space");
+    }
+
+    #[test]
+    fn a_merge_keeps_the_series_read_further() {
+        let a = Series { id: 1, ..series(Some(3.0), 7, 0, 0) };
+        let b = Series { id: 2, ..series(Some(8.0), 2, 0, 0) };
+        assert_eq!(merge_keep(&a, &b), (2, 1));
+        assert_eq!(merge_keep(&b, &a), (2, 1));
+        let c = Series { id: 3, ..series(None, 10, 0, 0) };
+        assert_eq!(merge_keep(&c, &a), (1, 3), "something read beats nothing");
     }
 
     #[test]

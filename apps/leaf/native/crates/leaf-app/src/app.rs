@@ -325,6 +325,8 @@ pub struct App {
     pub health: Loaded<Vec<SourceHealth>>,
     /// "Wrong series?": the other entries for a series' work.
     pub alternatives: HashMap<i64, Loaded<Vec<Alternative>>>,
+    /// Followed series that look like one work, as the server pairs them.
+    pub duplicates: Loaded<Vec<[i64; 2]>>,
     /// A chapter to open once its series has loaded (an update tapped): (series, chapter).
     pub open_after: Option<(i64, i64)>,
     /// What chapters' read marks were before "Mark all before as read", per series, until the
@@ -433,6 +435,7 @@ impl App {
             status: Loaded::default(),
             health: Loaded::default(),
             alternatives: HashMap::new(),
+            duplicates: Loaded::default(),
             open_after: None,
             #[cfg(test)]
             reported: Vec::new(),
@@ -1002,6 +1005,7 @@ impl App {
             Job::Series(id) => self.series.entry(*id).or_default().loading = true,
             Job::Updates(_) => self.updates.loading = true,
             Job::Health => self.health.loading = true,
+            Job::Duplicates => self.duplicates.loading = true,
             Job::Alternatives(id) => self.alternatives.entry(*id).or_default().loading = true,
             _ => {}
         }
@@ -1039,6 +1043,26 @@ impl App {
         if crate::booksync::due(self.books_copied, self.booksync.last_try_ms(), now, self.shelf.books.len()) {
             self.booksync.copy(crate::net::Client::new(), server, self.data.clone(), self.books_copied.at_ms > 0, now);
         }
+    }
+
+    /// Two series made one on the server: the one read further is kept, the other goes into it.
+    /// Taken off the list of pairs at once.
+    pub fn merge(&mut self, a: i64, b: i64) {
+        let find = |id: i64| self.library.data.as_ref().and_then(|l| l.iter().find(|s| s.id == id).cloned());
+        let (Some(sa), Some(sb)) = (find(a), find(b)) else { return };
+        let (keep, other) = logic::merge_keep(&sa, &sb);
+        if let Some(l) = &mut self.duplicates.data {
+            l.retain(|p| *p != [a.min(b), a.max(b)]);
+        }
+        self.ask(Job::Merge(keep, other));
+    }
+
+    /// Two series said not to be the same: never paired again.
+    pub fn not_same(&mut self, a: i64, b: i64) {
+        if let Some(l) = &mut self.duplicates.data {
+            l.retain(|p| *p != [a.min(b), a.max(b)]);
+        }
+        self.ask(Job::NotSame(a, b));
     }
 
     /// Copy the books now (Settings), over a copy found from another phone too when `over`.
@@ -1255,6 +1279,42 @@ impl App {
                     if let Err(f) = r {
                         self.mark_bell(id, !on);
                         self.toast(&f.words(&label));
+                    }
+                }
+                Done::Duplicates(r) => {
+                    let l = &mut self.duplicates;
+                    l.loading = false;
+                    match r {
+                        Ok(list) => {
+                            l.data = Some(list);
+                            l.live = true;
+                            l.error = None;
+                        }
+                        Err(f) => l.error = Some(f.words(&label)),
+                    }
+                }
+                Done::Merged(keep, other, r) => match r {
+                    Ok(()) => {
+                        let title = self.library.data.as_ref().and_then(|l| l.iter().find(|s| s.id == keep)).map(|s| s.title.clone()).unwrap_or_default();
+                        if let Some(l) = &mut self.library.data {
+                            l.retain(|s| s.id != other);
+                        }
+                        self.series.remove(&other);
+                        self.places.forget(other);
+                        self.toast(&format!("Made one: {title}"));
+                        self.ask(Job::Library);
+                        self.ask(Job::Series(keep));
+                        self.ask(Job::Duplicates);
+                    }
+                    Err(f) => {
+                        self.toast(&format!("Not merged: {}", lower_first(&f.words(&label))));
+                        self.ask(Job::Duplicates);
+                    }
+                },
+                Done::NotSame(r) => {
+                    if let Err(f) = r {
+                        self.toast(&f.words(&label));
+                        self.ask(Job::Duplicates);
                     }
                 }
                 Done::Watch(id, on, r) => {

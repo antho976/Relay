@@ -754,6 +754,75 @@ impl Ctx {
         Ok((ids.len() + back.len()) as u32)
     }
 
+    /// Followed series that look like one work, as pairs (lower id first): their titles, or the
+    /// titles they go by elsewhere, name the same work ([`duplicate_pairs`]), and the owner has not
+    /// said they differ ([`Ctx::not_duplicates`]).
+    pub fn duplicates(&self) -> Vec<[i64; 2]> {
+        let st = self.store();
+        let works: Vec<(i64, Vec<String>)> = st
+            .works()
+            .into_iter()
+            .map(|w| {
+                let mut names = vec![w.title.clone()];
+                names.extend(st.aliases(w.id));
+                (w.id, names)
+            })
+            .collect();
+        duplicate_pairs(&works).into_iter().filter(|[a, b]| st.get(&format!("notdup:{a}:{b}")).is_none()).collect()
+    }
+
+    /// Two series said not to be the same: never suggested again.
+    pub fn not_duplicates(&self, a: i64, b: i64) {
+        self.store().set(&format!("notdup:{}:{}", a.min(b), a.max(b)), "1");
+    }
+
+    /// Two follows of one work made one: `other` goes, its copies (own and linked) become
+    /// `keep`'s links, its other titles its aliases, its bell and shelf carried when `keep` has
+    /// none, and `keep` read as far as either was.
+    pub fn merge(&self, keep: i64, other: i64) -> Result<(), String> {
+        if keep == other {
+            return Err("that's the same series".into());
+        }
+        let (k, o, links, aliases) = {
+            let st = self.store();
+            let k = st.work(keep).ok_or("no such series")?;
+            let o = st.work(other).ok_or("no such series")?;
+            (k, o.clone(), st.link_sources(o.id), st.aliases(o.id))
+        };
+        let furthest = |w: &Work| -> Result<Option<f64>, String> {
+            let m = self.suwa.manga(w.manga_id)?;
+            let extras = self.extras(w);
+            Ok(m.chapters.iter().chain(extras.iter().flat_map(|e| e.chapters.iter())).filter(|c| c.read && c.number >= 0.0).map(|c| c.number).reduce(f64::max))
+        };
+        let (fk, fo) = (furthest(&k)?, furthest(&o)?);
+        let _ = self.suwa.set_in_library(o.manga_id, false);
+        {
+            let st = self.store();
+            st.remove_work(o.id);
+            st.add_link(k.id, o.manga_id, &o.source);
+            for (m, source) in links {
+                st.add_link(k.id, m, &source);
+            }
+            let mut names = vec![o.title.clone()];
+            names.extend(aliases);
+            st.add_aliases(k.id, &names);
+            if o.bell && !k.bell {
+                st.set_bell(k.id, true);
+            }
+            if k.shelf.is_none() && o.shelf.is_some() {
+                st.set_shelf(k.id, o.shelf.as_deref());
+            }
+        }
+        if let Some(f) = fo
+            && fk.is_none_or(|k| f > k)
+        {
+            // Read to `f`, with its parts (71.1 goes with 71).
+            let before = if f.fract() == 0.0 { f + 1.0 } else { f + 1e-6 };
+            self.read_before(k.id, before, false)?;
+        }
+        Ok(())
+    }
+
     /// Due for a comparison at the next hourly pass.
     pub fn compare_soon(&self, id: i64) {
         self.store().compared(id, 0);
@@ -1498,6 +1567,20 @@ pub fn fmt_num(n: f64) -> String {
     if n.fract() == 0.0 { format!("{}", n as i64) } else { format!("{n}") }
 }
 
+/// Pairs of works (lower id first) any of whose names ([`same_work`]) match.
+pub fn duplicate_pairs(works: &[(i64, Vec<String>)]) -> Vec<[i64; 2]> {
+    let mut out = Vec::new();
+    for (i, (a, an)) in works.iter().enumerate() {
+        for (b, bn) in &works[i + 1..] {
+            if an.iter().any(|x| bn.iter().any(|y| same_work(x, y))) {
+                out.push([*a.min(b), *a.max(b)]);
+            }
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
 /// What "read before" changes, of (id, number, read) chapters: those below `before` not read yet
 /// are to be marked read, and, with `unread_after`, those from it on that are read, unread.
 /// Numbers below 0 (extras without one) are left alone.
@@ -1510,6 +1593,22 @@ fn read_marks(all: &[(i64, f64, bool)], before: f64, unread_after: bool) -> (Vec
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn two_follows_of_one_work_are_paired_by_any_of_their_names() {
+        let works = vec![
+            (1, vec!["Return of the Frozen Player".to_string()]),
+            (2, vec!["Junk to King: I Am A Scavenger".to_string()]),
+            (3, vec!["Became the King by Scavenging".to_string(), "Junk to King".to_string()]),
+            (4, vec!["Solo Leveling".to_string()]),
+            (5, vec!["Solo Leveling: Ragnarok".to_string()]),
+            (6, vec!["The Frozen Player Returns".to_string(), "Return of the Frozen Player".to_string()]),
+        ];
+        assert_eq!(duplicate_pairs(&works), vec![[1, 6], [2, 3]], "by an alias each; Solo Leveling and Ragnarok are two works");
+        let works = vec![(9, vec!["I Became the King by Scavenging".to_string()]), (3, vec!["Became the King by Scavenging".to_string()])];
+        assert_eq!(duplicate_pairs(&works), vec![[3, 9]], "lower id first");
+    }
+
 
     #[test]
     fn read_up_to_marks_before_read_and_after_unread_only_when_asked() {

@@ -777,6 +777,8 @@ mod fake {
                     }
                     (200, "application/json", b"{\"ok\":true}".to_vec())
                 }
+                ("GET", ["v1", "duplicates"]) => (200, "application/json", b"[]".to_vec()),
+                ("POST", ["v1", "series", _, "merge"]) | ("POST", ["v1", "duplicates", "dismiss"]) => (200, "application/json", b"{\"ok\":true}".to_vec()),
                 ("GET", ["v1", "phone", "files"]) => {
                     let list: Vec<leaf_proto::PhoneFile> = st.phone.iter().map(|((k, n), b)| leaf_proto::PhoneFile { kind: k.clone(), name: n.clone(), size: b.len() as u64, at_ms: 1_700_000_000_000 }).collect();
                     (200, "application/json", serde_json::to_vec(&list).unwrap())
@@ -1610,6 +1612,34 @@ fn the_phones_bars_show_with_the_overlay_and_hide_with_it() {
     step(&mut app, &mut t);
     step(&mut app, &mut t);
     assert_eq!(BARS.lock().unwrap().iter().filter(|(d, _)| *d == app.data).count(), asked, "the phone is asked once a change, not every frame");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_series_followed_twice_is_merged_into_the_one_read_further() {
+    let (mut app, mut t, dir) = app("dupes");
+    let fake = fake::Fake::start();
+    app.shot = false;
+    app.server = Some(fake.server());
+    // Series 2 is read further than series 1: it is the one kept. The server's library says so.
+    if let Some(l) = &mut app.library.data {
+        l[1].read_upto = Some(8.0);
+        for sr in l.iter() {
+            fake.state.lock().unwrap().details.insert(sr.id, leaf_proto::SeriesDetail { series: sr.clone(), description: None, chapters: vec![] });
+        }
+    }
+    app.duplicates.data = Some(vec![[1, 2]]);
+    app.st.space.tab = crate::space::RECENT;
+    app.reset_to(Route::Space);
+    step(&mut app, &mut t);
+    app.st.space.dupes = true;
+    step(&mut app, &mut t);
+    // The sheet: its head 104, the two rows 120 and 8, then Merge at the left.
+    let top = app.canvas.h - app.canvas.inset_bottom - (104.0 + 196.0 + 8.0);
+    tap(&mut app, &mut t, 100.0, top + 104.0 + 128.0 + 22.0);
+    assert!(until(&mut app, &mut t, 5.0, |_| fake.hits("/v1/series/2/merge") == 1), "{:?}", fake.state.lock().unwrap().hits);
+    assert_eq!(app.duplicates.data, Some(vec![]), "the pair is gone at once");
+    assert!(!app.st.space.dupes, "and the sheet with it");
     let _ = std::fs::remove_dir_all(dir);
 }
 

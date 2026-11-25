@@ -27,6 +27,9 @@
 //! | `POST /v1/chapters/{id}/read` [`ChapterRead`] | marks that chapter number read or unread |
 //! | `POST /v1/series/{id}/shelf` [`ShelfSet`] | puts it on a shelf |
 //! | `GET /v1/series/{id}/alternatives` | `[Alternative]`: other entries for the work |
+//! | `GET /v1/duplicates` | `[[a, b]]`: followed series that look like one work |
+//! | `POST /v1/duplicates/dismiss` `[a, b]` | "Not the same": that pair is never suggested again |
+//! | `POST /v1/series/{id}/merge` [`Merge`] | the other series made part of this one (its copies, bell, shelf and progress) |
 //! | `POST /v1/series/{id}/repin` [`Repin`] | reads it from another entry; answers [`Series`] |
 //! | `GET /v1/health` | `[SourceHealth]` |
 //! | `GET` / `POST /v1/backup` | the latest nightly backup / one made now (JSON) |
@@ -263,6 +266,15 @@ impl Api {
             }
             (Method::Get, ["v1", "series", _]) => id(2).ok_or("bad id".to_string()).and_then(|i| ctx.detail_json(i)).map(|d| json(&d)),
             (Method::Delete, ["v1", "series", _]) => id(2).ok_or("bad id".to_string()).and_then(|i| ctx.unfollow(i)).map(|_| json(&serde_json::json!({ "ok": true }))),
+            (Method::Get, ["v1", "duplicates"]) => Ok(json(&ctx.duplicates())),
+            (Method::Post, ["v1", "duplicates", "dismiss"]) => serde_json::from_str::<[i64; 2]>(body).map_err(|e| format!("dismiss: {e}")).map(|[a, b]| {
+                ctx.not_duplicates(a, b);
+                json(&serde_json::json!({ "ok": true }))
+            }),
+            (Method::Post, ["v1", "series", _, "merge"]) => {
+                let Some(keep) = id(2) else { return fail(400, "bad id") };
+                serde_json::from_str::<leaf_proto::Merge>(body).map_err(|e| format!("merge: {e}")).and_then(|m| ctx.merge(keep, m.other)).map(|_| json(&serde_json::json!({ "ok": true })))
+            }
             (Method::Get, ["v1", "series", _, "cover"]) => {
                 let manga = id(2).and_then(|i| ctx.store.lock().ok()?.work(i)).map(|w| w.manga_id);
                 manga.ok_or("no such series".to_string()).and_then(|m| ctx.suwa.bytes(&format!("/api/v1/manga/{m}/thumbnail"))).map(|(b, k)| image(b, &k))

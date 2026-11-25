@@ -640,3 +640,10 @@ pub struct PhoneFile {
     pub size: u64,
     pub at_ms: i64,
 }
+
+/// `POST /v1/series/{id}/merge`: this series (`other`) is the same work; it goes, and its copies,
+/// bell, shelf and progress become the series' in the path.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct Merge {
+    pub other: i64,
+}

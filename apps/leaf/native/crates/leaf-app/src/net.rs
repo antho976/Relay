@@ -336,6 +336,12 @@ pub enum Job {
     Bell(i64, bool),
     /// Hear once when a source other than Webtoon has it (`POST /v1/series/{id}/watch`).
     Watch(i64, bool),
+    /// Followed series that look like one work (`GET /v1/duplicates`).
+    Duplicates,
+    /// The second series made part of the first (`POST /v1/series/{id}/merge`).
+    Merge(i64, i64),
+    /// "Not the same" (`POST /v1/duplicates/dismiss`).
+    NotSame(i64, i64),
     /// Chapters that came lately for series in My space, over this many days (`/v1/updates`).
     Updates(u32),
     /// A chapter read or unread (`POST /v1/chapters/{id}/read`).
@@ -437,6 +443,8 @@ impl Job {
                 | Job::Progress(..)
                 | Job::Bell(..)
                 | Job::Watch(..)
+                | Job::Merge(..)
+                | Job::NotSame(..)
                 | Job::ChapterRead(..)
                 | Job::ReadBefore(..)
                 | Job::Shelf(..)
@@ -467,6 +475,9 @@ pub enum Done {
     PageCount(i64, Result<u32, Fail>),
     Bell(i64, bool, Result<(), Fail>),
     Watch(i64, bool, Result<(), Fail>),
+    Duplicates(Result<Vec<[i64; 2]>, Fail>),
+    Merged(i64, i64, Result<(), Fail>),
+    NotSame(Result<(), Fail>),
     Updates { cached: bool, result: Result<Vec<Update>, Fail> },
     ChapterRead(i64, bool, Result<(), Fail>),
     ReadBefore(i64, Result<(), Fail>),
@@ -513,6 +524,9 @@ impl Done {
             Done::PageCount(_, r) => of(r),
             Done::Bell(_, _, r) => of(r),
             Done::Watch(_, _, r) => of(r),
+            Done::Duplicates(r) => of(r),
+            Done::Merged(_, _, r) => of(r),
+            Done::NotSame(r) => of(r),
             Done::Updates { result, .. } => of(result),
             Done::ChapterRead(_, _, r) => of(r),
             Done::ReadBefore(_, r) => of(r),
@@ -897,6 +911,21 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
                 None => no_server(),
             };
             send(Done::Bell(id, on, r));
+        }
+        Job::Duplicates => {
+            let r = match &server {
+                Some(s) => client.json(s, "/v1/duplicates"),
+                None => no_server(),
+            };
+            send(Done::Duplicates(r));
+        }
+        Job::Merge(keep, other) => {
+            let r = post_json(client, &server, &format!("/v1/series/{keep}/merge"), &leaf_proto::Merge { other }).map(|_| ());
+            send(Done::Merged(keep, other, r));
+        }
+        Job::NotSame(a, b) => {
+            let r = post_json(client, &server, "/v1/duplicates/dismiss", &[a, b]).map(|_| ());
+            send(Done::NotSame(r));
         }
         Job::Watch(id, on) => {
             let r = match &server {

@@ -83,6 +83,8 @@ pub struct State {
     pub select: Option<BTreeSet<i64>>,
     /// Downloads: chapters to delete, waiting for the confirm.
     pub confirm: Option<Vec<i64>>,
+    /// The sheet of series in My space twice is open.
+    pub dupes: bool,
 }
 
 impl State {
@@ -94,11 +96,12 @@ impl State {
         self.sort_menu = false;
         self.shelf_for = None;
         self.confirm = None;
+        self.dupes = false;
         open || self.select.take().is_some()
     }
 
     fn covered(&self) -> bool {
-        self.add_menu || self.more_menu || self.sort_menu || self.shelf_for.is_some() || self.confirm.is_some()
+        self.add_menu || self.more_menu || self.sort_menu || self.shelf_for.is_some() || self.confirm.is_some() || self.dupes
     }
 }
 
@@ -161,6 +164,61 @@ fn cover(cx: &mut kit::Ctx, im: &mut crate::images::Images, s: &Series, x: f32, 
     }
 }
 
+/// What the sheet of series in My space twice asked for.
+enum DupeAct {
+    Merge(i64, i64),
+    NotSame(i64, i64),
+}
+
+/// Pairs of series that look like one: each with its cover, title and where you are, then Merge
+/// (the one read further is kept, [`logic::merge_keep`]) or Not the same. Some(None) when it
+/// closes.
+fn dupes_sheet(cx: &mut kit::Ctx, im: &mut crate::images::Images, pairs: &[(Series, Series)], now: u64) -> Option<Option<DupeAct>> {
+    const SHOWN: usize = 3;
+    let row_h = 60.0;
+    let pair_h = 2.0 * row_h + 8.0 + 44.0 + 24.0;
+    let n = pairs.len().min(SHOWN);
+    let (top, outside) = kit::sheet(cx, 30.0 + 26.0 + 48.0 + n as f32 * pair_h + 8.0);
+    if outside {
+        return Some(None);
+    }
+    let x = PAD + 4.0;
+    let w = WIDTH - 2.0 * x;
+    cx.c.text("Followed twice", x, top + 26.0, Text::new(ty::SECTION, t::INK).semi());
+    cx.c.para("Merge keeps the one read further, with the other's chapters, bell and progress.", x, top + 56.0, w, Text::new(ty::CAPTION, t::INK3).line(1.4), 2);
+    let mut y = top + 30.0 + 26.0 + 48.0;
+    let mut out = None;
+    for (a, b) in pairs.iter().take(SHOWN) {
+        for s in [a, b] {
+            let c = 44.0;
+            cover(cx, im, s, x, y + (row_h - c) / 2.0, c, c, 6.0, now);
+            let tx = x + c + 12.0;
+            let title_t = Text::new(14.5, t::INK).semi();
+            let line_t = Text::new(12.5, t::INK3);
+            let ty0 = y + (row_h - title_t.lh() - 2.0 - line_t.lh()) / 2.0;
+            cx.c.text_fit(&s.title, tx, ty0, x + w - tx, title_t);
+            let line = match (logic::at_chapter(s, None), s.latest) {
+                (Some(n), Some(l)) => format!("Chapter {} of {}", logic::num(n), logic::num(l)),
+                (None, Some(l)) => format!("Not started · {} chapters", logic::num(l)),
+                _ => "No chapters yet".to_string(),
+            };
+            cx.c.text_fit(&line, tx, ty0 + title_t.lh() + 2.0, x + w - tx, line_t);
+            y += row_h;
+        }
+        y += 8.0;
+        let kw = (w - 10.0) / 2.0;
+        if kit::primary(cx, x, y, kw, 44.0, "Merge", None) {
+            out = Some(Some(DupeAct::Merge(a.id, b.id)));
+        }
+        if kit::plain(cx, x + kw + 10.0, y, kw, 44.0, "Not the same", None) {
+            out = Some(Some(DupeAct::NotSame(a.id, b.id)));
+        }
+        y += 44.0 + 24.0;
+    }
+    cx.ui.tap = None;
+    out
+}
+
 pub fn draw(app: &mut App, dt: f32) -> bool {
     let tab = app.st.space.tab.min(DOWNLOADS);
     if app.fresh {
@@ -169,6 +227,10 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         }
         if tab == UPDATES && !app.updates.loading && app.server.is_some() {
             app.ask(Job::Updates(UPDATE_DAYS));
+        }
+        // Series followed twice: asked once a session (and after a merge).
+        if app.duplicates.data.is_none() && !app.duplicates.loading && app.server.is_some() && !app.shot {
+            app.ask(Job::Duplicates);
         }
     }
     // Only what you have done something with: read, followed or downloaded (`logic::in_space`).
@@ -197,6 +259,17 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let offline = app.library.offline();
     let error = app.library.error.clone().filter(|_| !offline);
     let sort = app.following_sort;
+    // Pairs of series in My space that look like one, with both still here.
+    let pairs: Vec<(Series, Series)> = app
+        .duplicates
+        .data
+        .iter()
+        .flatten()
+        .filter_map(|[a, b]| Some((series.iter().find(|s| s.id == *a)?.clone(), series.iter().find(|s| s.id == *b)?.clone())))
+        .collect();
+    if pairs.is_empty() {
+        app.st.space.dupes = false;
+    }
     let covered = app.st.space.covered();
     let pg = app.page_begin(dt, top_h);
     let mut cx = cx!(app);
@@ -218,6 +291,22 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let mut set_all: Option<bool> = None;
     let mut rows: Vec<crate::sweep::Row> = Vec::new();
     let held_at = if covered { None } else { cx.ui.resting(now).filter(|(_, ns)| *ns >= crate::series::LONG_PRESS_NS).map(|(p, _)| p) };
+    // Series followed twice: one row above Recent and Following, a tap opens the pairs.
+    if (tab == RECENT || tab == FOLLOWING) && !pairs.is_empty() && query.trim().is_empty() {
+        y += 8.0;
+        let h = 56.0;
+        if !covered && cx.pressed(0.0, y, WIDTH, h) {
+            cx.c.rect(0.0, y, WIDTH, h, 0.0, t::WASH);
+        }
+        cx.c.icon("copy", x0 + 12.0, y + h / 2.0, 18.0, t::INK2);
+        let words = if pairs.len() == 1 { "1 series is in My space twice".to_string() } else { format!("{} series are in My space twice", pairs.len()) };
+        let (kw, tapped) = kit::pill(&mut cx, WIDTH - PAD, y + (h - 32.0) / 2.0, "Review", false);
+        cx.c.text_fit(&words, x0 + 36.0, y + (h - Text::new(ty::UI, t::INK).lh()) / 2.0, WIDTH - PAD - kw - 12.0 - x0 - 36.0, Text::new(ty::UI, t::INK));
+        if !covered && (tapped || cx.tap(0.0, y, WIDTH, h)) {
+            st.dupes = true;
+        }
+        y += h;
+    }
     match tab {
         UPDATES => {
             let groups = logic::group_updates(&updates, belled_only, &query, shelf::day_of);
@@ -749,6 +838,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let mut to_stats = false;
     let mut new_sort = None;
     let mut new_shelf: Option<(i64, Shelf)> = None;
+    let mut dupe_act: Option<DupeAct> = None;
     let mut delete_read_all = false;
     let mut confirmed: Option<Vec<i64>> = None;
     if covered {
@@ -807,6 +897,12 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     confirmed = Some(ids);
                 }
                 Some(false) => st.confirm = None,
+                None => {}
+            }
+        } else if st.dupes {
+            match dupes_sheet(&mut cx, &mut app.images, &pairs, now) {
+                Some(Some(a)) => dupe_act = Some(a),
+                Some(None) => st.dupes = false,
                 None => {}
             }
         } else if let Some(id) = st.shelf_for {
@@ -891,6 +987,11 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     }
     if add_books {
         app.host.pick_books();
+    }
+    match dupe_act {
+        Some(DupeAct::Merge(a, b)) => app.merge(a, b),
+        Some(DupeAct::NotSame(a, b)) => app.not_same(a, b),
+        None => {}
     }
     match act {
         Some(Act::Series(id)) => app.push(Route::Series(id)),
