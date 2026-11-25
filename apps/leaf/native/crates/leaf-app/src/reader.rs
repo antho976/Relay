@@ -38,6 +38,9 @@ const PLACEHOLDER_H: f32 = 560.0;
 /// A page that would not load.
 const FAILED_H: f32 = 240.0;
 const END_H: f32 = 240.0;
+/// "Next up" under the end's key (which ends 168 down it): its label, the row and room after.
+const NEXT_AT: f32 = 204.0;
+const NEXT_H: f32 = NEXT_AT - END_H + 28.0 + 72.0 + 48.0;
 /// A chapter whose length did not come is asked again after this long, doubling each time up to
 /// [`COUNT_RETRY_MAX_NS`]: never once a frame.
 const COUNT_RETRY_NS: u64 = 5_000_000_000;
@@ -60,6 +63,10 @@ pub struct Reader {
     /// Drives the momentum: its offset is reset each frame, the change is the strip's.
     fling: Scroll,
     pub overlay: bool,
+    /// What the end of the newest chapter offers next, and how many chapters it has left
+    /// ([`logic::next_up`]); its chapters were asked for once the end came near.
+    pub next_up: Option<(leaf_proto::Series, u32)>,
+    next_asked: bool,
     gate: ProgressGate,
     /// The status bar's height (with the bars hidden, the camera cut-out's): headings keep clear of it.
     top_pad: f32,
@@ -129,7 +136,7 @@ impl Book for View<'_> {
                     _ => PLACEHOLDER_H,
                 }
             }
-            Item::End => END_H,
+            Item::End => END_H + if self.r.next_up.is_some() { NEXT_H } else { 0.0 },
         }
     }
 }
@@ -167,6 +174,8 @@ impl Reader {
             pos: Pos { item, off: 0.0 },
             fling: fling(),
             overlay: false,
+            next_up: None,
+            next_asked: false,
             gate,
             top_pad: 0.0,
             top_read: false,
@@ -209,6 +218,8 @@ impl Reader {
             pos: Pos { item, off: 0.0 },
             fling: fling(),
             overlay: false,
+            next_up: None,
+            next_asked: false,
             gate: ProgressGate::default(),
             top_pad: 0.0,
             top_read: false,
@@ -434,6 +445,10 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         }
         // The end's key says "Back to the series": there, also when the reader was opened from
         // Home or an update.
+        Leave::Next(id) => {
+            app.pop();
+            app.continue_series(id);
+        }
         Leave::ToSeries => {
             app.pop();
             if let Some(id) = series
@@ -464,6 +479,8 @@ enum Leave {
     Stay,
     Back,
     ToSeries,
+    /// Next up: that series, where you are in it.
+    Next(i64),
 }
 
 /// One frame of the reader. Returns (still moving, where to go).
@@ -637,6 +654,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
     // Draw the strip.
     let mut retry = false;
     let mut to_series = false;
+    let mut end_at: Option<f32> = None;
     {
         let v_im = &app.images;
         let c = &mut app.canvas;
@@ -719,6 +737,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
                     }
                 }
                 Item::End => {
+                    end_at = Some(*y);
                     let last = r.chapters.last();
                     let words = match last {
                         _ if r.local.is_some() => "The end".to_string(),
@@ -738,6 +757,44 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
                     }
                 }
             }
+        }
+    }
+    // Next up, under the end of the newest chapter: the series with the fewest chapters left.
+    let mut next: Option<i64> = None;
+    if let (Some(ey), Some((s, left))) = (end_at, r.next_up.as_ref()) {
+        if !r.next_asked && app.detail_for(s.id).is_none() {
+            r.next_asked = true;
+            app.ask(Job::Series(s.id));
+        }
+        let cx = cx!(app);
+        let y = ey + NEXT_AT;
+        cx.c.text("NEXT UP", PAD, y, Text::new(ty::SMALL, t::INK3).semi());
+        let (ry, ch) = (y + 28.0, 72.0);
+        if !overlay_tap && cx.pressed(0.0, ry, WIDTH, ch) {
+            cx.c.rect(0.0, ry, WIDTH, ch, 0.0, t::WASH);
+        }
+        let of = crate::images::CoverOf::Series(s.id);
+        cx.c.rect(PAD, ry, ch, ch, 8.0, t::S1);
+        if app.images.cover(cx.c, of, now) {
+            cx.c.image_cover(&of.key(), PAD, ry, ch, ch, 8.0, crate::draw::Rgba::WHITE);
+        }
+        let kt = Text::new(13.0, t::INK).semi();
+        let (kw, kh) = (cx.c.measure("Continue", kt) + 24.0, 34.0);
+        let (kx, ky) = (WIDTH - PAD - kw, ry + (ch - kh) / 2.0);
+        cx.c.outline(kx, ky, kw, kh, 8.0, 1.0, t::INK.a(0.28));
+        cx.c.text("Continue", kx + 12.0, ky + (kh - kt.lh()) / 2.0, kt);
+        let tx = PAD + ch + 14.0;
+        let title_t = Text::new(15.5, t::INK).semi();
+        let line_t = Text::new(13.0, t::INK2);
+        let ty0 = ry + (ch - title_t.lh() - 4.0 - line_t.lh()) / 2.0;
+        cx.c.text_fit(&s.title, tx, ty0, kx - 12.0 - tx, title_t);
+        let line = match logic::next_chapter(s) {
+            Some(n) => format!("{} · chapter {}", logic::left_words(*left), logic::num(n)),
+            None => logic::left_words(*left),
+        };
+        cx.c.text_fit(&line, tx, ty0 + title_t.lh() + 4.0, kx - 12.0 - tx, line_t);
+        if !overlay_tap && cx.ui.tapped(0.0, ry, WIDTH, ch) {
+            next = Some(s.id);
         }
     }
     // A finger held on a page: the sheet that hides it (and the ones like it).
@@ -981,7 +1038,9 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
             None => {}
         }
     }
-    let leave = if to_series {
+    let leave = if let Some(id) = next {
+        Leave::Next(id)
+    } else if to_series {
         Leave::ToSeries
     } else if back {
         Leave::Back

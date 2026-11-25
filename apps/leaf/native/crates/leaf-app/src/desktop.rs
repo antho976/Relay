@@ -779,6 +779,14 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
         if fake {
             r.shot_counts(12);
         }
+        // Next up at the strip's end, from the library (as `App::open_chapter` does).
+        if app.library.data.is_none() {
+            app.ask(crate::net::Job::Library);
+            settle(&mut app, &gfx, &mut clock, 30.0);
+        }
+        if let Some(list) = &app.library.data {
+            r.next_up = crate::logic::next_up(list, id, |s| crate::logic::in_space(s, false)).map(|(s, n)| (s.clone(), n));
+        }
         app.reader = Some(r);
         app.push(Route::Reader);
         settle(&mut app, &gfx, &mut clock, 30.0);

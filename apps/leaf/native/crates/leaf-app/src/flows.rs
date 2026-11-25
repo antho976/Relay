@@ -1157,6 +1157,8 @@ fn back_to_the_series_at_the_end_goes_to_the_series_wherever_the_reader_was_open
     let d = comic(1, &[2, 2]);
     measure(&mut app, &d);
     app.series.insert(1, loaded(d.clone()));
+    // Nothing else to offer next: the end is its key alone.
+    app.library.data = Some(vec![series(1, "Series 1")]);
     // Continue from Home: the series page is not under the reader.
     app.continue_series(1);
     assert_eq!(app.route(), &Route::Reader);
@@ -1174,6 +1176,38 @@ fn back_to_the_series_at_the_end_goes_to_the_series_wherever_the_reader_was_open
     tap(&mut app, &mut t, WIDTH / 2.0, h - 240.0 + 124.0 + 22.0);
     assert_eq!(app.nav.len(), 2);
     assert_eq!(app.route(), &Route::Series(1));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_end_of_the_newest_chapter_offers_the_series_nearest_its_end_and_opens_it() {
+    let (mut app, mut t, dir) = app_with("next-up", 8, 2340.0);
+    let d = comic(1, &[2, 2]);
+    measure(&mut app, &d);
+    app.series.insert(1, loaded(d.clone()));
+    // Series 7 has one chapter left; the rest six.
+    if let Some(l) = &mut app.library.data {
+        let s = l.iter_mut().find(|s| s.id == 7).unwrap();
+        s.read_upto = Some(9.0);
+        s.unread = 1;
+    }
+    let mut next = comic(7, &[2; 10]);
+    for c in &mut next.chapters {
+        c.read = c.number <= 9.0;
+    }
+    measure(&mut app, &next);
+    app.series.insert(7, loaded(next));
+    app.open_chapter(&d, 0, 0);
+    assert_eq!(reader(&app).next_up.as_ref().map(|(s, n)| (s.id, *n)), Some((7, 1)));
+    step(&mut app, &mut t);
+    scroll(&mut app, &mut t, 1e5);
+    // The row under the end's key, the strip's last 352 units: Next up's row is 232 to 304 of them.
+    let h = app.canvas.h;
+    tap(&mut app, &mut t, WIDTH / 2.0, h - 352.0 + 268.0);
+    assert_eq!(app.route(), &Route::Reader, "it opened in the reader");
+    let r = reader(&app);
+    assert_eq!(r.series, 7);
+    assert!(matches!(r.pos.item, crate::strip::Item::Head(9) | crate::strip::Item::Page(9, _)), "at chapter 10, where reading got to: {:?}", r.pos);
     let _ = std::fs::remove_dir_all(dir);
 }
 

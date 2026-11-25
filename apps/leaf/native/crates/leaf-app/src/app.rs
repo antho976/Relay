@@ -524,6 +524,10 @@ impl App {
             r.restore(index.min(d.chapters.len().saturating_sub(1)), p);
         }
         r.speed = self.speed_of(d.series.id);
+        if let Some(list) = &self.library.data {
+            let downloaded = self.saver.series_ids();
+            r.next_up = logic::next_up(list, d.series.id, |s| logic::in_space(s, downloaded.contains(&s.id))).map(|(s, n)| (s.clone(), n));
+        }
         self.close_reader();
         self.reader = Some(r);
         self.immersive(true);

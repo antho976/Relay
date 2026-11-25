@@ -390,6 +390,21 @@ pub fn left_after(s: &Series, d: Option<&SeriesDetail>) -> Option<u32> {
     Some(by_number.min(s.unread))
 }
 
+/// "1 chapter left", "12 chapters left".
+pub fn left_words(n: u32) -> String {
+    if n == 1 { "1 chapter left".into() } else { format!("{n} chapters left") }
+}
+
+/// The series the end of the newest chapter offers next (the owner, 2026-11-25): in My space, not
+/// `current`, with chapters left to read, not put On hold, Dropped or Done; the fewest left first,
+/// then the one read last, then the one added last.
+pub fn next_up(list: &[Series], current: i64, in_space: impl Fn(&Series) -> bool) -> Option<(&Series, u32)> {
+    list.iter()
+        .filter(|s| s.id != current && in_space(s) && matches!(shelf_of(s), Shelf::Reading | Shelf::Plan))
+        .filter_map(|s| left_after(s, None).filter(|n| *n > 0).map(|n| (s, n)))
+        .min_by_key(|(s, n)| (*n, std::cmp::Reverse(s.last_read_at), std::cmp::Reverse(s.added_at)))
+}
+
 /// Where a series stands in Recent, as a sort key (the owner, 2026-11-25): what you read here,
 /// last read first; then what you are partway through but never opened here (its progress came
 /// with it), the fewest chapters left first, so one or two from the newest come up top; then what
@@ -1115,6 +1130,23 @@ mod tests {
         assert_eq!(holes(&list), Some((2, 3.0)), "2 and 2.5, each once; 3 read in one copy");
         assert_eq!(past(71.0), 72.0, "71's parts go with it");
         assert!(past(71.5) > 71.5 && past(71.5) < 71.6);
+    }
+
+    #[test]
+    fn next_up_is_the_series_with_the_fewest_chapters_left() {
+        let mk = |id: i64, upto: Option<f64>, unread: u32, shelf: Option<&str>| Series { id, shelf: shelf.map(String::from), ..series(upto, unread, 0, 0) };
+        let list = [
+            mk(1, Some(9.0), 1, None),
+            mk(2, Some(8.0), 2, None),
+            mk(3, Some(9.0), 1, Some("dropped")),
+            mk(4, Some(10.0), 0, None),
+            mk(5, None, 10, None),
+            mk(6, Some(9.5), 1, Some("hold")),
+        ];
+        let pick = |current: i64| next_up(&list, current, |_| true).map(|(s, n)| (s.id, n));
+        assert_eq!(pick(9), Some((1, 1)));
+        assert_eq!(pick(1), Some((2, 2)), "not the one being read; not dropped, on hold, caught up or unstarted");
+        assert_eq!(next_up(&list, 9, |s| s.id != 1).map(|(s, _)| s.id), Some(2), "only what is in My space");
     }
 
     #[test]
