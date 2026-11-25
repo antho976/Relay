@@ -46,6 +46,9 @@ use crate::net::Job;
 use crate::shelf::{self, Book};
 use crate::theme::{self as t, PAD, ty};
 
+/// A row of Recent: finished, chapters left, its place in the order, and what it is.
+type RecentRow<'a> = (bool, Option<u32>, (u8, i64, i64), Result<&'a Series, &'a Book>);
+
 /// The fixed top: the title and its keys, then the tabs.
 const TOP: f32 = 104.0;
 /// The filter field under the tabs (Updates, Recent, Following).
@@ -344,16 +347,25 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             y += 12.0;
             cx.c.text_fit(&words.join(" · ").to_uppercase(), x0, y, w, Text::new(ty::SMALL, t::INK3).semi());
             y += 30.0;
-            // What is being read, last read first (a belled series' new chapter as of when it
-            // came); then what is finished; never read after, newest added first.
-            let done_of = |s: &Series| logic::finished(s, app.series.get(&s.id).and_then(|l| l.data.as_ref()));
-            let mut rows: Vec<(bool, i64, i64, Result<&Series, &Book>)> = series
+            // What is being read here, last read first (a belled series' new chapter as of when it
+            // came); then what is partway through but never opened here, fewest chapters left
+            // first; then what is caught up; then what is not started ([`logic::recent_key`]).
+            let detail = |s: &Series| app.series.get(&s.id).and_then(|l| l.data.as_ref());
+            let mut rows: Vec<RecentRow> = series
                 .iter()
                 .filter(|s| logic::title_matches(&s.title, &query))
-                .map(|s| (done_of(s), if s.bell && new_of[&s.id] > 0 { s.last_read_at.max(s.updated_at) } else { s.last_read_at }, s.added_at, Ok(s)))
+                .map(|s| {
+                    let done = logic::finished(s, detail(s));
+                    let left = logic::left_after(s, detail(s));
+                    let last = if s.bell && new_of[&s.id] > 0 && s.last_read_at > 0 { s.last_read_at.max(s.updated_at) } else { s.last_read_at };
+                    (done, left, logic::recent_key(last, s.added_at, done, left), Ok(s))
+                })
                 .collect();
-            rows.extend(books.iter().filter(|b| logic::title_matches(&b.title, &query) || logic::title_matches(&b.author, &query)).map(|b| (b.progress >= 0.995, b.opened_ms, b.added_ms, Err(b))));
-            rows.sort_by_key(|r| (r.1 == 0, r.0, std::cmp::Reverse(r.1), std::cmp::Reverse(r.2)));
+            rows.extend(books.iter().filter(|b| logic::title_matches(&b.title, &query) || logic::title_matches(&b.author, &query)).map(|b| {
+                let done = b.progress >= 0.995;
+                (done, None, logic::recent_key(b.opened_ms, b.added_ms, done, None), Err(b))
+            }));
+            rows.sort_by_key(|r| r.2);
             if rows.is_empty() && !query.trim().is_empty() && !(series.is_empty() && books.is_empty()) {
                 y += 40.0;
                 let (h, _) = kit::notice(&mut cx, x0 + 16.0, y, w - 32.0, &format!("Nothing with \u{201C}{}\u{201D} in its title", query.trim()), None, None);
@@ -368,7 +380,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 y += 46.0;
             }
             let rh = ROW_H;
-            for (done, _, _, r) in rows {
+            for (done, left, _, r) in rows {
                 if y + rh < view_top || y > view_bottom {
                     y += rh;
                     continue;
@@ -387,12 +399,19 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                             (None, _) if s.chapters == 0 => "No chapters yet".into(),
                             (None, _) => "Chapter 1".into(),
                         };
-                        let last = if s.last_read_at > 0 { format!("Last read {}", logic::ago(s.last_read_at, now_ms)) } else { "Not started".into() };
+                        // Progress that came with it but never read here: how much is left, not "Not started".
+                        let last = match left {
+                            _ if s.last_read_at > 0 => format!("Last read {}", logic::ago(s.last_read_at, now_ms)),
+                            Some(1) => "1 chapter left".into(),
+                            Some(n) if n > 0 => format!("{n} chapters left"),
+                            Some(_) => "Caught up".into(),
+                            None => "Not started".into(),
+                        };
                         if done {
                             // Finished: "Read", and the key opens the series rather than its last chapter again.
                             (s.title.as_str(), "Read".to_string(), 0, last, "Open", 0.0, Act::Series(s.id), Act::Series(s.id))
                         } else {
-                            let key = if s.last_read_at > 0 { "Continue" } else { "Start" };
+                            let key = if s.last_read_at > 0 || left.is_some() { "Continue" } else { "Start" };
                             (s.title.as_str(), line, new_of[&s.id], last, key, logic::read_fraction(s), Act::Series(s.id), Act::Continue(s.id))
                         }
                     }

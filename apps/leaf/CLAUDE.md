@@ -127,6 +127,9 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
   waits until the reader closes); not again until the server answered and was lost again; "Back
   online" is a toast. While out of reach the server is tried every 20 s and on coming back to the
   front; the platform's network state is not read (2026-11-23).
+- Recent (2026-11-25): what was read here, last read first; then series partway through but never
+  opened here (progress that came with them), fewest chapters left first, saying "2 chapters left"
+  and Continue rather than "Not started"; then caught up; then not started (`logic::recent_key`).
 - Every select mode selects in bulk by sweeping (`sweep.rs`, the owner, 2026-11-23): a long press on
   a row and a drag without lifting selects the range from that row to the finger, dragging back lets
   go, a long press on a selected row de-selects, the list scrolls by itself in a 72-unit band at its

@@ -358,7 +358,34 @@ pub fn finished(s: &Series, d: Option<&SeriesDetail>) -> bool {
     }
 }
 
-/// Unread chapters after the furthest one read: what "58 to go" counts.
+/// Chapters left after the furthest one read, as the library knows it: the newest's number past
+/// it, never more than the unread count (a gap or a half chapter counts once). None when
+/// nothing is read.
+pub fn left_after(s: &Series, d: Option<&SeriesDetail>) -> Option<u32> {
+    let upto = s.read_upto?;
+    if let Some(d) = d
+        && !d.chapters.is_empty()
+    {
+        return Some(to_go(s, Some(d)));
+    }
+    let by_number = s.latest.map_or(0.0, |l| (l - upto.floor()).max(0.0).ceil()) as u32;
+    Some(by_number.min(s.unread))
+}
+
+/// Where a series stands in Recent, as a sort key (the owner, 2026-11-25): what you read here,
+/// last read first; then what you are partway through but never opened here (its progress came
+/// with it), the fewest chapters left first, so one or two from the newest come up top; then what
+/// is caught up, last read first; then what is not started, newest added first.
+pub fn recent_key(last_read: i64, added: i64, done: bool, left: Option<u32>) -> (u8, i64, i64) {
+    match (last_read > 0, done, left) {
+        (true, false, _) => (0, -last_read, -added),
+        (false, false, Some(n)) => (1, n as i64, -added),
+        (_, true, _) => (2, -last_read, -added),
+        (false, false, None) => (3, -added, 0),
+    }
+}
+
+
 pub fn to_go(s: &Series, d: Option<&SeriesDetail>) -> u32 {
     match (s.read_upto, d) {
         (Some(upto), Some(d)) if !d.chapters.is_empty() => d.chapters.iter().filter(|c| !c.read && c.number > upto).count() as u32,
@@ -1061,6 +1088,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn recent_puts_series_one_or_two_chapters_from_the_end_first_after_what_you_read_here() {
+        // Progress that came with a series (read to 9 of 10), never opened here.
+        let near = series(Some(9.0), 1, 0, 0);
+        assert_eq!(left_after(&near, None), Some(1));
+        // A half chapter and a gap leave more unread than the numbers say: the numbers win.
+        let gappy = series(Some(9.0), 5, 0, 0);
+        assert_eq!(left_after(&gappy, None), Some(1));
+        let far = series(Some(2.0), 8, 0, 0);
+        assert_eq!(left_after(&far, None), Some(8));
+        assert_eq!(left_after(&series(None, 10, 0, 0), None), None, "nothing read");
+        let mut keys = [
+            ("not started", recent_key(0, 50, false, None)),
+            ("far", recent_key(0, 40, false, Some(8))),
+            ("caught up", recent_key(0, 30, true, Some(0))),
+            ("read here", recent_key(1_000, 1, false, Some(30))),
+            ("near", recent_key(0, 20, false, Some(1))),
+            ("two left", recent_key(0, 60, false, Some(2))),
+            ("read here lately", recent_key(2_000, 1, false, Some(40))),
+        ];
+        keys.sort_by_key(|k| k.1);
+        let order: Vec<&str> = keys.iter().map(|k| k.0).collect();
+        assert_eq!(order, ["read here lately", "read here", "near", "two left", "far", "caught up", "not started"]);
+    }
     #[test]
     fn only_what_you_did_something_with_is_in_your_space() {
         let mut s = series(None, 10, 0, 0);
