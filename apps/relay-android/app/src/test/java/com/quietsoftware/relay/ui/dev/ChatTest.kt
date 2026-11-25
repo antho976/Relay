@@ -90,6 +90,54 @@ class ChatTest {
     }
 
     @Test
+    fun thePersonsNumberedMessageEchoedOnScreenIsNotAQuestion() {
+        // What Claude Code draws after a numbered message while it works: the echo, its answer,
+        // the working line and the empty input box. The list is the person's, not a menu.
+        val screen = """
+            Everything is pushed to PR #207. Merge #206 first.
+            ✻ Sautéed for 59m 24s · done 1:37 a.m.
+
+            ❯ 1. Series done are still in continue if not enough are to fill it
+              2. Bookmark when clicking and opening the UI
+              3. In search fetch less
+
+              It looks really good though btw.
+
+            ⏺ Great to hear it held up.
+
+            ✻ Sautéing… (12s · esc to interrupt)
+
+            ────────────────────────────────────────
+            ❯${" "}
+            ────────────────────────────────────────
+              ⏵⏵ auto mode on (shift+tab to cycle)
+        """.trimIndent()
+        assertFalse(screenAsks(screen))
+        assertTrue(askOf(screen).second.isEmpty())
+        // Echoed and nothing after it yet but the prompt with a draft: still not a menu.
+        assertFalse(screenAsks("❯ 1. one\n  2. two\n\n❯ 112233"))
+    }
+
+    @Test
+    fun aRealMenuUnderAnEchoedListIsTheOneRead() {
+        val screen = """
+            ❯ 1. old item
+              2. another
+
+            ⏺ Bash(cargo test)
+            Do you want to proceed?
+            ❯ 1. Yes
+              2. No, and tell Claude what to do differently (esc)
+
+            Esc to cancel · Tab to amend
+        """.trimIndent()
+        assertTrue(screenAsks(screen))
+        val (question, options) = askOf(screen)
+        assertEquals("Do you want to proceed?", question.last())
+        assertEquals(listOf("1" to "Yes", "2" to "No, and tell Claude what to do differently (esc)"), options)
+    }
+
+    @Test
     fun whatThePersonSentShowsUntilTheLogHasIt() {
         val sent = msg("tmp:1", "user", """{"text":"and the tests"}""")
         val pieces = chatPieces(emptyList(), listOf(sent), working = false, today = today)

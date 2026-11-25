@@ -209,38 +209,14 @@ fn claude_record(record: &Value, at: u64, worktree: &Path, out: &mut Vec<Transcr
             if !summary.is_empty() { body["detail"] = json!(cut_lines(&summary, MAX_COMPACT_SUMMARY)); }
             out.push(message(id, "note", body, record));
         }
-        Some("user") => match content {
-            Some(Value::String(text)) => {
-                if let Some((role, body)) = claude_user_text(text) { out.push(message(id, role, body, record)); }
-            }
-            Some(Value::Array(blocks)) => {
-                let mut words = Vec::new();
-                for (i, block) in blocks.iter().enumerate() {
-                    match block.get("type").and_then(Value::as_str) {
-                        Some("tool_result") => {
-                            let text = claude_result_text(block.get("content"));
-                            out.push(message(format!("{id}:{i}"), "tool", json!({
-                                "tool_use_id": block.get("tool_use_id").and_then(Value::as_str).unwrap_or_default(),
-                                "is_error": block.get("is_error").and_then(Value::as_bool).unwrap_or(false),
-                                "text": cut(&text, MAX_ANSWER),
-                            }), record));
-                        }
-                        Some("text") => {
-                            let text = block.get("text").and_then(Value::as_str).unwrap_or_default();
-                            if text.starts_with("[Image") { words.push("[image]".to_string()) }
-                            else if let Some((role, body)) = claude_user_text(text) {
-                                if role == "note" { out.push(message(format!("{id}:{i}"), role, body, record)) }
-                                else { words.push(body["text"].as_str().unwrap_or_default().to_string()) }
-                            }
-                        }
-                        Some("image") => words.push("[image]".to_string()),
-                        _ => {}
-                    }
-                }
-                if !words.is_empty() { out.push(message(id, "user", json!({"text": words.join("\n\n")}), record)); }
-            }
-            _ => {}
-        },
+        Some("user") => claude_user(&id, content, record, out),
+        // What the person sent while the agent worked: Claude Code hands it over at the next
+        // step, mid-turn, and logs it as an attachment rather than a user turn.
+        Some("attachment") => {
+            let Some(queued) = record.get("attachment").filter(|a| a.get("type").and_then(Value::as_str) == Some("queued_command")) else { return };
+            let human = queued.pointer("/origin/kind").and_then(Value::as_str) == Some("human") || queued.get("humanTurn").and_then(Value::as_bool) == Some(true);
+            if human { claude_user(&id, queued.get("prompt"), record, out) }
+        }
         Some("assistant") => {
             let Some(Value::Array(blocks)) = content else { return };
             let text_of = |block: &Value| block.get("text").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -286,6 +262,42 @@ fn claude_record(record: &Value, at: u64, worktree: &Path, out: &mut Vec<Transcr
     }
 }
 
+/// A person's turn, as words (text and pictures) and the tools' answers it carries.
+fn claude_user(id: &str, content: Option<&Value>, record: &Value, out: &mut Vec<TranscriptMessage>) {
+    match content {
+        Some(Value::String(text)) => {
+            if let Some((role, body)) = claude_user_text(text) { out.push(message(id.to_string(), role, body, record)); }
+        }
+        Some(Value::Array(blocks)) => {
+            let mut words = Vec::new();
+            for (i, block) in blocks.iter().enumerate() {
+                match block.get("type").and_then(Value::as_str) {
+                    Some("tool_result") => {
+                        let text = claude_result_text(block.get("content"));
+                        out.push(message(format!("{id}:{i}"), "tool", json!({
+                            "tool_use_id": block.get("tool_use_id").and_then(Value::as_str).unwrap_or_default(),
+                            "is_error": block.get("is_error").and_then(Value::as_bool).unwrap_or(false),
+                            "text": cut(&text, MAX_ANSWER),
+                        }), record));
+                    }
+                    Some("text") => {
+                        let text = block.get("text").and_then(Value::as_str).unwrap_or_default();
+                        if text.starts_with("[Image") { words.push("[image]".to_string()) }
+                        else if let Some((role, body)) = claude_user_text(text) {
+                            if role == "note" { out.push(message(format!("{id}:{i}"), role, body, record)) }
+                            else { words.push(body["text"].as_str().unwrap_or_default().to_string()) }
+                        }
+                    }
+                    Some("image") => words.push("[image]".to_string()),
+                    _ => {}
+                }
+            }
+            if !words.is_empty() { out.push(message(id.to_string(), "user", json!({"text": words.join("\n\n")}), record)); }
+        }
+        _ => {}
+    }
+}
+
 /// "973k", "1.2M": a context's size, as a person reads it.
 fn tokens(n: u64) -> String {
     match n {
@@ -319,7 +331,8 @@ fn note(text: impl Into<String>, kind: &str) -> Value { json!({"text": text.into
 /// What a person typed, as they would read it, or a note for what Relay or Claude Code typed in
 /// their place; `None` for context Claude Code added for the model.
 fn claude_user_text(text: &str) -> Option<(&'static str, Value)> {
-    let trimmed = text.trim();
+    let unwrapped = PASTED.replace_all(text, "");
+    let trimmed = unwrapped.trim();
     if trimmed.starts_with("[Request interrupted") { return Some(("note", note("Interrupted", "interrupt"))); }
     if let Some(name) = between(trimmed, "<command-name>", "</command-name>") {
         let args = between(trimmed, "<command-args>", "</command-args>").unwrap_or_default();
@@ -338,6 +351,10 @@ fn claude_user_text(text: &str) -> Option<(&'static str, Value)> {
     if let Some(found) = relay_typed(trimmed) { return Some(found); }
     (!trimmed.is_empty()).then(|| ("user", json!({"text": trimmed})))
 }
+
+/// The tags Claude Code logs a pasted message in (`<pasted_content id="d72e">`…`</pasted_content id="d72e">`):
+/// the person sees only what they pasted.
+static PASTED: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"</?pasted_content(?:\s[^>]*)?>").unwrap());
 
 /// What Relay types into an agent's terminal (`handlers::session`: `launch_nudge`,
 /// `assignment_text`), read back as what it was: the person's own launch words where it carries
@@ -681,6 +698,25 @@ mod tests {
         assert_eq!(out.messages[5].body["text"], "/compact");
         assert_eq!(out.messages[6].body, json!({"text": "Interrupted", "kind": "interrupt"}));
         assert!(out.found && !out.reset);
+    }
+
+    /// A paste reads as what was pasted, and a message sent while the agent worked (logged as a
+    /// queued attachment, handed over mid-turn) reads as the person's, as any other.
+    #[test]
+    fn a_paste_and_a_message_sent_mid_turn_read_as_the_persons() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("c.jsonl");
+        fs::write(&path, lines(&[
+            json!({"type": "user", "uuid": "u1", "message": {"content": "\n\n<pasted_content id=\"d72e\">\n1. one\n2. two\n</pasted_content id=\"d72e\">\n"}}),
+            json!({"type": "attachment", "uuid": "q1", "timestamp": "2026-11-23T03:32:16Z", "attachment": {"type": "queued_command", "prompt": "make it slower", "origin": {"kind": "human"}, "humanTurn": true}}),
+            json!({"type": "attachment", "uuid": "q2", "attachment": {"type": "queued_command", "prompt": [{"type": "text", "text": "this? [Image #11]"}, {"type": "image", "source": {}}], "humanTurn": true}}),
+            json!({"type": "attachment", "uuid": "q3", "attachment": {"type": "queued_command", "prompt": "<task-notification>…</task-notification>"}}),
+            json!({"type": "attachment", "uuid": "d", "attachment": {"type": "deferred_tools_record", "entries": []}}),
+        ])).unwrap();
+        let out = read(Provider::Claude, &path, Path::new("/wt"), None, 200).unwrap();
+        let got: Vec<(&str, &str, &str)> = out.messages.iter().map(|m| (m.id.as_str(), m.role.as_str(), m.body["text"].as_str().unwrap_or_default())).collect();
+        assert_eq!(got, [("u1", "user", "1. one\n2. two"), ("q1", "user", "make it slower"), ("q2", "user", "this? [Image #11]\n\n[image]")]);
+        assert_eq!(out.messages[1].created_at, "2026-11-23T03:32:16Z");
     }
 
     /// A compaction reads as a line saying so, and the summary Claude Code hands the model as a

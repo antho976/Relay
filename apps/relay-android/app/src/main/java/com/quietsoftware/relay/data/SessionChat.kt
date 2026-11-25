@@ -129,7 +129,9 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
             list.filter { mine ->
                 // Only a message logged since this one was sent can be it: a picture alone has no words to tell it by.
                 val known = before[mine.id].orEmpty()
-                val said = users.any { it.id !in known && gist(it.text) == gist(mine.text) }
+                // Claude Code logs messages that waited in its queue together, as one: a part of one counts.
+                val typed = gist(mine.text)
+                val said = users.any { it.id !in known && gist(it.text).let { logged -> logged == typed || (typed.isNotEmpty() && typed in logged) } }
                 !said && (queued || now - Instant.parse(mine.createdAt).toEpochMilli() < SENDING_MS)
             }
         }
@@ -138,7 +140,7 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
 
     /** A message as typed, whichever way its provider logged the pictures it named (a path, or `[Image #1]`). */
     private fun gist(text: String): String =
-        text.lines().filterNot { ATTACHED_LINE in it }.joinToString("\n").replace(IMAGE_TAG, "").trim()
+        text.lines().filterNot { ATTACHED_LINE in it }.joinToString("\n").replace(IMAGE_TAG, "").replace(PASTE_TAG, "").trim()
 
     /** Keep the conversation for when the PC is away: the newest part, as the first read's answer. */
     fun save() {
@@ -212,5 +214,7 @@ class SessionChat(private val relay: Relay, val name: String, private val scope:
         private const val PASTE_END = "\u001b[201~"
         private const val ATTACHED_LINE = ".relay/attachments/"
         private val IMAGE_TAG = Regex("""\[Image #\d+]""")
+        /** How Claude Code logs a pasted message (an older PC's Relay passes the tags on). */
+        private val PASTE_TAG = Regex("""</?pasted_content[^>]*>""")
     }
 }
