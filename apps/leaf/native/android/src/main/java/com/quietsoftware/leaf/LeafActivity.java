@@ -8,6 +8,9 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.pdf.PdfRenderer;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.ParcelFileDescriptor;
 import android.provider.OpenableColumns;
@@ -107,6 +110,16 @@ public class LeafActivity extends GameActivity {
     /** A light tick (a row caught by a drag that selects), as the system's touch feedback allows. */
     public void tick() {
         runOnUiThread(() -> getWindow().getDecorView().performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK));
+    }
+
+    /** On a network that isn't metered (Wi-Fi, as people mean it): "Download Next up" may run. */
+    public boolean unmetered() {
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (cm == null) return false;
+        Network n = cm.getActiveNetwork();
+        if (n == null) return false;
+        NetworkCapabilities c = cm.getNetworkCapabilities(n);
+        return c != null && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
     }
 
     /** A book or a strip is open: the screen stays on. */

@@ -49,6 +49,10 @@ pub trait Host: Send + Sync {
     fn ask_notifications(&self) {}
     /// A book or a strip is on screen (or no longer): keep the screen on.
     fn reading(&self, _on: bool) {}
+    /// The phone is on a network that isn't metered (Wi-Fi, as people mean it). A desktop is.
+    fn unmetered(&self) -> bool {
+        true
+    }
     /// Open a web address in the app that takes it (Android: the Webtoon app when it is
     /// installed, else the browser). False when nothing could.
     fn open_url(&self, url: &str) -> bool {
@@ -244,6 +248,11 @@ struct Config {
     update_later: Option<(u32, i64)>,
 }
 
+/// "Download Next up": how many series, how many chapters of each, and how often it looks.
+pub const AUTO_SERIES: usize = 3;
+pub const AUTO_CHAPTERS: usize = 2;
+const AUTO_EVERY_MS: i64 = 3 * 3_600_000;
+
 /// How reading feels, kept in `config.json`.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
@@ -256,11 +265,14 @@ pub struct ReadPrefs {
     pub speeds: std::collections::BTreeMap<i64, u8>,
     /// Scanlators' promo pages ("join our Discord") are left out: the server skips them.
     pub skip_promo: bool,
+    /// The next chapters of the series closest to their end are kept on this phone, on Wi-Fi
+    /// ([`App::auto_next_tick`]). Off until turned on.
+    pub auto_next: bool,
 }
 
 impl Default for ReadPrefs {
     fn default() -> ReadPrefs {
-        ReadPrefs { trim_gutters: true, dim: 0.0, speeds: Default::default(), skip_promo: true }
+        ReadPrefs { trim_gutters: true, dim: 0.0, speeds: Default::default(), skip_promo: true, auto_next: false }
     }
 }
 
@@ -318,6 +330,8 @@ pub struct App {
     pub booksync: crate::booksync::BookSync,
     /// Restore was tapped once with books on this phone: the next tap replaces them.
     pub restore_asked: bool,
+    /// When "Download Next up" looks again (ms).
+    pub auto_next_at: i64,
     /// Chapters that came for series in My space (`/v1/updates`).
     pub updates: Loaded<Vec<Update>>,
     /// The server's status, as Settings shows it (AniList).
@@ -431,6 +445,7 @@ impl App {
             books_copied: config.books_copied,
             booksync: Default::default(),
             restore_asked: false,
+            auto_next_at: 0,
             updates: Loaded::default(),
             status: Loaded::default(),
             health: Loaded::default(),
@@ -1065,6 +1080,41 @@ impl App {
         self.ask(Job::NotSame(a, b));
     }
 
+    /// "Download Next up on Wi-Fi": the next [`AUTO_CHAPTERS`] chapters of the [`AUTO_SERIES`]
+    /// series closest to their end ([`logic::next_ups`]) put in the download line, quietly. Looked
+    /// at every few hours, sooner while a series' chapters are still being asked for; only once the
+    /// server has answered, and only off a metered network.
+    fn auto_next_tick(&mut self) {
+        let now = crate::shelf::now_ms();
+        if !self.prefs.auto_next || self.shot || self.server.is_none() || self.st.online.reach != Some(true) || now < self.auto_next_at {
+            return;
+        }
+        let Some(list) = self.library.data.clone() else { return };
+        if !self.host.unmetered() {
+            self.auto_next_at = now + 10 * 60_000;
+            return;
+        }
+        let downloaded = self.saver.series_ids();
+        let targets: Vec<i64> = logic::next_ups(&list, -1, |s| logic::in_space(s, downloaded.contains(&s.id)), AUTO_SERIES).into_iter().map(|(s, _)| s.id).collect();
+        let mut waiting = false;
+        for id in targets {
+            match self.series.get(&id).map(|l| (l.data.clone(), l.loading)) {
+                Some((Some(d), _)) => {
+                    let want: Vec<leaf_proto::Chapter> = logic::next_unread(&d, AUTO_CHAPTERS).into_iter().filter(|c| !self.saver.is_saved(c.id)).collect();
+                    if !want.is_empty() {
+                        self.saver.add(id, &d.series.title, &want);
+                    }
+                }
+                Some((None, true)) => waiting = true,
+                _ => {
+                    waiting = true;
+                    self.ask(Job::Series(id));
+                }
+            }
+        }
+        self.auto_next_at = now + if waiting { 20_000 } else { AUTO_EVERY_MS };
+    }
+
     /// Copy the books now (Settings), over a copy found from another phone too when `over`.
     pub fn copy_books(&mut self, over: bool) {
         let Some(server) = self.server.clone() else { return };
@@ -1090,6 +1140,7 @@ impl App {
     fn take_answers(&mut self) {
         self.shelf.take();
         self.books_tick();
+        self.auto_next_tick();
         let picked = crate::shelf::take_delivered();
         if !picked.is_empty() {
             let files = picked.into_iter().map(|(p, n)| (p, n, true)).collect();

@@ -399,10 +399,29 @@ pub fn left_words(n: u32) -> String {
 /// `current`, with chapters left to read, not put On hold, Dropped or Done; the fewest left first,
 /// then the one read last, then the one added last.
 pub fn next_up(list: &[Series], current: i64, in_space: impl Fn(&Series) -> bool) -> Option<(&Series, u32)> {
-    list.iter()
+    next_ups(list, current, in_space, 1).into_iter().next()
+}
+
+/// The first `n` series [`next_up`] would offer, in its order.
+pub fn next_ups(list: &[Series], current: i64, in_space: impl Fn(&Series) -> bool, n: usize) -> Vec<(&Series, u32)> {
+    let mut out: Vec<(&Series, u32)> = list
+        .iter()
         .filter(|s| s.id != current && in_space(s) && matches!(shelf_of(s), Shelf::Reading | Shelf::Plan))
         .filter_map(|s| left_after(s, None).filter(|n| *n > 0).map(|n| (s, n)))
-        .min_by_key(|(s, n)| (*n, std::cmp::Reverse(s.last_read_at), std::cmp::Reverse(s.added_at)))
+        .collect();
+    out.sort_by_key(|(s, n)| (*n, std::cmp::Reverse(s.last_read_at), std::cmp::Reverse(s.added_at)));
+    out.truncate(n);
+    out
+}
+
+/// The next `n` chapters to read, one per number, after the furthest read: what "Download Next
+/// up" keeps on the phone.
+pub fn next_unread(d: &SeriesDetail, n: usize) -> Vec<Chapter> {
+    let upto = d.chapters.iter().filter(|c| c.read).map(|c| c.number).fold(f64::NEG_INFINITY, f64::max);
+    let mut ahead: Vec<&Chapter> = d.chapters.iter().filter(|c| !c.read && c.number > upto).collect();
+    ahead.sort_by(|a, b| a.number.total_cmp(&b.number));
+    ahead.dedup_by(|a, b| a.number == b.number);
+    ahead.into_iter().take(n).cloned().collect()
 }
 
 /// Of two follows of one work, which to keep and which goes into it: the one read further, then
@@ -1165,6 +1184,17 @@ mod tests {
         assert_eq!(merge_keep(&b, &a), (2, 1));
         let c = Series { id: 3, ..series(None, 10, 0, 0) };
         assert_eq!(merge_keep(&c, &a), (1, 3), "something read beats nothing");
+    }
+
+    #[test]
+    fn the_next_chapters_kept_are_the_first_unread_after_the_furthest_read_one_per_number() {
+        let ch = |id: i64, n: f64, read: bool| Chapter { id, number: n, name: String::new(), group: None, pages: 0, read, last_page: 0, downloaded: false, uploaded_at: 0, from: None };
+        let d = SeriesDetail {
+            series: series(Some(3.0), 3, 0, 0),
+            description: None,
+            chapters: vec![ch(1, 1.0, false), ch(3, 3.0, true), ch(5, 5.0, false), ch(4, 4.0, false), ch(44, 4.0, false), ch(6, 6.0, false)],
+        };
+        assert_eq!(next_unread(&d, 2).iter().map(|c| c.id).collect::<Vec<_>>(), vec![4, 5], "a hole before 3 is not ahead; 4's second copy once");
     }
 
     #[test]

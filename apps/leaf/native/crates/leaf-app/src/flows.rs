@@ -1644,6 +1644,36 @@ fn a_series_followed_twice_is_merged_into_the_one_read_further() {
 }
 
 #[test]
+fn next_up_is_downloaded_on_wi_fi_only_once_turned_on() {
+    let (mut app, mut t, dir) = app("auto-next");
+    let fake = fake::Fake::start();
+    app.shot = false;
+    app.server = Some(fake.server());
+    app.st.online.reach = Some(true);
+    // Series 2 has 2 chapters left of 10, the others 6: it is first.
+    let mut d = comic(2, &[3; 10]);
+    for c in &mut d.chapters {
+        c.read = c.number <= 8.0;
+    }
+    d.series.read_upto = Some(8.0);
+    d.series.unread = 2;
+    fake.state.lock().unwrap().details.insert(2, d.clone());
+    if let Some(l) = &mut app.library.data {
+        l[1] = d.series.clone();
+    }
+    let kept = |app: &App, id: i64| !matches!(app.saver.state(id), crate::offline::Kept::None);
+    for _ in 0..30 {
+        step(&mut app, &mut t);
+    }
+    assert!(!kept(&app, 1009), "off until turned on");
+    app.prefs.auto_next = true;
+    app.series.insert(2, loaded(d));
+    assert!(until(&mut app, &mut t, 5.0, |a| kept(a, 1009) && kept(a, 1010)), "chapters 9 and 10 in the line");
+    assert!(!kept(&app, 1008), "not one already read");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn the_place_moves_only_down_the_strip() {
     let (mut app, mut t, dir) = app("place-forward");
     app.shot = false;

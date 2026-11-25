@@ -79,6 +79,10 @@ impl Host for AndroidHost {
         with_activity(&self.app, |env, activity| env.call_method(activity, "setImmersive", "(Z)V", &[JValue::Bool(on as u8)]).map(|_| ()));
     }
 
+    fn unmetered(&self) -> bool {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "unmetered", "()Z", &[])?.z()).unwrap_or(false)
+    }
+
     fn reading(&self, on: bool) {
         with_activity(&self.app, |env, activity| env.call_method(activity, "setReading", "(Z)V", &[JValue::Bool(on as u8)]).map(|_| ()));
     }

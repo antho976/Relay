@@ -174,6 +174,20 @@ pub fn draw(cx: &mut Ctx, p: Parts, x: f32, mut y: f32, w: f32, now_ns: u64) -> 
         acts.push(Act::Save);
     }
     y += h;
+    let (h, tap) = toggle_row(
+        cx,
+        x,
+        y,
+        w,
+        "Download Next up on Wi-Fi",
+        "The next 2 chapters of the 3 series closest to their end are kept on this phone, ready to read with no connection.",
+        p.prefs.auto_next,
+    );
+    if tap {
+        p.prefs.auto_next = !p.prefs.auto_next;
+        acts.push(Act::Save);
+    }
+    y += h;
     if let Some(n) = p.hidden.filter(|n| *n > 0) {
         let rh = 52.0;
         let tt = Text::new(ty::UI, t::INK2);

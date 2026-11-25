@@ -4,6 +4,8 @@
     <!-- The owner's leaf-server: the library, covers and pages. No other host. Books come from the
          system's file picker, which needs no permission. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- "Download Next up on Wi-Fi" asks whether the network is metered. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- New chapters of a series whose bell is on: an hourly job asks the server and posts a
          notice per new chapter run (Android 13+ asks the person first, the first time a bell is
          turned on). The job is kept across restarts. -->

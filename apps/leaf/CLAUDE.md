@@ -140,6 +140,15 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
   never made a copy never sends its shelf over one already there: Settings offers Restore (or "Use
   this phone's"). Restore replaces the shelf's rows in one transaction (`shelf::Op::Restore`).
   Files over 95 MB stay on the phone (Cloudflare takes 100 MB at most).
+- Followed twice (2026-11-25): the server pairs followed series whose titles or aliases name one
+  work (`GET /v1/duplicates`, `duplicate_pairs`); My space's Recent and Following show "N series are
+  in My space twice", and Merge keeps the one read further (`logic::merge_keep`, `POST
+  /v1/series/{id}/merge`: the other's copies become links, its bell, shelf and progress carried).
+  "Not the same" is kept for good (`notdup:` in kv).
+- "Download Next up on Wi-Fi" (Settings › Reading, off by default, 2026-11-25): the next 2
+  chapters of the 3 series closest to their end go in the download line, quietly, every 3 hours,
+  only on an unmetered network (`Host::unmetered`, `LeafActivity.unmetered`; the one place the
+  platform's network state is read). It is the owner's ask for those downloads.
 - Every select mode selects in bulk by sweeping (`sweep.rs`, the owner, 2026-11-23): a long press on
   a row and a drag without lifting selects the range from that row to the finger, dragging back lets
   go, a long press on a selected row de-selects, the list scrolls by itself in a 72-unit band at its
