@@ -101,6 +101,7 @@ pub struct Ctx {
     /// Pages near chapters' edges by their pictures, and the ones hidden by hand (`promo.rs`).
     pub promo: Mutex<crate::promo::Seen>,
     /// Titles shown before they are added (`/v1/preview`): the entries asked, to (when, the detail).
+    /// Pages of titles not added, by their entries, with when each stops being kept (ms).
     pub preview_cache: Mutex<HashMap<String, (i64, Value)>>,
     /// "Did you mean": a search's words to (when, AniList's title for them, if any).
     pub suggest_cache: Mutex<HashMap<String, (i64, Option<String>)>>,
@@ -115,6 +116,8 @@ pub type SearchCache = HashMap<(String, String), (i64, Vec<crate::suwa::Found>)>
 pub const SEARCH_KEEP_MS: i64 = 10 * 60_000;
 /// A preview of a title not added yet is used again for this long.
 pub const PREVIEW_KEEP_MS: i64 = 10 * 60_000;
+/// A pick's page asked for ahead, as the day's picks are made, is kept this long.
+pub const WARM_KEEP_MS: i64 = 26 * 3_600_000;
 /// The most entries one preview tries, in the order the phone sent them.
 const PREVIEW_TRIES: usize = 3;
 /// AniList's answer to "did you mean" is used again for this long.
@@ -602,6 +605,12 @@ impl Ctx {
     /// added, to My space or to Suwayomi's library. An entry already linked to a work answers that
     /// work's own detail (its id set), and the phone opens that page instead.
     pub fn preview_json(&self, manga_ids: &[i64]) -> Result<Value, String> {
+        self.preview_as(manga_ids, Lane::Fore, PREVIEW_KEEP_MS)
+    }
+
+    /// [`Ctx::preview_json`], asked in `lane` and kept `keep_ms` (the day's picks are asked ahead,
+    /// in the background, and kept a day).
+    pub fn preview_as(&self, manga_ids: &[i64], lane: Lane, keep_ms: i64) -> Result<Value, String> {
         if manga_ids.is_empty() {
             return Err("preview what?".into());
         }
@@ -611,13 +620,13 @@ impl Ctx {
         }
         let key = manga_ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
         let now = now_ms();
-        let kept = self.preview_cache.lock().unwrap_or_else(|p| p.into_inner()).get(&key).filter(|(at, _)| now - at < PREVIEW_KEEP_MS).map(|(_, v)| v.clone());
+        let kept = self.preview_cache.lock().unwrap_or_else(|p| p.into_inner()).get(&key).filter(|(until, _)| now < *until).map(|(_, v)| v.clone());
         if let Some(v) = kept {
             return Ok(v);
         }
         let mut last = Err("none of its entries answered".to_string());
         for &m in manga_ids.iter().take(PREVIEW_TRIES) {
-            match self.refresh(m, None, Lane::Fore) {
+            match self.refresh(m, None, lane) {
                 Ok(manga) if !manga.chapters.is_empty() => {
                     self.note_source(&manga.source_name, None);
                     let mut v = preview_of(&manga, &self.prefs);
@@ -625,15 +634,15 @@ impl Ctx {
                     if manga_ids.len() == 1 && manga.source_name.eq_ignore_ascii_case(WEBTOONS) {
                         let numbers: Vec<f64> = manga.chapters.iter().map(|c| c.number).collect();
                         let paid = self.webtoon_url(m).and_then(|url| {
-                            let l = self.listing(&url, Lane::Fore, now).ok().flatten()?;
+                            let l = self.listing(&url, lane, now).ok().flatten()?;
                             crate::webtoon::paid_ahead(&l, plausible_latest(&numbers), &url)
                         });
                         v["series"]["paid"] = serde_json::to_value(paid).unwrap_or(Value::Null);
                         v["series"]["watch"] = Value::Bool(false);
                     }
                     let mut cache = self.preview_cache.lock().unwrap_or_else(|p| p.into_inner());
-                    cache.retain(|_, (at, _)| now - *at < PREVIEW_KEEP_MS);
-                    cache.insert(key, (now, v.clone()));
+                    cache.retain(|_, (until, _)| now < *until);
+                    cache.insert(key, (now + keep_ms, v.clone()));
                     return Ok(v);
                 }
                 Ok(_) => last = Err("no chapters there yet".into()),

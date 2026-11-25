@@ -88,12 +88,26 @@ pub struct Ui {
     pub dt: f32,
     /// The finger now down sweeps a selection ([`crate::sweep`]): no list scrolls with it.
     claimed: bool,
+    /// A second finger down beside the first (a pinch): its id and where it is (units).
+    second: Option<(u64, (f32, f32))>,
 }
 
 impl Ui {
     /// Feed a touch, already converted to units.
     pub fn touch(&mut self, t: Touch, x: f32, y: f32) {
         match t.phase {
+            // A second finger: a pinch. The first is no longer a tap, a press or a drag of the page.
+            Phase::Down if self.id.is_some_and(|id| id != t.id) && self.second.is_none() => {
+                self.second = Some((t.id, (x, y)));
+                self.down = None;
+                self.caught.set(true);
+            }
+            Phase::Move if self.second.is_some_and(|(id, _)| id == t.id) => {
+                self.second = Some((t.id, (x, y)));
+            }
+            Phase::Up | Phase::Cancel if self.second.is_some_and(|(id, _)| id == t.id) => {
+                self.second = None;
+            }
             Phase::Down if self.id.is_none() => {
                 self.id = Some(t.id);
                 self.start = (x, y);
@@ -153,8 +167,10 @@ impl Ui {
                 self.id = None;
                 self.down = None;
                 self.dragging = false;
+                self.second = None;
             }
             Phase::Cancel if self.id == Some(t.id) => {
+                self.second = None;
                 self.id = None;
                 self.down = None;
                 self.dragging = false;
@@ -200,6 +216,11 @@ impl Ui {
     /// Where the finger is now, while one is down (units).
     pub fn finger(&self) -> Option<(f32, f32)> {
         self.id.map(|_| self.pos)
+    }
+
+    /// Both fingers of a pinch, while two are down (units).
+    pub fn pinch(&self) -> Option<((f32, f32), (f32, f32))> {
+        Some((self.finger()?, self.second?.1))
     }
 
     /// A finger resting without moving: where, and for how long (ns) by `now`.

@@ -145,13 +145,46 @@ pub enum Route {
 
 /// A title not added yet, shown on its own page under its preview id (`-manga_id` of its first
 /// entry; [`App::open_preview`]): what adds it, and what to ask the server.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Preview {
     pub title: String,
     /// Its entries on your sources, best first (a search result's or a pick's).
     pub hits: Vec<leaf_proto::Hit>,
     /// A pick's AniList id: added, it leaves the picks.
     pub anilist: Option<i64>,
+    /// A pick's description, status and length (AniList's): shown at once, before the page
+    /// comes from the server ([`Preview::stand_in`]).
+    pub about: Option<String>,
+    pub status: String,
+    pub chapters: Option<u32>,
+}
+
+impl Preview {
+    /// The series as far as the pick knows it, for its page while the server is asked.
+    pub fn stand_in(&self, id: i64) -> leaf_proto::Series {
+        leaf_proto::Series {
+            id,
+            title: self.title.clone(),
+            author: None,
+            source: String::new(),
+            status: self.status.clone(),
+            chapters: self.chapters.unwrap_or(0),
+            read_upto: None,
+            unread: 0,
+            latest: None,
+            gaps: Vec::new(),
+            updated_at: 0,
+            note: None,
+            bell: false,
+            added_at: 0,
+            last_read_at: 0,
+            shelf: None,
+        }
+    }
+
+    fn of_rec(r: &Rec) -> Preview {
+        Preview { title: r.title.clone(), hits: r.hits.clone(), anilist: Some(r.anilist_id), about: r.description.clone(), status: r.status.clone(), chapters: r.chapters }
+    }
 }
 
 /// What adding a previewed title goes on to do once it is in ([`App::adopt`]): reading a chapter,
@@ -936,8 +969,17 @@ impl App {
             self.toast("None of your sources carries it any more");
             return;
         };
-        self.previews.insert(id, Preview { title: title.to_string(), hits: hits.to_vec(), anilist });
+        self.previews.insert(id, Preview { title: title.to_string(), hits: hits.to_vec(), anilist, ..Default::default() });
         self.push(Route::Series(id));
+    }
+
+    /// A pick's page: what the pick knows (its title, status, description and cover) shows at once,
+    /// its chapters as the server answers.
+    pub fn open_pick(&mut self, r: &Rec) {
+        self.open_preview(&r.title, &r.hits, Some(r.anilist_id));
+        if let Some(id) = preview_id(&r.hits) {
+            self.previews.insert(id, Preview::of_rec(r));
+        }
     }
 
     /// Add a previewed title (`POST /v1/follow` with its entries, as Search's Add did), then do
@@ -967,7 +1009,7 @@ impl App {
             self.toast("None of your sources carries it any more");
             return;
         };
-        self.previews.insert(id, Preview { title: r.title.clone(), hits: r.hits.clone(), anilist: Some(r.anilist_id) });
+        self.previews.insert(id, Preview::of_rec(r));
         let read = matches!(then, Then::Read(..));
         self.adopt(id, then);
         if read {

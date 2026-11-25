@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use crate::autopilot::{Ctx, log, now_ms};
 use crate::budget::Lane;
 
-const MEDIA: &str = "id title{romaji english} synonyms format countryOfOrigin isAdult status chapters genres tags{name rank} averageScore popularity coverImage{large}";
+const MEDIA: &str = "id title{romaji english} synonyms format countryOfOrigin isAdult status chapters genres tags{name rank} averageScore popularity coverImage{large} description(asHtml:false)";
 /// Series asked about per request: ten, each with ten recommendations.
 const BATCH: usize = 10;
 /// Top picks sent: Home shows six at a time, a different six every few hours. The first 30
@@ -37,6 +37,9 @@ const COLLECTION_EACH: usize = 10;
 const TAG_RANK: u32 = 60;
 const DAY: i64 = 86_400_000;
 const HITS_KEPT: i64 = 7 * DAY;
+/// How many of each Because rail's picks have their pages asked for ahead.
+const WARM_PER_RAIL: usize = 6;
+
 pub const NO_COVER: &str = "no cover known";
 
 /// A title as AniList describes it.
@@ -57,6 +60,31 @@ pub struct Media {
     pub score: Option<u32>,
     pub popularity: u64,
     pub cover: Option<String>,
+    /// AniList's description, in plain words ([`plain_description`]).
+    pub description: Option<String>,
+}
+
+/// AniList's description as plain words: its line breaks (`<br>`) kept as paragraphs, other tags
+/// and spoiler marks taken out, and the "(Source: …)" credit at its end dropped.
+pub fn plain_description(d: &str) -> Option<String> {
+    let t = d.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n");
+    // Any other tag (<i>, <b>) goes, its words kept.
+    let mut out = String::with_capacity(t.len());
+    let mut in_tag = false;
+    for c in t.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            c if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    let mut t = out.replace("~!", "").replace("!~", "").replace("&quot;", "\"").replace("&#039;", "\u{2019}").replace("&amp;", "&");
+    if let Some(i) = t.rfind("(Source:") {
+        t.truncate(i);
+    }
+    let paras: Vec<String> = t.split("\n\n").map(|p| p.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|p| !p.is_empty()).collect();
+    (!paras.is_empty()).then(|| paras.join("\n\n"))
 }
 
 impl Media {
@@ -88,6 +116,7 @@ impl Media {
             score: v["averageScore"].as_u64().map(|s| s as u32),
             popularity: v["popularity"].as_u64().unwrap_or(0),
             cover: v["coverImage"]["large"].as_str().map(String::from),
+            description: v["description"].as_str().and_then(plain_description),
         })
     }
 
@@ -278,6 +307,7 @@ pub fn rec_of(m: &Media, reason: String, hits: Vec<Hit>, in_space: Option<i64>) 
         hits,
         cover: format!("/v1/recs/cover/{}", m.id),
         in_space,
+        description: m.description.clone(),
     }
 }
 
@@ -533,6 +563,19 @@ impl Ctx {
         }
     }
 
+    /// The pages of the picks the phone shows first (Top picks, and the first few of each Because
+    /// rail) asked for now, in the background lane, and kept a day: a pick opens at once. About two
+    /// requests to a source each, once a day.
+    fn warm_previews(&self, r: &Recs) {
+        let picks = r.top.iter().chain(r.because.iter().flat_map(|b| b.recs.iter().take(WARM_PER_RAIL)));
+        for rec in picks.filter(|rec| rec.in_space.is_none() && !rec.hits.is_empty()) {
+            let ids: Vec<i64> = rec.hits.iter().map(|h| h.manga_id).collect();
+            if let Err(e) = self.preview_as(&ids, Lane::Back, crate::autopilot::WARM_KEEP_MS) {
+                log(&format!("warming {}: {e}", rec.title));
+            }
+        }
+    }
+
     /// Makes the day's recommendations (slow: AniList and the sources are asked, in turn).
     pub fn make_recs(&self) -> Result<Recs, String> {
         let now = now_ms();
@@ -576,6 +619,7 @@ impl Ctx {
         let shown: Vec<&Media> = want.iter().collect();
         self.remember_covers(&shown);
         self.store().set("recs", &serde_json::to_string(&r).unwrap_or_default());
+        self.warm_previews(&r);
         Ok(r)
     }
 
@@ -678,6 +722,14 @@ impl Ctx {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn anilists_description_comes_as_plain_paragraphs() {
+        let d = "In a world of <i>hunters</i>,<br><br>one man ~!wins!~ &amp; lives.<br>\n<br>(Source: Webtoon)";
+        assert_eq!(plain_description(d).as_deref(), Some("In a world of hunters,\n\none man wins & lives."));
+        assert_eq!(plain_description("<br>"), None);
+    }
+
     use super::*;
 
     /// Shaped as AniList answers `Page(media(id_in:...)){ ... recommendations }` (trimmed).

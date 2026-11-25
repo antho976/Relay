@@ -76,6 +76,10 @@ pub struct State {
     pub upto_text: String,
     /// The synopsis and the facts (the info key).
     pub info: bool,
+    /// The story under the title is open in full (More).
+    pub about_open: bool,
+    /// The cover, full screen ([`crate::zoom`]).
+    pub zoom: Option<crate::zoom::Zoom>,
     /// The download choices (the key beside Follow).
     pub download: bool,
 }
@@ -93,13 +97,14 @@ impl State {
         self.alternatives = false;
         self.range = false;
         self.upto = false;
+        self.zoom = None;
         self.info = false;
         self.download = false;
         open
     }
 
     fn covered(&self) -> bool {
-        self.menu || self.confirm || self.shelf || self.alternatives || self.range || self.upto || self.info || self.download
+        self.menu || self.confirm || self.shelf || self.alternatives || self.range || self.upto || self.info || self.download || self.zoom.is_some()
     }
 }
 
@@ -192,12 +197,21 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let now = app.now_ns;
     let mut cx = cx!(app);
     let held = if covered { kit::hold(&mut cx) } else { None };
-    let series = detail.as_ref().map(|d| d.series.clone()).or(from_library);
+    // A pick not yet answered for: what the pick knows, so the page shows at once.
+    let series = detail.as_ref().map(|d| d.series.clone()).or(from_library).or_else(|| app.previews.get(&id).map(|p| p.stand_in(id)));
     let x0 = PAD;
     let w = WIDTH - PAD * 2.0;
     let top = cx.c.inset_top;
-    let of = CoverOf::Series(id);
-    let has_cover = app.images.cover(cx.c, of, now);
+    let mut of = CoverOf::Series(id);
+    let mut has_cover = app.images.cover(cx.c, of, now);
+    // A pick's own cover is on the phone already: it stands in until the entry's comes.
+    if !has_cover
+        && let Some(a) = app.previews.get(&id).and_then(|p| p.anilist)
+        && app.images.cover(cx.c, CoverOf::Rec(a), now)
+    {
+        of = CoverOf::Rec(a);
+        has_cover = true;
+    }
     // A wash of the cover's own colours behind the poster, fading into the ground.
     let wash_h = top + 56.0 + POSTER.1 + 40.0;
     if cx.c.has_image(&of.banner_key()) {
@@ -212,6 +226,8 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         cx.c.image_cover(&of.key(), px, py, pw, ph, COVER_R, Rgba::WHITE);
     }
     cx.c.outline(px, py, pw, ph, COVER_R, 1.0, t::INK.a(0.08));
+    // A tap on the cover: it, full screen.
+    let zoom_cover = (has_cover && !covered && cx.tap(px, py, pw, ph)).then_some(of);
     let mut y = py + ph + 22.0;
     let mut act: Option<Act> = None;
     let mut sweep_rows: Vec<crate::sweep::Row> = Vec::new();
@@ -219,6 +235,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let mut flip = false;
     let mut set_also = None;
     let mut open_info = false;
+    let mut set_about: Option<bool> = None;
     let mut also_hit: Option<(crate::recs::Hit, Vec<leaf_proto::Rec>)> = None;
     let mut spinning_any = false;
     if let Some(s) = &series {
@@ -227,41 +244,69 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             cx.c.text(&l, x0, y, tt);
             y += tt.lh();
         }
-        if let Some(a) = s.author.as_deref().map(|a| logic::showable(a, |c| cx.c.can_show(c))).filter(|a| !a.is_empty()) {
-            y += 4.0;
-            let at = Text::new(13.5, t::INK2);
-            cx.c.text_fit(&a, x0, y, w, at);
-            y += at.lh();
+        // One line of readings: the source's rating and bookmarks, where it stands, your shelf.
+        let about = detail.as_ref().and_then(|d| d.description.as_deref()).map(logic::about).or_else(|| app.previews.get(&id).and_then(|p| p.about.as_deref()).map(logic::about)).unwrap_or_default();
+        y += 8.0;
+        let mut items: Vec<(Option<&str>, String, bool)> = Vec::new();
+        if let Some(r) = &about.rating {
+            items.push((Some("star"), r.clone(), true));
         }
-        y += 16.0;
-        // The synopsis, three lines; the info key (or a tap here) shows it all.
-        if let Some(d) = &detail {
-            let body = d.description.as_deref().map(logic::clean_description).filter(|s| !s.is_empty());
-            if let Some(body) = body {
-                let bt = Text::new(14.5, t::INK2).line(1.5);
-                let h = cx.c.para(&body, x0, y, w, bt, 3);
-                if !covered && cx.tap(x0, y, w, h) {
-                    open_info = true;
-                }
-                y += h + 16.0;
-            }
+        if let Some(bk) = &about.bookmarks {
+            items.push((None, format!("{bk} bookmarks"), false));
         }
-        // A few tags: where it stands, the shelf you put it on.
-        let mut tags: Vec<String> = Vec::new();
-        tags.extend(logic::status_word(&s.status));
+        items.extend(logic::status_word(&s.status).map(|w| (None, w, false)));
         if s.shelf.is_some() {
-            tags.push(logic::shelf_of(s).words().to_string());
+            items.push((None, logic::shelf_of(s).words().to_string(), false));
         }
-        let mut tx = x0;
-        for tg in &tags {
-            let tt = Text::new(12.5, t::INK2).medium();
-            let tw = cx.c.measure(tg, tt) + 20.0;
-            cx.c.rect(tx, y, tw, 28.0, 6.0, t::S2);
-            cx.c.text(tg, tx + 10.0, y + (28.0 - tt.lh()) / 2.0, tt);
-            tx += tw + 8.0;
+        if !items.is_empty() {
+            let mut mx = x0;
+            for (icon, words, strong) in &items {
+                let tt = if *strong { Text::new(14.0, t::INK).semi() } else { Text::new(14.0, t::INK2) };
+                if let Some(ic) = icon {
+                    cx.c.icon(ic, mx + 7.0, y + tt.lh() / 2.0, 14.0, t::WARN);
+                    mx += 18.0;
+                }
+                cx.c.text(words, mx, y, tt);
+                mx += cx.c.measure(words, tt) + 14.0;
+            }
+            y += Text::new(14.0, t::INK).lh() + 16.0;
+        } else {
+            y += 8.0;
         }
-        if !tags.is_empty() {
-            y += 28.0 + 20.0;
+        // The tagline, then the story: two lines and More, or all of it, a quote standing alone.
+        if let Some(tg) = &about.tagline {
+            y += cx.c.para(tg, x0, y, w, Text::new(15.0, t::INK).semi().line(1.4), 3) + 8.0;
+        }
+        if !about.paras.is_empty() {
+            let bt = Text::new(15.0, t::INK2).line(1.6);
+            let open = app.st.series.about_open;
+            let start_y = y;
+            if open {
+                for p in &about.paras {
+                    y += match p {
+                        logic::Para::Text(tx) => cx.c.para(tx, x0, y, w, bt, 40),
+                        logic::Para::Quote(q) => cx.c.para(q, x0, y, w, Text::new(17.0, t::INK).semi().line(1.4), 6),
+                    } + 10.0;
+                }
+            } else {
+                y += cx.c.para(&about.story(), x0, y, w, bt, 2) + 2.0;
+            }
+            let mt = Text::new(14.0, t::ACCENT).semi();
+            cx.c.text(if open { "Less" } else { "More" }, x0, y, mt);
+            y += mt.lh();
+            if !covered && cx.tap(x0, start_y, w, y - start_y) {
+                set_about = Some(!open);
+            }
+            if open {
+                let names: Vec<String> = about.also.iter().map(|a| logic::showable(a, |c| cx.c.can_show(c))).filter(|a| !a.is_empty()).take(3).collect();
+                if !names.is_empty() {
+                    y += 14.0;
+                    y += cx.c.para(&format!("Also known as {}", names.join(", ")), x0, y, w, Text::new(13.0, t::INK3).line(1.5), 3);
+                }
+            }
+            y += 22.0;
+        } else {
+            y += 8.0;
         }
     }
     let mut cont: Option<logic::Continue> = None;
@@ -750,7 +795,11 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let on_shelf = series.as_ref().map_or(logic::Shelf::Plan, logic::shelf_of);
     if covered {
         kit::release(&mut cx, held);
-        if let Some(s) = &app.st.recs.sheet {
+        if let Some(z) = &mut st.zoom {
+            if crate::zoom::draw(&mut cx, &mut app.images, z, now) {
+                st.zoom = None;
+            }
+        } else if let Some(s) = &app.st.recs.sheet {
             rec_act = crate::recs::sheet(&mut cx, &mut app.images, s, now);
         } else if st.menu {
             let shelf_words = format!("Shelf: {}", on_shelf.words());
@@ -866,6 +915,12 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         st.info = true;
     } else if stop_select {
         st.select = None;
+    }
+    if let Some(o) = set_about {
+        st.about_open = o;
+    }
+    if let Some(of) = zoom_cover {
+        st.zoom = Some(crate::zoom::Zoom::new(of));
     }
     if to_range {
         st.range = true;
@@ -1151,50 +1206,121 @@ fn upto_sheet(cx: &mut kit::Ctx, text: &mut String) -> Option<Option<f64>> {
     out
 }
 
-/// The synopsis in full and the facts (the info key). True when it closes.
+/// About the series (the info key, the owner's pick A, 2026-11-25): its author and status, the
+/// readings on one line (the source's rating and bookmarks, how far you are), the tagline, the
+/// story in its paragraphs with a quote standing alone, and the other titles it goes by. True
+/// when it closes.
 fn info_sheet(cx: &mut kit::Ctx, d: Option<&SeriesDetail>) -> bool {
     let Some(d) = d else { return true };
     let x = PAD + 4.0;
     let w = WIDTH - 2.0 * x;
-    let body = d.description.as_deref().map(logic::clean_description).filter(|s| !s.is_empty()).unwrap_or_else(|| "No description came with this series.".into());
-    let bt = Text::new(ty::UI, t::INK2).line(1.5);
     let s = &d.series;
-    let mut rows: Vec<(&str, String)> = Vec::new();
-    if let Some(a) = s.author.as_deref().map(|a| logic::showable(a, |c| cx.c.can_show(c))).filter(|a| !a.is_empty()) {
-        rows.push(("Author", a));
+    let a = d.description.as_deref().map(logic::about).unwrap_or_default();
+    let title_t = Text::new(20.0, t::INK).semi().line(1.2);
+    let meta_t = Text::new(14.0, t::INK3);
+    let value_t = Text::new(22.0, t::INK).semi();
+    let label_t = Text::new(12.0, t::INK3).medium();
+    let tag_t = Text::new(15.0, t::INK).semi().line(1.4);
+    let body_t = Text::new(15.0, t::INK2).line(1.6);
+    let quote_t = Text::new(17.0, t::INK).semi().line(1.4);
+    let head_t = Text::new(11.0, t::INK3).semi();
+    let also_t = Text::new(13.0, t::INK3).line(1.5);
+    let author = s.author.as_deref().map(|a| logic::showable(a, |c| cx.c.can_show(c))).filter(|a| !a.is_empty());
+    let meta: Vec<String> = author.into_iter().chain(logic::status_word(&s.status)).collect();
+    let read = d.chapters.iter().filter(|c| c.read).count();
+    let mut readings: Vec<(Option<&str>, String, &str)> = Vec::new();
+    if let Some(r) = &a.rating {
+        readings.push((Some("star"), r.clone(), "Rating"));
     }
-    if let Some(sw) = logic::status_word(&s.status) {
-        rows.push(("Status", sw));
+    if let Some(b) = &a.bookmarks {
+        readings.push((None, b.clone(), "Bookmarks"));
     }
-    rows.push(("Chapters", match s.latest {
-        Some(l) => format!("{}, up to {}", d.chapters.len(), logic::num(l)),
-        None => d.chapters.len().to_string(),
-    }));
-    if s.read_upto.is_some() {
-        rows.push(("Read", format!("{} of {}", d.chapters.iter().filter(|c| c.read).count(), d.chapters.len())));
+    if !d.chapters.is_empty() {
+        readings.push((None, format!("{read} / {}", d.chapters.len()), "Read"));
     }
-    if s.updated_at > 0 {
-        rows.push(("Updated", logic::local_date(s.updated_at)));
+    let also: Vec<String> = a.also.iter().map(|n| logic::showable(n, |c| cx.c.can_show(c))).filter(|n| !n.is_empty() && *n != s.title).collect();
+    let also_words = match also.len() {
+        0 => String::new(),
+        n if n > 3 => format!("{}  +{}", also[..3].join(", "), n - 3),
+        _ => also.join(", "),
+    };
+    // Its height, the story cut to what the screen holds.
+    let room = cx.c.h - cx.c.inset_top - 60.0;
+    let mut h = 30.0 + cx.c.para_h(&s.title, w, title_t, 3) + 4.0;
+    if !meta.is_empty() {
+        h += meta_t.lh();
     }
-    if s.added_at > 0 {
-        rows.push(("Added", logic::local_date(s.added_at)));
+    if !readings.is_empty() {
+        h += 20.0 + value_t.lh() + 2.0 + label_t.lh();
     }
-    let max_lines = ((cx.c.h * 0.42) / bt.lh()).floor().max(4.0) as usize;
-    let body_h = cx.c.para_h(&body, w, bt, max_lines);
-    let rh = 26.0;
-    let (top, outside) = kit::sheet(cx, 30.0 + 30.0 + body_h + 20.0 + rh * rows.len() as f32 + 16.0);
+    h += 22.0;
+    if let Some(tg) = &a.tagline {
+        h += cx.c.para_h(tg, w, tag_t, 3) + 12.0;
+    }
+    let mut paras: Vec<(&logic::Para, usize)> = Vec::new();
+    let tail = if also_words.is_empty() { 16.0 } else { 20.0 + head_t.lh() + 6.0 + cx.c.para_h(&also_words, w, also_t, 3) + 16.0 };
+    for p in &a.paras {
+        let (tx, tt) = match p {
+            logic::Para::Text(tx) => (tx, body_t),
+            logic::Para::Quote(q) => (q, quote_t),
+        };
+        let full = cx.c.para_h(tx, w, tt, 40);
+        let left = room - h - tail;
+        if left < tt.lh() * 2.0 {
+            break;
+        }
+        let lines = if full <= left { 40 } else { (left / tt.lh()).floor() as usize };
+        h += cx.c.para_h(tx, w, tt, lines) + 12.0;
+        paras.push((p, lines));
+    }
+    if a.paras.is_empty() {
+        h += body_t.lh() + 12.0;
+    }
+    h += tail;
+    let (top, outside) = kit::sheet(cx, h);
     if outside {
         return true;
     }
-    cx.c.text_fit(&s.title, x, top + 26.0, w, Text::new(ty::SECTION, t::INK).semi());
-    let mut y = top + 60.0;
-    y += cx.c.para(&body, x, y, w, bt, max_lines) + 20.0;
-    let lt = Text::new(ty::UI, t::INK3);
-    let vt = Text::new(ty::UI, t::INK);
-    for (l, v) in rows {
-        cx.c.text(l, x, y, lt);
-        cx.c.text_fit(&v, x + 100.0, y, w - 100.0, vt);
-        y += rh;
+    let mut y = top + 30.0;
+    y += cx.c.para(&s.title, x, y, w, title_t, 3) + 4.0;
+    if !meta.is_empty() {
+        cx.c.text_fit(&meta.join(" \u{00B7} "), x, y, w, meta_t);
+        y += meta_t.lh();
+    }
+    if !readings.is_empty() {
+        y += 20.0;
+        let cw = w / readings.len().max(3) as f32;
+        for (i, (icon, value, label)) in readings.iter().enumerate() {
+            let rx = x + i as f32 * cw;
+            let mut vx = rx;
+            if let Some(ic) = icon {
+                cx.c.icon(ic, vx + 8.0, y + value_t.lh() / 2.0, 16.0, t::WARN);
+                vx += 22.0;
+            }
+            cx.c.text(value, vx, y, value_t);
+            cx.c.text(label, rx, y + value_t.lh() + 2.0, label_t);
+        }
+        y += value_t.lh() + 2.0 + label_t.lh();
+    }
+    y += 22.0;
+    if let Some(tg) = &a.tagline {
+        y += cx.c.para(tg, x, y, w, tag_t, 3) + 12.0;
+    }
+    for (p, lines) in paras {
+        y += match p {
+            logic::Para::Text(tx) => cx.c.para(tx, x, y, w, body_t, lines),
+            logic::Para::Quote(q) => cx.c.para(q, x, y, w, quote_t, lines),
+        } + 12.0;
+    }
+    if a.paras.is_empty() {
+        cx.c.text("No description came with this series.", x, y, Text::new(15.0, t::INK3));
+        y += body_t.lh() + 12.0;
+    }
+    if !also_words.is_empty() {
+        y += 8.0;
+        cx.c.text("ALSO KNOWN AS", x, y, head_t);
+        y += head_t.lh() + 6.0;
+        cx.c.para(&also_words, x, y, w, also_t, 3);
     }
     cx.ui.tap = None;
     false

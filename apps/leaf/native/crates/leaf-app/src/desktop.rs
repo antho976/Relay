@@ -466,6 +466,7 @@ fn fake_recs(app: &mut App, series: i64) -> Result<(), String> {
             hits: vec![leaf_proto::Hit { manga_id: -1, source: String::new() }; 1 + i % 3],
             cover: format!("/v1/recs/cover/{anilist}"),
             in_space: None,
+            description: None,
         });
     }
     let pick = |from: usize, n: usize| -> Vec<leaf_proto::Rec> { recs.iter().skip(from).take(n).cloned().collect() };
@@ -692,7 +693,7 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
         if let Ok(b) = std::fs::read(crate::images::CoverOf::Series(id).file(&dir)) {
             let _ = crate::net::write_atomic(&crate::images::CoverOf::Series(pid).file(&dir), &b);
         }
-        app.previews.insert(pid, crate::app::Preview { title: d.series.title.clone(), hits: vec![leaf_proto::Hit { manga_id: 1_000_000 + id, source: String::new() }], anilist: None });
+        app.previews.insert(pid, crate::app::Preview { title: d.series.title.clone(), hits: vec![leaf_proto::Hit { manga_id: 1_000_000 + id, source: String::new() }], anilist: None, ..Default::default() });
         app.series.insert(pid, crate::app::Loaded { data: Some(d), live: true, error: None, loading: false });
         app.push(Route::Series(pid));
         settle(&mut app, &gfx, &mut clock, 20.0);
@@ -750,6 +751,7 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
                 app.ask(crate::net::Job::Alternatives(id));
             }
             "info" => st.info = true,
+            "zoom" => st.zoom = Some(crate::zoom::Zoom::new(crate::images::CoverOf::Series(id))),
             "range" => {
                 st.range = true;
                 st.range_from = "12".into();

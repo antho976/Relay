@@ -149,6 +149,20 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
   chapters of the 3 series closest to their end go in the download line, quietly, every 3 hours,
   only on an unmetered network (`Host::unmetered`, `LeafActivity.unmetered`; the one place the
   platform's network state is read). It is the owner's ask for those downloads.
+- A series' description (2026-11-25, design 42 page 18: B on the page, A in the sheet) is taken
+  apart by `logic::about`: the source's rating and bookmarks become readings (★ 9.29 · 41.1K
+  bookmarks · Ongoing under the title), a bracketed tagline its own line, a quotation standing as
+  its own sentence a pull quote, "Alternative Titles" a list. The page shows the tagline, two lines
+  and More (opening in place); ⓘ shows it all with the readings in a row.
+- A tap on the series page's cover opens it full screen (`zoom.rs`): at its own size (never past
+  the screen), two fingers zoom to 5x, a double tap zooms in and back, a pull down closes. The
+  picture is the cover's own file (`Images::full`). `Ui` follows a second finger for this
+  (`Ui::pinch`); nothing else uses it yet.
+- A pick opens with what it knows (2026-11-25): `Preview::stand_in` (title, status) and AniList's
+  description (`Rec::description`, from the picks' own AniList query: no extra request) show at
+  once, the pick's cover stands in for the entry's, and the chapters fill in as the server answers.
+  The server asks for Top picks' pages (and the first six of each Because rail) as it makes the
+  day's picks, in the background lane, and keeps them a day (`warm_previews`, `WARM_KEEP_MS`).
 - Every select mode selects in bulk by sweeping (`sweep.rs`, the owner, 2026-11-23): a long press on
   a row and a drag without lifting selects the range from that row to the finger, dragging back lets
   go, a long press on a selected row de-selects, the list scrolls by itself in a 72-unit band at its

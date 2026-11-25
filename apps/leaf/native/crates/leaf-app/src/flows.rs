@@ -281,6 +281,7 @@ fn picks(n: i64, in_space: Option<i64>) -> leaf_proto::Recs {
         hits: vec![leaf_proto::Hit { manga_id: 500 + i, source: "S".into() }],
         cover: String::new(),
         in_space,
+        description: None,
     };
     leaf_proto::Recs { top: (1..=n).map(rec).collect(), made_at: 1, ..Default::default() }
 }
@@ -1670,6 +1671,66 @@ fn next_up_is_downloaded_on_wi_fi_only_once_turned_on() {
     app.series.insert(2, loaded(d));
     assert!(until(&mut app, &mut t, 5.0, |a| kept(a, 1009) && kept(a, 1010)), "chapters 9 and 10 in the line");
     assert!(!kept(&app, 1008), "not one already read");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_cover_opens_full_screen_and_two_fingers_zoom_it() {
+    let (mut app, mut t, dir) = app("zoom");
+    app.series.insert(50, loaded(detail(50, 10)));
+    app.push(Route::Series(50));
+    // The cover, as if fetched: 400 x 600.
+    let of = crate::images::CoverOf::Series(50);
+    std::fs::create_dir_all(app.data.join("covers")).unwrap();
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(400, 600, image::Rgba([200, 80, 60, 255])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    std::fs::write(of.file(&app.data), &png).unwrap();
+    assert!(until(&mut app, &mut t, 5.0, |a| a.canvas.has_image(&of.key())), "the cover is in");
+    // The cover sits under the top row, in the middle.
+    let cover_y = app.canvas.inset_top + 56.0 + 6.0 + 100.0;
+    tap(&mut app, &mut t, WIDTH / 2.0, cover_y);
+    assert!(app.st.series.zoom.is_some(), "a tap on the cover opens it");
+    assert!(until(&mut app, &mut t, 5.0, |a| a.canvas.has_image(&of.full_key())), "at its own size");
+    // Two fingers spread apart: it zooms in.
+    let u = app.canvas.u;
+    let x0 = ((app.canvas.px_w - WIDTH * u) * 0.5).max(0.0);
+    let at = |x: f32, y: f32| (x0 + x * u, y * u);
+    let (cx_, cy_) = (WIDTH / 2.0, app.canvas.h / 2.0);
+    let (a, b) = (at(cx_ - 30.0, cy_), at(cx_ + 30.0, cy_));
+    app.touch(Touch { id: 1, phase: Phase::Down, x: a.0, y: a.1, t_ns: t });
+    app.touch(Touch { id: 2, phase: Phase::Down, x: b.0, y: b.1, t_ns: t });
+    step(&mut app, &mut t);
+    for k in 1..=10 {
+        let d = 30.0 + 6.0 * k as f32;
+        let (a, b) = (at(cx_ - d, cy_), at(cx_ + d, cy_));
+        app.touch(Touch { id: 1, phase: Phase::Move, x: a.0, y: a.1, t_ns: t });
+        app.touch(Touch { id: 2, phase: Phase::Move, x: b.0, y: b.1, t_ns: t });
+        step(&mut app, &mut t);
+    }
+    let z = app.st.series.zoom.as_ref().unwrap().z;
+    assert!((z - 3.0).abs() < 0.05, "60 apart to 180: three times, {z}");
+    app.touch(Touch { id: 2, phase: Phase::Up, x: b.0, y: b.1, t_ns: t });
+    app.touch(Touch { id: 1, phase: Phase::Up, x: a.0, y: a.1, t_ns: t });
+    step(&mut app, &mut t);
+    assert!(app.st.series.zoom.is_some(), "lifting the fingers is not a tap that closes it");
+    assert!(app.back());
+    assert!(app.st.series.zoom.is_none() && app.route() == &Route::Series(50), "Back puts it away, the page stays");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_pick_opens_with_what_it_knows_before_the_server_answers() {
+    let (mut app, mut t, dir) = app("pick-now");
+    let mut rec = picks(1, None).top.remove(0);
+    rec.description = Some("A hunter wakes up ten years in the past.".into());
+    app.open_pick(&rec);
+    step(&mut app, &mut t);
+    let id = -rec.hits[0].manga_id;
+    assert_eq!(app.route(), &Route::Series(id));
+    let p = &app.previews[&id];
+    assert_eq!(p.stand_in(id).title, "Pick 1", "the title shows at once");
+    assert_eq!(p.about.as_deref(), Some("A hunter wakes up ten years in the past."), "and AniList's description");
+    assert_eq!(p.stand_in(id).status, "ongoing");
     let _ = std::fs::remove_dir_all(dir);
 }
 

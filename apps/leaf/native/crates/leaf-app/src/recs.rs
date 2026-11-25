@@ -51,7 +51,7 @@ pub fn hit(app: &mut App, rec: &Rec, tag: Option<&str>, held: bool) {
             app.st.recs.sheet = Some(Sheet { rec: rec.clone(), tag });
         }
         Some(id) => app.push(Route::Series(id)),
-        None => app.open_preview(&rec.title, &rec.hits, Some(rec.anilist_id)),
+        None => app.open_pick(rec),
     }
 }
 
@@ -467,6 +467,7 @@ mod tests {
             hits: vec![],
             cover: "/v1/recs/cover/1".into(),
             in_space: None,
+            description: None,
         };
         assert_eq!(facts(&r), "Action · Murim · 125 chapters · finished");
         assert_eq!(grid_h(0), 0.0);

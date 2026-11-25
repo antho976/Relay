@@ -219,6 +219,140 @@ pub fn clean_description(d: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// A series' description taken apart for the page and the ⓘ sheet (the owner, 2026-11-25): the
+/// source's numbers in front become readings, a bracketed tagline its own line, a quotation that
+/// stands as a sentence of its own a pull quote, and the other titles a list.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct About {
+    /// "9.29", as the source rates it.
+    pub rating: Option<String>,
+    /// "41.1K", the source's bookmarks (or followers).
+    pub bookmarks: Option<String>,
+    /// "By the Author that brought you “Return of the Mount Hua Sect”".
+    pub tagline: Option<String>,
+    pub paras: Vec<Para>,
+    /// Other titles it goes by, as the source lists them.
+    pub also: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Para {
+    Text(String),
+    /// A line of speech standing alone ("“That guy? He’s a total scumbag.”").
+    Quote(String),
+}
+
+impl About {
+    /// The story as one paragraph of plain words (the quotes kept in it).
+    pub fn story(&self) -> String {
+        self.paras.iter().map(|p| match p {
+            Para::Text(t) | Para::Quote(t) => t.as_str(),
+        }).collect::<Vec<_>>().join(" ")
+    }
+}
+
+/// `d` taken apart: see [`About`].
+pub fn about(d: &str) -> About {
+    let mut out = About::default();
+    let mut t = d.trim();
+    // The site's numbers in front, kept when they are a rating or a count of readers.
+    const FIELDS: [&str; 7] = ["Rank:", "Rating:", "Bookmarks:", "Views:", "Followers:", "Follows:", "Score:"];
+    loop {
+        let rest = t.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '•' | '·' | '|' | ','));
+        let Some(f) = FIELDS.iter().find(|f| rest.starts_with(**f)) else { break };
+        let v = rest[f.len()..].trim_start();
+        let n = v.find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | ',' | '#' | 'K' | 'k' | 'M' | '%' | '/'))).unwrap_or(v.len());
+        let value = v[..n].trim_end_matches(['.', ',']).to_string();
+        if !value.is_empty() {
+            match *f {
+                "Rating:" | "Score:" if out.rating.is_none() => out.rating = Some(value),
+                "Bookmarks:" | "Followers:" | "Follows:" if out.bookmarks.is_none() => out.bookmarks = Some(value),
+                _ => {}
+            }
+        }
+        t = &v[n..];
+    }
+    t = t.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '•' | '·' | '|'));
+    // The other titles: a list under its heading, one per line ("- Taejon Birok").
+    let mut body_end = t.len();
+    for tail in ["Alternative Title", "Associated Name", "Tracker(s)", "Official Source", "Links:", "\n---"] {
+        if let Some(i) = t.find(tail) {
+            body_end = body_end.min(i);
+        }
+    }
+    for head in ["Alternative Title", "Associated Name"] {
+        if let Some(i) = t.find(head) {
+            let list = &t[i..];
+            let list = list.split_once(':').map_or("", |(_, r)| r);
+            let stop = ["Tracker(s)", "Official Source", "Links:", "\n---", "\n\n"].iter().filter_map(|s| list.find(s)).min().unwrap_or(list.len());
+            for name in list[..stop].split(['\n', '•']).map(|l| l.trim().trim_start_matches(['-', '*', '•']).trim()) {
+                if !name.is_empty() && !out.also.iter().any(|a| a == name) {
+                    out.also.push(name.to_string());
+                }
+            }
+        }
+    }
+    let mut body = t[..body_end].trim();
+    let quote = |s: &str| s.replace('<', "\u{201C}").replace('>', "\u{201D}");
+    if let Some(inner) = body.strip_prefix('[')
+        && let Some(end) = inner.find(']')
+    {
+        let tag = inner[..end].trim().trim_end_matches('.');
+        if !tag.is_empty() {
+            out.tagline = Some(quote(tag));
+        }
+        body = inner[end + 1..].trim();
+    }
+    for block in body.split("\n\n") {
+        let text = quote(&block.split_whitespace().collect::<Vec<_>>().join(" "));
+        if text.is_empty() {
+            continue;
+        }
+        split_quotes(&text, &mut out.paras);
+    }
+    out
+}
+
+/// A paragraph cut around the quotations that are whole sentences of their own.
+fn split_quotes(text: &str, out: &mut Vec<Para>) {
+    let mut rest = text;
+    loop {
+        // A quotation opening at the start or after a sentence's end, closing before a space or
+        // the end, not too long to stand alone.
+        let found = rest.char_indices().filter(|(_, c)| matches!(c, '\u{201C}' | '"')).find_map(|(i, open)| {
+            let before = rest[..i].trim_end();
+            if !(before.is_empty() || before.ends_with(['.', '!', '?', '\u{2026}', '\u{201D}', '"'])) {
+                return None;
+            }
+            let close = if open == '"' { '"' } else { '\u{201D}' };
+            let after = &rest[i + open.len_utf8()..];
+            let j = after.find(close)?;
+            let end = i + open.len_utf8() + j + close.len_utf8();
+            let next = rest[end..].chars().next();
+            let whole = next.is_none_or(|c| c.is_whitespace());
+            let inner = &after[..j];
+            (whole && inner.ends_with(['.', '!', '?', '\u{2026}']) && inner.chars().count() <= 140).then_some((i, end))
+        });
+        match found {
+            Some((i, end)) => {
+                let lead = rest[..i].trim();
+                if !lead.is_empty() {
+                    out.push(Para::Text(lead.to_string()));
+                }
+                out.push(Para::Quote(rest[i..end].to_string()));
+                rest = rest[end..].trim_start();
+            }
+            None => {
+                let r = rest.trim();
+                if !r.is_empty() {
+                    out.push(Para::Text(r.to_string()));
+                }
+                return;
+            }
+        }
+    }
+}
+
 /// `n` of `all`, a different `n` each `turn_ms` (by the wall clock, so it holds across restarts),
 /// round the list: six top picks of 24 come round again after four turns.
 pub fn rotating<T: Clone>(all: &[T], n: usize, now_ms: i64, turn_ms: i64) -> Vec<T> {
@@ -1195,6 +1329,28 @@ mod tests {
             chapters: vec![ch(1, 1.0, false), ch(3, 3.0, true), ch(5, 5.0, false), ch(4, 4.0, false), ch(44, 4.0, false), ch(6, 6.0, false)],
         };
         assert_eq!(next_unread(&d, 2).iter().map(|c| c.id).collect::<Vec<_>>(), vec![4, 5], "a hole before 3 is not ahead; 4's second copy once");
+    }
+
+    #[test]
+    fn a_description_is_taken_apart_into_readings_tagline_story_and_other_titles() {
+        let d = "Rating: 9.29 \u{2022} Bookmarks: 41.1K\n\n[By the Author that brought you <Return of the Mount Hua Sect>] The great warrior who ended the chaos. He was known as a gentleman... \u{201C}That guy? He\u{2019}s a total scumbag.\u{201D} The shocking truth is finally revealed!\n\nAlternative Titles:\n- \u{6020}\u{5C0A}\n- Secrets of the Grand Master\n- Taejon Birok";
+        let a = about(d);
+        assert_eq!(a.rating.as_deref(), Some("9.29"));
+        assert_eq!(a.bookmarks.as_deref(), Some("41.1K"));
+        assert_eq!(a.tagline.as_deref(), Some("By the Author that brought you \u{201C}Return of the Mount Hua Sect\u{201D}"));
+        assert_eq!(
+            a.paras,
+            vec![
+                Para::Text("The great warrior who ended the chaos. He was known as a gentleman...".into()),
+                Para::Quote("\u{201C}That guy? He\u{2019}s a total scumbag.\u{201D}".into()),
+                Para::Text("The shocking truth is finally revealed!".into()),
+            ]
+        );
+        assert_eq!(a.also, vec!["\u{6020}\u{5C0A}", "Secrets of the Grand Master", "Taejon Birok"]);
+        // Speech inside a sentence stays in it; no numbers, no readings.
+        let b = about("He said \u{201C}no.\u{201D} and left. Then \"Run!\" she cried.");
+        assert_eq!(b.paras.len(), 1, "{:?}", b.paras);
+        assert_eq!((b.rating, b.bookmarks, b.tagline), (None, None, None));
     }
 
     #[test]

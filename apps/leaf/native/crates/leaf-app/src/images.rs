@@ -31,6 +31,8 @@ const HERO_ASPECT: f32 = 720.0 / 860.0;
 /// A cover is never drawn bigger than this times its own pixels: one too small to fill the
 /// spotlight at that is shown sharp as a poster over a blurred, darkened copy of itself.
 pub const MAX_UPSCALE: f32 = 1.3;
+/// A cover looked at full screen is kept no bigger than this on its longer side (pixels).
+pub const FULL_MAX: u32 = 2000;
 /// The poster is kept at most this wide (it is drawn far narrower than the screen).
 const POSTER_MAX_W: u32 = 600;
 /// The blurred copy behind a poster: this wide, blurred, then drawn across the whole spotlight.
@@ -64,6 +66,10 @@ impl CoverOf {
     /// for that ([`Images::hero_poster`]), a blurred, darkened copy to draw behind its poster.
     pub fn hero_key(self) -> String {
         format!("h:{}", self.key())
+    }
+    /// The cover at its own size ([`Images::full`]).
+    pub fn full_key(self) -> String {
+        format!("f:{}", self.key())
     }
     /// The cover itself, at its own size, drawn sharp over [`CoverOf::hero_key`]'s blur.
     pub fn poster_key(self) -> String {
@@ -148,6 +154,8 @@ enum Want {
     Local { key: String, book: PathBuf, entry: String },
     /// A cover at the spotlight's size.
     Hero(CoverOf),
+    /// A cover at its own size, to look at full screen ([`Images::full`]).
+    Full(CoverOf),
     /// A chapter's picture, from disk or the server.
     Thumb { chapter: i64 },
     /// A collection's picture, by its tag's slug.
@@ -182,6 +190,7 @@ enum Fetched {
 }
 
 enum Got {
+    Full { of: CoverOf, img: Option<Pixels> },
     /// `src`: the cover's own size in pixels, which says whether it can fill the spotlight.
     Cover { of: CoverOf, img: Option<Pixels>, banner: Option<Pixels>, src: Option<(u32, u32)> },
     Page { chapter: i64, n: u32, decode: bool, result: Result<Fetched, String> },
@@ -260,6 +269,9 @@ pub struct Images {
     local_sizes: HashMap<String, (u32, u32)>,
     local_failed: HashSet<String>,
     hero_failed: HashMap<CoverOf, u64>,
+    /// Covers at their own size in the atlas, with that size; and when one could not be had.
+    full_sizes: HashMap<CoverOf, (u32, u32)>,
+    full_failed: HashMap<CoverOf, u64>,
     /// Covers too small to fill the spotlight: their poster's size (pixels).
     posters: HashMap<CoverOf, (u32, u32)>,
     /// Covers' own sizes, as they were decoded.
@@ -296,6 +308,8 @@ impl Images {
         }
         Images {
             hero_failed: HashMap::new(),
+            full_sizes: HashMap::new(),
+            full_failed: HashMap::new(),
             posters: HashMap::new(),
             cover_src: HashMap::new(),
             thumb_failed: HashMap::new(),
@@ -453,6 +467,22 @@ impl Images {
         }
         self.push(90, Want::Hero(of));
         false
+    }
+
+    /// A cover at its own size (to look at full screen): its size once in the atlas, else asked for
+    /// (from the copy on disk, or the server) and None meanwhile.
+    pub fn full(&mut self, c: &Canvas, of: CoverOf, now_ns: u64) -> Option<(u32, u32)> {
+        if c.has_image(&of.full_key()) {
+            return self.full_sizes.get(&of).copied();
+        }
+        if c.image_waiting(&of.full_key()) || self.asked.contains(&Want::Full(of)) {
+            return None;
+        }
+        if self.full_failed.get(&of).is_some_and(|t| now_ns.saturating_sub(*t) < COVER_RETRY_NS) {
+            return None;
+        }
+        self.push(95, Want::Full(of));
+        None
     }
 
     /// A collection's picture: in the atlas, on its way (asked for now if need be), or none on the
@@ -636,6 +666,20 @@ impl Images {
                     self.soft.remove(&k);
                     // The reader's list may now ask for something it skipped while this was out.
                     self.last_wants.clear();
+                }
+                Got::Full { of, img } => {
+                    self.asked.remove(&Want::Full(of));
+                    match img {
+                        Some(p) => {
+                            self.full_sizes.insert(of, (p.w, p.h));
+                            if !c.add_image(&of.full_key(), p.w, p.h, p.px) && !c.image_waiting(&of.full_key()) {
+                                self.full_failed.insert(of, now_ns);
+                            }
+                        }
+                        None => {
+                            self.full_failed.insert(of, now_ns);
+                        }
+                    }
                 }
                 Got::Hero { of, img } => {
                     self.asked.remove(&Want::Hero(of));
@@ -870,6 +914,7 @@ fn worker(shared: &Shared, tx: &Sender<Got>, client: &Client, data: &Path) {
                 result: page(client, server.as_ref(), data, *chapter, *n, *decode, shared.trim.load(std::sync::atomic::Ordering::Relaxed), shared.promo.load(std::sync::atomic::Ordering::Relaxed)),
             },
             Want::Local { key, book, entry } => Got::Local { key: key.clone(), book: book.clone(), entry: entry.clone(), img: local_picture(book, entry) },
+            Want::Full(of) => Got::Full { of: *of, img: full(client, server.as_ref(), data, *of) },
             Want::Hero(of) => Got::Hero { of: *of, img: hero(client, server.as_ref(), data, *of, shared.screen_w.load(std::sync::atomic::Ordering::Relaxed)) },
             Want::Thumb { chapter } => Got::Thumb { chapter: *chapter, img: thumb(client, server.as_ref(), data, *chapter) },
             Want::Art(slug) => art(client, server.as_ref(), data, slug),
@@ -879,6 +924,7 @@ fn worker(shared: &Shared, tx: &Sender<Got>, client: &Client, data: &Path) {
             Want::Page { chapter, n, decode } => Got::Page { chapter, n, decode, result: Err("This page didn't decode".into()) },
             Want::Local { key, book, entry } => Got::Local { key, book, entry, img: None },
             Want::Hero(of) => Got::Hero { of, img: None },
+            Want::Full(of) => Got::Full { of, img: None },
             Want::Thumb { chapter } => Got::Thumb { chapter, img: None },
             Want::Art(slug) => Got::Art { slug, img: None, none: false },
         });
@@ -937,6 +983,23 @@ fn hero(client: &Client, server: Option<&Server>, data: &Path, of: CoverOf, scre
     let bytes = fetch(client, server, &file, &of.path()).ok()?;
     let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
     Some(hero_pics(&img, screen_w))
+}
+
+/// A cover at its own size, no bigger than [`FULL_MAX`] on its longer side.
+fn full(client: &Client, server: Option<&Server>, data: &Path, of: CoverOf) -> Option<Pixels> {
+    let file = of.file(data);
+    let server = if matches!(of, CoverOf::Book(_)) { None } else { server };
+    let bytes = fetch(client, server, &file, &of.path()).ok()?;
+    let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    let (w0, h0) = img.dimensions();
+    let img = if w0.max(h0) > FULL_MAX {
+        let s = FULL_MAX as f32 / w0.max(h0) as f32;
+        image::imageops::resize(&img, ((w0 as f32 * s) as u32).max(1), ((h0 as f32 * s) as u32).max(1), image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
+    let (w, h) = img.dimensions();
+    Some(Pixels { w, h, px: img.into_raw() })
 }
 
 fn hero_pics(img: &image::RgbaImage, screen_w: u32) -> HeroPics {

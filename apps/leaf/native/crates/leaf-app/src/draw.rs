@@ -897,6 +897,11 @@ fn own_glyph(name: &str) -> Option<&'static glyphs::Glyph> {
             ],
         }),
         // A ribbon bookmark, filled (on the reader's bookmark tag).
+        // A filled star: a source's rating.
+        "star" => Some(&Glyph {
+            scale: 1.0,
+            shapes: &[Shape { d: "M8.00 1.60L9.76 6.17L14.66 6.44L10.85 9.53L12.11 14.26L8.00 11.60L3.89 14.26L5.15 9.53L1.34 6.44L6.24 6.17z", fill: true, stroke: true, rotate: 0.0 }],
+        }),
         "bookmark" => Some(&Glyph {
             scale: 1.0,
             shapes: &[Shape { d: "M4 1.75h8a.75.75 0 0 1 .75.75v11.5l-4.75-3-4.75 3V2.5A.75.75 0 0 1 4 1.75z", fill: true, stroke: true, rotate: 0.0 }],

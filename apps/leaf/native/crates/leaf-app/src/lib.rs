@@ -48,6 +48,7 @@ pub mod typeset;
 pub mod ui;
 pub mod update;
 pub mod wake;
+pub mod zoom;
 
 #[cfg(target_os = "android")]
 mod android;

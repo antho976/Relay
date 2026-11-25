@@ -454,6 +454,9 @@ pub struct Rec {
     /// Already in your space, as this series (only `/v1/series/{id}/also` lists those).
     #[serde(default)]
     pub in_space: Option<i64>,
+    /// AniList's description, in plain words: shown while the page itself is asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// "Because you read X".
