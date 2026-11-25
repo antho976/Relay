@@ -259,15 +259,17 @@ fn wrap(c: &mut Canvas, b: &Block, width: f32, size: f32, face: Weight, lh: f32,
     lines
 }
 
-/// A word too wide for a line, cut into pieces that fit.
+/// A word too wide for a line, cut into pieces that fit, between graphemes: never between a
+/// letter and its accent, or inside an emoji.
 #[allow(clippy::too_many_arguments)]
 fn split_long(c: &mut Canvas, text: &str, a: u32, z: u32, width: f32, size: f32, face: Weight, b: &Block) -> Vec<(u32, u32)> {
+    use unicode_segmentation::UnicodeSegmentation;
     let mut out = Vec::new();
     let mut s = a as usize;
     while s < z as usize {
         let mut e = s;
-        for (i, ch) in text[s..z as usize].char_indices() {
-            let cand = s + i + ch.len_utf8();
+        for (i, g) in text[s..z as usize].grapheme_indices(true) {
+            let cand = s + i + g.len();
             let w = measure(c, &text[s..cand], face_of(face, b.style_at(s as u32)), size);
             if w > width && e > s {
                 break;
@@ -320,8 +322,8 @@ impl Laid {
 fn x_in_line(c: &mut Canvas, text: &str, l: &Line, i: u32) -> f32 {
     for r in &l.runs {
         if i <= r.end {
-            let i = i.max(r.start).min(r.end);
-            return r.x + measure(c, &text[r.start as usize..i as usize], r.face, r.size);
+            let i = text.floor_char_boundary(i.max(r.start).min(r.end) as usize);
+            return r.x + measure(c, &text[r.start as usize..i.max(r.start as usize)], r.face, r.size);
         }
     }
     l.runs.last().map_or(0.0, |r| r.x + measure(c, &text[r.start as usize..r.end as usize], r.face, r.size))
@@ -406,6 +408,24 @@ mod tests {
         assert_eq!(word_at(text, i + 2), (i, i + 6));
         let m = text.find("memory").unwrap() as u32;
         assert_eq!(word_at(text, m), (m, m + 6));
+    }
+
+    #[test]
+    fn a_long_word_breaks_between_graphemes_and_a_stale_byte_is_safe() {
+        let mut c = canvas();
+        let t = Type::default();
+        // "é" written as e + a combining accent, a hundred times: no line may start on an accent.
+        let text = "e\u{301}".repeat(100);
+        let l = lay(&mut c, &block(&text, Vec::new()), &t, None);
+        assert!(l.lines.len() >= 2);
+        for line in &l.lines {
+            assert!(!text[line.start as usize..].starts_with('\u{301}'), "a line starts inside a grapheme at {}", line.start);
+        }
+        // A byte inside a character (a highlight stored before the book read differently).
+        let accent = "café au lait";
+        let l = lay(&mut c, &block(accent, Vec::new()), &t, None);
+        let inside = accent.find('é').unwrap() as u32 + 1;
+        let _ = x_in_line(&mut c, accent, &l.lines[0], inside);
     }
 
     #[test]

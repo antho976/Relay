@@ -10,9 +10,10 @@ use leaf_proto::{Chapter, Gap, Progress, Series, SeriesDetail};
 
 /// A server address as typed ("192.168.1.20:4580", "anthobot.bid/leaf") made into the base every
 /// request starts with: a scheme, no trailing slash, and no `/v1` (the app adds it). A path stays:
-/// the server may sit behind a prefix. Without a scheme, an address on this network (an IP,
-/// `localhost`, a `.local` or `.lan` name) is http and any other name https. Errors are words for
-/// the person.
+/// the server may sit behind a prefix. Without a scheme, an address on this network (a private,
+/// loopback or link-local IP, `localhost`, a name without dots, a `.local` or `.lan` name) is http
+/// and any other https; http to any other is refused, since the token would cross the internet in
+/// the clear. Errors are words for the person.
 pub fn normalize_server(input: &str) -> Result<String, &'static str> {
     let t = input.trim();
     if t.is_empty() {
@@ -38,6 +39,9 @@ pub fn normalize_server(input: &str) -> Result<String, &'static str> {
     if host.is_empty() || rest.chars().any(char::is_whitespace) || host.starts_with(':') {
         return Err("That doesn't read as an address");
     }
+    if scheme == "http" && !is_local_host(host) {
+        return Err("Use https:// for a server outside your network");
+    }
     if let Some((_, port)) = host.rsplit_once(':')
         && !host.ends_with(']')
         && (port.is_empty() || port.parse::<u16>().is_err())
@@ -47,19 +51,32 @@ pub fn normalize_server(input: &str) -> Result<String, &'static str> {
     Ok(format!("{scheme}://{rest}"))
 }
 
-/// A host (with its port, if any) that is reached on the local network, not by a public name.
+/// A host (with its port, if any) that is reached on the local network, not by a public name: a
+/// public IP is not (the token would go to it in the clear).
 fn is_local_host(host_port: &str) -> bool {
-    let host = if host_port.starts_with('[') {
-        return true;
-    } else {
-        host_port.rsplit_once(':').map_or(host_port, |(h, _)| h).to_ascii_lowercase()
-    };
-    host == "localhost" || host.ends_with(".local") || host.ends_with(".lan") || host.parse::<std::net::Ipv4Addr>().is_ok()
+    if let Some(v6) = host_port.strip_prefix('[') {
+        let ip = v6.split(']').next().unwrap_or("");
+        return ip.parse::<std::net::Ipv6Addr>().is_ok_and(|a| {
+            let first = a.segments()[0];
+            a.is_loopback() || first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
+        });
+    }
+    let host = host_port.rsplit_once(':').map_or(host_port, |(h, _)| h).to_ascii_lowercase();
+    if let Ok(a) = host.parse::<std::net::Ipv4Addr>() {
+        // 100.64.0.0/10 is Tailscale's (and carrier NAT's): a tailnet's traffic is its own tunnel.
+        let [x, y, ..] = a.octets();
+        return a.is_private() || a.is_loopback() || a.is_link_local() || (x == 100 && (64..128).contains(&y));
+    }
+    host == "localhost" || !host.contains('.') || host.ends_with(".local") || host.ends_with(".lan")
 }
 
-/// The address as people say it: no scheme ("192.168.1.20:4580").
+/// The address as people say it: no scheme ("192.168.1.20:4580"), unless the scheme is not the
+/// one the address would get typed bare ("http://server1.example:4580" stays as it is), so that
+/// connecting again with the label keeps the same address.
 pub fn server_label(base: &str) -> String {
-    base.split_once("://").map_or(base, |(_, r)| r).trim_end_matches('/').to_string()
+    let base = base.trim_end_matches('/');
+    let bare = base.split_once("://").map_or(base, |(_, r)| r);
+    if normalize_server(bare).is_ok_and(|b| b == base) { bare.to_string() } else { base.to_string() }
 }
 
 // Words
@@ -134,10 +151,15 @@ pub fn showable(s: &str, can: impl Fn(char) -> bool) -> String {
     while let Some(open) = rest.find(['(', '[', '（']) {
         out.push_str(&rest[..open]);
         let after = &rest[open..];
-        let close = after.find([')', ']', '）']).map(|i| i + after[i..].chars().next().map_or(1, char::len_utf8));
+        // By the brackets' own lengths: a full-width one is three bytes, not one.
+        let open_len = after.chars().next().map_or(1, char::len_utf8);
+        let close = after[open_len..].find([')', ']', '）']).map(|i| {
+            let at = open_len + i;
+            (at, at + after[at..].chars().next().map_or(1, char::len_utf8))
+        });
         match close {
-            Some(end) => {
-                let inner = &after[1..end - 1];
+            Some((inner_end, end)) => {
+                let inner = &after[open_len..inner_end];
                 if inner.chars().any(|c| !can(c) && !c.is_whitespace()) && !inner.chars().any(|c| can(c) && c.is_alphanumeric()) {
                     // Dropped whole.
                 } else {
@@ -366,6 +388,12 @@ pub struct Continue {
     pub label: String,
 }
 
+/// The page a chapter left part way opens at: its last page, kept inside the chapter when its
+/// length is known (an unknown length, 0, is no reason to start it over).
+pub fn resume_page(c: &Chapter) -> u32 {
+    if c.pages == 0 { c.last_page } else { c.last_page.min(c.pages - 1) }
+}
+
 /// Continue where the person stopped: a chapter left part way (after the last one finished),
 /// else the one after the last finished, else the first. When everything is read, the newest.
 pub fn continue_point(chapters: &[Chapter]) -> Option<Continue> {
@@ -376,7 +404,7 @@ pub fn continue_point(chapters: &[Chapter]) -> Option<Continue> {
     let part_way = chapters.iter().rposition(|c| !c.read && c.last_page > 0);
     let at = |i: usize, page: u32, verb: &str| Continue { index: i, page, label: format!("{verb} ch. {}", num(chapters[i].number)) };
     match (part_way, last_read) {
-        (Some(p), r) if r.is_none_or(|r| p > r) => Some(at(p, chapters[p].last_page.min(chapters[p].pages.saturating_sub(1)), "Continue")),
+        (Some(p), r) if r.is_none_or(|r| p > r) => Some(at(p, resume_page(&chapters[p]), "Continue")),
         (_, Some(r)) if r + 1 < chapters.len() => Some(at(r + 1, 0, "Continue")),
         (_, Some(r)) => Some(Continue { index: r, page: 0, label: format!("Read ch. {} again", num(chapters[r].number)) }),
         (_, None) => Some(Continue { index: 0, page: 0, label: "Start reading".into() }),
@@ -547,6 +575,16 @@ mod tests {
         assert!(normalize_server("a b").is_err());
         assert_eq!(server_label("http://192.168.1.5:4580"), "192.168.1.5:4580");
         assert_eq!(server_label("https://anthobot.bid/leaf"), "anthobot.bid/leaf");
+        assert_eq!(normalize_server("server1:4580").unwrap(), "http://server1:4580", "a name without dots is on this network");
+        assert_eq!(normalize_server("100.101.102.103:4580").unwrap(), "http://100.101.102.103:4580", "a tailnet address");
+        assert_eq!(normalize_server("203.0.113.7:4580").unwrap(), "https://203.0.113.7:4580", "a public IP gets https");
+        assert!(normalize_server("http://203.0.113.7:4580").is_err(), "and no token goes to it in the clear");
+        assert!(normalize_server("http://leaf.example.org").is_err());
+        assert_eq!(normalize_server("[fd00::5]:4580").unwrap(), "http://[fd00::5]:4580");
+        assert_eq!(normalize_server("[2001:db8::1]:4580").unwrap(), "https://[2001:db8::1]:4580");
+        for base in ["http://server1:4580", "https://server1:4580", "http://192.168.1.5:4580", "https://anthobot.bid/leaf", "https://192.168.1.5"] {
+            assert_eq!(normalize_server(&server_label(base)).unwrap(), base, "connecting again with {} keeps it", server_label(base));
+        }
     }
 
     #[test]
@@ -598,6 +636,9 @@ mod tests {
         assert_eq!(showable("LEE Dong Wook/ PARK Saenal", latin), "LEE Dong Wook/ PARK Saenal");
         assert_eq!(showable("Solo (Redice) 我", latin), "Solo (Redice)");
         assert_eq!(showable("有马文化", latin), "");
+        assert_eq!(showable("Mo Xiang Tong Xiu（墨香铜臭）", latin), "Mo Xiang Tong Xiu", "full-width brackets");
+        assert_eq!(showable("Mo Xiang (墨香铜臭）", latin), "Mo Xiang");
+        assert_eq!(showable("（Mo）", latin), "Mo");
     }
 
     fn series(read_upto: Option<f64>, unread: u32, updated_at: i64, last_read_at: i64) -> Series {
@@ -751,6 +792,9 @@ mod tests {
         assert_eq!(continue_point(&old).unwrap().index, 2);
         let all = vec![ch(1, 1.0, true, 29), ch(2, 2.0, true, 29)];
         assert_eq!(continue_point(&all).unwrap(), Continue { index: 1, page: 0, label: "Read ch. 2 again".into() });
+        let mut unknown = vec![ch(1, 1.0, true, 0), ch(2, 2.0, false, 15)];
+        unknown[1].pages = 0;
+        assert_eq!(continue_point(&unknown).unwrap().page, 15, "a length not known yet does not start the chapter over");
     }
 
     #[test]

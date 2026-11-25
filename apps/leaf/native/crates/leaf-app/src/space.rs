@@ -369,6 +369,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         let top = cx.c.inset_top;
         cx.c.dy = 0.0;
         cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + TOP, 0.0, t::BG);
+        kit::fixed_top(&mut cx, TOP);
         cx.c.text("My space", PAD, top + 14.0, Text::new(ty::TITLE, t::INK).brand());
         if kit::icon_key(&mut cx, WIDTH - 6.0 - 44.0 * 2.0, top + 10.0, "plus") {
             st.add_menu = true;

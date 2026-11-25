@@ -1,6 +1,7 @@
-//! Home (design 42, page 12, artboard A): a full-bleed spotlight over a cover that turns every
-//! six seconds (swipe to turn it by hand), then Continue reading, a rail of covers with how far
-//! each is read, then Recently updated. The spotlight leads with belled series that have new
+//! Home (design 42, page 12, artboard A): a full-bleed spotlight over a cover that turns by
+//! itself every eighteen seconds, sliding gently (it is not dragged: its dots choose one), then
+//! Continue reading, a rail of covers with how far each is read, then Recently updated. A cover
+//! too small to fill the spotlight sharp is a poster over a blurred copy of itself. The spotlight leads with belled series that have new
 //! chapters, then what was read most recently, books too ([`logic::spotlight`]).
 
 use leaf_proto::Series;
@@ -8,7 +9,7 @@ use leaf_proto::Series;
 use crate::app::{App, Route};
 use crate::cx;
 use crate::draw::{Rgba, Text, WIDTH};
-use crate::images::CoverOf;
+use crate::images::{CoverOf, MAX_UPSCALE};
 use crate::kit::{self, Ctx};
 use crate::logic::{self, Spot};
 use crate::net::Job;
@@ -16,10 +17,14 @@ use crate::shelf::{self, Book};
 use crate::theme::{self as t, COVER_R, PAD, ty};
 use crate::ui::HScroll;
 
-/// The spotlight turns after this long untouched.
-const TURN_NS: u64 = 6_000_000_000;
+/// The spotlight rests this long on each (the owner: slow; it is a picture, not a ticker).
+pub const TURN_NS: u64 = 18_000_000_000;
+/// A turn slides over this long, easing in and out.
+const SLIDE_NS: u64 = 1_200_000_000;
 /// At most this many things take turns in it.
 const SPOTS: usize = 5;
+/// How far down the order the spotlight looks for covers big enough to fill it sharp.
+const SPOT_CANDIDATES: usize = 15;
 /// The spotlight's height under the status bar.
 const HERO: f32 = 436.0;
 
@@ -29,11 +34,24 @@ pub struct State {
     /// the thing shown is this modulo how many there are.
     pub pos: f32,
     pub target: f32,
-    /// When the thing showing came, for the next turn.
+    /// Where the turn going on started from, and when.
+    from: f32,
+    turn_ns: u64,
+    /// When the thing showing came to rest, for the next turn.
     pub since_ns: u64,
     pub rail: HScroll,
     /// The shot asks for this one in the spotlight.
     pub shot_spot: Option<usize>,
+}
+
+impl State {
+    /// Slide to `target` (a whole number) from wherever the spotlight is.
+    fn turn_to(&mut self, target: f32, now: u64) {
+        self.from = self.pos;
+        self.target = target;
+        self.turn_ns = now;
+        self.since_ns = now;
+    }
 }
 
 #[derive(Clone)]
@@ -105,7 +123,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         spots.push(Spot { rings: false, updated_at: 0, read_at: b.opened_ms });
         items.push(Item::Book(b.clone()));
     }
-    let mut order = logic::spotlight(&spots, SPOTS);
+    let mut order = logic::spotlight(&spots, SPOT_CANDIDATES);
     // Room left: what was added or updated last takes it, so the spotlight still turns.
     {
         let mut added: Vec<(i64, usize)> = items
@@ -118,13 +136,36 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             .collect();
         added.sort_by_key(|a| std::cmp::Reverse(a.0));
         for (_, i) in added {
-            if order.len() >= SPOTS {
+            if order.len() >= SPOT_CANDIDATES {
                 break;
             }
             if !order.contains(&i) {
                 order.push(i);
             }
         }
+    }
+    // Full-bleed only (the owner's call, 2026-11-22): a cover too small to fill the spotlight sharp
+    // is skipped, not shown blurred or as a poster. Covers not decoded yet are asked for (small
+    // ones, cheap); until any is known to fit, the order as it stands is shown.
+    let now_c = app.now_ns;
+    let mut fits: Vec<usize> = Vec::new();
+    for &i in &order {
+        let of = items[i].cover();
+        match app.images.hero_fits(of) {
+            Some(true) => fits.push(i),
+            Some(false) => {}
+            None => {
+                app.images.cover(&mut app.canvas, of, now_c);
+            }
+        }
+        if fits.len() >= SPOTS {
+            break;
+        }
+    }
+    if !fits.is_empty() {
+        order = fits;
+    } else {
+        order.truncate(SPOTS);
     }
     let hero: Vec<Item> = order.iter().map(|&i| items[i].clone()).collect();
     // What is being read: series part way, books part way, last read first.
@@ -171,43 +212,36 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let hero_h = top + HERO;
     let mut y;
     if n > 0 {
-        // Turning: by hand, then to the nearest; by itself every six seconds.
+        // Turning: by itself, or to a dot tapped; a slide that eases in and out.
         if let Some(i) = st.shot_spot.take() {
             st.pos = i as f32;
-            st.target = i as f32;
+            st.turn_to(i as f32, now);
         }
-        let area = [0.0, cx.c.dy, WIDTH, hero_h];
-        cx.ui.claim_h(area);
-        let mine = cx.ui.swiping_in(area[0], area[1], area[2], area[3]);
-        if mine {
-            st.pos -= cx.ui.drag_dx / WIDTH;
-            st.target = st.pos;
-            if let Some(v) = cx.ui.fling_x {
-                st.target = if v < -250.0 {
-                    st.pos.floor() + 1.0
-                } else if v > 250.0 {
-                    st.pos.ceil() - 1.0
-                } else {
-                    st.pos.round()
-                };
+        let resting = (st.pos - st.target).abs() < 0.001;
+        if n > 1 && !shot && resting && now.saturating_sub(st.since_ns) >= TURN_NS {
+            st.turn_to(st.target.round() + 1.0, now);
+        }
+        if (st.pos - st.target).abs() >= 0.001 {
+            let f = (now.saturating_sub(st.turn_ns) as f32 / SLIDE_NS as f32).clamp(0.0, 1.0);
+            let e = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+            st.pos = st.from + (st.target - st.from) * e;
+            if f >= 1.0 {
+                st.pos = st.target;
+                st.since_ns = now;
+            } else {
+                moving = true;
             }
-            st.since_ns = now;
-        } else if n > 1 && !shot && (st.pos - st.target).abs() < 0.001 && now.saturating_sub(st.since_ns) >= TURN_NS {
-            st.target = st.pos.round() + 1.0;
-            st.since_ns = now;
-        }
-        if !mine && (st.pos - st.target).abs() > 0.001 {
-            st.pos += (st.target - st.pos) * (1.0 - (-dt * 9.0).exp());
-            moving = true;
-        } else if !mine {
+        } else {
             st.pos = st.target;
         }
-        moving |= mine && cx.ui.busy();
         if n == 1 {
             st.pos = 0.0;
             st.target = 0.0;
         }
         let first = st.pos.floor();
+        // The pictures stop at the spotlight's edge: a backdrop drawn larger must not show as a
+        // band under the fade.
+        cx.c.push_clip(0.0, cx.c.dy, WIDTH, hero_h);
         for k in [first, first + 1.0] {
             let off = (k - st.pos) * WIDTH;
             if off.abs() >= WIDTH - 0.5 {
@@ -220,7 +254,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 Item::Book(b) => b.has_cover && app.images.hero(cx.c, of, now),
                 Item::Series(_) => app.images.hero(cx.c, of, now),
             };
-            if has_hero {
+            if has_hero && app.images.hero_poster(of).is_some() {
+                cx.c.image_cover(&of.hero_key(), off - 16.0, -16.0, WIDTH + 32.0, hero_h + 16.0, 0.0, Rgba::WHITE);
+            } else if has_hero {
                 cx.c.image_cover(&of.hero_key(), off, 0.0, WIDTH, hero_h, 0.0, Rgba::WHITE);
             } else if app.images.cover(cx.c, of, now) && cx.c.has_image(&of.banner_key()) {
                 cx.c.image_cover(&of.banner_key(), off - 20.0, -20.0, WIDTH + 40.0, hero_h + 40.0, 0.0, Rgba::WHITE.a(0.7));
@@ -232,6 +268,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 cx.c.rect(off, 0.0, WIDTH, hero_h, 0.0, tone);
             }
         }
+        cx.c.pop_clip();
         // Dark at the top for the status bar and the name, and a long fade into the ground.
         cx.c.rect_grad(-1000.0, 0.0, WIDTH + 2000.0, top + 90.0, 0.0, t::BG.a(0.55), t::BG.a(0.0));
         cx.c.rect_grad(-1000.0, hero_h * 0.3, WIDTH + 2000.0, hero_h * 0.7 + 1.0, 0.0, t::BG.a(0.0), t::BG);
@@ -250,6 +287,24 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             let title_t = Text::new(30.0, t::INK).brand().line(1.12);
             let lines = cx.c.wrap(it.title(), w, title_t, 2);
             let title_y = line_y - 8.0 - lines.len() as f32 * title_t.lh();
+            // A cover too small to fill the spotlight: itself, sharp, at the upper right, never
+            // drawn past [`MAX_UPSCALE`] its own pixels, above the words.
+            let of = it.cover();
+            if let Some((pw, ph)) = app.images.hero_poster(of)
+                && cx.c.has_image(&of.hero_key())
+                && cx.c.has_image(&of.poster_key())
+            {
+                let (pw, ph) = (pw as f32, ph as f32);
+                let top_y = top + 64.0;
+                let room_h = (title_y - 22.0 - 18.0 - top_y).max(60.0);
+                let pw_u = (room_h * pw / ph).min(pw * MAX_UPSCALE / cx.c.u).min(WIDTH * 0.5);
+                let ph_u = pw_u * ph / pw;
+                let px = WIDTH - PAD - 4.0 - pw_u + off;
+                let py = top_y + (room_h - ph_u) * 0.35;
+                cx.c.shadow(px, py + 8.0, pw_u, ph_u, COVER_R, 26.0, Rgba::hex(0x000000).a(0.6));
+                cx.c.image_cover(&of.poster_key(), px, py, pw_u, ph_u, COVER_R, Rgba::WHITE);
+                cx.c.outline(px, py, pw_u, ph_u, COVER_R, 1.0, t::INK.a(0.1));
+            }
             let (label, label_ink, line, key, sub): (String, Rgba, String, String, &str) = match it {
                 Item::Series(s) => {
                     let new = news[i];
@@ -322,17 +377,32 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             let cur = (st.pos.round() as i64).rem_euclid(n as i64) as usize;
             let mut dx = WIDTH - PAD - 4.0;
             let dy_ = hero_h - 70.0 + 20.0;
+            let right = dx;
+            let mut centres = vec![0.0; n];
             for i in (0..n).rev() {
                 if i == cur {
                     dx -= 16.0;
                     cx.c.rect(dx, dy_, 16.0, 4.0, 2.0, t::INK);
+                    centres[i] = dx + 8.0;
                 } else {
                     dx -= 4.0;
                     cx.c.circle(dx + 2.0, dy_ + 2.0, 2.0, t::INK.a(0.4));
+                    centres[i] = dx + 2.0;
                 }
                 dx -= 6.0;
             }
-            if !shot && !mine && (st.pos - st.target).abs() < 0.001 {
+            // A dot is too small to aim at: a tap along them picks the nearest.
+            let (sx, sw) = (dx - 10.0, right - dx + 20.0);
+            if let Some((tx, _)) = cx.ui.tap
+                && cx.tap(sx, dy_ - 20.0, sw, 44.0)
+                && let Some(j) = (0..n).min_by(|&a, &b| (centres[a] - tx).abs().total_cmp(&(centres[b] - tx).abs()))
+                && j != cur
+            {
+                let to = st.pos.round() + j as f32 - cur as f32;
+                st.turn_to(to, now);
+                moving = true;
+            }
+            if !shot && (st.pos - st.target).abs() < 0.001 {
                 wake = Some(st.since_ns + TURN_NS);
             }
         }
@@ -475,6 +545,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         let scrolled = (-cx.c.dy).clamp(0.0, 60.0) / 60.0;
         cx.c.dy = 0.0;
         cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + 56.0, 0.0, t::BG.a(scrolled));
+        kit::fixed_top(&mut cx, 56.0);
         let tt = Text::new(22.0, t::INK).brand();
         let tw = cx.c.text("Leaf", PAD + 4.0, top + 6.0 + (44.0 - tt.lh()) / 2.0, tt);
         if offline {

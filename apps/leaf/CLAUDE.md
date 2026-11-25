@@ -49,7 +49,12 @@ anywhere but loopback.
 - Tabs are Home, Search and My space only; Notes and Stats are not tabs (My space's ⋯ reaches
   them). No source names anywhere in the UI. Adding a series is not following it: the bell is.
 - Nothing downloads without being asked, apart from the server's one next chapter.
-- While a menu is open, the page under it takes no tap (`kit::hold`; `flows.rs` tests it).
+- While a menu is open, the page under it takes no tap (`kit::hold`; `flows.rs` tests it). Nor
+  does a tap on fixed chrome drawn after the page (the tab bar, a fixed top): `Ui::begin_frame`
+  holds it and `kit::chrome` / `kit::fixed_top` give it back; new fixed chrome registers itself so.
+- The spotlight is never dragged: it rests 18 s on each, slides gently, and its dots choose one.
+  No cover is drawn past 1.3× its own pixels (`images::MAX_UPSCALE`): a smaller one is a sharp
+  poster over a blurred, darkened copy of itself (the series banner too).
 
 ## Developing against a real Suwayomi
 

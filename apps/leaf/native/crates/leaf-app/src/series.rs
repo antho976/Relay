@@ -34,6 +34,8 @@ pub struct State {
     pub about: bool,
     /// When the series was last asked again while chapters download.
     polled_ns: u64,
+    /// How many times it was asked since the last download began: each wait is longer.
+    polls: u32,
 }
 
 impl State {
@@ -50,8 +52,17 @@ const ROW_H: f32 = 84.0;
 const GAP_H: f32 = 48.0;
 /// A chapter's picture on its row.
 const PIC: (f32, f32) = (120.0, 68.0);
-/// While a chapter downloads on the server, the series is asked again this often.
+/// While a chapter downloads on the server, the series is asked again after this, then after
+/// twice as long each time (to [`POLL_MAX_NS`]), and given up on after [`POLLS`] asks: a download
+/// the server took but could not finish is not waited for as long as the page is open.
 const POLL_NS: u64 = 5_000_000_000;
+const POLL_MAX_NS: u64 = 80_000_000_000;
+const POLLS: u32 = 12;
+
+/// The wait before the series is asked again, after `polls` asks.
+fn poll_wait(polls: u32) -> u64 {
+    (POLL_NS << polls.min(8)).min(POLL_MAX_NS)
+}
 
 enum Act {
     Open(usize, u32),
@@ -72,13 +83,26 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let loaded = app.series.get(&id);
     let (loading, error, offline) = (loaded.is_some_and(|l| l.loading), loaded.and_then(|l| l.error.clone()), loaded.is_some_and(|l| l.offline()));
     // Chapters downloading on the server: asked again every few seconds until they are there.
-    let waiting = detail.as_ref().is_some_and(|d| d.chapters.iter().any(|c| app.downloading.contains(&c.id) && !c.downloaded));
-    if waiting && !loading && app.now_ns.saturating_sub(app.st.series.polled_ns) >= POLL_NS {
-        app.st.series.polled_ns = app.now_ns;
-        app.ask(Job::Series(id));
+    let mut waiting = detail.as_ref().is_some_and(|d| d.chapters.iter().any(|c| app.downloading.contains(&c.id) && !c.downloaded));
+    if waiting && !loading && app.now_ns.saturating_sub(app.st.series.polled_ns) >= poll_wait(app.st.series.polls) {
+        if app.st.series.polls >= POLLS {
+            // The server took the download and never finished it: stop waiting, say so.
+            if let Some(d) = &detail {
+                for c in d.chapters.iter().filter(|c| !c.downloaded) {
+                    app.downloading.remove(&c.id);
+                }
+            }
+            app.st.series.polls = 0;
+            waiting = false;
+            app.toast("Your server couldn't download that chapter. Try again later");
+        } else {
+            app.st.series.polled_ns = app.now_ns;
+            app.st.series.polls += 1;
+            app.ask(Job::Series(id));
+        }
     }
     if waiting {
-        let at = app.st.series.polled_ns + POLL_NS;
+        let at = app.st.series.polled_ns + poll_wait(app.st.series.polls);
         app.wake_at(at);
     }
     let covered = app.st.series.menu || app.st.series.confirm;
@@ -95,9 +119,13 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let top = cx.c.inset_top;
     let of = CoverOf::Series(id);
     let has_cover = app.images.cover(cx.c, of, now);
-    // The banner: the cover itself, wide, fading into the ground.
+    // The banner: the cover itself, wide, fading into the ground; a cover too small to be
+    // stretched that wide is a blurred, darkened copy of itself (it shows sharp beside the title).
     let banner_h = top + 300.0;
-    if app.images.hero(cx.c, of, now) {
+    let hero = app.images.hero(cx.c, of, now);
+    if hero && app.images.hero_poster(of).is_some() {
+        cx.c.image_cover(&of.hero_key(), -24.0, -24.0, WIDTH + 48.0, banner_h + 24.0, 0.0, Rgba::WHITE);
+    } else if hero {
         cx.c.image_cover_at(&of.hero_key(), 0.0, 0.0, WIDTH, banner_h, 0.0, Rgba::WHITE, (0.5, 0.25));
     } else if cx.c.has_image(&of.banner_key()) {
         cx.c.image_cover(&of.banner_key(), -40.0, -40.0, WIDTH + 80.0, banner_h + 40.0, 0.0, Rgba::WHITE.a(0.6));
@@ -332,7 +360,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                             if pic_tap {
                                 act = Some(Act::Download(c.id));
                             } else if key_tap || cx.tap(0.0, y, WIDTH, h) {
-                                let page = if !c.read { c.last_page.min(c.pages.saturating_sub(1)) } else { 0 };
+                                let page = if !c.read { logic::resume_page(c) } else { 0 };
                                 act = Some(Act::Open(i, page));
                             }
                         }
@@ -362,6 +390,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         let scrolled = (-cx.c.dy).clamp(0.0, 60.0) / 60.0;
         cx.c.dy = 0.0;
         cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + 56.0, 0.0, t::BG.a(scrolled));
+        kit::fixed_top(&mut cx, 56.0);
         // Over the picture the keys sit on a soft dark disc, so a bright cover doesn't swallow them.
         for kx in [6.0, WIDTH - 6.0 - 88.0, WIDTH - 6.0 - 44.0] {
             cx.c.circle(kx + 22.0, top + 28.0, 18.0, t::BG.a(0.32 * (1.0 - scrolled)));
@@ -446,6 +475,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             app.download(&ids, true);
             app.toast(&format!("Downloading {}", logic::chapters_words(ids.len())));
             app.st.series.polled_ns = app.now_ns;
+            app.st.series.polls = 0;
         }
     }
     if retry {
@@ -460,6 +490,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         Some(Act::Download(c)) if !covered => {
             app.download(&[c], true);
             app.st.series.polled_ns = app.now_ns;
+            app.st.series.polls = 0;
         }
         Some(Act::Bell(on)) if !covered => app.set_bell(id, on),
         _ => {
@@ -469,4 +500,18 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         }
     }
     pg.moving || loading && !crate::wake::has()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_download_is_waited_for_less_and_less_often_then_given_up() {
+        let waits: Vec<u64> = (0..POLLS).map(poll_wait).collect();
+        assert_eq!(&waits[..5], &[5_000_000_000, 10_000_000_000, 20_000_000_000, 40_000_000_000, 80_000_000_000]);
+        assert!(waits.iter().all(|w| *w <= POLL_MAX_NS));
+        let total: u64 = waits.iter().sum();
+        assert!(total < 20 * 60 * 1_000_000_000, "given up within twenty minutes");
+    }
 }

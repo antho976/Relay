@@ -37,6 +37,8 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 flate2 = "1"
 quick-xml = "0.41"
+# A word too long for a line is cut between graphemes, not inside one.
+unicode-segmentation = "1"
 # The local day (reading time is counted per day): the zone's offset from localtime_r.
 libc = "0.2"
 

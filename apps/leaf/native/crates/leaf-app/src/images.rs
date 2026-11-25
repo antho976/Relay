@@ -25,10 +25,16 @@ pub const COVER_W: u32 = 336;
 pub const COVER_H: u32 = 480;
 /// The banner: so small that drawing it across the screen blurs it.
 const BANNER: (u32, u32) = (14, 20);
-/// A cover as the home page's spotlight and the series page's banner draw it: the screen's width
-/// on a 1080 px phone is about three times this, which a cover's own resolution rarely beats.
-pub const HERO_W: u32 = 720;
-pub const HERO_H: u32 = 860;
+/// A cover as the home page's spotlight and the series page's banner draw it, across and down:
+/// cut to this shape, at the cover's own resolution (never more than the screen's width).
+const HERO_ASPECT: f32 = 720.0 / 860.0;
+/// A cover is never drawn bigger than this times its own pixels: one too small to fill the
+/// spotlight at that is shown sharp as a poster over a blurred, darkened copy of itself.
+pub const MAX_UPSCALE: f32 = 1.3;
+/// The poster is kept at most this wide (it is drawn far narrower than the screen).
+const POSTER_MAX_W: u32 = 600;
+/// The blurred copy behind a poster: this wide, blurred, then drawn across the whole spotlight.
+const BACKDROP_W: u32 = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CoverOf {
@@ -51,9 +57,14 @@ impl CoverOf {
     pub fn banner_key(self) -> String {
         format!("b:{}", self.key())
     }
-    /// The large copy ([`HERO_W`] × [`HERO_H`]).
+    /// The large copy: the cover cut to the spotlight's shape, or, when the cover is too small
+    /// for that ([`Images::hero_poster`]), a blurred, darkened copy to draw behind its poster.
     pub fn hero_key(self) -> String {
         format!("h:{}", self.key())
+    }
+    /// The cover itself, at its own size, drawn sharp over [`CoverOf::hero_key`]'s blur.
+    pub fn poster_key(self) -> String {
+        format!("hp:{}", self.key())
     }
     fn path(self) -> String {
         match self {
@@ -108,11 +119,19 @@ struct Pixels {
     px: Vec<u8>,
 }
 
+/// A cover for the spotlight: cut to its shape when it is big enough, else a blurred backdrop
+/// and the cover itself as a poster.
+struct HeroPics {
+    main: Pixels,
+    poster: Option<Pixels>,
+}
+
 enum Got {
-    Cover { of: CoverOf, img: Option<Pixels>, banner: Option<Pixels> },
+    /// `src`: the cover's own size in pixels, which says whether it can fill the spotlight.
+    Cover { of: CoverOf, img: Option<Pixels>, banner: Option<Pixels>, src: Option<(u32, u32)> },
     Page { chapter: i64, n: u32, decode: bool, result: Result<Option<PageImg>, String> },
     Local { key: String, book: PathBuf, entry: String, img: Option<Pixels> },
-    Hero { of: CoverOf, img: Option<Pixels> },
+    Hero { of: CoverOf, img: Option<HeroPics> },
     Thumb { chapter: i64, pages: u32, img: Option<Pixels> },
     /// What the page cache holds: bytes per chapter.
     Cached(HashMap<i64, u64>),
@@ -132,6 +151,8 @@ struct Shared {
     /// chapter id `-book`.
     pdfs: Mutex<HashMap<i64, PathBuf>>,
     host: Mutex<Option<std::sync::Arc<dyn crate::app::Host>>>,
+    /// The screen's width in pixels, which decides whether a cover fills the spotlight.
+    screen_w: std::sync::atomic::AtomicU32,
 }
 
 /// How many fetches and decodes run at once.
@@ -153,10 +174,16 @@ pub struct Images {
     failed: HashMap<(i64, u32), String>,
     stored: HashSet<(i64, u32)>,
     last_wants: Vec<(i64, u32, bool)>,
+    /// A reader is open: decoded pages arriving are kept. Closed, they are let go on arrival.
+    reading: bool,
     /// Pictures inside books: their sizes once decoded, and the ones that would not.
     local_sizes: HashMap<String, (u32, u32)>,
     local_failed: HashSet<String>,
     hero_failed: HashMap<CoverOf, u64>,
+    /// Covers too small to fill the spotlight: their poster's size (pixels).
+    posters: HashMap<CoverOf, (u32, u32)>,
+    /// Covers' own sizes, as they were decoded.
+    cover_src: HashMap<CoverOf, (u32, u32)>,
     thumb_failed: HashMap<i64, u64>,
     /// The chapters whose pages are on this phone, with their bytes, once the cache was looked at.
     pub cached: Option<HashMap<i64, u64>>,
@@ -172,6 +199,7 @@ impl Images {
             server: Mutex::new(None),
             pdfs: Mutex::new(HashMap::new()),
             host: Mutex::new(None),
+            screen_w: std::sync::atomic::AtomicU32::new(1080),
         });
         let (tx, rx) = channel();
         let client = Client::new();
@@ -181,6 +209,8 @@ impl Images {
         }
         Images {
             hero_failed: HashMap::new(),
+            posters: HashMap::new(),
+            cover_src: HashMap::new(),
             thumb_failed: HashMap::new(),
             cached: None,
             tx,
@@ -194,9 +224,35 @@ impl Images {
             failed: HashMap::new(),
             stored: HashSet::new(),
             last_wants: Vec::new(),
+            reading: false,
             local_sizes: HashMap::new(),
             local_failed: HashSet::new(),
         }
+    }
+
+    /// The screen is this many pixels wide (each frame; covers decoded from now on follow it).
+    pub fn set_screen_w(&self, px: f32) {
+        self.shared.screen_w.store(px.round().max(1.0) as u32, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The cover is too small to fill the spotlight: the size of its poster ([`CoverOf::poster_key`],
+    /// pixels), drawn sharp over the blurred [`CoverOf::hero_key`]. None when the hero fills it.
+    /// Whether the cover can fill the spotlight sharp (no more than [`MAX_UPSCALE`]): None until
+    /// its cover or spotlight picture has been decoded once.
+    pub fn hero_fits(&self, of: CoverOf) -> Option<bool> {
+        let screen_w = self.shared.screen_w.load(std::sync::atomic::Ordering::Relaxed).clamp(320, 1440) as f32;
+        if let Some(&(w, h)) = self.cover_src.get(&of) {
+            let cw = (w as f32).min(h as f32 * HERO_ASPECT);
+            return Some(cw * MAX_UPSCALE >= screen_w);
+        }
+        if self.posters.contains_key(&of) {
+            return Some(false);
+        }
+        None
+    }
+
+    pub fn hero_poster(&self, of: CoverOf) -> Option<(u32, u32)> {
+        self.posters.get(&of).copied()
     }
 
     /// The platform, for PDF pages.
@@ -265,7 +321,8 @@ impl Images {
     /// now (with [`CoverOf::hero_key`]).
     pub fn hero(&mut self, c: &mut Canvas, of: CoverOf, now_ns: u64) -> bool {
         let key = of.hero_key();
-        if c.has_image(&key) {
+        // A poster's blur is no use without the poster (the atlas may have let one go).
+        if c.has_image(&key) && (!self.posters.contains_key(&of) || c.has_image(&of.poster_key())) {
             return true;
         }
         if c.image_waiting(&key) || self.asked.contains(&Want::Hero(of)) {
@@ -358,6 +415,7 @@ impl Images {
     /// The pages the reader wants, nearest first: (chapter, page, decode). Anything else queued
     /// for pages is dropped.
     pub fn want_pages(&mut self, wants: &[(i64, u32, bool)]) {
+        self.reading = true;
         if wants == self.last_wants.as_slice() {
             return;
         }
@@ -403,8 +461,11 @@ impl Images {
         while let Ok(got) = self.rx.try_recv() {
             arrived = true;
             match got {
-                Got::Cover { of, img, banner } => {
+                Got::Cover { of, img, banner, src } => {
                     self.asked.remove(&Want::Cover(of));
+                    if let Some(wh) = src {
+                        self.cover_src.insert(of, wh);
+                    }
                     match img {
                         Some(p) => {
                             if !c.add_image_slot(&of.key(), p.w, p.h, (COVER_W, COVER_H), p.px) && !c.image_waiting(&of.key()) {
@@ -431,7 +492,9 @@ impl Images {
                         Ok(Some(img)) => {
                             self.sizes.insert(k, (img.w, img.h));
                             self.stored.insert(k);
-                            self.decoded.insert(k, img);
+                            if self.reading {
+                                self.decoded.insert(k, img);
+                            }
                         }
                         Ok(None) => {
                             self.stored.insert(k);
@@ -446,8 +509,17 @@ impl Images {
                 Got::Hero { of, img } => {
                     self.asked.remove(&Want::Hero(of));
                     match img {
-                        Some(p) => {
-                            if !c.add_image_slot(&of.hero_key(), p.w, p.h, (HERO_W, HERO_H), p.px) && !c.image_waiting(&of.hero_key()) {
+                        Some(HeroPics { main: p, poster }) => {
+                            match poster {
+                                Some(q) => {
+                                    self.posters.insert(of, (q.w, q.h));
+                                    c.add_image(&of.poster_key(), q.w, q.h, q.px);
+                                }
+                                None => {
+                                    self.posters.remove(&of);
+                                }
+                            }
+                            if !c.add_image(&of.hero_key(), p.w, p.h, p.px) && !c.image_waiting(&of.hero_key()) {
                                 self.hero_failed.insert(of, now_ns);
                             }
                         }
@@ -515,6 +587,14 @@ impl Images {
         self.decoded.retain(|k, _| keep.contains(k));
     }
 
+    /// The reader closed: nothing more is fetched for it (a chapter opened by mistake is not
+    /// downloaded behind your back), and its decoded pages are let go.
+    pub fn leave_pages(&mut self) {
+        self.want_pages(&[]);
+        self.reading = false;
+        self.decoded.clear();
+    }
+
     /// Something is being fetched or decoded.
     pub fn pending(&self) -> bool {
         !self.asked.is_empty()
@@ -543,11 +623,11 @@ fn worker(shared: &Shared, tx: &Sender<Got>, client: &Client, data: &Path) {
             Want::Page { chapter, n, decode } if *chapter < 0 => Got::Page { chapter: *chapter, n: *n, decode: *decode, result: pdf_page(shared, *chapter, *n, *decode) },
             Want::Page { chapter, n, decode } => Got::Page { chapter: *chapter, n: *n, decode: *decode, result: page(client, server.as_ref(), data, *chapter, *n, *decode) },
             Want::Local { key, book, entry } => Got::Local { key: key.clone(), book: book.clone(), entry: entry.clone(), img: local_picture(book, entry) },
-            Want::Hero(of) => Got::Hero { of: *of, img: hero(client, server.as_ref(), data, *of) },
+            Want::Hero(of) => Got::Hero { of: *of, img: hero(client, server.as_ref(), data, *of, shared.screen_w.load(std::sync::atomic::Ordering::Relaxed)) },
             Want::Thumb { chapter, pages } => Got::Thumb { chapter: *chapter, pages: *pages, img: thumb(client, server.as_ref(), data, *chapter, *pages) },
         }));
         let got = got.unwrap_or_else(|_| match want {
-            Want::Cover(of) => Got::Cover { of, img: None, banner: None },
+            Want::Cover(of) => Got::Cover { of, img: None, banner: None, src: None },
             Want::Page { chapter, n, decode } => Got::Page { chapter, n, decode, result: Err("This page didn't decode".into()) },
             Want::Local { key, book, entry } => Got::Local { key, book, entry, img: None },
             Want::Hero(of) => Got::Hero { of, img: None },
@@ -577,11 +657,12 @@ fn cover(client: &Client, server: Option<&Server>, data: &Path, of: CoverOf) -> 
     let file = of.file(data);
     // A book's cover is only ever its file's.
     let server = if matches!(of, CoverOf::Book(_)) { None } else { server };
-    let Ok(bytes) = fetch(client, server, &file, &of.path()) else { return Got::Cover { of, img: None, banner: None } };
+    let Ok(bytes) = fetch(client, server, &file, &of.path()) else { return Got::Cover { of, img: None, banner: None, src: None } };
     let Ok(img) = image::load_from_memory(&bytes) else {
         let _ = std::fs::remove_file(&file);
-        return Got::Cover { of, img: None, banner: None };
+        return Got::Cover { of, img: None, banner: None, src: None };
     };
+    let src = Some((img.width(), img.height()));
     let filled = img.resize_to_fill(COVER_W, COVER_H, image::imageops::FilterType::Triangle).to_rgba8();
     let small = image::imageops::resize(&filled, BANNER.0, BANNER.1, image::imageops::FilterType::Triangle);
     let (w, h) = filled.dimensions();
@@ -589,23 +670,85 @@ fn cover(client: &Client, server: Option<&Server>, data: &Path, of: CoverOf) -> 
         of,
         img: Some(Pixels { w, h, px: filled.into_raw() }),
         banner: Some(Pixels { w: BANNER.0, h: BANNER.1, px: small.into_raw() }),
+        src,
     }
 }
 
-/// A cover at the spotlight's size, cut from its top third (where faces are) when it is taller.
-fn hero(client: &Client, server: Option<&Server>, data: &Path, of: CoverOf) -> Option<Pixels> {
+/// A cover for the spotlight on a screen `screen_w` pixels wide. Big enough to fill it within
+/// [`MAX_UPSCALE`]: cut to its shape (from the top third, where faces are, when it is taller),
+/// at its own resolution or the screen's, whichever is less. Smaller: the cover as a poster at
+/// its own size, and a blurred, darkened copy to fill the spotlight behind it.
+fn hero(client: &Client, server: Option<&Server>, data: &Path, of: CoverOf, screen_w: u32) -> Option<HeroPics> {
     let file = of.file(data);
     let server = if matches!(of, CoverOf::Book(_)) { None } else { server };
     let bytes = fetch(client, server, &file, &of.path()).ok()?;
     let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
-    let (w0, h0) = (img.width().max(1) as f32, img.height().max(1) as f32);
-    let scale = (HERO_W as f32 / w0).max(HERO_H as f32 / h0);
-    let (w1, h1) = (((w0 * scale).round() as u32).max(HERO_W), ((h0 * scale).round() as u32).max(HERO_H));
-    let big = image::imageops::resize(&img, w1, h1, image::imageops::FilterType::Triangle);
-    let x = (w1 - HERO_W) / 2;
-    let y = ((h1 - HERO_H) as f32 * 0.3) as u32;
-    let cut = image::imageops::crop_imm(&big, x, y, HERO_W, HERO_H).to_image();
-    Some(Pixels { w: HERO_W, h: HERO_H, px: cut.into_raw() })
+    Some(hero_pics(&img, screen_w))
+}
+
+fn hero_pics(img: &image::RgbaImage, screen_w: u32) -> HeroPics {
+    use image::imageops::{FilterType, crop_imm, resize};
+    let (w0, h0) = (img.width().max(1), img.height().max(1));
+    // The part the spotlight's shape keeps, in the cover's own pixels.
+    let cw = (w0 as f32).min(h0 as f32 * HERO_ASPECT).floor().max(1.0) as u32;
+    let ch = ((cw as f32 / HERO_ASPECT).round() as u32).clamp(1, h0);
+    let screen_w = screen_w.clamp(320, 1440);
+    if cw as f32 * MAX_UPSCALE >= screen_w as f32 {
+        let (x, y) = ((w0 - cw) / 2, ((h0 - ch) as f32 * 0.3) as u32);
+        let cut = crop_imm(img, x, y, cw, ch).to_image();
+        let out = if cw > screen_w { resize(&cut, screen_w, ((screen_w as f32 / HERO_ASPECT).round() as u32).max(1), FilterType::Triangle) } else { cut };
+        let (w, h) = out.dimensions();
+        return HeroPics { main: Pixels { w, h, px: out.into_raw() }, poster: None };
+    }
+    let poster = if w0 > POSTER_MAX_W { resize(img, POSTER_MAX_W, ((h0 as f32 * POSTER_MAX_W as f32 / w0 as f32).round() as u32).max(1), FilterType::Triangle) } else { img.clone() };
+    let (pw, ph) = poster.dimensions();
+    let (bw, bh) = (BACKDROP_W, ((BACKDROP_W as f32 * h0 as f32 / w0 as f32).round() as u32).max(1));
+    let mut back = resize(img, bw, bh, FilterType::Triangle);
+    blur(&mut back, 7, 3);
+    for p in back.pixels_mut() {
+        for c in 0..3 {
+            p.0[c] = (p.0[c] as f32 * 0.6) as u8;
+        }
+        p.0[3] = 255;
+    }
+    HeroPics { main: Pixels { w: bw, h: bh, px: back.into_raw() }, poster: Some(Pixels { w: pw, h: ph, px: poster.into_raw() }) }
+}
+
+/// A box blur of radius `r`, `passes` times across and down (three is close to a Gaussian),
+/// edges held.
+fn blur(img: &mut image::RgbaImage, r: u32, passes: u32) {
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let r = r as isize;
+    let mut buf: Vec<[f32; 3]> = img.pixels().map(|p| [p.0[0] as f32, p.0[1] as f32, p.0[2] as f32]).collect();
+    let mut tmp = buf.clone();
+    let n = (2 * r + 1) as f32;
+    for _ in 0..passes {
+        for (len, count, step, stride) in [(w, h, 1usize, w), (h, w, w, 1usize)] {
+            for line in 0..count {
+                let at = |i: isize| line * stride + (i.clamp(0, len as isize - 1) as usize) * step;
+                let mut sum = [0.0f32; 3];
+                for i in -r..=r {
+                    let p = buf[at(i)];
+                    for c in 0..3 {
+                        sum[c] += p[c];
+                    }
+                }
+                for i in 0..len as isize {
+                    tmp[at(i)] = [sum[0] / n, sum[1] / n, sum[2] / n];
+                    let (add, sub) = (buf[at(i + r + 1)], buf[at(i - r)]);
+                    for c in 0..3 {
+                        sum[c] += add[c] - sub[c];
+                    }
+                }
+            }
+            std::mem::swap(&mut buf, &mut tmp);
+        }
+    }
+    for (p, b) in img.pixels_mut().zip(buf) {
+        p.0[0] = b[0].round() as u8;
+        p.0[1] = b[1].round() as u8;
+        p.0[2] = b[2].round() as u8;
+    }
 }
 
 /// A chapter's picture: from disk when it was made before, else cut from the most colourful of
@@ -754,12 +897,30 @@ fn page(client: &Client, server: Option<&Server>, data: &Path, chapter: i64, n: 
     })
 }
 
+/// The most one page's decode may allocate: a 1600 × 30000 webtoon strip fits, a malformed
+/// header asking for gigabytes does not.
+const PAGE_MAX_ALLOC: u64 = 256 << 20;
+/// A page with more pixels than this decodes alone: three of them at once could take the phone's
+/// memory.
+const BIG_PAGE_PX: u64 = 12_000_000;
+static BIG_DECODE: Mutex<()> = Mutex::new(());
+
 /// A page's bytes decoded, scaled down to at most [`PAGE_W`] wide, and cut into tiles.
 pub fn decode_page(bytes: &[u8]) -> Result<PageImg, String> {
-    let img = image::load_from_memory(bytes).map_err(|_| "This page didn't decode".to_string())?;
-    let (w0, h0) = (img.width(), img.height());
+    let bad = |_| "This page didn't decode".to_string();
+    let reader = || -> std::io::Result<image::ImageReader<std::io::Cursor<&[u8]>>> {
+        let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+        let mut limits = image::Limits::default();
+        limits.max_alloc = Some(PAGE_MAX_ALLOC);
+        r.limits(limits);
+        Ok(r)
+    };
+    let (w0, h0) = reader().map_err(bad)?.into_dimensions().map_err(|_| "This page didn't decode".to_string())?;
+    let _alone = (w0 as u64 * h0 as u64 > BIG_PAGE_PX).then(|| BIG_DECODE.lock().unwrap_or_else(|e| e.into_inner()));
+    let img = reader().map_err(bad)?.decode().map_err(|_| "This page didn't decode".to_string())?;
     let (w, h) = crate::logic::scaled_size(w0, h0);
-    let rgba = if (w, h) == (w0, h0) { img.to_rgba8() } else { image::imageops::resize(&img.to_rgba8(), w, h, image::imageops::FilterType::Triangle) };
+    // Scaled straight from the decoded picture: no full-size RGBA copy first.
+    let rgba = if (w, h) == (w0, h0) { img.into_rgba8() } else { image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle) };
     let raw = rgba.into_raw();
     let row = (w * 4) as usize;
     let tiles = crate::logic::tile_rows(h).into_iter().map(|(y, th)| raw[y as usize * row..(y + th) as usize * row].to_vec()).collect();
@@ -788,6 +949,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_small_cover_is_a_poster_and_a_big_one_fills_without_upscaling() {
+        // 400 px wide on a 1080 px screen would be stretched 2.7 times: a poster at its own size
+        // and a small blurred, darkened copy.
+        let small = image::RgbaImage::from_fn(400, 600, |x, _| image::Rgba([if x < 200 { 250 } else { 0 }, 100, 50, 255]));
+        let h = hero_pics(&small, 1080);
+        let p = h.poster.as_ref().expect("a poster");
+        assert_eq!((p.w, p.h), (400, 600));
+        assert_eq!(h.main.w, BACKDROP_W);
+        let row = (h.main.h / 2 * h.main.w * 4) as usize;
+        let mid = &h.main.px[row + (h.main.w / 2 * 4) as usize..][..3];
+        assert!(mid[0] > 40 && mid[0] < 110, "the halves blur together and darken: {mid:?}");
+        // 900 px wide fills a 1080 px screen at 1.2 times: cut to shape at its own size.
+        let big = image::RgbaImage::from_pixel(900, 1400, image::Rgba([1, 2, 3, 255]));
+        let h = hero_pics(&big, 1080);
+        assert!(h.poster.is_none());
+        assert_eq!(h.main.w, 900);
+        assert_eq!(h.main.h, (900.0 / HERO_ASPECT).round() as u32);
+        // Bigger than the screen: brought down to its width, never up.
+        let h = hero_pics(&image::RgbaImage::from_pixel(2000, 3000, image::Rgba([1, 2, 3, 255])), 1080);
+        assert_eq!(h.main.w, 1080);
+    }
+
+    #[test]
     fn a_tall_page_decodes_into_tiles() {
         // A 1000 × 2600 PNG: scaled to 800 × 2080, three tiles.
         let img = image::RgbaImage::from_pixel(1000, 2600, image::Rgba([10, 200, 30, 255]));
@@ -800,6 +984,43 @@ mod tests {
         assert_eq!(p.tiles[2].len(), 800 * 40 * 4);
         assert_eq!((tile_h(2080, 0), tile_h(2080, 2)), (1020, 40));
         assert!(decode_page(b"not an image").is_err());
+        // A PNG header claiming 60000 × 60000 is refused before anything that size is made.
+        let mut huge = Vec::new();
+        image::RgbaImage::new(1, 1).write_to(&mut std::io::Cursor::new(&mut huge), image::ImageFormat::Png).unwrap();
+        huge[16..20].copy_from_slice(&60_000u32.to_be_bytes());
+        huge[20..24].copy_from_slice(&60_000u32.to_be_bytes());
+        // The header's checksum made right again, so it is the size that is refused.
+        let crc = huge[12..29].iter().fold(!0u32, |mut c, &b| {
+            c ^= b as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { (c >> 1) ^ 0xEDB8_8320 } else { c >> 1 };
+            }
+            c
+        });
+        huge[29..33].copy_from_slice(&(!crc).to_be_bytes());
+        assert_eq!(image::ImageReader::new(std::io::Cursor::new(&huge)).with_guessed_format().unwrap().into_dimensions().unwrap(), (60_000, 60_000));
+        assert!(decode_page(&huge).is_err());
+    }
+
+    #[test]
+    fn queued_pages_go_when_the_reader_moves_or_closes() {
+        // A server that takes requests and never answers: the workers hold the first three, the
+        // rest stay queued, so what is dropped from the queue can be seen.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let dir = std::env::temp_dir().join(format!("leaf-images-hold-{}", std::process::id()));
+        let mut im = Images::new(dir.clone());
+        im.set_server(Some(Server { base, token: None }));
+        let queued = |im: &Images| -> Vec<Want> { im.shared.q.lock().unwrap().items.iter().map(|i| i.2.clone()).collect() };
+        let old: Vec<(i64, u32, bool)> = (0..8).map(|n| (1, n, true)).collect();
+        im.want_pages(&old);
+        assert!(queued(&im).iter().any(|w| matches!(w, Want::Page { chapter: 1, .. })), "some of chapter 1 waits its turn");
+        im.want_pages(&[(5, 0, true), (5, 1, true), (5, 2, true), (5, 3, true)]);
+        assert!(queued(&im).iter().all(|w| !matches!(w, Want::Page { chapter: 1, .. })), "the reader moved: chapter 1 is dropped");
+        im.leave_pages();
+        assert!(queued(&im).iter().all(|w| !matches!(w, Want::Page { .. })), "the reader closed: nothing is fetched for it");
+        drop(listener);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

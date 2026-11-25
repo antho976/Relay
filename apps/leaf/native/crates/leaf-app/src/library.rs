@@ -88,6 +88,7 @@ pub fn draw_imports(app: &mut App, dt: f32) -> bool {
         let top = cx.c.inset_top;
         cx.c.dy = 0.0;
         cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + 60.0, 0.0, t::BG);
+        kit::fixed_top(&mut cx, 60.0);
         let title = if left > 0 { format!("Adding {} {}", left, if left == 1 { "book" } else { "books" }) } else { "Added to your library".to_string() };
         kit::top_bar(&mut cx, top + 8.0, &title, &[]).0
     };

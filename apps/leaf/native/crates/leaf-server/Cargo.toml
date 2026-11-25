@@ -13,3 +13,7 @@ serde_json = "1"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 tiny_http = "0.12"
+# Re-encoding downloaded pages smaller (squeeze.rs): decode with image, encode lossy WebP with
+# libwebp (image's own WebP encoder is lossless only).
+image = { version = "0.25", default-features = false, features = ["webp"] }
+webp = { version = "0.3", default-features = false }

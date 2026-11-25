@@ -62,6 +62,15 @@ pub struct Ui {
     covered_last: bool,
     /// When the finger now down came down, on [`crate::clock::now_ns`] (for a long press).
     down_ns: u64,
+    /// Fixed chrome drawn over the page (tab bar, fixed tops) this frame and the last, screen
+    /// units: a tap inside one is held from the page ([`Ui::begin_frame`]) and given back only to
+    /// that chrome ([`Ui::chrome`]).
+    chrome: Vec<[f32; 4]>,
+    chrome_last: Vec<[f32; 4]>,
+    /// This frame's tap, held from the page because it fell on chrome (or a dialog was over the
+    /// page last frame: then only the dialog gets it back, through [`Ui::cover`]).
+    held: Option<(f32, f32)>,
+    held_for_cover: bool,
 }
 
 impl Ui {
@@ -137,6 +146,32 @@ impl Ui {
         }
     }
 
+    /// Before the page draws: a tap that fell on fixed chrome (drawn last frame, or `also`, such
+    /// as the tab bar a tabbed page always has) is taken aside, so nothing under it can take it;
+    /// the chrome gets it back as it draws ([`Ui::chrome`]). While a dialog or menu was over the
+    /// page, every tap is held for it ([`Ui::cover`]).
+    pub fn begin_frame(&mut self, also: Option<[f32; 4]>) {
+        self.held = None;
+        self.held_for_cover = false;
+        let Some((x, y)) = self.tap else { return };
+        let on = |r: &[f32; 4]| x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3];
+        if self.covered_last {
+            self.held = self.tap.take();
+            self.held_for_cover = true;
+        } else if self.chrome_last.iter().chain(also.iter()).any(on) {
+            self.held = self.tap.take();
+        }
+    }
+
+    /// Fixed chrome is drawn over the page here (screen units), after the page: a held tap inside
+    /// it is its own again. Call before its controls ask whether they were tapped.
+    pub fn chrome(&mut self, r: [f32; 4]) {
+        self.chrome.push(r);
+        if !self.held_for_cover && Self::inside(self.held, r[0], r[1], r[2], r[3]) {
+            self.tap = self.held.take();
+        }
+    }
+
     pub fn busy(&self) -> bool {
         self.id.is_some()
     }
@@ -169,6 +204,9 @@ impl Ui {
         self.fling_x = None;
         self.hzones_last = std::mem::take(&mut self.hzones);
         self.covered_last = std::mem::take(&mut self.covered);
+        self.chrome_last = std::mem::take(&mut self.chrome);
+        self.held = None;
+        self.held_for_cover = false;
         if self.id.is_none() {
             self.drag_from = None;
             self.horizontal = false;
@@ -180,6 +218,11 @@ impl Ui {
     /// the next frame on (a sheet opens with a tap, never mid-drag).
     pub fn cover(&mut self) {
         self.covered = true;
+        // A tap held because the dialog was over the page last frame is the dialog's.
+        if self.held_for_cover {
+            self.tap = self.held.take();
+            self.held_for_cover = false;
+        }
     }
 
     /// Something covered the page last frame ([`Ui::cover`]): it stays still under it.

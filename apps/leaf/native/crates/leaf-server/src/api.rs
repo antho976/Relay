@@ -16,12 +16,13 @@
 //! | `POST /v1/chapters/{id}/progress` [`Progress`] | `{"ok":true}` |
 //! | `GET /v1/events` | `[Event]`, newest first; `?since=<ms>` the ones after, oldest first |
 //! | `POST /v1/series/{id}/bell` [`Bell`] | turns its new-chapter notices on or off |
+//! | `POST /v1/series/{id}/read` [`ReadBefore`] | marks every chapter below a number read |
 //! | `POST` / `DELETE /v1/chapters/{id}/download` | downloads a chapter on the server, or removes it |
 
 use std::io::Read;
 use std::sync::Arc;
 
-use leaf_proto::{Bell, Follow, Pages, Progress, Status};
+use leaf_proto::{Bell, Follow, Pages, Progress, ReadBefore, Status};
 use serde::Serialize;
 use tiny_http::{Header, Method, Request, Response};
 
@@ -83,9 +84,12 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Same length and same bytes, compared without stopping at the first difference.
+/// Same length and same bytes, compared without stopping at the first difference, and over the
+/// longer of the two so the time taken does not tell the token's length either.
 fn same_secret(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let diff = (0..a.len().max(b.len())).fold(0u8, |acc, i| acc | (a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0xff)));
+    diff == 0 && a.len() == b.len()
 }
 
 impl Api {
@@ -157,19 +161,36 @@ impl Api {
             },
             (Method::Post, ["v1", "follow"]) => serde_json::from_str::<Follow>(body)
                 .map_err(|e| format!("follow: {e}"))
-                .and_then(|f| ctx.follow(&f.title, &f.manga_ids))
-                .map(|s| {
-                    // The other sources are looked at right away, off this request.
-                    let (c, id) = (self.ctx.clone(), s.id);
-                    std::thread::spawn(move || c.compare_now(id));
+                .and_then(|f| ctx.follow(&f.title, &f.manga_ids).map(|s| (s, f.quiet)))
+                .map(|(s, quiet)| {
+                    if quiet {
+                        ctx.compare_soon(s.id);
+                    } else {
+                        // The other sources are looked at right away, off this request.
+                        let (c, id) = (self.ctx.clone(), s.id);
+                        std::thread::spawn(move || c.compare_now(id));
+                    }
                     json(&s)
                 }),
+            (Method::Post, ["v1", "series", _, "read"]) => {
+                let Some(i) = id(2) else { return fail(400, "bad id") };
+                serde_json::from_str::<ReadBefore>(body)
+                    .map_err(|e| format!("read: {e}"))
+                    .and_then(|r| ctx.read_before(i, r.before))
+                    .map(|n| json(&serde_json::json!({ "ok": true, "marked": n })))
+            }
             (Method::Get, ["v1", "chapters", _, "pages"]) => {
                 id(2).ok_or("bad id".to_string()).and_then(|c| ctx.pages(c).map(|p| json(&Pages { chapter_id: c, count: p.len() as u32 })))
             }
             (Method::Get, ["v1", "chapters", _, "pages", _]) => {
                 let (Some(c), Some(n)) = (id(2), id(4)) else { return fail(400, "bad page") };
-                ctx.pages(c).and_then(|p| p.get(n as usize).cloned().ok_or("no such page".to_string())).and_then(|u| ctx.suwa.bytes(&u)).map(|(b, k)| image(b, &k))
+                let got = ctx.pages(c).and_then(|p| p.get(n as usize).cloned().ok_or("no such page".to_string())).and_then(|u| ctx.suwa.bytes(&u));
+                if got.is_err() {
+                    // The phone asks again; the list is fetched afresh, from another source if
+                    // this one keeps refusing.
+                    ctx.forget_pages(c);
+                }
+                got.map(|(b, k)| image(b, &k))
             }
             (Method::Post, ["v1", "chapters", _, "progress"]) => {
                 let Some(c) = id(2) else { return fail(400, "bad id") };
@@ -207,5 +228,7 @@ mod tests {
         assert!(same_secret("abc", "abc"));
         assert!(!same_secret("abc", "abd"));
         assert!(!same_secret("abc", "abcd"));
+        assert!(!same_secret("abcd", "abc"));
+        assert!(!same_secret("", "a"));
     }
 }

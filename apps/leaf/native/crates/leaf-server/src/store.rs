@@ -127,9 +127,11 @@ impl Store {
     }
 
     /// The same work on another source, kept to fill the chapters the work's own source lacks.
+    /// Nothing for a work unfollowed meanwhile, or for another work's own copy.
     pub fn add_link(&self, id: i64, manga_id: i64, source: &str) {
         let _ = self.db.execute(
-            "INSERT INTO link (work_id, manga_id, source) VALUES (?1, ?2, ?3) ON CONFLICT(manga_id) DO UPDATE SET work_id = excluded.work_id, source = excluded.source",
+            "INSERT INTO link (work_id, manga_id, source) SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM work WHERE id = ?1) AND NOT EXISTS (SELECT 1 FROM work WHERE manga_id = ?2 AND id != ?1)
+             ON CONFLICT(manga_id) DO UPDATE SET work_id = excluded.work_id, source = excluded.source",
             params![id, manga_id, source],
         );
     }
@@ -166,10 +168,16 @@ impl Store {
     }
 
     pub fn move_work(&self, id: i64, manga_id: i64, source: &str, now: i64) -> Result<(), String> {
-        self.db
-            .execute("UPDATE work SET manga_id = ?2, source = ?3, fails = 0, compared_at = ?4, note = NULL WHERE id = ?1", params![id, manga_id, source, now])
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        match self.db.execute("UPDATE work SET manga_id = ?2, source = ?3, fails = 0, compared_at = ?4, note = NULL WHERE id = ?1", params![id, manga_id, source, now]) {
+            Ok(0) => Err("the series is no longer followed".into()),
+            Ok(_) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// The latest chapter raised without it counting as an update (chapters filled in, not new).
+    pub fn raise_latest(&self, id: i64, latest: f64) {
+        let _ = self.db.execute("UPDATE work SET latest = ?2 WHERE id = ?1 AND latest < ?2", params![id, latest]);
     }
 
     pub fn checked(&self, id: i64, ok: bool, latest: Option<f64>, now: i64) {
@@ -204,8 +212,13 @@ impl Store {
         let _ = self.db.execute("UPDATE work SET note = ?2 WHERE id = ?1", params![id, note]);
     }
 
+    /// An event, stamped after every one before it: the phone reads `?since=<the last at it saw>`,
+    /// so one written late with an earlier moment (a check that took minutes) would be skipped.
     pub fn event(&self, at: i64, work: Option<i64>, kind: &str, text: &str) {
-        let _ = self.db.execute("INSERT INTO event (at, work_id, kind, text) VALUES (?1, ?2, ?3, ?4)", params![at, work, kind, text]);
+        let _ = self.db.execute(
+            "INSERT INTO event (at, work_id, kind, text) VALUES (MAX(?1, ?5, COALESCE((SELECT MAX(at) FROM event), 0) + 1), ?2, ?3, ?4)",
+            params![at, work, kind, text, crate::autopilot::now_ms()],
+        );
         let _ = self.db.execute("DELETE FROM event WHERE id NOT IN (SELECT id FROM event ORDER BY id DESC LIMIT 500)", []);
     }
 
@@ -259,6 +272,31 @@ mod tests {
         s.checked(id, true, Some(58.0), 600);
         let w = s.work(id).unwrap();
         assert_eq!((w.latest, w.updated_at), (60.0, 500), "only a newer chapter moves updated_at");
+    }
+
+    #[test]
+    fn links_need_a_followed_work_and_moves_a_followed_one() {
+        let s = Store::in_memory();
+        let id = s.add_work("Junk to King", 1, "MangaDex", 54.0, 100).unwrap();
+        let other = s.add_work("Nano Machine", 2, "MangaDex", 10.0, 100).unwrap();
+        s.add_link(99, 12, "Drake Scans");
+        assert!(s.work_of_any(12).is_none(), "no link for a work that is gone");
+        s.add_link(id, 2, "MangaDex");
+        assert_eq!(s.links(id), Vec::<i64>::new(), "another work's own copy is not taken as a link");
+        assert_eq!(s.work_of_any(2).unwrap().id, other);
+        s.remove_work(id);
+        assert!(s.move_work(id, 9, "Asura Scans", 400).is_err(), "an unfollowed work does not move");
+    }
+
+    #[test]
+    fn events_stamped_late_are_not_skipped() {
+        let s = Store::in_memory();
+        s.event(5_000, None, "info", "a");
+        let seen = s.events(10)[0].at;
+        // A check that began earlier writes its event now: it still comes after what was seen.
+        s.event(1_000, Some(1), "new", "b");
+        let after = s.events_since(seen);
+        assert_eq!(after.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(), vec!["b"]);
     }
 
     #[test]
