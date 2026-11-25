@@ -95,6 +95,11 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
   2026-11-23): square covers 88 (`space::ROW_H`), chapter pictures 72 × 54 (`series::PIC`).
 - Chapter pictures come only from the server (`/v1/chapters/{id}/thumb`): the phone never fetches
   pages to make one.
+- The reader (2026-11-24): a drag that starts on the phone's gesture strips (the top and bottom
+  28 units, or the bars if taller) never scrolls the strip; showing the overlay hides the phone's
+  bars again, as does the window getting focus back while reading. With the overlay up, the saved
+  place is marked where it is on the strip, a line and a hanging "BOOKMARK" tag; the header names
+  it only when it is in another chapter.
 - A tap in the reader (comics and books) only shows or hides the overlay: no tap zones and no
   volume-key paging, and no setting for either (the owner, 2026-11-23).
 - A search result or a pick (Top picks, Because you read, Collections, Readers also like) opens its
@@ -109,10 +114,10 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
   a list inside is pulled by its head (`kit::sheet_grab`). A drag on a sheet never moves the page or
   a rail under it. A sheet holds every tap from the page under it; the series page's bottom key is
   fixed chrome (`kit::chrome`). `flows.rs` tests each.
-- Home has no "Finished, to binge" (the server may still make it) and no Because rail of fewer than
-  two picks. Collections are 16:9 tiles with the tag's picture (`/v1/recs/tagart/{slug}`, kept on
-  disk), else a still collage of the collection's covers; each Because rail has a banner, a still
-  collage of its covers. Nothing there moves (2026-11-23).
+- Home has no "Finished, to binge" and no Collections (the server still makes both; the owner
+  never used Collections, 2026-11-24), and no Because rail of fewer than two picks; each Because
+  rail has a banner, a still collage of its covers. Nothing there moves (2026-11-23). Top picks
+  show six of the server's 24, the next six every four hours (`logic::rotating`, 2026-11-24).
 - Out of reach (no network, the server off, or a proxy saying it is down: `Fail::out_of_reach`,
   read from every live answer by `Done::reach`), a sheet says "You're offline" once a spell
   (`online.rs`): the cloud struck through, what still opens, Open downloads (My space › Downloads)

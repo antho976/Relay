@@ -5,11 +5,11 @@
 //! new chapters, then what was read most recently, books too ([`logic::spotlight`]).
 //!
 //! Under it: Top picks for you (three across, each with why in the accent), Continue reading
-//! (square covers, "1 new chapter" in the accent), "Because you read X" rails, each under a banner
-//! (a still collage of its covers), and Collections (a 16:9 tile per tag you read most, each opening
-//! its list: the tag's picture from the server, `/v1/recs/tagart/{slug}`, else a still collage of
-//! its covers). Nothing in them moves. The server's finished series to binge is not
-//! shown (the owner, 2026-11-23), nor a Because rail of one pick. Picks are
+//! (square covers, "1 new chapter" in the accent) and "Because you read X" rails, each under a
+//! banner (a still collage of its covers). Nothing in them moves. Top picks show six of the
+//! server's at a time, the next six every four hours ([`logic::rotating`]). The server's finished
+//! series to binge is not shown (the owner, 2026-11-23), nor a Because rail of one pick, nor its
+//! Collections (the owner never used them, 2026-11-24; the server still makes them). Picks are
 //! [`crate::recs`]': a tap opens a pick's page (a preview, nothing added), a long press its sheet.
 //! Until the server has made them
 //! (its first day) the section says so.
@@ -45,9 +45,8 @@ const CARD_R: f32 = 14.0;
 const BOOK_DONE: f32 = 0.995;
 /// Top picks shown on Home (the rest are a tap away).
 const TOP_PICKS: usize = 6;
-/// A collection's tile: the tag's picture is 16:9.
-const TILE_W: f32 = 200.0;
-const TILE_H: f32 = 112.0;
+/// Home shows the next six top picks after this long (the owner, 2026-11-24: "not every minute").
+const PICKS_TURN_MS: i64 = 4 * 3_600_000;
 /// The banner over a "Because you read" rail.
 const BANNER_H: f32 = 76.0;
 /// A "Because you read" rail shows only with at least this many picks.
@@ -65,9 +64,8 @@ pub struct State {
     /// When the thing showing came to rest, for the next turn.
     pub since_ns: u64,
     pub rail: HScroll,
-    /// "Because you read" rails, and the collections' tiles.
+    /// "Because you read" rails.
     pub because: Vec<HScroll>,
-    pub tiles: HScroll,
     /// The shot asks for this one in the spotlight.
     pub shot_spot: Option<usize>,
 }
@@ -506,7 +504,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     };
     // Top picks for you.
     if picks_shown {
-        let top_recs: Vec<Rec> = recs.as_ref().map(|r| r.top.iter().take(TOP_PICKS).cloned().collect()).unwrap_or_default();
+        let top_recs: Vec<Rec> = recs.as_ref().map(|r| logic::rotating(&r.top, TOP_PICKS, crate::shelf::now_ms(), PICKS_TURN_MS)).unwrap_or_default();
         let more = recs.as_ref().is_some_and(|r| r.top.len() > TOP_PICKS);
         let (h, tapped) = heading(&mut cx, y, "Top picks for you", more);
         if tapped {
@@ -643,45 +641,6 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 rec_hit = Some((hit, b.recs.clone(), None));
             }
             y += h + 32.0;
-        }
-        // Collections: a tile per tag, each opening its list.
-        let cols: Vec<&leaf_proto::Collection> = r.collections.iter().filter(|c| !c.recs.is_empty()).collect();
-        if !cols.is_empty() {
-            let (h, _) = heading(&mut cx, y, "Collections", false);
-            y += h + 14.0;
-            let (tw, th) = (TILE_W, TILE_H);
-            let area = [0.0, y + cx.c.dy, WIDTH, th];
-            cx.ui.claim_h(area);
-            moving |= st.tiles.update(cx.ui, area, dt);
-            let mut x = PAD - st.tiles.off;
-            for c in &cols {
-                if x + tw > -10.0 && x < WIDTH + 10.0 {
-                    // The tag's picture; until it comes, its tone; with none on the server, a
-                    // still collage of the collection's covers. The name over a dark foot.
-                    let tone = crate::recs::tone(&c.tag);
-                    let slug = crate::images::tag_slug(&c.tag);
-                    match app.images.art(cx.c, &slug, now) {
-                        crate::images::Art::Ready => {
-                            cx.c.rect(x, y, tw, th, 10.0, tone);
-                            cx.c.image_cover(&crate::images::art_key(&slug), x, y, tw, th, 10.0, Rgba::WHITE);
-                        }
-                        crate::images::Art::Coming => cx.c.rect_hgrad(x, y, tw, th, 10.0, tone, tone.mix(Rgba::hex(0x000000), 0.35)),
-                        crate::images::Art::None => crate::recs::collage(cx.c, &mut app.images, &c.recs, x, y, tw, th, 10.0, 4, tone, 0.7, now),
-                    }
-                    crate::recs::scrim(cx.c, x, y, tw, th, 10.0);
-                    if cx.pressed(x, y, tw, th) {
-                        cx.c.rect(x, y, tw, th, 10.0, t::WASH);
-                    }
-                    let tt = Text::new(16.0, Rgba::WHITE).semi();
-                    cx.c.text_fit(&c.tag, x + 12.0, y + th - 10.0 - tt.lh(), tw - 24.0, tt);
-                    if !covered && cx.tap(x, y, tw, th) {
-                        to_picks = Some(format!("tag:{}", c.tag));
-                    }
-                }
-                x += tw + 10.0;
-            }
-            st.tiles.max = x + st.tiles.off - 10.0 + PAD - WIDTH;
-            y += th + 32.0;
         }
     }
     if n > 0

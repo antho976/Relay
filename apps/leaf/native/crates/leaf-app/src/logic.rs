@@ -183,19 +183,51 @@ pub fn showable(s: &str, can: impl Fn(char) -> bool) -> String {
 /// ("Associated Name(s):- …", "Tracker(s):- [AniList](https://…)").
 pub fn clean_description(d: &str) -> String {
     let mut t = d.trim();
-    if t.starts_with("Rank:")
-        && let Some(i) = t.find("Bookmarks:")
-    {
-        let rest = t[i + "Bookmarks:".len()..].trim_start();
-        let n = rest.find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | ',' | 'K' | 'k' | 'M'))).unwrap_or(rest.len());
-        t = rest[n..].trim_start();
+    // A site's numbers in front ("Rank: #4 • Rating: 9.25 • Bookmarks: 156.5K"), glued to the
+    // text that follows: each field and its number taken off.
+    const FIELDS: [&str; 7] = ["Rank:", "Rating:", "Bookmarks:", "Views:", "Followers:", "Follows:", "Score:"];
+    loop {
+        let rest = t.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '•' | '·' | '|' | ','));
+        let Some(f) = FIELDS.iter().find(|f| rest.starts_with(**f)) else { break };
+        let v = rest[f.len()..].trim_start();
+        let n = v.find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | ',' | '#' | 'K' | 'k' | 'M' | '%' | '/'))).unwrap_or(v.len());
+        t = &v[n..];
     }
+    t = t.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '•' | '·' | '|'));
     for tail in ["Alternative Title", "Associated Name", "Tracker(s)", "Official Source", "Links:", "\n---"] {
         if let Some(i) = t.find(tail) {
             t = t[..i].trim_end();
         }
     }
-    t.to_string()
+    // A tagline in brackets ("[By the author of <Mount Hua>]") becomes its own sentence, a title in
+    // angle brackets is quoted, and the text is one paragraph with single spaces.
+    let mut out = String::new();
+    let mut rest = t;
+    if let Some(inner) = rest.strip_prefix('[')
+        && let Some(end) = inner.find(']')
+    {
+        let tag = inner[..end].trim();
+        out.push_str(tag);
+        if !tag.ends_with(['.', '!', '?']) {
+            out.push('.');
+        }
+        out.push(' ');
+        rest = &inner[end + 1..];
+    }
+    out.push_str(rest);
+    let out = out.replace('<', "\u{201C}").replace('>', "\u{201D}");
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `n` of `all`, a different `n` each `turn_ms` (by the wall clock, so it holds across restarts),
+/// round the list: six top picks of 24 come round again after four turns.
+pub fn rotating<T: Clone>(all: &[T], n: usize, now_ms: i64, turn_ms: i64) -> Vec<T> {
+    if all.len() <= n || n == 0 {
+        return all.to_vec();
+    }
+    let sets = all.len().div_ceil(n) as i64;
+    let start = (now_ms.div_euclid(turn_ms.max(1)).rem_euclid(sets)) as usize * n;
+    (0..n).map(|i| all[(start + i) % all.len()].clone()).collect()
 }
 
 /// A day as "Mar 4, 2024", from milliseconds since the epoch (UTC).
@@ -1173,6 +1205,19 @@ mod tests {
     fn descriptions_lose_the_sources_furniture() {
         assert_eq!(clean_description("Rank: #4 • Rating: 9.25 • Bookmarks: 156.5KNanotechnology meets martial arts.Alternative Titles:- NM"), "Nanotechnology meets martial arts.");
         assert_eq!(clean_description("  A plain one. "), "A plain one.");
+        let picks: Vec<u32> = (0..14).collect();
+        let h = 3_600_000;
+        assert_eq!(rotating(&picks, 6, 0, 4 * h), vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(rotating(&picks, 6, 3 * h, 4 * h), vec![0, 1, 2, 3, 4, 5], "the same until the turn");
+        assert_eq!(rotating(&picks, 6, 4 * h, 4 * h), vec![6, 7, 8, 9, 10, 11]);
+        assert_eq!(rotating(&picks, 6, 8 * h, 4 * h), vec![12, 13, 0, 1, 2, 3], "round the list, always six");
+        assert_eq!(rotating(&picks, 6, 12 * h, 4 * h), vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(rotating(&picks[..4], 6, 4 * h, 4 * h), vec![0, 1, 2, 3], "fewer than six: all of them");
+        assert_eq!(
+            clean_description("Rating: 9.29 • Bookmarks: 40.9K[By the Author that brought you <Return of the Mount Hua Sect>] The great warrior who ended the chaos."),
+            "By the Author that brought you \u{201C}Return of the Mount Hua Sect\u{201D}. The great warrior who ended the chaos."
+        );
+        assert_eq!(clean_description("Views: 1.2M | A story.\n\nIn two parts."), "A story. In two parts.");
         assert_eq!(clean_description("Hajin begins to uncover the truth behind his death...Associated Name(s):- Reborn As The Heavenly DemonTracker(s):- [Official Source](https://www.webtoons.com/en/x)"), "Hajin begins to uncover the truth behind his death...");
     }
 

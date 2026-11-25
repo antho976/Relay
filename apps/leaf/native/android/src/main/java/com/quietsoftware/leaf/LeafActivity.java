@@ -80,8 +80,19 @@ public class LeafActivity extends GameActivity {
         });
     }
 
+    /** Reading: the bars are to stay hidden, and are hidden again whenever the window comes back. */
+    private volatile boolean immersive;
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        // The shade, a dialog or the app switcher brings the bars back; reading, they go again.
+        if (hasFocus && immersive) setImmersive(true);
+    }
+
     /** While reading, the bars hide; a swipe from the edge shows them for a moment. */
     public void setImmersive(final boolean on) {
+        immersive = on;
         runOnUiThread(() -> {
             WindowInsetsControllerCompat c = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
             if (on) {

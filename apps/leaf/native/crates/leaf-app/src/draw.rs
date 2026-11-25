@@ -896,6 +896,11 @@ fn own_glyph(name: &str) -> Option<&'static glyphs::Glyph> {
                 Shape { d: "M8 4.4a.8.8 0 1 0 0 1.6a.8.8 0 1 0 0-1.6z", fill: true, stroke: false, rotate: 0.0 },
             ],
         }),
+        // A ribbon bookmark, filled (on the reader's bookmark tag).
+        "bookmark" => Some(&Glyph {
+            scale: 1.0,
+            shapes: &[Shape { d: "M4 1.75h8a.75.75 0 0 1 .75.75v11.5l-4.75-3-4.75 3V2.5A.75.75 0 0 1 4 1.75z", fill: true, stroke: true, rotate: 0.0 }],
+        }),
         // No connection: the cloud, broken where a slash crosses it.
         "cloud-off" => Some(&Glyph {
             scale: 1.0,

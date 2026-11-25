@@ -457,8 +457,12 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
     // The overlay's keys take their taps before the strip does.
     let overlay_tap = r.overlay;
     let (top_bar, bottom_bar) = (app.canvas.inset_top + 60.0, BAR_H + app.canvas.inset_bottom);
-    // A drag on the overlay's bars (the dimmer) is theirs, not the strip's.
-    let on_bars = sheet_open || (r.overlay && app.ui.drag_from.is_some_and(|(_, y)| y < top_bar || y > view_h - bottom_bar));
+    // A drag on the overlay's bars (the dimmer) is theirs, not the strip's; nor is one that starts
+    // on the phone's own gesture strips at the top and bottom edges (a swipe home, or down for the
+    // shade, never moves the page: the owner, 2026-11-24).
+    let edges = (app.canvas.inset_top.max(EDGE_ZONE), view_h - app.canvas.inset_bottom.max(EDGE_ZONE));
+    let from_edge = app.ui.drag_from.is_some_and(|(_, y)| y < edges.0 || y > edges.1);
+    let on_bars = sheet_open || from_edge || (r.overlay && app.ui.drag_from.is_some_and(|(_, y)| y < top_bar || y > view_h - bottom_bar));
     // Scroll: the finger, then the momentum it left, auto-scroll.
     let before = r.fling.off;
     let coasting = if on_bars { false } else { r.fling.update(&app.ui, [0.0, 0.0, WIDTH, view_h], dt) };
@@ -785,6 +789,16 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
     let mut speed: Option<u8> = None;
     let mut dim: Option<f32> = None;
     if r.overlay {
+        // The bookmark: the exact spot the place is kept at, a line across the strip and its tag.
+        if let Some(s) = r.saved.filter(|_| r.local.is_none()) {
+            let item = r.chapters.iter().position(|c| c.id == s.chapter).map(|i| if s.head { Item::Head(i) } else { Item::Page(i, s.page) });
+            if let Some((_, y)) = item.and_then(|it| shown.iter().find(|(x, _)| *x == it)) {
+                let line_y = (y + s.off).max(app.canvas.inset_top + 60.0);
+                if line_y < view_h - BAR_H - app.canvas.inset_bottom {
+                    bookmark_mark(&mut app.canvas, line_y);
+                }
+            }
+        }
         let mut cx = cx!(app);
         let top = cx.c.inset_top;
         cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, top + 60.0, 0.0, t::GLASS);
@@ -801,14 +815,15 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
         };
         let sub_t = Text::new(ty::CAPTION, t::INK2);
         // Where the place is kept on the phone: "Saved · page 12".
+        // In this chapter the place is marked where it is, on the strip (below); in another, said here.
         let saved = r.saved.filter(|_| r.local.is_none()).map(|s| match r.chapters.iter().position(|c| c.id == s.chapter) {
-            Some(i) if i == ci => (Some(s), format!("Saved · page {}", s.page + 1)),
+            Some(i) if i == ci => (Some(s), String::new()),
             Some(i) => (None, format!("Saved · ch. {} p. {}", logic::num(r.chapters[i].number), s.page + 1)),
             None => (None, "Saved".to_string()),
         });
         let sub_w = cx.c.measure(&sub, sub_t);
         cx.c.text_fit(&sub, 56.0, top + 31.0, WIDTH - 56.0 - PAD, sub_t);
-        if let Some((_, words)) = &saved {
+        if let Some((_, words)) = saved.as_ref().filter(|(_, w)| !w.is_empty()) {
             let sx = 56.0 + sub_w + 8.0;
             if sx < WIDTH - PAD - 60.0 {
                 cx.c.text_fit(&format!("· {words}"), sx, top + 31.0, WIDTH - PAD - sx, sub_t.color(t::ACCENT));
@@ -878,10 +893,11 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
         if r.auto {
             // A tap stops auto-scroll, and shows the overlay to start it again.
             r.auto = false;
-            r.overlay = true;
-        } else {
-            r.overlay = true;
         }
+        r.overlay = true;
+        // The phone's own bars stay hidden under it: a swipe from an edge may have brought them
+        // back for a moment, and the overlay is not a reason to keep them (the owner, 2026-11-24).
+        app.host.immersive(true);
     }
     if let Some(l) = speed {
         r.speed = l;
@@ -940,6 +956,9 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
 /// The overlay's bottom bar, above the gesture bar: the chapter keys and auto-scroll, then the
 /// dimmer.
 const BAR_H: f32 = 64.0 + 48.0 + 14.0;
+/// A drag that starts this close to the top or bottom edge (or within the phone's bars, if
+/// taller) is the phone's gesture, not a scroll of the strip.
+const EDGE_ZONE: f32 = 28.0;
 
 /// What auto-scroll finds from the screen's top to a little past its bottom.
 #[derive(Debug, PartialEq)]
@@ -949,6 +968,20 @@ enum Ahead {
     Loading,
     /// A page there would not load.
     Failed,
+}
+
+/// The bookmark's mark at `y`: a line across in the accent, and a tag hanging from it at the
+/// left, "BOOKMARK" (flat where it meets the line, rounded below).
+fn bookmark_mark(c: &mut crate::draw::Canvas, y: f32) {
+    c.rect(0.0, y - 1.0, WIDTH, 2.0, 0.0, t::ACCENT);
+    let tt = Text::new(11.0, t::ON_ACCENT).semi();
+    let words = "BOOKMARK";
+    let (x, top, h) = (PAD, y, 24.0);
+    let w = c.measure(words, tt) + 32.0;
+    c.rect(x, top, w, h, 8.0, t::ACCENT);
+    c.rect(x, top, w, h / 2.0, 0.0, t::ACCENT);
+    c.icon("bookmark", x + 14.0, top + h / 2.0, 12.0, t::ON_ACCENT);
+    c.text(words, x + 24.0, top + (h - tt.lh()) / 2.0, tt);
 }
 
 fn ahead(v: &View, pos: Pos, view_h: f32) -> Ahead {

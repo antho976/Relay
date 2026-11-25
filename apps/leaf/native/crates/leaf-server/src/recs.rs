@@ -26,7 +26,9 @@ use crate::budget::Lane;
 const MEDIA: &str = "id title{romaji english} synonyms format countryOfOrigin isAdult status chapters genres tags{name rank} averageScore popularity coverImage{large}";
 /// Series asked about per request: ten, each with ten recommendations.
 const BATCH: usize = 10;
-const TOP: usize = 12;
+/// Top picks sent: Home shows six at a time, a different six every few hours. The first 30
+/// scored are looked for on your sources anyway ([`wanted`]), so more cost no requests.
+const TOP: usize = 24;
 const BECAUSE_SERIES: usize = 3;
 const BECAUSE_EACH: usize = 8;
 const COLLECTIONS: usize = 4;

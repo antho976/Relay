@@ -227,17 +227,17 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             cx.c.text_fit(&a, x0, y, w, at);
             y += at.lh();
         }
-        y += 12.0;
+        y += 16.0;
         // The synopsis, three lines; the info key (or a tap here) shows it all.
         if let Some(d) = &detail {
             let body = d.description.as_deref().map(logic::clean_description).filter(|s| !s.is_empty());
             if let Some(body) = body {
-                let bt = Text::new(14.0, t::INK2).line(1.45);
+                let bt = Text::new(14.5, t::INK2).line(1.5);
                 let h = cx.c.para(&body, x0, y, w, bt, 3);
                 if !covered && cx.tap(x0, y, w, h) {
                     open_info = true;
                 }
-                y += h + 12.0;
+                y += h + 16.0;
             }
         }
         // A few tags: where it stands, the shelf you put it on.

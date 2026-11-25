@@ -15,6 +15,8 @@ struct TestHost(PathBuf);
 
 /// Links each test's app asked the platform to open, by its data folder (tests run at once).
 static OPENED: std::sync::Mutex<Vec<(PathBuf, String)>> = std::sync::Mutex::new(Vec::new());
+/// Each test app's asks to hide (true) or show the phone's bars, in order.
+static BARS: std::sync::Mutex<Vec<(PathBuf, bool)>> = std::sync::Mutex::new(Vec::new());
 
 impl Host for TestHost {
     fn data_dir(&self) -> PathBuf {
@@ -25,6 +27,14 @@ impl Host for TestHost {
         OPENED.lock().unwrap().push((self.0.clone(), url.to_string()));
         true
     }
+    fn immersive(&self, on: bool) {
+        BARS.lock().unwrap().push((self.0.clone(), on));
+    }
+}
+
+/// How many times this app asked to hide the phone's bars.
+fn bars_hidden(app: &App) -> usize {
+    BARS.lock().unwrap().iter().filter(|(d, on)| *d == app.data && *on).count()
 }
 
 /// The links this app asked the platform to open.
@@ -1490,6 +1500,54 @@ fn slide(app: &mut App, t: &mut u64, from: (f32, f32), by: (f32, f32), n: u64) {
     }
     app.touch(Touch { id: 1, phase: Phase::Up, x: x0 + (from.0 + by.0) * u, y: (from.1 + by.1) * u, t_ns: *t });
     step(app, t);
+}
+
+#[test]
+fn a_swipe_from_the_phones_edges_never_moves_the_strip() {
+    let (mut app, mut t, dir) = app("edge-swipe");
+    let d = comic(1, &[8]);
+    for n in 0..8 {
+        app.images.fake_size(1001, n, 800, 1200);
+    }
+    app.open_chapter(&d, 0, 0);
+    step(&mut app, &mut t);
+    let h = app.canvas.h;
+    let at = |a: &App| a.reader.as_ref().map(|r| r.pos).unwrap();
+    let before = at(&app);
+    // Up from the gesture strip at the bottom (to go home).
+    slide(&mut app, &mut t, (200.0, h - 6.0), (0.0, -400.0), 12);
+    for _ in 0..30 {
+        step(&mut app, &mut t);
+    }
+    assert_eq!(at(&app), before, "the page stays where it was");
+    assert!(app.reader.as_ref().is_some_and(|r| !r.overlay), "and no overlay came up");
+    // The same swipe from the middle reads on.
+    slide(&mut app, &mut t, (200.0, h / 2.0 + 200.0), (0.0, -400.0), 12);
+    for _ in 0..30 {
+        step(&mut app, &mut t);
+    }
+    let read_on = at(&app);
+    assert_ne!(read_on, before);
+    // Down from the top edge (the shade): it stays.
+    slide(&mut app, &mut t, (200.0, 6.0), (0.0, 400.0), 12);
+    for _ in 0..30 {
+        step(&mut app, &mut t);
+    }
+    assert_eq!(at(&app), read_on, "the shade's swipe leaves it too");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn showing_the_overlay_hides_the_phones_bars_again() {
+    let (mut app, mut t, dir) = app("overlay-bars");
+    let d = comic(1, &[3]);
+    app.open_chapter(&d, 0, 0);
+    step(&mut app, &mut t);
+    let before = bars_hidden(&app);
+    tap(&mut app, &mut t, 200.0, 400.0);
+    assert!(app.reader.as_ref().is_some_and(|r| r.overlay));
+    assert_eq!(bars_hidden(&app), before + 1, "the bars are asked to hide with it");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
