@@ -71,6 +71,9 @@ pub struct State {
     pub range: bool,
     pub range_from: String,
     pub range_to: String,
+    /// "I've read up to…" is open, with the chapter typed.
+    pub upto: bool,
+    pub upto_text: String,
     /// The synopsis and the facts (the info key).
     pub info: bool,
     /// The download choices (the key beside Follow).
@@ -89,13 +92,14 @@ impl State {
         self.shelf = false;
         self.alternatives = false;
         self.range = false;
+        self.upto = false;
         self.info = false;
         self.download = false;
         open
     }
 
     fn covered(&self) -> bool {
-        self.menu || self.confirm || self.shelf || self.alternatives || self.range || self.info || self.download
+        self.menu || self.confirm || self.shelf || self.alternatives || self.range || self.upto || self.info || self.download
     }
 }
 
@@ -119,7 +123,7 @@ pub const PIC: (f32, f32) = (72.0, 54.0);
 /// The paid episodes' row.
 const PAID_H: f32 = 70.0;
 /// The row under it, for a series only Webtoon has: tell me when another source has it.
-const WATCH_H: f32 = 56.0;
+pub const WATCH_H: f32 = 56.0;
 /// The fixed key at the bottom, and the band it sits on.
 const KEY_H: f32 = 50.0;
 const BAR_H: f32 = KEY_H + 24.0;
@@ -138,6 +142,8 @@ enum Act {
     Paid(String),
     /// Hear once when a source other than Webtoon has it.
     Watch(bool),
+    /// Every chapter before this one read: the holes progress brought from elsewhere left.
+    FillHoles(f64),
 }
 
 /// What the selection's bar asked for.
@@ -342,6 +348,27 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                     flip = true;
                 }
                 y += ht.lh() + 12.0;
+                // Unread chapters before the furthest read: holes left by progress brought from
+                // elsewhere, filled with one tap.
+                if id > 0
+                    && let Some((n, at)) = logic::holes(&d.chapters)
+                {
+                    cx.c.icon("check", x0 + PIC.0 / 2.0, y + WATCH_H / 2.0, 18.0, t::INK3);
+                    let (kw, tapped) = kit::pill(&mut cx, WIDTH - PAD, y + (WATCH_H - 32.0) / 2.0, "Mark read", false);
+                    let tx = x0 + PIC.0 + 14.0;
+                    let tt = Text::new(ty::UI, t::INK2).line(1.3);
+                    let words = format!("{} before {} {} unread", logic::chapters_words(n), logic::num(at), if n == 1 { "is" } else { "are" });
+                    let lines = cx.c.wrap(&words, WIDTH - PAD - kw - 12.0 - tx, tt, 2);
+                    let mut ty0 = y + (WATCH_H - lines.len() as f32 * tt.lh()) / 2.0;
+                    for l in &lines {
+                        cx.c.text(l, tx, ty0, tt);
+                        ty0 += tt.lh();
+                    }
+                    if (tapped || cx.tap(0.0, y, WIDTH, WATCH_H)) && !covered && selecting.is_none() {
+                        act = Some(Act::FillHoles(at));
+                    }
+                    y += WATCH_H;
+                }
                 let mut rows = logic::chapter_rows(&d.chapters, &d.series.gaps);
                 if oldest {
                     rows.reverse();
@@ -718,6 +745,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let mut ask_alternatives = false;
     let mut repin: Option<i64> = None;
     let mut range_act: Option<(f64, f64, bool)> = None;
+    let mut upto_act: Option<f64> = None;
     let mut rec_act = None;
     let on_shelf = series.as_ref().map_or(logic::Shelf::Plan, logic::shelf_of);
     if covered {
@@ -726,29 +754,35 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             rec_act = crate::recs::sheet(&mut cx, &mut app.images, s, now);
         } else if st.menu {
             let shelf_words = format!("Shelf: {}", on_shelf.words());
-            match kit::menu(&mut cx, top + 52.0, &["Select chapters", "Download next 5", "Download all unread", &shelf_words, "Wrong series?", "Remove from My space"]) {
+            match kit::menu(&mut cx, top + 52.0, &["Select chapters", "I've read up to…", "Download next 5", "Download all unread", &shelf_words, "Wrong series?", "Remove from My space"]) {
                 Some(0) => {
                     st.menu = false;
                     st.select = Some(BTreeSet::new());
                 }
                 Some(1) => {
                     st.menu = false;
-                    next5 = true;
+                    st.upto = true;
+                    // Filled in with the furthest chapter read.
+                    st.upto_text = detail.as_ref().and_then(|d| d.chapters.iter().filter(|c| c.read).map(|c| c.number).reduce(f64::max)).map(logic::num).unwrap_or_default();
                 }
                 Some(2) => {
                     st.menu = false;
-                    all_unread = true;
+                    next5 = true;
                 }
                 Some(3) => {
                     st.menu = false;
-                    st.shelf = true;
+                    all_unread = true;
                 }
                 Some(4) => {
+                    st.menu = false;
+                    st.shelf = true;
+                }
+                Some(5) => {
                     st.menu = false;
                     st.alternatives = true;
                     ask_alternatives = true;
                 }
-                Some(5) => {
+                Some(6) => {
                     st.menu = false;
                     st.confirm = true;
                 }
@@ -768,6 +802,15 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                     range_act = Some(r);
                 }
                 Some(None) => st.range = false,
+                None => {}
+            }
+        } else if st.upto {
+            match upto_sheet(&mut cx, &mut st.upto_text) {
+                Some(Some(n)) => {
+                    st.upto = false;
+                    upto_act = Some(n);
+                }
+                Some(None) => st.upto = false,
                 None => {}
             }
         } else if st.info {
@@ -868,6 +911,10 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     }
     if let Some(sh) = new_shelf {
         app.set_shelf(id, sh);
+    }
+    if let Some(n) = upto_act {
+        app.read_upto(id, n);
+        app.toast(&format!("Read up to chapter {}", logic::num(n)));
     }
     if let Some((from, to, download)) = range_act
         && let Some(d) = &detail
@@ -972,6 +1019,11 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             }
         }
         Some(Act::Watch(on)) => app.set_watch(id, on),
+        Some(Act::FillHoles(at)) => {
+            let n = detail.as_ref().and_then(|d| logic::holes(&d.chapters)).map_or(0, |h| h.0);
+            app.read_before(id, at);
+            app.toast(&format!("{} marked read", logic::chapters_words(n)));
+        }
         Some(Act::Paid(url)) => {
             if !app.host.open_url(&url) {
                 app.toast("Nothing on this phone opens that link");
@@ -1063,6 +1115,35 @@ fn range_sheet(cx: &mut kit::Ctx, from: &mut String, to: &mut String) -> Option<
         out = Some(Some((a, b, true)));
     }
     if out.is_some() && cx.focus.id.is_some_and(|f| f.starts_with("range-")) {
+        cx.focus.id = None;
+        cx.host.keyboard(false, "", Kb::Text);
+    }
+    cx.ui.tap = None;
+    out
+}
+
+/// "I've read up to…": one chapter number; every chapter to it is marked read and every one after
+/// it unread, to set right progress brought from elsewhere. Some(None) for a tap outside.
+fn upto_sheet(cx: &mut kit::Ctx, text: &mut String) -> Option<Option<f64>> {
+    let (top, outside) = kit::sheet(cx, 30.0 + 26.0 + 24.0 + 72.0 + 20.0 + 48.0 + 16.0);
+    if outside {
+        return Some(None);
+    }
+    let x = PAD + 4.0;
+    let w = WIDTH - 2.0 * x;
+    cx.c.text("I've read up to", x, top + 26.0, Text::new(ty::SECTION, t::INK).semi());
+    cx.c.text_fit("Chapters to it are marked read, the ones after unread", x, top + 52.0, w, Text::new(ty::CAPTION, t::INK3));
+    let fy = top + 30.0 + 26.0 + 24.0;
+    kit::field(cx, "upto", x, fy, w, "Chapter", "", text, Kb::Text);
+    let ky = fy + 72.0 + 20.0;
+    let n = text.trim().replace(',', ".").parse::<f64>().ok().filter(|n| n.is_finite() && *n >= 0.0);
+    let mut out = None;
+    if kit::primary(cx, x, ky, w, 48.0, "Mark read", Some("check"))
+        && let Some(n) = n
+    {
+        out = Some(Some(n));
+    }
+    if out.is_some() && cx.focus.id == Some("upto") {
         cx.focus.id = None;
         cx.host.keyboard(false, "", Kb::Text);
     }

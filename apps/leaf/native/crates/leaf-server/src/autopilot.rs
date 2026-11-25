@@ -735,18 +735,23 @@ impl Ctx {
     }
 
     /// Marks every chapter numbered below `before` read, on the series' own source and its linked
-    /// copies; the chapter you're on is then the one downloaded ahead.
-    pub fn read_before(&self, id: i64, before: f64) -> Result<u32, String> {
+    /// copies; the chapter you're on is then the one downloaded ahead. With `unread_after`, every
+    /// chapter from `before` on is marked unread too: progress set right by hand.
+    pub fn read_before(&self, id: i64, before: f64, unread_after: bool) -> Result<u32, String> {
         let w = self.store().work(id).ok_or("no such series")?;
         let m = self.suwa.manga(w.manga_id)?;
         let extras = self.extras(&w);
-        let ids: Vec<i64> = m.chapters.iter().chain(extras.iter().flat_map(|e| e.chapters.iter())).filter(|c| c.number >= 0.0 && c.number < before && !c.read).map(|c| c.id).collect();
+        let all: Vec<(i64, f64, bool)> = m.chapters.iter().chain(extras.iter().flat_map(|e| e.chapters.iter())).map(|c| (c.id, c.number, c.read)).collect();
+        let (ids, back) = read_marks(&all, before, unread_after);
         for part in ids.chunks(200) {
             self.suwa.mark(part, Some(true), None)?;
         }
+        for part in back.chunks(200) {
+            self.suwa.mark(part, Some(false), Some(0))?;
+        }
         let m = self.suwa.manga(w.manga_id)?;
         self.keep_ahead(&self.detail_now(&w, &m));
-        Ok(ids.len() as u32)
+        Ok((ids.len() + back.len()) as u32)
     }
 
     /// Due for a comparison at the next hourly pass.
@@ -1493,8 +1498,26 @@ pub fn fmt_num(n: f64) -> String {
     if n.fract() == 0.0 { format!("{}", n as i64) } else { format!("{n}") }
 }
 
+/// What "read before" changes, of (id, number, read) chapters: those below `before` not read yet
+/// are to be marked read, and, with `unread_after`, those from it on that are read, unread.
+/// Numbers below 0 (extras without one) are left alone.
+fn read_marks(all: &[(i64, f64, bool)], before: f64, unread_after: bool) -> (Vec<i64>, Vec<i64>) {
+    let numbered = || all.iter().filter(|c| c.1 >= 0.0);
+    let read = numbered().filter(|c| c.1 < before && !c.2).map(|c| c.0).collect();
+    let unread = if unread_after { numbered().filter(|c| c.1 >= before && c.2).map(|c| c.0).collect() } else { Vec::new() };
+    (read, unread)
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn read_up_to_marks_before_read_and_after_unread_only_when_asked() {
+        let all = [(1, 1.0, true), (2, 2.0, false), (3, 3.0, true), (4, 3.5, false), (5, 4.0, true), (6, -1.0, false)];
+        assert_eq!(read_marks(&all, 4.0, false), (vec![2, 4], vec![]));
+        assert_eq!(read_marks(&all, 3.0, true), (vec![2], vec![3, 5]), "from 3 on, what was read is unread");
+    }
+
     use super::*;
 
     fn offer(id: i64, source: &str, numbers: impl IntoIterator<Item = i64>) -> Offer {

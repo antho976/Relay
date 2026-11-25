@@ -358,6 +358,24 @@ pub fn finished(s: &Series, d: Option<&SeriesDetail>) -> bool {
     }
 }
 
+/// Unread chapters numbered below the furthest one read (each number once), and that furthest
+/// number: what progress brought from elsewhere leaves behind when only some chapters matched.
+pub fn holes(chapters: &[Chapter]) -> Option<(usize, f64)> {
+    let at = chapters.iter().filter(|c| c.read).map(|c| c.number).reduce(f64::max)?;
+    let mut nums: Vec<f64> = chapters.iter().filter(|c| !c.read && c.number < at && c.number >= 0.0).map(|c| c.number).collect();
+    nums.sort_by(f64::total_cmp);
+    nums.dedup();
+    // A number read in another copy is not a hole.
+    nums.retain(|n| !chapters.iter().any(|c| c.read && c.number == *n));
+    (!nums.is_empty()).then_some((nums.len(), at))
+}
+
+/// The first number past chapter `n` and its parts: 72 for 71 (so 71.1 counts as read with it),
+/// 71.6 for 71.5.
+pub fn past(n: f64) -> f64 {
+    if n.fract() == 0.0 { n + 1.0 } else { n + 1e-6 }
+}
+
 /// Chapters left after the furthest one read, as the library knows it: the newest's number past
 /// it, never more than the unread count (a gap or a half chapter counts once). None when
 /// nothing is read.
@@ -1086,6 +1104,17 @@ mod tests {
             last_read_at,
             shelf: None,
         }
+    }
+
+    #[test]
+    fn holes_are_unread_numbers_below_the_furthest_read() {
+        let ch = |n: f64, read: bool| Chapter { id: (n * 10.0) as i64, number: n, name: String::new(), group: None, pages: 0, read, last_page: 0, downloaded: false, uploaded_at: 0, from: None };
+        assert_eq!(holes(&[ch(1.0, true), ch(2.0, true), ch(3.0, false)]), None, "unread only after: no hole");
+        assert_eq!(holes(&[ch(1.0, false)]), None, "nothing read");
+        let list = [ch(1.0, true), ch(2.0, false), ch(2.0, false), ch(2.5, false), ch(3.0, true), ch(3.0, false), ch(4.0, false)];
+        assert_eq!(holes(&list), Some((2, 3.0)), "2 and 2.5, each once; 3 read in one copy");
+        assert_eq!(past(71.0), 72.0, "71's parts go with it");
+        assert!(past(71.5) > 71.5 && past(71.5) < 71.6);
     }
 
     #[test]

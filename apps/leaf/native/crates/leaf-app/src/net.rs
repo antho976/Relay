@@ -327,7 +327,7 @@ pub enum Job {
     /// A chapter read or unread (`POST /v1/chapters/{id}/read`).
     ChapterRead(i64, bool),
     /// Every chapter of a series numbered below this, read (`POST /v1/series/{id}/read`).
-    ReadBefore(i64, f64),
+    ReadBefore(i64, f64, bool),
     /// A series put on a shelf (`POST /v1/series/{id}/shelf`).
     Shelf(i64, Option<String>),
     /// How each source is doing (`/v1/health`).
@@ -909,8 +909,8 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
             let r = post_json(client, &server, &format!("/v1/chapters/{chapter}/read"), &ChapterRead { read }).map(|_| ());
             send(Done::ChapterRead(chapter, read, r));
         }
-        Job::ReadBefore(id, before) => {
-            let r = post_json(client, &server, &format!("/v1/series/{id}/read"), &ReadBefore { before }).map(|_| ());
+        Job::ReadBefore(id, before, unread_after) => {
+            let r = post_json(client, &server, &format!("/v1/series/{id}/read"), &ReadBefore { before, unread_after }).map(|_| ());
             send(Done::ReadBefore(id, r));
         }
         Job::Shelf(id, shelf) => {

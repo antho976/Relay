@@ -1531,14 +1531,27 @@ impl App {
 
     /// Every chapter of a series numbered below `before`, read.
     pub fn read_before(&mut self, series: i64, before: f64) {
+        self.read_until(series, before, false);
+    }
+
+    /// "I've read up to chapter N": every chapter to N read (its parts, N.1 and on, too when N is
+    /// whole), every one after it unread.
+    pub fn read_upto(&mut self, series: i64, n: f64) {
+        self.read_until(series, logic::past(n), true);
+    }
+
+    fn read_until(&mut self, series: i64, before: f64, unread_after: bool) {
         let Some(d) = self.series.get(&series).and_then(|l| l.data.clone()) else { return };
         let mut undo = Vec::new();
-        for c in d.chapters.iter().filter(|c| c.number < before) {
-            undo.push((c.id, c.read));
-            self.mark_read(c.id, true);
+        for c in &d.chapters {
+            let read = c.number < before;
+            if read || (unread_after && c.read) {
+                undo.push((c.id, c.read));
+                self.mark_read(c.id, read);
+            }
         }
         self.read_undo.insert(series, undo);
-        self.ask(Job::ReadBefore(series, before));
+        self.ask(Job::ReadBefore(series, before, unread_after));
     }
 
     fn mark_shelf(&mut self, id: i64, shelf: Option<String>) {

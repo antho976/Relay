@@ -22,7 +22,7 @@
 //! | `GET /v1/events` | `[Event]`, newest first; `?since=<ms>` the ones after, oldest first |
 //! | `POST /v1/series/{id}/bell` [`Bell`] | turns its new-chapter notices on or off |
 //! | `POST /v1/series/{id}/watch` [`Bell`] | a series only on Webtoon: one notice ("elsewhere") when another source has it |
-//! | `POST /v1/series/{id}/read` [`ReadBefore`] | marks every chapter below a number read |
+//! | `POST /v1/series/{id}/read` [`ReadBefore`] | marks every chapter below a number read (and, asked, every one from it unread) |
 //! | `GET /v1/updates?days=14` | `[Update]`, chapters that arrived, newest first |
 //! | `POST /v1/chapters/{id}/read` [`ChapterRead`] | marks that chapter number read or unread |
 //! | `POST /v1/series/{id}/shelf` [`ShelfSet`] | puts it on a shelf |
@@ -298,7 +298,7 @@ impl Api {
                 let Some(i) = id(2) else { return fail(400, "bad id") };
                 serde_json::from_str::<ReadBefore>(body)
                     .map_err(|e| format!("read: {e}"))
-                    .and_then(|r| ctx.read_before(i, r.before))
+                    .and_then(|r| ctx.read_before(i, r.before, r.unread_after))
                     .map(|n| json(&serde_json::json!({ "ok": true, "marked": n })))
             }
             (Method::Get, ["v1", "chapters", _, "pages"]) => {

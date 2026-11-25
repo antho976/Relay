@@ -451,7 +451,9 @@ fn a_long_press_on_a_chapter_selects_it_and_the_bar_marks_the_selection() {
     assert!(!d.chapters.iter().find(|c| c.id == 1006).unwrap().read, "and nothing else");
     assert_eq!(app.st.series.select, None, "the selection is done");
     assert_eq!(app.route(), &Route::Series(1));
-    // Back stops selecting before it leaves the page.
+    // Back stops selecting before it leaves the page. (Chapters 1 to 6 are now unread below a
+    // read one: their row sits above the list.)
+    let y0 = y0 + crate::series::WATCH_H;
     hold(&mut app, &mut t, 200.0, y0 + row / 2.0);
     assert!(app.st.series.select.is_some());
     assert!(app.back());
@@ -1036,6 +1038,11 @@ fn a_page_whose_early_fetch_failed_still_loads_when_reached() {
     // Chapter 2's pages are kept ahead on disk while chapter 1 is read; the server can't yet.
     fake.state.lock().unwrap().fail_pages.insert(1002);
     let d = comic(1, &[6, 3]);
+    // Chapter 1's pages are measured, so chapter 2 is far ahead from the start (on a slow run,
+    // pages not yet measured put it near, and its failure would be one shown).
+    for n in 0..6 {
+        app.images.fake_size(1001, n, 800, 1600);
+    }
     app.open_chapter(&d, 0, 0);
     assert!(until(&mut app, &mut t, 5.0, |_| fake.hits("/v1/chapters/1002/pages/2") > 0 && !fake.state.lock().unwrap().hits.is_empty()));
     assert!(until(&mut app, &mut t, 5.0, |a| !a.images.pending()));
@@ -1044,7 +1051,7 @@ fn a_page_whose_early_fetch_failed_still_loads_when_reached() {
     if let Some(r) = &mut app.reader {
         r.pos = crate::strip::Pos { item: crate::strip::Item::Head(1), off: 0.0 };
     }
-    assert!(until(&mut app, &mut t, 5.0, |a| (0..3).all(|n| a.images.size(1002, n).is_some())), "its pages load: {:?}", app.images.failed(1002, 0));
+    assert!(until(&mut app, &mut t, 5.0, |a| (0..3).all(|n| a.images.size(1002, n).is_some())), "its pages load: {:?}", (0..3).map(|n| app.images.failed(1002, n)).collect::<Vec<_>>());
     let _ = std::fs::remove_dir_all(dir);
 }
 

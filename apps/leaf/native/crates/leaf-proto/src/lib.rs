@@ -108,9 +108,12 @@ pub struct Follow {
 }
 
 /// Every chapter numbered below `before` is marked read: where you are, brought from elsewhere.
+/// With `unread_after`, every chapter from `before` on is marked unread too ("I've read up to…").
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct ReadBefore {
     pub before: f64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unread_after: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
