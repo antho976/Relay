@@ -117,6 +117,9 @@ pub enum Op {
     RemoveHighlight(i64),
     Reviewed { id: i64, due_ms: i64, interval_d: i64, retired: bool, day: i64 },
     Setting(String, String),
+    /// Take every row of the shelf at this path (a copy fetched back from the server,
+    /// [`crate::booksync`]) in place of these, then load them.
+    Restore(PathBuf),
 }
 
 pub enum Done {
@@ -374,7 +377,35 @@ fn apply(c: &Connection, data: &Path, op: Op) -> rusqlite::Result<Option<Done>> 
             c.prepare_cached("INSERT INTO settings(key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value")?.execute(params![k, v])?;
             Ok(None)
         }
+        Op::Restore(path) => {
+            let r = restore(c, &path);
+            let _ = std::fs::remove_file(&path);
+            r?;
+            Ok(Some(Done::Loaded(Box::new(load(c)?))))
+        }
     }
+}
+
+/// Every row of the shelf at `path` in place of this one's, all or nothing. The copy is brought up
+/// to this schema first, so its tables have these columns in this order.
+fn restore(c: &Connection, path: &Path) -> rusqlite::Result<()> {
+    drop(open_db(path)?);
+    c.execute("ATTACH DATABASE ?1 AS copy", params![path.to_string_lossy()])?;
+    let r = c.execute_batch(
+        "BEGIN;
+         DELETE FROM highlights; DELETE FROM reading; DELETE FROM reviews; DELETE FROM settings; DELETE FROM books;
+         INSERT INTO books SELECT * FROM copy.books;
+         INSERT INTO highlights SELECT * FROM copy.highlights;
+         INSERT INTO reading SELECT * FROM copy.reading;
+         INSERT INTO reviews SELECT * FROM copy.reviews;
+         INSERT INTO settings SELECT * FROM copy.settings;
+         COMMIT;",
+    );
+    if r.is_err() {
+        let _ = c.execute_batch("ROLLBACK;");
+    }
+    let _ = c.execute_batch("DETACH DATABASE copy;");
+    r
 }
 
 fn worker(data: PathBuf, rx: Receiver<Op>, tx: Sender<Done>, pending: Arc<AtomicUsize>) {

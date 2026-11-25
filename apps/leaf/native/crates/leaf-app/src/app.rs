@@ -236,6 +236,9 @@ struct Config {
     /// When the server was last asked for a newer app (ms).
     #[serde(default)]
     update_checked_ms: i64,
+    /// The last copy of the books this phone made on the server ([`crate::booksync`]).
+    #[serde(default)]
+    books_copied: crate::booksync::Copied,
     /// "Later" on an update: that build is not offered again until then (ms).
     #[serde(default)]
     update_later: Option<(u32, i64)>,
@@ -310,6 +313,11 @@ pub struct App {
     pub notify: crate::notices::Notify,
     pub updates_all: bool,
     pub backup: Option<BackupInfo>,
+    /// The last copy of the books this phone made, and the copy or restore running now.
+    pub books_copied: crate::booksync::Copied,
+    pub booksync: crate::booksync::BookSync,
+    /// Restore was tapped once with books on this phone: the next tap replaces them.
+    pub restore_asked: bool,
     /// Chapters that came for series in My space (`/v1/updates`).
     pub updates: Loaded<Vec<Update>>,
     /// The server's status, as Settings shows it (AniList).
@@ -418,6 +426,9 @@ impl App {
             notify: config.notify,
             updates_all: config.updates_all,
             backup: config.backup.clone(),
+            books_copied: config.books_copied,
+            booksync: Default::default(),
+            restore_asked: false,
             updates: Loaded::default(),
             status: Loaded::default(),
             health: Loaded::default(),
@@ -744,6 +755,7 @@ impl App {
             backup: self.backup.clone(),
             update_checked_ms: self.update_checked_ms,
             update_later: self.update_later,
+            books_copied: self.books_copied,
         };
         let (path, host) = (self.data.join("config.json"), self.host.clone());
         let n = ASKED.fetch_add(1, Ordering::SeqCst) + 1;
@@ -996,9 +1008,64 @@ impl App {
         self.jobs.send(self.server.as_ref(), job);
     }
 
+    /// The copy of the books on the server: how the last one ended, and the day's when it is due
+    /// (never in shots or tests, never out of reach, never over a copy this phone didn't make).
+    fn books_tick(&mut self) {
+        let now = crate::shelf::now_ms();
+        match self.booksync.take() {
+            Some(crate::booksync::Outcome::Copied { books, .. }) => {
+                self.books_copied = crate::booksync::Copied { at_ms: now, books };
+                self.save_config();
+            }
+            Some(crate::booksync::Outcome::Restored(path)) => {
+                self.shelf.send(crate::shelf::Op::Restore(path));
+                // From now on this phone's copy is the one kept; the next copy is due at once,
+                // once the shelf has loaded what came back.
+                self.books_copied = crate::booksync::Copied { at_ms: 1, books: 0 };
+                self.save_config();
+                self.restore_asked = false;
+                self.toast("Your books are back on this phone");
+            }
+            Some(crate::booksync::Outcome::Failed(e)) if self.booksync.last_was_restore() => {
+                self.restore_asked = false;
+                self.toast(&e);
+            }
+            _ => {}
+        }
+        let Some(server) = self.server.clone() else { return };
+        if self.shot || !self.shelf.loaded || self.booksync.busy() || self.booksync.found.is_some() || self.st.online.reach != Some(true) {
+            return;
+        }
+        if crate::booksync::due(self.books_copied, self.booksync.last_try_ms(), now, self.shelf.books.len()) {
+            self.booksync.copy(crate::net::Client::new(), server, self.data.clone(), self.books_copied.at_ms > 0, now);
+        }
+    }
+
+    /// Copy the books now (Settings), over a copy found from another phone too when `over`.
+    pub fn copy_books(&mut self, over: bool) {
+        let Some(server) = self.server.clone() else { return };
+        if over {
+            self.booksync.found = None;
+        }
+        let made_before = over || self.books_copied.at_ms > 0;
+        self.booksync.copy(crate::net::Client::new(), server, self.data.clone(), made_before, crate::shelf::now_ms());
+    }
+
+    /// Fetch the copy of the books back (Settings); with books on this phone, only on the second
+    /// tap, as they are replaced.
+    pub fn restore_books(&mut self) {
+        let Some(server) = self.server.clone() else { return };
+        if !self.shelf.books.is_empty() && !self.restore_asked {
+            self.restore_asked = true;
+            return;
+        }
+        self.booksync.restore(crate::net::Client::new(), server, self.data.clone());
+    }
+
     /// Take what the workers answered.
     fn take_answers(&mut self) {
         self.shelf.take();
+        self.books_tick();
         let picked = crate::shelf::take_delivered();
         if !picked.is_empty() {
             let files = picked.into_iter().map(|(p, n)| (p, n, true)).collect();

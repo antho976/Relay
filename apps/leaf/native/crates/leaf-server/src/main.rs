@@ -29,6 +29,7 @@ mod anilist;
 mod api;
 mod autopilot;
 mod budget;
+mod phone;
 mod promo;
 mod recs;
 mod squeeze;

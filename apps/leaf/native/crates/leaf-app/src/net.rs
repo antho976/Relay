@@ -274,6 +274,20 @@ impl Client {
         Ok(hash.finish().as_ref().iter().map(|b| format!("{b:02x}")).collect())
     }
 
+    /// A file on disk sent as the body of a `PUT`, streamed; slow networks get the time they need.
+    pub fn put_file(&self, s: &Server, path: &str, file: &Path) -> Result<(), Fail> {
+        let agent: ureq::Agent = ureq::Agent::config_builder().timeout_connect(Some(Duration::from_secs(10))).timeout_global(Some(Duration::from_secs(20 * 60))).http_status_as_error(false).build().into();
+        let r = self.go(s, path, |url| {
+            let f = std::fs::File::open(file).map_err(ureq::Error::Io)?;
+            let mut req = agent.put(url).header("content-type", "application/octet-stream");
+            if let Some(t) = &s.token {
+                req = req.header("Authorization", format!("Bearer {t}"));
+            }
+            req.send(&f)
+        })?;
+        Client::read(Ok(r)).map(|_| ())
+    }
+
     pub fn json<T: for<'de> Deserialize<'de>>(&self, s: &Server, path: &str) -> Result<T, Fail> {
         serde_json::from_slice(&self.get(s, path)?).map_err(|_| Fail::Garbled)
     }

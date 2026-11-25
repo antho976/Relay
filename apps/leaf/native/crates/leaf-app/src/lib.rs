@@ -13,6 +13,7 @@
 
 pub mod app;
 pub mod book;
+pub mod booksync;
 pub mod clock;
 pub mod connect;
 pub mod draw;

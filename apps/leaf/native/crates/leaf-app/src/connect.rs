@@ -142,6 +142,16 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             health: &app.health,
             backup: app.backup.as_ref(),
             backing_up: app.backing_up,
+            books: crate::settings::Books {
+                copied: app.books_copied,
+                busy: app.booksync.busy(),
+                restoring: app.booksync.restoring(),
+                found: app.booksync.found,
+                error: app.booksync.error.as_deref(),
+                too_big: app.booksync.too_big,
+                here: app.shelf.books.len(),
+                confirm: app.restore_asked,
+            },
             hidden: app.hidden_pages.data,
             anilist: &mut st.anilist,
             now_ms: crate::shelf::now_ms(),
@@ -194,6 +204,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 app.images.clear_skips();
                 app.toast("Pages you hid will show again");
             }
+            Act::CopyBooks(over) => app.copy_books(over),
+            Act::RestoreBooks => app.restore_books(),
+            Act::KeepBooks => app.restore_asked = false,
             Act::Copy(words) => {
                 app.host.copy_text(words);
                 app.toast("Copied");

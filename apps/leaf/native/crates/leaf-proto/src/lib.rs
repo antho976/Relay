@@ -630,3 +630,13 @@ mod search_tests {
         assert_eq!(super::edit_distance("kitten", "sitting"), 3);
     }
 }
+
+/// A file of the phone's backup kept on the server (`/v1/phone/files`): its kind (`shelf`,
+/// `books`, `covers`), name, size in bytes and when it was kept (ms since the epoch).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PhoneFile {
+    pub kind: String,
+    pub name: String,
+    pub size: u64,
+    pub at_ms: i64,
+}

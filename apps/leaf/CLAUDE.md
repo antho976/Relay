@@ -130,6 +130,16 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
 - Recent (2026-11-25): what was read here, last read first; then series partway through but never
   opened here (progress that came with them), fewest chapters left first, saying "2 chapters left"
   and Continue rather than "Not started"; then caught up; then not started (`logic::recent_key`).
+- Next up (2026-11-25): under the end of the newest chapter, the series in My space with the
+  fewest chapters left (not On hold, Dropped or Done), opened where you are (`logic::next_up`).
+- Imported progress (2026-11-25): a series page with unread chapters below the furthest read shows
+  "N chapters before X are unread · Mark read" (`logic::holes`); ⋯ → "I've read up to…" marks every
+  chapter to N read and every one after unread (`ReadBefore::unread_after`).
+- Books are copied to the server once a day (`booksync.rs`, `leaf-server/src/phone.rs`): the
+  books, covers and a `VACUUM INTO` copy of `shelf.db`, under `<LEAF_DATA>/phone/`. A phone that
+  never made a copy never sends its shelf over one already there: Settings offers Restore (or "Use
+  this phone's"). Restore replaces the shelf's rows in one transaction (`shelf::Op::Restore`).
+  Files over 95 MB stay on the phone (Cloudflare takes 100 MB at most).
 - Every select mode selects in bulk by sweeping (`sweep.rs`, the owner, 2026-11-23): a long press on
   a row and a drag without lifting selects the range from that row to the finger, dragging back lets
   go, a long press on a selected row de-selects, the list scrolls by itself in a 72-unit band at its

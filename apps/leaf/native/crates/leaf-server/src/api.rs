@@ -43,6 +43,7 @@
 //! | `GET /v1/series/{id}/also` | `[Rec]`: "Readers also like", kept a day |
 //! | `GET /v1/app/latest` | [`AppLatest`]; 404 when the server holds no app |
 //! | `GET /v1/app/apk` | the app (`application/vnd.android.package-archive`) |
+//! | `GET /v1/phone/files`, `PUT` / `GET /v1/phone/files/{kind}/{name}` | the phone's backup of its books (`phone.rs`) |
 //!
 //! `/v1/library` and `/v1/series/{id}` send each series with `paid` ([`leaf_proto::PaidAhead`] or
 //! null, less the chapters the series has now), `watch` (null unless only Webtoon has it, then
@@ -158,6 +159,27 @@ impl Api {
                 ),
                 Err(_) => req.respond(fail(404, "no app on this server")),
             };
+            return;
+        }
+        // The phone's backup (`phone.rs`): files in and out as bytes, not JSON.
+        if authorised && parts.len() >= 3 && parts[..3] == ["v1", "phone", "files"] {
+            let data = &self.ctx.data;
+            let reply = match (&method, &parts[3..]) {
+                (Method::Get, []) => json(&crate::phone::list(data)),
+                (Method::Put, [kind, name]) => match crate::phone::put(data, kind, &percent_decode(name), req.as_reader()) {
+                    Ok(n) => json(&serde_json::json!({ "ok": true, "size": n })),
+                    Err((code, why)) => fail(code, &why),
+                },
+                (Method::Get, [kind, name]) => match crate::phone::file(data, kind, &percent_decode(name)).and_then(|p| std::fs::File::open(p).ok()) {
+                    Some(f) => {
+                        let _ = req.respond(Response::from_file(f).with_chunked_threshold(usize::MAX).with_header(header("content-type", "application/octet-stream")));
+                        return;
+                    }
+                    None => fail(404, "not kept"),
+                },
+                _ => fail(404, "no such request"),
+            };
+            let _ = req.respond(reply);
             return;
         }
         let reply = if parts.as_slice() == ["v1", "ping"] {

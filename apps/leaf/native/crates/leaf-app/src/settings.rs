@@ -30,6 +30,27 @@ pub enum Act {
     Promo(bool),
     /// Every page hidden by hand shown again.
     ClearHidden,
+    /// Copy the books to the server now; `true` over a copy another phone made.
+    CopyBooks(bool),
+    /// Fetch the copy of the books back (a second tap when books are here).
+    RestoreBooks,
+    /// Not restore after all.
+    KeepBooks,
+}
+
+/// The copy of the books on the server, as Settings shows it ([`crate::booksync`]).
+pub struct Books<'a> {
+    pub copied: crate::booksync::Copied,
+    pub busy: bool,
+    pub restoring: bool,
+    /// A copy this phone didn't make, from when (ms).
+    pub found: Option<i64>,
+    pub error: Option<&'a str>,
+    pub too_big: usize,
+    /// Books on this phone now.
+    pub here: usize,
+    /// Restore was tapped once: the next tap replaces the books here.
+    pub confirm: bool,
 }
 
 const PIN_URL: &str = "https://anilist.co/api/v2/oauth/pin";
@@ -61,6 +82,7 @@ pub struct Parts<'a> {
     pub health: &'a Loaded<Vec<SourceHealth>>,
     pub backup: Option<&'a BackupInfo>,
     pub backing_up: bool,
+    pub books: Books<'a>,
     /// How many pages were hidden by hand, once the server said.
     pub hidden: Option<u32>,
     /// The AniList token being typed.
@@ -309,8 +331,70 @@ pub fn draw(cx: &mut Ctx, p: Parts, x: f32, mut y: f32, w: f32, now_ns: u64) -> 
     if kit::plain(cx, x + kw + 10.0, y, kw, 44.0, "Back up now", None) && !p.backing_up {
         acts.push(Act::Backup(true));
     }
-    y += 44.0;
+    y += 44.0 + 28.0;
+    y += books_part(cx, &p.books, x, y, w, p.now_ms, &mut acts);
     (y, acts)
+}
+
+/// Your books' copy on the server: when it was made, Copy now, and Restore when there is one to
+/// fetch. Returns its height.
+fn books_part(cx: &mut Ctx, b: &Books, x: f32, y0: f32, w: f32, now_ms: i64, acts: &mut Vec<Act>) -> f32 {
+    let mut y = y0;
+    let body = Text::new(ty::UI, t::INK2).line(1.45);
+    let small = Text::new(ty::CAPTION, t::INK3).line(1.4);
+    cx.c.text("Your books", x, y, Text::new(ty::BODY, t::INK).semi());
+    y += 26.0;
+    y += cx.c.para("Your books, highlights, notes and places are copied to your server once a day, so a new phone gets them back.", x, y, w, body, 4) + 8.0;
+    let state = if b.restoring {
+        "Bringing your books back…".to_string()
+    } else if b.busy {
+        "Copying…".to_string()
+    } else if let Some(at) = b.found {
+        format!("Your server has a copy of your books made {} on another phone", made_words(at, now_ms))
+    } else if b.copied.at_ms > 1 {
+        let n = if b.copied.books == 1 { "1 book".to_string() } else { format!("{} books", b.copied.books) };
+        format!("Copied {}, {n}", made_words(b.copied.at_ms, now_ms))
+    } else {
+        "Not copied yet".to_string()
+    };
+    y += cx.c.para(&state, x, y, w, small, 3) + 4.0;
+    if b.too_big > 0 && !b.busy {
+        let words = if b.too_big == 1 { "1 book is over 95 MB and stays on this phone only".to_string() } else { format!("{} books are over 95 MB and stay on this phone only", b.too_big) };
+        y += cx.c.para(&words, x, y, w, small, 2) + 4.0;
+    }
+    if let Some(e) = b.error.filter(|_| !b.busy) {
+        y += cx.c.para(e, x, y, w, Text::new(ty::CAPTION, t::WARN).line(1.4), 3) + 4.0;
+    }
+    y += 8.0;
+    if b.confirm && !b.busy {
+        let n = if b.here == 1 { "the book".to_string() } else { format!("the {} books", b.here) };
+        y += cx.c.para(&format!("This replaces {n} on this phone, and their highlights and places, with the copy."), x, y, w, body, 3) + 10.0;
+        let kw = (w - 10.0) / 2.0;
+        if kit::primary(cx, x, y, kw, 44.0, "Replace", None) {
+            acts.push(Act::RestoreBooks);
+        }
+        if kit::plain(cx, x + kw + 10.0, y, kw, 44.0, "Keep mine", None) {
+            acts.push(Act::KeepBooks);
+        }
+        return y + 44.0 - y0;
+    }
+    let kw = (w - 10.0) / 2.0;
+    if b.found.is_some() {
+        if kit::primary(cx, x, y, kw, 44.0, "Restore", Some("download")) && !b.busy {
+            acts.push(Act::RestoreBooks);
+        }
+        if kit::plain(cx, x + kw + 10.0, y, kw, 44.0, "Use this phone's", None) && !b.busy {
+            acts.push(Act::CopyBooks(true));
+        }
+    } else {
+        if kit::plain(cx, x, y, kw, 44.0, if b.busy && !b.restoring { "Copying" } else { "Copy now" }, Some("upload")) && !b.busy {
+            acts.push(Act::CopyBooks(false));
+        }
+        if b.copied.at_ms > 0 && kit::plain(cx, x + kw + 10.0, y, kw, 44.0, if b.restoring { "Restoring" } else { "Restore" }, None) && !b.busy {
+            acts.push(Act::RestoreBooks);
+        }
+    }
+    y + 44.0 - y0
 }
 
 /// "today at 03:00", "on Nov 21, 2026 at 03:00".

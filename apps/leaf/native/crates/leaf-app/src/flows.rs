@@ -636,6 +636,8 @@ mod fake {
         pub bells: Vec<(i64, bool)>,
         /// Collections' pictures, by slug (the rest are a 404).
         pub tagart: HashSet<String>,
+        /// The phone's copy of its books (`/v1/phone/files`), by (kind, name).
+        pub phone: std::collections::BTreeMap<(String, String), Vec<u8>>,
     }
 
     pub struct Fake {
@@ -775,6 +777,18 @@ mod fake {
                     }
                     (200, "application/json", b"{\"ok\":true}".to_vec())
                 }
+                ("GET", ["v1", "phone", "files"]) => {
+                    let list: Vec<leaf_proto::PhoneFile> = st.phone.iter().map(|((k, n), b)| leaf_proto::PhoneFile { kind: k.clone(), name: n.clone(), size: b.len() as u64, at_ms: 1_700_000_000_000 }).collect();
+                    (200, "application/json", serde_json::to_vec(&list).unwrap())
+                }
+                ("PUT", ["v1", "phone", "files", kind, name]) => {
+                    st.phone.insert((kind.to_string(), name.to_string()), body.clone());
+                    (200, "application/json", b"{\"ok\":true}".to_vec())
+                }
+                ("GET", ["v1", "phone", "files", kind, name]) => match st.phone.get(&(kind.to_string(), name.to_string())) {
+                    Some(b) => (200, "application/octet-stream", b.clone()),
+                    None => (404, "text/plain", b"no".to_vec()),
+                },
                 _ => (404, "text/plain", b"no".to_vec()),
             }
         };
@@ -1665,6 +1679,77 @@ fn a_swipe_home_over_the_brightness_slider_leaves_it_alone() {
     slide(&mut app, &mut t, (300.0, slider_y), (-120.0, 4.0), 8);
     assert!(app.prefs.dim > before, "dragged left along it, darker: {} after {before}", app.prefs.dim);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A book on this app's shelf: its file in `books/`, its row, and one highlight.
+fn shelve_book(app: &mut App, t: &mut u64, file: &str, title: &str) -> i64 {
+    std::fs::write(app.data.join("books").join(file), format!("the words of {title}")).unwrap();
+    let book = crate::shelf::Book {
+        id: 0,
+        kind: crate::shelf::Kind::Txt,
+        title: title.into(),
+        author: String::new(),
+        file: file.into(),
+        added_ms: 1,
+        opened_ms: 0,
+        place: Default::default(),
+        progress: 0.0,
+        cpm: 0.0,
+        pages: 0,
+        has_cover: false,
+        chapter: String::new(),
+        chars: 0,
+    };
+    let before = app.shelf.books.len();
+    app.shelf.send(crate::shelf::Op::Add { import: 0, book, cover: None });
+    assert!(until(app, t, 5.0, |a| a.shelf.books.len() > before), "added");
+    let id = app.shelf.books.iter().find(|b| b.title == title).unwrap().id;
+    let p = crate::shelf::Place { section: 0, block: 1, byte: 0 };
+    let h = crate::shelf::Highlight { id: 0, book: id, from: p, to: crate::shelf::Place { byte: 5, ..p }, text: "words".into(), colour: 0, note: "kept".into(), chapter: String::new(), created_ms: 1, due_ms: 1, interval_d: 0, retired: false };
+    app.shelf.send(crate::shelf::Op::AddHighlight(h));
+    assert!(until(app, t, 5.0, |a| a.shelf.highlights.iter().any(|h| h.book == id)), "highlighted");
+    id
+}
+
+#[test]
+fn books_copied_from_one_phone_come_back_on_a_new_one_and_never_the_other_way() {
+    let fake = fake::Fake::start();
+    // The first phone: a book and a highlight, copied once the server has answered.
+    let (mut a, mut t, dir_a) = app("books-a");
+    a.shot = false;
+    a.server = Some(fake.server());
+    assert!(until(&mut a, &mut t, 5.0, |a| a.shelf.loaded));
+    shelve_book(&mut a, &mut t, "1-Dune.txt", "Dune");
+    a.st.online.reach = Some(true);
+    assert!(until(&mut a, &mut t, 10.0, |a| a.books_copied.at_ms > 1), "the day's copy made: {:?}", a.booksync.error);
+    {
+        let st = fake.state.lock().unwrap();
+        let kept: Vec<_> = st.phone.keys().cloned().collect();
+        assert_eq!(kept, vec![("books".to_string(), "1-Dune.txt".to_string()), ("shelf".to_string(), "shelf.db".to_string())]);
+    }
+    // A new phone with a book of its own: it finds the copy and sends nothing over it.
+    let (mut b, mut tb, dir_b) = app("books-b");
+    b.shot = false;
+    b.server = Some(fake.server());
+    assert!(until(&mut b, &mut tb, 5.0, |b| b.shelf.loaded));
+    shelve_book(&mut b, &mut tb, "2-Emma.txt", "Emma");
+    let shelf_before = fake.state.lock().unwrap().phone[&("shelf".to_string(), "shelf.db".to_string())].clone();
+    b.st.online.reach = Some(true);
+    assert!(until(&mut b, &mut tb, 10.0, |b| b.booksync.found.is_some()), "found: {:?}", b.booksync.error);
+    assert_eq!(fake.state.lock().unwrap().phone[&("shelf".to_string(), "shelf.db".to_string())], shelf_before, "the first phone's copy stands");
+    assert!(!fake.state.lock().unwrap().phone.contains_key(&("books".to_string(), "2-Emma.txt".to_string())));
+    // Restore: asked twice, as Emma is replaced; then Dune, its highlight and its file are here.
+    b.restore_books();
+    assert!(b.restore_asked && !b.booksync.busy(), "the first tap only asks");
+    b.restore_books();
+    assert!(until(&mut b, &mut tb, 10.0, |b| b.shelf.books.iter().any(|x| x.title == "Dune")), "restored: {:?}", b.booksync.error);
+    assert_eq!(b.shelf.books.iter().map(|x| x.title.as_str()).collect::<Vec<_>>(), vec!["Dune"]);
+    assert!(b.shelf.highlights.iter().any(|h| h.note == "kept"));
+    assert_eq!(std::fs::read_to_string(b.data.join("books").join("1-Dune.txt")).unwrap(), "the words of Dune");
+    // From then on this phone's copies are the ones kept.
+    assert!(until(&mut b, &mut tb, 10.0, |b| b.books_copied.at_ms > 1), "copied after the restore");
+    let _ = std::fs::remove_dir_all(dir_a);
+    let _ = std::fs::remove_dir_all(dir_b);
 }
 
 #[test]
