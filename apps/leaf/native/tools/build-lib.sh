@@ -16,6 +16,19 @@ NDK="${ANDROID_NDK_HOME:-$(ls -d "$SDK"/ndk/* | sort -V | tail -1)}"
 BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 API=26
 ABIS=("$@"); [ ${#ABIS[@]} -eq 0 ] && ABIS=(arm64-v8a)
+# The build number the app knows itself by (update.rs reads it with option_env!), the commit count;
+# Gradle's versionCode takes the same number. Set LEAF_BUILD to choose another.
+export LEAF_BUILD="${LEAF_BUILD:-$(git rev-list --count HEAD)}"
+echo "LEAF_BUILD=$LEAF_BUILD"
+# The server's second address (its Tailscale one), asked when the first can't be reached: from
+# LEAF_ALT_BASE, else the one-line file apps/leaf/.dev/alt-base (gitignored, the owner's own).
+alt_file="$(cd "$(dirname "$0")/../.." && pwd)/.dev/alt-base"
+if [[ -z "${LEAF_ALT_BASE:-}" && -f "$alt_file" ]]; then
+    LEAF_ALT_BASE="$(tr -d '[:space:]' < "$alt_file")"
+fi
+export LEAF_ALT_BASE="${LEAF_ALT_BASE:-}"
+[[ -n "$LEAF_ALT_BASE" ]] && echo "LEAF_ALT_BASE set"
+
 
 for abi in "${ABIS[@]}"; do
   case "$abi" in

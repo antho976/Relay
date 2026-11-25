@@ -518,6 +518,15 @@ impl Canvas {
         false
     }
 
+    /// Let a picture go now (its slot is free for the next one): it no longer stands for what it
+    /// showed.
+    pub fn forget_image(&mut self, key: &str) {
+        if let Some(p) = self.images.pics.remove(key) {
+            self.images.free.push(p.slot);
+        }
+        self.image_waiting.retain(|(k, ..)| k != key);
+    }
+
     pub fn has_image(&self, key: &str) -> bool {
         self.images.pics.contains_key(key)
     }
@@ -867,7 +876,8 @@ fn path_commands(d: &str) -> Vec<zeno::Command> {
 }
 
 /// Leaf's own glyphs beside Relay's generated set (`glyphs.rs`, which is regenerated, not edited):
-/// the bell filled, for a series whose bell is on.
+/// the bell filled, for a series whose bell is on, the info key (a ringed i) and no connection (a
+/// cloud struck through).
 fn own_glyph(name: &str) -> Option<&'static glyphs::Glyph> {
     use glyphs::{Glyph, Shape};
     match name {
@@ -876,6 +886,28 @@ fn own_glyph(name: &str) -> Option<&'static glyphs::Glyph> {
             shapes: &[
                 Shape { d: "M6.85 14a1.33 1.33 0 0 0 2.3 0", fill: false, stroke: true, rotate: 0.0 },
                 Shape { d: "M2.17 10.22A.67.67 0 0 0 2.67 11.33h10.67a.67.67 0 0 0 .49-1.12C12.94 9.3 12 8.33 12 5.33a4 4 0 0 0-8 0c0 3-.94 3.97-1.83 4.89z", fill: true, stroke: true, rotate: 0.0 },
+            ],
+        }),
+        "info" => Some(&Glyph {
+            scale: 1.0,
+            shapes: &[
+                Shape { d: "M8 1.67a6.33 6.33 0 1 0 0 12.66a6.33 6.33 0 1 0 0-12.66z", fill: false, stroke: true, rotate: 0.0 },
+                Shape { d: "M8 7.33v3.67", fill: false, stroke: true, rotate: 0.0 },
+                Shape { d: "M8 4.4a.8.8 0 1 0 0 1.6a.8.8 0 1 0 0-1.6z", fill: true, stroke: false, rotate: 0.0 },
+            ],
+        }),
+        // A ribbon bookmark, filled (on the reader's bookmark tag).
+        "bookmark" => Some(&Glyph {
+            scale: 1.0,
+            shapes: &[Shape { d: "M4 1.75h8a.75.75 0 0 1 .75.75v11.5l-4.75-3-4.75 3V2.5A.75.75 0 0 1 4 1.75z", fill: true, stroke: true, rotate: 0.0 }],
+        }),
+        // No connection: the cloud, broken where a slash crosses it.
+        "cloud-off" => Some(&Glyph {
+            scale: 1.0,
+            shapes: &[
+                Shape { d: "M1.75 1.75l12.5 12.5", fill: false, stroke: true, rotate: 0.0 },
+                Shape { d: "M3.9 3.9A4.6 4.6 0 0 0 6 12.5h5.6a3 3 0 0 0 .85-.12", fill: false, stroke: true, rotate: 0.0 },
+                Shape { d: "M14.3 10.9A3 3 0 0 0 11.6 6.6h-1.15A4.6 4.6 0 0 0 6.7 3.45", fill: false, stroke: true, rotate: 0.0 },
             ],
         }),
         _ => None,

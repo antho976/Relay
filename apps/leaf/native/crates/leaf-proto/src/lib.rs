@@ -38,6 +38,10 @@ pub struct Series {
     /// When a chapter of it was last read (ms since the epoch), 0 if never.
     #[serde(default)]
     pub last_read_at: i64,
+    /// The shelf you put it on: "reading", "plan", "hold", "dropped" or "done"; None when you
+    /// haven't chosen (the app shows Reading once started, Plan to read before).
+    #[serde(default)]
+    pub shelf: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -82,6 +86,9 @@ pub struct Candidate {
     pub hits: Vec<Hit>,
     /// Already followed, as this series.
     pub followed: Option<i64>,
+    /// Found only on Webtoon, which sells these episodes ahead of the free ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paid: Option<PaidAhead>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -130,7 +137,8 @@ pub struct Progress {
 pub struct Event {
     pub at: i64,
     pub series: Option<i64>,
-    /// "switched", "new", "blocked", "lost" or "info".
+    /// "switched", "new", "blocked", "lost", "elsewhere" (a watched series another source has
+    /// now) or "info".
     pub kind: String,
     pub text: String,
 }
@@ -141,6 +149,9 @@ pub struct Status {
     pub suwayomi: Option<String>,
     pub sources: Vec<String>,
     pub series: u32,
+    /// AniList sync is set up (a token is stored on the server).
+    #[serde(default)]
+    pub anilist: bool,
 }
 
 /// A title as compared across sources: lower case, letters and digits only, words single-spaced,
@@ -332,5 +343,287 @@ mod tests {
         ];
         let ids: Vec<i64> = pick_copies(&all).iter().map(|c| c.id).collect();
         assert_eq!(ids, vec![2, 4, 5, 6]);
+    }
+}
+
+
+/// A chapter that arrived for a series in your space (`GET /v1/updates`), newest first.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Update {
+    pub series: i64,
+    pub title: String,
+    pub chapter: i64,
+    pub number: f64,
+    pub name: String,
+    /// When the server first saw it (ms since the epoch).
+    pub at: i64,
+    pub read: bool,
+    pub bell: bool,
+}
+
+/// `POST /v1/chapters/{id}/read`: read or unread (every copy of that chapter number).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct ChapterRead {
+    pub read: bool,
+}
+
+/// `POST /v1/series/{id}/shelf`; None clears the choice.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ShelfSet {
+    pub shelf: Option<String>,
+}
+
+/// `POST /v1/series/{id}/repin`: read this series from this Suwayomi manga instead (a wrong
+/// match fixed by hand); your place is carried across by chapter number.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct Repin {
+    pub manga_id: i64,
+}
+
+/// One offer for "Wrong series?" (`GET /v1/series/{id}/alternatives`): a work found on a source,
+/// with how many chapters it has, so the right one is easy to tell.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Alternative {
+    pub manga_id: i64,
+    pub title: String,
+    pub source: String,
+    pub chapters: u32,
+    pub latest: Option<f64>,
+    /// It is the series' current copy.
+    pub current: bool,
+}
+
+/// A source's health (`GET /v1/health`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SourceHealth {
+    pub name: String,
+    pub ok: bool,
+    /// When it last answered (ms since the epoch), 0 if never.
+    pub last_ok_at: i64,
+    pub last_error: Option<String>,
+    /// The last error was a Cloudflare check that could not be passed.
+    pub blocked: bool,
+}
+
+/// `POST /v1/settings/anilist`: an AniList access token (None removes it).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct AnilistToken {
+    pub token: Option<String>,
+}
+
+// Round 3 (2026-11-23). New types only: `Series` and `Chapter` are built field by field in
+// leaf-server (`autopilot.rs`) and in the phone app's tests, so a new field there breaks both
+// builds. The server sends these extra fields in the same JSON (serde ignores what a struct
+// lacks), and the phone reads them beside the structs (leaf-app's `net::Extras`):
+//
+// - every `Series` (`/v1/library`, `/v1/series/{id}`): `"paid": PaidAhead | null`;
+// - every `Chapter` (`/v1/series/{id}`): `"thumb": bool`, a picture at `/v1/chapters/{id}/thumb`;
+// - every `SourceHealth` (`/v1/health`): `"paused_until": ms` (0 when not paused) and
+//   `"requests_today": {"fore": n, "back": n}`.
+
+/// Newer episodes the Webtoons.com app sells ahead of the free ones (`Series.paid`): "Chapters
+/// 9–23 are on Webtoon (paid)", with a link that opens the Webtoon app or site. Leaf never fetches
+/// a paid episode.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PaidAhead {
+    pub from: f64,
+    pub to: f64,
+    pub url: String,
+}
+
+/// A series recommended from AniList, carried by at least one of your sources (`hits`, to add
+/// it with `POST /v1/follow`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Rec {
+    pub anilist_id: i64,
+    pub title: String,
+    /// Why, in words: "More like Nano Machine", "3 of yours point here".
+    pub reason: String,
+    #[serde(default)]
+    pub genres: Vec<String>,
+    pub chapters: Option<u32>,
+    /// "ongoing", "completed", "hiatus", "cancelled" or "unknown", as `Series::status`.
+    pub status: String,
+    #[serde(default)]
+    pub hits: Vec<Hit>,
+    /// Its cover on this server: `/v1/recs/cover/{anilist_id}`.
+    pub cover: String,
+    /// Already in your space, as this series (only `/v1/series/{id}/also` lists those).
+    #[serde(default)]
+    pub in_space: Option<i64>,
+}
+
+/// "Because you read X".
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Because {
+    pub series: i64,
+    pub title: String,
+    pub recs: Vec<Rec>,
+}
+
+/// Popular titles with one of the tags you read most.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Collection {
+    pub tag: String,
+    pub recs: Vec<Rec>,
+}
+
+/// `GET /v1/recs`: made once a day on the server; `made_at` 0 when not made yet.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Recs {
+    #[serde(default)]
+    pub top: Vec<Rec>,
+    #[serde(default)]
+    pub because: Vec<Because>,
+    #[serde(default)]
+    pub collections: Vec<Collection>,
+    /// A finished series with high scores, to read in one go.
+    #[serde(default)]
+    pub binge: Option<Rec>,
+    #[serde(default)]
+    pub made_at: i64,
+}
+
+/// `POST /v1/recs/tags`: fewer recommendations with this tag (`less`), or as before.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct RecTag {
+    pub tag: String,
+    pub less: bool,
+}
+
+/// `POST` / `DELETE /v1/downloads`: chapters to download on the server, or to remove.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct DownloadIds {
+    pub ids: Vec<i64>,
+}
+
+/// `POST /v1/series/{id}/download`: the chapters numbered `from` to `to`, or every unread one.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+pub struct SeriesDownload {
+    #[serde(default)]
+    pub from: Option<f64>,
+    #[serde(default)]
+    pub to: Option<f64>,
+    #[serde(default)]
+    pub unread: bool,
+}
+
+/// `GET /v1/app/latest`: the newest phone app the server holds (`GET /v1/app/apk`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct AppLatest {
+    pub build: u32,
+    pub version: String,
+    pub size: u64,
+    pub sha256: String,
+    pub made_at: i64,
+}
+
+/// `POST` / `DELETE /v1/pages/hide`: a page the owner hid by hand ("Hide this page and ones like
+/// it"), or that hiding undone; `all` on a DELETE forgets every page hidden.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+pub struct PageHide {
+    #[serde(default)]
+    pub chapter: i64,
+    #[serde(default)]
+    pub page: u32,
+    #[serde(default)]
+    pub all: bool,
+}
+
+/// `GET /v1/pages/hidden`: how many pages the owner hid by hand.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+pub struct HiddenPages {
+    #[serde(default)]
+    pub count: u32,
+}
+
+/// `GET /v1/search/sources`: the broad sources a search asks first (one request each, so the
+/// phone shows each one's results as they come), and how many sources there are in all.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct SearchSources {
+    #[serde(default)]
+    pub broad: Vec<String>,
+    #[serde(default)]
+    pub all: u32,
+}
+
+/// The edit distance between two words (Levenshtein, over characters): letters added, taken
+/// away or changed to turn one into the other.
+pub fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut diag = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let next = (diag + usize::from(ca != cb)).min(row[j] + 1).min(row[j + 1] + 1);
+            diag = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    row[b.len()]
+}
+
+/// A word of a search found in a title's words, typos allowed: inside the title, the start of one
+/// of its words, or within one letter of one (for words of three to five letters) or two (longer).
+/// Words of one or two letters must be there as typed.
+pub fn word_in_title(word: &str, title_words: &[&str], title: &str) -> bool {
+    if title.contains(word) {
+        return true;
+    }
+    let n = word.chars().count();
+    let k = match n {
+        0..=2 => return false,
+        3..=5 => 1,
+        _ => 2,
+    };
+    title_words.iter().any(|t| t.starts_with(word) || edit_distance(word, t) <= k)
+}
+
+/// A search's words found in a title: every word of the query in the title, typos allowed
+/// ([`word_in_title`], both normalised, [`norm_title`]), or the two naming the same work
+/// ([`same_work`]). What a source answers beyond that ("Solo Leveling" bringing back every title
+/// with "level" in its synopsis) is not shown.
+pub fn title_has_words(title: &str, query: &str) -> bool {
+    let (t, q) = (norm_title(title), norm_title(query));
+    if q.is_empty() || t.is_empty() {
+        return false;
+    }
+    let words: Vec<&str> = t.split(' ').collect();
+    q.split(' ').all(|w| word_in_title(w, &words, &t)) || same_work(title, query)
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::title_has_words;
+
+    #[test]
+    fn a_result_keeps_every_word_of_the_search() {
+        assert!(title_has_words("Solo Leveling", "solo leveling"));
+        assert!(title_has_words("Solo Leveling: Ragnarok", "solo lev"), "a word typed part way");
+        assert!(title_has_words("The Greatest Estate Developer", "estate developer"));
+        assert!(title_has_words("Omniscient Reader’s Viewpoint", "omniscient readers"));
+        assert!(!title_has_words("Leveling With the Gods", "solo leveling"), "one word missing");
+        assert!(!title_has_words("Return of the Mount Hua Sect", "solo"));
+        assert!(title_has_words("I Became the King by Scavenging", "Became the King by Scavenging"));
+        assert!(!title_has_words("", "solo"));
+        assert!(!title_has_words("Solo Leveling", "  "));
+    }
+
+    #[test]
+    fn a_typo_or_two_still_finds_the_title() {
+        assert!(title_has_words("Solo Leveling", "solo levleing"), "two letters swapped in a long word");
+        assert!(title_has_words("Nano Machine", "nano machin"), "typed part way");
+        assert!(title_has_words("Nano Machine", "nanp machine"), "one wrong in a short word");
+        assert!(title_has_words("The Awakening Contract", "awakenng contract"));
+        assert!(!title_has_words("The Awakening Contract", "aweking contract"), "three letters off: that is for Did you mean");
+        assert!(!title_has_words("Nano Machine", "nnao mechanic"));
+        assert!(title_has_words("Tower of God", "tower of good"), "one letter off in a short word");
+        assert!(!title_has_words("Tower of God", "tower of gaad"), "but not two");
+        assert!(title_has_words("Tower of God", "tower of gods"));
+        assert!(!title_has_words("Tower of God", "tower on god"), "two-letter words exactly");
+        assert_eq!(super::edit_distance("aweking", "awakening"), 3);
+        assert_eq!(super::edit_distance("", "abc"), 3);
+        assert_eq!(super::edit_distance("kitten", "sitting"), 3);
     }
 }

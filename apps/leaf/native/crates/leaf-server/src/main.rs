@@ -13,20 +13,33 @@
 //! | `LEAF_EXTENSIONS_REPO` | Keiyoushi's `index.min.json` | the extension list added when Suwayomi has none |
 //! | `LEAF_FLARESOLVERR` | none | a FlareSolverr's address, turned on in Suwayomi for Cloudflare-checked sources |
 //! | `LEAF_AHEAD` | `1` | chapters after the last one read kept downloaded |
-//! | `LEAF_DOWNLOADS` | none | Suwayomi's download folder; its WebP pages are re-encoded smaller |
+//! | `LEAF_DOWNLOADS` | none | Suwayomi's download folder (`mangas/`); its WebP pages are re-encoded smaller, and chapter pictures cut from them |
 //! | `LEAF_WEBP_QUALITY` | `60` | the quality they are re-encoded at |
 //! | `LEAF_TICK_SECS` | `3600` | how often the autopilot looks at what is due |
+//! | `LEAF_SOURCE_GAP_MS` | `3000` (MangaDex `1500`, AniList `2000`) | background requests' spacing per source: `ms`, `Name=ms`, or both, comma-separated |
+//! | `LEAF_REC_SOURCES` | `MangaDex,Weeb Central,MangaFire` | the sources searched to tell whether a recommendation can be read |
+//! | `LEAF_REC_SEARCHES` | `80` | recommended titles looked for on them per day at most (each kept a week) |
+//! | `LEAF_SEARCH_SOURCES` | `MangaDex,Asura Scans,Weeb Central,MangaFire` | the broad sources a search asks; the others only on "Search all sources" |
+//! | `LEAF_TAGART` | `<LEAF_DATA>/tagart` | the collections' pictures, `<slug>.webp` (`apps/leaf/tools/tagart.sh` makes them) |
+//!
+//! Data (`LEAF_DATA`): `leaf.db`, `backups/`, `thumbs/<chapter>.webp`, `recs/covers/`, `tagart/`, and
+//! `app/` (`leaf.apk` and `latest.json`, put there by `apps/leaf/tools/publish-apk.sh`).
 
 mod anilist;
 mod api;
 mod autopilot;
+mod budget;
+mod promo;
+mod recs;
 mod squeeze;
 mod store;
 mod suwa;
+mod thumbs;
+mod webtoon;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use autopilot::{Ctx, log};
@@ -64,6 +77,7 @@ fn main() {
             std::process::exit(2);
         }
     };
+    let downloads = std::env::var("LEAF_DOWNLOADS").ok().filter(|v| !v.trim().is_empty()).map(PathBuf::from);
     let ctx = Arc::new(Ctx {
         suwa: suwa::Suwa::new(&var("SUWAYOMI_URL", "http://127.0.0.1:4567")),
         store: Mutex::new(store),
@@ -71,12 +85,28 @@ fn main() {
         prefs: var("LEAF_SOURCES", "Asura Scans,MangaDex").split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
         ahead: var("LEAF_AHEAD", "1").parse().unwrap_or(1),
         pages: Mutex::new(HashMap::new()),
+        data: data.clone(),
+        budget: budget::Budget::new(std::env::var("LEAF_SOURCE_GAP_MS").ok().as_deref()),
+        downloads: downloads.clone(),
+        thumbs: Mutex::new(HashSet::new()),
+        thumbs_wanted: Mutex::new(Vec::new()),
+        kick: (Mutex::new(false), Condvar::new()),
+        rec_source_names: var("LEAF_REC_SOURCES", "MangaDex,Weeb Central,MangaFire").split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        rec_searches: var("LEAF_REC_SEARCHES", "80").parse().unwrap_or(80),
+        search_sources: var("LEAF_SEARCH_SOURCES", "MangaDex,Asura Scans,Weeb Central,MangaFire").split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        search_cache: Mutex::new(HashMap::new()),
+        promo: Mutex::new(promo::Seen::default()),
+        preview_cache: Mutex::new(HashMap::new()),
+        suggest_cache: Mutex::new(HashMap::new()),
+        tagart: std::env::var("LEAF_TAGART").ok().filter(|v| !v.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data.join("tagart")),
     });
+    ctx.restore_pauses();
+    ctx.load_thumbs();
+    ctx.load_promo();
     let tick = Duration::from_secs(var("LEAF_TICK_SECS", "3600").parse().unwrap_or(3600).max(60));
 
     // The autopilot: waits for Suwayomi, sets it up once, then a pass every `tick`.
     let pilot = ctx.clone();
-    let downloads = std::env::var("LEAF_DOWNLOADS").ok().filter(|v| !v.trim().is_empty()).map(PathBuf::from);
     let quality: f32 = var("LEAF_WEBP_QUALITY", "60").parse().unwrap_or(60.0);
     let flaresolverr = std::env::var("LEAF_FLARESOLVERR").ok().filter(|v| !v.trim().is_empty());
     let repo = var("LEAF_EXTENSIONS_REPO", "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json");
@@ -131,6 +161,16 @@ fn main() {
             }
             let wait = next_pass.saturating_duration_since(std::time::Instant::now());
             std::thread::sleep(if extensions_in { wait } else { wait.min(Duration::from_secs(60)) });
+        }
+    });
+
+    // The download line and the pictures asked for: every minute, or at once when woken.
+    let line = ctx.clone();
+    std::thread::spawn(move || {
+        loop {
+            line.wait_for_work(Duration::from_secs(60));
+            line.drain();
+            line.wanted_thumbs();
         }
     });
 

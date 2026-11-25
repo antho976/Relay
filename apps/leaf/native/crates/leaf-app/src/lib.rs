@@ -5,8 +5,9 @@
 //! `typeset` (setting text in lines), `book` (the reader), `notes` (highlights, review, find) and
 //! `stats`.
 //!
-//! `app` holds the state and draws a frame; `library`, `search`, `series`, `reader` and `connect`
-//! are the screens; `strip` and `logic` the rules they read (tested); `net` and `images` the
+//! `app` holds the state and draws a frame; `home`, `space`, `library`, `search`, `series`,
+//! `reader` and `connect` are the screens, `recs` the picks (Home's and a series' Readers also
+//! like), `update` the app updates from the server, `offline` the downloads kept on the phone and their line (`saved` a series' downloads); `strip` and `logic` the rules they read (tested); `net` and `images` the
 //! worker threads that talk to the server and decode; `draw` and `gfx` the canvas and the GPU;
 //! `desktop` and `android` the two front ends.
 
@@ -21,21 +22,30 @@ pub mod glyphs;
 pub mod home;
 pub mod images;
 pub mod kit;
+pub mod known;
 pub mod library;
 pub mod logic;
 pub mod net;
 pub mod notes;
+pub mod notices;
+pub mod offline;
+pub mod online;
+pub mod places;
 pub mod reader;
+pub mod saved;
+pub mod recs;
 pub mod search;
 pub mod series;
+pub mod settings;
 pub mod shelf;
 pub mod space;
 pub mod stats;
 pub mod strip;
+pub mod sweep;
 pub mod theme;
-pub mod thumb;
 pub mod typeset;
 pub mod ui;
+pub mod update;
 pub mod wake;
 
 #[cfg(target_os = "android")]

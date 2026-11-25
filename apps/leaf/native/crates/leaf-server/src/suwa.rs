@@ -17,6 +17,14 @@ pub struct Source {
     pub name: String,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChapterInfo {
+    pub manga_id: i64,
+    pub number: f64,
+    pub source: String,
+    pub downloaded: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct Found {
     pub id: i64,
@@ -95,7 +103,7 @@ impl Suwa {
     pub fn ensure_settings(&self, flaresolverr: Option<&str>) -> Result<(), String> {
         let conv: Vec<Value> = TO_WEBP.iter().map(|m| json!({ "mimeType": m, "target": "image/webp" })).collect();
         self.gql(
-            "mutation($c:[SettingsDownloadConversionTypeInput!]){ setSettings(input:{settings:{downloadConversions:$c, serveConversions:$c, downloadAsCbz:false, autoDownloadNewChapters:false}}){ clientMutationId } }",
+            "mutation($c:[SettingsDownloadConversionTypeInput!]){ setSettings(input:{settings:{downloadConversions:$c, serveConversions:$c, downloadAsCbz:false, autoDownloadNewChapters:false, backupInterval:1, backupTTL:14}}){ clientMutationId } }",
             json!({ "c": conv }),
         )?;
         if let Some(url) = flaresolverr {
@@ -171,8 +179,46 @@ impl Suwa {
 
     /// Where a chapter is: its series and its number.
     pub fn chapter_place(&self, chapter_id: i64) -> Result<(i64, f64), String> {
-        let d = self.gql("query($id:Int!){ chapter(id:$id){ mangaId chapterNumber } }", json!({ "id": chapter_id }))?;
-        Ok((d["chapter"]["mangaId"].as_i64().unwrap_or(0), d["chapter"]["chapterNumber"].as_f64().unwrap_or(-1.0)))
+        self.chapter_info(chapter_id).map(|c| (c.manga_id, c.number))
+    }
+
+    /// A chapter's series, number, source and whether it is downloaded (quick: no source asked).
+    pub fn chapter_info(&self, chapter_id: i64) -> Result<ChapterInfo, String> {
+        let d = self.gql("query($id:Int!){ chapter(id:$id){ mangaId chapterNumber isDownloaded manga { source { displayName } } } }", json!({ "id": chapter_id }))?;
+        let c = &d["chapter"];
+        Ok(ChapterInfo {
+            manga_id: c["mangaId"].as_i64().unwrap_or(0),
+            number: c["chapterNumber"].as_f64().unwrap_or(-1.0),
+            source: source_name(&c["manga"]["source"]["displayName"]),
+            downloaded: c["isDownloaded"].as_bool().unwrap_or(false),
+        })
+    }
+
+    /// The source a manga is read from ("Asura Scans"; quick: no source asked).
+    pub fn source_of(&self, manga_id: i64) -> Result<String, String> {
+        let d = self.gql("query($id:Int!){ manga(id:$id){ source { displayName } } }", json!({ "id": manga_id }))?;
+        Ok(source_name(&d["manga"]["source"]["displayName"]))
+    }
+
+    /// The manga's page on its site: Suwayomi's `realUrl` when the extension gives one, else its
+    /// `url` (often a path on the site).
+    pub fn manga_url(&self, manga_id: i64) -> Result<String, String> {
+        let d = self.gql("query($id:Int!){ manga(id:$id){ url realUrl } }", json!({ "id": manga_id }))?;
+        let m = &d["manga"];
+        m["realUrl"].as_str().filter(|s| !s.is_empty()).or(m["url"].as_str()).map(String::from).ok_or_else(|| "no address".to_string())
+    }
+
+    /// Chapters in Suwayomi's download queue still to download (queued or downloading), with
+    /// their source.
+    pub fn download_queue(&self) -> Result<Vec<(i64, String)>, String> {
+        let d = self.gql("{ downloadStatus { queue { state chapter { id } manga { source { displayName } } } } }", json!({}))?;
+        Ok(d["downloadStatus"]["queue"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|q| matches!(q["state"].as_str(), Some("QUEUED") | Some("DOWNLOADING")))
+            .map(|q| (q["chapter"]["id"].as_i64().unwrap_or(0), source_name(&q["manga"]["source"]["displayName"])))
+            .collect())
     }
 
     /// The chapter's page addresses on Suwayomi (each one fetched with [`Suwa::bytes`]).
@@ -274,6 +320,11 @@ fn status_of(s: &str) -> &'static str {
     }
 }
 
+/// A source as leaf-server names it: Suwayomi's display name without " (EN)".
+fn source_name(v: &Value) -> String {
+    v.as_str().unwrap_or_default().trim_end_matches(" (EN)").to_string()
+}
+
 fn manga_of(m: &Value, chapters: &Value) -> Manga {
     let text = |v: &Value| v.as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from);
     Manga {
@@ -283,7 +334,7 @@ fn manga_of(m: &Value, chapters: &Value) -> Manga {
         description: text(&m["description"]),
         status: status_of(m["status"].as_str().unwrap_or("")).to_string(),
         source_id: m["source"]["id"].as_str().unwrap_or_default().to_string(),
-        source_name: m["source"]["displayName"].as_str().unwrap_or_default().trim_end_matches(" (EN)").to_string(),
+        source_name: source_name(&m["source"]["displayName"]),
         chapters: chapters
             .as_array()
             .into_iter()

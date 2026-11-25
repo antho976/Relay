@@ -9,6 +9,19 @@
          turned on). The job is kept across restarts. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- App updates from the owner's server: a newer APK, downloaded and checked, is handed to
+         Android's installer, which asks the person (the first time, Android asks whether Leaf may
+         install apps at all). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- Which apps open a web link (Webtoon's paid episodes: its app, else the browser), so
+         LeafActivity.openUrl can tell when none does. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
 
     <!-- Plain http is allowed: a server on the home network (192.168.x.x:4580) has no certificate.
          Leaf talks to the one server the person typed in, and nothing else. -->
@@ -40,7 +53,7 @@
             android:permission="android.permission.BIND_JOB_SERVICE"
             android:exported="false" />
         <!-- Lends a book's notes (Markdown under the cache's shared/ folder) to the app picked in
-             the share sheet. -->
+             the share sheet, and an app update (the cache's updates/) to the installer. -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"

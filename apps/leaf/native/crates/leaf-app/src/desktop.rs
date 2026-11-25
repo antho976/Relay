@@ -4,10 +4,34 @@
 //! - `--shot out.png --screen NAME` draws one screen to a file, against a real server
 //!   (`--server`, default `http://127.0.0.1:4580`; `--token`), on a data folder of its own that
 //!   is removed after. Screens: `connect` (the first run, the address checked), `connect-empty`,
-//!   `home` (`--hero N` for the spotlight's Nth), `library-empty` (the list answered empty),
-//!   `space` (`--tab recent|following|downloads`, `--sort 0..2` for Following), `search`
-//!   (`--query`, default "nano"), `series` (`--id`, default 1; `--tab about`), `reader`
-//!   (`--id`, `--chapter` number, default 1; `--scroll UNITS` down the strip; `--overlay 1`).
+//!   `home` (`--hero N` for the spotlight's Nth, `--rail UNITS|end` Continue reading moved sideways, `--all-read-but N` every series finished on the shot's copy but the N read last), `library-empty` (the list answered empty),
+//!   `space` (`--tab updates|recent|following|downloads`, `--sort 0..2` for Following, `--filter
+//!   WORDS` typed in its field, `--shelf 0..4` for one shelf, `--shelve ID:dropped` to put a
+//!   series on a shelf in the shot's copy, `--fake-updates 1` for a made-up Updates list built from
+//!   the library, `--all 1` for Updates' All, `--sheet shelf` with `--id` for the shelf sheet,
+//!   `--sheet select` for Downloads selecting its first two series), `saved` (`--id`: a series'
+//!   downloads), `search` (`--query`, default "nano"; `--fake-search N`
+//!   answers with N works made from the library instead of asking the server's sources; `--meant
+//!   TITLE` offers "Did you mean TITLE?"), `series` (`--id`, default 1; `--preview 1` shows it as a
+//!   title not added yet; `--tab also`; `--sheet shelf|wrong|menu|info|range|rec`; `--select N` selects N
+//!   chapters from where you are; `--paid FROM-TO` shows paid episodes ahead on the shot's copy),
+//!   `picks` (`--of top|binge|tag:<tag>|because:<id>`), `reader` (`--id`, `--chapter` number, default 1; `--scroll UNITS`
+//!   down the strip; `--overlay 1`; `--auto 1` auto-scroll on; `--dim 0..0.85`; `--fake-pages 1`
+//!   draws made-up pages instead of asking the server for any; `--sheet hide` the long press's
+//!   sheet on the page at the top), `settings` (the
+//!   Settings page, `--scroll UNITS`, `--backup 1` to export the latest backup).
+//!   `--fake-recs 1` makes Home's picks (and a series' Readers also like) from the library, for the
+//!   days the server has none (covers are the series' own, fetched once into `--data`);
+//!   `--sheet rec` on `home` opens the first pick's sheet (`--sheet drag`: pulled down by a finger
+//!   still on it); `--tagart DIR` takes the collections' pictures from `DIR/<slug>.webp`;
+//!   `--update 1` offers a made-up newer app. `--sweep N` (`series`, `saved`, `space --tab
+//!   downloads`): a long press on the first row on screen dragged down over N more, the finger
+//!   still down. Pointed at a server that isn't there (`--server http://127.0.0.1:9`, with a
+//!   `--data` folder an earlier shot filled), a page shows the offline prompt.
+//!   `--fake-saved N` shows chapters as downloaded to this phone on the shot's copy (N series' in
+//!   `space`; a few of `--id`'s on `series` and `saved`), their manifests written to the shot's
+//!   folder with no page, so a later shot with `--data` and no server finds them;
+//!   `--fake-saving 1` puts the next few in line, the first part way.
 //!   `--size WxH` (default 1080x2340). `--bell ID` and `--seen ID` mark a series on the shot's own
 //!   copy only (its bell on; read up to two chapters before its newest). Nothing is written to the server: no progress is reported.
 //! - `--data DIR` keeps Leaf's files somewhere else than `~/.local/share/leaf` (and, with
@@ -323,6 +347,147 @@ fn seed(app: &mut App, gfx: &Gfx, clock: &mut u64, id: i64) -> Result<(), String
     Ok(())
 }
 
+/// Updates made up from the library for a shot (the server only records arrivals from the day it
+/// learnt to): each series' newest chapters, spread over the last few days, the older ones read.
+/// `--fake-search N`: the search answered with N works named after the library's series (none
+/// of the server's sources asked), the broad sources' answer, so "Search all sources" shows.
+fn fake_search(app: &mut App, n: usize, gfx: &Gfx, clock: &mut u64) {
+    // Asked already, as far as the page knows: it sends nothing while the library comes.
+    let q = app.st.search.query.trim().to_string();
+    app.st.search.asked = Some(q.clone());
+    app.ask(crate::net::Job::Library);
+    settle(app, gfx, clock, 20.0);
+    // Titles with the words searched first, as the server would keep them.
+    let mut lib = app.library.data.clone().unwrap_or_default();
+    lib.sort_by_key(|s| !leaf_proto::title_has_words(&s.title, &q));
+    let list: Vec<leaf_proto::Candidate> = lib
+        .iter()
+        .take(n)
+        .enumerate()
+        .map(|(i, s)| leaf_proto::Candidate { title: s.title.clone(), cover_of: None, hits: (0..(i % 3 + 1)).map(|k| leaf_proto::Hit { manga_id: s.id * 10 + k as i64, source: format!("S{k}") }).collect(), followed: (i == 0).then_some(s.id), paid: (i == 1).then(|| leaf_proto::PaidAhead { from: 9.0, to: 23.0, url: String::new() }) })
+        .collect();
+    app.st.search.asked = Some(q.clone());
+    app.st.search.all = false;
+    app.st.search.more = true;
+    app.st.search.answered(q, false, Ok(list), true);
+}
+
+/// Chapters shown as downloaded to this phone, on the shot's copy: `n` series' a few each (or, with
+/// `only`, four of that one's, under its newest). Their manifests go to the shot's folder (no
+/// pages), so a shot after with no server finds them.
+fn fake_saved(app: &mut App, dir: &std::path::Path, n: usize, only: Option<i64>) {
+    let ids: Vec<i64> = match only {
+        Some(id) => vec![id],
+        None => app.library.data.iter().flatten().map(|s| s.id).filter(|id| app.series.get(id).is_some_and(|l| l.data.is_some())).take(n).collect(),
+    };
+    let now = crate::shelf::now_ms();
+    let mut list = Vec::new();
+    for (i, id) in ids.iter().enumerate() {
+        let Some(d) = app.series.get(id).and_then(|l| l.data.clone()) else { continue };
+        let k = d.chapters.len();
+        let per = if only.is_some() { 4 } else { 3 + (i * 5) % 9 };
+        let from = k.saturating_sub(1 + per);
+        for (j, c) in d.chapters[from..k.saturating_sub(1)].iter().enumerate() {
+            let pages = if c.pages > 0 { c.pages } else { 30 + (c.number as u32 * 7) % 25 };
+            let bytes = 4_200_000 + (c.number * 137_000.0) as u64 % 3_100_000;
+            list.push(crate::offline::Manifest { series: *id, title: d.series.title.clone(), chapter: c.clone(), pages, skipped: vec![], bytes, saved_at: now - (i as i64) * 3 * 3_600_000 - j as i64 * 60_000 });
+        }
+    }
+    for m in &list {
+        let _ = crate::net::write_atomic(&crate::offline::chapter_dir(dir, m.chapter.id).join("manifest.json"), &serde_json::to_vec(m).unwrap_or_default());
+    }
+    app.saver.shot_saved(list);
+}
+
+/// The three chapters under the saved ones in line on the shot's copy, the first part way.
+fn fake_saving(app: &mut App, id: i64) {
+    let Some(d) = app.series.get(&id).and_then(|l| l.data.clone()) else { return };
+    let items: Vec<crate::offline::Item> = d
+        .chapters
+        .iter()
+        .rev()
+        .filter(|c| !app.saver.is_saved(c.id))
+        .skip(1)
+        .take(3)
+        .map(|c| crate::offline::Item { series: id, title: d.series.title.clone(), chapter: c.clone(), asked: true, failed: None })
+        .collect();
+    app.saver.shot_line(items, 12, 40);
+}
+
+fn fake_updates(app: &mut App) {
+    let now = crate::shelf::now_ms();
+    let hour = 3_600_000;
+    let mut list = Vec::new();
+    let mut lib = app.library.data.clone().unwrap_or_default();
+    lib.sort_by_key(|s| std::cmp::Reverse(s.last_read_at));
+    for (k, s) in lib.iter().filter(|s| app.series.get(&s.id).is_some_and(|l| l.data.is_some())).take(6).enumerate() {
+        let Some(d) = app.series.get(&s.id).and_then(|l| l.data.as_ref()) else { continue };
+        for (j, c) in d.chapters.iter().rev().take(3).enumerate() {
+            let ago = (k as i64 * 7 + j as i64 * 19) * hour + 25 * 60_000;
+            list.push(leaf_proto::Update { series: s.id, title: s.title.clone(), chapter: c.id, number: c.number, name: c.name.clone(), at: now - ago, read: j >= 2 || c.read, bell: s.bell });
+        }
+    }
+    list.sort_by_key(|u| std::cmp::Reverse(u.at));
+    app.updates.data = Some(list);
+    app.updates.loading = false;
+}
+
+/// Picks made up from the library for a shot (the server makes its own once a day, from its
+/// first day on): each a series you have, shown as if it were not yours, its cover copied from
+/// the series' own (fetched once into the data folder). Readers also like for `series` too, two
+/// of them marked yours.
+fn fake_recs(app: &mut App, series: i64) -> Result<(), String> {
+    let lib = app.library.data.clone().ok_or("the library did not load")?;
+    let server = app.server.clone().ok_or("no server")?;
+    let client = crate::net::Client::new();
+    let mut lib: Vec<leaf_proto::Series> = lib.into_iter().filter(|s| s.id != series).collect();
+    lib.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
+    let reasons = ["More like Nano Machine", "3 of yours point here", "Murim · finished", "More like Return of the Mount Hua Sect", "2 of yours point here", "Regression · ongoing"];
+    let genres = [["Action", "Murim"], ["Fantasy", "Regression"], ["Action", "Martial Arts"], ["Drama", "Romance"], ["Action", "Hunters"], ["Fantasy", "Magic"]];
+    let mut recs = Vec::new();
+    for (i, s) in lib.iter().take(18).enumerate() {
+        let anilist = 900_000 + s.id;
+        let file = crate::images::CoverOf::Rec(anilist).file(&app.data);
+        if !file.exists() {
+            let own = crate::images::CoverOf::Series(s.id).file(&app.data);
+            let bytes = match std::fs::read(&own) {
+                Ok(b) => b,
+                Err(_) => client.get(&server, &format!("/v1/series/{}/cover", s.id)).map_err(|f| f.words("the server"))?,
+            };
+            crate::net::write_atomic(&file, &bytes).map_err(|e| e.to_string())?;
+        }
+        recs.push(leaf_proto::Rec {
+            anilist_id: anilist,
+            title: s.title.clone(),
+            reason: reasons[i % reasons.len()].into(),
+            genres: genres[i % genres.len()].iter().map(|g| g.to_string()).collect(),
+            chapters: Some(s.chapters),
+            status: s.status.clone(),
+            hits: vec![leaf_proto::Hit { manga_id: -1, source: String::new() }; 1 + i % 3],
+            cover: format!("/v1/recs/cover/{anilist}"),
+            in_space: None,
+        });
+    }
+    let pick = |from: usize, n: usize| -> Vec<leaf_proto::Rec> { recs.iter().skip(from).take(n).cloned().collect() };
+    let read: Vec<&leaf_proto::Series> = app.library.data.as_ref().map(|l| l.iter().filter(|s| s.last_read_at > 0).collect()).unwrap_or_default();
+    let because: Vec<leaf_proto::Because> = read.iter().take(2).enumerate().map(|(k, s)| leaf_proto::Because { series: s.id, title: s.title.clone(), recs: pick(6 + k * 4, 5) }).collect();
+    let collections = ["Murim", "Magic", "Hunters", "Necromancy"].iter().enumerate().map(|(k, tag)| leaf_proto::Collection { tag: tag.to_string(), recs: pick(k * 3, 6) }).collect();
+    let mut binge = recs.iter().find(|r| r.status == "completed").cloned().or_else(|| recs.last().cloned());
+    if let Some(b) = &mut binge {
+        b.reason = "Finished, and 9 in 10 of its readers rate it well".into();
+    }
+    app.recs.data = Some(leaf_proto::Recs { top: pick(0, 9), because, collections, binge, made_at: crate::shelf::now_ms() });
+    app.recs.loading = false;
+    let mut also = pick(3, 9);
+    for (k, r) in also.iter_mut().enumerate() {
+        if k == 1 || k == 4 {
+            r.in_space = Some(r.anilist_id - 900_000);
+        }
+    }
+    app.also.insert(series, crate::app::Loaded { data: Some(also), live: true, error: None, loading: false });
+    Ok(())
+}
+
 /// One frame of a screen, drawn with no window.
 fn shot(args: &[String], out: &str) -> Result<(), String> {
     let (w, h) = arg(args, "--size")
@@ -344,7 +509,7 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
     // Roughly a phone's status bar and gesture bar.
     app.resize(w as f32, h as f32, w as f32 * 0.085, w as f32 * 0.04);
     let base = arg(args, "--server").unwrap_or_else(|| "http://127.0.0.1:4580".into());
-    let server = Server { base: crate::logic::normalize_server(&base).map_err(|e| e.to_string())?, token: arg(args, "--token") };
+    let server = Server { base: crate::logic::normalize_server(&base).map_err(|e| e.to_string())?, token: arg(args, "--token"), alt: None };
     let id = arg(args, "--id").and_then(|v| v.parse::<i64>().ok()).unwrap_or(1);
     match screen.as_str() {
         "connect-empty" => {}
@@ -358,13 +523,28 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.reset_to(Route::Home);
             app.st.home.shot_spot = arg(args, "--hero").and_then(|v| v.parse::<usize>().ok());
         }
+        "settings" => {
+            app.set_server(server);
+            app.reset_to(Route::Home);
+            app.push(Route::Connect);
+            app.st.connect.load(app.server.as_ref());
+        }
+        "saved" => {
+            app.set_server(server);
+            app.st.space.tab = crate::space::DOWNLOADS;
+            app.reset_to(Route::Space);
+        }
         "space" => {
             app.set_server(server);
             app.st.space.tab = match arg(args, "--tab").as_deref() {
-                Some("following") => 1,
-                Some("downloads") => 2,
-                _ => 0,
+                Some("updates") => crate::space::UPDATES,
+                Some("following") => crate::space::FOLLOWING,
+                Some("downloads") => crate::space::DOWNLOADS,
+                _ => crate::space::RECENT,
             };
+            app.st.space.query = arg(args, "--filter").unwrap_or_default();
+            app.st.space.shelf = arg(args, "--shelf").and_then(|v| v.parse::<usize>().ok()).and_then(|i| crate::logic::Shelf::ALL.get(i).copied());
+            app.updates_all = arg(args, "--all").is_some();
             app.following_sort = arg(args, "--sort").and_then(|v| v.parse::<u8>().ok()).unwrap_or(0).min(2);
             app.reset_to(Route::Space);
         }
@@ -375,14 +555,28 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.focus.id = Some("search");
             app.st.search.query = arg(args, "--query").unwrap_or_else(|| "nano".into());
             app.focus.text = app.st.search.query.clone();
-            app.finish_typing();
+            match arg(args, "--fake-search").and_then(|v| v.parse::<usize>().ok()) {
+                Some(n) => fake_search(&mut app, n, &gfx, &mut clock),
+                None => app.finish_typing(),
+            }
+            // `--meant TITLE`: "Did you mean" offers it (with `--fake-search 0`).
+            if let Some(m) = arg(args, "--meant") {
+                settle(&mut app, &gfx, &mut clock, 5.0);
+                let q = app.st.search.asked.clone().unwrap_or_default();
+                app.st.search.suggest = Some((q, Some(m)));
+            }
         }
         "series" | "reader" => {
             app.set_server(server);
             app.reset_to(Route::Home);
             app.push(Route::Series(id));
             app.frame(clock);
-            app.st.series.about = arg(args, "--tab").as_deref() == Some("about");
+            app.st.series.also = arg(args, "--tab").as_deref() == Some("also");
+        }
+        "picks" => {
+            app.set_server(server);
+            app.reset_to(Route::Home);
+            app.push(Route::Picks(arg(args, "--of").unwrap_or_else(|| "top".into())));
         }
         _ if BOOK_SCREENS.contains(&screen.as_str()) => {
             books_shot(&mut app, &gfx, &mut clock, args, &screen)?;
@@ -428,6 +622,148 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
         }
         settle(&mut app, &gfx, &mut clock, 5.0);
     }
+    // `--shelve ID:shelf`, several separated by commas: the shot's copy only.
+    if let Some(list) = arg(args, "--shelve") {
+        for pair in list.split(',') {
+            if let Some((sid, sh)) = pair.split_once(':')
+                && let (Ok(sid), Some(sh)) = (sid.parse::<i64>(), crate::logic::Shelf::from_key(sh))
+                && let Some(s) = app.library.data.as_mut().and_then(|l| l.iter_mut().find(|s| s.id == sid))
+            {
+                s.shelf = Some(sh.key().into());
+            }
+        }
+        settle(&mut app, &gfx, &mut clock, 10.0);
+    }
+    if arg(args, "--fake-recs").is_some() {
+        fake_recs(&mut app, id)?;
+        // `--tagart DIR`: the collections' pictures from a folder (`<slug>.webp`), as if the
+        // server had sent them; a tag with none there shows its collage.
+        if let Some(src) = arg(args, "--tagart") {
+            let tags: Vec<String> = app.recs.data.iter().flat_map(|r| r.collections.iter().map(|c| c.tag.clone())).collect();
+            for tag in tags {
+                let slug = crate::images::tag_slug(&tag);
+                if let Ok(b) = std::fs::read(std::path::Path::new(&src).join(format!("{slug}.webp"))) {
+                    crate::net::write_atomic(&dir.join("covers").join(format!("tag-{slug}.webp")), &b).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+        settle(&mut app, &gfx, &mut clock, 30.0);
+    }
+    if let Some((from, to)) = arg(args, "--paid").and_then(|v| v.split_once('-').and_then(|(a, b)| Some((a.parse::<f64>().ok()?, b.parse::<f64>().ok()?)))) {
+        app.paid.insert(id, leaf_proto::PaidAhead { from, to, url: "https://www.webtoons.com/".into() });
+    }
+    if arg(args, "--update").is_some() {
+        let build = crate::update::BUILD + 3;
+        crate::update::offered(&mut app, leaf_proto::AppLatest { build, version: crate::update::version_of(build), size: 18_400_000, sha256: String::new(), made_at: 0 });
+    }
+    if screen == "home"
+        && matches!(arg(args, "--sheet").as_deref(), Some("rec" | "drag"))
+        && let Some(r) = app.recs.data.as_ref().and_then(|r| r.top.first().cloned())
+    {
+        crate::recs::hit(&mut app, &r, None, true);
+        // `--sheet drag`: a finger pulling it down 140 units, still down as the shot is taken.
+        if arg(args, "--sheet").as_deref() == Some("drag") {
+            settle(&mut app, &gfx, &mut clock, 5.0);
+            let u = app.canvas.u;
+            let x0 = ((w as f32 - crate::draw::WIDTH * u) * 0.5).max(0.0);
+            let (fx, fy) = (x0 + 200.0 * u, app.canvas.h - 200.0);
+            app.touch(Touch { id: 1, phase: Phase::Down, x: fx, y: fy * u, t_ns: clock });
+            for i in 1..=8u64 {
+                clock += 16_666_666;
+                app.touch(Touch { id: 1, phase: Phase::Move, x: fx, y: (fy + 140.0 * i as f32 / 8.0) * u, t_ns: clock });
+                app.frame(clock);
+            }
+        }
+    }
+    // `--preview 1` on `series`: the series shown as a title not added yet (its page from
+    // Search or a pick), from the shot's copy: nothing read, no bell, Follow and the download key.
+    if screen == "series" && arg(args, "--preview").is_some() {
+        let mut d = app.series.get(&id).and_then(|l| l.data.clone()).ok_or("the series did not load")?;
+        let pid = -(1_000_000 + id);
+        d.series.id = pid;
+        d.series.bell = false;
+        d.series.read_upto = None;
+        d.series.last_read_at = 0;
+        d.series.shelf = None;
+        for c in &mut d.chapters {
+            c.read = false;
+            c.last_page = 0;
+        }
+        if let Ok(b) = std::fs::read(crate::images::CoverOf::Series(id).file(&dir)) {
+            let _ = crate::net::write_atomic(&crate::images::CoverOf::Series(pid).file(&dir), &b);
+        }
+        app.previews.insert(pid, crate::app::Preview { title: d.series.title.clone(), hits: vec![leaf_proto::Hit { manga_id: 1_000_000 + id, source: String::new() }], anilist: None });
+        app.series.insert(pid, crate::app::Loaded { data: Some(d), live: true, error: None, loading: false });
+        app.push(Route::Series(pid));
+        settle(&mut app, &gfx, &mut clock, 20.0);
+        // The server this shot reads has no preview of a made-up entry: its answer is not shown.
+        if let Some(l) = app.series.get_mut(&pid) {
+            l.error = None;
+            l.live = true;
+        }
+        settle(&mut app, &gfx, &mut clock, 5.0);
+    }
+    if let Some(n) = arg(args, "--select").and_then(|v| v.parse::<usize>().ok()) {
+        let d = app.series.get(&id).and_then(|l| l.data.clone()).ok_or("the series did not load")?;
+        let from = crate::logic::continue_point(&d.chapters).map_or(0, |c| c.index);
+        app.st.series.select = Some(d.chapters.iter().rev().skip(d.chapters.len().saturating_sub(from + 1)).take(n).map(|c| c.id).collect());
+    }
+    if let Some(n) = arg(args, "--fake-saved").and_then(|v| v.parse::<usize>().ok()) {
+        let only = matches!(screen.as_str(), "series" | "saved").then_some(id);
+        fake_saved(&mut app, &dir, n, only);
+        if arg(args, "--fake-saving").is_some() {
+            fake_saving(&mut app, id);
+        }
+        settle(&mut app, &gfx, &mut clock, 5.0);
+    }
+    if screen == "saved" {
+        app.push(Route::Saved(id));
+        settle(&mut app, &gfx, &mut clock, 10.0);
+    }
+    if arg(args, "--fake-updates").is_some() {
+        fake_updates(&mut app);
+        settle(&mut app, &gfx, &mut clock, 20.0);
+    }
+    // `--backup 1`: Settings exports the latest backup (a read; the desktop saves it under the
+    // shot's own folder).
+    if screen == "settings" && arg(args, "--backup").is_some() {
+        app.backing_up = true;
+        app.ask(crate::net::Job::Backup(false));
+        settle(&mut app, &gfx, &mut clock, 30.0);
+    }
+    if screen == "space" {
+        match arg(args, "--sheet").as_deref() {
+            Some("shelf") => app.st.space.shelf_for = Some(id),
+            Some("select") => app.st.space.select = Some(app.saver.groups().iter().take(2).map(|g| g.series).collect()),
+            _ => {}
+        }
+    }
+    if screen == "series"
+        && let Some(sheet) = arg(args, "--sheet")
+    {
+        let st = &mut app.st.series;
+        match sheet.as_str() {
+            "menu" => st.menu = true,
+            "shelf" => st.shelf = true,
+            "wrong" => {
+                st.alternatives = true;
+                app.ask(crate::net::Job::Alternatives(id));
+            }
+            "info" => st.info = true,
+            "range" => {
+                st.range = true;
+                st.range_from = "12".into();
+                st.range_to = "30".into();
+            }
+            "rec" => {
+                if let Some(r) = app.also.get(&id).and_then(|l| l.data.as_ref()).and_then(|l| l.iter().find(|r| r.in_space.is_none()).cloned()) {
+                    crate::recs::hit(&mut app, &r, None, true);
+                }
+            }
+            other => return Err(format!("unknown sheet: {other}")),
+        }
+        settle(&mut app, &gfx, &mut clock, 30.0);
+    }
     if screen == "library-empty" {
         // What a first library looks like, before anything is followed (the owner's server
         // follows two series already).
@@ -437,7 +773,13 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
         let d = app.series.get(&id).and_then(|l| l.data.clone()).ok_or("the series did not load")?;
         let number = arg(args, "--chapter").and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
         let index = d.chapters.iter().position(|c| c.number == number).ok_or(format!("no chapter {number}"))?;
-        app.reader = Some(crate::reader::Reader::open(&d, index, 0));
+        let fake = arg(args, "--fake-pages").is_some();
+        app.images.set_fake_pages(fake);
+        let mut r = crate::reader::Reader::open(&d, index, 0);
+        if fake {
+            r.shot_counts(12);
+        }
+        app.reader = Some(r);
         app.push(Route::Reader);
         settle(&mut app, &gfx, &mut clock, 30.0);
         if let Some(units) = arg(args, "--scroll").and_then(|s| s.parse::<f32>().ok()) {
@@ -458,6 +800,20 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
         {
             r.overlay = true;
         }
+        if arg(args, "--auto").is_some()
+            && let Some(r) = &mut app.reader
+        {
+            r.auto = true;
+        }
+        if arg(args, "--sheet").as_deref() == Some("hide")
+            && let Some(r) = &mut app.reader
+            && let crate::strip::Item::Page(c, n) = r.pos.item
+        {
+            r.hide_sheet = Some((c, n));
+        }
+        if let Some(d) = arg(args, "--dim").and_then(|v| v.parse::<f32>().ok()) {
+            app.prefs.dim = d.clamp(0.0, crate::app::DIM_MAX);
+        }
         settle(&mut app, &gfx, &mut clock, 10.0);
     }
     if screen != "reader"
@@ -466,6 +822,68 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
     {
         app.scroll().off = units;
         settle(&mut app, &gfx, &mut clock, 10.0);
+    }
+    // `--all-read-but N`: on the shot's copy only, every series read to its end but the N read
+    // last (to see finished ones fill Continue reading, labelled Read).
+    if let Some(keep) = arg(args, "--all-read-but").and_then(|v| v.parse::<usize>().ok()) {
+        // Every series' chapters in first, so none arrives after to undo the marks.
+        settle(&mut app, &gfx, &mut clock, 20.0);
+        let mut list = app.library.data.clone().unwrap_or_default();
+        list.sort_by_key(|s| std::cmp::Reverse(s.last_read_at));
+        let shot_now = crate::shelf::now_ms();
+        for (i, s) in list.iter_mut().filter(|s| s.read_upto.is_some() || s.last_read_at > 0).enumerate().skip(keep) {
+            s.read_upto = s.latest;
+            // Read lately, an hour apart, so they line up after the ones still going.
+            if s.last_read_at == 0 {
+                s.last_read_at = shot_now - (i as i64) * 3_600_000 - 86_400_000;
+            }
+            s.unread = 0;
+            if let Some(d) = app.series.get_mut(&s.id).and_then(|l| l.data.as_mut()) {
+                d.chapters.iter_mut().for_each(|c| c.read = true);
+                d.series = s.clone();
+            }
+        }
+        app.library.data = Some(list);
+        clock += 16_666_666;
+        app.frame(clock);
+    }
+    // `--rail UNITS`: Home's Continue reading moved sideways (`end` for its last covers).
+    if screen == "home"
+        && let Some(v) = arg(args, "--rail")
+    {
+        for _ in 0..3 {
+            clock += 16_666_666;
+            app.frame(clock);
+        }
+        let max = app.st.home.rail.max.max(0.0);
+        app.st.home.rail.off = if v == "end" { max } else { v.parse::<f32>().unwrap_or(0.0).min(max) };
+        for _ in 0..3 {
+            clock += 16_666_666;
+            app.frame(clock);
+        }
+    }
+    // `--sweep N`: a long press on the first row on screen of a list that selects, dragged down
+    // over N more without lifting (the finger is still down in the shot).
+    if let Some(n) = arg(args, "--sweep").and_then(|v| v.parse::<usize>().ok()) {
+        let off = app.scroll().off;
+        let rows = app.sweep.rows.clone();
+        let top = app.canvas.inset_top + 120.0;
+        let k = rows.iter().position(|r| r.y - off >= top).ok_or("no row to sweep on this screen")?;
+        let (from, to) = (rows[k], rows[(k + n).min(rows.len() - 1)]);
+        let u = app.canvas.u;
+        let x = ((app.canvas.px_w - crate::draw::WIDTH * u) * 0.5).max(0.0) + 200.0 * u;
+        let at = |r: crate::sweep::Row| (r.y - off + r.h / 2.0) * u;
+        let finger = |app: &mut App, phase: crate::ui::Phase, y: f32, clock: &mut u64, wait: u64| {
+            app.touch(crate::ui::Touch { id: 1, phase, x, y, t_ns: *clock });
+            *clock += 16_666_666 + wait;
+            app.frame(*clock);
+        };
+        finger(&mut app, crate::ui::Phase::Down, at(from), &mut clock, 0);
+        finger(&mut app, crate::ui::Phase::Move, at(from), &mut clock, crate::series::LONG_PRESS_NS);
+        for i in 1..=12 {
+            let y = at(from) + (at(to) - at(from)) * i as f32 / 12.0;
+            finger(&mut app, crate::ui::Phase::Move, y, &mut clock, 0);
+        }
     }
     clock += 16_666_666;
     app.frame(clock);
@@ -530,6 +948,9 @@ impl ApplicationHandler<()> for Windowed {
         let Some(app) = &mut self.app else { return };
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            // Another window took focus: the reader's place is kept, as on the phone.
+            WindowEvent::Focused(false) => app.keep_place(),
+            WindowEvent::Focused(true) => app.resumed(),
             WindowEvent::Resized(size) => {
                 if let Some((gfx, screen)) = &mut self.gfx {
                     screen.resize(gfx, size.width, size.height);

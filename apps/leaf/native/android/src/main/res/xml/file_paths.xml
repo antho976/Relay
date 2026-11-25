@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- What the FileProvider lends to the app a book's notes are shared with: only the cache's shared/
-     folder, where Leaf writes the Markdown it is sharing. -->
+<!-- What the FileProvider lends: the cache's shared/ folder, where Leaf writes the Markdown (or
+     backup) it is sharing, to the app picked in the share sheet; and updates/, where an app update
+     Leaf downloaded and checked waits for Android's installer. -->
 <paths>
     <cache-path name="shared" path="shared/" />
+    <cache-path name="updates" path="updates/" />
 </paths>

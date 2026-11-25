@@ -179,20 +179,55 @@ pub fn showable(s: &str, can: impl Fn(char) -> bool) -> String {
 }
 
 /// A series' description as worth reading: without a source's leading ranking ("Rank: #4 •
-/// Rating: 9.25 • Bookmarks: 156.5K") and its trailing list of other titles.
+/// Rating: 9.25 • Bookmarks: 156.5K") and its trailing lists of other titles and links
+/// ("Associated Name(s):- …", "Tracker(s):- [AniList](https://…)").
 pub fn clean_description(d: &str) -> String {
     let mut t = d.trim();
-    if t.starts_with("Rank:")
-        && let Some(i) = t.find("Bookmarks:")
+    // A site's numbers in front ("Rank: #4 • Rating: 9.25 • Bookmarks: 156.5K"), glued to the
+    // text that follows: each field and its number taken off.
+    const FIELDS: [&str; 7] = ["Rank:", "Rating:", "Bookmarks:", "Views:", "Followers:", "Follows:", "Score:"];
+    loop {
+        let rest = t.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '•' | '·' | '|' | ','));
+        let Some(f) = FIELDS.iter().find(|f| rest.starts_with(**f)) else { break };
+        let v = rest[f.len()..].trim_start();
+        let n = v.find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | ',' | '#' | 'K' | 'k' | 'M' | '%' | '/'))).unwrap_or(v.len());
+        t = &v[n..];
+    }
+    t = t.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '•' | '·' | '|'));
+    for tail in ["Alternative Title", "Associated Name", "Tracker(s)", "Official Source", "Links:", "\n---"] {
+        if let Some(i) = t.find(tail) {
+            t = t[..i].trim_end();
+        }
+    }
+    // A tagline in brackets ("[By the author of <Mount Hua>]") becomes its own sentence, a title in
+    // angle brackets is quoted, and the text is one paragraph with single spaces.
+    let mut out = String::new();
+    let mut rest = t;
+    if let Some(inner) = rest.strip_prefix('[')
+        && let Some(end) = inner.find(']')
     {
-        let rest = t[i + "Bookmarks:".len()..].trim_start();
-        let n = rest.find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | ',' | 'K' | 'k' | 'M'))).unwrap_or(rest.len());
-        t = rest[n..].trim_start();
+        let tag = inner[..end].trim();
+        out.push_str(tag);
+        if !tag.ends_with(['.', '!', '?']) {
+            out.push('.');
+        }
+        out.push(' ');
+        rest = &inner[end + 1..];
     }
-    if let Some(i) = t.find("Alternative Title") {
-        t = t[..i].trim_end();
+    out.push_str(rest);
+    let out = out.replace('<', "\u{201C}").replace('>', "\u{201D}");
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `n` of `all`, a different `n` each `turn_ms` (by the wall clock, so it holds across restarts),
+/// round the list: six top picks of 24 come round again after four turns.
+pub fn rotating<T: Clone>(all: &[T], n: usize, now_ms: i64, turn_ms: i64) -> Vec<T> {
+    if all.len() <= n || n == 0 {
+        return all.to_vec();
     }
-    t.to_string()
+    let sets = all.len().div_ceil(n) as i64;
+    let start = (now_ms.div_euclid(turn_ms.max(1)).rem_euclid(sets)) as usize * n;
+    (0..n).map(|i| all[(start + i) % all.len()].clone()).collect()
 }
 
 /// A day as "Mar 4, 2024", from milliseconds since the epoch (UTC).
@@ -311,6 +346,56 @@ pub fn updated_words(s: &Series, new: u32) -> String {
     }
 }
 
+/// Everything there is of the series is read: nothing after the furthest chapter read to its end
+/// (a stray side chapter left unread below it does not keep it going). With the chapters at hand,
+/// none unread past it; without, the library's newest is not past it. A belled series whose new
+/// chapter came after you finished is not finished: it has one past it.
+pub fn finished(s: &Series, d: Option<&SeriesDetail>) -> bool {
+    let Some(upto) = s.read_upto else { return false };
+    match d {
+        Some(d) if !d.chapters.is_empty() => !d.chapters.iter().any(|c| !c.read && c.number > upto),
+        _ => s.unread == 0 || s.latest.is_none_or(|l| l <= upto),
+    }
+}
+
+/// Unread chapters after the furthest one read: what "58 to go" counts.
+pub fn to_go(s: &Series, d: Option<&SeriesDetail>) -> u32 {
+    match (s.read_upto, d) {
+        (Some(upto), Some(d)) if !d.chapters.is_empty() => d.chapters.iter().filter(|c| !c.read && c.number > upto).count() as u32,
+        _ => s.unread,
+    }
+}
+
+/// Something "Continue reading" may list (a series or a book).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Reading {
+    /// Opened at least once (a chapter read or begun, a book opened).
+    pub started: bool,
+    /// Nothing left to read ([`finished`]).
+    pub done: bool,
+    /// When it was last read, ms.
+    pub read_at: i64,
+    /// A belled series' newest chapter came after it was last read: when it came, ms (0 if not).
+    pub news_at: i64,
+}
+
+/// "Continue reading" lists at least this many when it can: finished things fill it up to here.
+pub const CONTINUE_FILL: usize = 15;
+
+/// Continue reading's order, as (index, finished): what you have started and not finished, most
+/// recently read first (a belled series' new chapter counts as of when it came, so it comes back
+/// near the front); then, only while there are fewer than [`CONTINUE_FILL`], finished ones, most
+/// recently read first. Never what was never opened.
+pub fn continue_order(list: &[Reading]) -> Vec<(usize, bool)> {
+    let key = |r: &Reading| r.read_at.max(r.news_at);
+    let mut going: Vec<usize> = (0..list.len()).filter(|&i| list[i].started && !list[i].done).collect();
+    going.sort_by_key(|&i| std::cmp::Reverse(key(&list[i])));
+    let mut done: Vec<usize> = (0..list.len()).filter(|&i| list[i].started && list[i].done).collect();
+    done.sort_by_key(|&i| std::cmp::Reverse(list[i].read_at));
+    let room = CONTINUE_FILL.saturating_sub(going.len());
+    going.into_iter().map(|i| (i, false)).chain(done.into_iter().take(room).map(|i| (i, true))).collect()
+}
+
 /// Something the home page's spotlight may show.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spot {
@@ -320,14 +405,17 @@ pub struct Spot {
     pub updated_at: i64,
     /// When it was last read (or opened), ms; 0 if never.
     pub read_at: i64,
+    /// Everything of it is read ([`finished`]): it comes after what is still being read.
+    pub done: bool,
 }
 
 /// The spotlight's order, as indexes into `spots`: belled series with new chapters first (newest
-/// first), then what was read most recently; at most `max`. Never-read things lead nothing.
+/// first), then what is being read, most recently first; at most `max`. Finished things are left
+/// out (the caller adds them last, after what was added lately); never-read things lead nothing.
 pub fn spotlight(spots: &[Spot], max: usize) -> Vec<usize> {
     let mut ringing: Vec<usize> = (0..spots.len()).filter(|&i| spots[i].rings).collect();
     ringing.sort_by_key(|&i| std::cmp::Reverse(spots[i].updated_at));
-    let mut read: Vec<usize> = (0..spots.len()).filter(|&i| !spots[i].rings && spots[i].read_at > 0).collect();
+    let mut read: Vec<usize> = (0..spots.len()).filter(|&i| !spots[i].rings && !spots[i].done && spots[i].read_at > 0).collect();
     read.sort_by_key(|&i| std::cmp::Reverse(spots[i].read_at));
     ringing.into_iter().chain(read).take(max).collect()
 }
@@ -362,11 +450,11 @@ pub fn chapter_rows(chapters: &[Chapter], gaps: &[Gap]) -> Vec<Row> {
     keyed.into_iter().map(|(_, _, r)| r).collect()
 }
 
-/// The next `n` chapters from where reading stopped (the Continue point on) that the server has
-/// not downloaded: what "Download next 5" asks for. Chapter ids.
-pub fn next_to_download(chapters: &[Chapter], n: usize) -> Vec<i64> {
+/// The next `n` chapters from where reading stopped (the Continue point on) that this phone
+/// doesn't hold or wait for (`kept`): what "Download next 5" asks for. Chapter ids.
+pub fn next_to_download(chapters: &[Chapter], n: usize, kept: impl Fn(i64) -> bool) -> Vec<i64> {
     let from = continue_point(chapters).map_or(0, |c| c.index);
-    chapters[from..].iter().filter(|c| !c.read && !c.downloaded).take(n).map(|c| c.id).collect()
+    chapters[from..].iter().filter(|c| !c.read && !kept(c.id)).take(n).map(|c| c.id).collect()
 }
 
 /// What a gap row says.
@@ -394,6 +482,20 @@ pub fn resume_page(c: &Chapter) -> u32 {
     if c.pages == 0 { c.last_page } else { c.last_page.min(c.pages - 1) }
 }
 
+/// A series shows in My space (Recent, Following, Updates) and on Home only once you have done
+/// something with it: read a chapter, turned its bell on, or downloaded one to this phone
+/// (`downloads`: it has chapters on the phone or in the line). One added and left alone (a
+/// preview opened, "Wrong series?" elsewhere) stays out (the owner, 2026-11-23).
+pub fn in_space(s: &Series, downloads: bool) -> bool {
+    s.bell || s.last_read_at > 0 || s.read_upto.is_some() || downloads
+}
+
+/// Read into a chapter, not just opened: past its second page, or a fifth of it (chapters cut
+/// into a few tall pages). A chapter opened by mistake and left at once is not.
+pub fn read_into(page: u32, pages: u32) -> bool {
+    page >= 2 || (pages > 0 && page >= 1 && page * 5 >= pages)
+}
+
 /// Continue where the person stopped: a chapter left part way (after the last one finished),
 /// else the one after the last finished, else the first. When everything is read, the newest.
 pub fn continue_point(chapters: &[Chapter]) -> Option<Continue> {
@@ -401,7 +503,10 @@ pub fn continue_point(chapters: &[Chapter]) -> Option<Continue> {
         return None;
     }
     let last_read = chapters.iter().rposition(|c| c.read);
-    let part_way = chapters.iter().rposition(|c| !c.read && c.last_page > 0);
+    // A chapter left part way counts only once it was read into, or when it is the one after
+    // the last finished anyway: one opened by mistake and left at once does not move Continue.
+    let next = last_read.map_or(0, |r| r + 1);
+    let part_way = chapters.iter().enumerate().rposition(|(i, c)| !c.read && c.last_page > 0 && (i == next || read_into(c.last_page, c.pages)));
     let at = |i: usize, page: u32, verb: &str| Continue { index: i, page, label: format!("{verb} ch. {}", num(chapters[i].number)) };
     match (part_way, last_read) {
         (Some(p), r) if r.is_none_or(|r| p > r) => Some(at(p, resume_page(&chapters[p]), "Continue")),
@@ -481,6 +586,11 @@ impl ProgressGate {
         Some(self.mark(c, p, now_ns))
     }
 
+    /// The latest word on a chapter: held back, else sent, else what the server held.
+    pub fn place(&self, chapter: i64) -> Option<Progress> {
+        self.pending.filter(|(c, _)| *c == chapter).map(|(_, p)| p).or_else(|| self.sent.get(&chapter).copied())
+    }
+
     /// When the held-back report is due, if one is.
     pub fn due_at(&self) -> Option<u64> {
         self.pending.map(|_| self.last_ns.unwrap_or(0) + PROGRESS_EVERY_NS)
@@ -549,6 +659,294 @@ pub fn tile_rows(h: u32) -> Vec<(u32, u32)> {
     (0..h.div_ceil(TILE_H)).map(|i| (i * TILE_H, TILE_H.min(h - i * TILE_H))).collect()
 }
 
+/// When a backup file was made, from its name ("leaf-backup-1795398420.json": seconds since the
+/// epoch); 0 when the name doesn't say.
+pub fn backup_made_ms(name: &str) -> i64 {
+    let digits: String = name.rsplit('-').next().unwrap_or("").chars().take_while(char::is_ascii_digit).collect();
+    digits.parse::<i64>().ok().filter(|s| *s > 1_000_000_000).map_or(0, |s| s * 1000)
+}
+
+/// A file name from a `Content-Disposition` header (`attachment; filename="x.json"`).
+pub fn disposition_name(h: &str) -> Option<String> {
+    let (_, rest) = h.split_once("filename=")?;
+    let name = rest.split(';').next()?.trim().trim_matches('"').trim();
+    let name: String = name.chars().filter(|c| !matches!(c, '/' | '\\')).collect();
+    (!name.is_empty()).then_some(name)
+}
+
+// Finding a title as you type
+
+/// A letter without its accent, lower case: "é" and "É" are "e", "ß" is "ss", "æ" is "ae".
+fn fold_char(c: char, out: &mut String) {
+    let base = match c {
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' | 'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' | 'Ā' | 'Ă' | 'Ą' => 'a',
+        'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' | 'Ç' | 'Ć' | 'Ĉ' | 'Ċ' | 'Č' => 'c',
+        'ď' | 'đ' | 'Ď' | 'Đ' | 'ð' | 'Ð' => 'd',
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' | 'È' | 'É' | 'Ê' | 'Ë' | 'Ē' | 'Ĕ' | 'Ė' | 'Ę' | 'Ě' => 'e',
+        'ĝ' | 'ğ' | 'ġ' | 'ģ' | 'Ĝ' | 'Ğ' | 'Ġ' | 'Ģ' => 'g',
+        'ĥ' | 'ħ' | 'Ĥ' | 'Ħ' => 'h',
+        'ì' | 'í' | 'î' | 'ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ı' | 'Ì' | 'Í' | 'Î' | 'Ï' | 'Ĩ' | 'Ī' | 'Ĭ' | 'Į' | 'İ' => 'i',
+        'ĵ' | 'Ĵ' => 'j',
+        'ķ' | 'Ķ' => 'k',
+        'ĺ' | 'ļ' | 'ľ' | 'ŀ' | 'ł' | 'Ĺ' | 'Ļ' | 'Ľ' | 'Ŀ' | 'Ł' => 'l',
+        'ñ' | 'ń' | 'ņ' | 'ň' | 'Ñ' | 'Ń' | 'Ņ' | 'Ň' => 'n',
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ŏ' | 'ő' | 'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' | 'Ø' | 'Ō' | 'Ŏ' | 'Ő' => 'o',
+        'ŕ' | 'ŗ' | 'ř' | 'Ŕ' | 'Ŗ' | 'Ř' => 'r',
+        'ś' | 'ŝ' | 'ş' | 'š' | 'Ś' | 'Ŝ' | 'Ş' | 'Š' => 's',
+        'ţ' | 'ť' | 'ŧ' | 'Ţ' | 'Ť' | 'Ŧ' => 't',
+        'ù' | 'ú' | 'û' | 'ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' | 'Ù' | 'Ú' | 'Û' | 'Ü' | 'Ũ' | 'Ū' | 'Ŭ' | 'Ů' | 'Ű' | 'Ų' => 'u',
+        'ŵ' | 'Ŵ' => 'w',
+        'ý' | 'ÿ' | 'ŷ' | 'Ý' | 'Ÿ' | 'Ŷ' => 'y',
+        'ź' | 'ż' | 'ž' | 'Ź' | 'Ż' | 'Ž' => 'z',
+        'ß' => return out.push_str("ss"),
+        'æ' | 'Æ' => return out.push_str("ae"),
+        'œ' | 'Œ' => return out.push_str("oe"),
+        'þ' | 'Þ' => return out.push_str("th"),
+        // Curly quotes and dashes read as the plain ones.
+        '\u{2018}' | '\u{2019}' => '\'',
+        '\u{2013}' | '\u{2014}' => '-',
+        c => return out.extend(c.to_lowercase()),
+    };
+    out.push(base);
+}
+
+/// `s` lower case, without accents, its runs of spaces made one.
+pub fn fold(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_whitespace() {
+            if !out.is_empty() && !out.ends_with(' ') {
+                out.push(' ');
+            }
+        } else {
+            fold_char(c, &mut out);
+        }
+    }
+    out.trim_end().to_string()
+}
+
+/// The title holds every word typed, anywhere in it (inside words too), whatever the case and
+/// accents: "lev god" finds "Level Up with the Gods". An empty query holds everything.
+pub fn title_matches(title: &str, query: &str) -> bool {
+    let t = fold(title);
+    fold(query).split(' ').filter(|w| !w.is_empty()).all(|w| t.contains(w))
+}
+
+// Shelves
+
+/// Where a series sits in My space: what you choose, or Reading once started and Plan to read
+/// before.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Shelf {
+    Reading,
+    Plan,
+    Hold,
+    Dropped,
+    Done,
+}
+
+impl Shelf {
+    pub const ALL: [Shelf; 5] = [Shelf::Reading, Shelf::Plan, Shelf::Hold, Shelf::Dropped, Shelf::Done];
+
+    /// The name the server keeps.
+    pub fn key(self) -> &'static str {
+        match self {
+            Shelf::Reading => "reading",
+            Shelf::Plan => "plan",
+            Shelf::Hold => "hold",
+            Shelf::Dropped => "dropped",
+            Shelf::Done => "done",
+        }
+    }
+
+    pub fn words(self) -> &'static str {
+        match self {
+            Shelf::Reading => "Reading",
+            Shelf::Plan => "Plan to read",
+            Shelf::Hold => "On hold",
+            Shelf::Dropped => "Dropped",
+            Shelf::Done => "Done",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Shelf> {
+        Shelf::ALL.into_iter().find(|s| s.key() == k)
+    }
+}
+
+/// The shelf a series shows on: the one chosen, else Reading once a chapter was read or opened,
+/// else Plan to read.
+pub fn shelf_of(s: &Series) -> Shelf {
+    if let Some(sh) = s.shelf.as_deref().and_then(Shelf::from_key) {
+        return sh;
+    }
+    if s.read_upto.is_some() || s.last_read_at > 0 { Shelf::Reading } else { Shelf::Plan }
+}
+
+/// How many series sit on each shelf, in [`Shelf::ALL`]'s order.
+pub fn shelf_counts(list: &[Series]) -> [usize; 5] {
+    let mut n = [0; 5];
+    for s in list {
+        let i = Shelf::ALL.iter().position(|x| *x == shelf_of(s)).unwrap_or(0);
+        n[i] += 1;
+    }
+    n
+}
+
+// Updates
+
+/// Updates grouped by the local day they came, newest first: (`day` counted from 1970-01-01 as
+/// [`crate::shelf::day_of`] counts, indexes into `list`). `belled_only` leaves out series whose
+/// bell is off; `query` filters by title.
+pub fn group_updates(list: &[leaf_proto::Update], belled_only: bool, query: &str, day_of: impl Fn(i64) -> i64) -> Vec<(i64, Vec<usize>)> {
+    let mut idx: Vec<usize> = (0..list.len()).filter(|&i| (!belled_only || list[i].bell) && title_matches(&list[i].title, query)).collect();
+    idx.sort_by_key(|&i| (std::cmp::Reverse(list[i].at), std::cmp::Reverse(list[i].number.to_bits())));
+    let mut out: Vec<(i64, Vec<usize>)> = Vec::new();
+    for i in idx {
+        let d = day_of(list[i].at);
+        match out.last_mut() {
+            Some((day, v)) if *day == d => v.push(i),
+            _ => out.push((d, vec![i])),
+        }
+    }
+    out
+}
+
+/// A day's updates as rows: a series with more than two chapters that day is one row (its
+/// chapters, lowest number first), the others one row per chapter; in the day's order, a series'
+/// row where its newest chapter was.
+pub fn fold_updates(list: &[leaf_proto::Update], day: &[usize]) -> Vec<Vec<usize>> {
+    let mut of: Vec<(i64, Vec<usize>)> = Vec::new();
+    for &i in day {
+        match of.iter_mut().find(|(s, _)| *s == list[i].series) {
+            Some((_, v)) => v.push(i),
+            None => of.push((list[i].series, vec![i])),
+        }
+    }
+    let mut out = Vec::new();
+    for (_, mut v) in of {
+        if v.len() > 2 {
+            v.sort_by(|&a, &b| list[a].number.total_cmp(&list[b].number));
+            out.push(v);
+        } else {
+            out.extend(v.into_iter().map(|i| vec![i]));
+        }
+    }
+    out
+}
+
+/// A folded row's line: "Chapters 1–86 · 86 new", "· 3 new of 86", or "· read".
+pub fn run_words(list: &[leaf_proto::Update], run: &[usize]) -> String {
+    let (lo, hi) = (list[run[0]].number, list[run[run.len() - 1]].number);
+    let unread = run.iter().filter(|&&i| !list[i].read).count();
+    let tail = match unread {
+        0 => "read".to_string(),
+        u if u == run.len() => format!("{u} new"),
+        u => format!("{u} new of {}", run.len()),
+    };
+    format!("Chapters {}\u{2013}{} · {tail}", num(lo), num(hi))
+}
+
+/// A day's heading: "Today", "Yesterday", else its date.
+pub fn day_words(day: i64, today: i64) -> String {
+    match today - day {
+        0 => "Today".into(),
+        1 => "Yesterday".into(),
+        _ => date(day * 86_400_000),
+    }
+}
+
+/// The local time of day, "14:05", of a moment `offset_s` seconds from UTC.
+pub fn clock_words(ms: i64, offset_s: i64) -> String {
+    let m = (ms.div_euclid(1000) + offset_s).div_euclid(60).rem_euclid(1440);
+    format!("{:02}:{:02}", m / 60, m % 60)
+}
+
+/// Minutes into the day as "23:00".
+pub fn minute_words(m: u16) -> String {
+    format!("{:02}:{:02}", (m / 60) % 24, m % 60)
+}
+
+// Auto-scroll
+
+/// Auto-scroll's speeds, slowest first.
+pub const SPEEDS: u8 = 10;
+/// The speed a series starts at.
+pub const DEFAULT_SPEED: u8 = 4;
+
+/// Units per second at speed `level` (1 to [`SPEEDS`]): each a quarter faster than the one before,
+/// from a slow read of dense pages to a skim.
+pub fn scroll_speed(level: u8) -> f32 {
+    40.0 * 1.25f32.powi(level.clamp(1, SPEEDS) as i32 - 1)
+}
+
+// White and black gutters
+
+/// A run of near-uniform rows at a page's top or bottom longer than this (page pixels) is cut.
+pub const GUTTER_MIN: u32 = 40;
+/// It is cut down to this.
+pub const GUTTER_KEEP: u32 = 16;
+
+/// A row of RGBA pixels is near-uniform white (Some(true)) or black (Some(false)): all but one in
+/// a hundred of the pixels looked at are within a small distance of it.
+fn row_kind(row: &[u8]) -> Option<bool> {
+    let px = row.len() / 4;
+    if px == 0 {
+        return None;
+    }
+    let step = (px / 200).max(1);
+    let (mut white, mut black, mut seen) = (0usize, 0usize, 0usize);
+    for i in (0..px).step_by(step) {
+        let p = &row[i * 4..i * 4 + 3];
+        let (lo, hi) = (p.iter().copied().min().unwrap_or(0), p.iter().copied().max().unwrap_or(0));
+        if lo >= 232 {
+            white += 1;
+        } else if hi <= 24 {
+            black += 1;
+        }
+        seen += 1;
+    }
+    let need = seen - seen / 100;
+    if white >= need {
+        Some(true)
+    } else if black >= need {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// How many rows to cut from a page's top and bottom (RGBA, `w` × `h`): a run of near-white or
+/// near-black rows longer than [`GUTTER_MIN`] is cut down to [`GUTTER_KEEP`]. A page that is all
+/// one blank keeps twice that.
+pub fn gutter_cuts(px: &[u8], w: u32, h: u32) -> (u32, u32) {
+    let row = (w * 4) as usize;
+    if h == 0 || px.len() < row * h as usize {
+        return (0, 0);
+    }
+    let kind = |y: u32| row_kind(&px[y as usize * row..(y as usize + 1) * row]);
+    let run = |rows: &mut dyn Iterator<Item = u32>| -> u32 {
+        let mut first = None;
+        let mut n = 0;
+        for y in rows {
+            match (kind(y), first) {
+                (Some(k), None) => first = Some(k),
+                (Some(k), Some(f)) if k == f => {}
+                _ => break,
+            }
+            n += 1;
+        }
+        n
+    };
+    let top = run(&mut (0..h));
+    if top >= h {
+        return (h.saturating_sub(2 * GUTTER_KEEP), 0);
+    }
+    let bottom = run(&mut (0..h).rev());
+    let cut = |n: u32| if n > GUTTER_MIN { n - GUTTER_KEEP } else { 0 };
+    (cut(top), cut(bottom))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,6 +1003,7 @@ mod tests {
             bell: false,
             added_at: 0,
             last_read_at: 0,
+            shelf: None,
         };
         assert_eq!(library_line(&s), "350 chapters");
         assert_eq!(read_fraction(&s), 0.0);
@@ -658,7 +1057,19 @@ mod tests {
             bell: false,
             added_at: 1,
             last_read_at,
+            shelf: None,
         }
+    }
+
+    #[test]
+    fn only_what_you_did_something_with_is_in_your_space() {
+        let mut s = series(None, 10, 0, 0);
+        assert!(!in_space(&s, false), "added and left alone");
+        assert!(in_space(&s, true), "a chapter downloaded");
+        s.bell = true;
+        assert!(in_space(&s, false), "followed");
+        assert!(in_space(&series(Some(1.0), 9, 0, 0), false), "a chapter read");
+        assert!(in_space(&series(None, 10, 0, 5), false), "opened in the reader");
     }
 
     #[test]
@@ -698,11 +1109,54 @@ mod tests {
 
     #[test]
     fn the_spotlight_leads_with_belled_news_then_reading() {
-        let sp = |rings, updated_at, read_at| Spot { rings, updated_at, read_at };
-        let spots = [sp(false, 9, 50), sp(true, 30, 10), sp(false, 0, 0), sp(true, 40, 5), sp(false, 1, 70)];
+        let sp = |rings, updated_at, read_at| Spot { rings, updated_at, read_at, done: false };
+        let mut spots = vec![sp(false, 9, 50), sp(true, 30, 10), sp(false, 0, 0), sp(true, 40, 5), sp(false, 1, 70)];
         assert_eq!(spotlight(&spots, 5), vec![3, 1, 4, 0]);
         assert_eq!(spotlight(&spots, 2), vec![3, 1]);
         assert!(spotlight(&[], 5).is_empty());
+        // Finished, read last: left to the caller to add at the end.
+        spots.push(Spot { done: true, ..sp(false, 0, 90) });
+        assert_eq!(spotlight(&spots, 9), vec![3, 1, 4, 0]);
+    }
+
+    #[test]
+    fn finished_means_nothing_left_past_where_you_read() {
+        // Read to 10 of 10: finished, though a side chapter 4.5 was never read.
+        let mut s = series(Some(10.0), 1, 0, 5);
+        assert!(finished(&s, None));
+        let mut cs: Vec<Chapter> = (1..=10).map(|n| ch(n, n as f64, true, 0)).collect();
+        cs.insert(4, ch(99, 4.5, false, 0));
+        let d = SeriesDetail { series: s.clone(), description: None, chapters: cs.clone() };
+        assert!(finished(&s, Some(&d)));
+        assert_eq!(to_go(&s, Some(&d)), 0);
+        // A new chapter 11 came after: not finished, one to go.
+        cs.push(ch(11, 11.0, false, 0));
+        s.latest = Some(11.0);
+        let d = SeriesDetail { series: s.clone(), description: None, chapters: cs };
+        assert!(!finished(&s, Some(&d)));
+        assert!(!finished(&s, None));
+        assert_eq!(to_go(&s, Some(&d)), 1);
+        // Never read, or part way: not finished.
+        assert!(!finished(&series(None, 10, 0, 0), None));
+        assert!(!finished(&series(Some(6.0), 4, 0, 5), None));
+    }
+
+    #[test]
+    fn continue_lists_what_is_going_then_fills_with_what_is_finished() {
+        let r = |started, done, read_at, news_at| Reading { started, done, read_at, news_at };
+        let list = [r(true, false, 50, 0), r(true, true, 90, 0), r(false, false, 0, 0), r(true, false, 10, 80), r(true, false, 70, 0), r(true, true, 60, 0)];
+        // Going, most recent first (3's new chapter came at 80); then finished ones, labelled.
+        assert_eq!(continue_order(&list), vec![(3, false), (4, false), (0, false), (1, true), (5, true)]);
+        // Fifteen going: no finished ones.
+        let mut many: Vec<Reading> = (0..15).map(|i| r(true, false, 100 + i, 0)).collect();
+        many.push(r(true, true, 1000, 0));
+        let order = continue_order(&many);
+        assert_eq!(order.len(), 15);
+        assert!(order.iter().all(|(_, done)| !done));
+        assert_eq!(order[0].0, 14);
+        // Fourteen going: one finished fills the last place.
+        many.remove(0);
+        assert_eq!(continue_order(&many).last(), Some(&(14, true)));
     }
 
     #[test]
@@ -740,19 +1194,31 @@ mod tests {
 
     #[test]
     fn download_next_starts_where_reading_stopped() {
-        let mut chapters: Vec<Chapter> = (1..=10).map(|n| ch(n, n as f64, n <= 3, 0)).collect();
-        for c in &mut chapters {
-            c.downloaded = false;
-        }
-        chapters[4].downloaded = true;
-        assert_eq!(next_to_download(&chapters, 5), vec![4, 6, 7, 8, 9]);
-        assert_eq!(next_to_download(&chapters[..5], 5), vec![4]);
+        let chapters: Vec<Chapter> = (1..=10).map(|n| ch(n, n as f64, n <= 3, 0)).collect();
+        // Chapter 5 is on this phone already; what the server keeps doesn't count.
+        let kept = |id: i64| id == 5;
+        assert_eq!(next_to_download(&chapters, 5, kept), vec![4, 6, 7, 8, 9]);
+        assert_eq!(next_to_download(&chapters[..5], 5, kept), vec![4]);
     }
 
     #[test]
     fn descriptions_lose_the_sources_furniture() {
         assert_eq!(clean_description("Rank: #4 • Rating: 9.25 • Bookmarks: 156.5KNanotechnology meets martial arts.Alternative Titles:- NM"), "Nanotechnology meets martial arts.");
         assert_eq!(clean_description("  A plain one. "), "A plain one.");
+        let picks: Vec<u32> = (0..14).collect();
+        let h = 3_600_000;
+        assert_eq!(rotating(&picks, 6, 0, 4 * h), vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(rotating(&picks, 6, 3 * h, 4 * h), vec![0, 1, 2, 3, 4, 5], "the same until the turn");
+        assert_eq!(rotating(&picks, 6, 4 * h, 4 * h), vec![6, 7, 8, 9, 10, 11]);
+        assert_eq!(rotating(&picks, 6, 8 * h, 4 * h), vec![12, 13, 0, 1, 2, 3], "round the list, always six");
+        assert_eq!(rotating(&picks, 6, 12 * h, 4 * h), vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(rotating(&picks[..4], 6, 4 * h, 4 * h), vec![0, 1, 2, 3], "fewer than six: all of them");
+        assert_eq!(
+            clean_description("Rating: 9.29 • Bookmarks: 40.9K[By the Author that brought you <Return of the Mount Hua Sect>] The great warrior who ended the chaos."),
+            "By the Author that brought you \u{201C}Return of the Mount Hua Sect\u{201D}. The great warrior who ended the chaos."
+        );
+        assert_eq!(clean_description("Views: 1.2M | A story.\n\nIn two parts."), "A story. In two parts.");
+        assert_eq!(clean_description("Hajin begins to uncover the truth behind his death...Associated Name(s):- Reborn As The Heavenly DemonTracker(s):- [Official Source](https://www.webtoons.com/en/x)"), "Hajin begins to uncover the truth behind his death...");
     }
 
     #[test]
@@ -792,6 +1258,12 @@ mod tests {
         assert_eq!(continue_point(&old).unwrap().index, 2);
         let all = vec![ch(1, 1.0, true, 29), ch(2, 2.0, true, 29)];
         assert_eq!(continue_point(&all).unwrap(), Continue { index: 1, page: 0, label: "Read ch. 2 again".into() });
+        // A chapter far ahead opened by mistake (left on its first pages) does not move Continue;
+        // one read into does.
+        let slip = vec![ch(1, 1.0, true, 29), ch(2, 2.0, false, 0), ch(3, 3.0, false, 0), ch(4, 4.0, false, 1)];
+        assert_eq!(continue_point(&slip).unwrap().index, 1);
+        let real = vec![ch(1, 1.0, true, 29), ch(2, 2.0, false, 0), ch(3, 3.0, false, 0), ch(4, 4.0, false, 6)];
+        assert_eq!(continue_point(&real).unwrap().index, 3);
         let mut unknown = vec![ch(1, 1.0, true, 0), ch(2, 2.0, false, 15)];
         unknown[1].pages = 0;
         assert_eq!(continue_point(&unknown).unwrap().page, 15, "a length not known yet does not start the chapter over");
@@ -843,5 +1315,128 @@ mod tests {
         assert_eq!(tile_rows(2500), vec![(0, 1020), (1020, 1020), (2040, 460)]);
         assert_eq!(tile_rows(1020), vec![(0, 1020)]);
         assert!(tile_rows(0).is_empty());
+    }
+
+    #[test]
+    fn a_title_is_found_by_any_part_of_it_whatever_its_accents() {
+        assert!(title_matches("Level Up with the Gods", "lev god"));
+        assert!(title_matches("Level Up with the Gods", ""));
+        assert!(title_matches("Pokémon Adventures", "POKEMON"));
+        assert!(title_matches("Çağ", "cag"));
+        assert!(title_matches("Solo  Leveling", "o lev"));
+        assert!(!title_matches("Nano Machine", "nano king"));
+        assert_eq!(fold("  Straße  Œuvre "), "strasse oeuvre");
+    }
+
+    #[test]
+    fn a_series_sits_on_the_shelf_chosen_else_where_its_reading_puts_it() {
+        let mut s = series(None, 10, 0, 0);
+        assert_eq!(shelf_of(&s), Shelf::Plan);
+        s.last_read_at = 5;
+        assert_eq!(shelf_of(&s), Shelf::Reading);
+        s.shelf = Some("dropped".into());
+        assert_eq!(shelf_of(&s), Shelf::Dropped);
+        s.shelf = Some("nonsense".into());
+        assert_eq!(shelf_of(&s), Shelf::Reading);
+        let mut d = series(Some(1.0), 9, 0, 0);
+        d.shelf = Some("done".into());
+        assert_eq!(shelf_counts(&[s, d, series(None, 1, 0, 0)]), [1, 1, 0, 0, 1]);
+        for sh in Shelf::ALL {
+            assert_eq!(Shelf::from_key(sh.key()), Some(sh));
+        }
+    }
+
+    #[test]
+    fn updates_group_by_day_newest_first() {
+        let day = 86_400_000i64;
+        let u = |series: i64, title: &str, number: f64, at: i64, bell: bool| leaf_proto::Update { series, title: title.into(), chapter: series * 1000 + number as i64, number, name: String::new(), at, read: false, bell };
+        let list = vec![u(1, "Nano Machine", 280.0, 10 * day + 5, true), u(2, "Level Up", 90.0, 11 * day + 7, false), u(1, "Nano Machine", 281.0, 10 * day + 5, true), u(3, "Junk", 5.0, 9 * day, true)];
+        let g = group_updates(&list, false, "", |ms| ms.div_euclid(day));
+        assert_eq!(g, vec![(11, vec![1]), (10, vec![2, 0]), (9, vec![3])]);
+        assert_eq!(group_updates(&list, true, "", |ms| ms.div_euclid(day)), vec![(10, vec![2, 0]), (9, vec![3])]);
+        assert_eq!(group_updates(&list, false, "nano", |ms| ms.div_euclid(day)), vec![(10, vec![2, 0])]);
+        assert_eq!(day_words(11, 11), "Today");
+        assert_eq!(day_words(10, 11), "Yesterday");
+        assert_eq!(day_words(0, 11), "Jan 1, 1970");
+        assert_eq!(clock_words(14 * 3_600_000 + 5 * 60_000, 0), "14:05");
+        assert_eq!(clock_words(23 * 3_600_000, 3600), "00:00");
+        assert_eq!(minute_words(1380), "23:00");
+    }
+
+    #[test]
+    fn auto_scroll_speeds_climb_evenly() {
+        assert_eq!(scroll_speed(1), 40.0);
+        assert!(scroll_speed(0) == scroll_speed(1) && scroll_speed(99) == scroll_speed(SPEEDS));
+        for l in 1..SPEEDS {
+            assert!((scroll_speed(l + 1) / scroll_speed(l) - 1.25).abs() < 1e-4);
+        }
+    }
+
+    /// A page `w` wide of rows given as (colour, count) from the top.
+    fn page(w: u32, bands: &[([u8; 3], u32)]) -> (Vec<u8>, u32) {
+        let mut px = Vec::new();
+        let mut h = 0;
+        for (c, n) in bands {
+            for _ in 0..*n {
+                for _ in 0..w {
+                    px.extend_from_slice(&[c[0], c[1], c[2], 255]);
+                }
+            }
+            h += n;
+        }
+        (px, h)
+    }
+
+    #[test]
+    fn white_and_black_gutters_are_cut_down() {
+        let (white, black, art) = ([255, 255, 255], [3, 3, 3], [120, 60, 200]);
+        // 100 white rows over the art, 60 black under it: cut to 16 each.
+        let (px, h) = page(50, &[(white, 100), (art, 300), (black, 60)]);
+        assert_eq!(gutter_cuts(&px, 50, h), (84, 44));
+        // 40 rows is not more than 40: kept whole.
+        let (px, h) = page(50, &[(white, 40), (art, 300), ([250, 248, 245], 41)]);
+        assert_eq!(gutter_cuts(&px, 50, h), (0, 25), "near-white counts as white");
+        // White then black is two runs: only the first counts.
+        let (px, h) = page(50, &[(white, 30), (black, 30), (art, 100)]);
+        assert_eq!(gutter_cuts(&px, 50, h), (0, 0));
+        // A speck or two in a row does not stop it being blank; art does.
+        let (mut px, h) = page(400, &[(white, 80), (art, 100)]);
+        px[10 * 400 * 4..10 * 400 * 4 + 4].copy_from_slice(&[0, 0, 0, 255]);
+        assert_eq!(gutter_cuts(&px, 400, h), (64, 0));
+        // A blank page keeps a sliver.
+        let (px, h) = page(50, &[(white, 500)]);
+        assert_eq!(gutter_cuts(&px, 50, h), (500 - 32, 0));
+        assert_eq!(gutter_cuts(&[], 50, 0), (0, 0));
+    }
+
+    #[test]
+    fn a_backup_says_when_it_was_made() {
+        assert_eq!(backup_made_ms("leaf-backup-1795398420.json"), 1_795_398_420_000);
+        assert_eq!(backup_made_ms("backup.json"), 0);
+        assert_eq!(disposition_name("attachment; filename=\"leaf-backup-1795398420.json\""), Some("leaf-backup-1795398420.json".into()));
+        assert_eq!(disposition_name("attachment; filename=../x.json"), Some("..x.json".into()));
+        assert_eq!(disposition_name("inline"), None);
+    }
+}
+
+#[cfg(test)]
+mod fold_tests {
+    use super::*;
+    fn u(series: i64, number: f64, read: bool) -> leaf_proto::Update {
+        leaf_proto::Update { series, title: format!("S{series}"), chapter: (series * 1000) + number as i64, number, name: String::new(), at: 0, read, bell: true }
+    }
+    #[test]
+    fn more_than_two_of_a_series_fold_into_one_row() {
+        let mut list: Vec<_> = (1..=86).rev().map(|n| u(1, n as f64, false)).collect();
+        list.push(u(2, 5.0, false));
+        list.push(u(2, 4.0, true));
+        let day: Vec<usize> = (0..list.len()).collect();
+        let rows = fold_updates(&list, &day);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].len(), 86);
+        assert_eq!(run_words(&list, &rows[0]), "Chapters 1\u{2013}86 · 86 new");
+        assert_eq!((rows[1].len(), rows[2].len()), (1, 1));
+        list[0].read = true;
+        assert_eq!(run_words(&list, &rows[0]), "Chapters 1\u{2013}86 · 85 new of 86");
     }
 }

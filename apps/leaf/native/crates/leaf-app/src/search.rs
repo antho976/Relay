@@ -1,9 +1,17 @@
-//! Search, the second tab: one field, every source on the server asked at once (`/v1/search`),
-//! one row per work. Add sends every hit's manga id (`POST /v1/follow`), which puts the series in
-//! My space with its bell off (adding is not following), and opens it; one already added opens.
-//! Sources are not named: which one a series comes from is the server's business.
+//! Search, the second tab: one field, one row per work. The server asks a few broad sources
+//! (`/v1/search?source=`, one request each, so results show as they come) and keeps only titles
+//! with every word searched; "Search all sources" under the results asks the rest. A search goes
+//! once the typing pauses ([`PAUSE_NS`]) or on Enter, never for fewer than [`MIN_CHARS`]
+//! characters, never twice for the same words. A word may be off by a letter or two
+//! ([`leaf_proto::title_has_words`]); when nothing is found, AniList is asked once what the words
+//! probably meant (`/v1/search/suggest`), offered as "Did you mean …?", which searches that.
+//!
+//! A row opens the title's page: a series already added opens as it is; any other as a preview
+//! (`/v1/preview`, [`App::open_preview`]), with Follow and Download, nothing added until a chapter
+//! is read, it is followed or something is downloaded (the owner, 2026-11-23). Sources are not
+//! named: which one a series comes from is the server's business.
 
-use leaf_proto::{Candidate, Follow, Series};
+use leaf_proto::{Candidate, Series};
 
 use crate::app::{App, Route};
 use crate::cx;
@@ -13,27 +21,127 @@ use crate::kit::{self, Kb};
 use crate::net::Job;
 use crate::theme::{self as t, COVER_R, PAD, ty};
 
+/// A search goes this long after the last key, unless Enter sends it first.
+pub const PAUSE_NS: u64 = 700_000_000;
+/// Fewer characters than this are not searched.
+pub const MIN_CHARS: usize = 3;
+/// The most works shown (the server sends at most this many per source).
+pub const MAX_SHOWN: usize = 20;
+
 #[derive(Default)]
 pub struct State {
     pub query: String,
-    /// The query last sent, and what came back for it.
+    /// The query last sent, and what came back for it so far.
     pub asked: Option<String>,
+    /// That search asks every source ("Search all sources").
+    pub all: bool,
     pub results: Option<Result<Vec<Candidate>, String>>,
-    /// The title being followed now, and why the last follow failed.
-    pub following: Option<String>,
-    pub follow_error: Option<String>,
+    /// Parts of the search still to come.
+    pub more: bool,
+    /// The next part replaces what is shown (the all-sources answer), rather than joining it.
+    replace: bool,
+    /// The words as last seen, and when they last changed.
+    typed: String,
+    typed_ns: u64,
+    /// "Did you mean": the words it was asked for, and what AniList said they meant.
+    pub suggest: Option<(String, Option<String>)>,
+    /// Words that found nothing, to ask AniList about (the page sends it).
+    pub suggest_due: Option<String>,
+}
+
+/// One source's works joined to those shown: the same work (as the server tells works apart)
+/// gains its hits; found on more sources first; at most [`MAX_SHOWN`].
+pub fn merge(shown: &mut Vec<Candidate>, more: Vec<Candidate>) {
+    for c in more {
+        match shown.iter_mut().find(|s| leaf_proto::same_work(&s.title, &c.title)) {
+            Some(s) => {
+                for h in c.hits {
+                    if !s.hits.iter().any(|x| x.manga_id == h.manga_id || x.source == h.source) {
+                        s.hits.push(h);
+                    }
+                }
+                s.followed = s.followed.or(c.followed);
+            }
+            None => shown.push(c),
+        }
+    }
+    shown.sort_by_key(|c| std::cmp::Reverse(c.hits.len()));
+    shown.truncate(MAX_SHOWN);
+}
+
+/// Whether `q` (trimmed) is to be searched now: long enough, not the words last searched, and
+/// either sent (Enter) or the typing paused.
+pub fn due(q: &str, asked: Option<&str>, sent: bool, typed_ns: u64, now_ns: u64) -> bool {
+    q.chars().count() >= MIN_CHARS && asked != Some(q) && (sent || now_ns.saturating_sub(typed_ns) >= PAUSE_NS)
 }
 
 impl State {
-    pub fn answered(&mut self, q: String, r: Result<Vec<Candidate>, String>) {
-        if self.asked.as_deref() == Some(q.as_str()) {
-            self.results = Some(r);
+    /// An answer, or one source's part of it.
+    pub fn answered(&mut self, q: String, all: bool, r: Result<Vec<Candidate>, String>, last: bool) {
+        if self.asked.as_deref() != Some(q.as_str()) || self.all != all {
+            return;
+        }
+        match r {
+            Ok(list) => match &mut self.results {
+                Some(Ok(shown)) if !self.replace => merge(shown, list),
+                _ => {
+                    let mut shown = Vec::new();
+                    merge(&mut shown, list);
+                    self.results = Some(Ok(shown));
+                }
+            },
+            // A source that failed leaves the others' results; alone, it says why.
+            Err(e) => {
+                if self.results.is_none() && last {
+                    self.results = Some(Err(e));
+                }
+            }
+        }
+        if last {
+            self.more = false;
+            self.replace = false;
+            if self.results.is_none() {
+                self.results = Some(Ok(Vec::new()));
+            }
+            // Nothing at all: what did the words mean? Asked once for the same words.
+            if matches!(&self.results, Some(Ok(l)) if l.is_empty()) && self.suggest.as_ref().is_none_or(|(sq, _)| *sq != q) {
+                self.suggest = Some((q.clone(), None));
+                self.suggest_due = Some(q);
+            }
+        } else if self.results.is_some() {
+            self.replace = false;
         }
     }
 
+    /// The search sent: the broad sources, or (`all`) every one, the results shown kept until it
+    /// answers.
+    fn ask(&mut self, q: &str, all: bool) {
+        self.asked = Some(q.to_string());
+        self.all = all;
+        self.more = true;
+        if all {
+            self.replace = true;
+        } else {
+            self.results = None;
+            self.replace = false;
+        }
+    }
+
+    /// AniList's answer for words that found nothing.
+    pub fn suggested(&mut self, q: String, title: Option<String>) {
+        if self.suggest.as_ref().is_some_and(|(sq, _)| *sq == q) {
+            self.suggest = Some((q, title));
+        }
+    }
+
+    /// The title "Did you mean" offers for the words shown, if any.
+    pub fn meant(&self) -> Option<&str> {
+        let (q, t) = self.suggest.as_ref()?;
+        (self.asked.as_deref() == Some(q.as_str())).then_some(())?;
+        t.as_deref()
+    }
+
     pub fn followed(&mut self, s: &Series) {
-        self.following = None;
-        self.follow_error = None;
         if let Some(Ok(list)) = &mut self.results {
             for c in list.iter_mut() {
                 if leaf_proto::same_work(&c.title, &s.title) || c.title == s.title {
@@ -43,13 +151,8 @@ impl State {
         }
     }
 
-    pub fn follow_failed(&mut self, why: String) {
-        self.following = None;
-        self.follow_error = Some(why);
-    }
-
     fn searching(&self) -> bool {
-        self.asked.is_some() && self.results.is_none()
+        self.asked.is_some() && (self.results.is_none() || self.more)
     }
 }
 
@@ -72,14 +175,14 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let x0 = PAD;
     let w = WIDTH - PAD * 2.0;
     let mut y = pg.top + 8.0;
-    let mut follow: Option<Candidate> = None;
+    let mut preview: Option<Candidate> = None;
     let mut open: Option<i64> = None;
+    let mut meant: Option<String> = None;
     let mut retry = false;
+    let mut search_all = false;
     let mut connect = false;
     let no_server = app.server.is_none();
-    if let Some(e) = &st.follow_error {
-        y += cx.c.para(e, x0, y, w, Text::new(ty::UI, t::DANGER).line(1.4), 3) + 12.0;
-    }
+    let did_you_mean = st.meant().map(str::to_string);
     match (&st.asked, &st.results) {
         _ if no_server => {
             y += 60.0;
@@ -90,7 +193,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         (None, _) => {
             y += 24.0;
             cx.c.para(
-                "Search every source on your server at once. Adding a series puts it in My space; turn on its bell to hear when new chapters come.",
+                "Type a title: Leaf searches your server's main sources as you type. A title opens its page; reading a chapter, following it or downloading one puts it in My space.",
                 x0 + 8.0,
                 y,
                 w - 16.0,
@@ -110,14 +213,31 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             retry = r;
             y += h;
         }
-        (Some(q), Some(Ok(list))) if list.is_empty() => {
+        (Some(q), Some(Ok(list))) if list.is_empty() && !st.more => {
             y += 40.0;
             let (h, _) = kit::notice(&mut cx, x0 + 16.0, y, w - 32.0, &format!("Nothing found for \u{201C}{q}\u{201D}"), Some("Try the title as a source spells it, or a shorter part of it."), None);
-            y += h;
+            y += h + 16.0;
+            if let Some(t) = &did_you_mean {
+                let (h, tapped) = did_you_mean_row(&mut cx, x0, y, w, t);
+                if tapped {
+                    meant = Some(t.clone());
+                }
+                y += h + 12.0;
+            }
+            if !st.all && kit::plain(&mut cx, x0 + 40.0, y, w - 80.0, 46.0, "Search all sources", Some("search")) {
+                search_all = true;
+            }
+            y += 46.0;
         }
         (Some(_), Some(Ok(list))) => {
             let n = list.len();
-            cx.c.text(&if n == 1 { "1 work".to_string() } else { format!("{n} works") }, x0, y, Text::new(ty::CAPTION, t::INK3).medium());
+            let ct = Text::new(ty::CAPTION, t::INK3).medium();
+            let words = if n == 1 { "1 work".to_string() } else { format!("{n} works") };
+            cx.c.text(&words, x0, y, ct);
+            if st.more {
+                let ww = cx.c.measure(&words, ct);
+                cx.c.text(if st.all { "· searching every source" } else { "· still searching" }, x0 + ww + 6.0, y, ct.color(t::INK3.a(0.7)));
+            }
             y += 26.0;
             let view_top = -cx.c.dy - 40.0;
             let view_bottom = -cx.c.dy + cx.c.h + 40.0;
@@ -138,15 +258,13 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                         cx.c.image_cover(&of.key(), x0, cy, cw, ch, COVER_R - 2.0, Rgba::WHITE);
                     }
                 }
-                let busy = st.following.as_deref() == Some(c.title.as_str());
-                let words = if c.followed.is_some() {
-                    "In My space"
-                } else if busy {
-                    "Adding…"
+                // Added already: said quietly. Any row opens the title's page.
+                let pw = if c.followed.is_some() {
+                    kit::pill(&mut cx, WIDTH - PAD, y + (ROW_H - 32.0) / 2.0, "Added", true).0
                 } else {
-                    "Add"
+                    cx.c.icon("chevron-right", WIDTH - PAD - 10.0, y + ROW_H / 2.0, 16.0, t::INK3);
+                    24.0
                 };
-                let (pw, pill_tap) = kit::pill(&mut cx, WIDTH - PAD, y + (ROW_H - 32.0) / 2.0, words, c.followed.is_some() || busy);
                 let tx = x0 + cw + 14.0;
                 let tw = WIDTH - PAD - pw - 12.0 - tx;
                 let title_t = Text::new(ty::BODY, t::INK).medium().line(1.3);
@@ -158,18 +276,34 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     cx.c.text(l, tx, ly, title_t);
                     ly += title_t.lh();
                 }
-                let found = match c.hits.len() {
-                    1 => "Found on 1 source".to_string(),
-                    n => format!("Found on {n} sources"),
-                };
-                cx.c.text_fit(&found, tx, ly + 6.0, tw, line_t);
-                let row_tap = !pill_tap && cx.tap(0.0, y, WIDTH, ROW_H);
-                match c.followed {
-                    Some(id) if pill_tap || row_tap => open = Some(id),
-                    None if (pill_tap || row_tap) && st.following.is_none() => follow = Some(c.clone()),
-                    _ => {}
+                // Only Webtoon has it, and sells its newer chapters: said before you open it.
+                if let Some(p) = &c.paid {
+                    let range = if p.from == p.to { format!("chapter {}", crate::logic::num(p.from)) } else { format!("chapters {}–{}", crate::logic::num(p.from), crate::logic::num(p.to)) };
+                    let warn = line_t.color(t::WARN);
+                    cx.c.icon("coins", tx + 7.0, ly + 6.0 + warn.lh() / 2.0, 14.0, t::WARN);
+                    cx.c.text_fit(&format!("Webtoon only, {range} paid"), tx + 20.0, ly + 6.0, tw - 20.0, warn);
+                } else {
+                    let found = match c.hits.len() {
+                        1 => "Found on 1 source".to_string(),
+                        n => format!("Found on {n} sources"),
+                    };
+                    cx.c.text_fit(&found, tx, ly + 6.0, tw, line_t);
+                }
+                if cx.tap(0.0, y, WIDTH, ROW_H) {
+                    match c.followed {
+                        Some(id) => open = Some(id),
+                        None => preview = Some(c.clone()),
+                    }
                 }
                 y += ROW_H;
+            }
+            // The rest of the sources, only when asked (each search costs every source a request).
+            if !st.all && !st.more {
+                y += 14.0;
+                if kit::plain(&mut cx, x0 + 40.0, y, w - 80.0, 46.0, "Search all sources", Some("search")) {
+                    search_all = true;
+                }
+                y += 46.0 + 8.0;
             }
         }
     }
@@ -202,20 +336,47 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let searching = st.searching();
     app.page_end(&pg, bottom);
     let q = app.st.search.query.trim().to_string();
-    if (submit || retry) && !q.is_empty() {
-        let st = &mut app.st.search;
-        st.asked = Some(q.clone());
-        st.results = None;
-        st.follow_error = None;
+    let st = &mut app.st.search;
+    if st.typed != q {
+        st.typed = q.clone();
+        st.typed_ns = now;
+    }
+    if retry && !q.is_empty() {
+        // Asked again by hand: the same words may go twice.
+        st.asked = None;
+    }
+    let all_of = st.asked.clone().filter(|_| search_all);
+    if let Some(asked) = all_of {
+        st.ask(&asked, true);
+        app.ask(Job::Search(asked, true));
+    } else if due(&q, st.asked.as_deref(), submit || retry, st.typed_ns, now) && app.server.is_some() {
+        st.ask(&q, false);
         app.nav.last_mut().expect("a page").1 = Default::default();
-        app.ask(Job::Search(q));
+        app.ask(Job::Search(q, false));
+    } else if q.chars().count() >= MIN_CHARS && st.asked.as_deref() != Some(q.as_str()) {
+        let at = st.typed_ns + PAUSE_NS;
+        app.wake_at(at);
     }
-    if let Some(c) = follow {
-        app.st.search.following = Some(c.title.clone());
-        app.st.search.follow_error = None;
-        app.ask(Job::Follow(Follow { title: c.title.clone(), manga_ids: c.hits.iter().map(|h| h.manga_id).collect(), quiet: false }));
+    if let Some(q) = app.st.search.suggest_due.take() {
+        app.ask(Job::Suggest(q));
     }
-    if let Some(id) = open {
+    if let Some(t) = meant {
+        // "Did you mean": those words, searched now (in the field too, as if typed).
+        app.st.search.query = t.clone();
+        if app.focus.is("search") {
+            app.focus.text = t.clone();
+            app.host.keyboard(true, &t, Kb::Text);
+        }
+        let st = &mut app.st.search;
+        st.typed = t.clone();
+        st.typed_ns = now;
+        st.ask(&t, false);
+        app.nav.last_mut().expect("a page").1 = Default::default();
+        app.ask(Job::Search(t, false));
+    }
+    if let Some(c) = preview {
+        app.open_preview(&c.title, &c.hits, None);
+    } else if let Some(id) = open {
         app.push(Route::Series(id));
     } else if connect {
         app.push(Route::Connect);
@@ -225,4 +386,70 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         app.go_tab(i);
     }
     pg.moving || searching && !crate::wake::has()
+}
+
+/// "Did you mean The Awakening Contract?", the title in the accent, the whole line a key. Returns
+/// its height and whether it was tapped.
+fn did_you_mean_row(cx: &mut kit::Ctx, x: f32, y: f32, w: f32, title: &str) -> (f32, bool) {
+    let lead = "Did you mean ";
+    let tt = Text::new(ty::BODY, t::INK2);
+    let at = tt.color(t::ACCENT).semi();
+    let h = 44.0;
+    let lw = cx.c.measure(lead, tt);
+    let shown = cx.c.fit(&format!("{title}?"), (w - lw).max(40.0), at);
+    let total = lw + cx.c.measure(&shown, at);
+    let x0 = x + ((w - total) / 2.0).max(0.0);
+    if cx.pressed(x, y, w, h) {
+        cx.c.rect(x, y, w, h, t::KEY_R, t::WASH);
+    }
+    let ty0 = y + (h - tt.lh()) / 2.0;
+    cx.c.text(lead, x0, ty0, tt);
+    cx.c.text(&shown, x0 + lw, ty0, at);
+    (h, cx.tap(x, y, w, h))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cand(title: &str, manga: i64, source: &str) -> Candidate {
+        Candidate { title: title.into(), cover_of: Some(manga), hits: vec![leaf_proto::Hit { manga_id: manga, source: source.into() }], followed: None, paid: None }
+    }
+
+    #[test]
+    fn a_search_waits_for_the_typing_to_pause_and_never_goes_twice() {
+        let s = 1_000_000_000u64;
+        assert!(!due("so", None, true, 0, 10 * s), "two characters, even with Enter");
+        assert!(!due("sol", None, false, s, s + PAUSE_NS - 1), "still typing");
+        assert!(due("sol", None, false, s, s + PAUSE_NS), "paused");
+        assert!(due("sol", None, true, s, s), "Enter goes at once");
+        assert!(!due("sol", Some("sol"), true, 0, 10 * s), "never the same words twice");
+        assert!(due("solo", Some("sol"), false, 0, 10 * s));
+    }
+
+    #[test]
+    fn results_join_as_each_source_answers() {
+        let mut st = State::default();
+        st.ask("solo leveling", false);
+        st.answered("solo leveling".into(), false, Ok(vec![cand("Solo Leveling", 1, "A")]), false);
+        assert_eq!(st.results.as_ref().unwrap().as_ref().unwrap().len(), 1, "shown at once");
+        assert!(st.searching(), "more to come");
+        // An old search's answer is not shown.
+        st.answered("solo".into(), false, Ok(vec![cand("Solo", 9, "A")]), true);
+        // A failed source leaves the rest; the same work found again gains a hit.
+        st.answered("solo leveling".into(), false, Err("down".into()), false);
+        st.answered("solo leveling".into(), false, Ok(vec![cand("Solo Leveling: Ragnarok", 3, "B"), cand("solo leveling", 2, "B")]), true);
+        let list = st.results.as_ref().unwrap().as_ref().unwrap();
+        assert_eq!(list.iter().map(|c| (c.title.as_str(), c.hits.len())).collect::<Vec<_>>(), vec![("Solo Leveling", 2), ("Solo Leveling: Ragnarok", 1)]);
+        assert!(!st.searching());
+        // Every source: what is shown stays until that answer replaces it.
+        st.ask("solo leveling", true);
+        assert_eq!(st.results.as_ref().unwrap().as_ref().unwrap().len(), 2);
+        st.answered("solo leveling".into(), true, Ok(vec![cand("Solo Leveling", 1, "A")]), true);
+        assert_eq!(st.results.as_ref().unwrap().as_ref().unwrap().len(), 1);
+        // Never more than twenty.
+        let mut shown = Vec::new();
+        merge(&mut shown, (0..30).map(|i| cand(&format!("Work number {i} of many"), i, "A")).collect());
+        assert_eq!(shown.len(), MAX_SHOWN);
+    }
 }

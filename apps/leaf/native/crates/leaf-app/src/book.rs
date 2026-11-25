@@ -160,6 +160,9 @@ pub struct BookReader {
     pub back_to: Option<Pos>,
     clock: ReadClock,
     top_pad: f32,
+    /// `top_pad` was read once: from then on it only shrinks, so the bars showing with the
+    /// overlay never push the strip down.
+    top_read: bool,
     saved: Option<Place>,
     save_at: u64,
     pub note: String,
@@ -266,6 +269,7 @@ impl BookReader {
             back_to: None,
             clock: ReadClock::default(),
             top_pad: 0.0,
+            top_read: false,
             saved: Some(book.place),
             save_at: 0,
             note: String::new(),
@@ -333,6 +337,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         return true;
     };
     let (moving, leave) = frame(app, &mut r, dt);
+    // The phone's bars show with the reader's chrome and hide with it, as in the strip.
+    app.immersive(!r.chrome);
     app.book = Some(r);
     if leave {
         app.pop();
@@ -344,7 +350,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
 fn frame(app: &mut App, r: &mut BookReader, dt: f32) -> (bool, bool) {
     let view_h = app.canvas.h;
     let now = app.now_ns;
-    r.top_pad = app.canvas.inset_top;
+    r.top_pad = if r.top_read { r.top_pad.min(app.canvas.inset_top) } else { app.canvas.inset_top };
+    r.top_read = true;
     let th = theme(&r.ty);
     app.canvas.rect(-1000.0, 0.0, WIDTH + 2000.0, view_h, 0.0, th.bg);
     // The book arrives.
@@ -556,6 +563,11 @@ fn frame(app: &mut App, r: &mut BookReader, dt: f32) -> (bool, bool) {
         c.text(&left_words, PAD + 4.0, by + 6.0, tt);
         c.text(&format!("{pct}%"), WIDTH - PAD - 4.0, by + 6.0, tt.right());
     }
+    // The dimmer: a black veil over the page, under the controls.
+    if app.prefs.dim > 0.0 {
+        let c = &mut app.canvas;
+        c.rect(-1000.0, 0.0, WIDTH + 2000.0, view_h, 0.0, Rgba::hex(0x000000).a(app.prefs.dim.min(crate::app::DIM_MAX)));
+    }
     // One tap back to where a jump came from.
     let mut back_jump = false;
     if let Some(bt) = r.back_to {
@@ -611,6 +623,7 @@ fn frame(app: &mut App, r: &mut BookReader, dt: f32) -> (bool, bool) {
                 }
             }
             if !handled {
+                // Any other tap shows or hides the controls: no tap zones (2026-11-23).
                 r.chrome = !r.chrome;
             }
         }
@@ -1291,7 +1304,7 @@ fn popover(app: &mut App, r: &mut BookReader, doc: &Doc, s: u32, b: u32, view_h:
 /// The type sheet: size, spacing, margins and theme, previewed live on the page above it.
 fn type_sheet(app: &mut App, r: &mut BookReader) {
     let mut cx = cx!(app);
-    let (top, outside) = kit::sheet(&mut cx, 330.0);
+    let (top, outside) = kit::sheet(&mut cx, 350.0);
     let x = PAD + 4.0;
     let w = WIDTH - 2.0 * x;
     let mut y = top + 28.0;
@@ -1342,6 +1355,15 @@ fn type_sheet(app: &mut App, r: &mut BookReader) {
             r.ty.theme = i as u8;
         }
     }
+    // The dimmer: darker than the phone's own lowest brightness.
+    y += 92.0;
+    cx.c.text("Brightness", x, y - label.lh() / 2.0, label);
+    let bright = 1.0 - app.prefs.dim / crate::app::DIM_MAX;
+    if let Some(v) = kit::slider(&mut cx, seg_x, y, w - 96.0 - 10.0, bright) {
+        let d = (1.0 - v) * crate::app::DIM_MAX;
+        app.prefs.dim = if d < 0.02 { 0.0 } else { d };
+        app.dim_dirty = true;
+    }
     cx.ui.tap = None;
     if outside {
         r.sheet = Sheet::None;
@@ -1358,7 +1380,8 @@ fn contents_sheet(app: &mut App, r: &mut BookReader, doc: &Doc, place: Place, vi
     let dt = 1.0 / 60.0;
     let mut cx = cx!(app);
     let h = (view_h * 0.82).min(view_h - cx.c.inset_top - 24.0);
-    let (top, outside) = kit::sheet(&mut cx, h);
+    // The list scrolls inside: only its head pulls the sheet down.
+    let (top, outside) = kit::sheet_grab(&mut cx, h, 64.0);
     cx.c.text("Contents", PAD + 4.0, top + 24.0, Text::new(ty::HEADING, t::INK).semi());
     cx.c.text(&format!("{} entries", doc.toc.len()), WIDTH - PAD - 4.0, top + 30.0, Text::new(ty::CAPTION, t::INK3).right());
     let list_top = top + 64.0;

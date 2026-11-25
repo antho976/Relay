@@ -15,7 +15,10 @@
 //! JNI from this thread: it is attached for as long as `android_main` runs, and never returns to
 //! Java, so every JNI sequence runs inside a local frame ([`with_activity`]), which frees its
 //! local references. Back comes from `LeafActivity` (AndroidX would finish the activity first),
-//! and the reader hides the system bars through `LeafActivity.setImmersive`.
+//! and the reader hides the system bars through `LeafActivity.setImmersive`. While a book or a
+//! strip is open, `LeafActivity.setReading` keeps the screen on; the volume keys stay
+//! the system's. `LeafChaptersJob` asks `nativePlan` which chapter notices to post
+//! ([`crate::notices`]).
 
 use std::ffi::CString;
 use std::path::PathBuf;
@@ -76,8 +79,16 @@ impl Host for AndroidHost {
         with_activity(&self.app, |env, activity| env.call_method(activity, "setImmersive", "(Z)V", &[JValue::Bool(on as u8)]).map(|_| ()));
     }
 
+    fn reading(&self, on: bool) {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "setReading", "(Z)V", &[JValue::Bool(on as u8)]).map(|_| ()));
+    }
+
     fn ask_notifications(&self) {
         with_activity(&self.app, |env, activity| env.call_method(activity, "askNotifications", "()V", &[]).map(|_| ()));
+    }
+
+    fn tick(&self) {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "tick", "()V", &[]).map(|_| ()));
     }
 
     fn pick_books(&self) {
@@ -91,15 +102,48 @@ impl Host for AndroidHost {
         });
     }
 
-    fn share_file(&self, name: &str, mime: &str, bytes: &[u8]) -> Option<String> {
-        // Written under the cache's `shared` folder, which the FileProvider (AndroidManifest.xml,
-        // res/xml/file_paths.xml) lends to the app the person picks.
-        let cache: String = with_activity(&self.app, |env, activity| {
+    fn open_url(&self, url: &str) -> bool {
+        with_activity(&self.app, |env, activity| {
+            let u = env.new_string(url)?;
+            env.call_method(activity, "openUrl", "(Ljava/lang/String;)Z", &[JValue::Object(&u)])?.z()
+        })
+        .unwrap_or(false)
+    }
+
+    /// The app's cache folder (`getCacheDir`): the FileProvider lends its `shared/` and
+    /// `updates/` folders.
+    fn cache_dir(&self) -> PathBuf {
+        let cache: Option<String> = with_activity(&self.app, |env, activity| {
             let dir = env.call_method(activity, "getCacheDir", "()Ljava/io/File;", &[])?.l()?;
             let path = env.call_method(&dir, "getAbsolutePath", "()Ljava/lang/String;", &[])?.l()?;
             Ok(env.get_string(&JString::from(path))?.into())
-        })?;
-        let dir = PathBuf::from(cache).join("shared");
+        });
+        cache.map(PathBuf::from).unwrap_or_else(|| self.data_dir().join("scratch"))
+    }
+
+    fn can_install(&self) -> bool {
+        true
+    }
+
+    /// `LeafActivity.installApk`: 1 the installer opened, 0 Leaf may not install apps yet (the
+    /// settings to allow it opened instead), -1 it failed.
+    fn install_apk(&self, path: &std::path::Path) -> crate::app::Install {
+        let p = path.to_string_lossy().into_owned();
+        let r = with_activity(&self.app, |env, activity| {
+            let ps = env.new_string(&p)?;
+            env.call_method(activity, "installApk", "(Ljava/lang/String;)I", &[JValue::Object(&ps)])?.i()
+        });
+        match r {
+            Some(1) => crate::app::Install::Started,
+            Some(0) => crate::app::Install::NeedsLeave,
+            _ => crate::app::Install::Failed,
+        }
+    }
+
+    fn share_file(&self, name: &str, mime: &str, bytes: &[u8]) -> Option<String> {
+        // Written under the cache's `shared` folder, which the FileProvider (AndroidManifest.xml,
+        // res/xml/file_paths.xml) lends to the app the person picks.
+        let dir = self.cache_dir().join("shared");
         let _ = std::fs::remove_dir_all(&dir);
         let safe: String = name.chars().map(|c| if c.is_alphanumeric() || " .-_".contains(c) { c } else { '-' }).collect();
         let path = dir.join(if safe.trim_matches('.').is_empty() { "notes.md".to_string() } else { safe });
@@ -190,6 +234,29 @@ static BACK: AtomicBool = AtomicBool::new(false);
 pub extern "system" fn Java_com_quietsoftware_leaf_LeafActivity_nativeBack<'local>(_env: JNIEnv<'local>, _class: JClass<'local>) {
     BACK.store(true, Ordering::SeqCst);
     wake();
+}
+
+/// The chapter job's question: what to post now ([`crate::notices::plan_json`]).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_leaf_LeafChaptersJob_nativePlan<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    notify: JString<'local>,
+    state: JString<'local>,
+    events: JString<'local>,
+    now_ms: jni::sys::jlong,
+    offset_min: jni::sys::jint,
+) -> jni::sys::jstring {
+    let mut read = |s: &JString<'local>| -> String { if s.is_null() { String::new() } else { env.get_string(s).map(Into::into).unwrap_or_default() } };
+    let (n, st, ev) = (read(&notify), read(&state), read(&events));
+    let out = std::panic::catch_unwind(|| crate::notices::plan_json(&n, &st, &ev, now_ms, offset_min)).unwrap_or_else(|_| "{}".into());
+    env.new_string(out).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
+}
+
+/// The server's second address built in (`LEAF_ALT_BASE`), for the chapter job; "" when none.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_leaf_LeafChaptersJob_nativeAltBase<'local>(env: JNIEnv<'local>, _class: JClass<'local>) -> jni::sys::jstring {
+    env.new_string(crate::net::ALT_BASE.unwrap_or("")).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
 }
 
 #[link(name = "log")]
@@ -376,15 +443,22 @@ fn android_main(android: AndroidApp) {
                     }
                 }
                 MainEvent::Stop => {
+                    // Out of sight (Pause kept everything already; the place again, in case).
+                    app.keep_place();
                     if !multi_resume {
                         foreground = false;
                     }
                 }
+                // The notification shade, a dialog, the app switcher: the reader's place is kept.
+                MainEvent::LostFocus => app.keep_place(),
+                MainEvent::SaveState { .. } => app.keep_place(),
                 MainEvent::Resume { .. } => {
                     foreground = true;
                     dirty = true;
-                    // Back to the front: the open page reads the server again.
+                    // Back to the front: the open page reads the server again, a newer app is
+                    // asked for (at most every 15 minutes), and out of reach, the server is tried.
                     app.fresh = true;
+                    app.resumed();
                 }
                 MainEvent::GainedFocus => dirty = true,
                 MainEvent::Pause => {

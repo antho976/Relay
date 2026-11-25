@@ -731,7 +731,7 @@ pub fn now_ms() -> i64 {
 }
 
 /// The local zone's offset from UTC, in seconds, read once.
-fn zone_offset() -> i64 {
+pub fn zone_offset() -> i64 {
     static OFF: OnceLock<i64> = OnceLock::new();
     *OFF.get_or_init(|| {
         let t: libc::time_t = (now_ms() / 1000) as libc::time_t;

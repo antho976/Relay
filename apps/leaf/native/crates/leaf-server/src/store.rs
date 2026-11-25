@@ -28,6 +28,8 @@ pub struct Work {
     pub note: Option<String>,
     /// New chapters are announced.
     pub bell: bool,
+    /// The shelf chosen for it ("reading", "plan", "hold", "dropped", "done").
+    pub shelf: Option<String>,
 }
 
 const SCHEMA: &str = "
@@ -54,9 +56,19 @@ CREATE TABLE IF NOT EXISTS event (
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS alias (work_id INTEGER NOT NULL, title TEXT NOT NULL, UNIQUE(work_id, title));
 CREATE TABLE IF NOT EXISTS link (work_id INTEGER NOT NULL, manga_id INTEGER NOT NULL UNIQUE, source TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS arrival (work_id INTEGER NOT NULL, number REAL NOT NULL, at INTEGER NOT NULL, UNIQUE(work_id, number));
+CREATE TABLE IF NOT EXISTS source_health (name TEXT PRIMARY KEY, ok_at INTEGER NOT NULL DEFAULT 0, err_at INTEGER NOT NULL DEFAULT 0, err TEXT);
+CREATE TABLE IF NOT EXISTS dl_queue (seq INTEGER PRIMARY KEY, chapter_id INTEGER NOT NULL UNIQUE, source TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS rec_hidden (anilist_id INTEGER PRIMARY KEY, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS rec_tag (tag TEXT PRIMARY KEY, less INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS page_hash (chapter_id INTEGER NOT NULL, page INTEGER NOT NULL, hash INTEGER NOT NULL, source TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (chapter_id, page));
+CREATE TABLE IF NOT EXISTS page_hidden (chapter_id INTEGER NOT NULL, page INTEGER NOT NULL, hash INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (chapter_id, page));
 ";
 
-const WORK_COLS: &str = "id, title, manga_id, source, followed_at, fails, checked_at, compared_at, latest, updated_at, note, bell";
+/// The `kv` key of the next work id ([`Store::add_work`]).
+const WORK_NEXT_ID: &str = "work_next_id";
+
+const WORK_COLS: &str = "id, title, manga_id, source, followed_at, fails, checked_at, compared_at, latest, updated_at, note, bell, shelf";
 
 fn work_of(r: &rusqlite::Row) -> rusqlite::Result<Work> {
     Ok(Work {
@@ -72,6 +84,7 @@ fn work_of(r: &rusqlite::Row) -> rusqlite::Result<Work> {
         updated_at: r.get(9)?,
         note: r.get(10)?,
         bell: r.get::<_, i64>(11)? != 0,
+        shelf: r.get(12)?,
     })
 }
 
@@ -94,6 +107,10 @@ impl Store {
         if !has_bell {
             db.execute_batch("ALTER TABLE work ADD COLUMN bell INTEGER NOT NULL DEFAULT 0").map_err(|e| e.to_string())?;
         }
+        let has_shelf: bool = db.prepare("SELECT 1 FROM pragma_table_info('work') WHERE name = 'shelf'").and_then(|mut s| s.exists([])).unwrap_or(false);
+        if !has_shelf {
+            db.execute_batch("ALTER TABLE work ADD COLUMN shelf TEXT").map_err(|e| e.to_string())?;
+        }
         Ok(Store { db })
     }
 
@@ -110,14 +127,37 @@ impl Store {
         self.db.prepare_cached(&format!("SELECT {WORK_COLS} FROM work WHERE manga_id = ?1")).ok()?.query_row([manga_id], work_of).optional().ok()?
     }
 
+    /// The id the next work gets: never one a work had before. `work.id` is a plain `INTEGER
+    /// PRIMARY KEY`, which SQLite hands out again once the newest work is removed, and the phone
+    /// keeps covers and places by id: a reused id showed the old series' cover (2026-11-23). The
+    /// high-water mark is kept in `kv` (`work_next_id`) and, for a store from before it, seeded
+    /// from every id the store still names (works, events, links, aliases, arrivals).
+    fn next_work_id(&self) -> i64 {
+        let kept = self.get(WORK_NEXT_ID).and_then(|v| v.parse::<i64>().ok()).unwrap_or(1);
+        let seen: i64 = self
+            .db
+            .query_row(
+                "SELECT MAX(m) FROM (SELECT MAX(id) AS m FROM work UNION ALL SELECT MAX(work_id) FROM event UNION ALL SELECT MAX(work_id) FROM link
+                 UNION ALL SELECT MAX(work_id) FROM alias UNION ALL SELECT MAX(work_id) FROM arrival)",
+                [],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+        kept.max(seen + 1).max(1)
+    }
+
     pub fn add_work(&self, title: &str, manga_id: i64, source: &str, latest: f64, now: i64) -> Result<i64, String> {
+        let id = self.next_work_id();
         self.db
             .execute(
-                "INSERT INTO work (title, manga_id, source, followed_at, checked_at, compared_at, latest, updated_at) VALUES (?1, ?2, ?3, ?4, ?4, ?4, ?5, ?4)",
-                params![title, manga_id, source, now, latest],
+                "INSERT INTO work (id, title, manga_id, source, followed_at, checked_at, compared_at, latest, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?5, ?6, ?5)",
+                params![id, title, manga_id, source, now, latest],
             )
             .map_err(|e| e.to_string())?;
-        Ok(self.db.last_insert_rowid())
+        self.set(WORK_NEXT_ID, &(id + 1).to_string());
+        Ok(id)
     }
 
     pub fn remove_work(&self, id: i64) {
@@ -191,6 +231,41 @@ impl Store {
         }
     }
 
+    pub fn set_shelf(&self, id: i64, shelf: Option<&str>) {
+        let _ = self.db.execute("UPDATE work SET shelf = ?2 WHERE id = ?1", params![id, shelf]);
+    }
+
+    /// Chapters that arrived for a work (its latest number grew), for the Updates list.
+    pub fn add_arrivals(&self, id: i64, numbers: &[f64], at: i64) {
+        for n in numbers {
+            let _ = self.db.execute("INSERT OR IGNORE INTO arrival (work_id, number, at) VALUES (?1, ?2, ?3)", params![id, n, at]);
+        }
+        let _ = self.db.execute("DELETE FROM arrival WHERE at < ?1", [at - 60 * 86_400_000]);
+    }
+
+    /// (work, number, at) since `since`, newest first.
+    pub fn arrivals_since(&self, since: i64) -> Vec<(i64, f64, i64)> {
+        let mut st = self.db.prepare_cached("SELECT work_id, number, at FROM arrival WHERE at >= ?1 ORDER BY at DESC, number DESC LIMIT 1000").expect("a statement");
+        st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).expect("arrivals").filter_map(Result::ok).collect()
+    }
+
+    pub fn source_ok(&self, name: &str, at: i64) {
+        let _ = self.db.execute("INSERT INTO source_health (name, ok_at) VALUES (?1, ?2) ON CONFLICT(name) DO UPDATE SET ok_at = excluded.ok_at", params![name, at]);
+    }
+
+    pub fn source_err(&self, name: &str, err: &str, at: i64) {
+        let _ = self.db.execute(
+            "INSERT INTO source_health (name, err_at, err) VALUES (?1, ?2, ?3) ON CONFLICT(name) DO UPDATE SET err_at = excluded.err_at, err = excluded.err",
+            params![name, at, err],
+        );
+    }
+
+    /// name → (last ok, last error time, last error).
+    pub fn health(&self) -> Vec<(String, i64, i64, Option<String>)> {
+        let mut st = self.db.prepare_cached("SELECT name, ok_at, err_at, err FROM source_health").expect("a statement");
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).expect("health").filter_map(Result::ok).collect()
+    }
+
     pub fn set_bell(&self, id: i64, on: bool) {
         let _ = self.db.execute("UPDATE work SET bell = ?2 WHERE id = ?1", params![id, on as i64]);
     }
@@ -237,11 +312,128 @@ impl Store {
     pub fn set(&self, k: &str, v: &str) {
         let _ = self.db.execute("INSERT INTO kv (k, v) VALUES (?1, ?2) ON CONFLICT(k) DO UPDATE SET v = excluded.v", params![k, v]);
     }
+
+    pub fn del(&self, k: &str) {
+        let _ = self.db.execute("DELETE FROM kv WHERE k = ?1", [k]);
+    }
+
+    /// Every (key, value) whose key starts with `prefix`.
+    pub fn with_prefix(&self, prefix: &str) -> Vec<(String, String)> {
+        let mut st = self.db.prepare_cached("SELECT k, v FROM kv WHERE substr(k, 1, length(?1)) = ?1 ORDER BY k").expect("a statement");
+        st.query_map([prefix], |r| Ok((r.get(0)?, r.get(1)?))).expect("kv").filter_map(Result::ok).collect()
+    }
+
+    /// The linked copies with their sources.
+    pub fn link_sources(&self, id: i64) -> Vec<(i64, String)> {
+        let mut st = self.db.prepare_cached("SELECT manga_id, source FROM link WHERE work_id = ?1 ORDER BY rowid").expect("a statement");
+        st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?))).expect("links").filter_map(Result::ok).collect()
+    }
+
+    /// Chapters to hand to Suwayomi's downloader as their source's budget allows; one asked
+    /// again keeps its place in line.
+    pub fn queue_downloads(&self, chapters: &[(i64, String)], at: i64) {
+        for (id, source) in chapters {
+            let _ = self.db.execute("INSERT OR IGNORE INTO dl_queue (chapter_id, source, at) VALUES (?1, ?2, ?3)", params![id, source, at]);
+        }
+    }
+
+    pub fn unqueue_downloads(&self, ids: &[i64]) {
+        for id in ids {
+            let _ = self.db.execute("DELETE FROM dl_queue WHERE chapter_id = ?1", [id]);
+        }
+    }
+
+    /// (chapter, source), first asked first.
+    pub fn queued_downloads(&self) -> Vec<(i64, String)> {
+        let mut st = self.db.prepare_cached("SELECT chapter_id, source FROM dl_queue ORDER BY seq").expect("a statement");
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).expect("queue").filter_map(Result::ok).collect()
+    }
+
+    /// "Not interested": kept for good.
+    pub fn hide_rec(&self, anilist_id: i64, at: i64) {
+        let _ = self.db.execute("INSERT OR IGNORE INTO rec_hidden (anilist_id, at) VALUES (?1, ?2)", params![anilist_id, at]);
+    }
+
+    pub fn hidden_recs(&self) -> std::collections::HashSet<i64> {
+        let mut st = self.db.prepare_cached("SELECT anilist_id FROM rec_hidden").expect("a statement");
+        st.query_map([], |r| r.get(0)).expect("hidden").filter_map(Result::ok).collect()
+    }
+
+    /// Fewer recommendations with this tag (`less`), or as before.
+    pub fn set_rec_tag(&self, tag: &str, less: bool) {
+        let tag = tag.trim().to_lowercase();
+        let _ = if less {
+            self.db.execute("INSERT INTO rec_tag (tag, less) VALUES (?1, 1) ON CONFLICT(tag) DO UPDATE SET less = 1", [&tag])
+        } else {
+            self.db.execute("DELETE FROM rec_tag WHERE tag = ?1", [&tag])
+        };
+    }
+
+    /// A page near a chapter's start or end, by its picture's hash (`promo.rs`), kept for good.
+    pub fn add_page_hash(&self, chapter_id: i64, page: u32, hash: u64, source: &str, at: i64) {
+        let _ = self.db.execute(
+            "INSERT OR REPLACE INTO page_hash (chapter_id, page, hash, source, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![chapter_id, page, hash as i64, source, at],
+        );
+    }
+
+    /// Every page hash kept: (chapter, page, hash).
+    pub fn page_hashes(&self) -> Vec<(i64, u32, u64)> {
+        let mut st = self.db.prepare_cached("SELECT chapter_id, page, hash FROM page_hash").expect("a statement");
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? as u64))).expect("hashes").filter_map(Result::ok).collect()
+    }
+
+    /// A page the owner hid by hand, and the ones like it with it.
+    pub fn hide_page(&self, chapter_id: i64, page: u32, hash: u64, at: i64) {
+        let _ = self.db.execute("INSERT OR REPLACE INTO page_hidden (chapter_id, page, hash, at) VALUES (?1, ?2, ?3, ?4)", params![chapter_id, page, hash as i64, at]);
+    }
+
+    /// Undo one page hidden by hand, or (None) every one.
+    pub fn unhide_page(&self, which: Option<(i64, u32)>) {
+        let _ = match which {
+            Some((c, p)) => self.db.execute("DELETE FROM page_hidden WHERE chapter_id = ?1 AND page = ?2", params![c, p]),
+            None => self.db.execute("DELETE FROM page_hidden", []),
+        };
+    }
+
+    /// The pages hidden by hand: (chapter, page, hash).
+    pub fn hidden_pages(&self) -> Vec<(i64, u32, u64)> {
+        let mut st = self.db.prepare_cached("SELECT chapter_id, page, hash FROM page_hidden").expect("a statement");
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? as u64))).expect("hidden").filter_map(Result::ok).collect()
+    }
+
+    /// The tags marked "fewer like this", lower case.
+    pub fn less_tags(&self) -> std::collections::HashSet<String> {
+        let mut st = self.db.prepare_cached("SELECT tag FROM rec_tag WHERE less = 1").expect("a statement");
+        st.query_map([], |r| r.get(0)).expect("tags").filter_map(Result::ok).collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_removed_works_id_is_never_given_again() {
+        let s = Store::in_memory();
+        let a = s.add_work("Invincible Romance", 1, "MangaDex", 10.0, 100).unwrap();
+        let b = s.add_work("Solo Leveling", 2, "MangaDex", 10.0, 100).unwrap();
+        assert!(b > a);
+        // The newest removed: SQLite alone would give its id to the next one.
+        s.remove_work(b);
+        let c = s.add_work("The Awakening Contract", 3, "MangaDex", 10.0, 100).unwrap();
+        assert!(c > b, "{c} after {b}");
+        // A store from before the mark: seeded from the ids its events still name.
+        let old = Store::in_memory();
+        old.event(1, Some(172), "info", "Following Invincible Romance");
+        old.del(WORK_NEXT_ID);
+        assert_eq!(old.add_work("The Awakening Contract", 4, "MangaDex", 1.0, 2).unwrap(), 173);
+        old.remove_work(173);
+        old.del(WORK_NEXT_ID);
+        old.db.execute("DELETE FROM event", []).unwrap();
+        assert_eq!(old.add_work("Next", 5, "MangaDex", 1.0, 2).unwrap(), 1, "nothing named: from 1");
+        assert_eq!(old.add_work("After", 6, "MangaDex", 1.0, 2).unwrap(), 2);
+    }
 
     #[test]
     fn a_work_moves_and_keeps_its_id() {
@@ -255,6 +447,15 @@ mod tests {
         let w = s.work(id).unwrap();
         assert_eq!((w.manga_id, w.source.as_str(), w.fails), (9, "Asura Scans", 0));
         assert!(!w.bell, "adding is not following");
+        assert_eq!(w.shelf, None);
+        s.set_shelf(id, Some("hold"));
+        assert_eq!(s.work(id).unwrap().shelf.as_deref(), Some("hold"));
+        s.add_arrivals(id, &[61.0, 62.0], 1000);
+        s.add_arrivals(id, &[62.0], 2000);
+        assert_eq!(s.arrivals_since(0), vec![(id, 62.0, 1000), (id, 61.0, 1000)], "a chapter arrives once");
+        s.source_err("Asura Scans", "Cloudflare bypass currently disabled", 10);
+        s.source_ok("Asura Scans", 20);
+        assert_eq!(s.health(), vec![("Asura Scans".to_string(), 20, 10, Some("Cloudflare bypass currently disabled".to_string()))]);
         s.set_bell(id, true);
         assert!(s.work(id).unwrap().bell);
         assert_eq!(s.work_of_manga(9).unwrap().id, id);
@@ -297,6 +498,29 @@ mod tests {
         s.event(1_000, Some(1), "new", "b");
         let after = s.events_since(seen);
         assert_eq!(after.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(), vec!["b"]);
+    }
+
+    #[test]
+    fn downloads_wait_in_line_and_recs_keep_what_you_said() {
+        let s = Store::in_memory();
+        s.queue_downloads(&[(7, "Asura Scans".into()), (3, "MangaDex".into())], 10);
+        s.queue_downloads(&[(7, "Asura Scans".into()), (9, "Asura Scans".into())], 20);
+        assert_eq!(s.queued_downloads(), vec![(7, "Asura Scans".to_string()), (3, "MangaDex".to_string()), (9, "Asura Scans".to_string())], "asked again keeps its place");
+        s.unqueue_downloads(&[7, 3]);
+        assert_eq!(s.queued_downloads(), vec![(9, "Asura Scans".to_string())]);
+        s.hide_rec(30, 1);
+        s.hide_rec(30, 2);
+        assert_eq!(s.hidden_recs().into_iter().collect::<Vec<_>>(), vec![30]);
+        s.set_rec_tag(" Isekai ", true);
+        s.set_rec_tag("Murim", true);
+        s.set_rec_tag("murim", false);
+        assert_eq!(s.less_tags().into_iter().collect::<Vec<_>>(), vec!["isekai".to_string()]);
+        s.set("pause:A", "1");
+        s.set("pause:B", "2");
+        s.set("paused", "3");
+        assert_eq!(s.with_prefix("pause:").len(), 2);
+        s.del("pause:A");
+        assert_eq!(s.get("pause:A"), None);
     }
 
     #[test]
