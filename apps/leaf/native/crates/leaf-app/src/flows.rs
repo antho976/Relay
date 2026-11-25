@@ -33,8 +33,9 @@ impl Host for TestHost {
 }
 
 /// How many times this app asked to hide the phone's bars.
-fn bars_hidden(app: &App) -> usize {
-    BARS.lock().unwrap().iter().filter(|(d, on)| *d == app.data && *on).count()
+/// What this app last asked of the phone's bars: true, hidden.
+fn bars_last(app: &App) -> Option<bool> {
+    BARS.lock().unwrap().iter().rev().find(|(d, _)| *d == app.data).map(|(_, on)| *on)
 }
 
 /// The links this app asked the platform to open.
@@ -1538,15 +1539,59 @@ fn a_swipe_from_the_phones_edges_never_moves_the_strip() {
 }
 
 #[test]
-fn showing_the_overlay_hides_the_phones_bars_again() {
+fn the_phones_bars_show_with_the_overlay_and_hide_with_it() {
     let (mut app, mut t, dir) = app("overlay-bars");
     let d = comic(1, &[3]);
     app.open_chapter(&d, 0, 0);
     step(&mut app, &mut t);
-    let before = bars_hidden(&app);
+    assert_eq!(bars_last(&app), Some(true), "reading, the time and the battery are hidden");
     tap(&mut app, &mut t, 200.0, 400.0);
     assert!(app.reader.as_ref().is_some_and(|r| r.overlay));
-    assert_eq!(bars_hidden(&app), before + 1, "the bars are asked to hide with it");
+    assert_eq!(bars_last(&app), Some(false), "the overlay brings them");
+    tap(&mut app, &mut t, 200.0, 400.0);
+    assert!(app.reader.as_ref().is_some_and(|r| !r.overlay));
+    assert_eq!(bars_last(&app), Some(true), "and takes them away");
+    let asked = BARS.lock().unwrap().iter().filter(|(d, _)| *d == app.data).count();
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    assert_eq!(BARS.lock().unwrap().iter().filter(|(d, _)| *d == app.data).count(), asked, "the phone is asked once a change, not every frame");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_place_moves_only_down_the_strip() {
+    let (mut app, mut t, dir) = app("place-forward");
+    app.shot = false;
+    let d = comic(1, &[20]);
+    measure(&mut app, &d);
+    app.open_chapter(&d, 0, 0);
+    step(&mut app, &mut t);
+    for _ in 0..8 {
+        scroll(&mut app, &mut t, 400.0);
+    }
+    t += 3_000_000_000;
+    step(&mut app, &mut t);
+    let far = *app.places.get(1).expect("a place kept");
+    assert!(far.page >= 3, "{far:?}");
+    let told = app.reported.last().copied();
+    // Back up two pages to look at something, a while: the place stays, and so does the server's.
+    scroll(&mut app, &mut t, -1600.0);
+    t += 3_000_000_000;
+    step(&mut app, &mut t);
+    assert!(app.places.get(1).is_some_and(|p| p.same_spot(&far)), "{:?} after {far:?}", app.places.get(1));
+    assert_eq!(app.reported.last().copied(), told, "no page behind it is sent");
+    // Closed up there: still where reading got to.
+    app.pop();
+    assert!(app.places.get(1).is_some_and(|p| p.same_spot(&far)), "{:?} after {far:?}", app.places.get(1));
+    // Reading on past it moves it again.
+    app.open_chapter(&d, 0, far.page);
+    step(&mut app, &mut t);
+    for _ in 0..4 {
+        scroll(&mut app, &mut t, 400.0);
+    }
+    t += 3_000_000_000;
+    step(&mut app, &mut t);
+    assert!(app.places.get(1).is_some_and(|p| p.page > far.page), "{:?} after {far:?}", app.places.get(1));
     let _ = std::fs::remove_dir_all(dir);
 }
 

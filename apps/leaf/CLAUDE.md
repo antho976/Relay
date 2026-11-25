@@ -96,10 +96,12 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
 - Chapter pictures come only from the server (`/v1/chapters/{id}/thumb`): the phone never fetches
   pages to make one.
 - The reader (2026-11-24): a drag that starts on the phone's gesture strips (the top and bottom
-  28 units, or the bars if taller) never scrolls the strip; showing the overlay hides the phone's
-  bars again, as does the window getting focus back while reading. With the overlay up, the saved
-  place is marked where it is on the strip, a line and a hanging "BOOKMARK" tag; the header names
-  it only when it is in another chapter.
+  28 units, or the bars if taller) never scrolls the strip. The phone's bars (time, battery) show
+  while the overlay is up and hide with it (`App::immersive`, books too); headings keep the
+  bars-hidden inset so nothing moves when they come. The saved place only moves down the strip
+  (`Reader::further`): scrolling back up leaves it, and the server's page, where reading got to.
+  With the overlay up it is marked where it is on the strip, a line and a hanging "BOOKMARK" tag;
+  the header names it only when it is in another chapter (the owner, 2026-11-24).
 - A tap in the reader (comics and books) only shows or hides the overlay: no tap zones and no
   volume-key paging, and no setting for either (the owner, 2026-11-23).
 - A search result or a pick (Top picks, Because you read, Collections, Readers also like) opens its

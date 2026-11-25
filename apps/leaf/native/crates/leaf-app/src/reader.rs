@@ -63,6 +63,9 @@ pub struct Reader {
     gate: ProgressGate,
     /// The status bar's height (with the bars hidden, the camera cut-out's): headings keep clear of it.
     top_pad: f32,
+    /// `top_pad` was read once: from then on it only shrinks, so the bars showing with the
+    /// overlay never push the strip down.
+    top_read: bool,
     /// A PDF from the shelf (its book id), not a series: pages come from the platform's renderer
     /// and the place is kept on the phone, never sent to the server.
     pub local: Option<i64>,
@@ -166,6 +169,7 @@ impl Reader {
             overlay: false,
             gate,
             top_pad: 0.0,
+            top_read: false,
             local: None,
             auto: false,
             speed: logic::DEFAULT_SPEED,
@@ -207,6 +211,7 @@ impl Reader {
             overlay: false,
             gate: ProgressGate::default(),
             top_pad: 0.0,
+            top_read: false,
             local: Some(b.id),
             auto: false,
             speed: logic::DEFAULT_SPEED,
@@ -261,9 +266,39 @@ impl Reader {
     /// closes).
     pub fn keep_now(&mut self, now_ns: u64) -> Option<crate::places::Place> {
         let p = self.place_now()?;
+        if !self.further(&p) {
+            return self.saved;
+        }
         self.save.force(&p, now_ns);
         self.saved = Some(p);
         Some(p)
+    }
+
+    /// Where a place is along the strip: its chapter here, its heading (0) or page (1 + n), and how
+    /// far down that. None for a chapter not in this strip.
+    fn along(&self, p: &crate::places::Place) -> Option<(usize, u32, f32)> {
+        let c = self.chapters.iter().position(|ch| ch.id == p.chapter)?;
+        Some((c, if p.head { 0 } else { p.page + 1 }, p.off))
+    }
+
+    /// The place only moves down the strip (the owner, 2026-11-24): scrolling back up to look at
+    /// something leaves it where reading got to. True when `p` is further than the place kept, or
+    /// nothing is kept yet.
+    pub fn further(&self, p: &crate::places::Place) -> bool {
+        match (self.saved.and_then(|s| self.along(&s)), self.along(p)) {
+            (Some(s), Some(n)) => n > s,
+            _ => true,
+        }
+    }
+
+    /// The top of the screen is on a page (or heading) before the place kept.
+    fn behind_saved(&self) -> bool {
+        let Some((sc, slot, _)) = self.saved.and_then(|s| self.along(&s)) else { return false };
+        match self.pos.item {
+            Item::Head(c) => (c, 0) < (sc, slot),
+            Item::Page(c, n) => (c, n + 1) < (sc, slot),
+            Item::End => false,
+        }
     }
 
     /// A page leaves the strip (hidden by hand, `old_h` units tall until now, or skipped by the
@@ -382,6 +417,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         return true;
     };
     let (moving, leave, act) = frame(app, &mut r, dt);
+    // The phone's bars (the time, the battery) show with the overlay and hide with it (the owner,
+    // 2026-11-24).
+    app.immersive(!r.overlay);
     let series = (r.local.is_none()).then_some(r.series);
     app.reader = Some(r);
     match act {
@@ -432,7 +470,8 @@ enum Leave {
 fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct>) {
     let view_h = app.canvas.h;
     let now = app.now_ns;
-    r.top_pad = app.canvas.inset_top;
+    r.top_pad = if r.top_read { r.top_pad.min(app.canvas.inset_top) } else { app.canvas.inset_top };
+    r.top_read = true;
     let mut page_act: Option<PageAct> = None;
     // The sheet after a long press holds every tap and drag from the strip under it.
     let sheet_open = r.hide_sheet.is_some();
@@ -727,7 +766,8 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
         r.place(&v)
     };
     if !app.shot && !r.chapters.is_empty() && r.local.is_none() {
-        let mut reports = r.gate.see(r.chapters[ci].id, page, false, now);
+        // Back above the place kept, the server is not told the page either: it keeps the furthest.
+        let mut reports = if r.behind_saved() { Vec::new() } else { r.gate.see(r.chapters[ci].id, page, false, now) };
         // A chapter is finished once its last page has been on screen from its top to its bottom.
         // Promo pages left out at its end count as seen: the last page shown is its end.
         for (item, y) in &shown {
@@ -758,9 +798,10 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
         }
     }
     // The exact place, kept on the phone: on each new page, and every two seconds while the strip
-    // moves within one.
+    // moves within one; only further down ([`Reader::further`]).
     if r.pending_off.is_none()
         && let Some(p) = r.place_now()
+        && r.further(&p)
     {
         if r.save.due(&p, now) {
             app.places.put(p);
@@ -895,9 +936,6 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
             r.auto = false;
         }
         r.overlay = true;
-        // The phone's own bars stay hidden under it: a swipe from an edge may have brought them
-        // back for a moment, and the overlay is not a reason to keep them (the owner, 2026-11-24).
-        app.host.immersive(true);
     }
     if let Some(l) = speed {
         r.speed = l;

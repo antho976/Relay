@@ -160,6 +160,9 @@ pub struct BookReader {
     pub back_to: Option<Pos>,
     clock: ReadClock,
     top_pad: f32,
+    /// `top_pad` was read once: from then on it only shrinks, so the bars showing with the
+    /// overlay never push the strip down.
+    top_read: bool,
     saved: Option<Place>,
     save_at: u64,
     pub note: String,
@@ -266,6 +269,7 @@ impl BookReader {
             back_to: None,
             clock: ReadClock::default(),
             top_pad: 0.0,
+            top_read: false,
             saved: Some(book.place),
             save_at: 0,
             note: String::new(),
@@ -333,6 +337,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         return true;
     };
     let (moving, leave) = frame(app, &mut r, dt);
+    // The phone's bars show with the reader's chrome and hide with it, as in the strip.
+    app.immersive(!r.chrome);
     app.book = Some(r);
     if leave {
         app.pop();
@@ -344,7 +350,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
 fn frame(app: &mut App, r: &mut BookReader, dt: f32) -> (bool, bool) {
     let view_h = app.canvas.h;
     let now = app.now_ns;
-    r.top_pad = app.canvas.inset_top;
+    r.top_pad = if r.top_read { r.top_pad.min(app.canvas.inset_top) } else { app.canvas.inset_top };
+    r.top_read = true;
     let th = theme(&r.ty);
     app.canvas.rect(-1000.0, 0.0, WIDTH + 2000.0, view_h, 0.0, th.bg);
     // The book arrives.

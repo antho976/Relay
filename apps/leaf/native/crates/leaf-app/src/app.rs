@@ -277,6 +277,8 @@ pub struct App {
     /// A long press and drag selecting rows in bulk, on the page showing ([`crate::sweep`]).
     pub sweep: crate::sweep::Sweep,
     pub host: Arc<dyn Host>,
+    /// Whether the phone's bars were last asked to hide ([`App::immersive`]).
+    pub bars_hidden: bool,
     pub focus: Focus,
     /// The pages open, the current one last, each with its scroll.
     pub nav: Vec<(Route, Scroll)>,
@@ -391,6 +393,7 @@ impl App {
             ui: Ui::default(),
             sweep: Default::default(),
             host,
+            bars_hidden: false,
             focus: Focus::default(),
             nav: vec![(start, Scroll::default())],
             fresh: true,
@@ -491,7 +494,7 @@ impl App {
             self.images.set_pdf(b.id, b.path(&self.data));
             self.reader = Some(crate::reader::Reader::open_pdf(&b));
             self.push(Route::Reader);
-            self.host.immersive(true);
+            self.immersive(true);
             return;
         }
         let ty_ = crate::book::saved_type(self);
@@ -503,7 +506,7 @@ impl App {
         }
         self.book = Some(crate::book::BookReader::open(&b, &self.data, ty_, doc));
         self.push(Route::Book);
-        self.host.immersive(true);
+        self.immersive(true);
     }
 
     /// Open a series' chapter in the reader, at a page. A reader already open is closed first, as
@@ -523,7 +526,7 @@ impl App {
         r.speed = self.speed_of(d.series.id);
         self.close_reader();
         self.reader = Some(r);
-        self.host.immersive(true);
+        self.immersive(true);
         if self.route() == &Route::Reader {
             self.shown();
         } else {
@@ -635,7 +638,7 @@ impl App {
     fn close_book(&mut self) {
         if let Some(mut r) = self.book.take() {
             crate::book::close(self, &mut r);
-            self.host.immersive(false);
+            self.immersive(false);
         }
     }
 
@@ -1584,10 +1587,18 @@ impl App {
         }
         // The bars hide only while a book or a strip is on screen (not over its notes or search).
         let reading = matches!(self.route(), Route::Book | Route::Reader);
-        self.host.immersive(reading);
+        self.immersive(reading);
         self.host.reading(reading);
         if self.focus.id.take().is_some() {
             self.host.keyboard(false, "", Kb::Text);
+        }
+    }
+
+    /// Hide the phone's bars (reading) or show them, asking the phone only when that changes.
+    pub fn immersive(&mut self, on: bool) {
+        if self.bars_hidden != on {
+            self.bars_hidden = on;
+            self.host.immersive(on);
         }
     }
 
@@ -1612,7 +1623,7 @@ impl App {
             self.images.leave_pages();
             if r.local.is_some() {
                 self.keep_pdf_place(&r);
-                self.host.immersive(false);
+                self.immersive(false);
                 return;
             }
             if let Some(p) = r.keep_now(self.now_ns) {
@@ -1621,7 +1632,7 @@ impl App {
             if let Some((c, p)) = r.flush(self.now_ns) {
                 self.report_progress(c, p);
             }
-            self.host.immersive(false);
+            self.immersive(false);
             // What was read shows as read on the pages under it at once, before the server answers
             // (and when it can't: reading offline).
             for (chapter, p) in r.places() {
