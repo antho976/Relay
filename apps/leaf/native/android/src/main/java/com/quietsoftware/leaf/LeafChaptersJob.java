@@ -45,6 +45,9 @@ public class LeafChaptersJob extends JobService {
     private static final String PREFS = "leaf-notices";
     private static final String SINCE = "since";
     private static final String PLAN = "plan";
+    /** A notice's keys open Leaf with one of these (a series id): Read now, Download. */
+    public static final String EXTRA_READ = "leaf.read";
+    public static final String EXTRA_DOWNLOAD = "leaf.download";
 
     private static final boolean NATIVE;
 
@@ -149,9 +152,10 @@ public class LeafChaptersJob extends JobService {
                 for (int i = 0; i < events.length(); i++) {
                     JSONObject e = events.getJSONObject(i);
                     String kind = e.optString("kind");
-                    if ("new".equals(kind) || "elsewhere".equals(kind)) {
+                    if ("new".equals(kind) || "elsewhere".equals(kind) || "finished".equals(kind) || "blocked".equals(kind)) {
                         long at = e.optLong("at", 0);
-                        notify((int) (at % Integer.MAX_VALUE), e.optString("text", "New chapters"));
+                        long series = e.isNull("series") ? 0 : e.optLong("series", 0);
+                        notify((int) (at % Integer.MAX_VALUE), e.optString("text", "New chapters"), series, "new".equals(kind));
                     }
                 }
             }
@@ -188,7 +192,8 @@ public class LeafChaptersJob extends JobService {
             JSONArray post = plan.optJSONArray("post");
             for (int i = 0; post != null && i < post.length(); i++) {
                 JSONObject p = post.getJSONObject(i);
-                notify(p.optInt("id"), p.optString("text", "New chapters"));
+                long series = p.isNull("series") ? 0 : p.optLong("series", 0);
+                notify(p.optInt("id"), p.optString("text", "New chapters"), series, p.optBoolean("chapters", false));
             }
             JSONObject state = plan.optJSONObject("state");
             if (state != null) prefs.edit().putString(PLAN, state.toString()).apply();
@@ -198,7 +203,9 @@ public class LeafChaptersJob extends JobService {
         }
     }
 
-    private void notify(int id, String text) {
+    /** A notice; one of new chapters of one series ({@code chapters}) has Read now and Download,
+     *  and any notice of a series opens it. */
+    private void notify(int id, String text, long series, boolean chapters) {
         if (android.os.Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             return;
@@ -208,12 +215,26 @@ public class LeafChaptersJob extends JobService {
         nm.createNotificationChannel(new NotificationChannel(CHANNEL, "New chapters", NotificationManager.IMPORTANCE_DEFAULT));
         Intent open = new Intent(this, LeafActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent tap = PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        Notification n = new Notification.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_notify)
+        Notification.Builder b = new Notification.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_notify)
                 .setContentTitle(text)
                 .setContentIntent(tap)
-                .setAutoCancel(true)
-                .build();
-        nm.notify(id, n);
+                .setAutoCancel(true);
+        if (series != 0) {
+            b.setContentIntent(opening(EXTRA_READ, series, id * 4 + 1, chapters));
+            if (chapters) {
+                b.addAction(new Notification.Action.Builder(null, "Read now", opening(EXTRA_READ, series, id * 4 + 2, true)).build());
+                b.addAction(new Notification.Action.Builder(null, "Download", opening(EXTRA_DOWNLOAD, series, id * 4 + 3, true)).build());
+            }
+        }
+        nm.notify(id, b.build());
+    }
+
+    /** Leaf opened for a series: Read now (where you are in it) or Download; a notice that isn't
+     *  of new chapters opens the series' page ("read" with its id negative: the page). */
+    private PendingIntent opening(String extra, long series, int request, boolean reading) {
+        Intent open = new Intent(this, LeafActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        open.putExtra(extra, reading ? series : -series);
+        return PendingIntent.getActivity(this, request, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
     }
 
     private static String read(InputStream in) throws Exception {

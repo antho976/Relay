@@ -61,6 +61,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         app.jobs.send(Some(&s), Job::Status(s.clone()));
         app.ask(Job::Health);
         app.ask(Job::HiddenPages);
+        app.ask(Job::ServerInfo);
     }
     let pg = app.page_begin(dt, 56.0);
     if let Some(s) = app.st.connect.answered_ok.take() {
@@ -153,6 +154,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 confirm: app.restore_asked,
             },
             hidden: app.hidden_pages.data,
+            server: &app.server_info,
             anilist: &mut st.anilist,
             now_ms: crate::shelf::now_ms(),
         };
@@ -197,6 +199,13 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 app.ask(Job::Anilist(token));
             }
             Act::Health => app.ask(Job::Health),
+            Act::ServerInfo => app.ask(Job::ServerInfo),
+            Act::DiskCap(gb) => {
+                if let Some(i) = &mut app.server_info.data {
+                    i.room.cap_gb = gb;
+                }
+                app.ask(Job::DiskCap(gb));
+            }
             Act::Promo(skip) => app.images.set_promo(skip),
             Act::ClearHidden => {
                 app.ask(Job::ClearHidden);

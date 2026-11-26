@@ -51,6 +51,9 @@ type RecentRow<'a> = (bool, Option<u32>, (u8, i64, i64), Result<&'a Series, &'a 
 
 /// The fixed top: the title and its keys, then the tabs.
 const TOP: f32 = 104.0;
+/// Genres offered as chips in Following.
+const GENRE_CHIPS: usize = 12;
+
 /// The filter field under the tabs (Updates, Recent, Following).
 const FIELD: f32 = 54.0;
 const TABS: [&str; 4] = ["UPDATES", "RECENT", "FOLLOWING", "DOWNLOADS"];
@@ -85,6 +88,9 @@ pub struct State {
     pub confirm: Option<Vec<i64>>,
     /// The sheet of series in My space twice is open.
     pub dupes: bool,
+    /// Following shows one genre only (as its sources name it, any case).
+    pub genre: Option<String>,
+    genre_chips: crate::ui::HScroll,
 }
 
 impl State {
@@ -326,6 +332,44 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 set_all = Some(i == 1);
             }
             y += head_h + 8.0;
+            // Due today: a series whose usual day is today (or whose usual gap ends today) and
+            // whose chapter hasn't come yet ([`crate::rhythm`]).
+            let now_ms = crate::shelf::now_ms();
+            let due: Vec<(&Series, String)> = series
+                .iter()
+                .filter(|s| (!belled_only || s.bell) && logic::title_matches(&s.title, &query) && s.status != "completed")
+                .filter_map(|s| {
+                    let m = app.more.get(&s.id)?;
+                    let u = crate::rhythm::usual(&m.uploads, offset)?;
+                    crate::rhythm::due_today(&u, now_ms, offset).then(|| (s, crate::rhythm::usual_words(&u)))
+                })
+                .collect();
+            if !due.is_empty() {
+                cx.c.text("DUE TODAY", x0, y + 12.0, Text::new(ty::SMALL, t::INK3).semi());
+                y += 34.0;
+                let rh = 56.0;
+                for (s, words) in &due {
+                    if cx.pressed(0.0, y, WIDTH, rh) {
+                        cx.c.rect(0.0, y, WIDTH, rh, 0.0, t::WASH);
+                    }
+                    cover(&mut cx, &mut app.images, s, 0.0, y, rh, rh, 0.0, now);
+                    let tx = rh + 14.0;
+                    let title_t = Text::new(ty::BODY, t::INK).medium();
+                    let line_t = Text::new(12.5, t::INK3);
+                    let ty0 = y + (rh - title_t.lh() - 3.0 - line_t.lh()) / 2.0;
+                    cx.c.text_fit(&s.title, tx, ty0, WIDTH - PAD - tx, title_t);
+                    let line = match s.latest {
+                        Some(l) => format!("{words} · chapter {} next", logic::num((l + 1.0).floor())),
+                        None => words.clone(),
+                    };
+                    cx.c.text_fit(&line, tx, ty0 + title_t.lh() + 3.0, WIDTH - PAD - tx, line_t);
+                    if cx.tap(0.0, y, WIDTH, rh) {
+                        act = Some(Act::Series(s.id));
+                    }
+                    y += rh;
+                }
+                y += 10.0;
+            }
             if groups.is_empty() {
                 y += 30.0;
                 if updates_state.0 {
@@ -555,7 +599,10 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             y += 10.0;
             let ht = Text::new(ty::UI, t::INK2);
             let head_h = 40.0;
-            let shown = series.iter().filter(|s| st.shelf.is_none_or(|sh| logic::shelf_of(s) == sh) && logic::title_matches(&s.title, &query)).count();
+            let genre_now = st.genre.clone();
+            let mut pick_genre: Option<Option<String>> = None;
+            let genre_of = |s: &Series| genre_now.as_ref().is_none_or(|g| app.more.get(&s.id).is_some_and(|m| m.genres.iter().any(|x| x.eq_ignore_ascii_case(g))));
+            let shown = series.iter().filter(|s| st.shelf.is_none_or(|sh| logic::shelf_of(s) == sh) && genre_of(s) && logic::title_matches(&s.title, &query)).count();
             let count = match (shown == series.len(), series.len()) {
                 (true, 1) => "1 series".to_string(),
                 (true, n) => format!("{n} series"),
@@ -579,8 +626,23 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             if let Some(i) = kit::chip_row(&mut cx, &mut st.chips, y, &chips, dt) {
                 st.shelf = if i == 0 { None } else { Some(Shelf::ALL[i - 1]) };
             }
-            y += 32.0 + 14.0;
-            let mut list: Vec<Series> = series.iter().filter(|s| st.shelf.is_none_or(|sh| logic::shelf_of(s) == sh) && logic::title_matches(&s.title, &query)).cloned().collect();
+            y += 32.0 + 10.0;
+            // The genres your series have most, as their sources name them.
+            let genres = logic::top_genres(series.iter().filter_map(|s| app.more.get(&s.id)).map(|m| m.genres.as_slice()), GENRE_CHIPS);
+            if !genres.is_empty() {
+                let mut chips: Vec<(String, bool, Option<Rgba>)> = vec![("Any genre".to_string(), st.genre.is_none(), None)];
+                chips.extend(genres.iter().map(|(g, n)| (format!("{g} {n}"), st.genre.as_ref().is_some_and(|x| x.eq_ignore_ascii_case(g)), None)));
+                if let Some(i) = kit::chip_row(&mut cx, &mut st.genre_chips, y, &chips, dt) {
+                    pick_genre = Some(if i == 0 { None } else { Some(genres[i - 1].0.clone()) });
+                }
+                y += 32.0 + 14.0;
+            } else {
+                y += 4.0;
+            }
+            let mut list: Vec<Series> = series.iter().filter(|s| st.shelf.is_none_or(|sh| logic::shelf_of(s) == sh) && genre_of(s) && logic::title_matches(&s.title, &query)).cloned().collect();
+            if let Some(g) = pick_genre.take() {
+                st.genre = g;
+            }
             logic::sort_following(&mut list, sort);
             if list.is_empty() && !series.is_empty() {
                 y += 30.0;
@@ -636,7 +698,13 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 let block = title_t.lh() + 5.0 + line_t.lh();
                 let ty0 = y + (rh - block) / 2.0;
                 cx.c.text_fit(&s.title, tx, ty0, tw, title_t);
-                let updated = if s.updated_at > 0 { format!("{} Updated", logic::local_date(s.updated_at)) } else { format!("Added {}", logic::local_date(s.added_at)) };
+                // On a break (six weeks without a chapter): said instead of the date.
+                let paused = app.more.get(&s.id).filter(|m| crate::rhythm::on_break(&m.uploads, &s.status, crate::shelf::now_ms())).and_then(|m| crate::rhythm::words(&m.uploads, &s.status, crate::shelf::now_ms(), offset));
+                let updated = match paused {
+                    Some(w) => w,
+                    None if s.updated_at > 0 => format!("{} Updated", logic::local_date(s.updated_at)),
+                    None => format!("Added {}", logic::local_date(s.added_at)),
+                };
                 cx.c.text_fit(&updated, tx, ty0 + title_t.lh() + 5.0, tw, line_t);
                 if held_on(held_at, y, rh, cx.c.dy) {
                     cx.ui.swallow();

@@ -58,7 +58,16 @@ pub struct JobState {
 pub struct Post {
     pub id: i32,
     pub text: String,
+    /// The series it tells of; with `chapters`, the notice has Read now and Download keys.
+    #[serde(default)]
+    pub series: Option<i64>,
+    #[serde(default)]
+    pub chapters: bool,
 }
+
+/// Events posted on their own, never in a summary: a series only Webtoon had is elsewhere now,
+/// one is finished, one isn't updating.
+pub const ALONE: [&str; 3] = ["elsewhere", "finished", "blocked"];
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Plan {
@@ -104,8 +113,8 @@ pub fn plan(n: &Notify, mut state: JobState, events: &[Event], now_ms: i64, offs
     let local = now_ms.div_euclid(60_000) + offset_min as i64;
     let minute = local.rem_euclid(1440) as u16;
     let day = local.div_euclid(1440);
-    for e in events.iter().filter(|e| e.kind == "new" || e.kind == "elsewhere") {
-        let alone = e.kind == "elsewhere";
+    for e in events.iter().filter(|e| e.kind == "new" || ALONE.contains(&e.kind.as_str())) {
+        let alone = e.kind != "new";
         state.held.push(Held { at: e.at, series: e.series, chapters: if alone { 0 } else { chapters_in(&e.text) }, text: e.text.clone(), alone });
     }
     let mut post = Vec::new();
@@ -113,7 +122,7 @@ pub fn plan(n: &Notify, mut state: JobState, events: &[Event], now_ms: i64, offs
         let (alone, rest): (Vec<Held>, Vec<Held>) = state.held.drain(..).partition(|h| h.alone);
         state.held = rest;
         for h in alone {
-            post.push(Post { id: (h.at % i32::MAX as i64) as i32, text: h.text });
+            post.push(Post { id: (h.at % i32::MAX as i64) as i32, text: h.text, series: h.series, chapters: !h.alone });
         }
     }
     if n.summary {
@@ -121,14 +130,16 @@ pub fn plan(n: &Notify, mut state: JobState, events: &[Event], now_ms: i64, offs
             // What waits on its own (in quiet hours) stays held; the rest is the summary.
             let (alone, rest): (Vec<Held>, Vec<Held>) = state.held.drain(..).partition(|h| h.alone);
             if !rest.is_empty() {
-                post.push(Post { id: 0x5000_0000 | (day as i32 & 0x0FFF_FFFF), text: summary_words(&rest) });
+                // One series only: its keys too.
+                let one = rest.iter().all(|h| h.series.is_some() && h.series == rest[0].series).then(|| rest[0].series).flatten();
+                post.push(Post { id: 0x5000_0000 | (day as i32 & 0x0FFF_FFFF), text: summary_words(&rest), series: one, chapters: one.is_some() });
             }
             state.held = alone;
             state.summary_day = day;
         }
     } else if !in_quiet(n, minute) {
         for h in state.held.drain(..) {
-            post.push(Post { id: (h.at % i32::MAX as i64) as i32, text: h.text });
+            post.push(Post { id: (h.at % i32::MAX as i64) as i32, text: h.text, series: h.series, chapters: !h.alone });
         }
     }
     Plan { post, state }
@@ -167,6 +178,18 @@ mod tests {
         let p = plan(&n, JobState::default(), &[other], day0 + 23 * H + 30 * 60_000, 0);
         assert!(p.post.is_empty());
         assert_eq!(p.state.held.len(), 1);
+    }
+
+    #[test]
+    fn a_finished_series_is_said_alone_and_a_new_chapter_carries_its_series() {
+        let n = Notify { quiet: false, summary: true, ..Default::default() };
+        let ev = vec![
+            Event { at: 10, series: Some(3), kind: "finished".into(), text: "T is finished: 40 chapters, all read".into() },
+            Event { at: 11, series: Some(4), kind: "blocked".into(), text: "U isn't updating: its source stopped answering".into() },
+        ];
+        let p = plan(&n, JobState::default(), &ev, 12 * 3_600_000, 0);
+        assert_eq!(p.post.len(), 2, "both on their own, outside the summary");
+        assert!(p.post.iter().all(|x| !x.chapters));
     }
 
     #[test]
@@ -232,7 +255,7 @@ mod tests {
         assert_eq!(chapters_in("New chapters"), 1);
         let out = plan_json(r#"{"quiet":false}"#, "{}", r#"[{"at":5,"series":1,"kind":"new","text":"1 new chapter of A, up to 2"}]"#, 10, 0);
         let p: Plan = serde_json::from_str(&out).unwrap();
-        assert_eq!(p.post, vec![Post { id: 5, text: "1 new chapter of A, up to 2".into() }]);
+        assert_eq!(p.post, vec![Post { id: 5, text: "1 new chapter of A, up to 2".into(), series: Some(1), chapters: true }]);
         // Garbage in: nothing posted, nothing lost.
         let p: Plan = serde_json::from_str(&plan_json("x", "y", "z", 0, 0)).unwrap();
         assert!(p.post.is_empty());

@@ -49,6 +49,8 @@ pub struct State {
     pub suggest: Option<(String, Option<String>)>,
     /// Words that found nothing, to ask AniList about (the page sends it).
     pub suggest_due: Option<String>,
+    /// Search what is in the field now, without waiting for typing to pause (words shared to Leaf).
+    pub send_now: bool,
 }
 
 /// One source's works joined to those shown: the same work (as the server tells works apart)
@@ -169,7 +171,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         app.focus.kind = Kb::Text;
         app.host.keyboard(true, &app.st.search.query, Kb::Text);
     }
-    let submit = app.typed_done == Some("search");
+    let submit = app.typed_done == Some("search") || std::mem::take(&mut app.st.search.send_now);
     let pg = app.page_begin(dt, TOP);
     let now = app.now_ns;
     let st = &mut app.st.search;

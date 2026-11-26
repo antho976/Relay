@@ -345,7 +345,8 @@ pub fn picks_of(app: &App, of: &str) -> (String, Vec<Rec>, Option<String>) {
     }
     if let Some(id) = of.strip_prefix("because:").and_then(|v| v.parse::<i64>().ok()) {
         let b = d.and_then(|d| d.because.iter().find(|b| b.series == id));
-        return (b.map_or("Because you read".into(), |b| format!("Because you read {}", b.title)), b.map(|b| b.recs.clone()).unwrap_or_default(), None);
+        let words = |b: &leaf_proto::Because| format!("Because you {} {}", if b.finished { "finished" } else { "read" }, b.title);
+        return (b.map_or("Because you read".into(), words), b.map(|b| b.recs.clone()).unwrap_or_default(), None);
     }
     if of == "binge" {
         return ("Finished, to binge".into(), d.and_then(|d| d.binge.clone()).into_iter().collect(), None);

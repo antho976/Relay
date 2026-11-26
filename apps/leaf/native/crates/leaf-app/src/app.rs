@@ -73,6 +73,11 @@ pub trait Host: Send + Sync {
     }
     /// A light haptic tick (a row caught by a sweep), where the platform has one.
     fn tick(&self) {}
+    /// What Leaf was opened for since last asked: "read:ID", "download:ID" (a notice's keys; a
+    /// negative id opens the series' page), "share:TEXT" (shared to Leaf).
+    fn take_launch(&self) -> Option<String> {
+        None
+    }
     /// Put a picture in the phone's gallery (Android: Pictures/Leaf). Answers words to show
     /// when it went wrong, or where it went (the desktop saves a file).
     fn save_picture(&self, name: &str, jpeg: &[u8]) -> Option<String> {
@@ -336,6 +341,9 @@ impl Default for ReadPrefs {
 pub const WARM: crate::draw::Rgba = crate::draw::Rgba::hex(0xFF8C1F);
 pub const WARM_MAX: f32 = 0.28;
 
+/// The platform is asked this often what Leaf was opened for (a notice's key, a share).
+const LAUNCH_POLL_NS: u64 = 400_000_000;
+
 /// Searches kept for Search's list.
 pub const SEARCHES_KEPT: usize = 8;
 
@@ -416,6 +424,15 @@ pub struct App {
     pub duplicates: Loaded<Vec<[i64; 2]>>,
     /// A chapter to open once its series has loaded (an update tapped): (series, chapter).
     pub open_after: Option<(i64, i64)>,
+    /// A series to open where you are in it once it has loaded: Leaf opening in the chapter it was
+    /// closed in ([`ReadPrefs::reopen`]), or a notice's Read now.
+    pub continue_after: Option<i64>,
+    /// The start's look at [`App::reading_now`] was made.
+    reopen_looked: bool,
+    /// A notice's Download: the next chapters of this series go to the phone once it has loaded.
+    download_after: Option<i64>,
+    /// When the platform was last asked what Leaf was opened for (ns).
+    launch_polled: u64,
     /// What chapters' read marks were before "Mark all before as read", per series, until the
     /// server agrees.
     read_undo: HashMap<i64, Vec<(i64, bool)>>,
@@ -531,6 +548,10 @@ impl App {
             alternatives: HashMap::new(),
             duplicates: Loaded::default(),
             open_after: None,
+            continue_after: None,
+            reopen_looked: false,
+            download_after: None,
+            launch_polled: 0,
             #[cfg(test)]
             reported: Vec::new(),
             read_undo: HashMap::new(),
@@ -638,8 +659,13 @@ impl App {
             r.next_up = logic::next_up(list, d.series.id, |s| logic::in_space(s, downloaded.contains(&s.id))).map(|(s, n)| (s.clone(), n));
         }
         self.close_reader();
+        let series = r.series;
         self.reader = Some(r);
         self.immersive(true);
+        if self.reading_now != Some(series) && series > 0 && !self.shot {
+            self.reading_now = Some(series);
+            self.save_config();
+        }
         if self.route() == &Route::Reader {
             self.shown();
         } else {
@@ -1836,6 +1862,74 @@ impl App {
         }
     }
 
+    /// What Leaf was opened for: a notice's Read now or Download, or words shared to it.
+    pub fn launched(&mut self, l: &str) {
+        self.reopen_looked = true;
+        if let Some(id) = l.strip_prefix("read:").and_then(|v| v.trim().parse::<i64>().ok()) {
+            self.close_reader();
+            self.close_book();
+            if id > 0 {
+                self.continue_after = Some(id);
+            } else if id < 0 {
+                self.push(Route::Series(-id));
+            }
+        } else if let Some(id) = l.strip_prefix("download:").and_then(|v| v.trim().parse::<i64>().ok()).filter(|id| *id > 0) {
+            self.download_after = Some(id);
+            if self.detail_for(id).is_none() {
+                self.ask(Job::Series(id));
+            }
+        } else if let Some(text) = l.strip_prefix("share:") {
+            let q = logic::shared_title(text);
+            if q.chars().count() >= crate::search::MIN_CHARS {
+                self.close_reader();
+                self.close_book();
+                self.st.search = Default::default();
+                self.st.search.query = q.clone();
+                self.go_tab(1);
+                self.st.search.send_now = true;
+            }
+        }
+    }
+
+    /// Leaf opening: in the chapter it was closed in, when asked for (and nothing else was opened
+    /// meanwhile); and a series waiting to continue, once it has loaded.
+    fn continue_waiting(&mut self) {
+        if !self.reopen_looked && !self.shot {
+            self.reopen_looked = true;
+            if self.prefs.reopen
+                && self.nav.len() == 1
+                && let Some(id) = self.reading_now
+            {
+                self.continue_after = Some(id);
+            }
+        }
+        if let Some(id) = self.download_after
+            && let Some(d) = self.detail_for(id)
+        {
+            self.download_after = None;
+            let ids = logic::next_to_download(&d.chapters, 5, |c| self.saver.state(c) != crate::offline::Kept::None);
+            let get: Vec<leaf_proto::Chapter> = d.chapters.iter().filter(|c| ids.contains(&c.id)).cloned().collect();
+            if get.is_empty() {
+                self.toast("The next chapters are on this phone already");
+            } else {
+                self.download(id, &get);
+            }
+        }
+        let Some(id) = self.continue_after else { return };
+        if self.detail_for(id).is_some() {
+            self.continue_after = None;
+            self.continue_series(id);
+        } else if !self.series.get(&id).is_some_and(|l| l.loading) {
+            if self.series.get(&id).is_some_and(|l| l.error.is_some()) {
+                self.continue_after = None;
+                self.push(Route::Series(id));
+            } else {
+                self.series.entry(id).or_default().loading = true;
+                self.ask(Job::Series(id));
+            }
+        }
+    }
+
     /// An update tapped before its series had loaded: open it now that it has.
     fn open_waiting(&mut self) {
         let Some((series, chapter)) = self.open_after else { return };
@@ -2024,6 +2118,19 @@ impl App {
                 } else if let Some(c) = self.series.get_mut(&r.series).and_then(|l| l.data.as_mut()).and_then(|d| d.chapters.iter_mut().find(|c| c.id == chapter && !c.read)) {
                     c.last_page = p.page;
                 }
+            }
+            // Downloads of chapters just finished go, when you asked for that (Settings › Downloads).
+            if self.prefs.delete_read {
+                let done: Vec<i64> = r.places().into_iter().filter(|(c, p)| p.done && self.saver.is_saved(*c)).map(|(c, _)| c).collect();
+                if !done.is_empty() {
+                    let (n, bytes) = self.saver.delete(&done);
+                    if n > 0 {
+                        self.toast(&format!("Deleted {} you read from this phone · {} freed", logic::chapters_words(n), crate::space::size_words(bytes)));
+                    }
+                }
+            }
+            if self.reading_now.take().is_some() {
+                self.save_config();
             }
             let id = r.series;
             self.ask(Job::Series(id));
@@ -2224,6 +2331,13 @@ impl App {
         self.saver.set_server(if self.shot { None } else { self.server.clone() });
         self.saver.set_show_promo(!self.prefs.skip_promo);
         self.open_waiting();
+        if now_ns.saturating_sub(self.launch_polled) >= LAUNCH_POLL_NS || self.launch_polled == 0 {
+            self.launch_polled = now_ns.max(1);
+            if let Some(l) = self.host.take_launch() {
+                self.launched(&l);
+            }
+        }
+        self.continue_waiting();
         self.run_pending();
         let late = self.late_toast.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(words) = late {

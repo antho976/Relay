@@ -953,6 +953,71 @@ pub fn title_matches(title: &str, query: &str) -> bool {
     fold(query).split(' ').filter(|w| !w.is_empty()).all(|w| t.contains(w))
 }
 
+/// The title in words shared to Leaf: a link's last part ("…/series/omniscient-reader-abc123/"
+/// is "omniscient reader"), else the first line, without the app's own frills ("Read X on
+/// Webtoon", "X | Asura Scans").
+pub fn shared_title(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    // A line that isn't a link wins (the subject, or words before the link).
+    let words = lines.iter().find(|l| !l.contains("://")).map(|l| l.to_string());
+    let from_link = || {
+        let url = lines.iter().flat_map(|l| l.split_whitespace()).find(|w| w.contains("://"))?;
+        let path = url.split("://").nth(1)?.split(['?', '#']).next()?;
+        let parts: Vec<&str> = path.split('/').skip(1).filter(|p| !p.is_empty()).collect();
+        // The longest part that is words, not an id or a page ("list", "viewer", "chapter-12").
+        let skip = ["en", "list", "viewer", "series", "manga", "comics", "comic", "title", "read", "webtoon", "originals", "canvas"];
+        let part = parts.iter().filter(|p| !skip.contains(&p.to_lowercase().as_str()) && !p.chars().all(|c| c.is_ascii_digit()) && !p.to_lowercase().starts_with("chapter") && !p.to_lowercase().starts_with("episode")).max_by_key(|p| p.len())?;
+        let mut ws: Vec<&str> = part.split(['-', '_', '+', '.']).filter(|w| !w.is_empty()).collect();
+        // A trailing id ("abc123de", "12345").
+        while ws.last().is_some_and(|w| ws.len() > 1 && (w.chars().all(|c| c.is_ascii_digit()) || (w.len() >= 6 && w.chars().any(|c| c.is_ascii_digit()) && w.chars().any(|c| c.is_ascii_alphabetic())))) {
+            ws.pop();
+        }
+        Some(ws.join(" "))
+    };
+    let mut t = words.or_else(from_link).unwrap_or_default();
+    for sep in [" | ", " - Read", " – ", " — "] {
+        if let Some((a, _)) = t.split_once(sep) {
+            t = a.to_string();
+        }
+    }
+    if let Some(rest) = t.strip_prefix("Read ") {
+        t = rest.to_string();
+    }
+    if let Some((a, _)) = t.rsplit_once(" on ") {
+        t = a.to_string();
+    }
+    t.trim().trim_matches(['"', '\u{201C}', '\u{201D}']).trim().to_string()
+}
+
+/// The genres most series carry, most first, `n` at most: (name as most often written, count).
+/// Sources write them in their own case ("ACTION", "Action"): counted as one.
+pub fn top_genres<'a>(lists: impl Iterator<Item = &'a [String]>, n: usize) -> Vec<(String, usize)> {
+    let mut by: std::collections::HashMap<String, (usize, std::collections::HashMap<String, usize>)> = std::collections::HashMap::new();
+    for list in lists {
+        let mut seen = std::collections::HashSet::new();
+        for g in list {
+            let g = g.trim();
+            let k = g.to_lowercase();
+            if g.is_empty() || !seen.insert(k.clone()) {
+                continue;
+            }
+            let e = by.entry(k).or_default();
+            e.0 += 1;
+            *e.1.entry(g.to_string()).or_default() += 1;
+        }
+    }
+    let mut v: Vec<(String, usize)> = by
+        .into_values()
+        .map(|(count, spellings)| {
+            let name = spellings.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0))).map(|x| x.0).unwrap_or_default();
+            (name, count)
+        })
+        .collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    v.truncate(n);
+    v
+}
+
 // Shelves
 
 /// Where a series sits in My space: what you choose, or Reading once started and Plan to read
@@ -1171,6 +1236,24 @@ pub fn gutter_cuts(px: &[u8], w: u32, h: u32) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shared_link_or_title_becomes_the_words_to_search() {
+        assert_eq!(shared_title("https://www.webtoons.com/en/action/omniscient-reader/list?title_no=2154"), "omniscient reader");
+        assert_eq!(shared_title("https://asuracomic.net/series/nano-machine-7f3a2b1c"), "nano machine");
+        assert_eq!(shared_title("Read Omniscient Reader on WEBTOON\nhttps://www.webtoons.com/en/x/y/list?title_no=1"), "Omniscient Reader");
+        assert_eq!(shared_title("Solo Leveling | Some Scans"), "Solo Leveling");
+        assert_eq!(shared_title("https://site.com/manga/12345/the-greatest-estate-developer/chapter-120"), "the greatest estate developer");
+    }
+
+    #[test]
+    fn genres_count_once_a_series_whatever_their_case() {
+        let a = vec!["Action".to_string(), "ACTION".to_string(), "Murim".to_string()];
+        let b = vec!["action".to_string(), "Fantasy".to_string()];
+        let c = vec!["Action".to_string(), "Fantasy".to_string()];
+        let top = top_genres([a.as_slice(), b.as_slice(), c.as_slice()].into_iter(), 2);
+        assert_eq!(top, vec![("Action".to_string(), 3), ("Fantasy".to_string(), 2)]);
+    }
 
     fn ch(id: i64, number: f64, read: bool, last_page: u32) -> Chapter {
         Chapter { id, number, name: format!("Ch.{}", num(number)), group: None, pages: 30, read, last_page, downloaded: true, uploaded_at: 0, from: None }

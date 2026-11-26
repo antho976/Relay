@@ -79,6 +79,41 @@ impl Host for AndroidHost {
         with_activity(&self.app, |env, activity| env.call_method(activity, "setImmersive", "(Z)V", &[JValue::Bool(on as u8)]).map(|_| ()));
     }
 
+    fn take_launch(&self) -> Option<String> {
+        with_activity(&self.app, |env, activity| {
+            let v = env.call_method(activity, "takeLaunch", "()Ljava/lang/String;", &[])?.l()?;
+            if v.is_null() {
+                return Ok(None);
+            }
+            Ok(Some(env.get_string(&JString::from(v))?.into()))
+        })
+        .flatten()
+    }
+
+    fn save_picture(&self, name: &str, jpeg: &[u8]) -> Option<String> {
+        // Through a file, so the picture's bytes don't cross JNI.
+        let path = self.cache_dir().join("picture.jpg");
+        if let Err(e) = std::fs::create_dir_all(self.cache_dir()).and_then(|_| std::fs::write(&path, jpeg)) {
+            return Some(format!("Couldn't save it: {e}"));
+        }
+        let p = path.to_string_lossy().into_owned();
+        let said = with_activity(&self.app, |env, activity| {
+            let ps = env.new_string(&p)?;
+            let ns = env.new_string(name)?;
+            let v = env.call_method(activity, "savePicture", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", &[JValue::Object(&ps), JValue::Object(&ns)])?.l()?;
+            if v.is_null() {
+                return Ok(None);
+            }
+            Ok(Some(env.get_string(&JString::from(v))?.into()))
+        });
+        let _ = std::fs::remove_file(&path);
+        match said {
+            Some(None) => Some("Saved to your pictures, in Leaf".into()),
+            Some(Some(why)) => Some(why),
+            None => Some("The gallery didn't take it".into()),
+        }
+    }
+
     fn unmetered(&self) -> bool {
         with_activity(&self.app, |env, activity| env.call_method(activity, "unmetered", "()Z", &[])?.z()).unwrap_or(false)
     }

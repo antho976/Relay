@@ -36,6 +36,20 @@ pub enum Act {
     RestoreBooks,
     /// Not restore after all.
     KeepBooks,
+    /// Ask the server about itself again.
+    ServerInfo,
+    /// The room the server's chapters may take, in GB (None: no limit).
+    DiskCap(Option<u32>),
+}
+
+/// The sizes offered for the server's chapters, in GB (none first: no limit).
+pub const CAPS: [Option<u32>; 11] = [None, Some(5), Some(10), Some(20), Some(30), Some(50), Some(75), Some(100), Some(150), Some(200), Some(300)];
+
+/// The next size up or down from `now` (a size not offered steps to the nearest).
+pub fn cap_step(now: Option<u32>, up: bool) -> Option<u32> {
+    let i = CAPS.iter().position(|c| *c == now).unwrap_or_else(|| CAPS.iter().position(|c| c.is_some_and(|g| Some(g) >= now)).unwrap_or(CAPS.len() - 1));
+    let j = if up { (i + 1).min(CAPS.len() - 1) } else { i.saturating_sub(1) };
+    CAPS[j]
 }
 
 /// The copy of the books on the server, as Settings shows it ([`crate::booksync`]).
@@ -85,6 +99,8 @@ pub struct Parts<'a> {
     pub books: Books<'a>,
     /// How many pages were hidden by hand, once the server said.
     pub hidden: Option<u32>,
+    /// What the server says of itself.
+    pub server: &'a Loaded<crate::net::ServerInfo>,
     /// The AniList token being typed.
     pub anilist: &'a mut String,
     pub now_ms: i64,
@@ -188,6 +204,18 @@ pub fn draw(cx: &mut Ctx, p: Parts, x: f32, mut y: f32, w: f32, now_ns: u64) -> 
         acts.push(Act::Save);
     }
     y += h;
+    let (h, tap) = toggle_row(cx, x, y, w, "Delete downloads once read", "A chapter downloaded to this phone goes when you finish it and leave the reader.", p.prefs.delete_read);
+    if tap {
+        p.prefs.delete_read = !p.prefs.delete_read;
+        acts.push(Act::Save);
+    }
+    y += h;
+    let (h, tap) = toggle_row(cx, x, y, w, "Open where I left off", "Closed while reading, Leaf opens again in that chapter, at your place.", p.prefs.reopen);
+    if tap {
+        p.prefs.reopen = !p.prefs.reopen;
+        acts.push(Act::Save);
+    }
+    y += h;
     if let Some(n) = p.hidden.filter(|n| *n > 0) {
         let rh = 52.0;
         let tt = Text::new(ty::UI, t::INK2);
@@ -282,6 +310,11 @@ pub fn draw(cx: &mut Ctx, p: Parts, x: f32, mut y: f32, w: f32, now_ns: u64) -> 
     }
     y += 24.0;
 
+    // The server: how it is doing, and the room its chapters may take.
+    y += heading(cx, x, y, "SERVER");
+    y += server_part(cx, p.server, x, y, w, p.now_ms, now_ns, &mut acts);
+    y += 24.0;
+
     // AniList
     y += heading(cx, x, y, "ANILIST");
     let body = Text::new(ty::UI, t::INK2).line(1.45);
@@ -348,6 +381,107 @@ pub fn draw(cx: &mut Ctx, p: Parts, x: f32, mut y: f32, w: f32, now_ns: u64) -> 
     y += 44.0 + 28.0;
     y += books_part(cx, &p.books, x, y, w, p.now_ms, &mut acts);
     (y, acts)
+}
+
+/// The server's own readings: its last pass and download line, the room its chapters take with
+/// the size you set (− and +), and when its data was last backed up and copied to this PC.
+/// Returns its height.
+#[allow(clippy::too_many_arguments)]
+fn server_part(cx: &mut Ctx, s: &Loaded<crate::net::ServerInfo>, x: f32, y0: f32, w: f32, now_ms: i64, now_ns: u64, acts: &mut Vec<Act>) -> f32 {
+    let mut y = y0;
+    let body = Text::new(ty::UI, t::INK2).line(1.45);
+    let small = Text::new(ty::CAPTION, t::INK3).line(1.4);
+    let Some(i) = &s.data else {
+        match &s.error {
+            Some(e) => {
+                y += cx.c.para(e, x, y + 6.0, w, Text::new(ty::UI, t::DANGER).line(1.4), 3) + 12.0;
+                if kit::plain(cx, x, y, 120.0, 40.0, "Retry", None) {
+                    acts.push(Act::ServerInfo);
+                }
+                y += 48.0;
+            }
+            None => {
+                let turn = (now_ns as f64 / 1e9 * 0.9).fract() as f32;
+                cx.c.arc(x + 9.0, y + 18.0, 8.0, 2.0, turn, turn + 0.7, t::INK3, false);
+                cx.c.text("Asking your server", x + 28.0, y + 9.0, Text::new(ty::UI, t::INK2));
+                y += 40.0;
+            }
+        }
+        return y - y0;
+    };
+    let mut lines = Vec::new();
+    if i.pass_at > 0 {
+        lines.push(format!("Looked for new chapters {}", logic::ago(i.pass_at, now_ms)));
+    }
+    lines.push(match i.queued {
+        0 => "Nothing waiting to download".to_string(),
+        n => format!("{} waiting to download", logic::chapters_words(n as usize)),
+    });
+    for l in &lines {
+        y += cx.c.para(l, x, y, w, body, 2) + 2.0;
+    }
+    y += 16.0;
+    // The room: a meter of what the chapters take against the size set, and the size.
+    let r = &i.room;
+    let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
+    let used_words = r.used.map(|b| crate::space::size_words(b));
+    let head = match (&used_words, r.cap_gb) {
+        (Some(u), Some(c)) => format!("Chapters take {u} of {c} GB"),
+        (Some(u), None) => format!("Chapters take {u}"),
+        (None, _) => "Your server doesn't share its downloads with Leaf's part".to_string(),
+    };
+    cx.c.text_fit(&head, x, y, w, Text::new(ty::BODY, t::INK));
+    y += Text::new(ty::BODY, t::INK).lh() + 10.0;
+    if let (Some(b), Some(c)) = (r.used, r.cap_gb) {
+        let f = (gb(b) / c as f64).clamp(0.0, 1.0) as f32;
+        let ink = if f >= 0.9 { t::WARN } else { t::ACCENT };
+        cx.c.rect(x, y, w, 6.0, 3.0, t::S3);
+        cx.c.rect(x, y, (w * f).max(6.0), 6.0, 3.0, ink);
+        // Where cleaning starts.
+        cx.c.rect(x + w * 0.9 - 1.0, y - 3.0, 2.0, 12.0, 1.0, t::INK3);
+        y += 18.0;
+    }
+    let (h, step) = cap_row(cx, x, y, w, r.cap_gb);
+    if let Some(c) = step {
+        acts.push(Act::DiskCap(c));
+    }
+    y += h;
+    let rule = if r.cap_gb.is_some() {
+        "At 90% full, your server deletes the chapters you read longest ago, down to 80%. Never one you haven't read, nor the last two read of a series; a chapter deleted still opens, from its source."
+    } else {
+        "No limit set: your server only deletes chapters 20 or more behind where you are in a series. Set a size, and at 90% full the ones you read longest ago go first."
+    };
+    y += cx.c.para(rule, x, y, w, small, 5) + 8.0;
+    if r.cleaned_at > 0 && r.cleaned > 0 {
+        y += cx.c.para(&format!("Deleted {} read long ago {}", logic::chapters_words(r.cleaned as usize), logic::ago(r.cleaned_at, now_ms)), x, y, w, small, 2) + 4.0;
+    }
+    if r.stuck {
+        y += cx.c.para("Over 90% with nothing read left to delete: chapters not read yet fill it. A larger size makes room.", x, y, w, small.color(t::WARN), 3) + 4.0;
+    }
+    y += 12.0;
+    let backup = if i.backup_at > 0 { format!("Nightly backup made {}", logic::ago(i.backup_at, now_ms)) } else { "No nightly backup yet".to_string() };
+    let pc = if i.offsite_at > 0 { format!("Copied to your PC {}", logic::ago(i.offsite_at, now_ms)) } else { "Not copied off the server yet".to_string() };
+    y += cx.c.para(&format!("{backup} · {pc}"), x, y, w, small, 3);
+    y - y0
+}
+
+/// "Room for chapters" with − and + at the right. Returns its height and the size stepped to.
+fn cap_row(cx: &mut Ctx, x: f32, y: f32, w: f32, cap: Option<u32>) -> (f32, Option<Option<u32>>) {
+    let h = 48.0;
+    let tt = Text::new(ty::UI, t::INK2);
+    cx.c.text("Room for chapters", x, y + (h - tt.lh()) / 2.0, tt);
+    let right = x + w + 10.0;
+    let mut out = None;
+    if kit::icon_key(cx, right - 44.0, y + 2.0, "plus") && cap != CAPS[CAPS.len() - 1] {
+        out = Some(cap_step(cap, true));
+    }
+    let vt = Text::new(ty::BODY, t::INK).semi().center();
+    let words = cap.map_or("No limit".to_string(), |g| format!("{g} GB"));
+    cx.c.text(&words, right - 44.0 - 40.0, y + (h - vt.lh()) / 2.0, vt);
+    if kit::icon_key(cx, right - 44.0 - 80.0 - 44.0, y + 2.0, "minus") && cap.is_some() {
+        out = Some(cap_step(cap, false));
+    }
+    (h, out)
 }
 
 /// Your books' copy on the server: when it was made, Copy now, and Restore when there is one to
@@ -427,6 +561,15 @@ fn made_words(ms: i64, now_ms: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_room_steps_through_its_sizes_from_no_limit() {
+        assert_eq!(cap_step(None, true), Some(5));
+        assert_eq!(cap_step(Some(5), false), None);
+        assert_eq!(cap_step(Some(20), true), Some(30));
+        assert_eq!(cap_step(Some(25), true), Some(50), "a size set elsewhere steps from the next one");
+        assert_eq!(cap_step(Some(300), true), Some(300));
+    }
 
     #[test]
     fn a_source_says_how_it_is_doing() {

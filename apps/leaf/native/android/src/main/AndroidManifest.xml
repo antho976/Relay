@@ -15,6 +15,9 @@
          Android's installer, which asks the person (the first time, Android asks whether Leaf may
          install apps at all). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Save picture puts it in Pictures/Leaf: Android 10 and later need nothing for that;
+         Android 8 and 9 need this. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
     <!-- Which apps open a web link (Webtoon's paid episodes: its app, else the browser), so
          LeafActivity.openUrl can tell when none does. -->
@@ -48,6 +51,13 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- A link or a title shared to Leaf (from a browser, or the Webtoon app): Search
+                 opens with it. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
         <service

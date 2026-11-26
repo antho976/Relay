@@ -623,7 +623,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             let big = Text::new(17.0, Rgba::WHITE).semi();
             let tw = bw - 28.0 - if more { 24.0 } else { 0.0 };
             let ty0 = y + bh - 14.0 - big.lh();
-            cx.c.text("BECAUSE YOU READ", bx + 14.0, ty0 - small.lh() - 2.0, small);
+            cx.c.text(if b.finished { "BECAUSE YOU FINISHED" } else { "BECAUSE YOU READ" }, bx + 14.0, ty0 - small.lh() - 2.0, small);
             cx.c.text_fit(&b.title, bx + 14.0, ty0, tw, big);
             if more {
                 cx.c.icon("chevron-right", bx + bw - 18.0, ty0 + big.lh() / 2.0, 18.0, Rgba::WHITE);

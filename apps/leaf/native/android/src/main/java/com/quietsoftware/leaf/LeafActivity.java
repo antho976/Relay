@@ -81,6 +81,80 @@ public class LeafActivity extends GameActivity {
                 nativeBack();
             }
         });
+        launched(getIntent());
+    }
+
+    // What Leaf was opened for
+
+    /** "read:ID" or "download:ID" (a notice's keys), "share:TEXT" (a link or a title shared to
+     *  Leaf); taken by Rust ({@link #takeLaunch}) on its next frame. */
+    private volatile String launch;
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        launched(intent);
+    }
+
+    private void launched(Intent i) {
+        if (i == null) return;
+        long read = i.getLongExtra(LeafChaptersJob.EXTRA_READ, 0);
+        long download = i.getLongExtra(LeafChaptersJob.EXTRA_DOWNLOAD, 0);
+        if (read != 0) {
+            launch = "read:" + read;
+        } else if (download != 0) {
+            launch = "download:" + download;
+        } else if (Intent.ACTION_SEND.equals(i.getAction()) && "text/plain".equals(i.getType())) {
+            CharSequence t = i.getCharSequenceExtra(Intent.EXTRA_TEXT);
+            CharSequence subject = i.getCharSequenceExtra(Intent.EXTRA_SUBJECT);
+            String text = t == null ? "" : t.toString();
+            // Some apps put the title in the subject and only the link in the text.
+            if (subject != null && subject.length() > 0) text = subject + "\n" + text;
+            if (!text.trim().isEmpty()) launch = "share:" + text;
+        }
+        // Taken once: a turn of the screen doesn't open it again.
+        i.removeExtra(LeafChaptersJob.EXTRA_READ);
+        i.removeExtra(LeafChaptersJob.EXTRA_DOWNLOAD);
+    }
+
+    /** What Leaf was opened for since the last call, or null. */
+    public String takeLaunch() {
+        String l = launch;
+        launch = null;
+        return l;
+    }
+
+    // Pictures
+
+    /** A picture saved from the reader, put in Pictures/Leaf. Answers null, or why it failed. */
+    public String savePicture(String path, String name) {
+        try {
+            android.content.ContentValues v = new android.content.ContentValues();
+            v.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name);
+            v.put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                v.put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, android.os.Environment.DIRECTORY_PICTURES + "/Leaf");
+                v.put(android.provider.MediaStore.Images.Media.IS_PENDING, 1);
+            }
+            android.content.ContentResolver r = getContentResolver();
+            Uri uri = r.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
+            if (uri == null) return "The gallery didn't take it";
+            try (java.io.OutputStream out = r.openOutputStream(uri); java.io.InputStream in = new java.io.FileInputStream(path)) {
+                if (out == null) return "The gallery didn't take it";
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                v.clear();
+                v.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0);
+                r.update(uri, v, null, null);
+            }
+            return null;
+        } catch (Exception e) {
+            return "Couldn't save it: " + e.getMessage();
+        }
     }
 
     /** Reading: the bars are to stay hidden, and are hidden again whenever the window comes back. */

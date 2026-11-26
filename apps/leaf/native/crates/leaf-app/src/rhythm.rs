@@ -84,13 +84,18 @@ pub fn words(uploads: &[i64], status: &str, now_ms: i64, offset_s: i64) -> Optio
     if due_today(&u, now_ms, offset_s) {
         return Some("New chapter due today".into());
     }
-    Some(match (u.weekday, u.every) {
+    Some(usual_words(&u))
+}
+
+/// "New chapter usually Wednesday", "New chapter about every 2 weeks".
+pub fn usual_words(u: &Usual) -> String {
+    match (u.weekday, u.every) {
         (Some(w), _) => format!("New chapter usually {}", WEEKDAYS[w as usize]),
         (None, 1) => "New chapters most days".into(),
         (None, d @ 2..=10) => format!("New chapter about every {d} days"),
         (None, d) if d < 45 => format!("New chapter about every {} weeks", ((d as f64) / 7.0).round() as u32),
         (None, d) => format!("New chapter about every {} months", ((d as f64) / 30.0).round().max(1.0) as u32),
-    })
+    }
 }
 
 #[cfg(test)]
