@@ -424,7 +424,7 @@ fn server_part(cx: &mut Ctx, s: &Loaded<crate::net::ServerInfo>, x: f32, y0: f32
     // The room: a meter of what the chapters take against the size set, and the size.
     let r = &i.room;
     let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
-    let used_words = r.used.map(|b| crate::space::size_words(b));
+    let used_words = r.used.map(crate::space::size_words);
     let head = match (&used_words, r.cap_gb) {
         (Some(u), Some(c)) => format!("Chapters take {u} of {c} GB"),
         (Some(u), None) => format!("Chapters take {u}"),

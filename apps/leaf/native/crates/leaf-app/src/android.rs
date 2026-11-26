@@ -79,6 +79,14 @@ impl Host for AndroidHost {
         with_activity(&self.app, |env, activity| env.call_method(activity, "setImmersive", "(Z)V", &[JValue::Bool(on as u8)]).map(|_| ()));
     }
 
+    fn share_text(&self, text: &str) -> Option<String> {
+        let done = with_activity(&self.app, |env, activity| {
+            let ts = env.new_string(text)?;
+            env.call_method(activity, "shareText", "(Ljava/lang/String;)V", &[JValue::Object(&ts)]).map(|_| ())
+        });
+        if done.is_none() { Some("The share sheet didn't open".into()) } else { None }
+    }
+
     fn take_launch(&self) -> Option<String> {
         with_activity(&self.app, |env, activity| {
             let v = env.call_method(activity, "takeLaunch", "()Ljava/lang/String;", &[])?.l()?;

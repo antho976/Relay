@@ -163,6 +163,42 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
   once, the pick's cover stands in for the entry's, and the chapters fill in as the server answers.
   The server asks for Top picks' pages (and the first six of each Because rail) as it makes the
   day's picks, in the background lane, and keeps them a day (`warm_previews`, `WARM_KEEP_MS`).
+- Your stars (2026-11-25): a series' readings line ends with "You gave 4" or "Rate"; a tap opens
+  the sheet (`POST /v1/series/{id}/rating`, kept as `stars:{id}` on the server). Picks weigh a
+  series by them (`recs::weight`: 1–2 stars point nowhere and lead no rail, 4 counts 1.4, 5
+  counts 2), and "Because you finished X" is the series finished last (`recs::recent`), from the
+  same AniList answer and within the same daily search allowance: no request more.
+- When chapters come (`rhythm.rs`): the server sends each series' newest upload dates beside it
+  (`uploads`, one a day, 12 at most) and its genres (`genres`, Suwayomi's own); the phone says
+  "New chapter usually Wednesday" under the readings, lists "Due today" atop Updates, and a series
+  six weeks without a chapter says "On a break" in Following (`leaf_proto::BREAK_MS`). Following
+  has genre chips under the shelves (`logic::top_genres`).
+- The reader (2026-11-25): two fingers zoom the strip (to `reader::ZOOM_MAX`, one finger then
+  moves it across; no double tap: a tap still only shows the overlay); Warmth, an amber veil, sits
+  under Brightness (books too). A long press on a page offers Save picture (what of the page is
+  on screen, kept in `panels/` and put in Pictures/Leaf, `panels.rs`; the series page shows
+  "Saved pictures", the viewer's trash key lets one go from Leaf), "This page is broken: read it
+  elsewhere" (`POST /v1/chapters/{id}/elsewhere`: the chapter is read from another copy from then
+  on, `elsewhere:{chapter}`), and Hide.
+- Search lists what is in My space first ("In My space"); the very title of one of yours asks no
+  source until "Search your sources too". Searches that led to a page are kept (8) and shown under
+  the field. Words shared to Leaf (a link or a title, Android's share sheet) open Search with the
+  title (`logic::shared_title`).
+- Settings: "Delete downloads once read" (when leaving the reader), "Open where I left off"
+  (`reading_now` in config), and Server: the last pass, the download line, the room chapters take
+  and its size (`POST /v1/settings/disk`; `disk.rs`: at 90% of it the chapters read longest ago
+  go down to 80%, never an unread one nor the last two read of a series), the nightly backup and
+  the copy on the owner's PC (`tools/pull-backup.sh`, installed by `tools/install-offsite.sh` as a
+  user timer; the server learns of it from `offsite_at`).
+- Notices: "finished" (a belled series the source now calls completed) and "blocked" (no source
+  answers) post on their own; new chapters of one series carry Read now and Download keys
+  (`LeafChaptersJob`, `App::launched`). No source's name in either.
+- Wrapped (design 45, 2026-11-25; `wrapped.rs`, numbers in `wrapped_stats.rs`): the month's, and
+  the year's, as cards tapped through. The only place reading numbers show. From
+  `/v1/history` (Suwayomi's own read times, chapters marked in bulk left out) and the books'
+  clocked time; a comic's time is told from the gaps between chapters ("about"). Home shows a card
+  in a month's first week (the year's in January's first two), first until opened; My space's ⋯
+  has last month's; a notice on the 1st at 9 says it is ready. Share sends the readings as text.
 - Every select mode selects in bulk by sweeping (`sweep.rs`, the owner, 2026-11-23): a long press on
   a row and a drag without lifting selects the range from that row to the finger, dragging back lets
   go, a long press on a selected row de-selects, the list scrolls by itself in a 72-unit band at its

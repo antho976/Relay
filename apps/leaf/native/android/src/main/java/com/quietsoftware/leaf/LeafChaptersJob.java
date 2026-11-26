@@ -48,6 +48,8 @@ public class LeafChaptersJob extends JobService {
     /** A notice's keys open Leaf with one of these (a series id): Read now, Download. */
     public static final String EXTRA_READ = "leaf.read";
     public static final String EXTRA_DOWNLOAD = "leaf.download";
+    /** Wrapped is ready: which ("month:2026-11"). */
+    public static final String EXTRA_WRAPPED = "leaf.wrapped";
 
     private static final boolean NATIVE;
 
@@ -193,7 +195,12 @@ public class LeafChaptersJob extends JobService {
             for (int i = 0; post != null && i < post.length(); i++) {
                 JSONObject p = post.getJSONObject(i);
                 long series = p.isNull("series") ? 0 : p.optLong("series", 0);
-                notify(p.optInt("id"), p.optString("text", "New chapters"), series, p.optBoolean("chapters", false));
+                String wrapped = p.isNull("wrapped") ? "" : p.optString("wrapped", "");
+                if (!wrapped.isEmpty()) {
+                    notifyWrapped(p.optInt("id"), p.optString("text", "Wrapped is ready"), wrapped);
+                } else {
+                    notify(p.optInt("id"), p.optString("text", "New chapters"), series, p.optBoolean("chapters", false));
+                }
             }
             JSONObject state = plan.optJSONObject("state");
             if (state != null) prefs.edit().putString(PLAN, state.toString()).apply();
@@ -227,6 +234,21 @@ public class LeafChaptersJob extends JobService {
             }
         }
         nm.notify(id, b.build());
+    }
+
+    /** Wrapped is ready: a tap opens it. */
+    private void notifyWrapped(int id, String text, String which) {
+        if (android.os.Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm == null) return;
+        nm.createNotificationChannel(new NotificationChannel(CHANNEL, "New chapters", NotificationManager.IMPORTANCE_DEFAULT));
+        Intent open = new Intent(this, LeafActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        open.putExtra(EXTRA_WRAPPED, which);
+        PendingIntent tap = PendingIntent.getActivity(this, id, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        nm.notify(id, new Notification.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_notify).setContentTitle(text).setContentIntent(tap).setAutoCancel(true).build());
     }
 
     /** Leaf opened for a series: Read now (where you are in it) or Download; a notice that isn't

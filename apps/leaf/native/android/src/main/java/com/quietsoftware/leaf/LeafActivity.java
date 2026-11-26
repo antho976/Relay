@@ -99,6 +99,12 @@ public class LeafActivity extends GameActivity {
 
     private void launched(Intent i) {
         if (i == null) return;
+        String wrapped = i.getStringExtra(LeafChaptersJob.EXTRA_WRAPPED);
+        if (wrapped != null) {
+            launch = "wrapped:" + wrapped;
+            i.removeExtra(LeafChaptersJob.EXTRA_WRAPPED);
+            return;
+        }
         long read = i.getLongExtra(LeafChaptersJob.EXTRA_READ, 0);
         long download = i.getLongExtra(LeafChaptersJob.EXTRA_DOWNLOAD, 0);
         if (read != 0) {
@@ -123,6 +129,20 @@ public class LeafActivity extends GameActivity {
         String l = launch;
         launch = null;
         return l;
+    }
+
+    /** Words handed to the app picked in the share sheet (Wrapped's Share). */
+    public void shareText(final String text) {
+        runOnUiThread(() -> {
+            Intent send = new Intent(Intent.ACTION_SEND);
+            send.setType("text/plain");
+            send.putExtra(Intent.EXTRA_TEXT, text);
+            try {
+                startActivity(Intent.createChooser(send, null));
+            } catch (RuntimeException ignored) {
+                // No app takes text: nothing to do.
+            }
+        });
     }
 
     // Pictures

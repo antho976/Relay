@@ -73,6 +73,12 @@ pub trait Host: Send + Sync {
     }
     /// A light haptic tick (a row caught by a sweep), where the platform has one.
     fn tick(&self) {}
+    /// Hand words to another app (Android's share sheet). The desktop puts them on the clipboard.
+    /// Answers words to show, if any.
+    fn share_text(&self, text: &str) -> Option<String> {
+        self.copy_text(text);
+        Some("Copied".into())
+    }
     /// What Leaf was opened for since last asked: "read:ID", "download:ID" (a notice's keys; a
     /// negative id opens the series' page), "share:TEXT" (shared to Leaf).
     fn take_launch(&self) -> Option<String> {
@@ -155,6 +161,8 @@ pub enum Route {
     Imports,
     /// A list of recommendations: "top", "binge", "tag:<tag>" (a collection) or "because:<id>".
     Picks(String),
+    /// Wrapped: "month:2026-11" or "year:2026" ([`crate::wrapped`]).
+    Wrapped(String),
 }
 
 /// A title not added yet, shown on its own page under its preview id (`-manga_id` of its first
@@ -257,6 +265,7 @@ pub struct States {
     pub recs: crate::recs::State,
     pub update: crate::update::State,
     pub saved: crate::saved::State,
+    pub wrapped: crate::wrapped::State,
     /// Whether the server answers, and the prompt when it stops ([`crate::online`]).
     pub online: crate::online::State,
 }
@@ -296,6 +305,9 @@ struct Config {
     /// Searches that led somewhere, newest first ([`App::searches`]).
     #[serde(default)]
     searches: Vec<String>,
+    /// The Wrapped already opened ("month:2026-11"): Home moves their card to its end.
+    #[serde(default)]
+    wrapped_seen: Vec<String>,
     /// The series whose chapter was open when Leaf last went away (for [`ReadPrefs::reopen`]).
     #[serde(default)]
     reading_now: Option<i64>,
@@ -403,6 +415,8 @@ pub struct App {
     pub searches: Vec<String>,
     /// The series being read, kept so Leaf can open in it again ([`ReadPrefs::reopen`]).
     pub reading_now: Option<i64>,
+    /// The Wrapped already opened ("month:2026-11"), the last few.
+    pub wrapped_seen: Vec<String>,
     pub booksync: crate::booksync::BookSync,
     /// Restore was tapped once with books on this phone: the next tap replaces them.
     pub restore_asked: bool,
@@ -415,6 +429,10 @@ pub struct App {
     pub health: Loaded<Vec<SourceHealth>>,
     /// What the server says of itself (Settings › Server).
     pub server_info: Loaded<crate::net::ServerInfo>,
+    /// Every chapter read and when, for Wrapped (`/v1/history`), and when it was asked (ns).
+    pub history: Loaded<Vec<leaf_proto::HistoryRead>>,
+    history_asked: u64,
+    wrapped_cache: HashMap<String, (usize, crate::wrapped_stats::Stats)>,
     /// Pictures saved from the reader, newest first ([`crate::panels`]); a thread saving one
     /// adds it here.
     pub panels: Arc<std::sync::Mutex<Option<Vec<crate::panels::Panel>>>>,
@@ -536,6 +554,7 @@ impl App {
             backup: config.backup.clone(),
             books_copied: config.books_copied,
             searches: config.searches,
+            wrapped_seen: config.wrapped_seen,
             reading_now: config.reading_now,
             booksync: Default::default(),
             restore_asked: false,
@@ -544,6 +563,9 @@ impl App {
             status: Loaded::default(),
             health: Loaded::default(),
             server_info: Loaded::default(),
+            history: Loaded::default(),
+            history_asked: 0,
+            wrapped_cache: HashMap::new(),
             panels: Arc::new(std::sync::Mutex::new(None)),
             alternatives: HashMap::new(),
             duplicates: Loaded::default(),
@@ -752,6 +774,65 @@ impl App {
         self.ask(Job::HidePage(chapter, n, false));
     }
 
+    /// The reading history for Wrapped: asked once, then again after ten minutes.
+    pub fn want_history(&mut self) {
+        let stale = self.now_ns.saturating_sub(self.history_asked) > 600_000_000_000 || self.history_asked == 0;
+        if !self.history.loading && (self.history.data.is_none() || stale) && self.server.is_some() {
+            self.history.loading = true;
+            self.history_asked = self.now_ns.max(1);
+            self.ask(Job::History);
+        }
+    }
+
+    /// A Wrapped was opened: its card on Home goes to the end.
+    pub fn wrapped_seen(&mut self, key: &str) {
+        if !self.wrapped_seen.iter().any(|k| k == key) {
+            self.wrapped_seen.push(key.to_string());
+            let n = self.wrapped_seen.len();
+            if n > 6 {
+                self.wrapped_seen.drain(..n - 6);
+            }
+            self.save_config();
+        }
+    }
+
+    /// A period's numbers, worked out once per history (Home's Wrapped card).
+    pub fn wrapped_summary(&mut self, p: &crate::wrapped_stats::Period) -> Option<crate::wrapped_stats::Stats> {
+        let n = self.history.data.as_ref()?.len();
+        if let Some((m, s)) = self.wrapped_cache.get(&p.key())
+            && *m == n
+        {
+            return Some(s.clone());
+        }
+        let s = self.wrapped_stats(p);
+        self.wrapped_cache.insert(p.key(), (n, s.clone()));
+        Some(s)
+    }
+
+    /// A period's Wrapped numbers, from the history, the books' time and what is in My space.
+    pub fn wrapped_stats(&self, p: &crate::wrapped_stats::Period) -> crate::wrapped_stats::Stats {
+        let reads = crate::wrapped_stats::clean(self.history.data.as_deref().unwrap_or(&[]));
+        let mut by_day: HashMap<i64, i64> = HashMap::new();
+        for (day, _, secs) in &self.shelf.time {
+            *by_day.entry(*day).or_default() += *secs;
+        }
+        let book_days: Vec<(i64, i64)> = by_day.into_iter().collect();
+        let known: Vec<crate::wrapped_stats::Known> = self
+            .library
+            .data
+            .iter()
+            .flatten()
+            .map(|s| crate::wrapped_stats::Known { id: s.id, title: s.title.clone(), caught_up: s.unread == 0 && s.read_upto.is_some() })
+            .collect();
+        let books: Vec<crate::wrapped_stats::BookDone> = self
+            .shelf
+            .books
+            .iter()
+            .map(|b| crate::wrapped_stats::BookDone { title: b.title.clone(), finished_ms: (b.progress >= 0.995).then_some(b.opened_ms), pages: 0 })
+            .collect();
+        crate::wrapped_stats::compute(p, &reads, &book_days, &known, &books, crate::shelf::zone_offset())
+    }
+
     /// A search led to a page: kept first in the list (once, whatever its case).
     pub fn remember_search(&mut self, q: &str) {
         let q = q.trim();
@@ -936,6 +1017,7 @@ impl App {
             update_later: self.update_later,
             books_copied: self.books_copied,
             searches: self.searches.clone(),
+            wrapped_seen: self.wrapped_seen.clone(),
             reading_now: self.reading_now,
         };
         let (path, host) = (self.data.join("config.json"), self.host.clone());
@@ -1641,6 +1723,18 @@ impl App {
                         self.toast(&format!("Rating not kept: {}", lower_first(&f.words(&label))));
                     }
                 }
+                Done::History(r) => {
+                    let l = &mut self.history;
+                    l.loading = false;
+                    match r {
+                        Ok(v) => {
+                            l.data = Some(v);
+                            l.live = true;
+                            l.error = None;
+                        }
+                        Err(f) => l.error = Some(f.words(&label)),
+                    }
+                }
                 Done::ServerInfo(r) => {
                     let l = &mut self.server_info;
                     l.loading = false;
@@ -1878,6 +1972,10 @@ impl App {
             if self.detail_for(id).is_none() {
                 self.ask(Job::Series(id));
             }
+        } else if let Some(p) = l.strip_prefix("wrapped:").and_then(crate::wrapped_stats::Period::parse) {
+            self.close_reader();
+            self.close_book();
+            crate::wrapped::open(self, p);
         } else if let Some(text) = l.strip_prefix("share:") {
             let q = logic::shared_title(text);
             if q.chars().count() >= crate::search::MIN_CHARS {
@@ -2390,6 +2488,7 @@ impl App {
             Route::Find => crate::notes::draw_find(self, dt),
             Route::Imports => crate::library::draw_imports(self, dt),
             Route::Picks(ref of) => crate::recs::draw_picks(self, of, dt),
+            Route::Wrapped(ref key) => crate::wrapped::draw(self, key),
         };
         if (update || online) && self.route() == &route {
             self.canvas.dy = 0.0;

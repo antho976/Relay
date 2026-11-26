@@ -904,6 +904,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let mut add_books = false;
     let mut to_notes = false;
     let mut to_stats = false;
+    let mut to_wrapped = false;
     let mut new_sort = None;
     let mut new_shelf: Option<(i64, Shelf)> = None;
     let mut dupe_act: Option<DupeAct> = None;
@@ -927,7 +928,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             }
         } else if st.more_menu {
             // On Downloads, its own two first.
-            let items: &[&str] = if tab == DOWNLOADS { &["Select", "Delete read chapters", "Highlights", "Reading time"] } else { &["Highlights", "Reading time"] };
+            let items: &[&str] = if tab == DOWNLOADS { &["Select", "Delete read chapters", "Highlights", "Reading time", "Last month's Wrapped"] } else { &["Highlights", "Reading time", "Last month's Wrapped"] };
             let skip = if tab == DOWNLOADS { 2 } else { 0 };
             match kit::menu(&mut cx, top, items) {
                 Some(0) if skip == 2 => {
@@ -944,6 +945,10 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 }
                 Some(i) if i == skip + 1 => {
                     to_stats = true;
+                    st.more_menu = false;
+                }
+                Some(i) if i == skip + 2 => {
+                    to_wrapped = true;
                     st.more_menu = false;
                 }
                 Some(_) => st.more_menu = false,
@@ -1083,6 +1088,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 app.push(Route::Notes);
             } else if to_stats {
                 app.push(Route::Stats);
+            } else if to_wrapped {
+                let (y, m, _) = crate::wrapped_stats::date_of_day(shelf::day_of(shelf::now_ms()));
+                crate::wrapped::open(app, crate::wrapped_stats::Period::month(y, m).before());
             } else if let Some(i) = tab_hit {
                 app.go_tab(i);
             }

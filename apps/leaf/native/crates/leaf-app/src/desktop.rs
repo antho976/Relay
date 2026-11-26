@@ -579,6 +579,15 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.reset_to(Route::Home);
             app.push(Route::Picks(arg(args, "--of").unwrap_or_else(|| "top".into())));
         }
+        // `--period month:2026-11|year:2026 --card N`: one of Wrapped's cards.
+        "wrapped" => {
+            app.set_server(server);
+            app.reset_to(Route::Home);
+            let key = arg(args, "--period").unwrap_or_else(|| "month:2026-11".into());
+            app.st.wrapped.period = crate::wrapped_stats::Period::parse(&key);
+            app.st.wrapped.at = arg(args, "--card").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+            app.push(Route::Wrapped(key));
+        }
         _ if BOOK_SCREENS.contains(&screen.as_str()) => {
             books_shot(&mut app, &gfx, &mut clock, args, &screen)?;
         }

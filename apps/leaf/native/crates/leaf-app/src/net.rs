@@ -384,6 +384,8 @@ pub enum Job {
     Stars(i64, Option<u8>),
     /// What the server says of itself for Settings (`GET /v1/server`).
     ServerInfo,
+    /// Every chapter read and when, for Wrapped (`GET /v1/history`).
+    History,
     /// The room its chapters may take, in GB, or no limit (`POST /v1/settings/disk`).
     DiskCap(Option<u32>),
 }
@@ -552,6 +554,7 @@ pub enum Done {
     Elsewhere(i64, Result<u32, Fail>),
     Stars(i64, Option<u8>, Result<(), Fail>),
     ServerInfo(Result<ServerInfo, Fail>),
+    History(Result<Vec<leaf_proto::HistoryRead>, Fail>),
     DiskCap(Result<Room, Fail>),
 }
 
@@ -601,6 +604,7 @@ impl Done {
             Done::Elsewhere(_, r) => of(r),
             Done::Stars(_, _, r) => of(r),
             Done::ServerInfo(r) => of(r),
+            Done::History(r) => of(r),
             Done::DiskCap(r) => of(r),
         }
     }
@@ -1060,6 +1064,13 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
                 None => no_server(),
             };
             send(Done::ServerInfo(r));
+        }
+        Job::History => {
+            let r = match &server {
+                Some(s) => client.json::<Vec<leaf_proto::HistoryRead>>(s, "/v1/history?since=0"),
+                None => no_server(),
+            };
+            send(Done::History(r));
         }
         Job::DiskCap(cap_gb) => {
             let r = post_json(client, &server, "/v1/settings/disk", &leaf_proto::DiskCap { cap_gb }).and_then(|b| serde_json::from_slice::<Room>(&b).map_err(|_| Fail::Garbled));

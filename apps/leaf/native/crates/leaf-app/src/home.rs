@@ -243,6 +243,21 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let recs_loading = app.recs.loading && recs.is_none();
     let recs_error = app.recs.error.clone().filter(|_| recs.is_none());
     let covered = app.st.recs.sheet.is_some();
+    // Wrapped, in a month's first week (the year's in January's first two): a card, first until
+    // it is opened, then at the end.
+    let mut wrapped: Vec<(crate::wrapped_stats::Period, Option<crate::wrapped_stats::Stats>, bool)> = Vec::new();
+    if app.server.is_some() && !all_series.is_empty() {
+        let offered = crate::wrapped_stats::offered(crate::shelf::day_of(crate::shelf::now_ms()));
+        if !offered.is_empty() {
+            app.want_history();
+        }
+        for p in offered {
+            let s = app.wrapped_summary(&p);
+            let seen = app.wrapped_seen.iter().any(|k| *k == p.key());
+            wrapped.push((p, s, seen));
+        }
+    }
+    let mut open_wrapped: Option<crate::wrapped_stats::Period> = None;
 
     let pg = app.page_begin(dt, TOP_H);
     let st = &mut app.st.home;
@@ -502,6 +517,13 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         let tapped = more && cx.tap(0.0, y - 10.0, WIDTH, h + 20.0);
         (h, tapped)
     };
+    for (p, s, _) in wrapped.iter().filter(|w| !w.2) {
+        let (h, tap) = wrapped_card(&mut cx, &mut app.images, p, s.as_ref(), y, now, covered);
+        if tap {
+            open_wrapped = Some(*p);
+        }
+        y += h + 32.0;
+    }
     // Top picks for you.
     if picks_shown {
         let top_recs: Vec<Rec> = recs.as_ref().map(|r| logic::rotating(&r.top, TOP_PICKS, crate::shelf::now_ms(), PICKS_TURN_MS)).unwrap_or_default();
@@ -643,6 +665,13 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             y += h + 32.0;
         }
     }
+    for (p, s, _) in wrapped.iter().filter(|w| w.2) {
+        let (h, tap) = wrapped_card(&mut cx, &mut app.images, p, s.as_ref(), y, now, covered);
+        if tap {
+            open_wrapped = Some(*p);
+        }
+        y += h + 32.0;
+    }
     if n > 0
         && let Some(e) = &error
     {
@@ -701,6 +730,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         // The sheet holds every tap.
     } else if let Some((h, list, tag)) = rec_hit {
         crate::recs::on_hit(app, h, &list, tag.as_deref());
+    } else if let Some(p) = open_wrapped {
+        crate::wrapped::open(app, p);
     } else if let Some(of) = to_picks {
         app.push(Route::Picks(of));
     } else if let Some(id) = continue_series {
@@ -731,4 +762,52 @@ fn book_tone(b: &Book) -> Rgba {
     const TONES: [u32; 6] = [0x24405E, 0x5C2E2E, 0x24493F, 0x463A63, 0x5E4724, 0x343E4C];
     let hash = b.title.bytes().fold(7u32, |h, x| h.wrapping_mul(31).wrapping_add(x as u32));
     Rgba::hex(TONES[(hash % TONES.len() as u32) as usize])
+}
+
+/// Home's Wrapped card: the month's (or year's) name, a line of its numbers, Open, and a fan of its
+/// top series' covers. Returns its height and whether it was tapped.
+fn wrapped_card(cx: &mut Ctx, im: &mut crate::images::Images, p: &crate::wrapped_stats::Period, s: Option<&crate::wrapped_stats::Stats>, y: f32, now: u64, covered: bool) -> (f32, bool) {
+    let (x, w, h) = (PAD, WIDTH - 2.0 * PAD, 196.0);
+    cx.c.rect_grad(x, y, w, h, 18.0, Rgba::hex(0x0F3B27), Rgba::hex(0x1F2A5C));
+    if let Some(s) = s {
+        for (k, (id, ..)) in s.top.iter().take(4).enumerate() {
+            let of = CoverOf::Series(*id);
+            let (cx_, cy) = (x + w - 150.0 + k as f32 * 28.0, y + 28.0 + (k % 2) as f32 * 30.0);
+            cx.c.rect(cx_, cy, 64.0, 92.0, 8.0, Rgba::WHITE.a(0.08));
+            if im.cover(cx.c, of, now) {
+                cx.c.image_cover(&of.key(), cx_, cy, 64.0, 92.0, 8.0, Rgba::WHITE);
+            }
+        }
+    }
+    cx.c.text("WRAPPED", x + 18.0, y + 22.0, Text::new(11.0, t::ACCENT).semi());
+    let tw = 170.0;
+    let title = format!("Your {} in Leaf", p.name());
+    let tt = Text::new(22.0, Rgba::WHITE).semi().line(1.15);
+    let mut ty_ = y + 44.0;
+    for l in cx.c.wrap(&title, tw, tt, 2) {
+        cx.c.text(&l, x + 18.0, ty_, tt);
+        ty_ += tt.lh();
+    }
+    let line = match s {
+        Some(s) if s.chapters > 0 => {
+            let mut parts = vec![format!("{} chapters", crate::wrapped::group(s.chapters))];
+            if s.streak.0 > 1 {
+                parts.push(format!("a {}-day streak", s.streak.0));
+            }
+            if !s.new_series.is_empty() {
+                parts.push(format!("{} new series", s.new_series.len()));
+            }
+            let last = parts.pop().unwrap_or_default();
+            if parts.is_empty() { format!("{last}.") } else { format!("{} and {last}.", parts.join(", ")) }
+        }
+        Some(_) => "A quiet one. Open it anyway.".to_string(),
+        None => "Counting your chapters".to_string(),
+    };
+    cx.c.para(&line, x + 18.0, ty_ + 6.0, tw, Text::new(13.0, Rgba::WHITE.a(0.72)).line(1.4), 3);
+    let kt = Text::new(14.0, Rgba::hex(0x0D0D0E)).semi();
+    let kw = cx.c.measure("Open", kt) + 32.0;
+    cx.c.rect(x + 18.0, y + h - 52.0, kw, 36.0, 18.0, Rgba::WHITE);
+    cx.c.text("Open", x + 18.0 + 16.0, y + h - 52.0 + (36.0 - kt.lh()) / 2.0, kt);
+    let tapped = !covered && cx.tap(x, y, w, h);
+    (h, tapped)
 }

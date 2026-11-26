@@ -219,6 +219,7 @@ impl Api {
             }
             (Method::Get, ["v1", "health"]) => Ok(json(&ctx.health())),
             (Method::Get, ["v1", "server"]) => Ok(json(&ctx.server_json())),
+            (Method::Get, ["v1", "history"]) => Ok(json(&ctx.history(query_param(url, "since").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0)))),
             (Method::Post, ["v1", "settings", "disk"]) => serde_json::from_str::<leaf_proto::DiskCap>(body).map_err(|e| format!("disk: {e}")).map(|d| {
                 ctx.set_disk_cap(d.cap_gb);
                 // Measured and cleaned now, off this request, rather than at the next pass.

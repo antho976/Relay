@@ -488,6 +488,15 @@ pub fn back_after(prev_at: i64, new_at: i64) -> Option<u32> {
     (prev_at > 0 && new_at > 0 && new_at - prev_at >= BREAK_MS).then(|| ((new_at - prev_at) / (7 * 86_400_000)) as u32)
 }
 
+/// A chapter read, as Wrapped counts it (`GET /v1/history?since=`): its series, its number and
+/// when it was last read (ms).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct HistoryRead {
+    pub series: i64,
+    pub number: f64,
+    pub at: i64,
+}
+
 /// Your own rating of a series (`POST /v1/series/{id}/rating`): 1 to 5 stars, or none.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct Stars {

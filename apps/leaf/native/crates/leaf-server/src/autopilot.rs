@@ -1040,6 +1040,19 @@ impl Ctx {
         Ok(n)
     }
 
+    /// `GET /v1/history?since=`: every chapter read since then, one per number per series (its
+    /// copies' latest time), for Wrapped. From Suwayomi's own records: no site is asked.
+    pub fn history(&self, since: i64) -> Vec<leaf_proto::HistoryRead> {
+        let works = self.store().works();
+        let mut out = Vec::new();
+        for w in &works {
+            let Ok(m) = self.suwa.manga(w.manga_id) else { continue };
+            let extras = self.extras(w);
+            out.extend(history_of(w.id, std::iter::once(&m).chain(extras.iter()), since));
+        }
+        out
+    }
+
     /// `GET /v1/server`: what Settings shows of the server: its last pass, the download line, the
     /// room chapters take and the backups.
     pub fn server_json(&self) -> Value {
@@ -1658,6 +1671,18 @@ pub fn finished_words(title: &str, chapters: usize, unread: u32) -> String {
 pub fn elsewhere_words(title: &str, found: &[(&str, Vec<f64>)]) -> Option<String> {
     let best = found.iter().filter(|(src, ns)| !src.eq_ignore_ascii_case(WEBTOONS) && !ns.is_empty()).filter_map(|(_, ns)| plausible_latest(ns)).max_by(f64::total_cmp)?;
     Some(format!("{title} is on another source now, up to chapter {}", fmt_num(best)))
+}
+
+/// The chapters of one work read since `since`: one per number, at its copies' latest read.
+pub fn history_of<'a>(series: i64, copies: impl Iterator<Item = &'a Manga>, since: i64) -> Vec<leaf_proto::HistoryRead> {
+    let mut by: HashMap<u64, (f64, i64)> = HashMap::new();
+    for c in copies.flat_map(|m| m.chapters.iter()).filter(|c| c.read && c.last_read_at > 0 && c.last_read_at >= since && c.number >= 0.0) {
+        let e = by.entry(c.number.to_bits()).or_insert((c.number, 0));
+        e.1 = e.1.max(c.last_read_at);
+    }
+    let mut v: Vec<leaf_proto::HistoryRead> = by.into_values().map(|(number, at)| leaf_proto::HistoryRead { series, number, at }).collect();
+    v.sort_by(|a, b| a.at.cmp(&b.at).then(a.number.total_cmp(&b.number)));
+    v
 }
 
 /// When the newest chapters came out (ms), newest first: one per day at most, 12 at most. The

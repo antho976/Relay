@@ -51,7 +51,12 @@ pub struct JobState {
     pub held: Vec<Held>,
     /// The local day the last summary went out (days from 1970-01-01).
     pub summary_day: i64,
+    /// The local day Wrapped was last said to be ready.
+    pub wrapped_day: i64,
 }
+
+/// Wrapped is said to be ready from this time on the 1st (minutes into the day).
+pub const WRAPPED_AT: u16 = 9 * 60;
 
 /// A notice to post now.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -63,6 +68,9 @@ pub struct Post {
     pub series: Option<i64>,
     #[serde(default)]
     pub chapters: bool,
+    /// Wrapped to open ("month:2026-11"): the notice that it is ready.
+    #[serde(default)]
+    pub wrapped: Option<String>,
 }
 
 /// Events posted on their own, never in a summary: a series only Webtoon had is elsewhere now,
@@ -122,7 +130,7 @@ pub fn plan(n: &Notify, mut state: JobState, events: &[Event], now_ms: i64, offs
         let (alone, rest): (Vec<Held>, Vec<Held>) = state.held.drain(..).partition(|h| h.alone);
         state.held = rest;
         for h in alone {
-            post.push(Post { id: (h.at % i32::MAX as i64) as i32, text: h.text, series: h.series, chapters: !h.alone });
+            post.push(Post { id: (h.at % i32::MAX as i64) as i32, text: h.text, series: h.series, chapters: !h.alone, wrapped: None });
         }
     }
     if n.summary {
@@ -132,15 +140,22 @@ pub fn plan(n: &Notify, mut state: JobState, events: &[Event], now_ms: i64, offs
             if !rest.is_empty() {
                 // One series only: its keys too.
                 let one = rest.iter().all(|h| h.series.is_some() && h.series == rest[0].series).then(|| rest[0].series).flatten();
-                post.push(Post { id: 0x5000_0000 | (day as i32 & 0x0FFF_FFFF), text: summary_words(&rest), series: one, chapters: one.is_some() });
+                post.push(Post { id: 0x5000_0000 | (day as i32 & 0x0FFF_FFFF), text: summary_words(&rest), series: one, chapters: one.is_some(), wrapped: None });
             }
             state.held = alone;
             state.summary_day = day;
         }
     } else if !in_quiet(n, minute) {
         for h in state.held.drain(..) {
-            post.push(Post { id: (h.at % i32::MAX as i64) as i32, text: h.text, series: h.series, chapters: !h.alone });
+            post.push(Post { id: (h.at % i32::MAX as i64) as i32, text: h.text, series: h.series, chapters: !h.alone, wrapped: None });
         }
+    }
+    // Wrapped: on the 1st, once, past its time and outside quiet hours; the year's on January 1st.
+    let (y, m, d) = crate::wrapped_stats::date_of_day(day);
+    if d == 1 && minute >= WRAPPED_AT && !in_quiet(n, minute) && state.wrapped_day < day {
+        state.wrapped_day = day;
+        let p = if m == 1 { crate::wrapped_stats::Period::year(y - 1) } else { crate::wrapped_stats::Period::month(y, m).before() };
+        post.push(Post { id: 0x5100_0000 | (day as i32 & 0x00FF_FFFF), text: format!("Your {} in Leaf is ready", p.name()), series: None, chapters: false, wrapped: Some(p.key()) });
     }
     Plan { post, state }
 }
@@ -190,6 +205,23 @@ mod tests {
         let p = plan(&n, JobState::default(), &ev, 12 * 3_600_000, 0);
         assert_eq!(p.post.len(), 2, "both on their own, outside the summary");
         assert!(p.post.iter().all(|x| !x.chapters));
+    }
+
+    #[test]
+    fn wrapped_is_said_once_on_the_first_morning() {
+        let n = Notify { quiet: true, ..Default::default() };
+        let dec1 = crate::wrapped_stats::day_of_date(2026, 12, 1) * 86_400_000;
+        let early = plan(&n, JobState::default(), &[], dec1 + 7 * 3_600_000, 0);
+        assert!(early.post.is_empty(), "quiet hours");
+        let p = plan(&n, early.state, &[], dec1 + 10 * 3_600_000, 0);
+        assert_eq!(p.post.len(), 1);
+        assert_eq!(p.post[0].text, "Your November in Leaf is ready");
+        assert_eq!(p.post[0].wrapped.as_deref(), Some("month:2026-11"));
+        let again = plan(&n, p.state, &[], dec1 + 11 * 3_600_000, 0);
+        assert!(again.post.is_empty(), "once");
+        let jan1 = crate::wrapped_stats::day_of_date(2027, 1, 1) * 86_400_000;
+        let y = plan(&n, JobState::default(), &[], jan1 + 10 * 3_600_000, 0);
+        assert_eq!(y.post[0].wrapped.as_deref(), Some("year:2026"));
     }
 
     #[test]
@@ -255,7 +287,7 @@ mod tests {
         assert_eq!(chapters_in("New chapters"), 1);
         let out = plan_json(r#"{"quiet":false}"#, "{}", r#"[{"at":5,"series":1,"kind":"new","text":"1 new chapter of A, up to 2"}]"#, 10, 0);
         let p: Plan = serde_json::from_str(&out).unwrap();
-        assert_eq!(p.post, vec![Post { id: 5, text: "1 new chapter of A, up to 2".into(), series: Some(1), chapters: true }]);
+        assert_eq!(p.post, vec![Post { id: 5, text: "1 new chapter of A, up to 2".into(), series: Some(1), chapters: true, wrapped: None }]);
         // Garbage in: nothing posted, nothing lost.
         let p: Plan = serde_json::from_str(&plan_json("x", "y", "z", 0, 0)).unwrap();
         assert!(p.post.is_empty());
