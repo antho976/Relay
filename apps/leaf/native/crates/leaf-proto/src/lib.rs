@@ -692,3 +692,62 @@ pub struct PhoneFile {
 pub struct Merge {
     pub other: i64,
 }
+
+/// A list of your own (the owner, 2026-11-26: "a wait list for the next series"): a name, the
+/// series on it in your order, and whether Home shows it as a rail. `GET /v1/lists` answers every
+/// list; `POST /v1/lists` keeps the whole set sent, [`tidy_lists`] first, and answers it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct List {
+    pub id: i64,
+    pub name: String,
+    #[serde(default)]
+    pub series: Vec<i64>,
+    #[serde(default)]
+    pub home: bool,
+    /// When it was made (ms).
+    #[serde(default)]
+    pub made_at: i64,
+}
+
+/// A list's name is cut to this many characters.
+pub const LIST_NAME_MAX: usize = 60;
+/// At most this many lists.
+pub const LISTS_MAX: usize = 100;
+/// At most this many series on a list.
+pub const LIST_SERIES_MAX: usize = 500;
+
+/// Lists as they are kept: names trimmed and cut to [`LIST_NAME_MAX`] (one with none is "List"),
+/// a series once per list (where it first was), at most [`LIST_SERIES_MAX`] each and
+/// [`LISTS_MAX`] in all, and every list with an id of its own above 0.
+pub fn tidy_lists(lists: Vec<List>) -> Vec<List> {
+    let mut out: Vec<List> = Vec::new();
+    let mut next = lists.iter().map(|l| l.id).max().unwrap_or(0).max(0) + 1;
+    for mut l in lists.into_iter().take(LISTS_MAX) {
+        let name: String = l.name.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(LIST_NAME_MAX).collect();
+        l.name = if name.is_empty() { "List".into() } else { name };
+        let mut seen = std::collections::HashSet::new();
+        l.series.retain(|s| *s > 0 && seen.insert(*s));
+        l.series.truncate(LIST_SERIES_MAX);
+        if l.id <= 0 || out.iter().any(|o| o.id == l.id) {
+            l.id = next;
+            next += 1;
+        }
+        out.push(l);
+    }
+    out
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::*;
+
+    #[test]
+    fn lists_are_kept_tidy() {
+        let l = |id: i64, name: &str, series: Vec<i64>| List { id, name: name.into(), series, home: false, made_at: 0 };
+        let got = tidy_lists(vec![l(3, "  Wait   list ", vec![5, 7, 5, -2]), l(3, "", vec![]), l(0, &"x".repeat(80), vec![1])]);
+        assert_eq!(got[0].name, "Wait list");
+        assert_eq!(got[0].series, vec![5, 7], "once each, real ids only");
+        assert_eq!((got[1].id, got[1].name.as_str()), (4, "List"), "a second id 3 gets one of its own");
+        assert_eq!((got[2].id, got[2].name.chars().count()), (5, LIST_NAME_MAX));
+    }
+}

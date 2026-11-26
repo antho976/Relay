@@ -388,6 +388,10 @@ pub enum Job {
     History,
     /// The room its chapters may take, in GB, or no limit (`POST /v1/settings/disk`).
     DiskCap(Option<u32>),
+    /// Your lists (`GET /v1/lists`), the copy on disk first.
+    Lists,
+    /// Every list kept as it is now (`POST /v1/lists`), with the edit's number.
+    SaveLists(u64, Vec<leaf_proto::List>),
 }
 
 /// `GET /v1/server`: the last pass, the download line, the room chapters take and the backups.
@@ -507,6 +511,7 @@ impl Job {
                 | Job::Elsewhere(_)
                 | Job::Stars(..)
                 | Job::DiskCap(_)
+                | Job::SaveLists(..)
         )
     }
 }
@@ -556,6 +561,9 @@ pub enum Done {
     ServerInfo(Result<ServerInfo, Fail>),
     History(Result<Vec<leaf_proto::HistoryRead>, Fail>),
     DiskCap(Result<Room, Fail>),
+    Lists { cached: bool, result: Result<Vec<leaf_proto::List>, Fail> },
+    /// The edit's number, and the lists as the server kept them.
+    SavedLists(u64, Result<Vec<leaf_proto::List>, Fail>),
 }
 
 impl Done {
@@ -571,7 +579,7 @@ impl Done {
         }
         match self {
             Done::Status(s, r) => server.filter(|mine| mine.base == s.base).and_then(|_| of(r)),
-            Done::Library { cached: true, .. } | Done::Series { cached: true, .. } | Done::Updates { cached: true, .. } | Done::Recs { cached: true, .. } => None,
+            Done::Library { cached: true, .. } | Done::Series { cached: true, .. } | Done::Updates { cached: true, .. } | Done::Recs { cached: true, .. } | Done::Lists { cached: true, .. } => None,
             Done::Library { result, .. } => of(result),
             Done::Series { result, .. } => of(result),
             Done::Search { result, .. } => of(result),
@@ -606,6 +614,8 @@ impl Done {
             Done::ServerInfo(r) => of(r),
             Done::History(r) => of(r),
             Done::DiskCap(r) => of(r),
+            Done::Lists { result, .. } => of(result),
+            Done::SavedLists(_, r) => of(r),
         }
     }
 }
@@ -697,6 +707,11 @@ impl Jobs {
 
 fn library_file(data: &Path) -> PathBuf {
     data.join("library.json")
+}
+
+/// The lists as last known, for opening with no server.
+pub fn lists_file(data: &Path) -> PathBuf {
+    data.join("lists.json")
 }
 
 // Progress, in order and never lost
@@ -1071,6 +1086,24 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
                 None => no_server(),
             };
             send(Done::History(r));
+        }
+        Job::Lists => {
+            let file = lists_file(data);
+            if let Some(v) = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice::<Vec<leaf_proto::List>>(&b).ok()) {
+                send(Done::Lists { cached: true, result: Ok(v) });
+            }
+            let r = match &server {
+                Some(s) => client.json::<Vec<leaf_proto::List>>(s, "/v1/lists"),
+                None => no_server(),
+            };
+            if let Ok(v) = &r {
+                let _ = write_atomic(&file, &serde_json::to_vec(v).unwrap_or_default());
+            }
+            send(Done::Lists { cached: false, result: r });
+        }
+        Job::SaveLists(rev, lists) => {
+            let r = post_json(client, &server, "/v1/lists", &lists).and_then(|b| serde_json::from_slice::<Vec<leaf_proto::List>>(&b).map_err(|_| Fail::Garbled));
+            send(Done::SavedLists(rev, r));
         }
         Job::DiskCap(cap_gb) => {
             let r = post_json(client, &server, "/v1/settings/disk", &leaf_proto::DiskCap { cap_gb }).and_then(|b| serde_json::from_slice::<Room>(&b).map_err(|_| Fail::Garbled));

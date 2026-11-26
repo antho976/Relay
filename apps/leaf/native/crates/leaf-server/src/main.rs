@@ -30,6 +30,7 @@ mod api;
 mod autopilot;
 mod budget;
 mod disk;
+mod lists;
 mod phone;
 mod promo;
 mod recs;

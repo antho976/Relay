@@ -786,6 +786,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     // The fixed top: Back, the bell as Follow, info and ⋯ (or, selecting: how many, and the range).
     let mut back = false;
     let mut more = false;
+    let mut to_lists = false;
     let mut open_download = false;
     let mut stop_select = false;
     let mut to_range = false;
@@ -850,8 +851,13 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                 if kit::icon_key(&mut cx, info_x, top + 6.0, "info") {
                     open_info = true;
                 }
-                if !preview && kit::icon_key(&mut cx, WIDTH - 6.0 - 44.0, top + 6.0, "more") {
-                    more = true;
+                // A preview's ⋯ holds one thing: Add to list (it is added to your library first).
+                if kit::icon_key(&mut cx, WIDTH - 6.0 - 44.0, top + 6.0, "more") {
+                    if preview {
+                        to_lists = true;
+                    } else {
+                        more = true;
+                    }
                 }
                 if offline && scrolled <= 0.5 {
                     kit::tag(cx.c, 58.0, top + 18.0, "Offline");
@@ -894,7 +900,7 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             rec_act = crate::recs::sheet(&mut cx, &mut app.images, s, now);
         } else if st.menu {
             let shelf_words = format!("Shelf: {}", on_shelf.words());
-            match kit::menu(&mut cx, top + 52.0, &["Select chapters", "I've read up to…", "Download next 5", "Download all unread", &shelf_words, "Wrong series?", "Remove from My space"]) {
+            match kit::menu(&mut cx, top + 52.0, &["Select chapters", "I've read up to…", "Add to list…", "Download next 5", "Download all unread", &shelf_words, "Wrong series?", "Remove from My space"]) {
                 Some(0) => {
                     st.menu = false;
                     st.select = Some(BTreeSet::new());
@@ -907,22 +913,26 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                 }
                 Some(2) => {
                     st.menu = false;
-                    next5 = true;
+                    to_lists = true;
                 }
                 Some(3) => {
                     st.menu = false;
-                    all_unread = true;
+                    next5 = true;
                 }
                 Some(4) => {
                     st.menu = false;
-                    st.shelf = true;
+                    all_unread = true;
                 }
                 Some(5) => {
+                    st.menu = false;
+                    st.shelf = true;
+                }
+                Some(6) => {
                     st.menu = false;
                     st.alternatives = true;
                     ask_alternatives = true;
                 }
-                Some(6) => {
+                Some(7) => {
                     st.menu = false;
                     st.confirm = true;
                 }
@@ -1116,6 +1126,11 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     }
     if flip {
         app.flip_order(id);
+    }
+    if to_lists {
+        let title = app.series_title(id);
+        let title = if title.is_empty() { app.previews.get(&id).map(|p| p.title.clone()).unwrap_or_default() } else { title };
+        crate::lists::pick(app, id, &title);
     }
     if remove {
         app.st.series.busy = true;

@@ -33,6 +33,8 @@
 //!   `space`; a few of `--id`'s on `series` and `saved`), their manifests written to the shot's
 //!   folder with no page, so a later shot with `--data` and no server finds them;
 //!   `--fake-saving 1` puts the next few in line, the first part way.
+//!   Lists: `--fake-lists "*Wait list=100,98;Weekend=23"` (a * puts it on Home), screens `list`
+//!   and `list-add` (`--id` the list), `space --tab lists`, `--list-sheet pick:ID|name|menu:ID|home:ID|row:LIST:ID`.
 //!   `--size WxH` (default 1080x2340). `--bell ID` and `--seen ID` mark a series on the shot's own
 //!   copy only (its bell on; read up to two chapters before its newest). Nothing is written to the server: no progress is reported.
 //! - `--data DIR` keeps Leaf's files somewhere else than `~/.local/share/leaf` (and, with
@@ -513,6 +515,32 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
     let base = arg(args, "--server").unwrap_or_else(|| "http://127.0.0.1:4580".into());
     let server = Server { base: crate::logic::normalize_server(&base).map_err(|e| e.to_string())?, token: arg(args, "--token"), alt: None };
     let id = arg(args, "--id").and_then(|v| v.parse::<i64>().ok()).unwrap_or(1);
+    // `--fake-lists "*Wait list=100,98;Weekend=23"`: lists on the shot's own copy (a * shows it on
+    // Home); `--list-sheet pick:ID|name|menu:ID|row:LIST:ID` opens a list's sheet over the page.
+    if let Some(spec) = arg(args, "--fake-lists") {
+        let lists = spec
+            .split(';')
+            .enumerate()
+            .map(|(i, part)| {
+                let (name, ids) = part.split_once('=').unwrap_or((part, ""));
+                let home = name.starts_with('*');
+                let series = ids.split(',').filter_map(|v| v.trim().parse::<i64>().ok()).collect();
+                leaf_proto::List { id: i as i64 + 1, name: name.trim_start_matches('*').to_string(), series, home, made_at: 0 }
+            })
+            .collect();
+        app.lists.data = Some(lists);
+    }
+    if let Some(sheet) = arg(args, "--list-sheet") {
+        let parts: Vec<&str> = sheet.split(':').collect();
+        let n = |i: usize| parts.get(i).and_then(|v| v.parse::<i64>().ok()).unwrap_or(1);
+        app.st.lists.sheet = Some(match parts[0] {
+            "pick" => crate::lists::Sheet::Pick(n(1), "This series".into()),
+            "name" => crate::lists::Sheet::Name { rename: None, add: None },
+            "menu" => crate::lists::Sheet::Menu(n(1)),
+            "home" => crate::lists::Sheet::Home(n(1)),
+            _ => crate::lists::Sheet::Row(n(1), n(2)),
+        });
+    }
     match screen.as_str() {
         "connect-empty" => {}
         "connect" => {
@@ -546,6 +574,7 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
                 Some("updates") => crate::space::UPDATES,
                 Some("following") => crate::space::FOLLOWING,
                 Some("downloads") => crate::space::DOWNLOADS,
+                Some("lists") => crate::space::LISTS,
                 _ => crate::space::RECENT,
             };
             app.st.space.query = arg(args, "--filter").unwrap_or_default();
@@ -553,6 +582,11 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.updates_all = arg(args, "--all").is_some();
             app.following_sort = arg(args, "--sort").and_then(|v| v.parse::<u8>().ok()).unwrap_or(0).min(2);
             app.reset_to(Route::Space);
+        }
+        "list" | "list-add" => {
+            app.set_server(server);
+            app.reset_to(Route::Space);
+            app.push(if screen == "list" { Route::List(id) } else { Route::ListAdd(id) });
         }
         "search" => {
             app.set_server(server);

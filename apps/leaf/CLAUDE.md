@@ -190,6 +190,15 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
   go down to 80%, never an unread one nor the last two read of a series), the nightly backup and
   the copy on the owner's PC (`tools/pull-backup.sh`, installed by `tools/install-offsite.sh` as a
   user timer; the server learns of it from `offsite_at`).
+- Your lists (the owner, 2026-11-26: "a wait list for the next series"; `lists.rs`, server
+  `lists.rs`, `GET`/`POST /v1/lists` with the whole set, `leaf_proto::tidy_lists`): a name and
+  series in your order. My space has a fifth tab, Lists, with every list, on Home or not; a list
+  put on Home is a rail of its own under Continue reading (its name opens it, a long press offers
+  Remove from Home). A series' ⋯ has "Add to list…"; a preview's ⋯ is that alone (it is added to
+  the library first, nothing more). A list's page: Add series (a picker of your library), a long
+  press for Move to top / Remove, ⋯ for Home, Rename, Delete. The sheets are drawn over any page
+  (`lists::draw_sheet`, as the update sheet). A merge carries a series' place on lists over; a
+  series removed leaves them. The five tab names shrink a step only when they don't fit.
 - Settings is one page (the owner, 2026-11-26), in this order: Reading, Downloads (this phone's),
   Notifications, Server (its address in a row with Change, which folds out the address and token;
   the pass, the line and the room), Sources, AniList (setup steps folded behind Set up), Backups

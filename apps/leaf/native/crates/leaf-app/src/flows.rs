@@ -2671,3 +2671,42 @@ fn a_server_out_of_reach_is_asked_at_its_second_address() {
     let lone = crate::net::Server { alt: None, ..s.clone() };
     assert_eq!(client.get(&lone, "/v1/library").err(), Some(crate::net::Fail::Unreachable));
 }
+
+#[test]
+fn a_list_is_named_filled_ordered_and_put_on_home() {
+    let (mut app, mut t, dir) = app("lists");
+    app.lists.data = Some(Vec::new());
+    app.st.space.tab = crate::space::LISTS;
+    app.reset_to(Route::Space);
+    step(&mut app, &mut t);
+    // New list: the name is typed, and Done on the keyboard makes it and opens its page.
+    crate::lists::ask_name(&mut app, None, None);
+    step(&mut app, &mut t);
+    app.focus.text = "Next up".into();
+    step(&mut app, &mut t);
+    app.done_typing();
+    step(&mut app, &mut t);
+    assert_eq!(app.route(), &Route::List(1), "its page");
+    assert_eq!(app.lists.data.as_ref().unwrap()[0].name, "Next up");
+    assert!(app.st.lists.sheet.is_none() && app.focus.id.is_none(), "the sheet and the keyboard went");
+    app.toggle_in_list(1, 2);
+    app.toggle_in_list(1, 3);
+    // A series held: Move to top. A tap outside a sheet only closes it.
+    app.st.lists.sheet = Some(crate::lists::Sheet::Row(1, 3));
+    step(&mut app, &mut t);
+    let top = app.canvas.h - (76.0 + 52.0 * 2.0 + 12.0);
+    tap(&mut app, &mut t, 200.0, top + 76.0 + 26.0);
+    assert_eq!(app.lists.data.as_ref().unwrap()[0].series, vec![3, 2], "moved to the top");
+    app.st.lists.sheet = Some(crate::lists::Sheet::Row(1, 3));
+    step(&mut app, &mut t);
+    tap(&mut app, &mut t, 200.0, 200.0);
+    assert!(app.st.lists.sheet.is_none());
+    assert_eq!((app.route(), app.lists.data.as_ref().unwrap()[0].series.len()), (&Route::List(1), 2), "the page under it took no tap");
+    // On Home, and still in My space's Lists.
+    crate::lists::tab_act(&mut app, crate::lists::TabAct::Home(1, true));
+    assert!(app.lists.data.as_ref().unwrap()[0].home);
+    app.reset_to(Route::Home);
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    let _ = std::fs::remove_dir_all(dir);
+}

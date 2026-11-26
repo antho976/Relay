@@ -163,6 +163,10 @@ pub enum Route {
     Picks(String),
     /// Wrapped: "month:2026-11" or "year:2026" ([`crate::wrapped`]).
     Wrapped(String),
+    /// One of your lists ([`crate::lists`]).
+    List(i64),
+    /// Series to put on a list, picked from your library.
+    ListAdd(i64),
 }
 
 /// A title not added yet, shown on its own page under its preview id (`-manga_id` of its first
@@ -221,6 +225,8 @@ pub enum Then {
     Read(f64, u32),
     /// Download the chapters with these numbers to this phone.
     Download(Vec<f64>),
+    /// Put it on this list of yours.
+    List(i64),
 }
 
 /// The id a preview is shown under.
@@ -266,6 +272,7 @@ pub struct States {
     pub update: crate::update::State,
     pub saved: crate::saved::State,
     pub wrapped: crate::wrapped::State,
+    pub lists: crate::lists::State,
     /// Whether the server answers, and the prompt when it stops ([`crate::online`]).
     pub online: crate::online::State,
 }
@@ -429,6 +436,12 @@ pub struct App {
     pub health: Loaded<Vec<SourceHealth>>,
     /// What the server says of itself (Settings › Server).
     pub server_info: Loaded<crate::net::ServerInfo>,
+    /// Your lists ([`crate::lists`]), as edited here: each edit is numbered and sent whole; an
+    /// answer for an older edit than the last is not taken over this copy.
+    pub lists: Loaded<Vec<leaf_proto::List>>,
+    pub lists_rev: u64,
+    /// An edit the server didn't take (offline): sent again once it answers.
+    pub lists_unsent: bool,
     /// Every chapter read and when, for Wrapped (`/v1/history`), and when it was asked (ns).
     pub history: Loaded<Vec<leaf_proto::HistoryRead>>,
     history_asked: u64,
@@ -563,6 +576,9 @@ impl App {
             status: Loaded::default(),
             health: Loaded::default(),
             server_info: Loaded::default(),
+            lists: Loaded::default(),
+            lists_rev: 0,
+            lists_unsent: false,
             history: Loaded::default(),
             history_asked: 0,
             wrapped_cache: HashMap::new(),
@@ -918,6 +934,71 @@ impl App {
     }
 
     /// The page showing is one of the three tabs (they keep the tab bar).
+    /// Your lists, asked of the server when not yet (and the copy on disk shown meanwhile).
+    pub fn want_lists(&mut self) {
+        if self.lists.data.is_none() && !self.lists.loading && self.server.is_some() {
+            self.lists.loading = true;
+            self.ask(Job::Lists);
+        }
+    }
+
+    /// Change your lists: here at once, then sent whole to the server.
+    pub fn edit_lists(&mut self, f: impl FnOnce(&mut Vec<leaf_proto::List>)) {
+        let mut v = self.lists.data.clone().unwrap_or_default();
+        f(&mut v);
+        let v = leaf_proto::tidy_lists(v);
+        let _ = crate::net::write_atomic(&crate::net::lists_file(&self.data), &serde_json::to_vec(&v).unwrap_or_default());
+        self.lists.data = Some(v.clone());
+        self.lists_rev += 1;
+        self.ask(Job::SaveLists(self.lists_rev, v));
+    }
+
+    /// A new list, named so, with `series` on it when given (a preview is added to My space
+    /// first). Answers its id.
+    pub fn new_list(&mut self, name: &str, series: Option<i64>) -> i64 {
+        let id = self.lists.data.iter().flatten().map(|l| l.id).max().unwrap_or(0) + 1;
+        let made_at = crate::shelf::now_ms();
+        let name = name.to_string();
+        self.edit_lists(|v| v.push(leaf_proto::List { id, name, series: Vec::new(), home: false, made_at }));
+        if let Some(s) = series {
+            self.toggle_in_list(id, s);
+        }
+        id
+    }
+
+    /// Put `series` on list `list` (last), or take it off when it is there. A preview (an id
+    /// below 0) is added to My space first, then put on it.
+    pub fn toggle_in_list(&mut self, list: i64, series: i64) {
+        if series < 0 {
+            self.adopt(series, Then::List(list));
+            return;
+        }
+        let on = self.lists.data.iter().flatten().any(|l| l.id == list && l.series.contains(&series));
+        if on {
+            self.edit_lists(|v| {
+                if let Some(l) = v.iter_mut().find(|l| l.id == list) {
+                    l.series.retain(|s| *s != series);
+                }
+            });
+        } else {
+            self.add_to_list(list, series);
+        }
+    }
+
+    /// Put `series` on list `list`, last (where it is when already on it). Answers the list's name.
+    pub fn add_to_list(&mut self, list: i64, series: i64) -> String {
+        let mut name = String::new();
+        self.edit_lists(|v| {
+            if let Some(l) = v.iter_mut().find(|l| l.id == list) {
+                if !l.series.contains(&series) {
+                    l.series.push(series);
+                }
+                name = l.name.clone();
+            }
+        });
+        name
+    }
+
     pub fn tabbed(&self) -> bool {
         self.nav.len() == 1 && matches!(self.route(), Route::Home | Route::Search | Route::Space)
     }
@@ -1747,6 +1828,52 @@ impl App {
                         Err(f) => l.error = Some(f.words(&label)),
                     }
                 }
+                Done::Lists { cached, result } => {
+                    let l = &mut self.lists;
+                    if !cached {
+                        l.loading = false;
+                    }
+                    match result {
+                        // An edit not sent yet wins over the server's copy, and goes now.
+                        Ok(_) if !cached && self.lists_unsent => {
+                            self.lists_unsent = false;
+                            l.live = true;
+                            l.error = None;
+                            if let Some(v) = l.data.clone() {
+                                self.lists_rev += 1;
+                                self.ask(Job::SaveLists(self.lists_rev, v));
+                            }
+                        }
+                        // The copy on disk only while nothing newer is here.
+                        Ok(v) if cached => {
+                            if l.data.is_none() {
+                                l.data = Some(v);
+                            }
+                        }
+                        Ok(v) => {
+                            l.data = Some(v);
+                            l.live = true;
+                            l.error = None;
+                        }
+                        Err(f) => l.error = Some(f.words(&label)),
+                    }
+                }
+                Done::SavedLists(rev, r) => match r {
+                    Ok(v) => {
+                        if rev == self.lists_rev {
+                            let _ = crate::net::write_atomic(&crate::net::lists_file(&self.data), &serde_json::to_vec(&v).unwrap_or_default());
+                            self.lists.data = Some(v);
+                        }
+                    }
+                    Err(f) => {
+                        self.lists_unsent = true;
+                        if f.out_of_reach() {
+                            self.toast("Saved here; your server gets it once it answers");
+                        } else {
+                            self.toast(&format!("List not saved on your server: {}", lower_first(&f.words(&label))));
+                        }
+                    }
+                },
                 Done::DiskCap(r) => match r {
                     Ok(room) => {
                         if let Some(i) = &mut self.server_info.data {
@@ -1919,6 +2046,10 @@ impl App {
         match then {
             Then::Follow => self.set_bell(id, true),
             Then::Watch => self.set_watch(id, true),
+            Then::List(list) => {
+                let name = self.add_to_list(list, id);
+                self.toast(&format!("On {name}"));
+            }
             // The chapter opens only over its own page: elsewhere it would open over what you
             // went on to.
             Then::Read(..) if !shown => self.toast("Added to My space"),
@@ -1952,7 +2083,7 @@ impl App {
                     self.download(id, &get);
                 }
             }
-            Then::Follow | Then::Watch => {}
+            Then::Follow | Then::Watch | Then::List(_) => {}
         }
     }
 
@@ -2273,6 +2404,11 @@ impl App {
             self.ui.reset();
             return true;
         }
+        if self.st.lists.sheet.is_some() {
+            crate::lists::close(self);
+            self.ui.reset();
+            return true;
+        }
         if self.route() == &Route::Space && self.st.space.close_over() {
             self.ui.reset();
             return true;
@@ -2465,7 +2601,9 @@ impl App {
         // An app update's sheet lies over the page: the page takes no tap while it shows (the
         // offline prompt first, when both are up).
         let update = !online && self.st.update.open && crate::update::shows_over(&route);
-        let held = if update || online {
+        // A list's sheet (Add to list, a name, a list's ⋯) lies over whatever page opened it.
+        let list_sheet = !online && !update && self.st.lists.sheet.is_some();
+        let held = if update || online || list_sheet {
             self.ui.cover();
             self.ui.tap.take()
         } else {
@@ -2489,14 +2627,18 @@ impl App {
             Route::Imports => crate::library::draw_imports(self, dt),
             Route::Picks(ref of) => crate::recs::draw_picks(self, of, dt),
             Route::Wrapped(ref key) => crate::wrapped::draw(self, key),
+            Route::List(id) => crate::lists::draw(self, id, dt),
+            Route::ListAdd(id) => crate::lists::draw_add(self, id, dt),
         };
-        if (update || online) && self.route() == &route {
+        if (update || online || list_sheet) && self.route() == &route {
             self.canvas.dy = 0.0;
             self.ui.tap = held;
             if online {
                 crate::online::draw(self);
-            } else {
+            } else if update {
                 crate::update::draw(self);
+            } else {
+                crate::lists::draw_sheet(self);
             }
         }
         if let Some((words, until)) = self.toast.clone() {

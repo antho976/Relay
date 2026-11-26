@@ -848,6 +848,7 @@ impl Ctx {
                 st.set_shelf(k.id, o.shelf.as_deref());
             }
         }
+        self.lists_renamed(o.id, k.id);
         if let Some(f) = fo
             && fk.is_none_or(|k| f > k)
         {
@@ -987,6 +988,7 @@ impl Ctx {
         let w = self.store().work(id).ok_or("no such series")?;
         self.suwa.set_in_library(w.manga_id, false)?;
         self.store().remove_work(id);
+        self.lists_without(id);
         Ok(())
     }
 

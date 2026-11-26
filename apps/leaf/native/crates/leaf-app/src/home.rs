@@ -133,6 +133,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         app.st.home.since_ns = app.now_ns;
         app.want_recs(false);
         app.check_update();
+        app.want_lists();
     }
     let now = app.now_ns;
     let now_ms = shelf::now_ms();
@@ -630,6 +631,19 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         st.rail.max = x + st.rail.off - 10.0 + PAD - WIDTH;
         y += cell_h + 32.0;
     }
+    // Your lists put on Home, each a rail of its own (the owner, 2026-11-26).
+    let mut list_act: Option<crate::lists::RailAct> = None;
+    let pinned: Vec<leaf_proto::List> = app.lists.data.iter().flatten().filter(|l| l.home).cloned().collect();
+    for l in &pinned {
+        let on: Vec<(Series, String)> = crate::lists::series_of(l, &all_series)
+            .into_iter()
+            .map(|s| (s.clone(), crate::lists::where_words(s, app.series.get(&s.id).and_then(|d| d.data.as_ref()))))
+            .collect();
+        let hs = app.st.lists.rails.entry(l.id).or_default();
+        let (h, m) = crate::lists::rail(&mut cx, &mut app.images, hs, l, &on, y, dt, now, covered, &mut list_act);
+        moving |= m;
+        y += h + 32.0;
+    }
     if picks_shown && let Some(r) = &recs {
         // Because you read X: a rail each.
         // One pick is not a rail (the owner, 2026-11-23): fewer than two, and it is left out.
@@ -728,6 +742,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         crate::recs::act(app, a);
     } else if covered {
         // The sheet holds every tap.
+    } else if let Some(a) = list_act {
+        crate::lists::rail_act(app, a);
     } else if let Some((h, list, tag)) = rec_hit {
         crate::recs::on_hit(app, h, &list, tag.as_deref());
     } else if let Some(p) = open_wrapped {

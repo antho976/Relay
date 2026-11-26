@@ -22,7 +22,10 @@
 //!   header's Select, or ⋯) picks series, and the bar at the bottom deletes them, or only their read
 //!   chapters; ⋯ → "Delete read chapters" does so everywhere. Only this phone's copies go.
 //!
-//! Updates, Recent and Following have a field under the tabs that narrows the list to titles
+//! - **Lists**: your own lists ([`crate::lists`]): each with its covers, how many, the first titles
+//!   and On Home; New list. A list shown on Home is here too.
+//!
+//! Updates, Recent, Following and Lists have a field under the tabs that narrows the list to titles
 //! holding what is typed ([`logic::title_matches`]: any case, any accents, inside words). Following
 //! has a row of shelves (Reading, Plan to read, On hold, Dropped, Done) with their counts; a long
 //! press on a series' row in any list puts it on another shelf.
@@ -56,11 +59,13 @@ const GENRE_CHIPS: usize = 12;
 
 /// The filter field under the tabs (Updates, Recent, Following).
 const FIELD: f32 = 54.0;
-const TABS: [&str; 4] = ["UPDATES", "RECENT", "FOLLOWING", "DOWNLOADS"];
+const TABS: [&str; 5] = ["UPDATES", "RECENT", "FOLLOWING", "DOWNLOADS", "LISTS"];
 pub const UPDATES: u8 = 0;
 pub const RECENT: u8 = 1;
 pub const FOLLOWING: u8 = 2;
 pub const DOWNLOADS: u8 = 3;
+/// Your own lists ([`crate::lists`]), on Home or not (the owner, 2026-11-26).
+pub const LISTS: u8 = 4;
 /// How far back Updates looks, in days.
 pub const UPDATE_DAYS: u32 = 14;
 /// A series' row in Recent, Following and Downloads: its square cover flush left is as tall. The
@@ -226,13 +231,16 @@ fn dupes_sheet(cx: &mut kit::Ctx, im: &mut crate::images::Images, pairs: &[(Seri
 }
 
 pub fn draw(app: &mut App, dt: f32) -> bool {
-    let tab = app.st.space.tab.min(DOWNLOADS);
+    let tab = app.st.space.tab.min(LISTS);
     if app.fresh {
         if !app.library.loading && app.server.is_some() {
             app.ask(Job::Library);
         }
         if tab == UPDATES && !app.updates.loading && app.server.is_some() {
             app.ask(Job::Updates(UPDATE_DAYS));
+        }
+        if tab == LISTS {
+            app.want_lists();
         }
         // Series followed twice: asked once a session (and after a merge).
         if app.duplicates.data.is_none() && !app.duplicates.loading && app.server.is_some() && !app.shot {
@@ -292,6 +300,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let mut retry_saves = false;
     let mut cancel_saves = false;
     let mut start_select = false;
+    let mut list_act: Option<crate::lists::TabAct> = None;
     let selecting = st.select.clone().filter(|_| tab == DOWNLOADS);
     let groups = if tab == DOWNLOADS { app.saver.groups() } else { Vec::new() };
     let mut set_all: Option<bool> = None;
@@ -710,6 +719,11 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 y += rh;
             }
         }
+        LISTS => {
+            let all: Vec<Series> = app.library.data.clone().unwrap_or_default();
+            let lists = (app.lists.data.as_deref(), app.lists.loading && app.lists.data.is_none());
+            y = crate::lists::tab(&mut cx, &mut app.images, &lists, &all, &query, y, now, &mut list_act);
+        }
         _ => {
             // What is on this phone, from its own folder: no server needed.
             let total: u64 = groups.iter().map(|g| g.bytes).sum();
@@ -846,11 +860,17 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             }
         }
         let ty_ = top + 62.0;
-        let tt = Text::new(13.5, t::INK3).medium();
+        // Spread across the width, never closer than 14 apart; the words a little smaller only when
+        // the five don't fit so (a narrow phone).
+        let room = WIDTH - 2.0 * PAD - 14.0 * (TABS.len() - 1) as f32;
+        let tt = [13.5, 13.0, 12.5, 12.0]
+            .iter()
+            .map(|&size| Text::new(size, t::INK3).medium())
+            .find(|&tt| TABS.iter().map(|w| cx.c.measure(w, tt)).sum::<f32>() <= room)
+            .unwrap_or(Text::new(11.5, t::INK3).medium());
         let mut x = PAD;
-        // Spread across the width, never closer than 16 apart.
         let words_w: f32 = TABS.iter().map(|w| cx.c.measure(w, tt)).sum();
-        let gap = ((WIDTH - 2.0 * PAD - words_w) / (TABS.len() - 1) as f32).clamp(16.0, 28.0);
+        let gap = ((WIDTH - 2.0 * PAD - words_w) / (TABS.len() - 1) as f32).clamp(14.0, 28.0);
         for (i, words) in TABS.iter().enumerate() {
             let on = i as u8 == tab;
             let tw = cx.c.text(words, x, ty_ + (38.0 - tt.lh()) / 2.0, if on { tt.color(t::INK) } else { tt });
@@ -873,6 +893,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             let hint = match tab {
                 UPDATES => "Find in updates",
                 RECENT => "Find in Recent",
+                LISTS => "Find in Lists",
                 _ => "Find in Following",
             };
             kit::inline(&mut cx, "space-filter", fx + 36.0, fy, fw - 36.0 - 14.0 - clear_w, fh, hint, &mut q, Kb::Text, Text::new(ty::UI, t::INK));
@@ -1052,9 +1073,16 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         if t_ == UPDATES && !app.updates.loading {
             app.ask(Job::Updates(UPDATE_DAYS));
         }
+        if t_ == LISTS {
+            app.want_lists();
+        }
     }
     if add_books {
         app.host.pick_books();
+    }
+    if let Some(a) = list_act.filter(|_| !covered) {
+        crate::lists::tab_act(app, a);
+        return true;
     }
     match dupe_act {
         Some(DupeAct::Merge(a, b)) => app.merge(a, b),

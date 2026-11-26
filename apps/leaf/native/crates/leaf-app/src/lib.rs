@@ -25,6 +25,7 @@ pub mod images;
 pub mod kit;
 pub mod known;
 pub mod library;
+pub mod lists;
 pub mod logic;
 pub mod net;
 pub mod notes;
