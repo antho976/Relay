@@ -459,6 +459,19 @@ pub fn at_chapter(s: &Series, d: Option<&SeriesDetail>) -> Option<f64> {
     next_chapter(s)
 }
 
+/// A Recent row's place: "Chapter 12 of 40", the chapter you are on. Progress that came with a
+/// series and was never read here says how far it was read instead ("Read to 176 of 177"): the
+/// chapter after it, beside "1 chapter left", read as all of it read (the owner, 2026-11-26).
+pub fn place_words(s: &Series, d: Option<&SeriesDetail>) -> String {
+    match (at_chapter(s, d), s.latest, s.read_upto) {
+        (Some(_), Some(l), Some(r)) if s.last_read_at == 0 => format!("Read to {} of {}", num(r), num(l)),
+        (Some(n), Some(l), _) => format!("Chapter {} of {}", num(n), num(l)),
+        (Some(n), None, _) => format!("Chapter {}", num(n)),
+        (None, _, _) if s.chapters == 0 => "No chapters yet".into(),
+        (None, _, _) => "Chapter 1".into(),
+    }
+}
+
 /// The chapter to read next as the library knows it: the one after the last read to its end
 /// (never past the newest). None when nothing is read yet.
 pub fn next_chapter(s: &Series) -> Option<f64> {
@@ -1447,6 +1460,8 @@ mod tests {
         let far = series(Some(2.0), 8, 0, 0);
         assert_eq!(left_after(&far, None), Some(8));
         assert_eq!(left_after(&series(None, 10, 0, 0), None), None, "nothing read");
+        assert_eq!(place_words(&near, None), "Read to 9 of 10", "how far it came read, not the chapter after");
+        assert_eq!(place_words(&series(Some(9.0), 1, 0, 5), None), "Chapter 10 of 10", "read here: the chapter you are on");
         let mut keys = [
             ("not started", recent_key(0, 50, false, None)),
             ("far", recent_key(0, 40, false, Some(8))),

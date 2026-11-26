@@ -526,12 +526,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 let (title, line, new, last, key, f, row_act, key_act) = match r {
                     Ok(s) => {
                         cover(&mut cx, &mut app.images, s, 0.0, y, cw, rh, 0.0, now);
-                        let line = match (logic::at_chapter(s, app.series.get(&s.id).and_then(|l| l.data.as_ref())), s.latest) {
-                            (Some(n), Some(l)) => format!("Chapter {} of {}", logic::num(n), logic::num(l)),
-                            (Some(n), None) => format!("Chapter {}", logic::num(n)),
-                            (None, _) if s.chapters == 0 => "No chapters yet".into(),
-                            (None, _) => "Chapter 1".into(),
-                        };
+                        let line = logic::place_words(s, app.series.get(&s.id).and_then(|l| l.data.as_ref()));
                         // Progress that came with it but never read here: how much is left, not "Not started".
                         let last = match left {
                             _ if s.last_read_at > 0 => format!("Last read {}", logic::ago(s.last_read_at, now_ms)),
