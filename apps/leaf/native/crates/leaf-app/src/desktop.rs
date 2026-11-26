@@ -19,7 +19,8 @@
 //!   down the strip; `--overlay 1`; `--auto 1` auto-scroll on; `--dim 0..0.85`; `--fake-pages 1`
 //!   draws made-up pages instead of asking the server for any; `--sheet hide` the long press's
 //!   sheet on the page at the top), `settings` (the
-//!   Settings page, `--scroll UNITS`, `--backup 1` to export the latest backup).
+//!   Settings page, `--scroll UNITS`, `--backup 1` to export the latest backup, `--fold server,anilist` the address and AniList steps
+//!   folded out).
 //!   `--fake-recs 1` makes Home's picks (and a series' Readers also like) from the library, for the
 //!   days the server has none (covers are the series' own, fetched once into `--data`);
 //!   `--sheet rec` on `home` opens the first pick's sheet (`--sheet drag`: pulled down by a finger
@@ -529,6 +530,10 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.reset_to(Route::Home);
             app.push(Route::Connect);
             app.st.connect.load(app.server.as_ref());
+            // `--fold server,anilist`: the server's fields and AniList's steps folded out.
+            let fold = arg(args, "--fold").unwrap_or_default();
+            app.st.connect.editing = fold.contains("server");
+            app.st.connect.anilist_open = fold.contains("anilist");
         }
         "saved" => {
             app.set_server(server);

@@ -190,6 +190,11 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
   go down to 80%, never an unread one nor the last two read of a series), the nightly backup and
   the copy on the owner's PC (`tools/pull-backup.sh`, installed by `tools/install-offsite.sh` as a
   user timer; the server learns of it from `offsite_at`).
+- Settings is one page (the owner, 2026-11-26), in this order: Reading, Downloads (this phone's),
+  Notifications, Server (its address in a row with Change, which folds out the address and token;
+  the pass, the line and the room), Sources, AniList (setup steps folded behind Set up), Backups
+  (the nightly one, the PC copy, export, your books), the build last. The full Connect form is the
+  first run's alone (`connect.rs`).
 - Notices: "finished" (a belled series the source now calls completed) and "blocked" (no source
   answers) post on their own; new chapters of one series carry Read now and Download keys
   (`LeafChaptersJob`, `App::launched`). No source's name in either.
