@@ -82,6 +82,8 @@ pub struct State {
     pub zoom: Option<crate::zoom::Zoom>,
     /// The download choices (the key beside Follow).
     pub download: bool,
+    /// Your rating's sheet.
+    pub stars: bool,
 }
 
 impl State {
@@ -100,11 +102,12 @@ impl State {
         self.zoom = None;
         self.info = false;
         self.download = false;
+        self.stars = false;
         open
     }
 
     fn covered(&self) -> bool {
-        self.menu || self.confirm || self.shelf || self.alternatives || self.range || self.upto || self.info || self.download || self.zoom.is_some()
+        self.menu || self.confirm || self.shelf || self.alternatives || self.range || self.upto || self.info || self.download || self.stars || self.zoom.is_some()
     }
 }
 
@@ -120,6 +123,25 @@ pub fn shelf_sheet(cx: &mut kit::Ctx, title: &str, on: logic::Shelf) -> Option<O
         _ => Some(None),
     }
 }
+
+/// Your rating: Some(Some(stars)) picked, Some(None) cleared, None still open; a tap outside is
+/// Some(Some(current)).
+fn stars_sheet(cx: &mut kit::Ctx, title: &str, on: Option<u8>) -> Option<Option<u8>> {
+    let words = ["5 stars", "4 stars", "3 stars", "2 stars", "1 star"];
+    let mut items: Vec<(&str, bool)> = words.iter().enumerate().map(|(i, w)| (*w, on == Some(5 - i as u8))).collect();
+    if on.is_some() {
+        items.push(("No rating", false));
+    }
+    match kit::choices(cx, title, Some("Yours alone: picks lean on it, one or two stars lead none"), &items)? {
+        i if i < 5 => Some(Some(5 - i as u8)),
+        5 => Some(None),
+        _ => Some(on),
+    }
+}
+
+/// The pictures saved from a series: a row of them under its story.
+const PANEL_H: f32 = 112.0;
+const PANEL_W: f32 = 84.0;
 
 /// A chapter's row, its picture, and a gap's row.
 pub const ROW_H: f32 = 70.0;
@@ -193,6 +215,8 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let paid = app.paid.get(&id).cloned();
     let watch = app.watch.get(&id).copied();
     let selecting = app.st.series.select.clone();
+    let extra = app.more.get(&id).cloned();
+    let panels = if id > 0 { app.panels_of(id) } else { Vec::new() };
     let pg = app.page_begin(dt, 0.0);
     let now = app.now_ns;
     let mut cx = cx!(app);
@@ -236,6 +260,8 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let mut set_also = None;
     let mut open_info = false;
     let mut set_about: Option<bool> = None;
+    let mut open_stars = false;
+    let mut zoom_panel: Option<CoverOf> = None;
     let mut also_hit: Option<(crate::recs::Hit, Vec<leaf_proto::Rec>)> = None;
     let mut spinning_any = false;
     if let Some(s) = &series {
@@ -258,8 +284,13 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         if s.shelf.is_some() {
             items.push((None, logic::shelf_of(s).words().to_string(), false));
         }
-        if !items.is_empty() {
+        // Yours, after the source's: "You gave 4", or "Rate" (a tap on the line opens the sheet).
+        let rate = id > 0 && !preview;
+        let mine = extra.as_ref().and_then(|m| m.stars);
+        let line_y = y;
+        if !items.is_empty() || rate {
             let mut mx = x0;
+            let lh = Text::new(14.0, t::INK).lh();
             for (icon, words, strong) in &items {
                 let tt = if *strong { Text::new(14.0, t::INK).semi() } else { Text::new(14.0, t::INK2) };
                 if let Some(ic) = icon {
@@ -269,7 +300,31 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
                 cx.c.text(words, mx, y, tt);
                 mx += cx.c.measure(words, tt) + 14.0;
             }
-            y += Text::new(14.0, t::INK).lh() + 16.0;
+            if rate {
+                let (words, tt) = match mine {
+                    Some(n) => (format!("You gave {n}"), Text::new(14.0, t::INK).semi()),
+                    None => ("Rate".to_string(), Text::new(14.0, t::ACCENT).semi()),
+                };
+                let ww = 18.0 + cx.c.measure(&words, tt);
+                // A line too full puts yours under it.
+                if mx + ww > x0 + w && mx > x0 {
+                    mx = x0;
+                    y += lh + 6.0;
+                }
+                cx.c.icon("star", mx + 7.0, y + tt.lh() / 2.0, 14.0, if mine.is_some() { t::ACCENT } else { t::INK3 });
+                cx.c.text(&words, mx + 18.0, y, tt);
+            }
+            y += lh;
+            if rate && !covered && cx.tap(x0 - 8.0, line_y - 10.0, w + 16.0, y - line_y + 20.0) {
+                open_stars = true;
+            }
+            // When its chapters come: the usual day, due today, or a break.
+            if let Some(words) = extra.as_ref().and_then(|m| crate::rhythm::words(&m.uploads, &s.status, crate::shelf::now_ms(), crate::shelf::zone_offset())) {
+                y += 6.0;
+                cx.c.text(&words, x0, y, Text::new(13.0, t::INK3));
+                y += Text::new(13.0, t::INK3).lh();
+            }
+            y += 16.0;
         } else {
             y += 8.0;
         }
@@ -307,6 +362,29 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
             y += 22.0;
         } else {
             y += 8.0;
+        }
+        // Pictures saved from it, newest first: a tap opens one full screen.
+        if !panels.is_empty() {
+            cx.c.text("SAVED PICTURES", x0, y, Text::new(ty::SMALL, t::INK3).semi());
+            y += 22.0;
+            let fit = ((w + 10.0) / (PANEL_W + 10.0)).floor().max(1.0) as usize;
+            for (i, p) in panels.iter().take(fit).enumerate() {
+                let px = x0 + i as f32 * (PANEL_W + 10.0);
+                let pof = CoverOf::Panel(p.id);
+                cx.c.rect(px, y, PANEL_W, PANEL_H, 8.0, t::S1);
+                if app.images.cover(cx.c, pof, now) {
+                    cx.c.image_cover(&pof.key(), px, y, PANEL_W, PANEL_H, 8.0, Rgba::WHITE);
+                }
+                if !covered && cx.tap(px, y, PANEL_W, PANEL_H) {
+                    zoom_panel = Some(pof);
+                }
+            }
+            if panels.len() > fit {
+                let more_t = Text::new(12.5, t::INK3);
+                cx.c.text(&format!("{} more", panels.len() - fit), x0, y + PANEL_H + 6.0, more_t);
+                y += more_t.lh() + 6.0;
+            }
+            y += PANEL_H + 24.0;
         }
     }
     let mut cont: Option<logic::Continue> = None;
@@ -793,11 +871,24 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     let mut upto_act: Option<f64> = None;
     let mut rec_act = None;
     let on_shelf = series.as_ref().map_or(logic::Shelf::Plan, logic::shelf_of);
+    let mut removed_panel: Option<i64> = None;
+    let mut new_stars: Option<Option<u8>> = None;
     if covered {
         kit::release(&mut cx, held);
         if let Some(z) = &mut st.zoom {
             if crate::zoom::draw(&mut cx, &mut app.images, z, now) {
+                if let (true, CoverOf::Panel(p)) = (z.removed, z.of) {
+                    removed_panel = Some(p);
+                }
                 st.zoom = None;
+            }
+        } else if st.stars {
+            let title = series.as_ref().map_or("This series", |s| s.title.as_str());
+            if let Some(picked) = stars_sheet(&mut cx, title, extra.as_ref().and_then(|m| m.stars)) {
+                st.stars = false;
+                if picked != extra.as_ref().and_then(|m| m.stars) {
+                    new_stars = Some(picked);
+                }
             }
         } else if let Some(s) = &app.st.recs.sheet {
             rec_act = crate::recs::sheet(&mut cx, &mut app.images, s, now);
@@ -913,6 +1004,10 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
         st.download = true;
     } else if open_info {
         st.info = true;
+    } else if open_stars {
+        st.stars = true;
+    } else if let Some(of) = zoom_panel {
+        st.zoom = Some(crate::zoom::Zoom::new(of));
     } else if stop_select {
         st.select = None;
     }
@@ -966,6 +1061,16 @@ pub fn draw(app: &mut App, id: i64, dt: f32) -> bool {
     }
     if let Some(sh) = new_shelf {
         app.set_shelf(id, sh);
+    }
+    if let Some(n) = new_stars {
+        app.set_stars(id, n);
+    }
+    if let Some(p) = removed_panel {
+        crate::panels::remove(&app.data, p);
+        if let Some(all) = app.panels.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            all.retain(|x| x.id != p);
+        }
+        app.toast("Removed from Leaf; your gallery keeps its copy");
     }
     if let Some(n) = upto_act {
         app.read_upto(id, n);

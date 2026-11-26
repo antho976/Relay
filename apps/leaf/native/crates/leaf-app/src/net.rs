@@ -378,6 +378,38 @@ pub enum Job {
     HiddenPages,
     /// Every page hidden by hand shown again (`DELETE /v1/pages/hide`, `all`).
     ClearHidden,
+    /// A page was broken: the chapter read from another source (`POST /v1/chapters/{id}/elsewhere`).
+    Elsewhere(i64),
+    /// Your stars for a series, or none (`POST /v1/series/{id}/rating`).
+    Stars(i64, Option<u8>),
+    /// What the server says of itself for Settings (`GET /v1/server`).
+    ServerInfo,
+    /// The room its chapters may take, in GB, or no limit (`POST /v1/settings/disk`).
+    DiskCap(Option<u32>),
+}
+
+/// `GET /v1/server`: the last pass, the download line, the room chapters take and the backups.
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(default)]
+pub struct ServerInfo {
+    pub pass_at: i64,
+    pub queued: u32,
+    pub series: u32,
+    pub room: Room,
+    pub backup_at: i64,
+    /// When this PC last took a copy of the server's data (0: never).
+    pub offsite_at: i64,
+}
+
+/// The room the server's chapters take (`disk.rs` there).
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(default)]
+pub struct Room {
+    pub used: Option<u64>,
+    pub cap_gb: Option<u32>,
+    pub cleaned_at: i64,
+    pub cleaned: u32,
+    pub stuck: bool,
 }
 
 /// The recommendations on disk are asked for again after this long (they are made once a day).
@@ -396,6 +428,20 @@ pub struct SeriesExtra {
     /// Only Webtoon has it: whether you asked to hear when another source does (None: one does).
     #[serde(default)]
     pub watch: Option<bool>,
+    #[serde(flatten)]
+    pub more: More,
+}
+
+/// What a series carries beside its struct for the page and My space: your stars, when its newest
+/// chapters came out (newest first, ms), and its genres.
+#[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq)]
+pub struct More {
+    #[serde(default)]
+    pub stars: Option<u8>,
+    #[serde(default)]
+    pub uploads: Vec<i64>,
+    #[serde(default)]
+    pub genres: Vec<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
@@ -420,12 +466,13 @@ pub struct Extras {
     pub paid: Option<PaidAhead>,
     pub watch: Option<bool>,
     pub thumbs: Vec<(i64, bool)>,
+    pub more: More,
 }
 
 /// The extras of a `/v1/series/{id}` answer.
 pub fn detail_extras(bytes: &[u8]) -> Extras {
     let d: DetailExtra = serde_json::from_slice(bytes).unwrap_or_default();
-    Extras { paid: d.series.paid, watch: d.series.watch, thumbs: d.chapters.into_iter().map(|c| (c.id, c.thumb)).collect() }
+    Extras { paid: d.series.paid, watch: d.series.watch, thumbs: d.chapters.into_iter().map(|c| (c.id, c.thumb)).collect(), more: d.series.more }
 }
 
 /// Each series' paid episodes ahead, from a `/v1/library` answer.
@@ -455,6 +502,9 @@ impl Job {
                 | Job::RecTag(..)
                 | Job::HidePage(..)
                 | Job::ClearHidden
+                | Job::Elsewhere(_)
+                | Job::Stars(..)
+                | Job::DiskCap(_)
         )
     }
 }
@@ -498,6 +548,11 @@ pub enum Done {
     HidePage(i64, u32, bool, Result<u32, Fail>),
     /// The count of pages hidden by hand (asked, or after Clear).
     HiddenPages(Result<u32, Fail>),
+    /// The chapter's new page count, read from another source.
+    Elsewhere(i64, Result<u32, Fail>),
+    Stars(i64, Option<u8>, Result<(), Fail>),
+    ServerInfo(Result<ServerInfo, Fail>),
+    DiskCap(Result<Room, Fail>),
 }
 
 impl Done {
@@ -543,6 +598,10 @@ impl Done {
             Done::AppLatest(r) => of(r),
             Done::HidePage(_, _, _, r) => of(r),
             Done::HiddenPages(r) => of(r),
+            Done::Elsewhere(_, r) => of(r),
+            Done::Stars(_, _, r) => of(r),
+            Done::ServerInfo(r) => of(r),
+            Done::DiskCap(r) => of(r),
         }
     }
 }
@@ -983,6 +1042,28 @@ fn run(client: &Client, data: &Path, server: Option<Server>, job: Job, send: &dy
                 None => no_server(),
             };
             send(Done::HiddenPages(r));
+        }
+        Job::Elsewhere(chapter) => {
+            let r = match &server {
+                Some(s) => client.post(s, &format!("/v1/chapters/{chapter}/elsewhere"), "{}".into()).map(|b| count_of(&b)),
+                None => no_server(),
+            };
+            send(Done::Elsewhere(chapter, r));
+        }
+        Job::Stars(id, stars) => {
+            let r = post_json(client, &server, &format!("/v1/series/{id}/rating"), &leaf_proto::Stars { stars }).map(|_| ());
+            send(Done::Stars(id, stars, r));
+        }
+        Job::ServerInfo => {
+            let r = match &server {
+                Some(s) => client.json::<ServerInfo>(s, "/v1/server"),
+                None => no_server(),
+            };
+            send(Done::ServerInfo(r));
+        }
+        Job::DiskCap(cap_gb) => {
+            let r = post_json(client, &server, "/v1/settings/disk", &leaf_proto::DiskCap { cap_gb }).and_then(|b| serde_json::from_slice::<Room>(&b).map_err(|_| Fail::Garbled));
+            send(Done::DiskCap(r));
         }
         Job::Health => {
             let r = match &server {

@@ -25,6 +25,8 @@ use crate::theme::{self as t, COVER_R, PAD, ty};
 pub const PAUSE_NS: u64 = 700_000_000;
 /// Fewer characters than this are not searched.
 pub const MIN_CHARS: usize = 3;
+/// Series of yours shown above the sources' answer.
+pub const MINE_SHOWN: usize = 5;
 /// The most works shown (the server sends at most this many per source).
 pub const MAX_SHOWN: usize = 20;
 
@@ -183,6 +185,58 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let mut connect = false;
     let no_server = app.server.is_none();
     let did_you_mean = st.meant().map(str::to_string);
+    // Yours first: series in My space whose title holds the words, opened with no source asked.
+    let typed = st.query.trim().to_string();
+    let mine: Vec<Series> = if typed.chars().count() >= 2 {
+        app.library.data.iter().flatten().filter(|s| crate::logic::title_matches(&s.title, &typed)).take(MINE_SHOWN).cloned().collect()
+    } else {
+        Vec::new()
+    };
+    // The very title of one of yours: the sources are asked only when you say so.
+    let exact = mine.iter().any(|s| crate::logic::fold(&s.title) == crate::logic::fold(&typed));
+    let mut forget: Option<usize> = None;
+    let mut again: Option<String> = None;
+    let mut sources_too = false;
+    if !mine.is_empty() {
+        cx.c.text("IN MY SPACE", x0, y, Text::new(ty::SMALL, t::INK3).semi());
+        y += 22.0;
+        for s in &mine {
+            let rh = 64.0;
+            if cx.pressed(0.0, y, WIDTH, rh) {
+                cx.c.rect(0.0, y, WIDTH, rh, 0.0, t::WASH);
+            }
+            let of = CoverOf::Series(s.id);
+            let (cw, ch) = (40.0, 56.0);
+            cx.c.rect(x0, y + (rh - ch) / 2.0, cw, ch, 6.0, t::S1);
+            if app.images.cover(cx.c, of, now) {
+                cx.c.image_cover(&of.key(), x0, y + (rh - ch) / 2.0, cw, ch, 6.0, Rgba::WHITE);
+            }
+            let tx = x0 + cw + 14.0;
+            let tw = WIDTH - PAD - 24.0 - tx;
+            let title_t = Text::new(ty::BODY, t::INK).medium();
+            let line_t = Text::new(12.5, t::INK3);
+            let ty0 = y + (rh - title_t.lh() - 4.0 - line_t.lh()) / 2.0;
+            cx.c.text_fit(&s.title, tx, ty0, tw, title_t);
+            let line = match (s.read_upto, s.latest) {
+                (Some(r), Some(l)) => format!("Read to chapter {} of {}", crate::logic::num(r), crate::logic::num(l)),
+                (Some(r), None) => format!("Read to chapter {}", crate::logic::num(r)),
+                _ => "Not started".to_string(),
+            };
+            cx.c.text_fit(&line, tx, ty0 + title_t.lh() + 4.0, tw, line_t);
+            cx.c.icon("chevron-right", WIDTH - PAD - 10.0, y + rh / 2.0, 16.0, t::INK3);
+            if cx.tap(0.0, y, WIDTH, rh) {
+                open = Some(s.id);
+            }
+            y += rh;
+        }
+        y += 14.0;
+        if exact && st.asked.as_deref() != Some(typed.as_str()) && !no_server {
+            if kit::plain(&mut cx, x0 + 40.0, y, w - 80.0, 46.0, "Search your sources too", Some("search")) {
+                sources_too = true;
+            }
+            y += 46.0 + 14.0;
+        }
+    }
     match (&st.asked, &st.results) {
         _ if no_server => {
             y += 60.0;
@@ -190,6 +244,27 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             connect = c;
             y += h;
         }
+        (None, _) if typed.is_empty() && !app.searches.is_empty() => {
+            // The searches that led somewhere, newest first: a tap searches it again.
+            y += 8.0;
+            cx.c.text("RECENT", x0, y, Text::new(ty::SMALL, t::INK3).semi());
+            y += 14.0;
+            for (i, q) in app.searches.iter().enumerate() {
+                let rh = 48.0;
+                if cx.pressed(0.0, y, WIDTH - 56.0, rh) {
+                    cx.c.rect(0.0, y, WIDTH, rh, 0.0, t::WASH);
+                }
+                cx.c.icon("history", x0 + 9.0, y + rh / 2.0, 16.0, t::INK3);
+                cx.c.text_fit(q, x0 + 32.0, y + (rh - Text::new(ty::BODY, t::INK).lh()) / 2.0, w - 32.0 - 44.0, Text::new(ty::BODY, t::INK));
+                if kit::icon_key_ink(&mut cx, WIDTH - PAD - 40.0, y + 2.0, "close", t::INK3) {
+                    forget = Some(i);
+                } else if cx.tap(0.0, y, WIDTH - 56.0, rh) {
+                    again = Some(q.clone());
+                }
+                y += rh;
+            }
+        }
+        (None, _) if !mine.is_empty() => {}
         (None, _) => {
             y += 24.0;
             cx.c.para(
@@ -349,17 +424,18 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     if let Some(asked) = all_of {
         st.ask(&asked, true);
         app.ask(Job::Search(asked, true));
-    } else if due(&q, st.asked.as_deref(), submit || retry, st.typed_ns, now) && app.server.is_some() {
+    } else if (sources_too || (!exact || submit) && due(&q, st.asked.as_deref(), submit || retry, st.typed_ns, now)) && app.server.is_some() {
         st.ask(&q, false);
         app.nav.last_mut().expect("a page").1 = Default::default();
         app.ask(Job::Search(q, false));
-    } else if q.chars().count() >= MIN_CHARS && st.asked.as_deref() != Some(q.as_str()) {
+    } else if !exact && q.chars().count() >= MIN_CHARS && st.asked.as_deref() != Some(q.as_str()) {
         let at = st.typed_ns + PAUSE_NS;
         app.wake_at(at);
     }
     if let Some(q) = app.st.search.suggest_due.take() {
         app.ask(Job::Suggest(q));
     }
+    let meant = meant.or(again);
     if let Some(t) = meant {
         // "Did you mean": those words, searched now (in the field too, as if typed).
         app.st.search.query = t.clone();
@@ -373,6 +449,14 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         st.ask(&t, false);
         app.nav.last_mut().expect("a page").1 = Default::default();
         app.ask(Job::Search(t, false));
+    }
+    if let Some(i) = forget {
+        app.searches.remove(i);
+        app.save_config();
+    }
+    if preview.is_some() || open.is_some() {
+        let q = app.st.search.query.clone();
+        app.remember_search(&q);
     }
     if let Some(c) = preview {
         app.open_preview(&c.title, &c.hits, None);

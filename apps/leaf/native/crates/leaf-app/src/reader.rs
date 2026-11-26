@@ -92,6 +92,14 @@ pub struct Reader {
     pub undo: Option<(i64, u32, u64)>,
     /// The sheet over the strip after a long press on a page: (chapter index, page).
     pub hide_sheet: Option<(usize, u32)>,
+    /// What of that page was on screen then (shares of its height, top and bottom): Save
+    /// picture keeps that.
+    pub sheet_cut: (f32, f32),
+    /// Two fingers zoom the strip (1 is the screen's width, up to [`ZOOM_MAX`]), about the
+    /// strip's point at the screen's middle across (`zoom_x`, units of the strip unzoomed).
+    pub zoom: f32,
+    pub zoom_x: f32,
+    pinch_last: Option<((f32, f32), (f32, f32))>,
 }
 
 /// Undo is offered this long after a page is hidden.
@@ -188,6 +196,10 @@ impl Reader {
             saved: None,
             undo: None,
             hide_sheet: None,
+            sheet_cut: (0.0, 1.0),
+            zoom: 1.0,
+            zoom_x: WIDTH / 2.0,
+            pinch_last: None,
         }
     }
 
@@ -232,6 +244,10 @@ impl Reader {
             saved: None,
             undo: None,
             hide_sheet: None,
+            sheet_cut: (0.0, 1.0),
+            zoom: 1.0,
+            zoom_x: WIDTH / 2.0,
+            pinch_last: None,
         }
     }
 
@@ -436,6 +452,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     match act {
         Some(PageAct::Hide(c, n)) => app.hide_page(c, n),
         Some(PageAct::Unhide(c, n)) => app.unhide_page(c, n),
+        Some(PageAct::Save(c, n, cut)) => app.save_picture(c, n, cut),
+        Some(PageAct::Elsewhere(chapter)) => app.read_elsewhere(chapter),
         None => {}
     }
     match leave {
@@ -461,10 +479,13 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     moving
 }
 
-/// A page hidden by hand, or that undone.
+/// What the page sheet asked for: a page hidden by hand (or that undone), the part on screen
+/// saved, or the chapter read from another source.
 enum PageAct {
     Hide(i64, u32),
     Unhide(i64, u32),
+    Save(usize, u32, (f32, f32)),
+    Elsewhere(i64),
 }
 
 /// The Undo toast's box, at the screen's bottom (above the overlay's bar when it shows).
@@ -519,11 +540,34 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
     let edges = (app.canvas.inset_top.max(EDGE_ZONE), view_h - app.canvas.inset_bottom.max(EDGE_ZONE));
     let from_edge = app.ui.drag_from.is_some_and(|(_, y)| y < edges.0 || y > edges.1);
     let on_bars = sheet_open || from_edge || (r.overlay && app.ui.drag_from.is_some_and(|(_, y)| y < top_bar || y > view_h - bottom_bar));
-    // Scroll: the finger, then the momentum it left, auto-scroll.
+    // Two fingers: the strip zooms about them and follows them (never while a sheet is up).
+    let pinch = if sheet_open { None } else { app.ui.pinch() };
+    let mut zoom_dy = 0.0;
+    if let (Some((a, b)), Some((a0, b0))) = (pinch, r.pinch_last) {
+        let dist = |p: (f32, f32), q: (f32, f32)| ((p.0 - q.0).powi(2) + (p.1 - q.1).powi(2)).sqrt();
+        let (m0, m) = (((a0.0 + b0.0) / 2.0, (a0.1 + b0.1) / 2.0), ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0));
+        let (z, zx, scroll) = zoom_about(r.zoom, r.zoom * dist(a, b) / dist(a0, b0).max(1.0), r.zoom_x, m0, (m.0 - m0.0, m.1 - m0.1), view_h);
+        r.zoom = z;
+        r.zoom_x = zx;
+        zoom_dy = scroll;
+        r.fling.stop();
+    }
+    r.pinch_last = pinch;
+    // Let go near the screen's width: back to it.
+    if pinch.is_none() && r.zoom < 1.04 && r.zoom != 1.0 {
+        r.zoom = 1.0;
+        r.zoom_x = WIDTH / 2.0;
+    }
+    let zoomed = r.zoom > 1.0;
+    // Scroll: the finger, then the momentum it left, auto-scroll. Zoomed in, a finger also moves
+    // the strip across, and every move is in the strip's own units.
     let before = r.fling.off;
-    let coasting = if on_bars { false } else { r.fling.update(&app.ui, [0.0, 0.0, WIDTH, view_h], dt) };
-    let mut dy = r.fling.off - before;
+    let coasting = if on_bars || pinch.is_some() { false } else { r.fling.update(&app.ui, [0.0, 0.0, WIDTH, view_h], dt) };
+    let mut dy = (r.fling.off - before) / r.zoom + zoom_dy;
     r.fling.off = FLING_MID;
+    if zoomed && pinch.is_none() && !on_bars && app.ui.drag_from.is_some() {
+        r.zoom_x = clamp_x(r.zoom_x - app.ui.drag_dx / r.zoom, r.zoom);
+    }
     let mut moving = coasting;
     if r.auto && !sheet_open {
         let v = View { r, im: &app.images };
@@ -531,7 +575,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
             Ahead::Ready => {
                 r.waiting = false;
                 if !app.ui.busy() {
-                    dy += logic::scroll_speed(r.speed) * dt;
+                    dy += logic::scroll_speed(r.speed) * dt / r.zoom;
                 }
                 moving = true;
             }
@@ -659,6 +703,11 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
         let v_im = &app.images;
         let c = &mut app.canvas;
         let ui = &mut app.ui;
+        // Zoomed in: the strip drawn bigger about the screen's middle (no key on it takes a tap).
+        let (zz, zx) = (r.zoom, r.zoom_x);
+        let sx = |x: f32| (x - zx) * zz + WIDTH / 2.0;
+        let sy = |y: f32| (y - view_h / 2.0) * zz + view_h / 2.0;
+        let keys = !overlay_tap && !zoomed;
         for (item, y) in &shown {
             let h = View { r, im: v_im }.height(*item);
             match *item {
@@ -666,7 +715,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
                     let ch = &r.chapters[ci];
                     let words = if r.local.is_some() { ch.name.clone() } else { format!("Chapter {}", logic::num(ch.number)) };
                     let tt = Text::new(ty::CAPTION, t::INK3).medium().center();
-                    let y = &(y + r.top_pad);
+                    let y = &sy(y + r.top_pad);
                     let ty_ = y + (HEAD_H - tt.lh()) / 2.0;
                     let tw = c.measure(&words, tt);
                     c.text(&words, WIDTH / 2.0, ty_, tt);
@@ -709,13 +758,14 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
                             if bottom < 0.0 || top > view_h {
                                 continue;
                             }
-                            if !c.image_tile(&key, 0.0, top, WIDTH, bottom) {
-                                c.rect(0.0, top, WIDTH, bottom - top, 0.0, t::S1);
+                            if !c.image_tile(&key, sx(0.0), sy(top), WIDTH * zz, sy(bottom)) {
+                                c.rect(sx(0.0), sy(top), WIDTH * zz, (bottom - top) * zz, 0.0, t::S1);
                             }
                         }
                     }
                     if !drawn {
-                        c.rect(0.0, *y, WIDTH, h, 0.0, t::S1);
+                        let y = &sy(*y);
+                        c.rect(sx(0.0), *y, WIDTH * zz, h * zz, 0.0, t::S1);
                         let label = Text::new(ty::CAPTION, t::INK3).center();
                         match v_im.failed(id, n) {
                             Some(why) => {
@@ -726,7 +776,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
                                 c.rect(kx, ky, kw, kh, t::KEY_R, t::S2);
                                 let kt = Text::new(ty::UI, t::INK).semi().center();
                                 c.text("Retry", WIDTH / 2.0, ky + (kh - kt.lh()) / 2.0, kt);
-                                if !overlay_tap && ui.tapped(kx, ky, kw, kh) {
+                                if keys && ui.tapped(kx, ky, kw, kh) {
                                     retry = true;
                                 }
                             }
@@ -737,6 +787,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
                     }
                 }
                 Item::End => {
+                    let y = &sy(*y);
                     end_at = Some(*y);
                     let last = r.chapters.last();
                     let words = match last {
@@ -752,7 +803,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
                     c.rect(kx, ky, kw, kh, t::KEY_R, t::S2);
                     let kt = Text::new(ty::UI, t::INK).semi().center();
                     c.text(if r.local.is_some() { "Back to your library" } else { "Back to the series" }, WIDTH / 2.0, ky + (kh - kt.lh()) / 2.0, kt);
-                    if !overlay_tap && ui.tapped(kx, ky, kw, kh) {
+                    if keys && ui.tapped(kx, ky, kw, kh) {
                         to_series = true;
                     }
                 }
@@ -793,7 +844,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
             None => logic::left_words(*left),
         };
         cx.c.text_fit(&line, tx, ty0 + title_t.lh() + 4.0, kx - 12.0 - tx, line_t);
-        if !overlay_tap && cx.ui.tapped(0.0, ry, WIDTH, ch) {
+        if !overlay_tap && !zoomed && cx.ui.tapped(0.0, ry, WIDTH, ch) {
             next = Some(s.id);
         }
     }
@@ -811,6 +862,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
                 if py >= *y && py < y + h && app.images.size(r.chapters[c].id, n).is_some() {
                     app.ui.swallow();
                     r.hide_sheet = Some((c, n));
+                    r.sheet_cut = ((-y / h).clamp(0.0, 1.0), ((view_h - y) / h).clamp(0.0, 1.0));
                     r.fling.stop();
                     break;
                 }
@@ -872,6 +924,11 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
         let c = &mut app.canvas;
         c.rect(-1000.0, 0.0, WIDTH + 2000.0, view_h, 0.0, crate::draw::Rgba::hex(0x000000).a(app.prefs.dim.min(crate::app::DIM_MAX)));
     }
+    // Warmth: an amber veil, for reading at night.
+    if app.prefs.warm > 0.0 {
+        let c = &mut app.canvas;
+        c.rect(-1000.0, 0.0, WIDTH + 2000.0, view_h, 0.0, crate::app::WARM.a(app.prefs.warm.min(1.0) * crate::app::WARM_MAX));
+    }
     if r.auto && r.waiting && !r.overlay {
         let c = &mut app.canvas;
         let words = "Waiting for the next page";
@@ -886,6 +943,7 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
     let mut jump: Option<usize> = None;
     let mut speed: Option<u8> = None;
     let mut dim: Option<f32> = None;
+    let mut warm: Option<f32> = None;
     if r.overlay {
         // The bookmark: the exact spot the place is kept at, a line across the strip and its tag.
         if let Some(s) = r.saved.filter(|_| r.local.is_none()) {
@@ -969,6 +1027,11 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
         if let Some(v) = kit::slider(&mut cx, sx, sy, sw, bright) {
             dim = Some((1.0 - v) * crate::app::DIM_MAX);
         }
+        let wy = sy + 44.0;
+        cx.c.text("Warmth", PAD, wy - lt.lh() / 2.0, lt);
+        if let Some(v) = kit::slider(&mut cx, sx, wy, sw, app.prefs.warm) {
+            warm = Some(v);
+        }
         if ci > 0 {
             let words = format!("Ch. {}", logic::num(r.chapters[ci - 1].number));
             if chapter_key(&mut cx, PAD - 6.0, ky, &words, "chevron-left", false) {
@@ -1003,6 +1066,10 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
         app.prefs.dim = if d < 0.02 { 0.0 } else { d };
         app.dim_dirty = true;
     }
+    if let Some(v) = warm {
+        app.prefs.warm = if v < 0.03 { 0.0 } else { v };
+        app.dim_dirty = true;
+    }
     if retry {
         app.images.retry_failed();
     }
@@ -1029,8 +1096,17 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
         kit::release(&mut cx, held);
         let id = r.chapters[c].id;
         let words = format!("Page {} of chapter {}", n + 1, logic::num(r.chapters[c].number));
-        match kit::choices(&mut cx, &words, Some("Scanlators' \u{201C}join our Discord\u{201D} pages and the like"), &[("Hide this page and ones like it", false), ("Cancel", false)]) {
+        let items = [("Save picture", false), ("This page is broken: read it elsewhere", false), ("Hide this page and ones like it", false), ("Cancel", false)];
+        match kit::choices(&mut cx, &words, None, &items) {
             Some(0) => {
+                r.hide_sheet = None;
+                page_act = Some(PageAct::Save(c, n, r.sheet_cut));
+            }
+            Some(1) => {
+                r.hide_sheet = None;
+                page_act = Some(PageAct::Elsewhere(id));
+            }
+            Some(2) => {
                 r.hide_sheet = None;
                 page_act = Some(PageAct::Hide(id, n));
             }
@@ -1051,8 +1127,26 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
 }
 
 /// The overlay's bottom bar, above the gesture bar: the chapter keys and auto-scroll, then the
-/// dimmer.
-const BAR_H: f32 = 64.0 + 48.0 + 14.0;
+/// dimmer and the warmth.
+const BAR_H: f32 = 64.0 + 48.0 + 44.0 + 14.0;
+/// Two fingers zoom the strip this far at most.
+pub const ZOOM_MAX: f32 = 4.0;
+
+/// Zoom to `z` keeping the strip's point under `at` (screen units) where it is, and the fingers'
+/// move `moved` followed: the new `zoom_x`, and how far to scroll the strip (its own units).
+pub fn zoom_about(z0: f32, z: f32, zoom_x: f32, at: (f32, f32), moved: (f32, f32), view_h: f32) -> (f32, f32, f32) {
+    let z = z.clamp(1.0, ZOOM_MAX);
+    let ux = (at.0 - WIDTH / 2.0) / z0 + zoom_x;
+    let zx = clamp_x(ux - (at.0 - WIDTH / 2.0) / z - moved.0 / z, z);
+    let scroll = (at.1 - view_h / 2.0) * (1.0 / z0 - 1.0 / z) - moved.1 / z;
+    (z, zx, scroll)
+}
+
+/// The middle across stays where the zoomed strip still covers the screen.
+pub fn clamp_x(x: f32, z: f32) -> f32 {
+    let half = WIDTH / (2.0 * z);
+    x.clamp(half, WIDTH - half)
+}
 /// A drag that starts this close to the top or bottom edge (or within the phone's bars, if
 /// taller) is the phone's gesture, not a scroll of the strip.
 const EDGE_ZONE: f32 = 28.0;

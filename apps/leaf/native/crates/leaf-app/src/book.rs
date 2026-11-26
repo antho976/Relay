@@ -568,6 +568,10 @@ fn frame(app: &mut App, r: &mut BookReader, dt: f32) -> (bool, bool) {
         let c = &mut app.canvas;
         c.rect(-1000.0, 0.0, WIDTH + 2000.0, view_h, 0.0, Rgba::hex(0x000000).a(app.prefs.dim.min(crate::app::DIM_MAX)));
     }
+    if app.prefs.warm > 0.0 {
+        let c = &mut app.canvas;
+        c.rect(-1000.0, 0.0, WIDTH + 2000.0, view_h, 0.0, crate::app::WARM.a(app.prefs.warm.min(1.0) * crate::app::WARM_MAX));
+    }
     // One tap back to where a jump came from.
     let mut back_jump = false;
     if let Some(bt) = r.back_to {
@@ -1304,7 +1308,7 @@ fn popover(app: &mut App, r: &mut BookReader, doc: &Doc, s: u32, b: u32, view_h:
 /// The type sheet: size, spacing, margins and theme, previewed live on the page above it.
 fn type_sheet(app: &mut App, r: &mut BookReader) {
     let mut cx = cx!(app);
-    let (top, outside) = kit::sheet(&mut cx, 350.0);
+    let (top, outside) = kit::sheet(&mut cx, 394.0);
     let x = PAD + 4.0;
     let w = WIDTH - 2.0 * x;
     let mut y = top + 28.0;
@@ -1362,6 +1366,13 @@ fn type_sheet(app: &mut App, r: &mut BookReader) {
     if let Some(v) = kit::slider(&mut cx, seg_x, y, w - 96.0 - 10.0, bright) {
         let d = (1.0 - v) * crate::app::DIM_MAX;
         app.prefs.dim = if d < 0.02 { 0.0 } else { d };
+        app.dim_dirty = true;
+    }
+    // Warmth: an amber veil for reading at night, as the comics have.
+    y += 44.0;
+    cx.c.text("Warmth", x, y - label.lh() / 2.0, label);
+    if let Some(v) = kit::slider(&mut cx, seg_x, y, w - 96.0 - 10.0, app.prefs.warm) {
+        app.prefs.warm = if v < 0.03 { 0.0 } else { v };
         app.dim_dirty = true;
     }
     cx.ui.tap = None;

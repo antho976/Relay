@@ -471,7 +471,7 @@ fn fake_recs(app: &mut App, series: i64) -> Result<(), String> {
     }
     let pick = |from: usize, n: usize| -> Vec<leaf_proto::Rec> { recs.iter().skip(from).take(n).cloned().collect() };
     let read: Vec<&leaf_proto::Series> = app.library.data.as_ref().map(|l| l.iter().filter(|s| s.last_read_at > 0).collect()).unwrap_or_default();
-    let because: Vec<leaf_proto::Because> = read.iter().take(2).enumerate().map(|(k, s)| leaf_proto::Because { series: s.id, title: s.title.clone(), recs: pick(6 + k * 4, 5) }).collect();
+    let because: Vec<leaf_proto::Because> = read.iter().take(2).enumerate().map(|(k, s)| leaf_proto::Because { series: s.id, title: s.title.clone(), recs: pick(6 + k * 4, 5), finished: false }).collect();
     let collections = ["Murim", "Magic", "Hunters", "Necromancy"].iter().enumerate().map(|(k, tag)| leaf_proto::Collection { tag: tag.to_string(), recs: pick(k * 3, 6) }).collect();
     let mut binge = recs.iter().find(|r| r.status == "completed").cloned().or_else(|| recs.last().cloned());
     if let Some(b) = &mut binge {

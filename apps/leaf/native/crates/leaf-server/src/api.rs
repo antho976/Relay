@@ -218,6 +218,21 @@ impl Api {
                 Ok(json(&ctx.updates(days)))
             }
             (Method::Get, ["v1", "health"]) => Ok(json(&ctx.health())),
+            (Method::Get, ["v1", "server"]) => Ok(json(&ctx.server_json())),
+            (Method::Post, ["v1", "settings", "disk"]) => serde_json::from_str::<leaf_proto::DiskCap>(body).map_err(|e| format!("disk: {e}")).map(|d| {
+                ctx.set_disk_cap(d.cap_gb);
+                // Measured and cleaned now, off this request, rather than at the next pass.
+                let c = self.ctx.clone();
+                std::thread::spawn(move || c.disk_pass());
+                json(&ctx.room())
+            }),
+            (Method::Post, ["v1", "series", _, "rating"]) => {
+                let Some(i) = id(2) else { return fail(400, "bad id") };
+                serde_json::from_str::<leaf_proto::Stars>(body).map_err(|e| format!("rating: {e}")).and_then(|r| ctx.set_stars(i, r.stars)).map(|_| json(&serde_json::json!({ "ok": true })))
+            }
+            (Method::Post, ["v1", "chapters", _, "elsewhere"]) => {
+                id(2).ok_or("bad id".to_string()).and_then(|c| ctx.read_elsewhere(c)).map(|n| json(&serde_json::json!({ "ok": true, "count": n })))
+            }
             (Method::Post, ["v1", "chapters", _, "read"]) => {
                 let Some(c) = id(2) else { return fail(400, "bad id") };
                 serde_json::from_str::<ChapterRead>(body).map_err(|e| format!("read: {e}")).and_then(|r| ctx.mark_chapter(c, r.read)).map(|_| json(&serde_json::json!({ "ok": true })))

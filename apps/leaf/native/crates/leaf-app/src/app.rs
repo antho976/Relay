@@ -73,6 +73,15 @@ pub trait Host: Send + Sync {
     }
     /// A light haptic tick (a row caught by a sweep), where the platform has one.
     fn tick(&self) {}
+    /// Put a picture in the phone's gallery (Android: Pictures/Leaf). Answers words to show
+    /// when it went wrong, or where it went (the desktop saves a file).
+    fn save_picture(&self, name: &str, jpeg: &[u8]) -> Option<String> {
+        let dir = self.data_dir().join("pictures");
+        match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join(name.replace('/', "-")), jpeg)) {
+            Ok(()) => Some(format!("Saved to {}", dir.display())),
+            Err(e) => Some(format!("Couldn't save it: {e}")),
+        }
+    }
 }
 
 /// What asking to install an update did.
@@ -279,6 +288,12 @@ struct Config {
     /// "Later" on an update: that build is not offered again until then (ms).
     #[serde(default)]
     update_later: Option<(u32, i64)>,
+    /// Searches that led somewhere, newest first ([`App::searches`]).
+    #[serde(default)]
+    searches: Vec<String>,
+    /// The series whose chapter was open when Leaf last went away (for [`ReadPrefs::reopen`]).
+    #[serde(default)]
+    reading_now: Option<i64>,
 }
 
 /// "Download Next up": how many series, how many chapters of each, and how often it looks.
@@ -301,13 +316,28 @@ pub struct ReadPrefs {
     /// The next chapters of the series closest to their end are kept on this phone, on Wi-Fi
     /// ([`App::auto_next_tick`]). Off until turned on.
     pub auto_next: bool,
+    /// Warmth: an amber veil over the page this strong (0 to 1), for reading at night.
+    pub warm: f32,
+    /// A chapter downloaded to this phone is deleted once read (Settings › Downloads). Off until
+    /// turned on.
+    pub delete_read: bool,
+    /// Leaf opens in the chapter it was closed in, if it was closed while reading. Off until
+    /// turned on.
+    pub reopen: bool,
 }
 
 impl Default for ReadPrefs {
     fn default() -> ReadPrefs {
-        ReadPrefs { trim_gutters: true, dim: 0.0, speeds: Default::default(), skip_promo: true, auto_next: false }
+        ReadPrefs { trim_gutters: true, dim: 0.0, speeds: Default::default(), skip_promo: true, auto_next: false, warm: 0.0, delete_read: false, reopen: false }
     }
 }
+
+/// The amber of the warmth veil, and how opaque it is at its strongest.
+pub const WARM: crate::draw::Rgba = crate::draw::Rgba::hex(0xFF8C1F);
+pub const WARM_MAX: f32 = 0.28;
+
+/// Searches kept for Search's list.
+pub const SEARCHES_KEPT: usize = 8;
 
 /// The dimmer goes no darker than this.
 pub const DIM_MAX: f32 = 0.85;
@@ -360,6 +390,11 @@ pub struct App {
     pub backup: Option<BackupInfo>,
     /// The last copy of the books this phone made, and the copy or restore running now.
     pub books_copied: crate::booksync::Copied,
+    /// Searches that led to a page, newest first, [`SEARCHES_KEPT`] at most (Search shows them
+    /// under the field before anything is typed).
+    pub searches: Vec<String>,
+    /// The series being read, kept so Leaf can open in it again ([`ReadPrefs::reopen`]).
+    pub reading_now: Option<i64>,
     pub booksync: crate::booksync::BookSync,
     /// Restore was tapped once with books on this phone: the next tap replaces them.
     pub restore_asked: bool,
@@ -370,6 +405,11 @@ pub struct App {
     /// The server's status, as Settings shows it (AniList).
     pub status: Loaded<Status>,
     pub health: Loaded<Vec<SourceHealth>>,
+    /// What the server says of itself (Settings › Server).
+    pub server_info: Loaded<crate::net::ServerInfo>,
+    /// Pictures saved from the reader, newest first ([`crate::panels`]); a thread saving one
+    /// adds it here.
+    pub panels: Arc<std::sync::Mutex<Option<Vec<crate::panels::Panel>>>>,
     /// "Wrong series?": the other entries for a series' work.
     pub alternatives: HashMap<i64, Loaded<Vec<Alternative>>>,
     /// Followed series that look like one work, as the server pairs them.
@@ -397,6 +437,8 @@ pub struct App {
     pub watch: HashMap<i64, bool>,
     /// Chapters the server has a picture of (`thumb`).
     pub thumbs: HashSet<i64>,
+    /// Your stars, the newest chapters' dates and the genres of each series (`net::More`).
+    pub more: HashMap<i64, crate::net::More>,
     /// Recommendations (`/v1/recs`), and when they were last asked for (ms).
     pub recs: Loaded<Recs>,
     recs_asked_ms: i64,
@@ -476,12 +518,16 @@ impl App {
             updates_all: config.updates_all,
             backup: config.backup.clone(),
             books_copied: config.books_copied,
+            searches: config.searches,
+            reading_now: config.reading_now,
             booksync: Default::default(),
             restore_asked: false,
             auto_next_at: 0,
             updates: Loaded::default(),
             status: Loaded::default(),
             health: Loaded::default(),
+            server_info: Loaded::default(),
+            panels: Arc::new(std::sync::Mutex::new(None)),
             alternatives: HashMap::new(),
             duplicates: Loaded::default(),
             open_after: None,
@@ -496,6 +542,7 @@ impl App {
             saver: crate::offline::Saver::new(data.clone()),
             paid: HashMap::new(),
             watch: HashMap::new(),
+            more: HashMap::new(),
             thumbs: HashSet::new(),
             recs: Loaded::default(),
             recs_asked_ms: 0,
@@ -679,6 +726,61 @@ impl App {
         self.ask(Job::HidePage(chapter, n, false));
     }
 
+    /// A search led to a page: kept first in the list (once, whatever its case).
+    pub fn remember_search(&mut self, q: &str) {
+        let q = q.trim();
+        if q.chars().count() < crate::search::MIN_CHARS {
+            return;
+        }
+        self.searches.retain(|s| logic::fold(s) != logic::fold(q));
+        self.searches.insert(0, q.to_string());
+        self.searches.truncate(SEARCHES_KEPT);
+        self.save_config();
+    }
+
+    /// The pictures saved from series `id`, newest first (read from disk the first time).
+    pub fn panels_of(&self, id: i64) -> Vec<crate::panels::Panel> {
+        let mut g = self.panels.lock().unwrap_or_else(|e| e.into_inner());
+        let all = g.get_or_insert_with(|| crate::panels::list(&self.data));
+        all.iter().filter(|p| p.series == id).cloned().collect()
+    }
+
+    /// Save picture: what of page `n` of the reader's chapter `c` was on screen (`cut`, shares of
+    /// its height), kept in Leaf and put in the gallery, on a thread of its own.
+    pub fn save_picture(&mut self, c: usize, n: u32, cut: (f32, f32)) {
+        let Some(r) = &self.reader else { return };
+        let Some(ch) = r.chapters.get(c) else { return };
+        let p = crate::panels::Panel { id: 0, series: r.series, title: r.title.clone(), chapter: ch.number, page: n, at_ms: crate::shelf::now_ms() };
+        let (chapter, data, host, out, list) = (ch.id, self.data.clone(), self.host.clone(), self.late_toast.clone(), self.panels.clone());
+        let _ = std::thread::Builder::new().name("leaf-picture".into()).spawn(move || {
+            let said = (|| {
+                let bytes = crate::panels::page_bytes(&data, chapter, n).ok_or("This page isn't on the phone yet")?;
+                let jpeg = crate::panels::cut(&bytes, cut.0, cut.1)?;
+                let kept = crate::panels::keep(&data, p, &jpeg)?;
+                let name = crate::panels::gallery_name(&kept);
+                if let Some(all) = list.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                    all.insert(0, kept);
+                }
+                Ok::<String, String>(host.save_picture(&name, &jpeg).unwrap_or_else(|| "Saved to your pictures".into()))
+            })()
+            .unwrap_or_else(|e| e);
+            *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(said);
+            crate::wake::wake();
+        });
+    }
+
+    /// This page is broken: the chapter is read from another source from now on.
+    pub fn read_elsewhere(&mut self, chapter: i64) {
+        self.toast("Looking for this chapter on another source");
+        self.ask(Job::Elsewhere(chapter));
+    }
+
+    /// Your stars for a series (None: none), shown at once and sent.
+    pub fn set_stars(&mut self, id: i64, stars: Option<u8>) {
+        self.more.entry(id).or_default().stars = stars;
+        self.ask(Job::Stars(id, stars));
+    }
+
     /// Tell the server how far a chapter was read (a screenshot tells it nothing).
     pub fn report_progress(&mut self, chapter: i64, p: leaf_proto::Progress) {
         if self.shot {
@@ -807,6 +909,8 @@ impl App {
             update_checked_ms: self.update_checked_ms,
             update_later: self.update_later,
             books_copied: self.books_copied,
+            searches: self.searches.clone(),
+            reading_now: self.reading_now,
         };
         let (path, host) = (self.data.join("config.json"), self.host.clone());
         let n = ASKED.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1236,6 +1340,7 @@ impl App {
                                     Some(on) => self.watch.insert(e.id, on),
                                     None => self.watch.remove(&e.id),
                                 };
+                                self.more.insert(e.id, e.more);
                             }
                             let l = &mut self.library;
                             l.data = Some(list);
@@ -1284,6 +1389,9 @@ impl App {
                             Some(on) => self.watch.insert(id, on),
                             None => self.watch.remove(&id),
                         };
+                        if id > 0 {
+                            self.more.insert(id, extras.more.clone());
+                        }
                         for (c, has) in &extras.thumbs {
                             if *has {
                                 self.thumbs.insert(*c);
@@ -1489,6 +1597,44 @@ impl App {
                         Err(f) => l.error = Some(f.words(&label)),
                     }
                 }
+                Done::Elsewhere(chapter, r) => match r {
+                    Ok(n) => {
+                        self.images.forget_chapter(&mut self.canvas, chapter);
+                        if let Some(rd) = &mut self.reader {
+                            rd.page_count(chapter, Some(n), self.now_ns);
+                        }
+                        self.toast("Reading this chapter from another source");
+                    }
+                    Err(f) => self.toast(&f.words(&label)),
+                },
+                Done::Stars(id, stars, r) => {
+                    if let Err(f) = r {
+                        if self.more.get(&id).is_some_and(|m| m.stars == stars) {
+                            self.more.entry(id).or_default().stars = None;
+                        }
+                        self.toast(&format!("Rating not kept: {}", lower_first(&f.words(&label))));
+                    }
+                }
+                Done::ServerInfo(r) => {
+                    let l = &mut self.server_info;
+                    l.loading = false;
+                    match r {
+                        Ok(i) => {
+                            l.data = Some(i);
+                            l.live = true;
+                            l.error = None;
+                        }
+                        Err(f) => l.error = Some(f.words(&label)),
+                    }
+                }
+                Done::DiskCap(r) => match r {
+                    Ok(room) => {
+                        if let Some(i) = &mut self.server_info.data {
+                            i.room = room;
+                        }
+                    }
+                    Err(f) => self.toast(&format!("Not changed: {}", lower_first(&f.words(&label)))),
+                },
                 Done::Health(r) => {
                     let l = &mut self.health;
                     l.loading = false;

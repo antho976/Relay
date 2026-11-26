@@ -172,6 +172,20 @@ pub struct Mine {
     /// Finished and read to its end.
     pub finished: bool,
     pub last_read_at: i64,
+    /// Your own rating, 1 to 5 stars.
+    pub stars: Option<u8>,
+}
+
+/// How much a series of yours counts toward picks: by your stars (none counts as three), more
+/// when finished; one or two stars point nowhere.
+pub fn weight(s: &Mine) -> f64 {
+    let by_stars = match s.stars {
+        Some(1) | Some(2) => 0.0,
+        Some(4) => 1.4,
+        Some(5) => 2.0,
+        _ => 1.0,
+    };
+    by_stars * if s.finished { 1.5 } else { 1.0 }
 }
 
 /// What you read most, and what you asked to see less of.
@@ -260,7 +274,10 @@ pub fn score(read: &[(&Mine, &WithRecs)], mine: &[Mine], t: &Taste, hidden: &Has
     type Pointers = Vec<(f64, i64, String)>;
     let mut by_id: HashMap<i64, (Media, f64, Pointers)> = HashMap::new();
     for (s, wr) in read {
-        let weight = if s.finished { 1.5 } else { 1.0 };
+        let weight = weight(s);
+        if weight == 0.0 {
+            continue;
+        }
         for (rating, m) in &wr.recs {
             if unwanted(m, hidden) || in_space(m, mine).is_some() {
                 continue;
@@ -311,11 +328,21 @@ pub fn rec_of(m: &Media, reason: String, hits: Vec<Hit>, in_space: Option<i64>) 
     }
 }
 
-/// Your `n` most recently read series, for "Because you read X".
+/// Your `n` most recently read series, for "Because you read X", then the one you finished last
+/// if it isn't among them ("Because you finished X", the owner, 2026-11-25). Its recommendations
+/// came in the same AniList answer as the rest, and its titles are looked for on the sources
+/// within the same daily allowance (`LEAF_REC_SEARCHES`): no request more. A series you gave one
+/// or two stars leads no rail.
 pub fn recent<'a>(read: &[(&'a Mine, &'a WithRecs)], n: usize) -> Vec<(&'a Mine, &'a WithRecs)> {
-    let mut v = read.to_vec();
+    let mut v: Vec<(&Mine, &WithRecs)> = read.iter().copied().filter(|(s, _)| weight(s) > 0.0).collect();
     v.sort_by_key(|(s, _)| std::cmp::Reverse(s.last_read_at));
+    let finished = v.iter().copied().find(|(s, _)| s.finished);
     v.truncate(n);
+    if let Some(f) = finished
+        && !v.iter().any(|(s, _)| s.work == f.0.work)
+    {
+        v.push(f);
+    }
     v
 }
 
@@ -353,7 +380,7 @@ pub fn assemble(scored: &[Scored], because: &[(&Mine, &WithRecs)], collections: 
                 .filter_map(|(_, m)| Some(rec_of(m, format!("More like {}", s.title), carried(m.id)?, None)))
                 .take(BECAUSE_EACH)
                 .collect();
-            (!recs.is_empty()).then(|| Because { series: s.work, title: s.title.clone(), recs })
+            (!recs.is_empty()).then(|| Because { series: s.work, title: s.title.clone(), recs, finished: s.finished })
         })
         .collect();
     let collections: Vec<Collection> = collections
@@ -474,6 +501,7 @@ impl Ctx {
                 read,
                 finished: d.series.status == "completed" && d.series.unread == 0,
                 last_read_at: d.series.last_read_at,
+                stars: self.stars(w.id),
             });
         }
         out
@@ -758,9 +786,9 @@ mod tests {
 
     fn mine() -> Vec<Mine> {
         vec![
-            Mine { work: 101, title: "Nano Machine".into(), names: vec!["Nano Machine".into()], al: Some(1), read: true, finished: false, last_read_at: 50 },
-            Mine { work: 102, title: "Murim Login".into(), names: vec!["Murim Login".into()], al: Some(2), read: true, finished: true, last_read_at: 90 },
-            Mine { work: 103, title: "Junk to King".into(), names: vec!["Junk to King".into(), "Became the King by Scavenging".into()], al: None, read: false, finished: false, last_read_at: 0 },
+            Mine { work: 101, title: "Nano Machine".into(), names: vec!["Nano Machine".into()], al: Some(1), read: true, finished: false, last_read_at: 50, stars: None },
+            Mine { work: 102, title: "Murim Login".into(), names: vec!["Murim Login".into()], al: Some(2), read: true, finished: true, last_read_at: 90, stars: None },
+            Mine { work: 103, title: "Junk to King".into(), names: vec!["Junk to King".into(), "Became the King by Scavenging".into()], al: None, read: false, finished: false, last_read_at: 0, stars: None },
         ]
     }
 
@@ -809,6 +837,24 @@ mod tests {
         let s3 = score(&read, &m, &t3, &hidden);
         assert_eq!(s3.last().unwrap().media.id, 14);
         assert_eq!(top_tags(&t3, 4), vec!["murim", "cultivation"], "isekai left out of the collections");
+    }
+
+    #[test]
+    fn the_series_finished_last_leads_a_rail_and_one_you_rated_low_leads_none() {
+        let w = parse_with_recs(&fixture());
+        let mut m = mine();
+        // Murim Login (finished) read before Nano Machine: one rail of the last read, and the
+        // finished one after it.
+        m[1].last_read_at = 10;
+        let read: Vec<(&Mine, &WithRecs)> = vec![(&m[0], &w[0]), (&m[1], &w[1])];
+        let r = recent(&read, 1);
+        assert_eq!(r.iter().map(|(s, _)| s.work).collect::<Vec<_>>(), vec![101, 102]);
+        let mut low = m.clone();
+        low[0].stars = Some(2);
+        let read: Vec<(&Mine, &WithRecs)> = vec![(&low[0], &w[0]), (&low[1], &w[1])];
+        assert_eq!(recent(&read, 3).iter().map(|(s, _)| s.work).collect::<Vec<_>>(), vec![102], "two stars: no rail");
+        assert_eq!(weight(&low[0]), 0.0);
+        assert_eq!(weight(&Mine { stars: Some(5), finished: true, ..Default::default() }), 3.0);
     }
 
     #[test]

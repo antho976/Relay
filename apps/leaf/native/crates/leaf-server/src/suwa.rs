@@ -38,6 +38,8 @@ pub struct Manga {
     pub author: Option<String>,
     pub description: Option<String>,
     pub status: String,
+    /// The source's genres and tags, as it lists them.
+    pub genres: Vec<String>,
     pub source_id: String,
     pub source_name: String,
     pub chapters: Vec<Ch>,
@@ -58,7 +60,7 @@ pub struct Ch {
     pub last_read_at: i64,
 }
 
-const MANGA_FIELDS: &str = "id title author description status source { id displayName }";
+const MANGA_FIELDS: &str = "id title author description status genre source { id displayName }";
 const CHAPTER_FIELDS: &str = "id chapterNumber name scanlator pageCount isRead lastPageRead isDownloaded uploadDate lastReadAt";
 
 /// Images a page conversion turns to WebP. No quality is given: Suwayomi 2.4 refuses its own
@@ -333,6 +335,7 @@ fn manga_of(m: &Value, chapters: &Value) -> Manga {
         author: text(&m["author"]),
         description: text(&m["description"]),
         status: status_of(m["status"].as_str().unwrap_or("")).to_string(),
+        genres: m["genre"].as_array().into_iter().flatten().filter_map(|g| g.as_str()).map(str::trim).filter(|g| !g.is_empty()).map(String::from).collect(),
         source_id: m["source"]["id"].as_str().unwrap_or_default().to_string(),
         source_name: source_name(&m["source"]["displayName"]),
         chapters: chapters

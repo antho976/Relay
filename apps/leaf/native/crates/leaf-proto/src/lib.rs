@@ -299,6 +299,14 @@ pub fn pick_copies(all: &[Copy]) -> Vec<Copy> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_chapter_after_six_weeks_says_it_is_back() {
+        let day = 86_400_000;
+        assert_eq!(super::back_after(day, day + 41 * day), None);
+        assert_eq!(super::back_after(day, day + 63 * day), Some(9));
+        assert_eq!(super::back_after(0, 100 * day), None, "no date: no claim");
+    }
+
     use super::*;
 
     #[test]
@@ -459,12 +467,37 @@ pub struct Rec {
     pub description: Option<String>,
 }
 
-/// "Because you read X".
+/// "Because you read X", or "Because you finished X" when `finished`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Because {
     pub series: i64,
     pub title: String,
     pub recs: Vec<Rec>,
+    /// The series is finished and read to its end.
+    #[serde(default)]
+    pub finished: bool,
+}
+
+/// A series with no new chapter for this long is on a break (and a chapter after one says it is
+/// back): six weeks.
+pub const BREAK_MS: i64 = 42 * 86_400_000;
+
+/// The weeks a new chapter (uploaded at `new_at`) came after the one before it (`prev_at`), when
+/// that is a break ([`BREAK_MS`]); None when either time is unknown (0).
+pub fn back_after(prev_at: i64, new_at: i64) -> Option<u32> {
+    (prev_at > 0 && new_at > 0 && new_at - prev_at >= BREAK_MS).then(|| ((new_at - prev_at) / (7 * 86_400_000)) as u32)
+}
+
+/// Your own rating of a series (`POST /v1/series/{id}/rating`): 1 to 5 stars, or none.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct Stars {
+    pub stars: Option<u8>,
+}
+
+/// The room the server's chapters may take (`POST /v1/settings/disk`), in GB; none is no limit.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct DiskCap {
+    pub cap_gb: Option<u32>,
 }
 
 /// Popular titles with one of the tags you read most.

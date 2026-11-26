@@ -30,6 +30,8 @@ pub struct Zoom {
     pub off: (f32, f32),
     /// A pull down at its own size, toward putting it away (units).
     pub pull: f32,
+    /// A saved picture was removed from Leaf (its trash key): the caller lets it go.
+    pub removed: bool,
     last: Option<Fingers>,
     last_tap: Option<(u64, (f32, f32))>,
 }
@@ -42,7 +44,7 @@ enum Fingers {
 
 impl Zoom {
     pub fn new(of: CoverOf) -> Zoom {
-        Zoom { of, z: 1.0, off: (0.0, 0.0), pull: 0.0, last: None, last_tap: None }
+        Zoom { of, z: 1.0, off: (0.0, 0.0), pull: 0.0, removed: false, last: None, last_tap: None }
     }
 
     /// Zoom to `z` keeping the picture's point under `at` (screen units, from the screen's
@@ -146,6 +148,11 @@ pub fn draw(cx: &mut kit::Ctx, im: &mut Images, z: &mut Zoom, now: u64) -> bool 
         cx.c.rect(x, y, w, h, 0.0, t::S1);
     }
     if kit::icon_key(cx, WIDTH - 6.0 - 44.0, cx.c.inset_top + 8.0, "close") {
+        close = true;
+    }
+    // A saved picture can be let go from here (the gallery keeps its own copy).
+    if matches!(z.of, CoverOf::Panel(_)) && kit::icon_key(cx, 6.0, cx.c.inset_top + 8.0, "trash") {
+        z.removed = true;
         close = true;
     }
     cx.ui.tap = None;

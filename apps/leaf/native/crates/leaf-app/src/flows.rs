@@ -581,7 +581,7 @@ fn a_tap_in_the_reader_only_shows_the_overlay_and_auto_scrolls_until_tapped() {
     // The middle shows the overlay; its play key starts auto-scroll and puts the overlay away.
     tap(&mut app, &mut t, 200.0, h * 0.5);
     assert!(app.reader.as_ref().unwrap().overlay);
-    let bar_top = h - 112.0;
+    let bar_top = h - 156.0;
     tap(&mut app, &mut t, WIDTH / 2.0, bar_top + 10.0 + 22.0);
     let r = app.reader.as_ref().unwrap();
     assert!(r.auto && !r.overlay, "playing");
@@ -895,7 +895,7 @@ fn the_reader_never_reports_a_chapter_it_has_left() {
     let h = app.canvas.h;
     tap(&mut app, &mut t, 200.0, h * 0.5);
     assert!(reader(&app).overlay);
-    tap(&mut app, &mut t, WIDTH - crate::theme::PAD - 20.0, h - 112.0 + 10.0 + 22.0);
+    tap(&mut app, &mut t, WIDTH - crate::theme::PAD - 20.0, h - 156.0 + 10.0 + 22.0);
     assert!(matches!(reader(&app).pos.item, crate::strip::Item::Head(1)), "{:?}", reader(&app).pos);
     for _ in 0..3 {
         scroll(&mut app, &mut t, 780.0);
@@ -919,7 +919,7 @@ fn a_chapter_key_lands_on_the_chapter_heading() {
     step(&mut app, &mut t);
     let h = app.canvas.h;
     tap(&mut app, &mut t, 200.0, h * 0.5);
-    tap(&mut app, &mut t, WIDTH - crate::theme::PAD - 20.0, h - 112.0 + 10.0 + 22.0);
+    tap(&mut app, &mut t, WIDTH - crate::theme::PAD - 20.0, h - 156.0 + 10.0 + 22.0);
     for _ in 0..40 {
         step(&mut app, &mut t);
     }
@@ -928,7 +928,7 @@ fn a_chapter_key_lands_on_the_chapter_heading() {
     assert!(!r.overlay);
     // And the previous key, back to chapter 1's.
     tap(&mut app, &mut t, 200.0, h * 0.5);
-    tap(&mut app, &mut t, crate::theme::PAD + 20.0, h - 112.0 + 10.0 + 22.0);
+    tap(&mut app, &mut t, crate::theme::PAD + 20.0, h - 156.0 + 10.0 + 22.0);
     assert_eq!(reader(&app).pos, crate::strip::Pos { item: crate::strip::Item::Head(0), off: 0.0 });
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -1136,7 +1136,7 @@ fn auto_scroll_waits_at_a_chapter_still_opening_and_goes_on_into_it() {
     step(&mut app, &mut t);
     let h = app.canvas.h;
     tap(&mut app, &mut t, 200.0, h * 0.5);
-    tap(&mut app, &mut t, WIDTH / 2.0, h - 112.0 + 10.0 + 22.0);
+    tap(&mut app, &mut t, WIDTH / 2.0, h - 156.0 + 10.0 + 22.0);
     assert!(reader(&app).auto);
     // At full speed for a while: it reaches chapter 2's heading and waits there.
     app.set_speed(1, crate::logic::SPEEDS);
@@ -1363,7 +1363,8 @@ fn a_long_press_on_a_page_offers_to_hide_it_and_the_sheet_holds_every_tap() {
     let below = on_screen(&app, crate::strip::Item::Page(0, 3)).unwrap();
     hold(&mut app, &mut t, 200.0, 300.0);
     assert!(reader(&app).hide_sheet.is_some());
-    tap(&mut app, &mut t, 200.0, h - 192.0 + 76.0 + 26.0);
+    // Save picture, Read it elsewhere, Hide, Cancel: Hide is the third.
+    tap(&mut app, &mut t, 200.0, h - 278.0 + 58.0 + 104.0 + 26.0);
     assert!(reader(&app).hide_sheet.is_none());
     assert!(app.images.skipped(1001, 2), "hidden");
     let moved = on_screen(&app, crate::strip::Item::Page(0, 3)).unwrap();
@@ -1780,7 +1781,7 @@ fn a_swipe_home_over_the_brightness_slider_leaves_it_alone() {
     app.reader.as_mut().unwrap().overlay = true;
     step(&mut app, &mut t);
     let (h, inset) = (app.canvas.h, app.canvas.inset_bottom);
-    let slider_y = h - inset - 40.0;
+    let slider_y = h - inset - 84.0;
     let before = app.prefs.dim;
     // Up from the phone's gesture strip, across the slider, a little to the side as thumbs go.
     slide(&mut app, &mut t, (300.0, h - 4.0), (-30.0, -260.0), 12);
@@ -2309,7 +2310,7 @@ fn home_shows_no_binge_and_no_because_rail_of_one() {
     nowhere(&mut app);
     let mut r = picks(3, None);
     let one = r.top[0].clone();
-    r.because = vec![leaf_proto::Because { series: 1, title: "Series 1".into(), recs: vec![one.clone()] }, leaf_proto::Because { series: 2, title: "Series 2".into(), recs: r.top.clone() }];
+    r.because = vec![leaf_proto::Because { series: 1, title: "Series 1".into(), recs: vec![one.clone()], finished: false }, leaf_proto::Because { series: 2, title: "Series 2".into(), recs: r.top.clone(), finished: false }];
     r.binge = Some(one);
     app.recs.data = Some(r);
     app.reset_to(Route::Home);

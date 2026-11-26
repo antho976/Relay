@@ -48,6 +48,8 @@ pub enum CoverOf {
     Book(i64),
     /// A recommendation's, by its AniList id (`/v1/recs/cover/{id}`).
     Rec(i64),
+    /// A picture saved from the reader ([`crate::panels`]), only ever its file.
+    Panel(i64),
 }
 
 impl CoverOf {
@@ -57,6 +59,7 @@ impl CoverOf {
             CoverOf::Manga(id) => format!("c:m{id}"),
             CoverOf::Book(id) => format!("c:k{id}"),
             CoverOf::Rec(id) => format!("c:r{id}"),
+            CoverOf::Panel(id) => format!("c:p{id}"),
         }
     }
     pub fn banner_key(self) -> String {
@@ -81,12 +84,20 @@ impl CoverOf {
             CoverOf::Series(id) if id < 0 => format!("/v1/covers/{}", -id),
             CoverOf::Series(id) => format!("/v1/series/{id}/cover"),
             CoverOf::Manga(id) => format!("/v1/covers/{id}"),
-            CoverOf::Book(_) => String::new(),
+            CoverOf::Book(_) | CoverOf::Panel(_) => String::new(),
             CoverOf::Rec(id) => format!("/v1/recs/cover/{id}"),
         }
     }
     pub fn file(self, data: &Path) -> PathBuf {
-        data.join("covers").join(self.key().replace(':', "-"))
+        match self {
+            CoverOf::Panel(id) => crate::panels::file(data, id),
+            _ => data.join("covers").join(self.key().replace(':', "-")),
+        }
+    }
+
+    /// Only ever its own file: never asked of the server.
+    fn local(self) -> bool {
+        matches!(self, CoverOf::Book(_) | CoverOf::Panel(_))
     }
 }
 
@@ -830,6 +841,25 @@ impl Images {
         tile_key(chapter, n, i, self.cut)
     }
 
+    /// Let go of every page of a chapter, here and on disk, so each is fetched anew (it is read
+    /// from another source now). A copy downloaded to this phone is left alone.
+    pub fn forget_chapter(&mut self, c: &mut Canvas, chapter: i64) {
+        let pages: Vec<(u32, (u32, u32))> = self.sizes.iter().filter(|((ch, _), _)| *ch == chapter).map(|((_, n), s)| (*n, *s)).collect();
+        for (n, (_, h)) in pages {
+            for i in 0..h.div_ceil(crate::logic::TILE_H) as usize {
+                c.forget_image(&self.tile_key(chapter, n, i));
+            }
+            self.sizes.remove(&(chapter, n));
+            self.decoded.remove(&(chapter, n));
+            self.failed.remove(&(chapter, n));
+            self.ahead_failed.remove(&(chapter, n));
+        }
+        self.failed.retain(|(ch, _), _| *ch != chapter);
+        self.skipped.retain(|(ch, _)| *ch != chapter);
+        self.last_wants.clear();
+        let _ = std::fs::remove_dir_all(chapter_dir(&self.data, chapter));
+    }
+
     /// Try the pages that failed again (Retry, or the server came back).
     pub fn retry_failed(&mut self) {
         self.failed.clear();
@@ -955,10 +985,13 @@ fn fetch(client: &Client, server: Option<&Server>, file: &Path, path: &str) -> R
 fn cover(client: &Client, server: Option<&Server>, data: &Path, of: CoverOf) -> Got {
     let file = of.file(data);
     // A book's cover is only ever its file's.
-    let server = if matches!(of, CoverOf::Book(_)) { None } else { server };
+    let server = if of.local() { None } else { server };
     let Ok(bytes) = fetch(client, server, &file, &of.path()) else { return Got::Cover { of, img: None, banner: None, src: None } };
     let Ok(img) = image::load_from_memory(&bytes) else {
-        let _ = std::fs::remove_file(&file);
+        // A saved picture is the only copy there is: kept, whatever happened.
+        if !matches!(of, CoverOf::Panel(_)) {
+            let _ = std::fs::remove_file(&file);
+        }
         return Got::Cover { of, img: None, banner: None, src: None };
     };
     let src = Some((img.width(), img.height()));
@@ -979,7 +1012,7 @@ fn cover(client: &Client, server: Option<&Server>, data: &Path, of: CoverOf) -> 
 /// its own size, and a blurred, darkened copy to fill the spotlight behind it.
 fn hero(client: &Client, server: Option<&Server>, data: &Path, of: CoverOf, screen_w: u32) -> Option<HeroPics> {
     let file = of.file(data);
-    let server = if matches!(of, CoverOf::Book(_)) { None } else { server };
+    let server = if of.local() { None } else { server };
     let bytes = fetch(client, server, &file, &of.path()).ok()?;
     let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
     Some(hero_pics(&img, screen_w))
@@ -988,7 +1021,7 @@ fn hero(client: &Client, server: Option<&Server>, data: &Path, of: CoverOf, scre
 /// A cover at its own size, no bigger than [`FULL_MAX`] on its longer side.
 fn full(client: &Client, server: Option<&Server>, data: &Path, of: CoverOf) -> Option<Pixels> {
     let file = of.file(data);
-    let server = if matches!(of, CoverOf::Book(_)) { None } else { server };
+    let server = if of.local() { None } else { server };
     let bytes = fetch(client, server, &file, &of.path()).ok()?;
     let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
     let (w0, h0) = img.dimensions();

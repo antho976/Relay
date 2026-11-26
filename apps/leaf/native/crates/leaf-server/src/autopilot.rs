@@ -420,11 +420,6 @@ impl Ctx {
         detail_of(w, m, &self.extras(w), &self.prefs)
     }
 
-    pub fn library(&self) -> Vec<Series> {
-        let works = self.store().works();
-        works.iter().filter_map(|w| self.suwa.manga(w.manga_id).ok().map(|m| self.detail_now(w, &m).series)).collect()
-    }
-
     pub fn detail(&self, id: i64) -> Result<SeriesDetail, String> {
         let w = self.store().work(id).ok_or("no such series")?;
         let m = self.suwa.manga(w.manga_id)?;
@@ -458,24 +453,55 @@ impl Ctx {
     }
 
     /// A series as sent: [`Series`] and the fields the phone's struct doesn't have yet (`paid`,
-    /// `watch`).
-    fn series_json(&self, s: &Series) -> Value {
+    /// `watch`, `stars`, and from its chapters `uploads` and `genres`).
+    fn series_json(&self, d: &SeriesDetail, m: &Manga) -> Value {
+        let s = &d.series;
         let mut v = serde_json::to_value(s).unwrap_or(Value::Null);
         v["paid"] = serde_json::to_value(self.paid(s.id, s.latest)).unwrap_or(Value::Null);
         v["watch"] = serde_json::to_value(self.watch(s)).unwrap_or(Value::Null);
+        v["stars"] = serde_json::to_value(self.stars(s.id)).unwrap_or(Value::Null);
+        v["uploads"] = serde_json::to_value(uploads(&d.chapters)).unwrap_or(Value::Null);
+        v["genres"] = serde_json::to_value(&m.genres).unwrap_or(Value::Null);
         v
+    }
+
+    /// Your own rating of a series, 1 to 5 stars.
+    pub fn stars(&self, id: i64) -> Option<u8> {
+        let v = self.store().get(&format!("stars:{id}"));
+        v.and_then(|v| v.parse().ok()).filter(|n| (1..=5).contains(n))
+    }
+
+    /// `POST /v1/series/{id}/rating`.
+    pub fn set_stars(&self, id: i64, stars: Option<u8>) -> Result<(), String> {
+        let w = self.store().work(id).ok_or("no such series")?;
+        match stars.filter(|n| (1..=5).contains(n)) {
+            Some(n) => self.store().set(&format!("stars:{}", w.id), &n.to_string()),
+            None => self.store().del(&format!("stars:{}", w.id)),
+        }
+        Ok(())
     }
 
     /// `GET /v1/library`.
     pub fn library_json(&self) -> Value {
-        Value::Array(self.library().iter().map(|s| self.series_json(s)).collect())
+        let works = self.store().works();
+        Value::Array(
+            works
+                .iter()
+                .filter_map(|w| {
+                    let m = self.suwa.manga(w.manga_id).ok()?;
+                    Some(self.series_json(&self.detail_now(w, &m), &m))
+                })
+                .collect(),
+        )
     }
 
     /// `GET /v1/series/{id}`: with `paid` on the series and `thumb` on each chapter.
     pub fn detail_json(&self, id: i64) -> Result<Value, String> {
-        let d = self.detail(id)?;
+        let w = self.store().work(id).ok_or("no such series")?;
+        let m = self.suwa.manga(w.manga_id)?;
+        let d = self.detail_now(&w, &m);
         let mut v = serde_json::to_value(&d).map_err(|e| e.to_string())?;
-        v["series"] = self.series_json(&d.series);
+        v["series"] = self.series_json(&d, &m);
         let made = self.thumbs.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(list) = v["chapters"].as_array_mut() {
             for (c, json) in d.chapters.iter().zip(list.iter_mut()) {
@@ -1003,6 +1029,34 @@ impl Ctx {
         None
     }
 
+    /// `POST /v1/chapters/{id}/elsewhere`: a page was broken here (the owner said so on it), so the
+    /// chapter is read from another copy of the work, the reader's request (one source asked, in
+    /// the phone's lane), from now on. Answers the new page count.
+    pub fn read_elsewhere(&self, chapter_id: i64) -> Result<u32, String> {
+        let p = self.pages_elsewhere(chapter_id).ok_or("No other source has this chapter")?;
+        self.store().set(&format!("elsewhere:{chapter_id}"), "1");
+        let n = p.urls.len() as u32;
+        self.pages.lock().unwrap_or_else(|p| p.into_inner()).insert(chapter_id, p);
+        Ok(n)
+    }
+
+    /// `GET /v1/server`: what Settings shows of the server: its last pass, the download line, the
+    /// room chapters take and the backups.
+    pub fn server_json(&self) -> Value {
+        let get = |k: &str| self.store().get(k).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        let offsite = std::fs::metadata(self.data.join("offsite_at")).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as i64);
+        let queued = self.store().queued_downloads().len();
+        let series = self.store().works().len();
+        serde_json::json!({
+            "pass_at": get("pass_at"),
+            "queued": queued,
+            "series": series,
+            "room": self.room(),
+            "backup_at": get("backup_at"),
+            "offsite_at": offsite,
+        })
+    }
+
     /// Forgets a chapter's page list, so the next request asks again (and may fall back).
     pub fn forget_pages(&self, chapter_id: i64) {
         self.pages.lock().unwrap_or_else(|p| p.into_inner()).remove(&chapter_id);
@@ -1013,6 +1067,12 @@ impl Ctx {
     pub fn pages(&self, chapter_id: i64) -> Result<PageList, String> {
         let cached = self.pages.lock().unwrap_or_else(|p| p.into_inner()).get(&chapter_id).cloned();
         if let Some(p) = cached {
+            return Ok(p);
+        }
+        // A chapter you said was broken here reads from another copy first.
+        let moved = self.store().get(&format!("elsewhere:{chapter_id}")).is_some();
+        if moved && let Some(p) = self.pages_elsewhere(chapter_id) {
+            self.pages.lock().unwrap_or_else(|p| p.into_inner()).insert(chapter_id, p.clone());
             return Ok(p);
         }
         let info = self.suwa.chapter_info(chapter_id)?;
@@ -1355,6 +1415,8 @@ impl Ctx {
             self.store().set("backup_at", &now.to_string());
         }
         self.sync_anilist();
+        self.disk_pass();
+        self.store().set("pass_at", &now_ms().to_string());
         self.paid_pass(now_ms());
         let made = self.thumbs_pass(THUMBS_PER_PASS);
         if made > 0 {
@@ -1396,10 +1458,25 @@ impl Ctx {
             let arrived: Vec<f64> = numbers.iter().copied().filter(|n| *n > w.latest && *n <= l).collect();
             self.store().add_arrivals(w.id, &arrived, now);
         }
-        // Announced only for a series with its bell on.
+        // Announced only for a series with its bell on; after a break, saying so.
         if ok && w.bell && let Some(l) = latest.filter(|l| *l > w.latest && w.latest >= 0.0) {
             let n = d.chapters.iter().filter(|c| c.number > w.latest && c.number <= l).count();
-            self.store().event(now, Some(w.id), "new", &format!("{n} new chapter{} of {}, up to {}", if n == 1 { "" } else { "s" }, w.title, fmt_num(l)));
+            let prev = d.chapters.iter().filter(|c| c.number <= w.latest).map(|c| c.uploaded_at).max().unwrap_or(0);
+            let new = d.chapters.iter().filter(|c| c.number > w.latest).map(|c| c.uploaded_at).max().unwrap_or(0);
+            let back = leaf_proto::back_after(prev, new).map(|wk| format!(" · back after {wk} weeks")).unwrap_or_default();
+            self.store().event(now, Some(w.id), "new", &format!("{n} new chapter{} of {}, up to {}{back}", if n == 1 { "" } else { "s" }, w.title, fmt_num(l)));
+        }
+        // Finished: said once, when the source first calls it completed (bell on).
+        if ok {
+            let key = format!("status:{}", w.id);
+            let before = self.store().get(&key);
+            if before.as_deref() != Some(m.status.as_str()) {
+                if w.bell && m.status == "completed" && before.is_some() {
+                    let text = finished_words(&w.title, d.chapters.len(), d.series.unread);
+                    self.store().event(now, Some(w.id), "finished", &text);
+                }
+                self.store().set(&key, &m.status);
+            }
         }
         self.store().checked(w.id, ok, latest, now);
         let fails = if ok { 0 } else { w.fails + 1 };
@@ -1407,9 +1484,10 @@ impl Ctx {
             return;
         }
         if fails >= FAILS_BEFORE_MOVING && w.note.is_none() {
-            let note = format!("{} hasn't answered since {} tries. Nothing else carries it yet", w.source, fails);
+            // No source's name: the page and the notice show these words.
+            let note = format!("Its source hasn't answered the last {fails} checks, and no other has it yet");
             self.store().set_note(w.id, Some(&note));
-            self.store().event(now, Some(w.id), "blocked", &format!("{}: {note}", w.title));
+            self.store().event(now, Some(w.id), "blocked", &format!("{} isn't updating: its source stopped answering", w.title));
         } else if ok && w.note.is_some() {
             self.store().set_note(w.id, None);
         }
@@ -1567,9 +1645,29 @@ pub fn carried(d: &SeriesDetail, new: &Manga) -> (Vec<i64>, Vec<(i64, u32)>) {
 
 /// What a watched series' notice says once a source other than Webtoon has chapters of it (the
 /// copies found: source, chapter numbers); None while none does.
+/// "Nano Machine is finished: 211 chapters, 12 left to read".
+pub fn finished_words(title: &str, chapters: usize, unread: u32) -> String {
+    let left = match unread {
+        0 => ", all read".to_string(),
+        1 => ", 1 left to read".to_string(),
+        n => format!(", {n} left to read"),
+    };
+    format!("{title} is finished: {chapters} chapters{left}")
+}
+
 pub fn elsewhere_words(title: &str, found: &[(&str, Vec<f64>)]) -> Option<String> {
     let best = found.iter().filter(|(src, ns)| !src.eq_ignore_ascii_case(WEBTOONS) && !ns.is_empty()).filter_map(|(_, ns)| plausible_latest(ns)).max_by(f64::total_cmp)?;
     Some(format!("{title} is on another source now, up to chapter {}", fmt_num(best)))
+}
+
+/// When the newest chapters came out (ms), newest first: one per day at most, 12 at most. The
+/// phone reads a series' usual day and its breaks from these.
+pub fn uploads(chapters: &[Chapter]) -> Vec<i64> {
+    let mut at: Vec<i64> = chapters.iter().map(|c| c.uploaded_at).filter(|t| *t > 0).collect();
+    at.sort_unstable_by(|a, b| b.cmp(a));
+    at.dedup_by(|a, b| *b / 86_400_000 == *a / 86_400_000);
+    at.truncate(12);
+    at
 }
 
 pub fn fmt_num(n: f64) -> String {
@@ -1602,6 +1700,16 @@ fn read_marks(all: &[(i64, f64, bool)], before: f64, unread_after: bool) -> (Vec
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_finished_series_is_said_with_what_is_left_and_uploads_keep_one_a_day() {
+        assert_eq!(finished_words("Nano Machine", 211, 12), "Nano Machine is finished: 211 chapters, 12 left to read");
+        assert_eq!(finished_words("A", 3, 0), "A is finished: 3 chapters, all read");
+        let day = 86_400_000;
+        let ch = |n: f64, at: i64| Chapter { id: n as i64, number: n, name: String::new(), group: None, pages: 1, read: false, last_page: 0, downloaded: false, uploaded_at: at, from: None };
+        let list = vec![ch(1.0, 10 * day), ch(2.0, 17 * day), ch(2.5, 17 * day + 5), ch(3.0, 0), ch(4.0, 24 * day)];
+        assert_eq!(uploads(&list), vec![24 * day, 17 * day + 5, 10 * day], "newest first, one a day, no unknown dates");
+    }
 
     #[test]
     fn two_follows_of_one_work_are_paired_by_any_of_their_names() {
