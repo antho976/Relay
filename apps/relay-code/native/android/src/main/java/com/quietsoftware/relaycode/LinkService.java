@@ -30,7 +30,11 @@ public class LinkService extends Service {
     /** On a notification's tap: the agent whose chat opens. */
     static final String AGENT = "agent";
     private static final String CHANNEL = "link";
+    /** One channel per kind, so each can be tuned in Android's settings; the app's switches stay first. */
     private static final String ASKS = "asks";
+    private static final String HELD = "held";
+    private static final String DONE = "done";
+    private static final String QUIET = "acted";
     private static final int ID = 1;
 
     /** Whether librelaycode.so is loaded: only GameActivity loads it otherwise. */
@@ -97,12 +101,13 @@ public class LinkService extends Service {
     static void alert(Context context, int id, String title, String body, String agent, int kind, long hold) {
         NotificationManager nm = context.getSystemService(NotificationManager.class);
         if (nm == null) return;
-        nm.createNotificationChannel(new NotificationChannel(ASKS, "Agents that need you", NotificationManager.IMPORTANCE_HIGH));
+        channels(nm);
+        String channel = kind == KIND_REPLY ? ASKS : kind == KIND_HOLD ? HELD : kind == KIND_QUIET ? QUIET : DONE;
         Intent open = new Intent(context, CodeActivity.class)
                 .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 .putExtra(AGENT, agent);
         PendingIntent tap = PendingIntent.getActivity(context, id, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        Notification.Builder b = new Notification.Builder(context, ASKS)
+        Notification.Builder b = new Notification.Builder(context, channel)
                 .setSmallIcon(R.drawable.ic_notify)
                 .setContentTitle(title)
                 .setContentText(body)
@@ -120,12 +125,12 @@ public class LinkService extends Service {
             b.addAction(unlocked(new Notification.Action.Builder(null, "Allow once", ActionReceiver.intent(context, id, "allow", agent, hold, false))));
             b.addAction(unlocked(new Notification.Action.Builder(null, "Deny", ActionReceiver.intent(context, id, "deny", agent, hold, false))));
         } else if (kind == KIND_QUIET) {
-            // What was done: no sound again, and it clears by itself.
+            // What was done: no sound, and it clears by itself.
             b.setOnlyAlertOnce(true).setTimeoutAfter(10_000);
         }
         // On a locked screen only that something waits shows: no question, no command, no actions
         // (on every Android, so also where actions cannot ask for the phone unlocked).
-        b.setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(new Notification.Builder(context, ASKS)
+        b.setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(new Notification.Builder(context, channel)
                 .setSmallIcon(R.drawable.ic_notify)
                 .setContentTitle("Relay Code")
                 .setContentText(lockedWords(kind))
@@ -155,9 +160,23 @@ public class LinkService extends Service {
         if (nm != null) nm.cancel(id);
     }
 
+    /**
+     * The channels, made (or renamed) on every post: Android keeps what the owner set for each.
+     * Asking and held commands ring and show at the top of the screen; a finished turn rings; the
+     * link's own line is silent and out of the way.
+     */
+    private static void channels(NotificationManager nm) {
+        nm.createNotificationChannel(new NotificationChannel(ASKS, "When an agent asks you", NotificationManager.IMPORTANCE_HIGH));
+        nm.createNotificationChannel(new NotificationChannel(HELD, "When a command is held for you", NotificationManager.IMPORTANCE_HIGH));
+        nm.createNotificationChannel(new NotificationChannel(DONE, "When an agent finishes", NotificationManager.IMPORTANCE_DEFAULT));
+        // Your own answer from the shade, said back: never a sound.
+        nm.createNotificationChannel(new NotificationChannel(QUIET, "What you did from a notification", NotificationManager.IMPORTANCE_LOW));
+        nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Link to your PC", NotificationManager.IMPORTANCE_MIN));
+    }
+
     private static Notification notification(Context context, String words) {
         NotificationManager nm = context.getSystemService(NotificationManager.class);
-        if (nm != null) nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Link to your PC", NotificationManager.IMPORTANCE_MIN));
+        if (nm != null) channels(nm);
         Intent open = new Intent(context, CodeActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent tap = PendingIntent.getActivity(context, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new Notification.Builder(context, CHANNEL)
