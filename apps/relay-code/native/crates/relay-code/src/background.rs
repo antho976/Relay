@@ -24,10 +24,25 @@ use serde_json::{Value, json};
 
 use crate::settings::Notify;
 
+/// What a notification lets you do from the shade (D18), besides a tap opening the chat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Actions {
+    /// Open only.
+    Open,
+    /// Reply (words typed in the shade, sent with `chat.send`) and Open: an agent asks you.
+    Reply,
+    /// Allow once and Deny for this hold: a command is held for you.
+    Hold(i64),
+    /// None, and no sound: the notification saying what was done, before it clears.
+    Quiet,
+}
+
 /// How the platform posts what the loop decides.
 pub trait Notifier: Send + Sync {
     /// A notification about `agent`; a tap opens its chat. One per agent: a newer one replaces it.
-    fn alert(&self, id: i32, title: &str, body: &str, agent: &str);
+    fn alert(&self, id: i32, title: &str, body: &str, agent: &str, actions: Actions);
+    /// Take a notification away (after what it asked was done).
+    fn clear(&self, _id: i32) {}
     /// The background service's ongoing line: where the link stands.
     fn line(&self, words: &str);
 }
@@ -132,7 +147,78 @@ pub struct Tell {
     pub agent: String,
     pub title: String,
     pub body: String,
+    /// The hold a held command's notification allows or denies.
+    pub hold: Option<i64>,
 }
+
+impl Tell {
+    /// What it lets you do from the shade.
+    pub fn actions(&self) -> Actions {
+        match (self.kind, self.hold) {
+            (Notify::Asks, _) => Actions::Reply,
+            (Notify::Holds, Some(h)) => Actions::Hold(h),
+            _ => Actions::Open,
+        }
+    }
+}
+
+/// What was done from the shade (Android hands it over: `LinkService.nativeAct`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Act {
+    Reply { agent: String, text: String },
+    Allow { agent: String, hold: i64 },
+    Deny { agent: String, hold: i64 },
+}
+
+impl Act {
+    /// From the platform's words: `reply`, `allow` or `deny`; none for anything else or a reply
+    /// with nothing in it.
+    pub fn read(kind: &str, agent: &str, hold: i64, text: &str) -> Option<Act> {
+        let agent = agent.to_string();
+        match kind {
+            "reply" if !text.trim().is_empty() => Some(Act::Reply { agent, text: text.trim().to_string() }),
+            "allow" if hold > 0 => Some(Act::Allow { agent, hold }),
+            "deny" if hold > 0 => Some(Act::Deny { agent, hold }),
+            _ => None,
+        }
+    }
+
+    pub fn agent(&self) -> &str {
+        match self {
+            Act::Reply { agent, .. } | Act::Allow { agent, .. } | Act::Deny { agent, .. } => agent,
+        }
+    }
+
+    /// The request that does it: a reply is a message (`chat.send`, under an id of its own), a
+    /// hold is allowed once or denied.
+    pub fn request(&self, now_ms: u64) -> (&'static str, Value) {
+        match self {
+            Act::Reply { agent, text } => ("chat.send", json!({"session": agent, "text": text, "client_id": format!("shade-{now_ms}")})),
+            Act::Allow { hold, .. } => ("guardrail.confirm", json!({"hold_id": hold, "scope": "once"})),
+            Act::Deny { hold, .. } => ("guardrail.reject", json!({"hold_id": hold, "reason": "Denied from the phone"})),
+        }
+    }
+
+    /// What the notification says once the PC answered: its title and line.
+    pub fn after(&self, outcome: Result<(), String>) -> (String, String) {
+        let agent = self.agent();
+        match (self, outcome) {
+            (Act::Reply { text, .. }, Ok(())) => (format!("Sent to {agent}"), text.clone()),
+            (Act::Allow { .. }, Ok(())) => (format!("Allowed for {agent}"), "The command runs now".into()),
+            (Act::Deny { .. }, Ok(())) => (format!("Denied for {agent}"), "The command does not run".into()),
+            (Act::Reply { .. }, Err(e)) => (format!("Not sent to {agent}"), format!("{e}. Open the chat to send it again")),
+            (_, Err(e)) => (format!("Not done for {agent}"), format!("{e}. Open the chat to answer there")),
+        }
+    }
+}
+
+/// Something was done from the shade: the loop asks the PC, and the notification says how it went.
+pub fn act(a: Act) {
+    tell_loop(Msg::Act(a));
+}
+
+/// How long a "Sent" or "Allowed" stays before it clears.
+const DONE_SHOWN: Duration = Duration::from_millis(2_500);
 
 /// What the loop has seen, so each change notifies once.
 #[derive(Default)]
@@ -156,7 +242,7 @@ impl Watch {
         for r in rows.iter().filter(|r| r.is_agent()) {
             let name = &r.name;
             let looking = front.foreground && front.chat.as_deref() == Some(name.as_str());
-            let tell = |kind: Notify, title: String| Tell { kind, agent: name.clone(), title, body: r.title().to_string() };
+            let tell = |kind: Notify, title: String| Tell { kind, agent: name.clone(), title, body: r.title().to_string(), hold: None };
             if r.asks() {
                 asking.insert(name.clone());
                 // A question already waiting when the process started is told too, unless the
@@ -184,7 +270,7 @@ impl Watch {
         if !self.holds.insert(hold_id) || (front.foreground && front.chat.as_deref() == Some(agent)) {
             return None;
         }
-        Some(Tell { kind: Notify::Holds, agent: agent.to_string(), title: format!("{agent} needs your OK"), body: "A command is held until you allow it".into() })
+        Some(Tell { kind: Notify::Holds, agent: agent.to_string(), title: format!("{agent} needs your OK"), body: "A command is held until you allow it".into(), hold: Some(hold_id) })
     }
 
     /// When to read the list again by itself: once a working agent without hooks may have
@@ -224,6 +310,8 @@ enum Msg {
     Listed(Value),
     /// Look now: the app went to the background, or the screen came on.
     Look,
+    /// Something was done from the shade.
+    Act(Act),
 }
 
 static TO_LOOP: Mutex<Option<std::sync::mpsc::Sender<Msg>>> = Mutex::new(None);
@@ -312,6 +400,22 @@ fn run(link: Link, heard: std::sync::mpsc::Receiver<Msg>, data: PathBuf, notifie
         let rows_of = |v: &Value| -> Vec<Row> { v.get("sessions").cloned().and_then(|s| serde_json::from_value(s).ok()).unwrap_or_default() };
         match msg {
             Some(Msg::Look) => due = due.min(soon()).or(soon()),
+            // Done on a thread of its own: the PC's answer may take a while, and the loop goes on.
+            Some(Msg::Act(a)) => {
+                let (link, notifier) = (link.clone(), notifier.clone());
+                let _ = std::thread::Builder::new().name("rc-act".into()).spawn(move || {
+                    let (op, payload) = a.request(rc_link::link::now_ms());
+                    let outcome = link.call_quiet(op, payload, LIST_TIMEOUT).wait(LIST_TIMEOUT).map(|_| ()).map_err(|e| e.message);
+                    let ok = outcome.is_ok();
+                    let id = alert_id(a.agent());
+                    let (title, body) = a.after(outcome);
+                    notifier.alert(id, &title, &body, a.agent(), Actions::Quiet);
+                    if ok {
+                        std::thread::sleep(DONE_SHOWN);
+                        notifier.clear(id);
+                    }
+                });
+            }
             Some(Msg::Listed(v)) => {
                 let rows = rows_of(&v);
                 let now = rc_link::link::now_ms();
@@ -361,7 +465,7 @@ fn run(link: Link, heard: std::sync::mpsc::Receiver<Msg>, data: PathBuf, notifie
 
 fn post(notifier: &dyn Notifier, data: &Path, t: &Tell) {
     if crate::app::notifies_in(data, t.kind) {
-        notifier.alert(alert_id(&t.agent), &t.title, &t.body, &t.agent);
+        notifier.alert(alert_id(&t.agent), &t.title, &t.body, &t.agent, t.actions());
     }
 }
 
@@ -485,5 +589,39 @@ mod tests {
         let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
         let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
         (yoe + era * 400 + if m <= 2 { 1 } else { 0 }, m, d)
+    }
+
+    #[test]
+    fn asks_reply_holds_allow_or_deny_and_the_rest_only_open() {
+        let tell = |kind, hold| Tell { kind, agent: "a-b".into(), title: String::new(), body: String::new(), hold };
+        assert_eq!(tell(Notify::Asks, None).actions(), Actions::Reply);
+        assert_eq!(tell(Notify::Holds, Some(7)).actions(), Actions::Hold(7));
+        assert_eq!(tell(Notify::Done, None).actions(), Actions::Open);
+        // A hold the PC gave no id cannot be answered from the shade.
+        assert_eq!(tell(Notify::Holds, None).actions(), Actions::Open);
+    }
+
+    #[test]
+    fn an_act_from_the_shade_reads_strictly_and_asks_the_right_op() {
+        assert_eq!(Act::read("reply", "a-b", 0, "  yes, push it "), Some(Act::Reply { agent: "a-b".into(), text: "yes, push it".into() }));
+        assert_eq!(Act::read("reply", "a-b", 0, "   "), None, "an empty reply sends nothing");
+        assert_eq!(Act::read("allow", "a-b", 0, ""), None, "no hold, nothing to allow");
+        assert_eq!(Act::read("shrug", "a-b", 7, "x"), None);
+        let (op, p) = Act::read("reply", "a-b", 0, "go").unwrap().request(1_700_000_000_000);
+        assert_eq!((op, p["session"].as_str(), p["text"].as_str(), p["client_id"].as_str()), ("chat.send", Some("a-b"), Some("go"), Some("shade-1700000000000")));
+        let (op, p) = Act::read("allow", "a-b", 7, "").unwrap().request(0);
+        assert_eq!((op, p["hold_id"].as_i64(), p["scope"].as_str()), ("guardrail.confirm", Some(7), Some("once")));
+        let (op, p) = Act::read("deny", "a-b", 7, "").unwrap().request(0);
+        assert_eq!((op, p["hold_id"].as_i64()), ("guardrail.reject", Some(7)));
+    }
+
+    #[test]
+    fn the_notification_says_how_it_went() {
+        let reply = Act::Reply { agent: "a-b".into(), text: "go".into() };
+        assert_eq!(reply.after(Ok(())), ("Sent to a-b".to_string(), "go".to_string()));
+        assert_eq!(reply.after(Err("The PC did not answer in time".into())).0, "Not sent to a-b");
+        let allow = Act::Allow { agent: "a-b".into(), hold: 7 };
+        assert_eq!(allow.after(Ok(())).0, "Allowed for a-b");
+        assert!(allow.after(Err("gone".into())).1.contains("Open the chat"));
     }
 }
