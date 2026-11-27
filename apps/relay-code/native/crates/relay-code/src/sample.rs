@@ -181,3 +181,22 @@ pub fn days(app: &mut App) {
     app.convos.insert("swift-ocelot".into(), c);
     app.screens.insert("swift-ocelot".into(), crate::screen::read("────\n❯ \n────\n  ? for shortcuts"));
 }
+
+/// A Task call and what its helper did (A18). On swift-ocelot.
+pub fn helper(app: &mut App) {
+    let mut c = Convo::default();
+    c.take(&json!({"messages": [
+        {"id": "h0", "role": "user", "body": {"text": "Where are the guardrail roots set?"}, "created_at": ""},
+        {"id": "h1", "role": "assistant", "body": {"blocks": [{"type": "tool_use", "id": "toolu_map", "name": "Task", "summary": "Map the guardrail roots", "detail": "Find where write_roots are set and who reads them."}]}, "created_at": ""},
+        {"id": "h1r", "role": "tool", "body": {"tool_use_id": "toolu_map", "is_error": false, "text": "They are set in guardrails.rs from the worktree and its memory folders."}, "created_at": ""},
+        {"id": "h2", "role": "assistant", "body": {"blocks": [{"type": "text", "text": "They come from `guardrails.rs`: the worktree, then the memory folders."}]}, "created_at": ""},
+    ], "cursor": 1, "reset": true, "found": true}));
+    app.convos.insert("swift-ocelot".into(), c);
+    let steps = json!({"messages": [
+        {"id": "s0", "role": "user", "body": {"text": "Find where write_roots are set"}, "created_at": ""},
+        {"id": "s1", "role": "assistant", "body": {"blocks": [{"type": "tool_use", "id": "g1", "name": "Grep", "summary": "write_roots"}, {"type": "tool_use", "id": "r1", "name": "Read", "summary": "crates/relay-core/src/guardrails.rs"}, {"type": "tool_use", "id": "r2", "name": "Read", "summary": "crates/relay-core/src/handlers/session.rs"}]}, "created_at": ""},
+        {"id": "s2", "role": "assistant", "body": {"blocks": [{"type": "text", "text": "Set in **guardrails.rs** from the worktree and memory folders; the session handler reads them."}]}, "created_at": ""},
+    ]});
+    app.helpers.insert(("swift-ocelot".into(), "toolu_map".into()), crate::app::Helper { items: data::items(&data::messages(&steps)), found: true, at: u64::MAX / 2 });
+    app.screens.insert("swift-ocelot".into(), crate::screen::read("────\n❯ \n────\n  ? for shortcuts"));
+}

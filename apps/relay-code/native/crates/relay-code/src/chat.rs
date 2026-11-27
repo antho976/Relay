@@ -1016,11 +1016,98 @@ fn call(app: &mut App, c: &data::ToolCall, key: (String, usize), y: f32, draw: b
             let lines = if c.name == "AskUserQuestion" { 40 } else { 6 };
             put(app, detail, caption, lines, &mut h);
         }
+        // A helper (Task): what it did, read from its own log.
+        if matches!(c.name.as_str(), "Task" | "Agent") && !c.id.is_empty() {
+            h += 6.0 + helper_steps(app, c, x, y + h + 6.0, w, draw);
+        }
     }
     if let Some(out) = c.output.as_deref().filter(|o| !o.trim().is_empty()) {
         h += 6.0 + output(app, c, out, key, x, y + h + 6.0, w, draw);
     }
     h + 10.0
+}
+
+/// Open every folded line of the open chat (screenshots and tests).
+pub fn unfold_all(app: &mut App) {
+    let keys = app.st.chat.keys.clone();
+    for (j, it) in app.st.chat.items.clone().iter().enumerate() {
+        if matches!(it, Item::Did { .. })
+            && let Some(k) = keys.get(j)
+        {
+            app.st.chat.open.insert(k.clone());
+            app.st.chat.refolded.insert(k.clone());
+        }
+    }
+}
+
+/// A helper's steps came in: the message holding its call is measured again.
+pub fn helper_came(app: &mut App, call: &str) {
+    let items = app.st.chat.items.clone();
+    for (j, it) in items.iter().enumerate() {
+        if let Item::Did { calls, .. } = it
+            && calls.iter().any(|c| c.id == call)
+            && let Some(k) = app.st.chat.keys.get(j).cloned()
+        {
+            app.st.chat.refolded.insert(k);
+        }
+    }
+}
+
+/// How often a helper still at work is read again while its steps are open.
+const HELPER_EVERY_NS: u64 = 3_000_000_000;
+
+/// A helper's own steps under its Task call, folded as the main chat folds: each run of calls one
+/// line (ticked, or crossed when one failed), its words between. Read from the PC when first
+/// shown, and again while it works. Returns the height.
+fn helper_steps(app: &mut App, c: &data::ToolCall, x: f32, y: f32, w: f32, draw: bool) -> f32 {
+    let Some(name) = app.open_chat() else { return 0.0 };
+    let key = (name.clone(), c.id.clone());
+    if draw {
+        let stale = app.helpers.get(&key).is_none_or(|h| c.output.is_none() && app.now_ns.saturating_sub(h.at) > HELPER_EVERY_NS);
+        if stale {
+            app.read_helper(&name, &c.id);
+        }
+    }
+    let line = Text::new(ty::CAPTION, t::INK2).line(1.45);
+    let Some(helper) = app.helpers.get(&key).cloned() else {
+        if draw {
+            app.canvas.text("Reading what it did…", x + 12.0, y, line.color(t::INK3));
+        }
+        return line.lh();
+    };
+    if !helper.found {
+        if draw {
+            app.canvas.text("Its own steps are not kept on the PC", x + 12.0, y, line.color(t::INK3));
+        }
+        return line.lh();
+    }
+    let (ix, iw) = (x + 12.0, w - 12.0);
+    let mut h = 0.0;
+    for it in helper.items.iter() {
+        match it {
+            Item::Did { line: words, failed, .. } => {
+                if draw {
+                    let (g, ink) = if *failed { ("close", t::DANGER) } else { ("check", t::INK3) };
+                    app.canvas.icon(g, ix + 6.0, y + h + line.lh() / 2.0, 11.0, ink);
+                    app.canvas.text_fit(words, ix + 18.0, y + h, iw - 18.0, line);
+                }
+                h += line.lh() + 2.0;
+            }
+            Item::Said(md) => {
+                h += 2.0 + markdown(app, md, ix, y + h + 2.0, iw, Text::new(ty::CAPTION, t::INK).line(1.5), draw);
+            }
+            Item::Error(e) => {
+                h += if draw { app.canvas.para(e, ix, y + h, iw, line.color(t::DANGER), 3) } else { app.canvas.para_h(e, iw, line, 3) } + 2.0;
+            }
+            // Its brief is the call's own words above; its thinking and notes stay folded away.
+            _ => {}
+        }
+    }
+    if draw {
+        // A quiet rule says these are the helper's, not the agent's.
+        app.canvas.rect(x + 2.0, y, 2.0, h.max(line.lh()), 1.0, t::S3);
+    }
+    h
 }
 
 /// What a call answered, on code ground. A command's or a failure's tail shows ([`TAIL`] lines);
@@ -2628,6 +2715,25 @@ mod tests {
         a.chat_errors.insert("bold-puffin".into(), "missing".into());
         a.took_transcript("bold-puffin", &serde_json::json!({"messages": [], "cursor": 3, "reset": false, "found": true}));
         assert!(!a.chat_errors.contains_key("bold-puffin"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_task_opened_shows_what_its_helper_did() {
+        let (mut a, dir) = fresh_app("helper");
+        a.sample();
+        crate::sample::helper(&mut a);
+        a.open("swift-ocelot");
+        a.frame(2_000_000_000);
+        unfold_all(&mut a);
+        a.frame(2_016_000_000);
+        let j = a.st.chat.items.iter().position(|it| matches!(it, Item::Did { calls, .. } if calls.iter().any(|c| c.name == "Task"))).unwrap();
+        let with = a.st.chat.heights[j];
+        // Without its steps read yet: one line saying they are being read.
+        a.helpers.clear();
+        helper_came(&mut a, "toolu_map");
+        a.frame(2_032_000_000);
+        assert!(a.st.chat.heights[j] < with - 30.0, "its steps took room: {} vs {with}", a.st.chat.heights[j]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
