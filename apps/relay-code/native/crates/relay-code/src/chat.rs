@@ -647,7 +647,7 @@ const HOLD_NS: u64 = 450_000_000;
 pub fn menu_rect(app: &App) -> Option<[f32; 4]> {
     let (j, fy) = app.st.chat.menu?;
     let mine = matches!(app.st.chat.items.get(j), Some(Item::You(_)));
-    let (w, h) = (220.0, MESSAGE_MENU_H);
+    let (w, h) = (220.0, message_menu_h(app));
     let x = if mine { WIDTH - t::PAD - w } else { t::PAD };
     let lo = app.canvas.inset_top + TOP_H + 8.0;
     let hi = app.st.chat.box_top - 8.0 - h;
@@ -655,8 +655,10 @@ pub fn menu_rect(app: &App) -> Option<[f32; 4]> {
 }
 
 const MENU_H: f32 = 36.0 + 2.0 * 44.0 + 8.0;
-/// The held message's menu: its time, Copy, Copy as text, Share.
-const MESSAGE_MENU_H: f32 = 36.0 + 3.0 * 44.0 + 8.0;
+/// The held message's menu: its time, Copy, Copy as text, and Share where the phone can.
+fn message_menu_h(app: &App) -> f32 {
+    36.0 + if app.host.can_share() { 3.0 } else { 2.0 } * 44.0 + 8.0
+}
 
 /// A long press's menu: when the message was written, Copy (as written, Markdown kept) and Copy
 /// as text (the words as read). It takes every tap while open: a row, or anywhere to close it.
@@ -676,7 +678,8 @@ fn message_menu(app: &mut App) {
     let when = app.st.chat.times.get(j).copied().filter(|t| *t > 0).and_then(|t| local(t).map(|l| format!("{}, {:02}:{:02}", day_name(t, rc_link::link::now_ms()), l.hour, l.min)));
     app.canvas.text_fit(when.as_deref().unwrap_or("When: not in the log"), x + 16.0, y + 11.0, w - 32.0, Text::new(ty::SMALL, t::INK3).medium());
     let mut pick = None;
-    for (k, (words, glyph)) in [("Copy", "copy"), ("Copy as text", "file-text"), ("Share", "upload")].iter().enumerate() {
+    let rows: &[(&str, &str)] = if app.host.can_share() { &[("Copy", "copy"), ("Copy as text", "file-text"), ("Share", "upload")] } else { &[("Copy", "copy"), ("Copy as text", "file-text")] };
+    for (k, (words, glyph)) in rows.iter().enumerate() {
         let ry = y + 36.0 + k as f32 * 44.0;
         let mut cx = crate::cx!(app);
         if cx.pressed(x + 4.0, ry, w - 8.0, 44.0) {
@@ -2783,6 +2786,9 @@ mod tests {
             fn log(&self, _text: &str) {}
             fn share(&self, text: &str) {
                 self.1.lock().unwrap().push(text.to_string());
+            }
+            fn can_share(&self) -> bool {
+                true
             }
         }
         let dir = std::env::temp_dir().join(format!("relay-code-share-{}", std::process::id()));
