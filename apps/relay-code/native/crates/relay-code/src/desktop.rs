@@ -181,6 +181,20 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.open("umber-zebra");
             app.screens.insert("umber-zebra".into(), crate::screen::read("│ Bash command │\n│   git push -u origin relay/umber-zebra │\n│ Do you want to proceed? │\n│ ❯ 1. Yes │\n│   2. Yes, and don't ask again for git push commands in /home/anthony/dev3/RelayV4/.relay/worktrees/umber-zebra │\n│   3. No, and tell Claude what to do differently (esc) │\n  ⏵⏵ accept edits on (shift+tab to cycle)"));
         }
+        "photo" => {
+            // A9: a picture you sent shows as the picture; one the app no longer holds, as its name.
+            let (w, h) = (400u32, 300u32);
+            let pixels = (0..w * h).flat_map(|i| [(40 + (i % w) * 180 / w) as u8, 60, (120 + (i / w) * 100 / h) as u8, 255]).collect();
+            crate::attach::keep_thumb("/wt/.relay/uploads/shot-1.png", crate::attach::Thumb { w, h, pixels });
+            let mut c = crate::data::Convo::default();
+            c.take(&serde_json::json!({"messages": [
+                {"id": "p1", "role": "user", "body": {"text": "The send key overlaps the chip here\n/wt/.relay/uploads/shot-1.png"}, "created_at": ""},
+                {"id": "p2", "role": "assistant", "body": {"blocks": [{"type": "text", "text": "I see it: the chip is drawn after the key. Moving it."}]}, "created_at": ""},
+                {"id": "p3", "role": "user", "body": {"text": "/wt/.relay/uploads/older-shot.jpg"}, "created_at": ""},
+            ], "cursor": 1, "reset": true, "found": true}));
+            app.convos.insert("swift-ocelot".into(), c);
+            app.open("swift-ocelot");
+        }
         "blocked" => {
             // Blocked by its own report (session.done blocked), with no card on its screen.
             app.open("umber-zebra");

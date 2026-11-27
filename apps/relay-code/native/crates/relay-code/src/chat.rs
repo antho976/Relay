@@ -807,18 +807,63 @@ fn diff(app: &mut App, c: &data::ToolCall, key: usize, y: f32, draw: bool) -> f3
 
 /// Your words, right-aligned in a bubble. Returns its height.
 fn bubble(app: &mut App, text: &str, y: f32, draw: bool) -> f32 {
+    // A picture you sent is named by its path on the PC: it shows as the picture (or, once the
+    // app no longer has its copy, as its name), above your words.
+    let (pics, words): (Vec<&str>, Vec<&str>) = text.lines().partition(|l| crate::attach::is_picture(l));
+    let mut h = 0.0;
+    for p in pics {
+        h += picture(app, p.trim(), y + h, draw) + 6.0;
+    }
+    let words = words.join("\n");
+    if words.trim().is_empty() {
+        return h + 6.0;
+    }
+    let y = y + h;
     let st = Text::new(ty::BODY, t::INK).line(1.45);
-    let lines = app.canvas.wrap(text, BUBBLE_W - 32.0, st, 30);
+    let lines = app.canvas.wrap(words.trim(), BUBBLE_W - 32.0, st, 30);
     let tw = lines.iter().map(|l| app.canvas.measure(l, st)).fold(0.0f32, f32::max);
-    let (w, h) = (tw + 32.0, lines.len() as f32 * st.lh() + 24.0);
+    let (w, bh) = (tw + 32.0, lines.len() as f32 * st.lh() + 24.0);
     if draw {
         let x = WIDTH - t::PAD - w;
-        app.canvas.rect(x, y + 6.0, w, h, 18.0, t::S2);
+        app.canvas.rect(x, y + 6.0, w, bh, 18.0, t::S2);
         for (i, l) in lines.iter().enumerate() {
             app.canvas.text(l, x + 16.0, y + 6.0 + 12.0 + i as f32 * st.lh(), st);
         }
     }
-    h + 12.0
+    h + bh + 12.0
+}
+
+/// The most a sent picture takes in the chat, in units.
+const PIC_MAX: (f32, f32) = (220.0, 240.0);
+
+/// A picture you sent, right-aligned: the app's small copy of it, or its file name on a chip.
+/// Returns the height.
+fn picture(app: &mut App, path: &str, y: f32, draw: bool) -> f32 {
+    let Some(th) = crate::attach::thumb(path) else {
+        if draw {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            let st = Text::new(ty::CAPTION, t::INK2);
+            let w = (app.canvas.measure(name, st) + 46.0).min(BUBBLE_W);
+            let x = WIDTH - t::PAD - w;
+            app.canvas.rect(x, y + 6.0, w, 36.0, 12.0, t::S2);
+            app.canvas.icon("file-image", x + 18.0, y + 24.0, 14.0, t::INK2);
+            app.canvas.text_fit(name, x + 32.0, y + 6.0 + (36.0 - st.lh()) / 2.0, w - 42.0, st);
+        }
+        return 42.0;
+    };
+    let s = (PIC_MAX.0 / th.w as f32).min(PIC_MAX.1 / th.h as f32);
+    let (w, h) = ((th.w as f32 * s).round(), (th.h as f32 * s).round());
+    if draw {
+        let key = format!("sent:{path}");
+        if !app.canvas.has_image(&key) && !app.canvas.image_waiting(&key) {
+            app.canvas.add_image(&key, th.w, th.h, th.pixels.clone());
+        }
+        let x = WIDTH - t::PAD - w;
+        if !app.canvas.image_cover(&key, x, y + 6.0, w, h, 14.0, crate::draw::Rgba::WHITE) {
+            app.canvas.rect(x, y + 6.0, w, h, 14.0, t::S2);
+        }
+    }
+    h + 6.0
 }
 
 /// Photos picked go to this agent's checkout; each path, once written, joins the message.
