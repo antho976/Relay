@@ -118,6 +118,26 @@ fn the_person_opens_a_shell_in_the_project_folder_with_no_agent_around_it() {
     assert_eq!(git(&f.app, &["config", "--get", "core.hooksPath"]), hooks_before);
 }
 
+#[test]
+fn a_chat_message_is_typed_once_under_its_id_however_often_it_is_sent() {
+    let f = fixture();
+    let e = &f.engine;
+    let shell = name(&user(e, "session.create", json!({"project_id": 1, "provider": "shell"})));
+    user(e, "session.spawn", json!({"session": shell}));
+    let send = |id: &str, text: &str| call(e, Actor::User, "chat.send", json!({"session": shell, "text": text, "client_id": id}));
+    let first = send("c-1", "echo sent-$((40+2))").into_result().unwrap();
+    assert_eq!((first["client_id"].as_str(), first["typed"].as_bool()), (Some("c-1"), Some(true)));
+    // Its words, then Enter on their own: the shell ran it.
+    wait_for(e, &shell, "sent-42");
+    // The phone sends it again (its answer was lost): nothing is typed twice.
+    assert_eq!(send("c-1", "echo sent-$((40+2))").into_result().unwrap()["typed"], false);
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(scrollback(e, &shell).matches("sent-42").count(), 1);
+    assert_eq!(code(send("no spaces", "x")), "chat.client_id");
+    assert_eq!(code(send("c-2", "  ")), "chat.text");
+    user(e, "session.close", json!({"session": shell}));
+}
+
 /// The rows the store keeps of `session`'s screen.
 fn saved_screens(e: &Engine, session: &str) -> i64 {
     e.store.lock().query_row(

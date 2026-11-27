@@ -275,6 +275,9 @@ fn owns(
 /// Where `session.upload` puts pictures, from a session's checkout: inside `.relay/`, which
 /// Relay keeps out of git in every checkout it manages.
 const ATTACHMENTS: &str = ".relay/attachments";
+/// Enter goes as its own write this long after a chat.send's words, so the program does not take
+/// both as one paste (the phone's `ENTER_AFTER_MS`).
+const CHAT_ENTER_AFTER: std::time::Duration = std::time::Duration::from_millis(90);
 
 /// `.relay/attachments` in `worktree`, made if missing. The agent owns its checkout, so either
 /// folder may be a link it planted: a link is refused rather than written through.
@@ -2544,14 +2547,67 @@ pub fn register(e: &mut Engine) {
         let path = s.provider_ref.as_deref().filter(|reference| crate::providers::is_provider_ref(reference))
             .and_then(|reference| crate::transcript::locate(s.provider, reference, worktree));
         let Some(path) = path else {
-            return Ok(TranscriptOut { messages: Vec::new(), cursor: 0, before: 0, older: false, reset: false, found: false });
+            return Ok(TranscriptOut { messages: Vec::new(), cursor: 0, before: 0, older: false, reset: false, found: false, pending: Vec::new() });
         };
         if p.after.is_some() && p.before.is_some() {
             return Err(BusError::invalid("session.transcript_cursor", "after reads on and before reads back: one at a time"));
         }
         let limit = p.limit.unwrap_or(200).clamp(1, 1000) as usize;
-        crate::transcript::read(s.provider, &path, worktree, p.after, p.before, limit)
+        // What the person sent with chat.send in the last hour, to give back under its id.
+        let hour_ago = jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_hours(1)).map(crate::time::stamp).unwrap_or_default();
+        let sends = ctx.read(|conn| {
+            let mut st = conn.prepare_cached(
+                "SELECT client_id, text, log_tag, log_offset, sent_at FROM chat_sends WHERE session_id=?1 AND sent_at>=?2 ORDER BY id",
+            ).bus()?;
+            let rows = st.query_map(params![s.id, hour_ago], |r| Ok(crate::transcript::Sent {
+                client_id: r.get(0)?, text: r.get(1)?,
+                log_tag: r.get::<_, Option<i64>>(2)?.map(|t| t as u64), log_offset: r.get::<_, Option<i64>>(3)?.map(|o| o as u64),
+                sent_at: r.get(4)?,
+            })).bus()?;
+            rows.collect::<Result<Vec<_>, _>>().bus()
+        })?;
+        crate::transcript::read(s.provider, &path, worktree, p.after, p.before, limit, &sends)
             .map_err(|e| BusError::unavailable("session.transcript_unreadable", format!("{}: {e}", path.display())))
+    });
+
+    // A person's message, kept under the sender's id so it is drawn once: the log is found and
+    // measured with the store unlocked (for Codex a walk), the send recorded in the transaction,
+    // and the words typed after it commits, Enter on its own a moment later, as the phone did.
+    e.register_staged::<ChatSend, _>(|ctx, p| {
+        let ok_id = !p.client_id.is_empty() && p.client_id.len() <= 64 && p.client_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        if !ok_id {
+            return Err(BusError::invalid("chat.client_id", "client_id is letters, digits, - and _, at most 64"));
+        }
+        if p.text.trim().is_empty() || p.text.len() > 256 * 1024 {
+            return Err(BusError::invalid("chat.text", "text is the words to send: not empty, at most 256 KiB"));
+        }
+        let (id, pty) = live_pty(ctx, &p.session)?;
+        let row = ctx.read(|conn| sessions::by_id(conn, id)?.ok_or_else(|| BusError::not_found("session.not_found", format!("session {} not found", p.session))))?;
+        let s = &row.session;
+        let at = s.provider_ref.as_deref().filter(|reference| crate::providers::is_provider_ref(reference))
+            .and_then(|reference| crate::transcript::locate(s.provider, reference, Path::new(&s.worktree)))
+            .and_then(|path| crate::transcript::position(&path));
+        Ok((id, pty, at))
+    }, |ctx: &mut Ctx, p, (id, pty, at): (Id, Arc<Pty>, Option<(u64, u64)>)| {
+        let added = ctx.tx().prepare_cached(
+            "INSERT OR IGNORE INTO chat_sends(session_id, client_id, text, log_tag, log_offset, sent_at) VALUES (?1,?2,?3,?4,?5,?6)",
+        ).bus()?.execute(params![id, p.client_id, p.text, at.map(|a| a.0 as i64), at.map(|a| a.1 as i64), ctx.now]).bus()?;
+        if added == 0 {
+            // Sent before (a retry after a lost answer): typed once only.
+            return Ok(ChatSendOut { client_id: p.client_id, typed: false });
+        }
+        ctx.tx().prepare_cached("DELETE FROM chat_sends WHERE session_id=?1 AND sent_at<?2").bus()?
+            .execute(params![id, crate::time::days_ago(1)]).bus()?;
+        let text = p.text.clone();
+        ctx.after_commit(move |_| {
+            std::thread::spawn(move || {
+                if crate::engine::write_input(&pty, &text, true).is_ok() {
+                    std::thread::sleep(CHAT_ENTER_AFTER);
+                    let _ = crate::engine::write_input(&pty, "\r", false);
+                }
+            });
+        });
+        Ok(ChatSendOut { client_id: p.client_id, typed: true })
     });
 
     // A picture from the phone for the agent: decoded and written with the store lock released;

@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 445,
+  "op_count": 446,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -2203,6 +2203,24 @@
       },
       "result": {
         "$ref": "#/$defs/SessionTranscriptOut"
+      }
+    },
+    "chat.send": {
+      "summary": "A person's message to an agent: typed as one paste and Enter, kept under the sender's id",
+      "kind": "mutation",
+      "audit": "agent_only",
+      "undo": "none",
+      "scope": "session",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 3,
+      "payload": {
+        "$ref": "#/$defs/ChatSendIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ChatSendOut"
       }
     },
     "session.upload": {
@@ -14458,6 +14476,14 @@
         "found": {
           "type": "boolean",
           "description": "Whether the provider's conversation was found; false before its first hook names it."
+        },
+        "pending": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionTranscriptPending"
+          },
+          "description": "Messages sent with `chat.send` in the last hour that the log does not hold yet, oldest\nfirst: typed, not yet taken (or never shown, as some slash commands). Not on a page back.",
+          "default": []
         }
       },
       "required": [
@@ -14481,6 +14507,13 @@
         "body": true,
         "created_at": {
           "type": "string"
+        },
+        "client_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "On a person's message sent with `chat.send`: the sender's id for it, on this one message\nonly, so the sender draws it once."
         }
       },
       "required": [
@@ -14488,6 +14521,64 @@
         "role",
         "body",
         "created_at"
+      ]
+    },
+    "SessionTranscriptPending": {
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string",
+          "description": "The id it was sent with."
+        },
+        "text": {
+          "type": "string"
+        },
+        "sent_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "client_id",
+        "text",
+        "sent_at"
+      ]
+    },
+    "ChatSendIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string",
+          "description": "What the person wrote: typed into the agent's terminal as one paste, then Enter."
+        },
+        "client_id": {
+          "type": "string",
+          "description": "The sender's own id for this message (letters, digits, `-` and `_`, at most 64): sending\nit again types nothing twice, and `session.transcript` gives the message back with it."
+        }
+      },
+      "required": [
+        "session",
+        "text",
+        "client_id"
+      ]
+    },
+    "ChatSendOut": {
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "typed": {
+          "type": "boolean",
+          "description": "False when this id was sent before: nothing was typed again."
+        }
+      },
+      "required": [
+        "client_id",
+        "typed"
       ]
     },
     "SessionUploadIn": {
