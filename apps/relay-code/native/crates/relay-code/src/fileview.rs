@@ -341,6 +341,49 @@ pub fn sample(app: &mut App) {
 mod tests {
     use super::*;
 
+    /// Frames drawn at rest on `route`, after `warm` to settle: µs a frame (release, this machine).
+    fn frame_cost(a: &mut App, warm: usize, n: usize) -> f64 {
+        let mut clock = 2_000_000_000u64;
+        for _ in 0..warm {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        let t = std::time::Instant::now();
+        for _ in 0..n {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        t.elapsed().as_secs_f64() * 1e6 / n as f64
+    }
+
+    fn bench_app(name: &str) -> App {
+        struct NoHost(std::path::PathBuf);
+        impl crate::app::Host for NoHost {
+            fn data_dir(&self) -> std::path::PathBuf {
+                self.0.clone()
+            }
+            fn log(&self, _text: &str) {}
+        }
+        let dir = std::env::temp_dir().join(format!("relay-code-bench-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(NoHost(dir)), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        a
+    }
+
+    /// A 3000-line file open, at rest:
+    /// `cargo test --release fileview_frame_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn fileview_frame_cost() {
+        let mut a = bench_app("fileview");
+        let text: Vec<String> = (1..=3000).map(|i| format!("    let value_{i} = compute(&input[{i}..], \"{i}\"); // line {i}")).collect();
+        a.st.fileview = State { key: Some((1, None, "src/big.rs".into())), rel: "src/big.rs".into(), stage: Stage::Ready, text, ..State::default() };
+        open(&mut a, 1, None, "src/big.rs");
+        println!("file view frame, 3000 lines: {:.0} µs", frame_cost(&mut a, 10, 200));
+    }
+
     #[test]
     fn a_path_names_its_line_and_column_or_not() {
         assert_eq!(split_line("src/app.rs"), ("src/app.rs", None));

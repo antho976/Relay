@@ -1391,6 +1391,53 @@ pub fn sample_view(app: &mut App) {
 mod tests {
     use super::*;
 
+    /// Frames drawn at rest on `route`, after `warm` to settle: µs a frame (release, this machine).
+    fn frame_cost(a: &mut App, warm: usize, n: usize) -> f64 {
+        let mut clock = 2_000_000_000u64;
+        for _ in 0..warm {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        let t = std::time::Instant::now();
+        for _ in 0..n {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        t.elapsed().as_secs_f64() * 1e6 / n as f64
+    }
+
+    fn bench_app(name: &str) -> App {
+        struct NoHost(std::path::PathBuf);
+        impl crate::app::Host for NoHost {
+            fn data_dir(&self) -> std::path::PathBuf {
+                self.0.clone()
+            }
+            fn log(&self, _text: &str) {}
+        }
+        let dir = std::env::temp_dir().join(format!("relay-code-bench-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(NoHost(dir)), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        a
+    }
+
+    /// The Designs list with 40 designs, at rest:
+    /// `cargo test --release designs_frame_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn designs_frame_cost() {
+        let mut a = bench_app("designs");
+        let plan = a.st.designs.thumbs.values().find_map(|t| t.plan.clone()).expect("a sample plan");
+        let list: Vec<Item> = (0..40).map(|i| Item { id: 1000 + i, title: format!("Design {i} · a page of the app"), rev: 1, pages: 3, session: Some("bold-puffin".into()), updated_at: String::new() }).collect();
+        for i in &list {
+            a.st.designs.thumbs.insert(i.id, Thumb { rev: 1, stage: Stage::Ready, plan: Some(plan.clone()), key: None });
+        }
+        a.st.designs.list = list;
+        a.push(crate::app::Route::Designs);
+        println!("designs frame, 40 designs: {:.0} µs", frame_cost(&mut a, 20, 200));
+    }
+
     #[test]
     fn designs_list_newest_first_without_the_deleted() {
         let v = json!({"designs": [
