@@ -477,6 +477,180 @@ pub struct ToolCall {
     pub failed: bool,
 }
 
+/// What a line of a diff is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffKind {
+    Add,
+    Del,
+    Same,
+    /// `@@`: where the next lines are (or only that the change goes on further down).
+    Hunk,
+    /// A patch's file line (`*** Update File: …`).
+    File,
+}
+
+/// A line of a diff as drawn: its kind, its number in the file (the new one, or the old one for a
+/// removed line) when a hunk header gave one, and its words without the mark and without the
+/// indent every line of the change shares.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiffLine {
+    pub kind: DiffKind,
+    pub num: Option<u32>,
+    pub text: String,
+}
+
+/// `@@ -12,3 +14,4 @@`: where the old and new lines start.
+fn hunk_starts(l: &str) -> Option<(u32, u32)> {
+    let mut it = l.split_whitespace().skip(1);
+    let num = |s: &str| s[1..].split(',').next()?.parse::<u32>().ok();
+    let (a, b) = (it.next()?, it.next()?);
+    (a.starts_with('-') && b.starts_with('+')).then_some(())?;
+    Some((num(a)?, num(b)?))
+}
+
+/// A change as the PC sends it (`-` and `+` lines, `@@` between hunks, a patch's `***` lines)
+/// read into lines to draw, its shared indent dropped (tabs count as four spaces).
+pub fn diff_lines(detail: &str) -> Vec<DiffLine> {
+    let mut out = Vec::new();
+    let (mut old, mut new): (Option<u32>, Option<u32>) = (None, None);
+    for l in detail.lines() {
+        if l.starts_with("@@") {
+            match hunk_starts(l) {
+                Some((a, b)) => (old, new) = (Some(a), Some(b)),
+                None => (old, new) = (None, None),
+            }
+            out.push(DiffLine { kind: DiffKind::Hunk, num: None, text: String::new() });
+            continue;
+        }
+        if let Some(f) = l.strip_prefix("*** ") {
+            out.push(DiffLine { kind: DiffKind::File, num: None, text: f.trim().to_string() });
+            continue;
+        }
+        let (kind, body) = match l.chars().next() {
+            Some('+') => (DiffKind::Add, &l[1..]),
+            Some('-') => (DiffKind::Del, &l[1..]),
+            Some(' ') => (DiffKind::Same, &l[1..]),
+            _ => (DiffKind::Same, l),
+        };
+        let num = match kind {
+            DiffKind::Del => old.inspect(|_| old = old.map(|n| n + 1)),
+            DiffKind::Add => new.inspect(|_| new = new.map(|n| n + 1)),
+            _ => {
+                let n = new;
+                old = old.map(|n| n + 1);
+                new = new.map(|n| n + 1);
+                n
+            }
+        };
+        out.push(DiffLine { kind, num, text: body.replace('\t', "    ") });
+    }
+    // The indent every line with words shares goes: a change deep in a function reads from the left.
+    let lines = || out.iter().filter(|d| matches!(d.kind, DiffKind::Add | DiffKind::Del | DiffKind::Same) && !d.text.trim().is_empty());
+    let shared = lines().map(|d| d.text.len() - d.text.trim_start_matches(' ').len()).min().unwrap_or(0);
+    if shared > 0 {
+        for d in out.iter_mut().filter(|d| matches!(d.kind, DiffKind::Add | DiffKind::Del | DiffKind::Same)) {
+            d.text = d.text.get(shared.min(d.text.len() - d.text.trim_start_matches(' ').len())..).unwrap_or_default().to_string();
+        }
+    }
+    out
+}
+
+/// What a piece of code is, for its colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tok {
+    Plain,
+    Keyword,
+    Str,
+    Comment,
+    Number,
+}
+
+/// How a file's language marks comments and strings, from its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lang {
+    /// `//` comments: Rust, Kotlin, Java, JS and TS, C, Go, Swift.
+    Slashes,
+    /// `#` comments: Python, shell, TOML, YAML, Ruby.
+    Hash,
+    /// `--` comments: SQL, Lua.
+    Dashes,
+}
+
+pub fn lang_of(path: &str) -> Option<Lang> {
+    let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase())?;
+    Some(match ext.as_str() {
+        "rs" | "kt" | "kts" | "java" | "js" | "jsx" | "ts" | "tsx" | "mjs" | "c" | "h" | "cc" | "cpp" | "hpp" | "go" | "swift" | "cs" | "dart" | "scala" | "wgsl" | "gradle" => Lang::Slashes,
+        "py" | "sh" | "bash" | "zsh" | "fish" | "toml" | "yaml" | "yml" | "rb" | "pl" | "r" => Lang::Hash,
+        "sql" | "lua" => Lang::Dashes,
+        _ => return None,
+    })
+}
+
+const KEYWORDS: &[&str] = &[
+    "fn", "let", "mut", "pub", "use", "struct", "enum", "impl", "match", "if", "else", "for", "while", "loop", "return", "self", "Self", "const", "static", "mod", "trait",
+    "where", "async", "await", "true", "false", "None", "Some", "Ok", "Err", "def", "class", "import", "from", "as", "in", "not", "and", "or", "is", "lambda", "val", "var",
+    "fun", "when", "object", "interface", "function", "export", "default", "new", "this", "null", "undefined", "type", "package", "func", "defer", "case", "switch",
+    "break", "continue", "try", "catch", "finally", "throw", "override", "private", "internal", "suspend", "data", "elif", "with", "yield", "local", "then", "end",
+    "select", "insert", "update", "delete", "create", "table", "into", "values", "set", "null", "unsafe", "dyn", "ref", "move", "crate", "super",
+];
+
+/// A line of code as coloured pieces, by a light reading: comments to the line's end, strings in
+/// quotes, numbers, and the common keywords. No state across lines.
+pub fn tokens(line: &str, lang: Lang) -> Vec<(Tok, String)> {
+    let c: Vec<char> = line.chars().collect();
+    let mut out: Vec<(Tok, String)> = Vec::new();
+    let mut push = |t: Tok, s: String| match out.last_mut() {
+        Some((lt, ls)) if *lt == t => ls.push_str(&s),
+        _ => out.push((t, s)),
+    };
+    let mut i = 0;
+    while i < c.len() {
+        let rest: String = c[i..].iter().take(2).collect();
+        let comment = match lang {
+            Lang::Slashes => rest == "//",
+            Lang::Hash => c[i] == '#',
+            Lang::Dashes => rest == "--",
+        };
+        if comment {
+            push(Tok::Comment, c[i..].iter().collect());
+            break;
+        }
+        let ch = c[i];
+        // A string: to its closing quote (a backslash keeps the next character). In Rust a single
+        // quote is also a lifetime, so only a short '…' counts there.
+        if ch == '"' || ch == '`' || (ch == '\'' && (lang != Lang::Slashes || c.get(i + 2) == Some(&'\'') || (c.get(i + 1) == Some(&'\\') && c.get(i + 3) == Some(&'\'')))) {
+            let mut j = i + 1;
+            while j < c.len() && c[j] != ch {
+                j += if c[j] == '\\' { 2 } else { 1 };
+            }
+            let end = (j + 1).min(c.len());
+            push(Tok::Str, c[i..end].iter().collect());
+            i = end;
+            continue;
+        }
+        if ch.is_alphanumeric() || ch == '_' {
+            let mut j = i;
+            while j < c.len() && (c[j].is_alphanumeric() || c[j] == '_') {
+                j += 1;
+            }
+            let word: String = c[i..j].iter().collect();
+            let t = if ch.is_ascii_digit() {
+                Tok::Number
+            } else if KEYWORDS.contains(&word.as_str()) {
+                Tok::Keyword
+            } else {
+                Tok::Plain
+            };
+            push(t, word);
+            i = j;
+            continue;
+        }
+        push(Tok::Plain, ch.to_string());
+        i += 1;
+    }
+    out
+}
+
 /// One line of a to-do list: its words and how far along it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Todo {
@@ -1143,6 +1317,31 @@ mod tests {
         let t = |s: &str| parse_ms(s).unwrap();
         // You, the folded reads (from the first call's time), the words, the note with no time.
         assert_eq!(times, [t("2026-11-25T10:00:00Z"), t("2026-11-25T10:01:00Z"), t("2026-11-25T10:05:00Z"), 0]);
+    }
+
+    #[test]
+    fn a_diff_reads_with_its_marks_numbers_and_no_shared_indent() {
+        let d = diff_lines("@@ -10,2 +10,3 @@\n         let a = 1;\n-        let b = 2;\n+        let b = 3;\n+            nested();\n@@\n-        x();");
+        let kinds: Vec<DiffKind> = d.iter().map(|l| l.kind).collect();
+        assert_eq!(kinds, [DiffKind::Hunk, DiffKind::Same, DiffKind::Del, DiffKind::Add, DiffKind::Add, DiffKind::Hunk, DiffKind::Del]);
+        assert_eq!(d[1].text, "let a = 1;", "the shared eight spaces are gone");
+        assert_eq!(d[4].text, "    nested();", "what is deeper keeps its own indent");
+        // Numbers from the header: the old one for a removed line, the new one otherwise.
+        assert_eq!(d[1..5].iter().map(|l| l.num).collect::<Vec<_>>(), [Some(10), Some(11), Some(11), Some(12)]);
+        assert_eq!(d[6].num, None, "a bare @@ says where nothing is");
+        // Claude Code's edits have no header: no numbers at all.
+        assert!(diff_lines("-a\n+b").iter().all(|l| l.num.is_none()));
+    }
+
+    #[test]
+    fn code_is_coloured_lightly() {
+        let t = tokens("let s = \"a // b\"; // done 2", Lang::Slashes);
+        assert_eq!(t, [(Tok::Keyword, "let".into()), (Tok::Plain, " s = ".into()), (Tok::Str, "\"a // b\"".into()), (Tok::Plain, "; ".into()), (Tok::Comment, "// done 2".into())]);
+        // A Rust lifetime is not a string; a char is.
+        assert!(tokens("fn a<'a>(x: &'a str) -> char { 'x' }", Lang::Slashes).iter().filter(|(k, _)| *k == Tok::Str).map(|(_, s)| s.as_str()).eq(["'x'"]));
+        assert_eq!(tokens("x = 42  # n", Lang::Hash).last(), Some(&(Tok::Comment, "# n".into())));
+        assert_eq!(lang_of("src/data.rs"), Some(Lang::Slashes));
+        assert_eq!(lang_of("README.md"), None);
     }
 
     #[test]
