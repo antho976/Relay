@@ -75,6 +75,11 @@ pub struct State {
     shown: Option<(String, String, Vec<File>)>,
     pub message: String,
     pub picking: bool,
+    /// The branch picker's list, when it holds more than fits.
+    pick_scroll: crate::ui::Scroll,
+    /// The foot's menu (Commit without pushing), and the file whose discard waits for a yes.
+    pub menu: bool,
+    pub discard: Option<File>,
     pending: Vec<Pending>,
 }
 
@@ -178,7 +183,11 @@ enum Job {
     BranchDiff,
     Show(String),
     File(Group, String),
-    Stage,
+    /// Staging or unstaging one path: one at a time per path, so a second tick on another file
+    /// is never dropped as a repeat.
+    Stage(String),
+    /// Put a file back as HEAD has it (or, new, into Relay's trash).
+    Discard(String),
     Suggest,
     /// `set_upstream` is the push's, read when the commit was asked, for the worktree it commits.
     Commit { push: bool, set_upstream: bool },
@@ -208,7 +217,7 @@ impl Job {
 
     /// Done to the worktree whatever page is open: these finish even after a switch.
     fn acts(&self) -> bool {
-        matches!(self, Job::Stage | Job::Commit { .. } | Job::Push | Job::Pr)
+        matches!(self, Job::Stage(_) | Job::Discard(_) | Job::Commit { .. } | Job::Push | Job::Pr)
     }
 }
 
@@ -580,8 +589,18 @@ fn answered(app: &mut App, job: Job, repo: i64, worktree: Option<String>, r: Res
                     };
                 }
             }
-            (Job::Stage, Ok(_)) => {
+            (Job::Stage(_), Ok(_)) => {
                 if here {
+                    reload(app);
+                }
+            }
+            (Job::Discard(p), Ok(_)) => {
+                app.toast("Discarded");
+                if here {
+                    if app.st.changes.open.as_ref() == Some(&(Group::Work, p.clone())) {
+                        app.st.changes.open = None;
+                    }
+                    app.st.changes.files.retain(|f| f.path != p);
                     reload(app);
                 }
             }
@@ -667,7 +686,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     if app.fresh || app.take_changed("git") || app.take_changed("worktree") {
         reload(app);
     }
-    let foot_h = 132.0;
+    let foot_h = 132.0 + message_extra(app);
     let page = app.page_begin(dt, crate::home::TOP_H, foot_h);
     let mut y = page.top + 4.0;
 
@@ -752,6 +771,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 y += 52.0;
                 if app.st.changes.open.as_ref() == Some(&(Group::Work, f.path.clone())) {
                     y += hunks(app, y, &page);
+                    y += discard_key(app, y, f);
                 }
             }
         } else if commits.is_empty() {
@@ -767,7 +787,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             let st = &mut app.st.changes;
             let w = wt(st);
             let op = if f.staged() { "git.unstage" } else { "git.stage" };
-            st.ask(&link, repo, Job::Stage, op, json!({"project_id": repo, "worktree": w, "paths": [f.path]}));
+            st.ask(&link, repo, Job::Stage(f.path.clone()), op, json!({"project_id": repo, "worktree": w, "paths": [f.path]}));
         }
         if let Some(key) = open {
             open_file(app, key);
@@ -777,9 +797,11 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     crate::home::top(app, "Changes");
     foot(app, foot_h, nfiles);
     if app.st.changes.picking {
-        picker(app);
+        picker(app, dt);
     } else if app.st.changes.pr_sheet {
         pr_sheet(app);
+    } else if app.st.changes.discard.is_some() {
+        confirm_discard(app);
     }
     page.moving || !app.st.changes.pending.is_empty() && !crate::wake::has()
 }
@@ -1031,9 +1053,10 @@ fn foot(app: &mut App, foot_h: f32, nfiles: usize) {
     app.canvas.rect(-1000.0, top, WIDTH + 2000.0, 1.0, 0.0, t::LINE);
     let (x, w) = (t::PAD, WIDTH - 2.0 * t::PAD);
     let my = top + 12.0;
-    app.canvas.rect(x, my, w, 46.0, 12.0, t::S1);
+    let box_h = 46.0 + message_extra(app);
+    app.canvas.rect(x, my, w, box_h, 12.0, t::S1);
     let mut message = app.st.changes.message.clone();
-    kit::inline(&mut crate::cx!(app), "commit-message", x + 14.0, my, w - 60.0, 46.0, "Commit message", &mut message, Kb::Text, Text::new(ty::UI, t::INK));
+    message_box(app, x + 14.0, my, w - 60.0, box_h, &mut message);
     app.st.changes.message = message.clone();
     // Ask the PC for a message from the diff.
     let busy = app.st.changes.busy();
@@ -1052,7 +1075,7 @@ fn foot(app: &mut App, foot_h: f32, nfiles: usize) {
             }
         }
     }
-    let ky = my + 46.0 + 12.0;
+    let ky = my + box_h + 12.0;
     let pr_w = 120.0;
     let st = &app.st.changes;
     let ahead = st.ahead;
@@ -1070,8 +1093,32 @@ fn foot(app: &mut App, foot_h: f32, nfiles: usize) {
     let open_pr = pr_for(&st.prs, &st.branch).filter(|p| p.state == "open").map(|p| p.url.clone());
     let can_pr = !detached && !st.branch.is_empty() && st.branch != st.base;
     let mut cx = crate::cx!(app);
-    let go = if can && busy.is_none() { kit::primary(&mut cx, x, ky, w - pr_w - 10.0, 46.0, label, None) } else { kit::plain(&mut cx, x, ky, w - pr_w - 10.0, 46.0, label, None) && false };
+    // More: commit without pushing. Only when there is something to commit and somewhere to push.
+    let more_w = if nfiles > 0 && !detached { 46.0 + 10.0 } else { 0.0 };
+    let go_w = w - pr_w - 10.0 - more_w;
+    let go = if can && busy.is_none() { kit::primary(&mut cx, x, ky, go_w, 46.0, label, None) } else { kit::plain(&mut cx, x, ky, go_w, 46.0, label, None) && false };
+    let more = more_w > 0.0 && kit::plain(&mut cx, x + go_w + 10.0, ky, 46.0, 46.0, "", Some("more"));
     let pr = kit::plain(&mut cx, x + w - pr_w, ky, pr_w, 46.0, if open_pr.is_some() { "View PR" } else { "Pull request" }, None);
+    if more && busy.is_none() {
+        app.st.changes.menu = true;
+    }
+    let mut commit_only = false;
+    if app.st.changes.menu {
+        let items = ["Commit only"];
+        let mtop = ky - 8.0 - (48.0 * items.len() as f32 + 8.0);
+        match kit::menu(&mut crate::cx!(app), mtop, &items) {
+            Some(0) => {
+                app.st.changes.menu = false;
+                commit_only = can;
+                if !can {
+                    app.toast("Write a message first");
+                }
+            }
+            Some(_) => app.st.changes.menu = false,
+            None => {}
+        }
+    }
+    let go = go || commit_only;
     if pr {
         if let Some(url) = &open_pr {
             app.host.open_url(url);
@@ -1098,12 +1145,122 @@ fn foot(app: &mut App, foot_h: f32, nfiles: usize) {
         if nfiles > 0 {
             // Nothing ticked: the whole change goes, as "Include all".
             let all = !st.files.iter().any(File::staged);
-            st.ask(&link, repo, Job::Commit { push: !detached, set_upstream }, "git.commit", json!({"project_id": repo, "worktree": w, "message": message.trim(), "all": all}));
+            st.ask(&link, repo, Job::Commit { push: !detached && !commit_only, set_upstream }, "git.commit", json!({"project_id": repo, "worktree": w, "message": message.trim(), "all": all}));
         } else {
             let worktree = st.worktree.clone();
             push_to(app, repo, worktree, set_upstream);
         }
     }
+}
+
+/// The commit message's style and width in the foot's box.
+fn message_style() -> Text {
+    Text::new(ty::UI, t::INK).line(1.4)
+}
+
+const MESSAGE_LINES: usize = 5;
+
+/// The message's text as the box shows it: the keyboard's while it is being typed.
+fn message_text(app: &App) -> String {
+    if app.focus.is("commit-message") { app.focus.text.clone() } else { app.st.changes.message.clone() }
+}
+
+/// How much taller than one line the box is: a message of several lines (a subject, a blank
+/// line, a body, as git.suggest_message writes them) shows up to five of them.
+fn message_extra(app: &mut App) -> f32 {
+    let text = message_text(app);
+    if text.is_empty() {
+        return 0.0;
+    }
+    let st = message_style();
+    let w = WIDTH - 2.0 * t::PAD - 60.0;
+    let n = app.canvas.wrap_spans(&text, w, st).len().clamp(1, MESSAGE_LINES);
+    (n - 1) as f32 * st.lh()
+}
+
+/// The commit message: every line, wrapped, with the caret at its end while typing. A tap gives it
+/// the keyboard, as kit::inline does.
+fn message_box(app: &mut App, x: f32, y: f32, w: f32, h: f32, value: &mut String) {
+    let id = "commit-message";
+    let mut cx = crate::cx!(app);
+    let focused = cx.focus.is(id);
+    if focused {
+        *value = cx.focus.text.clone();
+        cx.focus.at = Some((y, h));
+    }
+    let st = message_style();
+    if value.is_empty() {
+        cx.c.text("Commit message", x, y + (46.0 - st.lh()) / 2.0, st.color(t::INK3));
+        if focused {
+            cx.c.rect(x, y + 12.0, 2.0, 22.0, 1.0, t::ACCENT);
+        }
+    } else {
+        let chars: Vec<char> = value.chars().collect();
+        let spans = cx.c.wrap_spans(value, w, st);
+        // Typing: the last lines, where the caret is. Otherwise the first.
+        let first = if focused { spans.len().saturating_sub(MESSAGE_LINES) } else { 0 };
+        let mut ly = y + (46.0 - st.lh()) / 2.0;
+        let mut end = (x, ly);
+        for (i, (a, b)) in spans.iter().enumerate().skip(first).take(MESSAGE_LINES) {
+            let line: String = chars[*a..*b].iter().collect();
+            let line = if !focused && i + 1 == first + MESSAGE_LINES && spans.len() > first + MESSAGE_LINES { format!("{}…", line.trim_end()) } else { line };
+            let tw = cx.c.text(&line, x, ly, st);
+            end = (x + tw, ly);
+            ly += st.lh();
+        }
+        if focused {
+            cx.c.rect(end.0 + 1.0, end.1 + (st.lh() - 22.0) / 2.0, 2.0, 22.0, 1.0, t::ACCENT);
+        }
+    }
+    if cx.tap(x - 14.0, y, w + 28.0, h) && (!focused || !cx.focus.keyboard_up) {
+        if !focused {
+            cx.focus.id = Some(id);
+            cx.focus.text = value.clone();
+            cx.focus.kind = Kb::Text;
+        }
+        cx.host.keyboard(true, value, Kb::Text);
+    }
+}
+
+/// Under an open uncommitted file's diff: Discard, which asks first. Returns its height.
+fn discard_key(app: &mut App, y: f32, f: &File) -> f32 {
+    let label = if f.index == "?" { "Delete this new file" } else { "Discard changes" };
+    let small = Text::new(ty::SMALL, t::DANGER).medium();
+    let lw = app.canvas.measure(label, small) + 24.0;
+    let x = WIDTH - t::PAD - lw;
+    let mut cx = crate::cx!(app);
+    if cx.pressed(x, y - 4.0, lw, 40.0) {
+        cx.c.rect(x, y - 2.0, lw, 32.0, 8.0, t::WASH);
+    }
+    cx.c.text(label, x + 12.0, y + 5.0, small);
+    if cx.tap(x, y - 6.0, lw, 44.0) {
+        app.st.changes.discard = Some(f.clone());
+    }
+    40.0
+}
+
+/// Discard asks before it goes: a file put back as HEAD has it loses its edits, staged or not; a
+/// new file goes to Relay's trash.
+fn confirm_discard(app: &mut App) {
+    let Some(f) = app.st.changes.discard.clone() else { return };
+    let name = f.path.trim_end_matches('/').rsplit('/').next().unwrap_or(&f.path).to_string();
+    let (title, body, act) = if f.index == "?" {
+        (format!("Delete {name}?"), "Git does not track it yet. It goes to Relay's trash on the PC.".to_string(), "Delete")
+    } else {
+        (format!("Discard {name}?"), "It goes back to the last commit. Its edits, staged or not, are lost.".to_string(), "Discard")
+    };
+    let answer = kit::confirm(&mut crate::cx!(app), &title, &body, act);
+    let Some(yes) = answer else { return };
+    app.st.changes.discard = None;
+    if !yes {
+        return;
+    }
+    let Some(repo) = app.repo else { return };
+    let link = app.link.clone();
+    let st = &mut app.st.changes;
+    let w = wt(st);
+    let op = if f.index == "?" { "file.delete" } else { "file.restore_head" };
+    st.ask(&link, repo, Job::Discard(f.path.clone()), op, json!({"project_id": repo, "worktree": w, "path": f.path}));
 }
 
 /// Under the branch chip: how it stands against its upstream, and Fetch; then its pull request,
@@ -1207,18 +1364,30 @@ fn pr_sheet(app: &mut App) {
 }
 
 /// The branches of the repo, one per worktree, each with its agent.
-fn picker(app: &mut App) {
+fn picker(app: &mut App, dt: f32) {
     let list = app.st.changes.worktrees.clone();
+    // Eight rows show; more scroll inside the sheet.
     let h = 64.0 + list.len().clamp(1, 8) as f32 * 56.0 + 12.0;
     let (top, outside) = kit::sheet(&mut crate::cx!(app), h);
     if outside {
         app.st.changes.picking = false;
+        app.st.changes.pick_scroll = crate::ui::Scroll::default();
         return;
     }
     app.canvas.text("Branch", t::PAD + 4.0, top + 28.0, Text::new(ty::SECTION, t::INK).semi());
-    let mut y = top + 60.0;
+    let list_top = top + 60.0;
+    let bottom = app.canvas.h - app.canvas.inset_bottom;
+    let viewport = [0.0, list_top, WIDTH, bottom - list_top];
+    app.st.changes.pick_scroll.update(&app.ui, viewport, dt);
+    app.canvas.push_clip(0.0, list_top, WIDTH, bottom - list_top);
+    let mut y = list_top - app.st.changes.pick_scroll.off;
     let mut pick = None;
-    for w in list.iter().take(8) {
+    for w in &list {
+        let visible = y + 56.0 > list_top && y < bottom;
+        if !visible {
+            y += 56.0;
+            continue;
+        }
         let mut cx = crate::cx!(app);
         if cx.pressed(0.0, y, WIDTH, 56.0) {
             cx.c.rect(8.0, y, WIDTH - 16.0, 56.0, 10.0, t::WASH);
@@ -1235,9 +1404,12 @@ fn picker(app: &mut App) {
         }
         y += 56.0;
     }
+    app.canvas.pop_clip();
+    app.st.changes.pick_scroll.max = y + app.st.changes.pick_scroll.off - bottom + 12.0;
     if let Some(p) = pick {
         let st = &mut app.st.changes;
         st.picking = false;
+        st.pick_scroll = crate::ui::Scroll::default();
         if st.worktree.as_ref() != Some(&p) && st.busy().is_none() {
             st.switch(p);
             reload(app);
@@ -1296,7 +1468,7 @@ pub fn sample(app: &mut App) {
         branch_loaded: true,
         open_commit: Some("3b5b460e4f1c".into()),
         shown: Some(shown),
-        message: "Ui: keep the tap on the sheet".into(),
+        message: "Ui: keep the tap on the sheet\n\nA tap on a sheet no longer reaches the row under it.".into(),
         ..State::default()
     };
 }
@@ -1569,6 +1741,104 @@ mod tests {
         a.st.changes.branch = "HEAD".into();
         answered(&mut a, Job::Commit { push: false, set_upstream: false }, 1, Some("/w/b".into()), Ok(json!({})));
         assert!(a.st.changes.pending.is_empty(), "no push after the commit");
+    }
+
+    /// A tap, looked at on the frame it lands: offline, what it asked fails on the next frame.
+    fn lift(a: &mut App, clock: &mut u64, x: f32, y: f32) {
+        use crate::ui::{Phase, Touch};
+        for phase in [Phase::Down, Phase::Up] {
+            *clock += 30_000_000;
+            a.touch(Touch { id: 1, phase, x, y, t_ns: *clock });
+            a.frame(*clock);
+        }
+    }
+
+    /// Changes open on the sample, settled, with nothing opened.
+    fn on_changes(name: &str) -> (App, u64) {
+        let mut a = app_on_b(name);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        a.push(Route::Changes);
+        a.st.changes.open_commit = None;
+        let mut clock = 2_000_000_000;
+        for _ in 0..3 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        (a, clock)
+    }
+
+    #[test]
+    fn ticking_two_files_stages_both() {
+        let mut a = app_on_b("stage");
+        let link = a.link.clone();
+        for p in ["a.rs", "b.rs", "a.rs"] {
+            a.st.changes.ask(&link, 1, Job::Stage(p.into()), "git.stage", json!({}));
+        }
+        let jobs: Vec<Job> = a.st.changes.pending.iter().map(|p| p.job.clone()).collect();
+        assert_eq!(jobs, [Job::Stage("a.rs".into()), Job::Stage("b.rs".into())], "a repeat on one path waits; another path goes");
+    }
+
+    #[test]
+    fn discard_asks_first_and_a_no_reaches_nothing() {
+        let (mut a, mut clock) = on_changes("discard");
+        let f = a.st.changes.files[0].clone();
+        a.st.changes.discard = Some(f.clone());
+        clock += 16_666_666;
+        a.frame(clock);
+        // Outside the dialog, over the page's rows: it closes, nothing is discarded or opened.
+        press(&mut a, &mut clock, 200.0, 140.0);
+        assert!(a.st.changes.discard.is_none() && a.st.changes.pending.is_empty() && a.st.changes.open.is_none());
+        // Yes: the dialog's right key, in the middle of the screen.
+        a.st.changes.discard = Some(f.clone());
+        clock += 16_666_666;
+        a.frame(clock);
+        let mut found = None;
+        for y in (300..560).step_by(4) {
+            a.st.changes.discard = Some(f.clone());
+            clock += 16_666_666;
+            a.frame(clock);
+            lift(&mut a, &mut clock, 290.0, y as f32);
+            if a.st.changes.pending.iter().any(|p| p.job == Job::Discard(f.path.clone())) {
+                found = Some(y);
+                break;
+            }
+        }
+        assert!(found.is_some(), "the dialog's Discard key sends the discard");
+    }
+
+    #[test]
+    fn the_menu_commits_without_pushing() {
+        let (mut a, mut clock) = on_changes("menu");
+        a.st.changes.message = "One line".into();
+        a.st.changes.menu = true;
+        clock += 16_666_666;
+        a.frame(clock);
+        // The menu sits above the foot's keys, at the right.
+        let ky = 844.0 - 132.0 + 12.0 + 46.0 + 12.0;
+        lift(&mut a, &mut clock, 300.0, ky - 8.0 - 56.0 + 4.0 + 24.0);
+        assert!(!a.st.changes.menu);
+        let jobs: Vec<Job> = a.st.changes.pending.iter().map(|p| p.job.clone()).collect();
+        assert!(jobs.contains(&Job::Commit { push: false, set_upstream: false }), "{jobs:?}");
+    }
+
+    #[test]
+    fn a_long_message_grows_the_box_to_five_lines_and_many_branches_scroll() {
+        let (mut a, mut clock) = on_changes("grow");
+        a.st.changes.message = "Subject".into();
+        assert_eq!(message_extra(&mut a), 0.0);
+        a.st.changes.message = "Subject\n\nOne\nTwo".into();
+        let lh = message_style().lh();
+        assert!((message_extra(&mut a) - 3.0 * lh).abs() < 0.5);
+        a.st.changes.message = (0..20).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        assert!((message_extra(&mut a) - 4.0 * lh).abs() < 0.5, "five lines at most");
+        a.st.changes.worktrees = (0..14).map(|i| Worktree { path: format!("/w/{i}"), branch: format!("relay/b{i}"), ..Worktree::default() }).collect();
+        a.st.changes.picking = true;
+        for _ in 0..2 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        assert!(a.st.changes.pick_scroll.max > 5.0 * 56.0, "the rows past eight scroll: {}", a.st.changes.pick_scroll.max);
     }
 
     #[test]
