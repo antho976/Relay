@@ -152,9 +152,9 @@ pub fn repo_chip(app: &mut App, right: f32, y: f32) -> f32 {
 pub fn draw(app: &mut App, dt: f32) -> bool {
     // A swipe from the left edge opens it; one to the left closes it.
     if app.ui.horizontal
-        && let Some((fx, _)) = app.ui.drag_from
+        && let Some((fx, fy)) = app.ui.drag_from
     {
-        if !app.st.drawer.open && fx < EDGE && app.ui.drag_dx > 0.0 {
+        if !app.st.drawer.open && fx < EDGE && app.ui.drag_dx > 0.0 && !app.ui.in_hzone(fx, fy) {
             app.st.drawer.swiping = true;
             app.st.drawer.open = true;
         } else if app.st.drawer.open && app.ui.drag_dx < -2.0 {
