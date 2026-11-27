@@ -91,7 +91,7 @@ fn start_box(app: &mut App) {
         let task = app.st.newagent.task.clone();
         app.focus.id = Some("new-agent");
         app.focus.text = task.clone();
-        app.focus.kind = kit::Kb::Text;
-        app.host.keyboard(true, &task, kit::Kb::Text);
+        app.focus.kind = kit::Kb::Prose;
+        app.host.keyboard(true, &task, kit::Kb::Prose);
     }
 }
