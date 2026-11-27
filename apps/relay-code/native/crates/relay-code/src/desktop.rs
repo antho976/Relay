@@ -242,6 +242,13 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.sending.insert("bold-puffin".into(), q);
             app.st.chat.queued_menu = Some((1, 470.0));
         }
+        "find" => {
+            // A16: find in a conversation, on the markdown sample.
+            crate::sample::days(&mut app);
+            app.open("swift-ocelot");
+            crate::chat::find_open(&mut app);
+            app.set_text("draft");
+        }
         "blocked" => {
             // Blocked by its own report (session.done blocked), with no card on its screen.
             app.open("umber-zebra");
