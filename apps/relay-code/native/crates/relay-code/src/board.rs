@@ -5,7 +5,7 @@
 use rc_link::Call;
 use serde_json::{Value, json};
 
-use crate::app::{App, Ask, Route};
+use crate::app::{App, Route};
 use crate::draw::{Text, WIDTH};
 use crate::kit;
 use crate::theme::{self as t, ty};
@@ -146,6 +146,11 @@ pub struct State {
     act: Option<Call>,
     pub comment: String,
     pub open: Opened,
+    /// Sending a task in review back to Active: the task (id, title), what to change, and the
+    /// comment then the move on their way (`moved` once the comment is in).
+    pub back: Option<(i64, String)>,
+    pub back_words: String,
+    back_call: Option<(i64, Call, bool)>,
     /// Each card's title height, measured once per title: wrapping 80 titles every frame was
     /// most of the Board's frame.
     heights: std::collections::HashMap<i64, (String, f32)>,
@@ -190,24 +195,7 @@ fn take(app: &mut App) {
             Err(e) => app.toast(&e.message),
         }
     }
-    if let Some(r) = app.st.board.act.as_ref().and_then(Call::poll) {
-        app.st.board.act = None;
-        match r {
-            Ok(v) => {
-                if let Some(tk) = task(&v) {
-                    if let Some(old) = app.st.board.tasks.iter_mut().find(|x| x.id == tk.id) {
-                        // The list's copy has no body: keep it so.
-                        *old = Task { body: String::new(), ..tk.clone() };
-                    }
-                    if app.st.board.open.id == tk.id {
-                        app.st.board.open.task = Some(tk);
-                    }
-                }
-                reload(app);
-            }
-            Err(e) => app.toast(&e.message),
-        }
-    }
+    keep_up(app);
     let o = &mut app.st.board.open;
     if let Some(r) = o.get.as_ref().and_then(Call::poll) {
         o.get = None;
@@ -238,6 +226,114 @@ fn take(app: &mut App) {
             // The words stay in the box to send again.
             Err(e) => app.toast(&e.message),
         }
+    }
+}
+
+/// Approve a task in review: done, its commit linked (`task.approve`).
+pub fn approve(app: &mut App, id: i64) {
+    if app.online() && app.st.board.act.is_none() {
+        app.st.board.act = Some(app.link.call("task.approve", json!({"task_id": id})));
+        app.toast("Approved");
+    }
+}
+
+/// Open the sheet that sends a task in review back to Active with a comment.
+pub fn send_back(app: &mut App, id: i64, title: &str) {
+    app.st.board.back = Some((id, title.to_string()));
+}
+
+/// Take what the Board's actions answered, on the Board and on the Inbox (which approves and sends
+/// back too): a send-back's comment, then its move.
+pub fn keep_up(app: &mut App) {
+    if let Some(r) = app.st.board.act.as_ref().and_then(Call::poll) {
+        app.st.board.act = None;
+        match r {
+            Ok(v) => {
+                if let Some(tk) = task(&v) {
+                    if let Some(old) = app.st.board.tasks.iter_mut().find(|x| x.id == tk.id) {
+                        *old = Task { body: String::new(), ..tk.clone() };
+                    }
+                    if app.st.board.open.id == tk.id {
+                        app.st.board.open.task = Some(tk);
+                    }
+                }
+                reload(app);
+            }
+            Err(e) => app.toast(&e.message),
+        }
+    }
+    let Some((id, call, moved)) = app.st.board.back_call.take() else { return };
+    let Some(r) = call.poll() else {
+        app.st.board.back_call = Some((id, call, moved));
+        return;
+    };
+    match (moved, r) {
+        // The comment is in: now the move, so the agent finds the task Active with its reason.
+        (false, Ok(_)) => {
+            let call = app.link.call("task.move", json!({"task_id": id, "column": "active"}));
+            app.st.board.back_call = Some((id, call, true));
+        }
+        (true, Ok(v)) => {
+            app.toast("Sent back to Active");
+            app.st.board.back = None;
+            app.st.board.back_words.clear();
+            if let Some(tk) = task(&v) {
+                if let Some(old) = app.st.board.tasks.iter_mut().find(|x| x.id == tk.id) {
+                    *old = Task { body: String::new(), ..tk.clone() };
+                }
+                if app.st.board.open.id == tk.id {
+                    app.st.board.open.task = Some(tk);
+                }
+            }
+            reload(app);
+        }
+        // The words stay in the sheet to send again.
+        (_, Err(e)) => app.toast(&e.message),
+    }
+}
+
+/// The send-back sheet: what to change, required, then Send back. Over any page that opens it.
+pub fn draw_send_back(app: &mut App) {
+    let Some((id, title)) = app.st.board.back.clone() else { return };
+    let extra = crate::changes::prose_extra(app, "send-back", &app.st.board.back_words.clone(), WIDTH - 2.0 * t::PAD - 28.0);
+    let h = 300.0 + extra;
+    let sending = app.st.board.back_call.is_some();
+    let (top, outside) = kit::sheet(&mut crate::cx!(app), h);
+    if outside && !sending {
+        app.finish_typing();
+        app.st.board.back = None;
+        return;
+    }
+    let (x, w) = (t::PAD, WIDTH - 2.0 * t::PAD);
+    app.canvas.text(&format!("Send back #{id}"), x + 4.0, top + 28.0, Text::new(ty::SECTION, t::INK).semi());
+    app.canvas.text_fit(&title, x + 4.0, top + 58.0, w - 8.0, Text::new(ty::SMALL, t::INK3));
+    let lt = Text::new(ty::CAPTION, t::INK2).medium();
+    let fy = top + 88.0;
+    app.canvas.text("What to change (the agent reads it)", x + 2.0, fy, lt);
+    let by = fy + lt.lh() + 6.0;
+    let bh = 48.0 + extra;
+    let focused = app.focus.is("send-back");
+    app.canvas.rect(x, by, w, bh, t::KEY_R, t::S1);
+    app.canvas.outline(x, by, w, bh, t::KEY_R, 1.0, if focused { t::INK3 } else { t::LINE });
+    let mut words = app.st.board.back_words.clone();
+    crate::changes::prose_box(app, "send-back", "The tests fail on…", x + 14.0, by + 1.0, w - 28.0, bh, &mut words);
+    app.st.board.back_words = words.clone();
+    let ready = !words.trim().is_empty() && !sending && app.online();
+    let label = if sending { "Sending back…" } else { "Send back to Active" };
+    let ky = top + h - 62.0;
+    let mut cx = crate::cx!(app);
+    let go = if ready { kit::primary(&mut cx, x, ky, w, 46.0, label, None) } else { kit::plain(&mut cx, x, ky, w, 46.0, label, None) && false };
+    if go {
+        app.finish_typing();
+        let call = app.link.call("task.comment", json!({"task_id": id, "body": words.trim()}));
+        app.st.board.back_call = Some((id, call, false));
+    }
+}
+
+impl State {
+    /// Back: the send-back sheet closes (unless it is sending). False when it was not open.
+    pub fn close_over(&mut self) -> bool {
+        self.back_call.is_none() && self.back.take().is_some()
     }
 }
 
@@ -431,25 +527,39 @@ pub fn draw_task(app: &mut App, id: i64, dt: f32) -> bool {
     let ky = my + box_h + 12.0;
     let busy = app.st.board.act.is_some();
     let next = next(&tk.column);
-    let agent_w = if tk.sessions.is_empty() && tk.column != "done" { 150.0 } else { 0.0 };
+    let review = tk.column == "in_review";
+    // An agent of today on it: its row shows above, and there is no second one to start.
+    let live = tk.sessions.iter().any(|n| app.agents.iter().any(|a| &a.name == n));
+    let side_w = if review { 130.0 } else if !live && tk.column != "done" { 150.0 } else { 0.0 };
+    let gap = if side_w > 0.0 { 10.0 } else { 0.0 };
     let mut cx = crate::cx!(app);
     let step = match next {
-        Some((_, words)) if !busy => kit::primary(&mut cx, x, ky, w - agent_w - if agent_w > 0.0 { 10.0 } else { 0.0 }, 44.0, words, None),
-        Some((_, words)) => kit::plain(&mut cx, x, ky, w - agent_w - 10.0, 44.0, words, None) && false,
+        Some((_, words)) if !busy => kit::primary(&mut cx, x, ky, w - side_w - gap, 44.0, words, None),
+        Some((_, words)) => kit::plain(&mut cx, x, ky, w - side_w - gap, 44.0, words, None) && false,
         None => false,
     };
-    let start = agent_w > 0.0 && kit::plain(&mut cx, x + w - agent_w, ky, agent_w, 44.0, "Start an agent", None);
+    let side = side_w > 0.0 && kit::plain(&mut cx, x + w - side_w, ky, side_w, 44.0, if review { "Send back" } else { "Start an agent" }, None);
     if step && let Some((col, _)) = next {
-        // Approving is its own op: it closes the task and links its commit.
-        let call = if tk.column == "in_review" { app.link.call("task.approve", json!({"task_id": id})) } else { app.link.call("task.move", json!({"task_id": id, "column": col})) };
-        app.st.board.act = Some(call);
+        if review {
+            // Approving is its own op: it closes the task and links its commit.
+            approve(app, id);
+        } else {
+            app.st.board.act = Some(app.link.call("task.move", json!({"task_id": id, "column": col})));
+        }
     }
-    if start && let Some(repo) = app.repo {
-        let prompt = format!("Task #{}: {}\n\n{}", tk.id, tk.title, tk.body);
-        app.ask(Ask::Create, "session.create", json!({"project_id": repo, "provider": "claude", "role": "builder", "task_id": id, "prompt": prompt.trim()}));
-        app.toast("Starting an agent on it…");
+    if side && review {
+        send_back(app, id, &tk.title);
+    } else if side {
+        // D2's New agent, the task linked and its words written in: model and effort are chosen
+        // there, and the new agent's chat opens once the PC has made it.
+        app.finish_typing();
+        let na = &mut app.st.newagent;
+        na.linked = Some((id, tk.title.clone()));
+        na.task = format!("Task #{}: {}\n\n{}", tk.id, tk.title, tk.body).trim().to_string();
+        na.open = true;
     }
-    page.moving
+    draw_send_back(app);
+    page.moving || app.st.board.back_call.is_some() && !crate::wake::has()
 }
 
 /// The task's comments and what was done to it, oldest first. Returns where it ends.
@@ -659,6 +769,77 @@ mod tests {
         a.st.board.column = 2;
         tap(&mut a, t::PAD + 12.0, chip_top + 32.0 + 5.0);
         assert_eq!(a.st.board.column, 0, "a tap just under the chip");
+    }
+
+    fn on_task(name: &str, column: &str) -> (App, u64) {
+        let dir = std::env::temp_dir().join(format!("relay-code-board-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(NoHost(dir)), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        if let Some(t) = a.st.board.open.task.as_mut() {
+            t.column = column.into();
+            t.sessions.clear();
+        }
+        a.push(Route::Task(41));
+        let mut clock = 2_000_000_000u64;
+        for _ in 0..3 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        (a, clock)
+    }
+
+    fn lift(a: &mut App, clock: &mut u64, x: f32, y: f32) {
+        use crate::ui::{Phase, Touch};
+        for phase in [Phase::Down, Phase::Up] {
+            *clock += 30_000_000;
+            a.touch(Touch { id: 1, phase, x, y, t_ns: *clock });
+            a.frame(*clock);
+        }
+    }
+
+    #[test]
+    fn start_an_agent_opens_new_agent_with_the_task_linked() {
+        let (mut a, mut clock) = on_task("start", "active");
+        // The foot's right key, on its last row.
+        lift(&mut a, &mut clock, 390.0 - 20.0 - 75.0, 844.0 - 124.0 + 12.0 + 44.0 + 12.0 + 22.0);
+        let na = &a.st.newagent;
+        assert!(na.open, "New agent opens");
+        assert_eq!(na.linked.as_ref().map(|l| l.0), Some(41));
+        assert!(na.task.starts_with("Task #41: "), "{}", na.task);
+    }
+
+    #[test]
+    fn send_back_wants_words_keeps_them_when_it_fails_and_back_closes_it() {
+        let (mut a, mut clock) = on_task("back", "in_review");
+        lift(&mut a, &mut clock, 390.0 - 20.0 - 65.0, 844.0 - 124.0 + 12.0 + 44.0 + 12.0 + 22.0);
+        assert_eq!(a.st.board.back.as_ref().map(|b| b.0), Some(41), "Send back opens its sheet");
+        // No words: its key does nothing.
+        let key_y = 844.0 - 300.0 + 300.0 - 62.0 + 20.0;
+        lift(&mut a, &mut clock, 195.0, key_y);
+        assert!(a.st.board.back_call.is_none());
+        // With words, offline: the comment fails at once, the words and the sheet stay.
+        a.st.board.back_words = "The drawer test fails on a tablet.".into();
+        a.st.board.back_call = Some((41, a.link.call("task.comment", json!({"task_id": 41, "body": "x"})), false));
+        keep_up(&mut a);
+        assert!(a.st.board.back_call.is_none() && a.st.board.back.is_some());
+        assert_eq!(a.st.board.back_words, "The drawer test fails on a tablet.");
+        // While it sends, Back leaves it; after, Back closes it.
+        a.st.board.back_call = Some((41, rc_link::Call::never(), false));
+        assert!(!a.st.board.close_over() && a.st.board.back.is_some());
+        a.st.board.back_call = None;
+        assert!(a.st.board.close_over() && a.st.board.back.is_none());
+        clock += 1;
+        let _ = clock;
+    }
+
+    #[test]
+    fn approve_is_one_call_and_a_second_tap_waits_for_it() {
+        let (mut a, _) = on_task("approve", "in_review");
+        a.st.board.act = Some(rc_link::Call::never());
+        approve(&mut a, 41);
+        assert!(a.st.board.act.is_some());
     }
 
     #[test]

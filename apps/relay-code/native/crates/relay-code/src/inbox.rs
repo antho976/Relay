@@ -263,16 +263,25 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         app.canvas.text("IN REVIEW", t::PAD, y + 12.0, Text::new(ty::SMALL, t::INK3).semi());
         y += 34.0;
         for tk in &review {
+            // The task's title (a tap opens it), then Approve and Send back on their own row.
+            let h = 92.0;
             let mut cx = crate::cx!(app);
-            if cx.pressed(0.0, y, WIDTH, 48.0) {
-                cx.c.rect(8.0, y, WIDTH - 16.0, 48.0, 10.0, t::WASH);
+            let (bw, back) = kit::pill(&mut cx, WIDTH - t::PAD, y + 48.0, "Send back", false);
+            let (_, approve) = kit::pill(&mut cx, WIDTH - t::PAD - bw - 8.0, y + 48.0, "Approve", false);
+            if !back && !approve && cx.pressed(0.0, y, WIDTH, 44.0) {
+                cx.c.rect(8.0, y, WIDTH - 16.0, 44.0, 10.0, t::WASH);
             }
-            cx.c.icon("board", t::PAD + 10.0, y + 24.0, 16.0, t::INK2);
-            cx.c.text_fit(&tk.title, t::PAD + 32.0, y + 14.0, WIDTH - t::PAD * 2.0 - 40.0, Text::new(ty::BODY, t::INK));
-            if cx.tap(0.0, y, WIDTH, 48.0) {
+            cx.c.icon("board", t::PAD + 10.0, y + 22.0, 16.0, t::INK2);
+            cx.c.text_fit(&tk.title, t::PAD + 32.0, y + 12.0, WIDTH - t::PAD * 2.0 - 40.0, Text::new(ty::BODY, t::INK));
+            let open = cx.tap(0.0, y, WIDTH, 44.0);
+            if approve {
+                crate::board::approve(app, tk.id);
+            } else if back {
+                crate::board::send_back(app, tk.id, &tk.title);
+            } else if open {
                 task = Some(tk.id);
             }
-            y += 48.0;
+            y += h;
         }
     }
     if !stopped.is_empty() {
@@ -303,6 +312,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     if app.st.inbox.denying.is_some() {
         deny_sheet(app);
     }
+    // Approve and Send back answer here too, and the send-back sheet opens over the Inbox.
+    crate::board::keep_up(app);
+    crate::board::draw_send_back(app);
     if let Some(n) = open {
         app.open(&n);
     } else if let Some(id) = task {
