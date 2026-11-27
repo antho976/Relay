@@ -681,12 +681,12 @@ fn answered(app: &mut App, job: Job, repo: i64, worktree: Option<String>, r: Res
             // Said where the commit opens, not in a toast that leaves "Reading the commit…" up.
             (Job::Show(sha), Err(e)) => {
                 if app.st.changes.open_commit.as_deref() == Some(sha.as_str()) {
-                    app.st.changes.shown = Some((sha, e.message, Vec::new()));
+                    app.st.changes.shown = Some((sha, crate::errors::words(&e), Vec::new()));
                 }
             }
             (Job::BranchDiff, Err(e)) => {
                 app.st.changes.branch_loaded = true;
-                app.toast(&e.message);
+                app.toast(&crate::errors::words(&e));
             }
             (Job::Show(sha), Ok(v)) => {
                 let st = &mut app.st.changes;
@@ -706,7 +706,7 @@ fn answered(app: &mut App, job: Job, repo: i64, worktree: Option<String>, r: Res
                         }
                         Err(e) if e.code == "git.diff_too_large" => Diff::Note("Too large to show here: over 1 MB of text.".into()),
                         Err(e) if e.code == "git.diff_binary" => Diff::Note("A binary file: there is no text to show.".into()),
-                        Err(e) => Diff::Note(e.message),
+                        Err(e) => Diff::Note(crate::errors::words(&e)),
                     };
                 }
             }
@@ -788,8 +788,8 @@ fn answered(app: &mut App, job: Job, repo: i64, worktree: Option<String>, r: Res
                 reload(app);
             }
             // Nothing read yet: the page says why, with Try again. Read before: a toast.
-            (Job::Worktrees | Job::Status | Job::Diff, Err(e)) if !app.st.changes.loaded => app.st.changes.error = Some(e.message),
-            (_, Err(e)) => app.toast(&e.message),
+            (Job::Worktrees | Job::Status | Job::Diff, Err(e)) if !app.st.changes.loaded => app.st.changes.error = Some(crate::errors::words(&e)),
+            (_, Err(e)) => app.toast(&crate::errors::words(&e)),
         }
     }
     if let Some(s) = status {
@@ -1665,7 +1665,8 @@ pub fn sample_error(app: &mut App) {
     st.files.clear();
     st.commits.clear();
     st.branch_files.clear();
-    st.error = Some("git status failed: not a git repository (or any of the parent directories): .git".into());
+    // As the PC sends it, through the same words as a real answer.
+    st.error = Some(crate::errors::words(&rc_link::BusError { kind: "unavailable".into(), code: "git.status_failed".into(), message: "fatal: not a git repository (or any of the parent directories): .git".into(), hint: None }));
 }
 
 /// Under the branch chip: how it stands against its upstream, and Fetch; then its pull request,
@@ -2550,6 +2551,19 @@ mod tests {
         let both_added = File { index: "A".into(), wt: "A".into(), ..File::default() };
         assert!(both_added.conflicted());
         assert!(!File { index: "A".into(), wt: " ".into(), ..File::default() }.conflicted());
+    }
+
+    #[test]
+    fn a_refusal_reaches_the_page_in_words_not_codes() {
+        let mut a = app_on_b("words");
+        let raw = rc_link::BusError { kind: "conflict".into(), code: "git.status_failed".into(), message: "fatal: not a git repository (or any of the parent directories): .git".into(), hint: None };
+        answered(&mut a, Job::Status, 1, Some("/w/b".into()), Err(raw));
+        assert_eq!(a.st.changes.error.as_deref(), Some("This folder is not a Git repository."));
+        // A file's diff refused, as the PC words it.
+        a.st.changes.open = Some((Group::Work, "x.rs".into()));
+        let raw = rc_link::BusError { kind: "invalid".into(), code: "git.path".into(), message: "git.diff.file refused: path must be worktree-relative and contain no ..".into(), hint: None };
+        answered(&mut a, Job::File(Group::Work, "x.rs".into()), 1, Some("/w/b".into()), Err(raw));
+        assert!(matches!(&a.st.changes.diff, Diff::Note(w) if w == "Path must be worktree-relative and contain no .."), "{:?}", a.st.changes.diff);
     }
 
     #[test]

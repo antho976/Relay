@@ -20,6 +20,7 @@ pub mod commands;
 pub mod data;
 pub mod draw;
 pub mod drawer;
+pub mod errors;
 pub mod fileview;
 pub mod gfx;
 pub mod glyphs;
