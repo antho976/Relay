@@ -53,6 +53,8 @@ pub struct State {
     times: Rc<Vec<u64>>,
     /// A long press's menu: the item (its place among those shown) and where the finger was.
     pub menu: Option<(usize, f32)>,
+    /// A long press on a message of yours still waiting: its place in the queue, where the finger was.
+    pub queued_menu: Option<(usize, f32)>,
     /// Items whose fold changed: only they are measured again, on the next frame.
     refolded: HashSet<String>,
     /// Each item's key ([`data::items_timed`]): folds and heights follow it, not its place.
@@ -100,7 +102,7 @@ impl State {
     }
 
     pub fn close_over(&mut self) -> bool {
-        std::mem::take(&mut self.model_sheet) | self.menu.take().is_some()
+        std::mem::take(&mut self.model_sheet) | self.menu.take().is_some() | self.queued_menu.take().is_some()
     }
 }
 
@@ -509,7 +511,10 @@ fn spans(app: &mut App, s: &str, x: f32, y: f32, w: f32, st: Text, max_lines: us
         }
     }
     if let Some(url) = open {
-        app.host.open_url(&url);
+        match url.strip_prefix(data::FILE_LINK) {
+            Some(path) => open_path(app, path),
+            None => app.host.open_url(&url),
+        }
     }
     h
 }
@@ -665,6 +670,69 @@ fn message_menu(app: &mut App) {
     }
 }
 
+/// Where the waiting message's menu sits.
+pub fn queued_rect(app: &App) -> Option<[f32; 4]> {
+    let (_, fy) = app.st.chat.queued_menu?;
+    let (w, h) = (220.0, MENU_H);
+    let lo = app.canvas.inset_top + TOP_H + 8.0;
+    let hi = app.st.chat.box_top - 8.0 - h;
+    Some([WIDTH - t::PAD - w, (fy - h - 12.0).max(lo).min(hi.max(lo)), w, h])
+}
+
+/// A long press on a message of yours still waiting: Edit (its words back in the box) and
+/// Remove. One the PC already has cannot be unsent: it is struck through and the agent still
+/// reads it, as the menu says.
+fn queued_menu(app: &mut App, name: &str) {
+    let (Some([x, y, w, h]), Some((i, _))) = (queued_rect(app), app.st.chat.queued_menu) else { return };
+    let Some(p) = app.sending.get(name).and_then(|s| s.waiting.get(i)).cloned() else {
+        app.st.chat.queued_menu = None;
+        return;
+    };
+    let screen = app.canvas.h;
+    app.canvas.dy = 0.0;
+    kit::above(&mut crate::cx!(app), crate::ui::layer::POPUP, [-1000.0, 0.0, WIDTH + 2000.0, screen]);
+    app.canvas.shadow(x, y, w, h, 14.0, 20.0, crate::draw::Rgba::hex(0x000000).a(0.45));
+    app.canvas.rect(x, y, w, h, 14.0, t::PANEL);
+    app.canvas.outline(x, y, w, h, 14.0, 1.0, t::LINE);
+    let unsent = p.stage == Stage::Queued || p.failed;
+    let head = if unsent { "Not sent yet" } else { "Sent · it will still read this" };
+    app.canvas.text_fit(head, x + 16.0, y + 11.0, w - 32.0, Text::new(ty::SMALL, t::INK3).medium());
+    let mut pick = None;
+    for (k, (words, glyph)) in [("Edit", "edit"), ("Remove", "trash")].iter().enumerate() {
+        let ry = y + 36.0 + k as f32 * 44.0;
+        let mut cx = crate::cx!(app);
+        if cx.pressed(x + 4.0, ry, w - 8.0, 44.0) {
+            cx.c.rect(x + 4.0, ry, w - 8.0, 44.0, 10.0, t::S2);
+        }
+        cx.c.icon(glyph, x + 24.0, ry + 22.0, 14.0, t::INK2);
+        cx.c.text(words, x + 42.0, ry + (44.0 - Text::new(ty::UI, t::INK).lh()) / 2.0, Text::new(ty::UI, t::INK));
+        if cx.tap(x + 4.0, ry, w - 8.0, 44.0) {
+            pick = Some(k);
+        }
+    }
+    if let Some(k) = pick {
+        app.st.chat.queued_menu = None;
+        if let Some(s) = app.sending.get_mut(name) {
+            s.take_back(i);
+        }
+        app.outbox_changed();
+        if k == 0 {
+            // Its words back in the box, after what is there.
+            let typed = app.draft(name);
+            let text = if typed.trim().is_empty() { p.text.clone() } else { format!("{}\n{}", typed.trim_end(), p.text) };
+            app.set_draft(name, &text);
+            app.focus.id = Some(FIELD);
+            app.focus.text = text.clone();
+            app.focus.kind = Kb::Prose;
+            app.focus.sel = None;
+            app.host.keyboard(true, &text, Kb::Prose);
+        }
+    } else if app.ui.tap_here().is_some() {
+        app.ui.swallow();
+        app.st.chat.queued_menu = None;
+    }
+}
+
 /// What "Copy as text" copies: the words as read, without Markdown's marks (a table's cells
 /// apart by tabs, code as it is).
 fn plain_words(it: &Item) -> Option<String> {
@@ -790,7 +858,18 @@ fn call(app: &mut App, c: &data::ToolCall, key: (String, usize), y: f32, draw: b
     } else if c.is_todos() {
         h += checklist(app, &data::todos(detail), x, y + h, w, draw);
     } else {
-        put(app, &format!("{} {}", c.name, c.summary), mono, 3, &mut h);
+        // A call on a file (a read, a search in one): its path opens the file.
+        match data::file_path(c.summary.trim()).filter(|p| *p == c.summary.trim()) {
+            Some(path) => {
+                let line = format!("{} {}", c.name, c.summary);
+                let lh = if draw { app.canvas.para(&line, x, y + h, w, mono.color(t::ACCENT.mix(t::INK, 0.35)), 3) } else { app.canvas.para_h(&line, w, mono, 3) };
+                if draw && crate::cx!(app).tap(x - 4.0, y + h - 4.0, w + 8.0, lh + 8.0) {
+                    open_path(app, path);
+                }
+                h += lh;
+            }
+            None => put(app, &format!("{} {}", c.name, c.summary), mono, 3, &mut h),
+        }
         // Questions and their choices, a sub-agent's brief: the words it sent, in prose.
         if !detail.trim().is_empty() {
             h += 2.0;
@@ -1002,6 +1081,11 @@ fn diff(app: &mut App, c: &data::ToolCall, key: (String, usize), y: f32, draw: b
         app.canvas.outline(x, y + 2.0, w, h, 10.0, 1.0, t::LINE);
         app.canvas.icon("edit", x + 14.0, y + 15.0, 12.0, t::INK3);
         app.canvas.text_fit(&c.summary, x + 26.0, y + 7.0, w - 40.0, Text::new(ty::SMALL, t::INK2).medium());
+        // The file's name at the head opens it; a tap below folds or shows the rest.
+        if data::file_path(c.summary.trim()).is_some() && crate::cx!(app).tap(x, y + 2.0, w, 26.0) {
+            open_path(app, c.summary.trim());
+            return h + 8.0;
+        }
         let mut ly = y + 2.0 + head;
         for (i, l) in lines.iter().enumerate().take(shown_lines) {
             match l.kind {
@@ -1050,6 +1134,15 @@ fn diff(app: &mut App, c: &data::ToolCall, key: (String, usize), y: f32, draw: b
     h + 8.0
 }
 
+/// Open a file named in the chat in the file view: read from the open chat's agent's checkout
+/// (its repo and worktree), or the repo shown when no chat is open (a task's words).
+fn open_path(app: &mut App, path: &str) {
+    let agent = app.open_chat().and_then(|n| app.agent(&n).cloned());
+    let repo = agent.as_ref().map(|a| a.project_id).or(app.repo);
+    let Some(repo) = repo else { return };
+    crate::fileview::open(app, repo, agent.and_then(|a| a.worktree), path);
+}
+
 /// A piece of code's colour: few, quiet, and the line's own ink for the rest.
 fn tok_ink(k: data::Tok, plain: crate::draw::Rgba) -> crate::draw::Rgba {
     match k {
@@ -1063,6 +1156,11 @@ fn tok_ink(k: data::Tok, plain: crate::draw::Rgba) -> crate::draw::Rgba {
 
 /// Your words, right-aligned in a bubble. Returns its height.
 fn bubble(app: &mut App, text: &str, y: f32, draw: bool) -> f32 {
+    bubble_ex(app, text, y, draw, false)
+}
+
+/// [`bubble`], struck through when you took it back after the PC had it.
+fn bubble_ex(app: &mut App, text: &str, y: f32, draw: bool, struck: bool) -> f32 {
     // A picture you sent is named by its path on the PC: it shows as the picture (or, once the
     // app no longer has its copy, as its name), above your words.
     let (pics, words): (Vec<&str>, Vec<&str>) = text.lines().partition(|l| crate::attach::is_picture(l));
@@ -1082,8 +1180,13 @@ fn bubble(app: &mut App, text: &str, y: f32, draw: bool) -> f32 {
     if draw {
         let x = WIDTH - t::PAD - w;
         app.canvas.rect(x, y + 6.0, w, bh, 18.0, t::S2);
+        let st = if struck { st.color(t::INK3) } else { st };
         for (i, l) in lines.iter().enumerate() {
-            app.canvas.text(l, x + 16.0, y + 6.0 + 12.0 + i as f32 * st.lh(), st);
+            let ly = y + 6.0 + 12.0 + i as f32 * st.lh();
+            let lw = app.canvas.text(l, x + 16.0, ly, st);
+            if struck {
+                app.canvas.rect(x + 16.0, ly + st.lh() * 0.5, lw, 1.0, 0.0, t::INK3);
+            }
         }
     }
     h + bh + 12.0
@@ -1279,7 +1382,7 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
         .filter(|p| !waiting.iter().any(|w| w.client_id == p.client_id))
         .map(|p| (p, data::parse_ms(&p.sent_at).unwrap_or(now_ms)))
         .filter(|(p, at)| !(p.text.starts_with('/') && now_ms.saturating_sub(*at) > data::COMMAND_WAIT_MS))
-        .map(|(p, at)| data::Pending { text: p.text.clone(), sent_ms: at, failed: false, stage: Stage::Entered, not_before_ms: 0, client_id: p.client_id.clone(), via_chat: true })
+        .map(|(p, at)| data::Pending { text: p.text.clone(), sent_ms: at, failed: false, stage: Stage::Entered, not_before_ms: 0, client_id: p.client_id.clone(), via_chat: true, struck: false })
         .collect();
     waiting.extend(extra);
 
@@ -1351,10 +1454,21 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
         app.st.chat.menu = Some(at);
     }
     let mut retry = None;
+    // Your own (not another device's): a finger held on one offers Edit and Remove.
+    let ours = app.sending.get(name).map_or(0, |s| s.waiting.len());
+    let mut take = None;
     for (i, p) in waiting.iter().enumerate() {
-        y += bubble(app, &p.text, y, true);
+        let top = y;
+        y += bubble_ex(app, &p.text, y, true, p.struck);
+        if i < ours
+            && let Some(hy) = held.filter(|hy| *hy >= top && *hy < y)
+        {
+            take = Some((i, hy - off));
+        }
         let online = app.link_state.online();
-        let (words, ink) = if p.failed {
+        let (words, ink) = if p.struck {
+            ("Taken back · it will still read this", t::INK3)
+        } else if p.failed {
             ("Not sent · tap to send again", t::DANGER)
         } else if p.stage < Stage::Entered && !online {
             ("Waiting for your PC", t::INK3)
@@ -1378,6 +1492,11 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     }
     app.page_end(&page, y + 8.0);
     app.canvas.dy = 0.0;
+    if let Some(at) = take {
+        app.ui.swallow();
+        app.host.haptic();
+        app.st.chat.queued_menu = Some(at);
+    }
     if let Some(i) = retry
         && let Some(s) = app.sending.get_mut(name)
     {
@@ -1421,6 +1540,9 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     }
     if app.st.chat.menu.is_some() {
         message_menu(app);
+    }
+    if app.st.chat.queued_menu.is_some() {
+        queued_menu(app, name);
     }
     moving
 }
@@ -2168,6 +2290,65 @@ mod tests {
         a.convos.get_mut("bold-puffin").unwrap().take_older(&serde_json::json!({"messages": page, "before": 0, "older": false}));
         assert_eq!(a.convos["bold-puffin"].msgs[0].id, "p300");
         assert!(!a.convos["bold-puffin"].older);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_path_in_the_chat_opens_in_its_agents_checkout() {
+        let (mut a, dir) = fresh_app("paths");
+        a.sample();
+        let mut ag = a.agent("swift-ocelot").cloned().unwrap();
+        ag.worktree = Some("/wt/swift-ocelot".into());
+        a.agents.retain(|x| x.name != "swift-ocelot");
+        a.agents.push(ag);
+        a.open("swift-ocelot");
+        open_path(&mut a, "src/chat.rs:42");
+        assert_eq!(a.route(), &crate::app::Route::File { repo: 1, worktree: Some("/wt/swift-ocelot".into()), path: "src/chat.rs:42".into() });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_waiting_message_held_can_be_edited_or_removed() {
+        let (mut a, dir) = fresh_app("take-back");
+        a.sample();
+        a.open("bold-puffin");
+        a.sending.insert("bold-puffin".into(), data::Sending::default());
+        a.say("bold-puffin", "first thought");
+        a.say("bold-puffin", "second thought");
+        let mut clock = 1_000_000_000u64;
+        let mut frame = |a: &mut App| {
+            clock += 16_666_666;
+            a.frame(clock);
+        };
+        frame(&mut a);
+        let tap = |a: &mut App, x: f32, y: f32, clock: u64| {
+            a.touch(crate::ui::Touch { id: 1, phase: crate::ui::Phase::Down, x, y, t_ns: clock });
+            a.frame(clock + 16_666_666);
+            a.touch(crate::ui::Touch { id: 1, phase: crate::ui::Phase::Up, x, y, t_ns: clock + 40_000_000 });
+            a.frame(clock + 50_000_000);
+            a.frame(clock + 70_000_000);
+        };
+        // Held on the second: Remove takes it out of the queue (in a shot nothing is sent).
+        a.st.chat.queued_menu = Some((1, 500.0));
+        frame(&mut a);
+        let [x, y, w, _] = queued_rect(&a).unwrap();
+        tap(&mut a, x + w / 2.0, y + 36.0 + 44.0 + 22.0, 3_000_000_000);
+        assert_eq!(a.sending["bold-puffin"].waiting.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["first thought"]);
+        // Held on the first: Edit puts its words in the box and takes it out.
+        a.st.chat.queued_menu = Some((0, 500.0));
+        a.frame(3_200_000_000);
+        let [x, y, w, _] = queued_rect(&a).unwrap();
+        tap(&mut a, x + w / 2.0, y + 36.0 + 22.0, 3_300_000_000);
+        assert!(a.sending["bold-puffin"].waiting.is_empty());
+        assert_eq!(a.draft("bold-puffin"), "first thought");
+        assert!(a.focus.is(FIELD));
+        // A tap beside the menu closes it and reaches nothing.
+        a.say("bold-puffin", "third");
+        a.st.chat.queued_menu = Some((0, 500.0));
+        a.frame(3_500_000_000);
+        tap(&mut a, 30.0, 300.0, 3_600_000_000);
+        assert!(a.st.chat.queued_menu.is_none());
+        assert_eq!(a.sending["bold-puffin"].waiting.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

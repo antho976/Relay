@@ -231,6 +231,17 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
                 app.st.chat.menu = Some((5, 640.0));
             }
         }
+        "queued" => {
+            // A15: one taken back after the PC had it, struck; the menu open on another.
+            app.open("bold-puffin");
+            let mut q = crate::data::Sending::default();
+            q.push("Use the old matcher after all", 0);
+            q.push("Push it when the tests pass", 0);
+            q.waiting[0].stage = crate::data::Stage::Entered;
+            q.take_back(0);
+            app.sending.insert("bold-puffin".into(), q);
+            app.st.chat.queued_menu = Some((1, 470.0));
+        }
         "blocked" => {
             // Blocked by its own report (session.done blocked), with no card on its screen.
             app.open("umber-zebra");
