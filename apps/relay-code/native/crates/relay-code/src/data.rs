@@ -410,16 +410,62 @@ impl Sending {
     }
 }
 
-/// One tool call: its tool, its one-line summary, and its detail (an edit's diff, `-` and `+`
-/// lines; a command's text).
-#[derive(Clone, Debug, PartialEq)]
+/// One tool call: its tool, its one-line summary, its detail (an edit's diff, `-` and `+` lines;
+/// a command's whole text; a plan; a to-do list as `[x]`/`[~]`/`[ ]` lines; questions and their
+/// choices), and what the tool answered (its head, matched by `tool_use_id`).
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct ToolCall {
+    pub id: String,
     pub name: String,
     pub summary: String,
     pub detail: Option<String>,
+    /// The tool's answer, once it came: its text (the PC sends the head of it).
+    pub output: Option<String>,
+    pub failed: bool,
+}
+
+/// One line of a to-do list: its words and how far along it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Todo {
+    Done,
+    Doing,
+    Open,
+}
+
+/// A to-do list as the PC words it (`[x] Fix it`, `[~] Push`, `[ ] Open the PR`).
+pub fn todos(detail: &str) -> Vec<(Todo, String)> {
+    detail
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim_start();
+            let (mark, rest) = (l.get(..3)?, l.get(3..)?);
+            let t = match mark {
+                "[x]" | "[X]" => Todo::Done,
+                "[~]" => Todo::Doing,
+                "[ ]" => Todo::Open,
+                _ => return None,
+            };
+            Some((t, rest.trim().to_string()))
+        })
+        .collect()
 }
 
 impl ToolCall {
+    /// A command run in a shell: its whole command and its output are shown.
+    pub fn is_shell(&self) -> bool {
+        matches!(self.name.as_str(), "Bash" | "exec_command" | "shell")
+    }
+
+    /// A plan put to you (Claude Code's plan mode).
+    pub fn is_plan(&self) -> bool {
+        self.name == "ExitPlanMode" && self.detail.as_deref().is_some_and(|d| !d.trim().is_empty())
+    }
+
+    /// A to-do list (Claude Code's TodoWrite, Codex's plan).
+    pub fn is_todos(&self) -> bool {
+        matches!(self.name.as_str(), "TodoWrite" | "update_plan") && self.detail.as_deref().is_some_and(|d| !todos(d).is_empty())
+    }
+
     /// An edit with a diff to show.
     pub fn is_edit(&self) -> bool {
         matches!(self.name.as_str(), "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "apply_patch") && self.detail.as_deref().is_some_and(|d| !d.trim().is_empty())
@@ -467,7 +513,7 @@ pub fn items(msgs: &[Msg]) -> Vec<Item> {
                 for b in m.body.get("blocks").and_then(Value::as_array).into_iter().flatten() {
                     let s = |k: &str| b.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
                     match b.get("type").and_then(Value::as_str) {
-                        Some("tool_use") => calls.push(ToolCall { name: s("name"), summary: s("summary"), detail: b.get("detail").and_then(Value::as_str).map(str::to_string) }),
+                        Some("tool_use") => calls.push(ToolCall { id: s("id"), name: s("name"), summary: s("summary"), detail: b.get("detail").and_then(Value::as_str).map(str::to_string), ..Default::default() }),
                         Some("text") => {
                             flush(&mut out, &mut calls, &mut failed);
                             out.push(Item::Said(s("text")));
@@ -481,8 +527,27 @@ pub fn items(msgs: &[Msg]) -> Vec<Item> {
                 }
             }
             "tool" => {
-                if m.body.get("is_error").and_then(Value::as_bool) == Some(true) {
+                let is_error = m.body.get("is_error").and_then(Value::as_bool) == Some(true);
+                if is_error {
                     failed = true;
+                }
+                // The answer goes to its call: one still in the row, else one already drawn.
+                let id = text("tool_use_id");
+                let t = text("text");
+                if id.is_empty() {
+                    continue;
+                }
+                let here = calls.iter_mut().rev().find(|c| c.id == id);
+                let found = match here {
+                    Some(c) => Some(c),
+                    None => out.iter_mut().rev().take(8).find_map(|it| match it {
+                        Item::Did { calls, failed, .. } => calls.iter_mut().find(|c| c.id == id).inspect(|_| *failed |= is_error),
+                        _ => None,
+                    }),
+                };
+                if let Some(c) = found {
+                    c.output = Some(t);
+                    c.failed = is_error;
                 }
             }
             "error" => {
@@ -840,6 +905,27 @@ mod tests {
         assert_eq!(s.next(0), Some(Step::Type("a".into())));
         s.answered(Answer::Refused, 10);
         assert_eq!(s.next(10), Some(Step::Type("b".into())));
+    }
+
+    #[test]
+    fn a_tool_answer_goes_to_its_call_by_id() {
+        let msg = |id: &str, role: &str, body: Value| Msg { id: id.into(), role: role.into(), body, created_at: String::new() };
+        let msgs = [
+            msg("1", "assistant", json!({"blocks": [
+                {"type": "tool_use", "id": "a", "name": "Bash", "summary": "cargo test"},
+                {"type": "tool_use", "id": "b", "name": "TodoWrite", "summary": "", "detail": "[x] Read it\n[~] Fix it\n[ ] Ship it"}]})),
+            msg("2", "tool", json!({"tool_use_id": "b", "is_error": false, "text": "ok"})),
+            msg("3", "assistant", json!({"blocks": [{"type": "text", "text": "Running it."}]})),
+            // An answer that comes after the agent's words still finds its call.
+            msg("4", "tool", json!({"tool_use_id": "a", "is_error": true, "text": "1 failed"})),
+        ];
+        let it = items(&msgs);
+        let Item::Did { failed, calls, .. } = &it[0] else { panic!("{it:?}") };
+        assert!(*failed);
+        assert_eq!((calls[0].output.as_deref(), calls[0].failed), (Some("1 failed"), true));
+        assert_eq!((calls[1].output.as_deref(), calls[1].failed), (Some("ok"), false));
+        assert!(calls[0].is_shell() && calls[1].is_todos());
+        assert_eq!(todos(calls[1].detail.as_deref().unwrap()), [(Todo::Done, "Read it".into()), (Todo::Doing, "Fix it".into()), (Todo::Open, "Ship it".into())]);
     }
 
     #[test]

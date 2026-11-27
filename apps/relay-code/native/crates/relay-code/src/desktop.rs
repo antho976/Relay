@@ -157,6 +157,11 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.st.drawer.open = true;
             app.st.agents.query = "leaf".into();
         }
+        // A3: what it did, call by call.
+        "plan" | "tools" => {
+            crate::sample::tools(&mut app, screen == "plan");
+            app.open("swift-ocelot");
+        }
         "blocked" => {
             // Blocked by its own report (session.done blocked), with no card on its screen.
             app.open("umber-zebra");

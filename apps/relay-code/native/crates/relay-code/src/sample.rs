@@ -89,3 +89,43 @@ fn civil(z: i64) -> (i64, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
+
+/// What an agent did, call by call (A3): a to-do list, a failing test with its output, an edit,
+/// the passing run, and, with `plan`, a plan put to you that waits for your answer. On swift-ocelot.
+pub fn tools(app: &mut App, plan: bool) {
+    let fail = (1..=18).map(|i| format!("test flows::case_{i:02} ... ok")).chain([
+        "test data::tests::a_failed_send_is_tapped_to_go_again ... FAILED".to_string(),
+        "".into(),
+        "failures:".into(),
+        "---- data::tests::a_failed_send_is_tapped_to_go_again stdout ----".into(),
+        "assertion `left == right` failed: its words never went: typed again".into(),
+        "  left: None".into(),
+        " right: Some(Type(\"a\"))".into(),
+        "test result: FAILED. 84 passed; 1 failed; 3 ignored".into(),
+    ]).collect::<Vec<_>>().join("\n");
+    let pass = (1..=30).map(|i| format!("test screen::tests::case_{i:02} ... ok")).chain(["test result: ok. 85 passed; 0 failed; 3 ignored".to_string()]).collect::<Vec<_>>().join("\n");
+    let mut msgs = vec![
+        json!({"id": "t0", "role": "user", "body": {"text": "Make a failed send retry from where it stopped"}, "created_at": ""}),
+        json!({"id": "t1", "role": "assistant", "body": {"blocks": [{"type": "tool_use", "id": "c1", "name": "TodoWrite", "summary": "3 to-dos", "detail": "[x] Read how Sending moves a message\n[~] Retry from the stage it failed at\n[ ] Run the tests and commit"}]}, "created_at": ""}),
+        json!({"id": "t1r", "role": "tool", "body": {"tool_use_id": "c1", "is_error": false, "text": "Todos have been modified successfully"}, "created_at": ""}),
+        json!({"id": "t2", "role": "assistant", "body": {"blocks": [{"type": "tool_use", "id": "c2", "name": "Bash", "summary": "cd apps/relay-code/native && cargo test --locked -p relay-code", "detail": "# Run the app's tests\ncd apps/relay-code/native && cargo test --locked -p relay-code 2>&1 | tail -40"}]}, "created_at": ""}),
+        json!({"id": "t2r", "role": "tool", "body": {"tool_use_id": "c2", "is_error": true, "text": fail}, "created_at": ""}),
+        json!({"id": "t3", "role": "assistant", "body": {"blocks": [{"type": "text", "text": "The retry went back to `Typed` for a send whose words never went. Fixing `retry`."}]}, "created_at": ""}),
+        json!({"id": "t4", "role": "assistant", "body": {"blocks": [{"type": "tool_use", "id": "c4", "name": "Edit", "summary": "src/data.rs", "detail": "-                Stage::Typing => Stage::Typed,\n+                Stage::Typing => Stage::Queued,"}]}, "created_at": ""}),
+        json!({"id": "t4r", "role": "tool", "body": {"tool_use_id": "c4", "is_error": false, "text": "The file was updated"}, "created_at": ""}),
+        json!({"id": "t5", "role": "assistant", "body": {"blocks": [{"type": "tool_use", "id": "c5", "name": "Bash", "summary": "cargo test --locked -p relay-code"}]}, "created_at": ""}),
+        json!({"id": "t5r", "role": "tool", "body": {"tool_use_id": "c5", "is_error": false, "text": pass}, "created_at": ""}),
+    ];
+    if plan {
+        msgs.push(json!({"id": "t6", "role": "assistant", "body": {"blocks": [{"type": "tool_use", "id": "c6", "name": "ExitPlanMode", "summary": "", "detail": "## Retry from where it stopped\n\n1. `retry` puts a send back at the stage it failed at\n2. **Enter alone** when its words were typed\n3. A test for each stage\n\nNothing else in the queue changes."}]}, "created_at": ""}));
+    }
+    let mut c = Convo::default();
+    c.take(&json!({"messages": msgs, "cursor": 1, "reset": true, "found": true}));
+    app.convos.insert("swift-ocelot".into(), c);
+    let screen = if plan {
+        "Would you like to proceed?\n\n❯ 1. Yes, and auto-accept edits\n  2. Yes, and manually approve edits\n  3. No, keep planning\n\nctrl-g to edit in your editor"
+    } else {
+        "· Pondering… (42s · ↓ 1.9k tokens)\n────\n❯ \n────\n  ⏵⏵ auto mode on (shift+tab to cycle)"
+    };
+    app.screens.insert("swift-ocelot".into(), crate::screen::read(screen));
+}
