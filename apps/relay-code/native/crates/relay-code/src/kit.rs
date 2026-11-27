@@ -372,8 +372,13 @@ pub fn menu(cx: &mut Ctx, top: f32, items: &[&str]) -> Option<usize> {
 /// Choices side by side on a quiet track, the one on raised (Spacing: Tight, Normal, Loose).
 /// Returns the one tapped.
 pub fn segmented(cx: &mut Ctx, x: f32, y: f32, w: f32, items: &[&str], on: usize) -> Option<usize> {
+    segmented_on(cx, x, y, w, items, on, t::S1)
+}
+
+/// [`segmented`] on a `track` of its own colour: S2 on a sheet, which is S1 itself.
+pub fn segmented_on(cx: &mut Ctx, x: f32, y: f32, w: f32, items: &[&str], on: usize, track: Rgba) -> Option<usize> {
     let h = 36.0;
-    cx.c.rect(x, y, w, h, 9.0, t::S1);
+    cx.c.rect(x, y, w, h, 9.0, track);
     let iw = w / items.len().max(1) as f32;
     let mut hit = None;
     for (i, item) in items.iter().enumerate() {
