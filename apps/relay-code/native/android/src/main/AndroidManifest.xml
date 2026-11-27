@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The owner's PC (on the home network, Tailscale, or through the owner's own server) and,
+         to pair through it, that server. No other host. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- To redial the moment the network changes (LinkService's network callback). -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- An agent that asks you something while the app is in the background. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- LinkService keeps the link to the paired PC open in the background (design 44, Q2). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- Plain ws:// is allowed: the PC's door on the home network has no certificate. -->
+    <application
+        android:label="Relay Code"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction"
+        android:usesCleartextTraffic="true"
+        android:theme="@style/Theme.RelayCode">
+        <!-- The whole app is librelaycode.so; CodeActivity (GameActivity, plus Back, the clipboard,
+             notifications and the service) hosts it and its keyboard. Every configuration change
+             the app follows by itself is listed, so the activity is not recreated for them. -->
+        <activity
+            android:name="com.quietsoftware.relaycode.CodeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|screenLayout|smallestScreenSize|density|uiMode|navigation|fontScale|fontWeightAdjustment|locale|layoutDirection|colorMode|touchscreen|mcc|mnc|grammaticalGender">
+            <meta-data android:name="android.app.lib_name" android:value="relaycode" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <service
+            android:name="com.quietsoftware.relaycode.LinkService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the owner's link to their own PC open, so their coding agents can reach them" />
+        </service>
+    </application>
+</manifest>

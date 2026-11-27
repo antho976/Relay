@@ -44,6 +44,7 @@ regex.workspace = true
 # The PTY reader's key scan (redact.rs): a SIMD search for `sk-ant-` instead of a byte-at-a-time walk.
 memchr = "2"
 similar.workspace = true
+vt100.workspace = true
 tempfile = "3"
 # The Pictures plugin's client for its fixed hosts (pictures-core), as relay-remote's.
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }

@@ -185,7 +185,7 @@ pub const PHONE_OPS: &[&str] = &[
     "session.attach", "session.brief", "session.clear_restorable", "session.close", "session.create",
     "session.detach", "session.discard_restorable", "session.get", "session.input", "session.list",
     "session.park", "session.resize", "session.restorable", "session.resume",
-    "session.scrollback", "session.spawn", "session.transcript", "session.update", "session.upload",
+    "session.screen", "session.scrollback", "session.spawn", "session.transcript", "session.update", "session.upload",
     "session.wake",
     "settings.reset",
     // A skill is installed from a repository and switched per project from the phone, and no

@@ -558,6 +558,8 @@ pub struct Engine {
     /// short keys are found with a handful of compares, where `HashMap` runs SipHash each time
     /// (11 % of `session.input`).
     ptys: std::sync::Mutex<BTreeMap<Id, Arc<Pty>>>,
+    /// `session.screen`'s terminal emulators, one per live PTY read that way. Its own locks.
+    pub(crate) screens: crate::screen::Screens,
     /// Session name → id for the live PTYs above, so `session.input` can resolve a keystroke's
     /// target without a `SELECT` (D148).
     pty_ids: std::sync::Mutex<BTreeMap<String, Id>>,
@@ -634,6 +636,7 @@ impl Engine {
                 in_flight_done: std::sync::Condvar::new(),
                 ptys: std::sync::Mutex::new(BTreeMap::new()),
                 pty_ids: std::sync::Mutex::new(BTreeMap::new()),
+                screens: Default::default(),
                 shell_ptys: std::sync::Mutex::new(HashSet::new()),
                 mirrors: std::sync::Mutex::new(HashMap::new()),
                 device_runs: std::sync::Mutex::new(HashMap::new()),
@@ -878,6 +881,7 @@ impl Engine {
             .unwrap_or_else(PoisonError::into_inner)
             .retain(|_, id| *id != session_id);
         self.shell_ptys.lock().unwrap_or_else(PoisonError::into_inner).remove(&session_id);
+        self.screens.forget(session_id);
         self.ptys.lock().unwrap_or_else(PoisonError::into_inner).remove(&session_id)
     }
     pub fn live_pty_count(&self) -> usize {

@@ -205,6 +205,23 @@ result!(#[schemars(rename = "SessionScrollbackOut")] ScrollbackOut {
     #[serde(default, skip_serializing_if = "Option::is_none")] pub rows: Option<u16>,
 });
 op!(Scrollback, "session.scrollback", ScrollbackIn => ScrollbackOut, OpMeta::query(Scope::Session, 3, "Scrollback text, the (epoch, seq) it ends at, and the PTY's size"));
+payload!(#[schemars(rename = "SessionScreenIn")] ScreenIn {
+    pub session: String,
+    /// How many rows from the bottom of what is drawn (default 12, at most the PTY's rows).
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub rows: Option<u16>,
+});
+result!(#[schemars(rename = "SessionScreenOut")] ScreenOut {
+    /// The last `rows` rows of the screen as a terminal would show it, plain text: blank rows
+    /// at the bottom dropped first, then each row's trailing spaces, joined with `\n`.
+    pub text: String,
+    /// The PTY's size the screen was rendered at.
+    pub cols: u16, pub rows: u16,
+    /// The program is on the alternate screen (a full-screen TUI such as vim or less).
+    pub alternate: bool,
+    /// Where in the output the screen stands, as `session.scrollback` and `session.attach` count it.
+    pub epoch: u64, pub seq: u64,
+});
+op!(Screen, "session.screen", ScreenIn => ScreenOut, OpMeta::query(Scope::Session, 3, "The bottom rows of the live terminal as rendered, plain text, and the (epoch, seq) they stand at"));
 payload!(#[schemars(rename = "SessionTranscriptIn")] TranscriptIn {
     pub session: String,
     /// The `cursor` of the previous answer: only what the agent wrote since. Absent, the
@@ -350,6 +367,7 @@ entries!(
     Input,
     Resize,
     Scrollback,
+    Screen,
     Transcript,
     Upload,
     RestorableList,

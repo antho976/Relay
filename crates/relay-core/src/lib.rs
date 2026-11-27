@@ -44,6 +44,7 @@ pub mod aide;
 pub mod clips;
 pub mod recovery;
 pub mod redact;
+pub mod screen;
 pub mod serve;
 pub mod sessions;
 mod shell;

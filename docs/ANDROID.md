@@ -326,7 +326,7 @@ phone with a key in Android's keystore; the pairing and the replica are excluded
 and device transfers. Wake-on-LAN targets, like the PC's name and Relay's version, are sent in the welcome, only to a
 phone the door has admitted; the greeting before it names nothing.
 
-This app adds to `PHONE_OPS`: an agent's conversation (`session.transcript`) and a picture for it (`session.upload`), the Threads space (`thread.*`, with a message's pictures, `thread.upload` and `thread.image`, the PC's own models, `thread.models` and `thread.pick`, and the cards a thread's agent asks on, `thread.proposal.*`), the ledger's reads for the Tally
+This app adds to `PHONE_OPS`: an agent's conversation (`session.transcript`), the bottom of its terminal as drawn (`session.screen`: a status line, a permission question) and a picture for it (`session.upload`), the Threads space (`thread.*`, with a message's pictures, `thread.upload` and `thread.image`, the PC's own models, `thread.models` and `thread.pick`, and the cards a thread's agent asks on, `thread.proposal.*`), the ledger's reads for the Tally
 panel and the Undo of an entry a thread added or changed, and its Redo (`money.summary/lists/series/tx.list/invest.*`,
 `money.tx.delete/restore/update`, `money.invest.delete/restore`, the last also for the Invest page's
 Activity), Arbiter's reads, a proposal's answer and its halt and restart keys, Avex's reads, a

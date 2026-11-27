@@ -56,6 +56,13 @@ Avex and the Relay phone app both have an `:app` module. Its CI is `.github/work
 only for changes under `apps/avex/`, and nothing in `cargo test` touches it. Its public build
 holds no `INTERNET` permission, ever; `crates/relay-gym` reads the file it exports.
 
+## Relay Code: `apps/relay-code`
+
+The phone app's Rust rewrite (wgpu, coding only, Relay design 44), installed beside
+`apps/relay-android` until it replaces it. Its own Cargo workspace (`apps/relay-code/native`) and
+its own instructions, `apps/relay-code/CLAUDE.md`: read them before changing anything there. It
+talks to the same door, so every op it sends must be in `PHONE_OPS` too.
+
 ## Tally: `apps/tally` and `crates/relay-money`
 
 Tally, the budget tracker, is Tally RS: Rust drawn with wgpu, for Android (a GameActivity shell in
