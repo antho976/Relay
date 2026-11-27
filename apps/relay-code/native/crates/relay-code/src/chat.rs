@@ -56,7 +56,9 @@ pub struct State {
     /// Find in this conversation (A16), while its bar is open.
     pub find: Option<Find>,
     /// A long press on a message of yours still waiting: its place in the queue, where the finger was.
-    pub queued_menu: Option<(usize, f32)>,
+    /// By the message's own id, never its place: one retiring ahead of it must not slide the
+    /// next one under the menu (A23).
+    pub queued_menu: Option<(String, f32)>,
     /// Items whose fold changed: only they are measured again, on the next frame.
     refolded: HashSet<String>,
     /// Each item's key ([`data::items_timed`]): folds and heights follow it, not its place.
@@ -840,7 +842,7 @@ fn find_bar(app: &mut App, name: &str) {
 
 /// Where the waiting message's menu sits.
 pub fn queued_rect(app: &App) -> Option<[f32; 4]> {
-    let (_, fy) = app.st.chat.queued_menu?;
+    let fy = app.st.chat.queued_menu.as_ref()?.1;
     let (w, h) = (220.0, MENU_H);
     let lo = app.canvas.inset_top + TOP_H + 8.0;
     let hi = app.st.chat.box_top - 8.0 - h;
@@ -851,8 +853,10 @@ pub fn queued_rect(app: &App) -> Option<[f32; 4]> {
 /// Remove. One the PC already has cannot be unsent: it is struck through and the agent still
 /// reads it, as the menu says.
 fn queued_menu(app: &mut App, name: &str) {
-    let (Some([x, y, w, h]), Some((i, _))) = (queued_rect(app), app.st.chat.queued_menu) else { return };
-    let Some(p) = app.sending.get(name).and_then(|s| s.waiting.get(i)).cloned() else {
+    let (Some([x, y, w, h]), Some((id, _))) = (queued_rect(app), app.st.chat.queued_menu.clone()) else { return };
+    // Where it is now; gone (the log took it), the menu goes too.
+    let at = app.sending.get(name).and_then(|s| s.waiting.iter().position(|p| !id.is_empty() && p.client_id == id));
+    let Some((i, p)) = at.and_then(|i| app.sending.get(name).map(|s| (i, s.waiting[i].clone()))) else {
         app.st.chat.queued_menu = None;
         return;
     };
@@ -1638,6 +1642,9 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
         .unwrap_or_default()
         .iter()
         .filter(|p| !waiting.iter().any(|w| w.client_id == p.client_id))
+        // One this phone already saw logged (retired by count: the PC could not match its words)
+        // is not drawn a second time (A23).
+        .filter(|p| !app.sending.get(name).is_some_and(|s| s.was_retired(&p.client_id)))
         .map(|p| (p, data::parse_ms(&p.sent_at).unwrap_or(now_ms)))
         .filter(|(p, at)| !(p.text.starts_with('/') && now_ms.saturating_sub(*at) > data::COMMAND_WAIT_MS))
         .map(|(p, at)| data::Pending { text: p.text.clone(), sent_ms: at, failed: false, stage: Stage::Entered, not_before_ms: 0, client_id: p.client_id.clone(), via_chat: true, struck: false })
@@ -1770,7 +1777,7 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
         if i < ours
             && let Some(hy) = held.filter(|hy| *hy >= top && *hy < y)
         {
-            take = Some((i, hy - off));
+            take = Some((p.client_id.clone(), hy - off));
         }
         let online = app.link_state.online();
         let (words, ink) = if p.struck {
@@ -2668,13 +2675,15 @@ mod tests {
             a.frame(clock + 70_000_000);
         };
         // Held on the second: Remove takes it out of the queue (in a shot nothing is sent).
-        a.st.chat.queued_menu = Some((1, 500.0));
+        let second = a.sending["bold-puffin"].waiting[1].client_id.clone();
+        a.st.chat.queued_menu = Some((second, 500.0));
         frame(&mut a);
         let [x, y, w, _] = queued_rect(&a).unwrap();
         tap(&mut a, x + w / 2.0, y + 36.0 + 44.0 + 22.0, 3_000_000_000);
         assert_eq!(a.sending["bold-puffin"].waiting.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["first thought"]);
         // Held on the first: Edit puts its words in the box and takes it out.
-        a.st.chat.queued_menu = Some((0, 500.0));
+        let first = a.sending["bold-puffin"].waiting[0].client_id.clone();
+        a.st.chat.queued_menu = Some((first, 500.0));
         a.frame(3_200_000_000);
         let [x, y, w, _] = queued_rect(&a).unwrap();
         tap(&mut a, x + w / 2.0, y + 36.0 + 22.0, 3_300_000_000);
@@ -2683,7 +2692,8 @@ mod tests {
         assert!(a.focus.is(FIELD));
         // A tap beside the menu closes it and reaches nothing.
         a.say("bold-puffin", "third");
-        a.st.chat.queued_menu = Some((0, 500.0));
+        let third = a.sending["bold-puffin"].waiting[0].client_id.clone();
+        a.st.chat.queued_menu = Some((third, 500.0));
         a.frame(3_500_000_000);
         tap(&mut a, 30.0, 300.0, 3_600_000_000);
         assert!(a.st.chat.queued_menu.is_none());
@@ -2812,6 +2822,40 @@ mod tests {
         assert_eq!(shared.len(), 1, "{shared:?}");
         assert!(!shared[0].contains("**"), "as read: {}", shared[0]);
         assert!(a.st.chat.menu.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_waiting_menu_stays_on_its_own_message_when_one_ahead_retires() {
+        let (mut a, dir) = fresh_app("menu-id");
+        a.sample();
+        a.open("bold-puffin");
+        let mut q = data::Sending::default();
+        q.push("first", 0);
+        q.push("second", 0);
+        for p in &mut q.waiting {
+            p.stage = Stage::Entered;
+        }
+        let second = q.waiting[1].client_id.clone();
+        a.sending.insert("bold-puffin".into(), q);
+        a.st.chat.queued_menu = Some((second.clone(), 500.0));
+        a.frame(2_000_000_000);
+        // The log takes the first: "second" slides into its place.
+        a.sending.get_mut("bold-puffin").unwrap().seen(1);
+        a.frame(2_016_000_000);
+        let [x, y, w, _] = queued_rect(&a).unwrap();
+        let (tx, ty_) = (x + w / 2.0, y + 36.0 + 44.0 + 22.0);
+        a.touch(crate::ui::Touch { id: 1, phase: crate::ui::Phase::Down, x: tx, y: ty_, t_ns: 2_100_000_000 });
+        a.frame(2_116_000_000);
+        a.touch(crate::ui::Touch { id: 1, phase: crate::ui::Phase::Up, x: tx, y: ty_, t_ns: 2_140_000_000 });
+        a.frame(2_150_000_000);
+        // Remove acted on "second" (the PC has it: struck), not on whatever took its old place.
+        let w0 = &a.sending["bold-puffin"].waiting[0];
+        assert_eq!((w0.text.as_str(), w0.struck), ("second", true));
+        // Its message gone, the menu closes by itself.
+        a.st.chat.queued_menu = Some(("no-such-id".into(), 500.0));
+        a.frame(2_200_000_000);
+        assert!(a.st.chat.queued_menu.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

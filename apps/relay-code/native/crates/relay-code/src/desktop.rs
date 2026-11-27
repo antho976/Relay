@@ -247,7 +247,8 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             q.waiting[0].stage = crate::data::Stage::Entered;
             q.take_back(0);
             app.sending.insert("bold-puffin".into(), q);
-            app.st.chat.queued_menu = Some((1, 470.0));
+            let id = app.sending["bold-puffin"].waiting[1].client_id.clone();
+            app.st.chat.queued_menu = Some((id, 470.0));
         }
         "find" => {
             // A16: find in a conversation, on the markdown sample.
