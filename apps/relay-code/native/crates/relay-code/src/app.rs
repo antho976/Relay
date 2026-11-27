@@ -104,6 +104,9 @@ pub enum Route {
     /// The repo's board, and one task.
     Board,
     Task(i64),
+    /// A file, read only (`fileview`): in `worktree` (the repo's own checkout when None), `path`
+    /// as given (relative or absolute, maybe ending in `:line`).
+    File { repo: i64, worktree: Option<String>, path: String },
     /// What needs you: held commands, agents that ask, finished work.
     Inbox,
 }
@@ -179,6 +182,7 @@ pub struct States {
     pub settings: crate::settings::State,
     pub changes: crate::changes::State,
     pub board: crate::board::State,
+    pub fileview: crate::fileview::State,
     pub inbox: crate::inbox::State,
     pub designs: crate::designs::State,
     pub agents: crate::agents::State,
@@ -1215,6 +1219,7 @@ impl App {
             Route::Design(id) => crate::designs::draw_design(self, *id, dt),
             Route::Board => crate::board::draw(self, dt),
             Route::Task(id) => crate::board::draw_task(self, *id, dt),
+            Route::File { repo, worktree, path } => crate::fileview::draw(self, *repo, worktree.clone(), path, dt),
             Route::Inbox => crate::inbox::draw(self, dt),
         };
         // "*" (the link came back) has been seen by every page drawn this frame.
