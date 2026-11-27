@@ -301,7 +301,7 @@ fn spawn_profile(drv: &dyn Driver) -> Value {
         id: 0, name: "<session>".into(), intent: None, project_id: 0, provider: Provider::Claude, role: Role::Builder,
         model: Some("<model>".into()), effort: Some("<effort>".into()), branch: String::new(), worktree: String::new(),
         task_id: None, module_id: None, pair_with: None, bus_writes: false, allow_ui: false, use_api_key: false, state: relay_bus::types::SessionState::Created,
-        pid: None, exit_code: None, provider_ref: None, spawned_at: None, last_output_at: None, usage: None,
+        waiting: None, pid: None, exit_code: None, provider_ref: None, spawned_at: None, last_output_at: None, usage: None,
         created_at: String::new(), updated_at: String::new(), closed_at: None,
     };
     let shape = |launch| -> Vec<String> {
@@ -634,7 +634,7 @@ mod tests {
         Session { id: 1, name: "calm-otter".into(), intent: None, project_id: 1, provider, role: Role::Builder,
             model: Some("model-x".into()), effort: Some("high".into()), branch: "relay/calm-otter".into(), worktree: "/tmp/w".into(),
             task_id: None, module_id: None, pair_with: None, bus_writes: false, allow_ui: false, use_api_key: false, state: SessionState::Created,
-            pid: None, exit_code: None, provider_ref: None, spawned_at: None, last_output_at: None, usage: None,
+            waiting: None, pid: None, exit_code: None, provider_ref: None, spawned_at: None, last_output_at: None, usage: None,
             created_at: "now".into(), updated_at: "now".into(), closed_at: None }
     }
 

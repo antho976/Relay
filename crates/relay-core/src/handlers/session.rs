@@ -1917,9 +1917,11 @@ pub fn register(e: &mut Engine) {
         if status == "completed" {
             release_claims(ctx, s)?;
         }
+        // A blocked or partial done waits on its blockers, not on a prompt (`Waiting::Report`).
+        let waiting = (session_state == "blocked").then_some("report");
         ctx.tx().execute(
-            "UPDATE sessions SET state=?1, last_output_at=?2, updated_at=?2 WHERE id=?3",
-            params![session_state, ctx.now, s.id],
+            "UPDATE sessions SET state=?1, waiting=?4, last_output_at=?2, updated_at=?2 WHERE id=?3",
+            params![session_state, ctx.now, s.id, waiting],
         ).bus()?;
         note_pty_state(ctx, s.id, session_state);
         let reported = p.summary.as_deref().map(str::trim).filter(|v| !v.is_empty());
@@ -2096,15 +2098,21 @@ pub fn register(e: &mut Engine) {
             return Err(BusError::invalid("session.provider_ref", format!("{value:?} is not a provider session id"))
                 .with_hint("provider_ref is the provider's own conversation id: letters, digits, '-' and '_', starting with a letter or digit"));
         }
+        // The hook itself says the agent waits at a prompt (`Waiting::Prompt`).
+        let mut prompts = false;
         let state = match p.kind.as_str() {
             "session_start" | "tool_use" | "prompt" => "running",
             "stop" | "idle" => "idle",
-            "blocked" => "blocked",
+            "blocked" => {
+                prompts = true;
+                "blocked"
+            }
             "notification" => {
                 let type_ = data.get("notification_type").or_else(|| data.get("type")).and_then(Value::as_str).unwrap_or("");
                 // Claude's `idle_prompt` ("waiting for your input") follows every finished turn a
                 // minute later: the turn's Stop already said so, and it needs nothing new.
-                if matches!(type_, "permission_prompt" | "elicitation_dialog" | "agent_needs_input" | "blocked") { "blocked" } else { sessions::state_str(s.state) }
+                prompts = matches!(type_, "permission_prompt" | "elicitation_dialog" | "agent_needs_input" | "blocked");
+                if prompts { "blocked" } else { sessions::state_str(s.state) }
             }
             _ => return Err(BusError::invalid("session.report_kind", "kind must be session_start, tool_use, prompt, stop, notification, idle, or blocked")),
         };
@@ -2122,20 +2130,21 @@ pub fn register(e: &mut Engine) {
         // `session.done` decided how this turn ends. The tool events that trail it in the same
         // turn — the done call's own PostToolUse among them — and the turn's Stop keep that
         // outcome: a blocked done stays blocked.
-        let state = match (done, p.kind.as_str()) {
-            (Some(_), "tool_use" | "prompt" | "idle") => sessions::state_str(s.state),
-            (Some(_), "stop") if s.state == SessionState::Blocked => "blocked",
-            _ => state,
-        };
+        let kept = matches!((done, p.kind.as_str()), (Some(_), "tool_use" | "prompt" | "idle"))
+            || (done.is_some() && p.kind == "stop" && s.state == SessionState::Blocked);
+        let state = if kept { sessions::state_str(s.state) } else { state };
+        // A hook that blocks is a live prompt; anything else keeps the reason it had.
+        let waiting = (state == "blocked" && prompts && !kept).then_some("prompt");
         let state_changed = state != sessions::state_str(s.state);
         // A Stop ends the turn a pending done belonged to. A fresh provider session starts no
         // turn a done could belong to; an assignment still waiting for a Stop keeps waiting.
         ctx.tx().prepare_cached(
             "UPDATE sessions SET state=?1, provider_ref=COALESCE(?2, provider_ref), last_output_at=?3, updated_at=?3,
+             waiting=CASE WHEN ?1='blocked' THEN COALESCE(?7, waiting) ELSE NULL END,
              done_pending_stop=CASE WHEN ?5='stop' THEN NULL WHEN ?5='session_start' AND done_pending_stop!=?6 THEN NULL
                                     ELSE done_pending_stop END
              WHERE id=?4",
-        ).bus()?.execute(params![state, provider_ref, ctx.now, s.id, p.kind, ASSIGNMENT_AT_STOP]).bus()?;
+        ).bus()?.execute(params![state, provider_ref, ctx.now, s.id, p.kind, ASSIGNMENT_AT_STOP, waiting]).bus()?;
         note_pty_state(ctx, s.id, state);
         if matches!(p.kind.as_str(), "tool_use" | "stop" | "prompt") {
             // The command behind a device lease has finished; keep the lease only briefly. A new

@@ -12232,6 +12232,18 @@
         "state": {
           "$ref": "#/$defs/SessionState"
         },
+        "waiting": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Waiting"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why a `blocked` session waits; null in every other state, and for a session blocked\nbefore the engine recorded why (schema v37).",
+          "default": null
+        },
         "pid": {
           "type": [
             "integer",
@@ -12309,6 +12321,21 @@
         "exited",
         "closed"
       ]
+    },
+    "Waiting": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "prompt",
+          "description": "At a live prompt in its terminal: a permission, a question, a request for input\n(the provider's hooks, `session.report`). Answering it lets the agent go on."
+        },
+        {
+          "type": "string",
+          "const": "report",
+          "description": "It ended its turn with `session.done` `blocked` or `partial`: there is nothing to answer\nin the terminal; its blockers say what it needs."
+        }
+      ],
+      "description": "Why a `blocked` session waits for the person."
     },
     "TaskDispatched": {
       "type": "object",
