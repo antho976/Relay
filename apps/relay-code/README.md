@@ -95,11 +95,10 @@ kind of build the phone has.
 
 ### Testing against a real door
 
-`tests/live_door.rs` pairs and connects against a throwaway engine. Pairing is the owner's to do
-(agents may not run `relay remote pair`), so run it yourself:
+`tests/live_door.rs` pairs, connects, and tries what the app is new to (`chat.send` once under one
+id, `session.transcript` with `before`, `phone.app.latest` and `.apk`) against a throwaway `test`
+engine on this PC. Pairing is the owner's to do, so the owner runs it, in a terminal of their own:
 
-```fish
-relay --instance test remote serve --bind 127.0.0.1:7431 --start-engine &
-set -x RELAY_E2E_LINK (relay --instance test remote pair --no-confirm | string match -r 'relay://pair\S+')
-cd apps/relay-code/native && cargo test -p rc-link --test live_door -- --nocapture
-```
+1. `apps/relay-code/tools/live-check.sh` starts the test engine, its door on loopback, a scratch project and a fake APK.
+2. It prints one pairing command: run it, as it is, in a second terminal.
+3. It runs the live test, prints `Live check passed.`, and stops what it started.
