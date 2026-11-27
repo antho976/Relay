@@ -974,34 +974,41 @@ fn diff_keys(app: &mut App, y: f32, group: Group, list: &[File], f: &File) -> f3
     let next = neighbour(list, &f.path, 1);
     let mut x = t::PAD - 12.0;
     let mut go: Option<File> = None;
-    for (label, target) in [("Previous", prev), ("Next", next)] {
-        let lw = app.canvas.measure(label, small) + 24.0;
+    // The file before and after, as chevrons: the words would crowd Discard off the row.
+    for (glyph, target) in [("chevron-left", prev), ("chevron-right", next)] {
         let mut cx = crate::cx!(app);
         let ink = if target.is_some() { t::INK2 } else { t::INK3.a(0.5) };
-        if target.is_some() && cx.pressed(x, y - 4.0, lw, 40.0) {
-            cx.c.rect(x, y - 2.0, lw, 32.0, 8.0, t::WASH);
+        if target.is_some() && cx.pressed(x, y - 6.0, 44.0, 44.0) {
+            cx.c.rect(x + 4.0, y - 2.0, 36.0, 32.0, 8.0, t::WASH);
         }
-        cx.c.text(label, x + 12.0, y + 5.0, small.color(ink));
-        if cx.tap(x, y - 6.0, lw, 44.0) && target.is_some() {
+        cx.c.icon(glyph, x + 22.0, y + 14.0, 14.0, ink);
+        if cx.tap(x, y - 6.0, 44.0, 44.0) && target.is_some() {
             go = target;
         }
-        x += lw;
+        x += 44.0;
     }
-    let close = {
-        let label = "Collapse";
+    let text_key = |app: &mut App, label: &str, x: &mut f32| {
         let lw = app.canvas.measure(label, small) + 24.0;
         let mut cx = crate::cx!(app);
-        if cx.pressed(x, y - 4.0, lw, 40.0) {
-            cx.c.rect(x, y - 2.0, lw, 32.0, 8.0, t::WASH);
+        if cx.pressed(*x, y - 4.0, lw, 40.0) {
+            cx.c.rect(*x, y - 2.0, lw, 32.0, 8.0, t::WASH);
         }
-        cx.c.text(label, x + 12.0, y + 5.0, small);
-        cx.tap(x, y - 6.0, lw, 44.0)
+        cx.c.text(label, *x + 12.0, y + 5.0, small);
+        let hit = cx.tap(*x, y - 6.0, lw, 44.0);
+        *x += lw;
+        hit
     };
+    let close = text_key(app, "Collapse", &mut x);
+    // The whole file, read only, unless it is gone.
+    let view = f.index != "D" && !f.path.ends_with('/') && text_key(app, "View file", &mut x);
     if group == Group::Work {
         discard_key(app, y, f);
     }
     if close {
         app.st.changes.open = None;
+    } else if view && let Some(repo) = app.repo {
+        let worktree = app.st.changes.worktree.clone();
+        crate::fileview::open(app, repo, worktree, &f.path);
     } else if let Some(t) = go {
         app.st.changes.expanded.insert((group, folder(&t.path).to_string()));
         open_file(app, (group, t.path.clone()));
@@ -1432,7 +1439,7 @@ pub(crate) fn prose_box(app: &mut App, id: &'static str, placeholder: &str, x: f
 
 /// Under an open uncommitted file's diff, at the right: Discard, which asks first.
 fn discard_key(app: &mut App, y: f32, f: &File) {
-    let label = if f.index == "?" { "Delete this new file" } else { "Discard changes" };
+    let label = if f.index == "?" { "Delete" } else { "Discard" };
     let small = Text::new(ty::SMALL, t::DANGER).medium();
     let lw = app.canvas.measure(label, small) + 24.0;
     let x = WIDTH - t::PAD - lw;

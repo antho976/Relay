@@ -256,6 +256,11 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.reset_to(Route::Home);
             app.push(Route::Inbox);
         }
+        "file" => {
+            crate::fileview::sample(&mut app);
+            app.reset_to(Route::Home);
+            app.push(Route::File { repo: 1, worktree: None, path: "apps/relay-code/native/crates/relay-code/src/ui.rs:6".into() });
+        }
         "designs" => {
             app.reset_to(Route::Home);
             app.push(Route::Designs);
