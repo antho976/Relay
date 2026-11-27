@@ -647,7 +647,7 @@ const HOLD_NS: u64 = 450_000_000;
 pub fn menu_rect(app: &App) -> Option<[f32; 4]> {
     let (j, fy) = app.st.chat.menu?;
     let mine = matches!(app.st.chat.items.get(j), Some(Item::You(_)));
-    let (w, h) = (220.0, MENU_H);
+    let (w, h) = (220.0, MESSAGE_MENU_H);
     let x = if mine { WIDTH - t::PAD - w } else { t::PAD };
     let lo = app.canvas.inset_top + TOP_H + 8.0;
     let hi = app.st.chat.box_top - 8.0 - h;
@@ -655,6 +655,8 @@ pub fn menu_rect(app: &App) -> Option<[f32; 4]> {
 }
 
 const MENU_H: f32 = 36.0 + 2.0 * 44.0 + 8.0;
+/// The held message's menu: its time, Copy, Copy as text, Share.
+const MESSAGE_MENU_H: f32 = 36.0 + 3.0 * 44.0 + 8.0;
 
 /// A long press's menu: when the message was written, Copy (as written, Markdown kept) and Copy
 /// as text (the words as read). It takes every tap while open: a row, or anywhere to close it.
@@ -674,7 +676,7 @@ fn message_menu(app: &mut App) {
     let when = app.st.chat.times.get(j).copied().filter(|t| *t > 0).and_then(|t| local(t).map(|l| format!("{}, {:02}:{:02}", day_name(t, rc_link::link::now_ms()), l.hour, l.min)));
     app.canvas.text_fit(when.as_deref().unwrap_or("When: not in the log"), x + 16.0, y + 11.0, w - 32.0, Text::new(ty::SMALL, t::INK3).medium());
     let mut pick = None;
-    for (k, (words, glyph)) in [("Copy", "copy"), ("Copy as text", "file-text")].iter().enumerate() {
+    for (k, (words, glyph)) in [("Copy", "copy"), ("Copy as text", "file-text"), ("Share", "upload")].iter().enumerate() {
         let ry = y + 36.0 + k as f32 * 44.0;
         let mut cx = crate::cx!(app);
         if cx.pressed(x + 4.0, ry, w - 8.0, 44.0) {
@@ -689,8 +691,13 @@ fn message_menu(app: &mut App) {
     if let Some(k) = pick {
         let words = if k == 0 { copy_words(&it) } else { plain_words(&it) };
         if let Some(words) = words {
-            app.host.copy_text(&words);
-            app.toast("Copied");
+            if k == 2 {
+                // To another app, as read (Markdown's marks dropped).
+                app.host.share(&words);
+            } else {
+                app.host.copy_text(&words);
+                app.toast("Copied");
+            }
         }
         app.st.chat.menu = None;
     } else if app.ui.tap_here().is_some() {
@@ -2763,6 +2770,42 @@ mod tests {
         helper_came(&mut a, "toolu_map");
         a.frame(2_032_000_000);
         assert!(a.st.chat.heights[j] < with - 30.0, "its steps took room: {} vs {with}", a.st.chat.heights[j]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn share_hands_the_message_as_read_to_another_app() {
+        struct ShareHost(std::path::PathBuf, std::sync::Mutex<Vec<String>>);
+        impl crate::app::Host for ShareHost {
+            fn data_dir(&self) -> std::path::PathBuf {
+                self.0.clone()
+            }
+            fn log(&self, _text: &str) {}
+            fn share(&self, text: &str) {
+                self.1.lock().unwrap().push(text.to_string());
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("relay-code-share-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let host = std::sync::Arc::new(ShareHost(dir.clone(), Default::default()));
+        let mut a = App::new(host.clone(), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        a.open("bold-puffin");
+        a.frame(2_000_000_000);
+        let j = a.st.chat.items.iter().position(|it| matches!(it, Item::Said(md) if md.contains("**"))).unwrap();
+        a.st.chat.menu = Some((j, 500.0));
+        a.frame(2_016_000_000);
+        let [x, y, w, _] = menu_rect(&a).unwrap();
+        let (tx, ty_) = (x + w / 2.0, y + 36.0 + 2.0 * 44.0 + 22.0);
+        a.touch(crate::ui::Touch { id: 1, phase: crate::ui::Phase::Down, x: tx, y: ty_, t_ns: 2_100_000_000 });
+        a.frame(2_116_000_000);
+        a.touch(crate::ui::Touch { id: 1, phase: crate::ui::Phase::Up, x: tx, y: ty_, t_ns: 2_140_000_000 });
+        a.frame(2_150_000_000);
+        let shared = host.1.lock().unwrap().clone();
+        assert_eq!(shared.len(), 1, "{shared:?}");
+        assert!(!shared[0].contains("**"), "as read: {}", shared[0]);
+        assert!(a.st.chat.menu.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
