@@ -634,3 +634,52 @@ fn cancel_leaves_the_wait_for_discord() {
     tap(&mut a, &mut clock, 195.0, cancel);
     assert!(!crate::pair::waiting(&a), "Cancel stops waiting");
 }
+
+// D7: no tap falls through an overlay.
+
+#[test]
+fn a_command_in_the_list_fills_the_box_and_nothing_under_it_is_hit() {
+    let mut a = app("palette");
+    let mut clock = 1_000_000_000;
+    a.open("bold-puffin");
+    frames(&mut a, &mut clock, 5);
+    a.focus.id = Some("chat");
+    a.focus.text = "/".into();
+    frames(&mut a, &mut clock, 3);
+    let n = crate::commands::list(&mut a, "bold-puffin", "/").len() as f32;
+    // The list sits on the message box: its first row is the top one.
+    let top = a.st.chat.box_top - (n * 42.0 + 12.0) - 6.0;
+    let first = crate::commands::list(&mut a, "bold-puffin", "/")[0].text.clone();
+    tap(&mut a, &mut clock, 120.0, top + 6.0 + 21.0);
+    assert_eq!(a.focus.text, format!("{first} "), "the row filled the box");
+    assert!(a.sending.get("bold-puffin").is_none_or(|s| s.waiting.iter().all(|p| !p.text.starts_with('/'))), "and sent nothing");
+    assert!(!a.st.chat.model_sheet && !a.st.drawer.open && a.st.agents.menu.is_none(), "nothing under the list took it");
+}
+
+#[test]
+fn a_tap_above_new_agent_closes_it_and_opens_no_agent_under_it() {
+    let mut a = app("new-outside");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.st.newagent.open = true;
+    a.st.newagent.task = "Kept for next time".into();
+    frames(&mut a, &mut clock, 5);
+    // Home's NEEDS YOU row (umber-zebra) is under this spot, above the sheet.
+    tap(&mut a, &mut clock, 150.0, 56.0 + 4.0 + 34.0 + 30.0);
+    assert!(!a.st.newagent.open, "a tap outside closes it");
+    assert_eq!(a.route(), &Route::Home, "and the row under it does not open");
+    assert_eq!(a.st.newagent.task, "Kept for next time", "what was typed waits for next time");
+}
+
+#[test]
+fn a_stopped_agents_foot_takes_its_own_taps() {
+    let mut a = app("stopped-foot");
+    let mut clock = 1_000_000_000;
+    a.open("keen-newt");
+    frames(&mut a, &mut clock, 5);
+    // The foot's words, over the end of the conversation: no copy, no keyboard, no page change.
+    tap(&mut a, &mut clock, 80.0, 844.0 - crate::agents::STOPPED_H / 2.0);
+    assert!(a.focus.id.is_none());
+    assert_eq!(a.route(), &Route::Chat("keen-newt".into()));
+    assert!(a.st.agents.menu.is_none() && a.st.agents.confirm.is_none());
+}
