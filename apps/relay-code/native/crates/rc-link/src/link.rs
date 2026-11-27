@@ -109,6 +109,9 @@ pub enum Refusal {
     HostOffline,
     /// That door is the server's copy, not a PC.
     WrongDoor,
+    /// Every door that answered is another PC or another Relay (a stale home address, the dev
+    /// instance), never this phone's PC.
+    OtherPc,
     Denied { code: String, text: String },
 }
 
@@ -128,6 +131,7 @@ impl Refusal {
             Refusal::Unreachable => "The PC did not answer".into(),
             Refusal::HostOffline => "Your server answered, but the PC is not connected to it".into(),
             Refusal::WrongDoor => "That is your server's copy, not a PC".into(),
+            Refusal::OtherPc => "Another PC answered at your PC's address".into(),
             Refusal::Denied { text, .. } => text.clone(),
         }
     }
@@ -262,6 +266,85 @@ pub async fn prove(g: &mut Greeted, device: &str, token: &str) -> Result<wire::W
         return Err(Refusal::WrongDoor);
     }
     Ok(w)
+}
+
+/// Both say who they are, and differ.
+fn differs(paired: &str, said: &str) -> bool {
+    !paired.is_empty() && !said.is_empty() && paired != said
+}
+
+/// Dial the pairing's routes until a door that is this phone's PC admits it. A door that is
+/// another PC, another Relay on it (the dev instance) or the server's copy is passed over for the
+/// next route, and never told this phone's proof when its greeting already says so.
+pub async fn reach(profile: &Profile) -> Result<(Greeted, wire::Welcome), Refusal> {
+    let mut left = order_routes(&profile.routes, profile.last_route.as_deref());
+    let mut passed: Option<Refusal> = None;
+    while !left.is_empty() {
+        let mut g = match greet(&left).await {
+            Ok(g) => g,
+            Err(r) => return Err(passed.unwrap_or(r)),
+        };
+        left.retain(|r| r.url != g.route.url);
+        if differs(&profile.instance, &g.greeting.instance) {
+            g.conn.close().await;
+            passed = Some(Refusal::OtherPc);
+            continue;
+        }
+        match prove(&mut g, &profile.device, &profile.token).await {
+            Ok(w) if !differs(&profile.host_id, w.host_id.as_deref().unwrap_or_default()) => return Ok((g, w)),
+            Ok(_) => passed = Some(Refusal::OtherPc),
+            // Only this PC forgetting the phone means pair again.
+            Err(Refusal::Unpaired) if is_this_pc(profile, &g).await => {
+                g.conn.close().await;
+                return Err(Refusal::Unpaired);
+            }
+            Err(Refusal::Unpaired) => passed = Some(Refusal::OtherPc),
+            Err(Refusal::WrongDoor) => passed = Some(Refusal::WrongDoor),
+            Err(r) => {
+                g.conn.close().await;
+                return Err(r);
+            }
+        }
+        g.conn.close().await;
+    }
+    Err(passed.unwrap_or(Refusal::Unreachable))
+}
+
+/// Whether a door that refused this phone is its PC, before calling the pairing gone. Its
+/// greeting names only the Relay instance, which another PC may share: a direct route is asked
+/// `GET /info` for the PC's id. The server's room is this PC's own.
+async fn is_this_pc(profile: &Profile, g: &Greeted) -> bool {
+    if differs(&profile.instance, &g.greeting.instance) {
+        return false;
+    }
+    if profile.host_id.is_empty() || g.route.kind == crate::pairlink::RouteKind::Rendezvous {
+        return true;
+    }
+    match info(&g.route.url).await {
+        Some(i) => i.get("host_id").and_then(Value::as_str).is_some_and(|h| h.is_empty() || h == profile.host_id),
+        None => false,
+    }
+}
+
+/// A direct door's `GET /info` (plain HTTP on the same port): who the PC is. Only `ws://`.
+async fn info(url: &str) -> Option<Value> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let authority = url.strip_prefix("ws://")?.split('/').next()?.to_string();
+    let wait = Duration::from_secs(3);
+    let mut tcp = tokio::time::timeout(wait, TcpStream::connect(&authority)).await.ok()?.ok()?;
+    let ask = format!("GET /info HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n");
+    tcp.write_all(ask.as_bytes()).await.ok()?;
+    let mut body = Vec::new();
+    let mut chunk = [0u8; 2048];
+    while body.len() < 16 * 1024 {
+        match tokio::time::timeout(wait, tcp.read(&mut chunk)).await.ok()?.ok()? {
+            0 => break,
+            n => body.extend_from_slice(&chunk[..n]),
+        }
+    }
+    let text = String::from_utf8_lossy(&body);
+    let (_, json) = text.split_once("\r\n\r\n")?;
+    serde_json::from_str(json.trim()).ok()
 }
 
 /// Present a pairing code. The code is spent the moment it is sent, so once one route has greeted
@@ -419,7 +502,7 @@ struct Inner {
     events: Mutex<Vec<Event>>,
     kick: Notify,
     waker: Waker,
-    /// Bumped by [`Link::forget`]: a loop of an older generation stops.
+    /// Bumped by [`Link::forget`] and [`Link::paired`]: a loop of an older generation stops.
     generation: Mutex<u64>,
     listeners: Mutex<Vec<std::sync::mpsc::Sender<Note>>>,
 }
@@ -490,8 +573,10 @@ impl Link {
         self.inner.kick.notify_one();
     }
 
-    /// A PC was paired: keep it and connect to it now.
+    /// A PC was paired: keep it and connect to it now. A connection still being made for the
+    /// pairing before is dropped (`generation`).
     pub fn paired(&self, p: &Profile) {
+        *self.inner.generation.lock().unwrap_or_else(|e| e.into_inner()) += 1;
         self.inner.store.save(p);
         if let Some(s) = self.inner.session.lock().unwrap_or_else(|e| e.into_inner()).take() {
             s.shut();
@@ -580,17 +665,12 @@ async fn run(inner: Arc<Inner>) {
         }
         attempt += 1;
         inner.show(LinkState::Connecting { attempt });
-        let routes = order_routes(&profile.routes, profile.last_route.as_deref());
-        let mut g = match greet(&routes).await {
-            Ok(g) => g,
-            Err(r) => {
-                backoff = wait_out(&inner, &r.text(), backoff).await;
-                continue;
-            }
-        };
-        let welcome = match prove(&mut g, &profile.device, &profile.token).await {
-            Ok(w) => w,
-            Err(r @ (Refusal::Unpaired | Refusal::WrongDoor)) => {
+        let current = || *inner.generation.lock().unwrap_or_else(|e| e.into_inner()) == generation;
+        let (g, welcome) = match reach(&profile).await {
+            Ok(r) => r,
+            // Paired again or forgotten meanwhile: what this pairing heard says nothing now.
+            Err(_) if !current() => continue,
+            Err(r @ Refusal::Unpaired) => {
                 inner.show(LinkState::Revoked { reason: r.text() });
                 continue;
             }
@@ -599,7 +679,7 @@ async fn run(inner: Arc<Inner>) {
                 continue;
             }
         };
-        if *inner.generation.lock().unwrap_or_else(|e| e.into_inner()) != generation {
+        if !current() {
             g.conn.close().await;
             continue;
         }
@@ -629,7 +709,17 @@ async fn run(inner: Arc<Inner>) {
             continue;
         }
         let events: Vec<Value> = SUBSCRIBE.iter().map(|e| json!(e)).collect();
-        let _ = ask(&session, "bus.subscribe", json!({ "events": events }), CALL_TIMEOUT).await;
+        // Online with no events would show agents that never change: connect again instead.
+        if ask(&session, "bus.subscribe", json!({ "events": events }), CALL_TIMEOUT).await.is_err() {
+            session.shut();
+            backoff = wait_out(&inner, "The PC did not send its news", backoff).await;
+            continue;
+        }
+        // Paired again or forgotten during the ping: this session is the old pairing's.
+        if !current() {
+            session.shut();
+            continue;
+        }
         *inner.session.lock().unwrap_or_else(|e| e.into_inner()) = Some(session.clone());
         inner.show(LinkState::Online { host, route });
         (inner.waker)();
