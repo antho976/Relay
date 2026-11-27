@@ -577,6 +577,39 @@ fn an_update_sheet_holds_the_page_and_later_puts_that_build_off() {
 }
 
 #[test]
+fn a_page_that_did_not_load_offers_another_source_beside_retry() {
+    let (mut app, mut t, dir) = app("blank-page");
+    let d = detail(1, 3);
+    let id = d.chapters[1].id;
+    app.open_chapter(&d, 1, 0);
+    // With no server here the pages fail as out of reach first (no other source helps that),
+    // then as the source's.
+    for _ in 0..20 {
+        step(&mut app, &mut t);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.images.failed(id, 0).is_some_and(|w| w.starts_with("Can't reach")), "out of reach first");
+    for n in 0..30 {
+        app.images.fake_failed(id, n, "Your server says: The source sent this page blank");
+    }
+    step(&mut app, &mut t);
+    // Down the right of the middle, where "Other source" sits beside Retry, until it takes a tap.
+    let mut found = false;
+    let mut y = 60.0;
+    while y < 700.0 && !found {
+        tap(&mut app, &mut t, WIDTH / 2.0 + 65.0, y);
+        found = app.toast_words() == Some("Looking for this chapter on another source");
+        if app.reader.as_ref().is_some_and(|r| r.overlay) {
+            let mid = app.canvas.h * 0.5;
+            tap(&mut app, &mut t, 200.0, mid);
+        }
+        y += 8.0;
+    }
+    assert!(found, "the failed page's Other source asks the server for another copy");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn a_tap_in_the_reader_only_shows_the_overlay_and_auto_scrolls_until_tapped() {
     let (mut app, mut t, dir) = app("reader");
     let d = detail(1, 3);

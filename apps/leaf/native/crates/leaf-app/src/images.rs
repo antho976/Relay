@@ -825,6 +825,12 @@ impl Images {
         self.shared.fake_pages.store(on, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Tests: a page that would not load, and why.
+    #[cfg(test)]
+    pub fn fake_failed(&mut self, chapter: i64, n: u32, why: &str) {
+        self.failed.insert((chapter, n), why.to_string());
+    }
+
     /// Tests: a page the server said to skip.
     #[cfg(test)]
     pub fn fake_skip(&mut self, chapter: i64, n: u32) {

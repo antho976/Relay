@@ -31,6 +31,15 @@ const PLAIN: f32 = 4.0;
 /// What [`Seen`] keeps for a page hashed and found plain, so it is not decoded again.
 const PLAIN_PAGE: u64 = 0;
 
+/// What the phone is told of a page that came blank: its reader offers another source.
+pub const BLANK_PAGE: &str = "The source sent this page blank";
+
+/// A picture that is only zeros at its start: what a source (or a download cut short) leaves
+/// where the image should be.
+pub fn blank(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && bytes.iter().take(4096).all(|b| *b == 0)
+}
+
 /// Page `n` of a chapter `count` pages long is near its start or its end.
 pub fn near_edge(n: u32, count: u32) -> bool {
     n < EDGE_START || n + EDGE_END >= count
@@ -163,7 +172,8 @@ impl Ctx {
 
     /// `GET /v1/chapters/{id}/pages/{n}`: the page, or [`PageOut::Skip`] for a promo page when
     /// `skip` (the phone's setting). A page near the chapter's edges is hashed as it passes; one
-    /// whose hash is known to be promo is not fetched at all.
+    /// whose hash is known to be promo is not fetched at all. A page the source sent blank is an
+    /// error ([`BLANK_PAGE`]).
     pub fn page_out(&self, chapter: i64, n: u32, skip: bool) -> Result<PageOut, String> {
         let list = self.pages(chapter)?;
         let edge = near_edge(n, list.urls.len() as u32);
@@ -175,6 +185,15 @@ impl Ctx {
             }
         }
         let (bytes, kind) = self.page(chapter, n as usize)?;
+        if blank(&bytes) {
+            // A source that sent zeros for a picture (MangaFire's chapter 58 of Return of the
+            // Frozen Player, 2026-11-26): an error the phone can act on, not a page it can't
+            // decode; a copy downloaded blank goes, so the next ask is the source's again.
+            if list.local {
+                let _ = self.download(chapter, false);
+            }
+            return Err(BLANK_PAGE.to_string());
+        }
         if edge && known.is_none() {
             match dhash(&bytes) {
                 Some(h) => {
@@ -223,6 +242,13 @@ impl Ctx {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_picture_of_zeros_is_blank_and_a_real_one_is_not() {
+        assert!(blank(&vec![0u8; 404_770]));
+        assert!(!blank(b"RIFF\x00\x00\x00\x00WEBP"));
+        assert!(!blank(&[]));
+    }
 
     /// A comic-ish page: bands and blocks of colour, `seed` choosing which.
     fn page(w: u32, h: u32, seed: u32) -> image::RgbImage {

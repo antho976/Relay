@@ -697,6 +697,8 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
     app.images.trim(&keep);
     // Draw the strip.
     let mut retry = false;
+    // A failed page's "Other source": the chapter from another copy of the work.
+    let mut elsewhere: Option<i64> = None;
     let mut to_series = false;
     let mut end_at: Option<f32> = None;
     {
@@ -771,13 +773,25 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
                             Some(why) => {
                                 c.text(&format!("Page {} didn't load", n + 1), WIDTH / 2.0, y + h / 2.0 - 36.0, Text::new(ty::BODY, t::INK2).center());
                                 c.text_fit(why, WIDTH / 2.0, y + h / 2.0 - 10.0, WIDTH - 2.0 * PAD, label);
-                                let (kw, kh) = (120.0, 40.0);
-                                let (kx, ky) = (WIDTH / 2.0 - kw / 2.0, y + h / 2.0 + 20.0);
-                                c.rect(kx, ky, kw, kh, t::KEY_R, t::S2);
+                                // Another source helps unless the server itself is out of reach
+                                // (a page broken or blank at this source, 2026-11-26).
+                                let other = id > 0 && r.local.is_none() && !why.starts_with("Can't reach");
+                                let (kw, ow, kh, gap) = (120.0, 140.0, 40.0, 10.0);
+                                let total = if other { kw + gap + ow } else { kw };
+                                let (kx, ky) = (WIDTH / 2.0 - total / 2.0, y + h / 2.0 + 20.0);
                                 let kt = Text::new(ty::UI, t::INK).semi().center();
-                                c.text("Retry", WIDTH / 2.0, ky + (kh - kt.lh()) / 2.0, kt);
+                                c.rect(kx, ky, kw, kh, t::KEY_R, t::S2);
+                                c.text("Retry", kx + kw / 2.0, ky + (kh - kt.lh()) / 2.0, kt);
                                 if keys && ui.tapped(kx, ky, kw, kh) {
                                     retry = true;
+                                }
+                                if other {
+                                    let ox = kx + kw + gap;
+                                    c.rect(ox, ky, ow, kh, t::KEY_R, t::S2);
+                                    c.text("Other source", ox + ow / 2.0, ky + (kh - kt.lh()) / 2.0, kt);
+                                    if keys && ui.tapped(ox, ky, ow, kh) {
+                                        elsewhere = Some(id);
+                                    }
                                 }
                             }
                             None => {
@@ -1072,6 +1086,9 @@ fn frame(app: &mut App, r: &mut Reader, dt: f32) -> (bool, Leave, Option<PageAct
     }
     if retry {
         app.images.retry_failed();
+    }
+    if let Some(c) = elsewhere {
+        page_act = Some(PageAct::Elsewhere(c));
     }
     if let Some(c) = jump {
         r.pos = Pos { item: Item::Head(c), off: 0.0 };
