@@ -30,6 +30,9 @@ pub struct Agent {
     /// turn blocked or partial, and its blockers say what it needs); none from an older PC.
     #[serde(default)]
     pub waiting: Option<String>,
+    /// Its checkout on the PC: where paths in its words are read from.
+    #[serde(default)]
+    pub worktree: Option<String>,
 }
 
 /// How long without terminal output before a running agent reads as waiting, not working.
@@ -136,6 +139,7 @@ pub fn agents(v: &Value) -> Vec<Agent> {
                         last_output_at: str_of(s, "last_output_at"),
                         updated_at: str_of(s, "updated_at").unwrap_or_default(),
                         waiting: str_of(s, "waiting"),
+                        worktree: str_of(s, "worktree").filter(|w| !w.is_empty()),
                     })
                 })
                 .filter(|a| a.provider != "shell")
@@ -1132,6 +1136,82 @@ pub struct Span {
     pub link: Option<String>,
 }
 
+/// A word that names a file: `src/app.rs`, `/home/a/wt/README.md:12`, `Cargo.toml:3:5`. It has a
+/// slash and an extension, or an extension files have; a line (and column) may follow.
+pub fn file_path(word: &str) -> Option<&str> {
+    const EXTS: &[&str] = &[
+        "rs", "md", "toml", "json", "kt", "kts", "ts", "tsx", "js", "jsx", "py", "sh", "fish", "yml", "yaml", "txt", "lock", "gradle", "wgsl", "html", "css", "go", "c", "h", "cpp", "java",
+        "swift", "sql", "xml", "csv", "lua", "rb", "svg", "png", "jpg",
+    ];
+    let w = word.trim_start_matches(['(', '[', '"', '\'', '<', '`']);
+    let w = w.trim_end_matches([')', ']', '"', '\'', ',', ';', '!', '?', '>', '.', ':', '`']);
+    if w.is_empty() || is_url_start(w) || w.contains("://") || !w.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':' | '~' | '@' | '+')) {
+        return None;
+    }
+    // Without its :line[:col].
+    let mut body = w;
+    for _ in 0..2 {
+        if let Some((head, n)) = body.rsplit_once(':')
+            && !n.is_empty()
+            && n.chars().all(|c| c.is_ascii_digit())
+        {
+            body = head;
+        }
+    }
+    if body.contains(':') {
+        return None;
+    }
+    let name = body.rsplit('/').next()?;
+    let (stem, ext) = name.rsplit_once('.')?;
+    let ext_ok = !ext.is_empty() && ext.chars().all(|c| c.is_ascii_alphanumeric()) && ext.chars().any(|c| c.is_ascii_alphabetic());
+    let known = EXTS.contains(&ext.to_ascii_lowercase().as_str());
+    let ok = ext_ok && (known || (body.contains('/') && !stem.is_empty())) && body.chars().any(|c| c.is_alphabetic());
+    ok.then_some(w)
+}
+
+/// What a link to a file is written as among [`Span::link`]s: `file:` and its path.
+pub const FILE_LINK: &str = "file:";
+
+/// Plain runs with their file paths made links (`file:<path>`), and a code run that is one path
+/// made one too.
+fn paths_linked(spans: Vec<Span>) -> Vec<Span> {
+    let mut out = Vec::new();
+    for sp in spans {
+        if sp.link.is_some() {
+            out.push(sp);
+            continue;
+        }
+        if sp.marks.code {
+            let link = file_path(sp.text.trim()).filter(|p| *p == sp.text.trim()).map(|p| format!("{FILE_LINK}{p}"));
+            out.push(Span { link, ..sp });
+            continue;
+        }
+        // Split the words around each path, keeping the spaces as they were.
+        let mut plain = String::new();
+        for (k, word) in sp.text.split(' ').enumerate() {
+            if k > 0 {
+                plain.push(' ');
+            }
+            match file_path(word) {
+                Some(p) => {
+                    let at = word.find(p).unwrap_or(0);
+                    plain.push_str(&word[..at]);
+                    if !plain.is_empty() {
+                        out.push(Span { text: std::mem::take(&mut plain), marks: sp.marks, link: None });
+                    }
+                    out.push(Span { text: p.to_string(), marks: sp.marks, link: Some(format!("{FILE_LINK}{p}")) });
+                    plain.push_str(&word[at + p.len()..]);
+                }
+                None => plain.push_str(word),
+            }
+        }
+        if !plain.is_empty() {
+            out.push(Span { text: plain, marks: sp.marks, link: None });
+        }
+    }
+    out
+}
+
 fn is_url_start(s: &str) -> bool {
     s.starts_with("https://") || s.starts_with("http://")
 }
@@ -1140,6 +1220,11 @@ fn is_url_start(s: &str) -> bool {
 /// unclosed `*` or `` ` `` stays as typed), and `_` only at a word's edge, so `snake_case` and
 /// `2 * 3` read as written.
 pub fn spans(s: &str) -> Vec<Span> {
+    paths_linked(spans_only(s))
+}
+
+/// [`spans`] before file paths are found.
+fn spans_only(s: &str) -> Vec<Span> {
     let c: Vec<char> = s.chars().collect();
     let n = c.len();
     let mut out: Vec<Span> = Vec::new();
@@ -1179,7 +1264,7 @@ pub fn spans(s: &str) -> Vec<Span> {
             let label: String = c[i + 1..close].iter().collect();
             if is_url_start(url.trim()) && !label.trim().is_empty() && !label.contains('[') {
                 push(&mut out, &mut buf, marks, None);
-                let words = spans(&label).into_iter().map(|s| s.text).collect::<String>();
+                let words = spans_only(&label).into_iter().map(|s| s.text).collect::<String>();
                 out.push(Span { text: words, marks, link: Some(url.trim().to_string()) });
                 i = end + 1;
                 continue;
@@ -1562,6 +1647,20 @@ mod tests {
         c.take(&json!({"messages": (300..500).map(m).collect::<Vec<_>>(), "cursor": 10, "reset": false, "found": true}));
         assert_eq!(c.msgs.len(), KEEP + 100);
         assert_eq!(c.msgs.first().map(|m| m.id.as_str()), Some("m0"));
+    }
+
+    #[test]
+    fn file_paths_are_found_with_their_line() {
+        for (w, p) in [("src/app.rs", Some("src/app.rs")), ("(src/app.rs:120).", Some("src/app.rs:120")), ("/home/a/wt/README.md:3:5,", Some("/home/a/wt/README.md:3:5")), ("Cargo.toml", Some("Cargo.toml"))] {
+            assert_eq!(file_path(w), p, "{w}");
+        }
+        for w in ["and/or", "e.g.", "1.5", "v2.0.1", "https://x.org/a.rs", "foo.bar", "a:b.rs"] {
+            assert_eq!(file_path(w), None, "{w}");
+        }
+        let s = spans("Fixed in src/chat.rs:42 and `apps/x/Cargo.toml`.");
+        let links: Vec<_> = s.iter().filter_map(|x| x.link.as_deref()).collect();
+        assert_eq!(links, ["file:src/chat.rs:42", "file:apps/x/Cargo.toml"]);
+        assert_eq!(s.iter().map(|x| x.text.as_str()).collect::<String>(), "Fixed in src/chat.rs:42 and apps/x/Cargo.toml.");
     }
 
     #[test]

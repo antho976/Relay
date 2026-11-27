@@ -90,7 +90,7 @@ pub fn upload(link: Link, session: String, path: PathBuf) {
         let out = match std::fs::read(&path) {
             Err(e) => Err(format!("Couldn't read the picture: {e}")),
             Ok(b) if b.len() > 4 << 20 => Err("That picture is over 4 MB".into()),
-            Ok(b) => match link.call("session.upload", json!({"session": session, "bytes_b64": base64(&b)})).wait(Duration::from_secs(60)) {
+            Ok(b) => match link.call_with("session.upload", json!({"session": session, "bytes_b64": base64(&b)}), Duration::from_secs(90)).wait(Duration::from_secs(95)) {
                 Ok(v) => {
                     let path = v.get("path").and_then(Value::as_str).map(str::to_string).ok_or_else(|| "The PC kept no path".to_string());
                     if let (Ok(p), Some(t)) = (&path, make_thumb(&b)) {

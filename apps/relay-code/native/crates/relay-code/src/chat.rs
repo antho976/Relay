@@ -509,7 +509,10 @@ fn spans(app: &mut App, s: &str, x: f32, y: f32, w: f32, st: Text, max_lines: us
         }
     }
     if let Some(url) = open {
-        app.host.open_url(&url);
+        match url.strip_prefix(data::FILE_LINK) {
+            Some(path) => open_path(app, path),
+            None => app.host.open_url(&url),
+        }
     }
     h
 }
@@ -790,7 +793,18 @@ fn call(app: &mut App, c: &data::ToolCall, key: (String, usize), y: f32, draw: b
     } else if c.is_todos() {
         h += checklist(app, &data::todos(detail), x, y + h, w, draw);
     } else {
-        put(app, &format!("{} {}", c.name, c.summary), mono, 3, &mut h);
+        // A call on a file (a read, a search in one): its path opens the file.
+        match data::file_path(c.summary.trim()).filter(|p| *p == c.summary.trim()) {
+            Some(path) => {
+                let line = format!("{} {}", c.name, c.summary);
+                let lh = if draw { app.canvas.para(&line, x, y + h, w, mono.color(t::ACCENT.mix(t::INK, 0.35)), 3) } else { app.canvas.para_h(&line, w, mono, 3) };
+                if draw && crate::cx!(app).tap(x - 4.0, y + h - 4.0, w + 8.0, lh + 8.0) {
+                    open_path(app, path);
+                }
+                h += lh;
+            }
+            None => put(app, &format!("{} {}", c.name, c.summary), mono, 3, &mut h),
+        }
         // Questions and their choices, a sub-agent's brief: the words it sent, in prose.
         if !detail.trim().is_empty() {
             h += 2.0;
@@ -1002,6 +1016,11 @@ fn diff(app: &mut App, c: &data::ToolCall, key: (String, usize), y: f32, draw: b
         app.canvas.outline(x, y + 2.0, w, h, 10.0, 1.0, t::LINE);
         app.canvas.icon("edit", x + 14.0, y + 15.0, 12.0, t::INK3);
         app.canvas.text_fit(&c.summary, x + 26.0, y + 7.0, w - 40.0, Text::new(ty::SMALL, t::INK2).medium());
+        // The file's name at the head opens it; a tap below folds or shows the rest.
+        if data::file_path(c.summary.trim()).is_some() && crate::cx!(app).tap(x, y + 2.0, w, 26.0) {
+            open_path(app, c.summary.trim());
+            return h + 8.0;
+        }
         let mut ly = y + 2.0 + head;
         for (i, l) in lines.iter().enumerate().take(shown_lines) {
             match l.kind {
@@ -1048,6 +1067,15 @@ fn diff(app: &mut App, c: &data::ToolCall, key: (String, usize), y: f32, draw: b
         }
     }
     h + 8.0
+}
+
+/// Open a file named in the chat in the file view: read from the open chat's agent's checkout
+/// (its repo and worktree), or the repo shown when no chat is open (a task's words).
+fn open_path(app: &mut App, path: &str) {
+    let agent = app.open_chat().and_then(|n| app.agent(&n).cloned());
+    let repo = agent.as_ref().map(|a| a.project_id).or(app.repo);
+    let Some(repo) = repo else { return };
+    crate::fileview::open(app, repo, agent.and_then(|a| a.worktree), path);
 }
 
 /// A piece of code's colour: few, quiet, and the line's own ink for the rest.
@@ -2168,6 +2196,20 @@ mod tests {
         a.convos.get_mut("bold-puffin").unwrap().take_older(&serde_json::json!({"messages": page, "before": 0, "older": false}));
         assert_eq!(a.convos["bold-puffin"].msgs[0].id, "p300");
         assert!(!a.convos["bold-puffin"].older);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_path_in_the_chat_opens_in_its_agents_checkout() {
+        let (mut a, dir) = fresh_app("paths");
+        a.sample();
+        let mut ag = a.agent("swift-ocelot").cloned().unwrap();
+        ag.worktree = Some("/wt/swift-ocelot".into());
+        a.agents.retain(|x| x.name != "swift-ocelot");
+        a.agents.push(ag);
+        a.open("swift-ocelot");
+        open_path(&mut a, "src/chat.rs:42");
+        assert_eq!(a.route(), &crate::app::Route::File { repo: 1, worktree: Some("/wt/swift-ocelot".into()), path: "src/chat.rs:42".into() });
         let _ = std::fs::remove_dir_all(&dir);
     }
 
