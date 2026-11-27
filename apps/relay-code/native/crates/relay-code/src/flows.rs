@@ -404,3 +404,86 @@ fn the_drawer_search_keeps_its_keyboard_and_finds_by_intent() {
     assert_eq!(a.route(), &Route::Chat("swift-ocelot".into()));
     assert!(!a.st.drawer.open);
 }
+
+// D2: starting an agent.
+
+/// New agent's sheet on a 390 × 844 screen with no insets: its top, and the middle of each row.
+struct Sheet {
+    model_y: f32,
+    effort_y: f32,
+    task_y: f32,
+}
+
+fn new_agent_sheet() -> Sheet {
+    let top = 844.0 - (82.0 + 96.0 + 16.0 + 2.0 * 46.0 + 6.0 + 48.0 + 14.0 + 48.0 + 16.0);
+    // The rows' tops: model and effort (36 each, 10 apart), then the task row (48) after 6 more.
+    let rows = top + 82.0 + 96.0 + 16.0;
+    Sheet { model_y: rows + 18.0, effort_y: rows + 46.0 + 18.0, task_y: rows + 2.0 * 46.0 + 6.0 + 24.0 }
+}
+
+#[test]
+fn new_agent_remembers_the_model_and_effort_last_chosen() {
+    let mut a = app("choice");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.st.newagent.open = true;
+    frames(&mut a, &mut clock, 5);
+    let s = new_agent_sheet();
+    // The tracks start after a 64-unit label: Opus is the second of four, High the fourth of six.
+    let (x0, w) = (16.0 + 64.0, 390.0 - 32.0 - 64.0);
+    tap(&mut a, &mut clock, x0 + w / 4.0 * 1.5, s.model_y);
+    tap(&mut a, &mut clock, x0 + w / 6.0 * 3.5, s.effort_y);
+    assert_eq!(a.last_choice(), (Some("opus".into()), Some("high".into())));
+    assert!(a.st.newagent.open, "choosing keeps the sheet up");
+    assert_eq!(a.route(), &Route::Home, "and reaches nothing under it");
+    // Auto goes back to Claude Code's own default.
+    tap(&mut a, &mut clock, x0 + w / 4.0 * 0.5, s.model_y);
+    assert_eq!(a.last_choice(), (None, Some("high".into())));
+}
+
+#[test]
+fn the_task_list_opens_over_new_agent_and_back_returns_to_it() {
+    let mut a = app("tasks");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.st.newagent.open = true;
+    frames(&mut a, &mut clock, 5);
+    tap(&mut a, &mut clock, 150.0, new_agent_sheet().task_y);
+    assert!(a.st.newagent.picking, "the task row opens the list");
+    a.st.newagent.tasks = a.st.board.tasks.clone();
+    frames(&mut a, &mut clock, 3);
+    // Back closes the list, not New agent.
+    assert!(a.back());
+    assert!(!a.st.newagent.picking && a.st.newagent.open);
+    // Again, and pick the first open task (Active first): it is linked, and the list goes.
+    a.st.newagent.picking = true;
+    frames(&mut a, &mut clock, 3);
+    let rows = a.st.newagent.tasks.iter().filter(|t| t.column != "done").count().clamp(1, 8) as f32;
+    let top = 844.0 - (70.0 + rows * 56.0 + 12.0);
+    tap(&mut a, &mut clock, 150.0, top + 64.0 + 28.0);
+    assert!(!a.st.newagent.picking);
+    assert_eq!(a.st.newagent.linked.as_ref().map(|l| l.0), Some(41));
+    // A tap above the list closes it, and reaches no agent row under it.
+    a.st.newagent.picking = true;
+    frames(&mut a, &mut clock, 3);
+    tap(&mut a, &mut clock, 150.0, 120.0);
+    assert!(!a.st.newagent.picking);
+    assert_eq!(a.route(), &Route::Home);
+}
+
+#[test]
+fn a_made_agent_opens_its_chat_at_once_starting() {
+    let mut a = app("created");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.st.newagent.open = true;
+    a.st.newagent.task = "Add a dark mode toggle".into();
+    a.st.newagent.linked = Some((41, "Dark mode".into()));
+    a.created(&serde_json::json!({"name": "brisk-lynx", "project_id": 1, "provider": "claude", "role": "builder", "state": "created", "branch": "relay/brisk-lynx", "model": "opus", "effort": "high"}));
+    frames(&mut a, &mut clock, 3);
+    assert_eq!(a.route(), &Route::Chat("brisk-lynx".into()));
+    assert!(!a.st.newagent.open && a.st.newagent.task.is_empty() && a.st.newagent.linked.is_none());
+    let made = a.agent("brisk-lynx").expect("it is listed before the PC lists it");
+    assert_eq!(made.state_words(), "starting");
+    assert!(a.busy("brisk-lynx"), "its chat shows it starting");
+}

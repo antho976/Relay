@@ -166,6 +166,14 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.reset_to(Route::Home);
             app.st.newagent.open = true;
             app.st.newagent.task = "Add a dark mode toggle to Settings".into();
+            app.set_choice(Some("opus"), Some("high"));
+            app.st.newagent.linked = Some((41, "Dark mode for Settings".into()));
+        }
+        "new-agent-tasks" => {
+            app.reset_to(Route::Home);
+            app.st.newagent.open = true;
+            app.st.newagent.picking = true;
+            app.st.newagent.tasks = app.st.board.tasks.clone();
         }
         "changes" => {
             app.reset_to(Route::Home);

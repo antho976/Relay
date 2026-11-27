@@ -49,6 +49,13 @@ impl State {
 pub struct NewAgent {
     pub open: bool,
     pub task: String,
+    /// The board task it is for, by id and title.
+    pub linked: Option<(i64, String)>,
+    /// The task list is up in place of the sheet.
+    pub picking: bool,
+    /// The repo's tasks, as last read for the list.
+    pub tasks: Vec<crate::board::Task>,
+    pub scroll: crate::ui::Scroll,
 }
 
 /// An agent's badge: two letters on its own colour, and its lamp.
@@ -376,16 +383,32 @@ fn repos(app: &mut App) {
     }
 }
 
-/// New agent: what it should do, in this repo, on Claude. Start makes and starts it, then opens
-/// its conversation. True while something moves.
+/// The models New agent offers, as `claude --model` takes them; None is Claude Code's own default.
+pub const MODELS: [(Option<&str>, &str); 4] = [(None, "Auto"), (Some("opus"), "Opus"), (Some("sonnet"), "Sonnet"), (Some("haiku"), "Haiku")];
+/// The efforts, as `claude --effort` takes them.
+pub const EFFORTS: [(Option<&str>, &str); 6] = [(None, "Auto"), (Some("low"), "Low"), (Some("medium"), "Med"), (Some("high"), "High"), (Some("xhigh"), "Extra"), (Some("max"), "Max")];
+
+const FIELD_H: f32 = 96.0;
+const ROW_H: f32 = 36.0;
+
+/// The sheet's height: its head, the field, model and effort, the task, Start.
+fn new_agent_h() -> f32 {
+    82.0 + FIELD_H + 16.0 + 2.0 * (ROW_H + 10.0) + 6.0 + 48.0 + 14.0 + 48.0 + 16.0
+}
+
+/// New agent: what it should do, in this repo, on which model and effort (remembered), and the
+/// board task it is for. Start makes and starts it; its chat opens as soon as the PC has made it.
 pub fn draw_new_agent(app: &mut App) -> bool {
     if !app.st.newagent.open {
         return false;
     }
+    if app.st.newagent.picking {
+        tasks(app);
+        return false;
+    }
     let creating = app.calls_for_new();
-    let h = 252.0;
-    let (top, outside) = kit::sheet(&mut crate::cx!(app), h);
-    if outside && app.focus.id.is_none() {
+    let (top, outside) = kit::sheet(&mut crate::cx!(app), new_agent_h());
+    if outside && app.focus.id.is_none() && !creating {
         app.st.newagent.open = false;
         return false;
     }
@@ -394,12 +417,12 @@ pub fn draw_new_agent(app: &mut App) -> bool {
     app.canvas.text_fit(&format!("In {repo}, on Claude Code"), t::PAD + 4.0, top + 52.0, WIDTH - 40.0, Text::new(ty::CAPTION, t::INK3));
     let fy = top + 82.0;
     let fw = WIDTH - 2.0 * t::PAD;
-    app.canvas.rect(t::PAD, fy, fw, 96.0, 14.0, t::S1);
+    app.canvas.rect(t::PAD, fy, fw, FIELD_H, 14.0, t::S2);
     let mut task = app.st.newagent.task.clone();
     let focused = app.focus.is("new-agent");
     if focused {
         task = app.focus.text.clone();
-        app.focus.at = Some((fy, 96.0));
+        app.focus.at = Some((fy, FIELD_H));
     }
     let style = Text::new(ty::BODY, if task.is_empty() { t::INK3 } else { t::INK }).line(1.4);
     let shown = if task.is_empty() { "What should it do?" } else { task.as_str() };
@@ -409,7 +432,7 @@ pub fn draw_new_agent(app: &mut App) -> bool {
     }
     {
         let mut cx = crate::cx!(app);
-        if cx.tap(t::PAD, fy, fw, 96.0) && !focused {
+        if cx.tap(t::PAD, fy, fw, FIELD_H) && !focused && !creating {
             cx.focus.id = Some("new-agent");
             cx.focus.text = task.clone();
             cx.focus.kind = Kb::Text;
@@ -417,20 +440,141 @@ pub fn draw_new_agent(app: &mut App) -> bool {
         }
     }
     app.st.newagent.task = task.clone();
-    let by = fy + 96.0 + 16.0;
+
+    // Model and effort, each a row of choices, remembered for the next agent.
+    let (model, effort) = app.last_choice();
+    let lw = 64.0;
+    let mut y = fy + FIELD_H + 16.0;
+    let lt = Text::new(ty::CAPTION, t::INK2).medium();
+    app.canvas.text("Model", t::PAD + 2.0, y + (ROW_H - lt.lh()) / 2.0, lt);
+    let on = MODELS.iter().position(|(m, _)| *m == model.as_deref()).unwrap_or(0);
+    let words: Vec<&str> = MODELS.iter().map(|(_, w)| *w).collect();
+    if let Some(i) = kit::segmented_on(&mut crate::cx!(app), t::PAD + lw, y, fw - lw, &words, on, t::S2)
+        && !creating
+    {
+        app.set_choice(MODELS[i].0, effort.as_deref());
+    }
+    y += ROW_H + 10.0;
+    app.canvas.text("Effort", t::PAD + 2.0, y + (ROW_H - lt.lh()) / 2.0, lt);
+    let (model, effort) = app.last_choice();
+    let on = EFFORTS.iter().position(|(e, _)| *e == effort.as_deref()).unwrap_or(0);
+    let words: Vec<&str> = EFFORTS.iter().map(|(_, w)| *w).collect();
+    if let Some(i) = kit::segmented_on(&mut crate::cx!(app), t::PAD + lw, y, fw - lw, &words, on, t::S2)
+        && !creating
+    {
+        app.set_choice(model.as_deref(), EFFORTS[i].0);
+    }
+    y += ROW_H + 10.0 + 6.0;
+
+    // The board task it is for: none, or one picked from the repo's open tasks.
+    let linked = app.st.newagent.linked.clone();
+    {
+        let h = 48.0;
+        let mut cx = crate::cx!(app);
+        let pressed = cx.pressed(t::PAD, y, fw, h);
+        cx.c.rect(t::PAD, y, fw, h, t::KEY_R, if pressed { t::S3 } else { t::S2 });
+        cx.c.icon("board", t::PAD + 20.0, y + h / 2.0, 16.0, t::INK2);
+        let (words, ink) = match &linked {
+            Some((id, title)) => (format!("#{id} {title}"), t::INK),
+            None => ("Link a board task".to_string(), t::INK2),
+        };
+        cx.c.text_fit(&words, t::PAD + 42.0, y + (h - 20.0) / 2.0, fw - 42.0 - 48.0, Text::new(ty::UI, ink).medium());
+        let clear = linked.is_some();
+        cx.c.icon(if clear { "close" } else { "chevron-right" }, t::PAD + fw - 22.0, y + h / 2.0, 13.0, t::INK3);
+        if clear && cx.tap(t::PAD + fw - 48.0, y, 48.0, h) {
+            app.st.newagent.linked = None;
+        } else if cx.tap(t::PAD, y, fw, h) && !creating {
+            app.st.newagent.picking = true;
+            app.finish_typing();
+            let Some(repo) = app.repo else { return false };
+            app.ask(Ask::Tasks, "task.list", json!({"project_id": repo, "limit": 200}));
+        }
+        y += h + 14.0;
+    }
+
     let ready = !task.trim().is_empty() && app.repo.is_some() && !creating;
     let words = if creating { "Starting…" } else { "Start agent" };
     let mut cx = crate::cx!(app);
-    let tapped = if ready { kit::primary(&mut cx, t::PAD, by, fw, 48.0, words, None) } else { kit::plain(&mut cx, t::PAD, by, fw, 48.0, words, None) && false };
+    let tapped = if ready { kit::primary(&mut cx, t::PAD, y, fw, 48.0, words, None) } else { kit::plain(&mut cx, t::PAD, y, fw, 48.0, words, None) && false };
     if tapped && let Some(repo) = app.repo {
         let prompt = task.trim().to_string();
         app.finish_typing();
-        app.ask(Ask::Create, "session.create", json!({"project_id": repo, "provider": "claude", "role": "builder", "prompt": prompt}));
-        app.st.newagent.task.clear();
-        app.st.newagent.open = false;
-        app.toast("Starting the agent…");
+        let (model, effort) = app.last_choice();
+        let mut p = json!({"project_id": repo, "provider": "claude", "role": "builder", "prompt": prompt});
+        if let Some(m) = model {
+            p["model"] = json!(m);
+        }
+        if let Some(e) = effort {
+            p["effort"] = json!(e);
+        }
+        if let Some((id, _)) = linked {
+            p["task_id"] = json!(id);
+        }
+        // The sheet stays, saying Starting…, until the PC has made the agent; then its chat opens.
+        app.ask(Ask::Create, "session.create", p);
     }
-    false
+    creating
+}
+
+/// The repo's open tasks to link a new agent to: what is not done yet, Active first.
+fn tasks(app: &mut App) {
+    let loading = app.asking(&Ask::Tasks);
+    let order = |c: &str| match c {
+        "active" => 0,
+        "ready" => 1,
+        "in_review" => 2,
+        _ => 3,
+    };
+    let mut list: Vec<crate::board::Task> = app.st.newagent.tasks.iter().filter(|t| t.column != "done").cloned().collect();
+    list.sort_by_key(|t| order(&t.column));
+    list.truncate(40);
+    let rows = list.len().clamp(1, 8) as f32;
+    let (top, outside) = kit::sheet(&mut crate::cx!(app), 70.0 + rows * 56.0 + 12.0);
+    if outside {
+        app.st.newagent.picking = false;
+        return;
+    }
+    {
+        let mut cx = crate::cx!(app);
+        if kit::icon_key(&mut cx, 6.0, top + 17.0, "chevron-left") {
+            app.st.newagent.picking = false;
+            return;
+        }
+    }
+    app.canvas.text("Board task", 56.0, top + 28.0, Text::new(ty::SECTION, t::INK).semi());
+    let list_top = top + 64.0;
+    let bottom = app.canvas.h - app.canvas.inset_bottom;
+    if list.is_empty() {
+        let words = if loading { "Reading the board…" } else { "No open tasks in this repo." };
+        app.canvas.text(words, t::PAD + 4.0, list_top + 16.0, Text::new(ty::UI, t::INK3));
+        return;
+    }
+    let dt = 0.016;
+    let viewport = [0.0, list_top, WIDTH, bottom - list_top];
+    app.st.newagent.scroll.update(&app.ui, viewport, dt);
+    app.canvas.push_clip(0.0, list_top, WIDTH, bottom - list_top);
+    let mut y = list_top - app.st.newagent.scroll.off;
+    let mut pick = None;
+    for task in &list {
+        let visible = y + 56.0 > list_top && y < bottom;
+        let mut cx = crate::cx!(app);
+        if visible && cx.pressed(0.0, y, WIDTH, 56.0) {
+            cx.c.rect(8.0, y, WIDTH - 16.0, 56.0, 10.0, t::WASH);
+        }
+        cx.c.text_fit(&task.title, t::PAD + 4.0, y + 9.0, WIDTH - 2.0 * t::PAD - 8.0, Text::new(ty::BODY, t::INK).semi());
+        let column = crate::board::COLUMNS.iter().find(|(k, _)| *k == task.column).map_or(task.column.as_str(), |(_, w)| *w);
+        cx.c.text(&format!("#{} · {column}", task.id), t::PAD + 4.0, y + 31.0, Text::new(ty::CAPTION, t::INK3));
+        if cx.tap(0.0, y, WIDTH, 56.0) && visible {
+            pick = Some((task.id, task.title.clone()));
+        }
+        y += 56.0;
+    }
+    app.canvas.pop_clip();
+    app.st.newagent.scroll.max = y + app.st.newagent.scroll.off - bottom + 12.0;
+    if let Some(p) = pick {
+        app.st.newagent.linked = Some(p);
+        app.st.newagent.picking = false;
+    }
 }
 
 impl App {

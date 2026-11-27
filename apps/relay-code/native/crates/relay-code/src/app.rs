@@ -100,6 +100,8 @@ pub enum Ask {
     Enter(String),
     Create,
     Spawn(String),
+    /// The repo's tasks, to link a new agent to one.
+    Tasks,
     /// The rendered foot of an agent's terminal (`session.screen`).
     Screen(String),
     /// The repo's agents with closed ones, for Earlier (D1).
@@ -118,6 +120,11 @@ struct Config {
     last_chat: Option<String>,
     #[serde(default)]
     asked_notifications: bool,
+    /// The model and effort New agent last started one with (None: Claude Code's default).
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    effort: Option<String>,
 }
 
 #[derive(Default)]
@@ -323,6 +330,38 @@ impl App {
 
     pub fn toast(&mut self, words: &str) {
         self.toast = Some((words.to_string(), self.now_ns + 2_500_000_000));
+    }
+
+    /// The PC made the agent New agent asked for: its chat opens now, starting, while the PC
+    /// starts it.
+    pub fn created(&mut self, v: &Value) {
+        let name = v.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
+        if name.is_empty() {
+            self.toast("The PC made no agent");
+        } else {
+            // Its chat opens now, starting, while the PC starts it.
+            if let Some(mut a) = data::agents(&json!({"sessions": [v.clone()]})).pop() {
+                a.state = "spawning".into();
+                self.agents.retain(|b| b.name != name);
+                self.agents.push(a);
+            }
+            self.st.newagent.open = false;
+            self.st.newagent.task.clear();
+            self.st.newagent.linked = None;
+            self.ask(Ask::Spawn(name.clone()), "session.spawn", json!({"session": name}));
+            self.open(&name);
+        }
+    }
+
+    /// The model and effort New agent offers first: the last ones used.
+    pub fn last_choice(&self) -> (Option<String>, Option<String>) {
+        (self.config.model.clone(), self.config.effort.clone())
+    }
+
+    pub fn set_choice(&mut self, model: Option<&str>, effort: Option<&str>) {
+        self.config.model = model.map(str::to_string);
+        self.config.effort = effort.map(str::to_string);
+        self.save_config();
     }
 
     pub fn save_config(&self) {
@@ -566,17 +605,12 @@ impl App {
                         self.toast(&format!("Not sent: {}", e.message));
                     }
                 }
-                (Ask::Create, Ok(v)) => {
-                    let name = v.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-                    if name.is_empty() {
-                        self.toast("The PC made no agent");
-                    } else {
-                        self.ask(Ask::Spawn(name.clone()), "session.spawn", json!({"session": name}));
-                    }
-                }
-                (Ask::Spawn(name), Ok(_)) => {
+                (Ask::Create, Ok(v)) => self.created(&v),
+                (Ask::Spawn(_), Ok(_)) => {
                     self.agents_stale = true;
-                    self.open(&name);
+                }
+                (Ask::Tasks, Ok(v)) => {
+                    self.st.newagent.tasks = crate::board::tasks(&v);
                 }
                 (Ask::Screen(name), Ok(v)) => {
                     let text = v.get("text").and_then(Value::as_str).unwrap_or_default();
@@ -878,6 +912,11 @@ impl App {
     pub fn back(&mut self) -> bool {
         if self.focus.id.is_some() {
             self.finish_typing();
+            return true;
+        }
+        // The task list goes back to New agent, not past it.
+        if std::mem::take(&mut self.st.newagent.picking) {
+            self.ui.reset();
             return true;
         }
         if self.st.agents.close_over()
