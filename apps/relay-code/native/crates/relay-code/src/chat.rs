@@ -39,6 +39,14 @@ pub struct State {
     todos: Option<Vec<(data::Todo, String)>>,
     /// That pinned list opened whole.
     todos_open: bool,
+    /// Code blocks shown whole, by their words.
+    open_code: HashSet<u64>,
+    /// Wide tables' sideways scroll, by their words.
+    tables: std::collections::HashMap<u64, crate::ui::HScroll>,
+    /// This frame's step (seconds), for a table coasting sideways.
+    dt: f32,
+    /// A table still coasts: draw again.
+    moving: bool,
     pub model_sheet: bool,
     pub typed: String,
     /// Where the message box starts on screen, for the model picker above it.
@@ -230,22 +238,22 @@ fn item(app: &mut App, it: &Item, index: usize, y: f32, draw: bool) -> f32 {
 }
 
 /// Markdown as [`data::pieces`] reads it, at `x`, `y`, `w` wide, its paragraphs in `prose`:
-/// headings in the bold of that face, items with their mark hanging, code and tables in mono on
-/// their own ground. Returns the height; `draw` false only measures.
+/// headings in the bold of that face, items with their mark hanging, inline marks as runs
+/// ([`spans`]), code on its own ground, tables as a grid. Returns the height; `draw` false only
+/// measures, by the same layout.
 pub fn markdown(app: &mut App, md: &str, x: f32, y: f32, w: f32, prose: Text, draw: bool) -> f32 {
-    let links = if draw { data::links(md) } else { Vec::new() };
     let mut h = 0.0;
     for p in data::pieces(md) {
         match p {
             Piece::Prose(s) => {
-                h += if draw { linked(app, &s, x, y + h, w, prose, 400, &links) } else { app.canvas.para_h(&s, w, prose, 400) };
+                h += spans(app, &s, x, y + h, w, prose, 400, draw);
                 h += 10.0;
             }
             Piece::Heading(s) => {
                 let bold = if prose.weight == Weight::Serif { Weight::SerifBold } else { Weight::Semi };
                 let st = Text { size: prose.size + 1.0, ..prose }.face(bold).line(1.35);
                 h += 4.0;
-                h += if draw { linked(app, &s, x, y + h, w, st, 6, &links) } else { app.canvas.para_h(&s, w, st, 6) };
+                h += spans(app, &s, x, y + h, w, st, 6, draw);
                 h += 8.0;
             }
             Piece::Item { mark, text, depth } => {
@@ -255,95 +263,173 @@ pub fn markdown(app: &mut App, md: &str, x: f32, y: f32, w: f32, prose: Text, dr
                 if draw {
                     app.canvas.text(&mark, ix + 2.0, y + h, prose.color(t::INK3));
                 }
-                h += if draw { linked(app, &text, ix + hang, y + h, tw, prose, 200, &links) } else { app.canvas.para_h(&text, tw, prose, 200) };
+                h += spans(app, &text, ix + hang, y + h, tw, prose, 200, draw);
                 h += 6.0;
             }
             Piece::Code(code) => {
-                let st = Text::new(ty::MONO, t::INK).face(Weight::Mono).line(1.5);
-                // The words keep clear of the copy key at the top right.
-                let cw = w - 28.0 - 26.0;
-                let ch = app.canvas.para_h(&code, cw, st, 60);
-                if draw {
-                    app.canvas.rect(x, y + h, w, ch + 24.0, 12.0, t::CODE);
-                    app.canvas.outline(x, y + h, w, ch + 24.0, 12.0, 1.0, t::LINE);
-                    app.canvas.para(&code, x + 14.0, y + h + 12.0, cw, st, 60);
-                    let (kx, ky) = (x + w - 22.0, y + h + 21.0);
-                    let mut cx = crate::cx!(app);
-                    let pressed = cx.pressed(kx - 16.0, ky - 16.0, 32.0, 32.0);
-                    if pressed {
-                        cx.c.circle(kx, ky, 14.0, t::WASH);
-                    }
-                    cx.c.icon("copy", kx, ky, 14.0, t::INK3);
-                    if cx.tap(kx - 20.0, ky - 20.0, 40.0, 40.0) {
-                        app.host.copy_text(&code);
-                        app.toast("Copied");
-                    }
-                }
-                h += ch + 24.0 + 12.0;
+                h += code_block(app, &code, x, y + h, w, draw) + 12.0;
+            }
+            Piece::Table(rows) => {
+                h += table(app, &rows, x, y + h, w, draw) + 12.0;
             }
         }
     }
     h
 }
 
-/// Where `label` is in `line`: whole, or the part of a label that wrapped (its first words ending
-/// the line, or its last words starting it). Byte offset and length.
-fn link_in(line: &str, label: &str) -> Option<(usize, usize)> {
-    if let Some(at) = line.find(label) {
-        return Some((at, label.len()));
-    }
-    let spaces: Vec<usize> = label.match_indices(' ').map(|(i, _)| i).collect();
-    // The longest head first, then the longest tail.
-    for &i in spaces.iter().rev() {
-        let head = &label[..i];
-        if !head.is_empty() && line.ends_with(head) {
-            return Some((line.len() - head.len(), head.len()));
-        }
-    }
-    for &i in &spaces {
-        let tail = &label[i + 1..];
-        if !tail.is_empty() && line.starts_with(tail) {
-            return Some((0, tail.len()));
-        }
-    }
-    None
+/// A key for something drawn from these words (a code block, a table), to keep its fold or its
+/// sideways scroll from frame to frame.
+fn key_of(words: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    words.hash(&mut h);
+    h.finish()
 }
 
-/// A paragraph whose links are drawn in the accent, underlined, and open on a tap. Lines without
-/// a link draw as [`crate::draw::Canvas::para`] draws them, so the heights agree.
-#[allow(clippy::too_many_arguments)]
-fn linked(app: &mut App, s: &str, x: f32, y: f32, w: f32, st: Text, max_lines: usize, links: &[(String, String)]) -> f32 {
-    if links.is_empty() || !links.iter().any(|(label, _)| s.contains(label.as_str())) {
-        return app.canvas.para(s, x, y, w, st, max_lines);
-    }
-    let lines = app.canvas.wrap(s, w, st, max_lines);
-    let mut open = None;
-    for (i, line) in lines.iter().enumerate() {
-        let ly = y + i as f32 * st.lh();
-        // The first link this line holds (whole, or the part of a long one that wrapped here).
-        let hit = links.iter().find_map(|(label, url)| link_in(line, label).map(|(at, len)| (at, len, url)));
-        let Some((at, len, url)) = hit else {
-            app.canvas.text(line, x, ly, st);
-            continue;
-        };
-        let (before, link, after) = (&line[..at], &line[at..at + len], &line[at + len..]);
-        let bw = app.canvas.text(before, x, ly, st);
-        let lst = st.color(t::ACCENT);
-        let lw = app.canvas.text(link, x + bw, ly, lst);
-        app.canvas.rect(x + bw, ly + st.lh() - 3.0, lw, 1.0, 0.0, t::ACCENT.a(0.6));
-        app.canvas.text(after, x + bw + lw, ly, st);
-        let mut cx = crate::cx!(app);
-        if cx.pressed(x + bw - 2.0, ly, lw + 4.0, st.lh()) {
-            cx.c.rect(x + bw - 2.0, ly, lw + 4.0, st.lh(), 4.0, t::WASH);
+/// Lines of a code block shown before "Show all".
+const CODE_LINES: usize = 40;
+
+/// A fenced code block on its own ground, with a copy key. A long one shows its first
+/// [`CODE_LINES`] and a key for the rest.
+fn code_block(app: &mut App, code: &str, x: f32, y: f32, w: f32, draw: bool) -> f32 {
+    let st = Text::new(ty::MONO, t::INK).face(Weight::Mono).line(1.5);
+    // The words keep clear of the copy key at the top right.
+    let cw = w - 28.0 - 26.0;
+    let key = key_of(code);
+    // Folded by the code's own lines, each wrapped as it must be.
+    let src = code.lines().count();
+    let open = app.st.chat.open_code.contains(&key);
+    let rows = app.canvas.wrap(code, cw, st, 4000);
+    let more = src > CODE_LINES;
+    let shown = if open || !more { rows.len() } else { code.lines().take(CODE_LINES).map(|l| app.canvas.wrap(l, cw, st, 4000).len()).sum::<usize>().min(rows.len()) };
+    let ch = shown as f32 * st.lh() + if more { 30.0 } else { 0.0 };
+    if draw {
+        app.canvas.rect(x, y, w, ch + 24.0, 12.0, t::CODE);
+        app.canvas.outline(x, y, w, ch + 24.0, 12.0, 1.0, t::LINE);
+        for (i, l) in rows.iter().take(shown).enumerate() {
+            app.canvas.text(l, x + 14.0, y + 12.0 + i as f32 * st.lh(), st);
         }
-        if cx.tap(x + bw - 4.0, ly - 4.0, lw + 8.0, st.lh() + 8.0) {
+        let (kx, ky) = (x + w - 22.0, y + 21.0);
+        let mut cx = crate::cx!(app);
+        if cx.pressed(kx - 16.0, ky - 16.0, 32.0, 32.0) {
+            cx.c.circle(kx, ky, 14.0, t::WASH);
+        }
+        cx.c.icon("copy", kx, ky, 14.0, t::INK3);
+        if cx.tap(kx - 20.0, ky - 20.0, 40.0, 40.0) {
+            app.host.copy_text(code);
+            app.toast("Copied");
+        }
+        if more {
+            let ky = y + 12.0 + shown as f32 * st.lh() + 6.0;
+            let words = if open { "Show less".to_string() } else { format!("Show all {src} lines") };
+            app.canvas.text(&words, x + 14.0, ky, Text::new(ty::SMALL, t::INK3).medium());
+            let mut cx = crate::cx!(app);
+            if cx.tap(x, ky - 8.0, w, 34.0) {
+                if !app.st.chat.open_code.remove(&key) {
+                    app.st.chat.open_code.insert(key);
+                }
+                app.st.chat.heights = Rc::default();
+            }
+        }
+    }
+    ch + 24.0
+}
+
+/// A table as a grid: columns as wide as their widest cell (up to a limit, past which cells
+/// wrap), the head in the bold, rules between rows. One wider than the column scrolls sideways.
+fn table(app: &mut App, rows: &[Vec<String>], x: f32, y: f32, w: f32, draw: bool) -> f32 {
+    let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if cols == 0 {
+        return 0.0;
+    }
+    let body = Text::new(ty::CAPTION, t::INK2).line(1.4);
+    let head = body.color(t::INK).semi();
+    let pad = 10.0;
+    let cell = |r: usize, c: usize| rows[r].get(c).map_or("", String::as_str);
+    let widths: Vec<f32> = (0..cols)
+        .map(|c| (0..rows.len()).map(|r| app.canvas.measure(cell(r, c), if r == 0 { head } else { body })).fold(0.0, f32::max).clamp(24.0, 220.0).ceil() + 2.0 + 2.0 * pad)
+        .collect();
+    let heights: Vec<f32> = (0..rows.len())
+        .map(|r| (0..cols).map(|c| app.canvas.para_h(cell(r, c), widths[c] - 2.0 * pad, if r == 0 { head } else { body }, 8)).fold(body.lh(), f32::max) + 2.0 * 7.0)
+        .collect();
+    let total_w: f32 = widths.iter().sum();
+    let h: f32 = heights.iter().sum();
+    if !draw {
+        return h;
+    }
+    let key = key_of(&rows.concat().join("|"));
+    let wide = total_w > w;
+    let mut off = 0.0;
+    if wide {
+        let area = [x, y + app.canvas.dy, w, h];
+        app.ui.claim_h(area);
+        let mut hs = app.st.chat.tables.get(&key).copied().unwrap_or_default();
+        hs.max = total_w - w;
+        let dt = app.st.chat.dt;
+        app.st.chat.moving |= hs.update(&app.ui, area, dt);
+        off = hs.off;
+        app.st.chat.tables.insert(key, hs);
+        app.canvas.push_clip(x, y + app.canvas.dy, w, h);
+    }
+    app.canvas.rect(x - off, y, widths.iter().sum(), heights[0], 0.0, t::WASH);
+    let mut ry = y;
+    for (r, rh) in heights.iter().enumerate() {
+        let mut cx_ = x - off;
+        for (c, cw) in widths.iter().enumerate() {
+            app.canvas.para(cell(r, c), cx_ + pad, ry + 7.0, cw - 2.0 * pad, if r == 0 { head } else { body }, 8);
+            cx_ += cw;
+        }
+        ry += rh;
+        if r + 1 < rows.len() {
+            app.canvas.rect(x - off, ry - 0.5, total_w, 1.0, 0.0, t::LINE);
+        }
+    }
+    if wide {
+        app.canvas.pop_clip();
+    }
+    h
+}
+
+/// A paragraph's inline Markdown, set: bold in the face's bold, italic in Literata's italic (Geist
+/// has none here, so a sans paragraph keeps it upright), code in mono on a chip, links in the
+/// accent, underlined, opening on a tap. Returns the height.
+#[allow(clippy::too_many_arguments)]
+fn spans(app: &mut App, s: &str, x: f32, y: f32, w: f32, st: Text, max_lines: usize, draw: bool) -> f32 {
+    let serif = matches!(st.weight, Weight::Serif | Weight::SerifBold);
+    let mut runs = Vec::new();
+    let mut links = Vec::new();
+    for sp in data::spans(s) {
+        let m = sp.marks;
+        let mut style = st;
+        if m.code {
+            style = Text::new(st.size - 2.0, t::INK).face(Weight::Mono);
+        } else if m.bold {
+            style = style.face(if serif { Weight::SerifBold } else { Weight::Semi });
+        } else if m.italic && serif {
+            style = style.face(Weight::SerifItalic);
+        }
+        if sp.link.is_some() {
+            style = style.color(t::ACCENT);
+        }
+        links.push(sp.link.clone());
+        runs.push(crate::draw::Run { text: sp.text, style, chip: m.code.then_some(t::S2), underline: sp.link.is_some() });
+    }
+    let (h, boxes) = app.canvas.rich(&runs, x, y, w, st.lh(), max_lines, draw);
+    let mut open = None;
+    for (r, [bx, by, bw, bh]) in boxes {
+        let Some(url) = &links[r] else { continue };
+        let mut cx = crate::cx!(app);
+        if cx.pressed(bx - 2.0, by, bw + 4.0, bh) {
+            cx.c.rect(bx - 2.0, by, bw + 4.0, bh, 4.0, t::WASH);
+        }
+        if cx.tap(bx - 4.0, by - 4.0, bw + 8.0, bh + 8.0) {
             open = Some(url.clone());
         }
     }
     if let Some(url) = open {
         app.host.open_url(&url);
     }
-    lines.len() as f32 * st.lh()
+    h
 }
 
 /// A question's words as its terminal set them: a first line naming the tool ("Bash command"),
@@ -710,6 +796,7 @@ fn attachments(app: &mut App, name: &str) {
 
 pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     attachments(app, name);
+    app.st.chat.dt = dt;
     let agent = app.agent(name).cloned();
     // A stopped or closed agent reads, with Resume in place of the message box (D1).
     let stopped = agent.as_ref().filter(|a| !crate::agents::live(a)).cloned();
@@ -889,7 +976,7 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
         }
     }
     header(app, agent.as_ref(), name);
-    let mut moving = page.moving;
+    let mut moving = page.moving || std::mem::take(&mut app.st.chat.moving);
     match &stopped {
         Some(a) => crate::agents::stopped_foot(app, a),
         None => moving |= composer(app, name, agent.as_ref(), foot_h, box_h, ask_h, question.as_ref(), scr.mode, &typed, lines, working),
@@ -1287,14 +1374,6 @@ fn model_picker(app: &mut App, name: &str, agent: Option<&Agent>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_link_is_found_whole_or_wrapped() {
-        assert_eq!(link_in("see the pull request here", "the pull request"), Some((4, 16)));
-        assert_eq!(link_in("see the pull", "the pull request"), Some((4, 8)));
-        assert_eq!(link_in("request for it", "the pull request"), Some((0, 7)));
-        assert_eq!(link_in("nothing here", "the pull request"), None);
-    }
 
     #[test]
     fn models_read_as_people_say_them() {

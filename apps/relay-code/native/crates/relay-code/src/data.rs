@@ -636,29 +636,30 @@ pub enum Piece {
     /// A list item: its mark ("•" or "2."), its words, how deep it is nested (0 to 2).
     Item { mark: String, text: String, depth: u8 },
     Code(String),
+    /// A table's rows, each its cells (the head first), their words plain.
+    Table(Vec<Vec<String>>),
 }
 
-/// Markdown, drawn simply: fenced code and tables apart in mono, headings, bulleted and numbered
-/// items with their nesting, paragraphs (lines joined, as markdown reads them), and `**`, `__`,
-/// backticks and link targets dropped from the words.
+/// Markdown in blocks: fenced code, tables (as rows of cells), headings, bulleted and numbered
+/// items with their nesting, and paragraphs (lines joined, as markdown reads them). The words of
+/// paragraphs, headings and items keep their inline marks, for [`spans`].
 pub fn pieces(md: &str) -> Vec<Piece> {
     let mut out = Vec::new();
     let mut para = String::new();
     let mut code: Option<String> = None;
-    let mut table = String::new();
+    let mut table: Vec<Vec<String>> = Vec::new();
     // An item's words go on across lines until a blank line or another block.
     let mut in_item = false;
     let flush_para = |out: &mut Vec<Piece>, para: &mut String| {
-        let t = inline(para.trim());
+        let t = para.trim().to_string();
         if !t.is_empty() {
             out.push(Piece::Prose(t));
         }
         para.clear();
     };
-    let flush_table = |out: &mut Vec<Piece>, table: &mut String| {
+    let flush_table = |out: &mut Vec<Piece>, table: &mut Vec<Vec<String>>| {
         if !table.is_empty() {
-            out.push(Piece::Code(table.trim_end_matches('\n').to_string()));
-            table.clear();
+            out.push(Piece::Table(std::mem::take(table)));
         }
     };
     for line in md.lines() {
@@ -685,8 +686,9 @@ pub fn pieces(md: &str) -> Vec<Piece> {
             in_item = false;
             // The line under a table's head (|---|:--|) says only how to align.
             if !t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) {
-                table.push_str(&inline(t));
-                table.push('\n');
+                let inner = t.strip_prefix('|').unwrap_or(t);
+                let inner = inner.strip_suffix('|').unwrap_or(inner);
+                table.push(inner.split('|').map(|c| inline(c.trim())).collect());
             }
             continue;
         }
@@ -699,19 +701,19 @@ pub fn pieces(md: &str) -> Vec<Piece> {
         if let Some(h) = heading(t) {
             flush_para(&mut out, &mut para);
             in_item = false;
-            out.push(Piece::Heading(inline(h)));
+            out.push(Piece::Heading(h.to_string()));
             continue;
         }
         let indent = line.len() - line.trim_start().len();
         if let Some((mark, text)) = list_mark(t) {
             flush_para(&mut out, &mut para);
-            out.push(Piece::Item { mark, text: inline(text), depth: (indent / 2).min(2) as u8 });
+            out.push(Piece::Item { mark, text: text.to_string(), depth: (indent / 2).min(2) as u8 });
             in_item = true;
             continue;
         }
         if in_item && let Some(Piece::Item { text, .. }) = out.last_mut() {
             text.push(' ');
-            text.push_str(&inline(t));
+            text.push_str(t);
             continue;
         }
         if !para.is_empty() {
@@ -727,29 +729,126 @@ pub fn pieces(md: &str) -> Vec<Piece> {
     out
 }
 
-/// The links in a message, as (the words shown, where they go): `[words](https://…)`, and bare
-/// web addresses (shown as themselves, without a full stop or bracket that ends the sentence).
-pub fn links(md: &str) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = Vec::new();
-    let mut rest = md;
-    while let Some(open) = rest.find("](") {
-        let label_start = rest[..open].rfind('[');
-        let after = &rest[open + 2..];
-        if let (Some(ls), Some(end)) = (label_start, after.find(')')) {
-            let label = rest[ls + 1..open].replace("**", "").replace('`', "");
-            let url = after[..end].trim();
-            if (url.starts_with("https://") || url.starts_with("http://")) && !label.trim().is_empty() {
-                out.push((label.trim().to_string(), url.to_string()));
+/// How a run of words is set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Marks {
+    pub bold: bool,
+    pub italic: bool,
+    pub code: bool,
+}
+
+/// A run of words with one look: plain, `**bold**`, `*italic*`, `` `code` ``, or a link
+/// (`[words](https://…)`, or a bare web address shown as itself).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Span {
+    pub text: String,
+    pub marks: Marks,
+    pub link: Option<String>,
+}
+
+fn is_url_start(s: &str) -> bool {
+    s.starts_with("https://") || s.starts_with("http://")
+}
+
+/// A line's inline Markdown as runs. A mark only counts when it closes later on the line (an
+/// unclosed `*` or `` ` `` stays as typed), and `_` only at a word's edge, so `snake_case` and
+/// `2 * 3` read as written.
+pub fn spans(s: &str) -> Vec<Span> {
+    let c: Vec<char> = s.chars().collect();
+    let n = c.len();
+    let mut out: Vec<Span> = Vec::new();
+    let mut marks = Marks::default();
+    let mut buf = String::new();
+    let push = |out: &mut Vec<Span>, buf: &mut String, marks: Marks, link: Option<String>| {
+        if buf.is_empty() {
+            return;
+        }
+        match out.last_mut() {
+            Some(l) if l.marks == marks && l.link.is_none() && link.is_none() => l.text.push_str(buf),
+            _ => out.push(Span { text: buf.clone(), marks, link }),
+        }
+        buf.clear();
+    };
+    let find = |from: usize, pat: &[char]| (from..n.saturating_sub(pat.len() - 1)).find(|&j| c[j..j + pat.len()] == *pat);
+    let word = |i: usize| i < n && (c[i].is_alphanumeric());
+    let mut i = 0;
+    while i < n {
+        let ch = c[i];
+        // `code`: as typed inside, no marks.
+        if ch == '`'
+            && let Some(end) = find(i + 1, &['`'])
+            && end > i + 1
+        {
+            push(&mut out, &mut buf, marks, None);
+            out.push(Span { text: c[i + 1..end].iter().collect(), marks: Marks { code: true, ..marks }, link: None });
+            i = end + 1;
+            continue;
+        }
+        // [words](https://…)
+        if ch == '['
+            && let Some(close) = find(i + 1, &[']', '('])
+            && let Some(end) = find(close + 2, &[')'])
+        {
+            let url: String = c[close + 2..end].iter().collect();
+            let label: String = c[i + 1..close].iter().collect();
+            if is_url_start(url.trim()) && !label.trim().is_empty() && !label.contains('[') {
+                push(&mut out, &mut buf, marks, None);
+                let words = spans(&label).into_iter().map(|s| s.text).collect::<String>();
+                out.push(Span { text: words, marks, link: Some(url.trim().to_string()) });
+                i = end + 1;
+                continue;
             }
         }
-        rest = &rest[open + 2..];
-    }
-    for word in md.split(|c: char| c.is_whitespace() || c == '(' || c == '<' || c == '`' || c == '"') {
-        let w = word.trim_end_matches(['.', ',', ';', ':', ')', '>', '!', '?', '\'', '`', '"', '*']);
-        if (w.starts_with("https://") || w.starts_with("http://")) && w.len() > 8 && !w.contains("](") && !out.iter().any(|(_, u)| u == w) {
-            out.push((w.to_string(), w.to_string()));
+        // A bare web address, without the full stop or bracket that ends its sentence.
+        if (ch == 'h') && (i == 0 || !word(i - 1)) && is_url_start(&c[i..n.min(i + 8)].iter().collect::<String>()) {
+            let mut end = i;
+            while end < n && !c[end].is_whitespace() && !matches!(c[end], '<' | '>' | '"' | '`') {
+                end += 1;
+            }
+            while end > i && matches!(c[end - 1], '.' | ',' | ';' | ':' | ')' | '!' | '?' | '\'' | '*') {
+                end -= 1;
+            }
+            if end - i > 8 {
+                push(&mut out, &mut buf, marks, None);
+                let url: String = c[i..end].iter().collect();
+                out.push(Span { text: url.clone(), marks, link: Some(url) });
+                i = end;
+                continue;
+            }
         }
+        // **bold** and __bold__
+        if (ch == '*' || ch == '_') && i + 1 < n && c[i + 1] == ch {
+            let pat = [ch, ch];
+            let opening = !marks.bold && i + 2 < n && !c[i + 2].is_whitespace() && find(i + 2, &pat).is_some();
+            let closing = marks.bold && i > 0 && !c[i - 1].is_whitespace();
+            if (opening || closing) && (ch == '*' || !(word(i.wrapping_sub(1)) && word(i + 2))) {
+                push(&mut out, &mut buf, marks, None);
+                marks.bold = !marks.bold;
+                i += 2;
+                continue;
+            }
+        }
+        // *italic* and _italic_
+        if ch == '*' || ch == '_' {
+            let edge = ch == '*' || ((i == 0 || !word(i - 1)) || !word(i + 1));
+            let opening = !marks.italic && i + 1 < n && !c[i + 1].is_whitespace() && (i == 0 || !word(i - 1) || ch == '*') && find(i + 1, &[ch]).is_some_and(|j| j > i + 1 && !c[j - 1].is_whitespace());
+            let closing = marks.italic && i > 0 && !c[i - 1].is_whitespace() && (ch == '*' || !word(i + 1));
+            if edge && (opening || closing) {
+                push(&mut out, &mut buf, marks, None);
+                marks.italic = !marks.italic;
+                i += 1;
+                continue;
+            }
+        }
+        if ch == '\\' && i + 1 < n && c[i + 1].is_ascii_punctuation() {
+            buf.push(c[i + 1]);
+            i += 2;
+            continue;
+        }
+        buf.push(ch);
+        i += 1;
     }
+    push(&mut out, &mut buf, marks, None);
     out
 }
 
@@ -1009,7 +1108,36 @@ mod tests {
     #[test]
     fn markdown_is_drawn_simply() {
         let p = pieces("**Fixed.** Run `cargo test`:\n```rust\nfn a() {}\n```\nDone.");
-        assert_eq!(p, [Piece::Prose("Fixed. Run cargo test:".into()), Piece::Code("fn a() {}".into()), Piece::Prose("Done.".into())]);
+        assert_eq!(p, [Piece::Prose("**Fixed.** Run `cargo test`:".into()), Piece::Code("fn a() {}".into()), Piece::Prose("Done.".into())]);
+    }
+
+    fn sp(text: &str, bold: bool, italic: bool, code: bool, link: Option<&str>) -> Span {
+        Span { text: text.into(), marks: Marks { bold, italic, code }, link: link.map(str::to_string) }
+    }
+
+    #[test]
+    fn inline_marks_read_as_runs() {
+        assert_eq!(
+            spans("**Fixed.** Run `cargo test` and *then* push"),
+            [sp("Fixed.", true, false, false, None), sp(" Run ", false, false, false, None), sp("cargo test", false, false, true, None), sp(" and ", false, false, false, None), sp("then", false, true, false, None), sp(" push", false, false, false, None)]
+        );
+        // Not marks: snake_case, a lone star, an unclosed backtick, 2 * 3 * 4.
+        for plain in ["call snake_case_name now", "a * b", "a `b", "2 * 3 * 4"] {
+            let s = spans(plain);
+            assert_eq!(s, [sp(plain, false, false, false, None)], "{plain}");
+        }
+        assert_eq!(spans("_quiet_ one"), [sp("quiet", false, true, false, None), sp(" one", false, false, false, None)]);
+        assert_eq!(spans("***both***"), [sp("both", true, true, false, None)]);
+    }
+
+    #[test]
+    fn links_are_found_with_their_words() {
+        let s = spans("See [the **PR**](https://github.com/a/b/pull/7), or https://example.org/x.");
+        assert_eq!(
+            s,
+            [sp("See ", false, false, false, None), sp("the PR", false, false, false, Some("https://github.com/a/b/pull/7")), sp(", or ", false, false, false, None), sp("https://example.org/x", false, false, false, Some("https://example.org/x")), sp(".", false, false, false, None)]
+        );
+        assert!(spans("Not ftp://x or [a](relative).").iter().all(|s| s.link.is_none()));
     }
 
     #[test]
@@ -1018,12 +1146,6 @@ mod tests {
         let t = parse_ms("2026-11-25T02:00:00Z").unwrap();
         assert!(a.working_at(t + 3_000));
         assert!(!a.working_at(t + BUSY_QUIET_MS + 1), "quiet at its prompt: ready, not working");
-    }
-
-    #[test]
-    fn links_are_found_with_their_words() {
-        let l = links("See [the PR](https://github.com/a/b/pull/7), or https://example.org/x.\nNot ftp://x or [a](relative).");
-        assert_eq!(l, [("the PR".to_string(), "https://github.com/a/b/pull/7".to_string()), ("https://example.org/x".to_string(), "https://example.org/x".to_string())]);
     }
 
     #[test]
@@ -1048,9 +1170,9 @@ mod tests {
                 Piece::Heading("What changed".into()),
                 Piece::Prose("The chat now keeps up.".into()),
                 Piece::Item { mark: "•".into(), text: "one".into(), depth: 0 },
-                Piece::Item { mark: "•".into(), text: "nested bold goes on".into(), depth: 1 },
-                Piece::Item { mark: "2.".into(), text: "two link".into(), depth: 0 },
-                Piece::Code("| a | b |\n| 1 | 2 |".into()),
+                Piece::Item { mark: "•".into(), text: "nested **bold** goes on".into(), depth: 1 },
+                Piece::Item { mark: "2.".into(), text: "two [link](http://x)".into(), depth: 0 },
+                Piece::Table(vec![vec!["a".into(), "b".into()], vec!["1".into(), "2".into()]]),
                 Piece::Prose("After.".into()),
             ]
         );

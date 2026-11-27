@@ -62,6 +62,8 @@ pub const FONTS: [&[u8]; crate::draw::FACES] = [
     include_bytes!("../assets/fonts/literata_400.ttf"),
     include_bytes!("../assets/fonts/geist_mono_400.ttf"),
     include_bytes!("../assets/fonts/literata_600.ttf"),
+    // Literata italic (the same OFL family, as Leaf ships it): emphasis in the agent's words.
+    include_bytes!("../assets/fonts/literata_400i.ttf"),
 ];
 
 /// The most a field holds, in characters.
