@@ -271,6 +271,22 @@ pub extern "system" fn Java_com_quietsoftware_relaycode_LinkService_nativeScreen
     crate::background::screen(on != 0);
 }
 
+/// A sample screen to show (the smoke run's `screen` extra; CodeActivity passes it only in a
+/// debuggable build).
+static SAMPLE: Mutex<Option<String>> = Mutex::new(None);
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_relaycode_CodeActivity_nativeSample<'local>(mut env: JNIEnv<'local>, _class: JClass<'local>, name: jni::objects::JString<'local>) {
+    if name.is_null() {
+        return;
+    }
+    let n: String = env.get_string(&name).map(Into::into).unwrap_or_default();
+    if !n.is_empty() {
+        *SAMPLE.lock().unwrap_or_else(|e| e.into_inner()) = Some(n);
+        wake();
+    }
+}
+
 /// Back, from CodeActivity's back callback.
 static BACK: AtomicBool = AtomicBool::new(false);
 
@@ -377,6 +393,8 @@ const RETRY_NS: u64 = 16_000_000;
 
 #[unsafe(no_mangle)]
 fn android_main(android: AndroidApp) {
+    let started = now_ns();
+    let mut first_frame = true;
     std::panic::set_hook(Box::new(|info| log(&format!("panic: {info}"))));
     *WAKER.lock().unwrap_or_else(|e| e.into_inner()) = Some(android.create_waker());
     crate::wake::set(Box::new(wake));
@@ -590,6 +608,11 @@ fn android_main(android: AndroidApp) {
             }
         }
 
+        // A sample screen asked for by the smoke run (debuggable builds only), before it is drawn.
+        if let Some(name) = SAMPLE.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            crate::smoke::show(&mut app, &name);
+            dirty = true;
+        }
         let due = dirty || matches!(next, Next::Now) || matches!(next, Next::At(at) if now_ns() >= at);
         if foreground
             && due
@@ -605,6 +628,10 @@ fn android_main(android: AndroidApp) {
             let (globals, clear) = (app.canvas.globals, app.clear_colour());
             if !s.frame(g, &globals, clear, &app.canvas.insts, &app.canvas.batches) {
                 next = Next::At(now_ns() + RETRY_NS);
+            } else if first_frame {
+                // Read by the smoke run beside `am start -W`'s TotalTime.
+                first_frame = false;
+                log(&format!("first frame {} ms after start", (now_ns() - started) / 1_000_000));
             }
         }
     }
