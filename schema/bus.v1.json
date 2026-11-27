@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 448,
+  "op_count": 449,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -3049,6 +3049,26 @@
       },
       "result": {
         "$ref": "#/$defs/Empty"
+      }
+    },
+    "git.pull": {
+      "summary": "Fast-forward the branch to its upstream (git pull --ff-only); refused when it cannot simply move forward",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "git.changed"
+      ],
+      "since": "1.0",
+      "phase": 8,
+      "payload": {
+        "$ref": "#/$defs/GitWtIn"
+      },
+      "result": {
+        "$ref": "#/$defs/GitPullOut"
       }
     },
     "git.pr.list": {
@@ -16387,6 +16407,13 @@
           "minimum": 0,
           "description": "How many entries git reported, `files` included; more than `files.len()` when truncated.",
           "default": 0
+        },
+        "operation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What the checkout is in the middle of, when anything: `merge`, `rebase` (or `git am`),\n`cherry_pick` or `revert`, from the files git keeps in its git dir while it waits."
         }
       },
       "required": [
@@ -17057,6 +17084,18 @@
       },
       "required": [
         "project_id"
+      ]
+    },
+    "GitPullOut": {
+      "type": "object",
+      "properties": {
+        "up_to_date": {
+          "type": "boolean",
+          "description": "Already level with its upstream: nothing moved."
+        }
+      },
+      "required": [
+        "up_to_date"
       ]
     },
     "GitPrListIn": {

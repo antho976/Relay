@@ -33,9 +33,17 @@ pub struct File {
     pub old_path: Option<String>,
     /// Git calls it binary (or too large to count): it has no text diff.
     pub binary: bool,
+    /// Porcelain worktree letter, beside `index`: both `U` (or both added, both deleted) is a
+    /// conflict.
+    pub wt: String,
 }
 
 impl File {
+    /// Left in conflict by a merge, rebase or pick: git's unmerged pairs.
+    pub fn conflicted(&self) -> bool {
+        self.index == "U" || self.wt == "U" || (self.index == "A" && self.wt == "A") || (self.index == "D" && self.wt == "D")
+    }
+
     pub fn staged(&self) -> bool {
         !matches!(self.index.as_str(), "" | " " | "?" | "!")
     }
@@ -50,6 +58,10 @@ pub struct State {
     upstream: Option<String>,
     ahead: i64,
     behind: i64,
+    /// How far the base has moved on since this branch left it (from the two walks).
+    pub behind_base: Option<usize>,
+    /// What the checkout is in the middle of (`git.status`'s operation): merge, rebase…
+    pub operation: Option<String>,
     /// The repo's pull requests (`git.pr.list`): the open branch's is shown and opened.
     prs: Vec<Pr>,
     /// The sheet that opens a pull request, with its title and body (pub, as `picking`, for
@@ -258,6 +270,8 @@ enum Job {
     /// `set_upstream` is the push's, read when the commit was asked, for the worktree it commits.
     Commit { push: bool, set_upstream: bool },
     Push,
+    /// Fast-forward to the upstream (`git.pull`).
+    Pull,
     Pr,
     /// The repo's pull requests, and a fetch: both for the whole repo, not one worktree.
     Prs,
@@ -273,7 +287,7 @@ const LONG_CALL: std::time::Duration = std::time::Duration::from_secs(600);
 impl Job {
     /// Runs git on the PC, network and hooks included.
     fn long(&self) -> bool {
-        matches!(self, Job::Commit { .. } | Job::Push | Job::Pr | Job::Fetch | Job::Merge(_))
+        matches!(self, Job::Commit { .. } | Job::Push | Job::Pull | Job::Pr | Job::Fetch | Job::Merge(_))
     }
 
     /// About the repo, not the open worktree: its answer is kept across a branch switch.
@@ -287,6 +301,7 @@ impl Job {
             Job::Suggest => Some("Writing a message…"),
             Job::Commit { .. } => Some("Committing…"),
             Job::Push => Some("Pushing…"),
+            Job::Pull => Some("Pulling…"),
             Job::Pr => Some("Opening the pull request…"),
             Job::Merge(_) => Some("Merging…"),
             _ => None,
@@ -295,7 +310,7 @@ impl Job {
 
     /// Done to the worktree whatever page is open: these finish even after a switch.
     fn acts(&self) -> bool {
-        matches!(self, Job::Stage(_) | Job::Discard(_) | Job::Commit { .. } | Job::Push | Job::Pr | Job::Merge(_))
+        matches!(self, Job::Stage(_) | Job::Discard(_) | Job::Commit { .. } | Job::Push | Job::Pull | Job::Pr | Job::Merge(_))
     }
 }
 
@@ -339,6 +354,7 @@ pub fn files(status: &Value, counts: &[Count]) -> Vec<File> {
                     let c = counts.iter().find(|c| c.path == path).cloned().unwrap_or_default();
                     Some(File {
                         index: f.get("index").and_then(Value::as_str).unwrap_or_default().to_string(),
+                        wt: f.get("worktree").and_then(Value::as_str).unwrap_or_default().to_string(),
                         old_path: f.get("renamed_from").and_then(Value::as_str).map(str::to_string),
                         path,
                         added: c.added,
@@ -366,6 +382,7 @@ pub fn diff_files(v: &Value) -> Vec<File> {
                         removed: n("removed"),
                         old_path: f.get("old_path").and_then(Value::as_str).map(str::to_string),
                         binary: f.get("binary").and_then(Value::as_bool) == Some(true),
+                        wt: String::new(),
                     })
                 })
                 .collect()
@@ -521,6 +538,8 @@ impl State {
         self.upstream = None;
         self.ahead = 0;
         self.behind = 0;
+        self.behind_base = None;
+        self.operation = None;
         self.pr_sheet = false;
         self.log = None;
         self.base_log = None;
@@ -574,6 +593,8 @@ fn fork_point(app: &mut App, repo: i64) {
     let st = &mut app.st.changes;
     let (Some(log), Some(base)) = (&st.log, &st.base_log) else { return };
     let (own, fork) = since_base(log, base);
+    // The base's commits newer than the fork: how far main has moved on since.
+    st.behind_base = fork.as_ref().and_then(|f| base.iter().position(|s| s == f));
     st.commits = own;
     st.fork = fork;
     if st.commits.is_empty() {
@@ -640,6 +661,7 @@ fn answered(app: &mut App, job: Job, repo: i64, worktree: Option<String>, r: Res
                 st.upstream = v.get("upstream").and_then(Value::as_str).map(str::to_string);
                 st.ahead = v.get("ahead").and_then(Value::as_i64).unwrap_or(0);
                 st.behind = v.get("behind").and_then(Value::as_i64).unwrap_or(0);
+                st.operation = v.get("operation").and_then(Value::as_str).map(str::to_string);
                 status = Some(v);
             }
             (Job::Diff, Ok(v)) => diffs.push(v),
@@ -717,6 +739,12 @@ fn answered(app: &mut App, job: Job, repo: i64, worktree: Option<String>, r: Res
                 } else {
                     app.toast("Committed");
                 }
+                if here {
+                    reload(app);
+                }
+            }
+            (Job::Pull, Ok(v)) => {
+                app.toast(if v.get("up_to_date").and_then(Value::as_bool) == Some(true) { "Already up to date" } else { "Pulled" });
                 if here {
                     reload(app);
                 }
@@ -867,6 +895,18 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     } else {
         let mut open: Option<(Group, String)> = None;
         let mut toggle_stage: Option<File> = None;
+        // Mid-merge or mid-rebase: what is in conflict, plainly, and nothing to commit here.
+        let conflicts: Vec<File> = app.st.changes.files.iter().filter(|f| f.conflicted()).cloned().collect();
+        let operation = app.st.changes.operation.clone();
+        if operation.is_some() || !conflicts.is_empty() {
+            y = conflict_state(app, y, operation.as_deref(), &conflicts);
+            app.page_end(&page, y);
+            crate::home::top(app, "Changes");
+            if app.st.changes.picking {
+                picker(app, dt);
+            }
+            return page.moving || !app.st.changes.pending.is_empty() && !crate::wake::has();
+        }
         // An agent's branch: everything it changed since it left the base, file by file, then
         // its commits. Agents commit their own work, so this is what there is to review.
         let commits = app.st.changes.commits.clone();
@@ -1576,11 +1616,45 @@ fn confirm_discard(app: &mut App) {
     st.ask(&link, repo, Job::Discard(f.path.clone()), op, json!({"project_id": repo, "worktree": w, "path": f.path}));
 }
 
+/// A checkout in the middle of a merge, rebase or pick: what it is doing, what to do about it on
+/// the PC, and the files in conflict. Returns where it ends.
+fn conflict_state(app: &mut App, y: f32, operation: Option<&str>, conflicts: &[File]) -> f32 {
+    let (title, how) = match operation {
+        Some("rebase") => ("A rebase is under way", "Settle the files below on the PC, then git rebase --continue (or --abort)."),
+        Some("merge") => ("A merge is under way", "Settle the files below on the PC, then commit the merge (or git merge --abort)."),
+        Some("cherry_pick") => ("A cherry-pick is under way", "Settle the files below on the PC, then git cherry-pick --continue (or --abort)."),
+        Some("revert") => ("A revert is under way", "Settle the files below on the PC, then git revert --continue (or --abort)."),
+        _ => ("Files in conflict", "Settle them on the PC and commit there."),
+    };
+    let body = if conflicts.is_empty() { format!("{how} Nothing is in conflict now.") } else { how.to_string() };
+    let (h, _) = kit::empty(&mut crate::cx!(app), y - 48.0, title, Some(&body), None);
+    let mut y = y - 48.0 + h;
+    if !conflicts.is_empty() {
+        y = section(app, y, &format!("IN CONFLICT · {}", plural(conflicts.len(), "FILE")));
+        let mono = Text::new(ty::MONO, t::INK).face(Weight::Mono);
+        let small = Text::new(ty::SMALL, t::INK3);
+        for f in conflicts {
+            let (dir, name) = f.path.rsplit_once('/').map_or(("", f.path.as_str()), |(d, n)| (d, n));
+            app.canvas.icon("close", t::PAD + 8.0, y + 16.0, 12.0, t::DANGER);
+            app.canvas.text_fit(name, t::PAD + 26.0, y + 6.0, WIDTH - 2.0 * t::PAD - 26.0, mono);
+            if !dir.is_empty() {
+                let d = app.canvas.fit_start(dir, WIDTH - 2.0 * t::PAD - 26.0, small);
+                app.canvas.text(&d, t::PAD + 26.0, y + 26.0, small);
+            }
+            y += 50.0;
+        }
+    }
+    y
+}
+
 /// The foot's message and keys show once there is a branch and something to do on it: files to
 /// commit, commits to push, or a pull request to open or look at. Not while connecting, and not on
 /// the base with nothing in hand.
 fn foot_shown(st: &State) -> bool {
     let branch = st.branch.as_str();
+    if st.operation.is_some() || st.files.iter().any(File::conflicted) {
+        return false;
+    }
     st.loaded && !branch.is_empty() && (!st.files.is_empty() || (branch != "HEAD" && (st.ahead > 0 || st.upstream.is_none() || branch != st.base)))
 }
 
@@ -1614,12 +1688,38 @@ fn branch_line(app: &mut App, mut y: f32) -> f32 {
             },
         }
     };
+    // How far the base moved on since the branch left it: a line of its own under this one.
+    let behind_base = match st.behind_base {
+        Some(n) if n > 0 && st.branch != st.base && !st.base.is_empty() => Some(format!("{n} new on {} since this branch left it.", st.base)),
+        _ => None,
+    };
+    // Behind its upstream, on a branch, mid-nothing: it can be pulled forward.
+    let pullable = st.behind > 0 && st.upstream.is_some() && st.branch != "HEAD" && st.operation.is_none();
+    let pulling = st.pending.iter().any(|p| p.job == Job::Pull);
     let fetching = st.pending.iter().any(|p| p.job == Job::Fetch);
     let pr = pr_for(&st.prs, &st.branch).cloned();
     let small = Text::new(ty::SMALL, t::INK3);
     let key = if fetching { "Fetching…" } else { "Fetch" };
     let kw = app.canvas.measure(key, small.color(t::INK2)) + 24.0;
-    app.canvas.text_fit(&words, t::PAD + 2.0, y + 9.0, WIDTH - 2.0 * t::PAD - kw - 8.0, small);
+    let pkey = if pulling { "Pulling…" } else { "Pull" };
+    let pw = if pullable { app.canvas.measure(pkey, small.color(t::INK2)) + 24.0 } else { 0.0 };
+    app.canvas.text_fit(&words, t::PAD + 2.0, y + 9.0, WIDTH - 2.0 * t::PAD - kw - pw - 8.0, small);
+    let pull = pullable && {
+        let mut cx = crate::cx!(app);
+        let px = WIDTH - t::PAD - kw - pw;
+        if cx.pressed(px, y - 6.0, pw, 44.0) {
+            cx.c.rect(px, y, pw, 32.0, 8.0, t::WASH);
+        }
+        cx.c.text(pkey, px + pw / 2.0, y + 9.0, small.color(t::ACCENT).center());
+        cx.tap(px, y - 6.0, pw, 44.0)
+    };
+    if pull
+        && !pulling
+        && let Some(repo) = app.repo
+    {
+        let link = app.link.clone();
+        app.st.changes.ask(&link, repo, Job::Pull, "git.pull", json!({"project_id": repo, "worktree": wt(&app.st.changes)}));
+    }
     let fetch = {
         let mut cx = crate::cx!(app);
         let kx = WIDTH - t::PAD - kw;
@@ -1637,6 +1737,10 @@ fn branch_line(app: &mut App, mut y: f32) -> f32 {
         app.st.changes.ask_for(&link, repo, None, Job::Fetch, "git.fetch", json!({"project_id": repo}));
     }
     y += 40.0;
+    if let Some(b) = behind_base {
+        app.canvas.text_fit(&b, t::PAD + 2.0, y - 8.0, WIDTH - 2.0 * t::PAD, small);
+        y += 24.0;
+    }
     if let Some(p) = pr {
         // Its checks: read when it shows, again after a change.
         if p.state == "open"
@@ -1855,6 +1959,7 @@ pub fn sample(app: &mut App) {
         upstream: Some("origin/relay/bold-puffin".into()),
         ahead: 2,
         behind: 1,
+        behind_base: Some(4),
         prs: vec![Pr { number: 209, branch: "relay/bold-puffin".into(), title: "Relay Code: the phone app rewritten in Rust + wgpu".into(), url: "https://github.com/antho976/Relay/pull/209".into(), state: "open".into(), draft: false }],
         checks: Some((209, vec![
             Check { name: "engine, bus and CLI".into(), state: "pass".into(), link: None, required: false },
@@ -2424,6 +2529,27 @@ mod tests {
         assert!(foot_shown(&st(true, "relay/x", 0, 0, true)), "a branch's pull request");
         assert!(!foot_shown(&st(true, "HEAD", 0, 0, false)), "detached, nothing to commit");
         assert!(foot_shown(&st(true, "HEAD", 1, 0, false)), "detached, a commit to make");
+    }
+
+    #[test]
+    fn a_branch_knows_how_far_main_moved_on_and_a_conflict_hides_the_foot() {
+        let mut a = app_on_b("behind");
+        a.st.changes.base = "main".into();
+        answered(&mut a, Job::Log, 1, Some("/w/b".into()), Ok(json!({"commits": [{"sha": "c1"}, {"sha": "m1"}]})));
+        answered(&mut a, Job::BaseLog, 1, Some("/w/b".into()), Ok(json!({"commits": [{"sha": "m4"}, {"sha": "m3"}, {"sha": "m2"}, {"sha": "m1"}]})));
+        assert_eq!(a.st.changes.behind_base, Some(3), "m4, m3 and m2 landed on main since");
+        // A status mid-rebase, one file in conflict.
+        let status = json!({"branch": "HEAD", "operation": "rebase", "files": [
+            {"path": "src/a.rs", "index": "U", "worktree": "U"},
+            {"path": "src/b.rs", "index": "M", "worktree": " "}]});
+        answered(&mut a, Job::Status, 1, Some("/w/b".into()), Ok(status));
+        let st = &a.st.changes;
+        assert_eq!(st.operation.as_deref(), Some("rebase"));
+        assert_eq!(st.files.iter().filter(|f| f.conflicted()).count(), 1);
+        assert!(!foot_shown(st), "nothing to commit mid-rebase");
+        let both_added = File { index: "A".into(), wt: "A".into(), ..File::default() };
+        assert!(both_added.conflicted());
+        assert!(!File { index: "A".into(), wt: " ".into(), ..File::default() }.conflicted());
     }
 
     #[test]
