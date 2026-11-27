@@ -161,6 +161,8 @@ pub struct State {
     /// Each card's title height, measured once per title: wrapping 80 titles every frame was
     /// most of the Board's frame.
     heights: std::collections::HashMap<i64, (String, f32)>,
+    /// The text size the heights were measured at: another one measures them again.
+    heights_scale: f32,
 }
 
 fn reload(app: &mut App) {
@@ -515,6 +517,12 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         y += h;
     }
     let tt = Text::new(ty::BODY, t::INK).semi().line(1.35);
+    // Another text size (Settings, or the phone's own): every card is measured again.
+    let scale = crate::draw::text_scale();
+    if app.st.board.heights_scale != scale {
+        app.st.board.heights.clear();
+        app.st.board.heights_scale = scale;
+    }
     for tk in &list {
         let th = match app.st.board.heights.get(&tk.id) {
             Some((title, h)) if *title == tk.title => *h,
@@ -592,6 +600,12 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
 
 /// One task: its words, who is on it, the next step, a comment.
 pub fn draw_task(app: &mut App, id: i64, dt: f32) -> bool {
+    // Another repo picked on the chip: this task is the old repo's, so its board shows instead,
+    // the same kind of page (route A), as a design does.
+    if app.st.board.repo.is_some() && app.st.board.repo != app.repo {
+        leave_for_board(app);
+        return true;
+    }
     if app.st.board.open.id != id {
         reload_task(app, id);
     }
@@ -717,6 +731,19 @@ pub fn draw_task(app: &mut App, id: i64, dt: f32) -> bool {
     }
     draw_send_back(app);
     page.moving || app.st.board.back_call.is_some() && !crate::wake::has()
+}
+
+/// From a task to the Board: back to it when it is under the task, else in its place.
+fn leave_for_board(app: &mut App) {
+    let n = app.nav.len();
+    if n >= 2 && app.nav[n - 2].0 == Route::Board {
+        app.pop();
+    } else if n >= 2 {
+        app.pop();
+        app.push(Route::Board);
+    } else {
+        app.reset_to(Route::Board);
+    }
 }
 
 /// The task's comments and what was done to it, oldest first. Returns where it ends.
@@ -1014,6 +1041,36 @@ mod tests {
         a.st.board.act = Some(rc_link::Call::never());
         approve(&mut a, 41);
         assert!(a.st.board.act.is_some());
+    }
+
+    #[test]
+    fn large_text_measures_the_cards_again_and_another_repo_leaves_a_task_for_the_board() {
+        let dir = std::env::temp_dir().join(format!("relay-code-board-size-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(NoHost(dir)), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        a.push(Route::Board);
+        let mut clock = 2_000_000_000u64;
+        let mut frame = |a: &mut App| {
+            clock += 16_666_666;
+            a.frame(clock);
+        };
+        frame(&mut a);
+        let small: f32 = a.st.board.heights.values().map(|(_, h)| *h).sum();
+        a.set_text_size(2);
+        frame(&mut a);
+        frame(&mut a);
+        let large: f32 = a.st.board.heights.values().map(|(_, h)| *h).sum();
+        assert!(large > small, "measured again at the larger size: {small} → {large}");
+        a.set_text_size(1);
+        // On a task, another repo picked: back to the Board's list.
+        a.push(Route::Task(41));
+        frame(&mut a);
+        assert_eq!(*a.route(), Route::Task(41));
+        a.repo = Some(2);
+        frame(&mut a);
+        assert_eq!(*a.route(), Route::Board);
     }
 
     #[test]

@@ -91,6 +91,8 @@ pub struct State {
     diff: Diff,
     /// The open picture's sides, when the open file is a changed picture.
     pub pic: Option<PicDiff>,
+    /// The text size the open diff's rows were wrapped at: another one wraps them again.
+    rows_scale: f32,
     /// The commit opened in the list, and what `git.show` said of it: its body and files.
     open_commit: Option<String>,
     shown: Option<(String, String, Vec<File>)>,
@@ -1473,6 +1475,12 @@ fn hunks(app: &mut App, y: f32, page: &crate::app::Page) -> f32 {
             let digit = app.canvas.measure("0", st);
             let most = lines.iter().filter_map(|l| l.num).max().unwrap_or(1);
             let gutter = digit * (most.to_string().len() as f32) + 10.0;
+            // Another text size: the rows wrap again, as the chat does.
+            let scale = crate::draw::text_scale();
+            if app.st.changes.rows_scale != scale {
+                rows.clear();
+                app.st.changes.rows_scale = scale;
+            }
             if rows.is_empty() {
                 *rows = wrap_rows(app, lines, w - 24.0 - gutter, digit, st);
             }
@@ -1823,15 +1831,17 @@ fn conflict_state(app: &mut App, y: f32, operation: Option<&str>, conflicts: &[F
         y = section(app, y, &format!("IN CONFLICT · {}", plural(conflicts.len(), "FILE")));
         let mono = Text::new(ty::MONO, t::INK).face(Weight::Mono);
         let small = Text::new(ty::SMALL, t::INK3);
+        // Each row as tall as its two lines at the text size chosen.
+        let (nh, dh) = (mono.lh(), small.lh());
         for f in conflicts {
             let (dir, name) = f.path.rsplit_once('/').map_or(("", f.path.as_str()), |(d, n)| (d, n));
-            app.canvas.icon("close", t::PAD + 8.0, y + 16.0, 12.0, t::DANGER);
+            app.canvas.icon("close", t::PAD + 8.0, y + 6.0 + nh / 2.0, 12.0, t::DANGER);
             app.canvas.text_fit(name, t::PAD + 26.0, y + 6.0, WIDTH - 2.0 * t::PAD - 26.0, mono);
             if !dir.is_empty() {
                 let d = app.canvas.fit_start(dir, WIDTH - 2.0 * t::PAD - 26.0, small);
-                app.canvas.text(&d, t::PAD + 26.0, y + 26.0, small);
+                app.canvas.text(&d, t::PAD + 26.0, y + 8.0 + nh, small);
             }
-            y += 50.0;
+            y += 6.0 + nh + 2.0 + dh + 12.0;
         }
     }
     y
@@ -2818,6 +2828,28 @@ mod tests {
         a.st.changes.ask(&link, 1, Job::Push, "git.push", json!({}));
         a.st.changes.ask(&link, 1, Job::Push, "git.push", json!({}));
         assert!(!a.st.changes.pending[0].stale && a.st.changes.pending[0].again.is_none());
+    }
+
+    #[test]
+    fn large_text_wraps_an_open_diff_again() {
+        let (mut a, mut clock) = on_changes("diff-size");
+        let text = (0..20).map(|i| format!("+    let value_{i} = compute(&input[{i}..], \"a fairly long line that wraps at a larger size\");")).collect::<Vec<_>>().join("\n");
+        a.st.changes.open = Some((Group::Branch, a.st.changes.branch_files[0].path.clone()));
+        a.st.changes.diff = Diff::Lines(diff_lines(&json!({"hunks": [{"text": format!("@@ -1,0 +1,20 @@\n{text}")}]})), Vec::new());
+        clock += 16_666_666;
+        a.frame(clock);
+        let rows = |a: &App| match &a.st.changes.diff {
+            Diff::Lines(_, r) => r.len(),
+            _ => 0,
+        };
+        let before = rows(&a);
+        a.set_text_size(2);
+        for _ in 0..2 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        assert!(rows(&a) > before, "wrapped again at the larger size: {before} → {}", rows(&a));
+        a.set_text_size(1);
     }
 
     #[test]
