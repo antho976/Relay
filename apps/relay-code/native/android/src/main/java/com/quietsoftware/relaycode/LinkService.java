@@ -56,6 +56,11 @@ public class LinkService extends Service {
      */
     static native void nativeStart(Context context, String dataDir);
 
+    /** The screen went on or off: off, Rust reads nothing on a timer. */
+    static native void nativeScreen(boolean on);
+
+    private android.content.BroadcastReceiver screen;
+
     private ConnectivityManager.NetworkCallback callback;
 
     /**
@@ -112,6 +117,20 @@ public class LinkService extends Service {
         if (LOADED) {
             try {
                 nativeStart(getApplicationContext(), getFilesDir().getAbsolutePath());
+                screen = new android.content.BroadcastReceiver() {
+                    @Override
+                    public void onReceive(Context context, Intent intent) {
+                        try {
+                            nativeScreen(Intent.ACTION_SCREEN_ON.equals(intent.getAction()));
+                        } catch (UnsatisfiedLinkError ignored) {
+                            // A library without it: timers run as before.
+                        }
+                    }
+                };
+                android.content.IntentFilter f = new android.content.IntentFilter(Intent.ACTION_SCREEN_ON);
+                f.addAction(Intent.ACTION_SCREEN_OFF);
+                // System broadcasts: a dynamic receiver needs no export flag for them.
+                registerReceiver(screen, f);
             } catch (UnsatisfiedLinkError ignored) {
                 // A library without it: the activity's loop still notifies while it is open.
             }
@@ -157,6 +176,14 @@ public class LinkService extends Service {
     @Override
     public void onDestroy() {
         if (running == this) running = null;
+        if (screen != null) {
+            try {
+                unregisterReceiver(screen);
+            } catch (RuntimeException ignored) {
+                // Already gone.
+            }
+            screen = null;
+        }
         if (callback != null) {
             try {
                 getSystemService(ConnectivityManager.class).unregisterNetworkCallback(callback);

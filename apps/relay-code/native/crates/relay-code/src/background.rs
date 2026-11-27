@@ -14,6 +14,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -106,6 +107,10 @@ impl Row {
         self.state == "blocked" && self.waiting.as_deref() == Some("report")
     }
 
+    fn is_agent(&self) -> bool {
+        self.provider != "shell"
+    }
+
     /// Claude Code says when a turn starts and ends (its hooks: running, then idle). Other
     /// providers stay "running" at their prompt, so their terminal going quiet says it instead.
     fn has_hooks(&self) -> bool {
@@ -147,7 +152,8 @@ impl Watch {
         self.known = true;
         let mut out = Vec::new();
         let (mut asking, mut stopped, mut working) = (HashSet::new(), HashSet::new(), HashSet::new());
-        for r in rows {
+        // A shell is the person's own terminal on the PC: nothing it does is an agent's news.
+        for r in rows.iter().filter(|r| r.is_agent()) {
             let name = &r.name;
             let looking = front.foreground && front.chat.as_deref() == Some(name.as_str());
             let tell = |kind: Notify, title: String| Tell { kind, agent: name.clone(), title, body: r.title().to_string() };
@@ -181,13 +187,15 @@ impl Watch {
         Some(Tell { kind: Notify::Holds, agent: agent.to_string(), title: format!("{agent} needs your OK"), body: "A command is held until you allow it".into() })
     }
 
-    /// When to read the list again by itself: the moment a working agent without hooks would
-    /// fall quiet. Claude Code says so itself (an event), so it needs no look.
+    /// When to read the list again by itself: once a working agent without hooks may have
+    /// fallen quiet, and no sooner than [`LOOK_FLOOR_MS`]. Only one at work can still change its
+    /// answer: Claude Code says when its turn ends (an event), a quiet one stays quiet until an
+    /// event, and a shell is no agent.
     pub fn next_look(rows: &[Row], now_ms: u64) -> Option<u64> {
         rows.iter()
-            .filter(|r| r.state == "running" && !r.has_hooks())
+            .filter(|r| r.is_agent() && !r.has_hooks() && r.working(now_ms))
             .filter_map(|r| r.last_output_at.as_deref().and_then(crate::data::parse_ms))
-            .map(|t| (t + crate::data::BUSY_QUIET_MS + 500).max(now_ms + 1_000))
+            .map(|t| (t + crate::data::BUSY_QUIET_MS + 500).max(now_ms + LOOK_FLOOR_MS))
             .min()
     }
 }
@@ -209,6 +217,38 @@ pub fn alert_id(agent: &str) -> i32 {
     agent.bytes().fold(7i32, |h, b| h.wrapping_mul(31).wrapping_add(b as i32)) | 0x100
 }
 
+/// What the loop hears: the link's news, the app's own list, or a reason to look.
+enum Msg {
+    Link(Note),
+    /// The app read `session.list` (it reads it itself while it is in front).
+    Listed(Value),
+    /// Look now: the app went to the background, or the screen came on.
+    Look,
+}
+
+static TO_LOOP: Mutex<Option<std::sync::mpsc::Sender<Msg>>> = Mutex::new(None);
+
+fn tell_loop(m: Msg) {
+    if let Some(tx) = TO_LOOP.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        let _ = tx.send(m);
+    }
+}
+
+/// The app's own `session.list` answer: while it is in front the loop reads none itself, so the
+/// PC is asked once.
+pub fn listed(v: &Value) {
+    tell_loop(Msg::Listed(v.clone()));
+}
+
+static SCREEN_ON: AtomicBool = AtomicBool::new(true);
+
+/// The screen went on or off (LinkService hears it). Off, nothing is read on a timer.
+pub fn screen(on: bool) {
+    if SCREEN_ON.swap(on, Ordering::SeqCst) != on && on {
+        tell_loop(Msg::Look);
+    }
+}
+
 /// Start the notifications for the process, once; later calls do nothing.
 pub fn start(data: PathBuf, notifier: Arc<dyn Notifier>) {
     static STARTED: OnceLock<()> = OnceLock::new();
@@ -217,37 +257,69 @@ pub fn start(data: PathBuf, notifier: Arc<dyn Notifier>) {
     }
     let link = link(&data);
     let heard = link.listen();
-    let _ = std::thread::Builder::new().name("rc-alerts".into()).spawn(move || run(link, heard, data, notifier));
+    let (tx, rx) = std::sync::mpsc::channel();
+    *TO_LOOP.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx.clone());
+    // The link's news into the loop's one queue.
+    let _ = std::thread::Builder::new().name("rc-alerts-in".into()).spawn(move || {
+        while let Ok(n) = heard.recv() {
+            if tx.send(Msg::Link(n)).is_err() {
+                return;
+            }
+        }
+    });
+    let _ = std::thread::Builder::new().name("rc-alerts".into()).spawn(move || run(link, rx, data, notifier));
 }
 
 /// How long after an agent's change to read the list: several events come together.
 const SETTLE: Duration = Duration::from_millis(300);
 const LIST_TIMEOUT: Duration = Duration::from_secs(20);
+/// The soonest the list is read again on a timer.
+pub const LOOK_FLOOR_MS: u64 = 15_000;
 
-fn run(link: Link, heard: std::sync::mpsc::Receiver<Note>, data: PathBuf, notifier: Arc<dyn Notifier>) {
+fn run(link: Link, heard: std::sync::mpsc::Receiver<Msg>, data: PathBuf, notifier: Arc<dyn Notifier>) {
     let mut watch = Watch::default();
     let mut due: Option<u64> = link.state().online().then(rc_link::link::now_ms);
+    // The next look on a timer, kept apart from one an event asked for.
+    let mut timer: Option<u64> = None;
     let pc = || link.profile().map(|p| p.name).unwrap_or_default();
     if let Some(l) = line(&link.state(), &pc()) {
         notifier.line(&l);
     }
+    let mut was_front = false;
     loop {
         let now = rc_link::link::now_ms();
-        let note = match due {
+        // With the screen off nothing is read on a timer: only an event brings a look.
+        let next = if SCREEN_ON.load(Ordering::SeqCst) { due.min(timer).or(due).or(timer) } else { due };
+        let msg = match next {
             Some(at) if at <= now => None,
             Some(at) => match heard.recv_timeout(Duration::from_millis(at - now)) {
-                Ok(n) => Some(n),
+                Ok(m) => Some(m),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
                 Err(_) => return,
             },
             None => match heard.recv() {
-                Ok(n) => Some(n),
+                Ok(m) => Some(m),
                 Err(_) => return,
             },
         };
         let soon = || Some(rc_link::link::now_ms() + SETTLE.as_millis() as u64);
-        match note {
-            Some(Note::State(s)) => {
+        let front = front_now();
+        // Leaving the front: the app's reads stop, so the loop takes over with a look of its own.
+        if was_front && !front.foreground {
+            due = due.min(soon()).or(soon());
+        }
+        was_front = front.foreground;
+        let rows_of = |v: &Value| -> Vec<Row> { v.get("sessions").cloned().and_then(|s| serde_json::from_value(s).ok()).unwrap_or_default() };
+        match msg {
+            Some(Msg::Look) => due = due.min(soon()).or(soon()),
+            Some(Msg::Listed(v)) => {
+                let rows = rows_of(&v);
+                let now = rc_link::link::now_ms();
+                for t in watch.list(&rows, now, &front) {
+                    post(&*notifier, &data, &t);
+                }
+            }
+            Some(Msg::Link(Note::State(s))) => {
                 if let Some(l) = line(&s, &pc()) {
                     notifier.line(&l);
                 }
@@ -255,12 +327,12 @@ fn run(link: Link, heard: std::sync::mpsc::Receiver<Note>, data: PathBuf, notifi
                     due = soon();
                 }
             }
-            Some(Note::Event(e)) => match e.ev.as_str() {
+            Some(Msg::Link(Note::Event(e))) => match e.ev.as_str() {
                 "guardrail.held" => {
                     let agent = e.payload.get("session").and_then(Value::as_str).unwrap_or_default();
                     let hold = e.payload.get("hold_id").and_then(Value::as_i64).unwrap_or_default();
                     if !agent.is_empty()
-                        && let Some(t) = watch.held(hold, agent, &front_now())
+                        && let Some(t) = watch.held(hold, agent, &front)
                     {
                         post(&*notifier, &data, &t);
                     }
@@ -269,14 +341,19 @@ fn run(link: Link, heard: std::sync::mpsc::Receiver<Note>, data: PathBuf, notifi
                 _ => {}
             },
             None => {
-                due = None;
-                let Ok(v) = link.call("session.list", json!({})).wait(LIST_TIMEOUT) else { continue };
-                let rows: Vec<Row> = v.get("sessions").cloned().and_then(|s| serde_json::from_value(s).ok()).unwrap_or_default();
+                (due, timer) = (None, None);
+                // In front, the app reads the list on the same events and hands it over.
+                if front.foreground || !link.state().online() {
+                    continue;
+                }
+                // Quiet: the answer does not wake the activity asleep in the background.
+                let Ok(v) = link.call_quiet("session.list", json!({}), LIST_TIMEOUT).wait(LIST_TIMEOUT) else { continue };
+                let rows = rows_of(&v);
                 let now = rc_link::link::now_ms();
-                for t in watch.list(&rows, now, &front_now()) {
+                for t in watch.list(&rows, now, &front) {
                     post(&*notifier, &data, &t);
                 }
-                due = Watch::next_look(&rows, now);
+                timer = Watch::next_look(&rows, now);
             }
         }
     }
@@ -341,10 +418,21 @@ mod tests {
         };
         let mut w = Watch::default();
         assert!(w.list(&at(1_000), NOW, &away()).is_empty(), "writing: working");
-        assert_eq!(Watch::next_look(&at(1_000), NOW), Some(NOW - 1_000 + crate::data::BUSY_QUIET_MS + 500), "looks again when it would fall quiet");
+        assert_eq!(Watch::next_look(&at(1_000), NOW), Some(NOW + LOOK_FLOOR_MS), "looks again once it may be quiet, not sooner than the floor");
+        assert_eq!(Watch::next_look(&at(20_000), NOW), None, "quiet already: nothing changes until an event");
         assert_eq!(kinds(&w.list(&at(20_000), NOW, &away())), [(Notify::Done, "x", "x finished")]);
         // Claude says it itself: no look on a timer.
         assert_eq!(Watch::next_look(&rows(&[("a", "claude", "running", None)]), NOW), None);
+    }
+
+    #[test]
+    fn a_shell_never_notifies_and_is_never_polled() {
+        let shell = |state: &str| vec![Row { name: "sh".into(), provider: "shell".into(), state: state.into(), last_output_at: Some(chrono_like(NOW - 1_000)), ..Default::default() }];
+        let mut w = Watch::default();
+        assert!(w.list(&shell("running"), NOW, &away()).is_empty());
+        assert!(w.list(&shell("running"), NOW + 60_000, &away()).is_empty(), "its terminal went quiet: no agent finished");
+        assert!(w.list(&shell("blocked"), NOW, &away()).is_empty());
+        assert_eq!(Watch::next_look(&shell("running"), NOW), None);
     }
 
     #[test]
