@@ -180,6 +180,8 @@ pub fn tag(c: &mut Canvas, x: f32, y: f32, words: &str) -> f32 {
 pub enum Kb {
     #[default]
     Text,
+    /// Writing: several lines (Enter puts a new line), sentences capitalised, corrections.
+    Prose,
     Url,
     /// A secret: no suggestions, shown as dots.
     Secret,
