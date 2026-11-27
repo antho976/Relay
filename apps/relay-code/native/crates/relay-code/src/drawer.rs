@@ -87,6 +87,8 @@ pub fn agent_row(app: &mut App, a: &Agent, x: f32, y: f32, w: f32, now_ms: u64) 
     }
     badge(cx.c, a, x + t::PAD, y + 14.0, 32.0);
     let tx = x + t::PAD + 32.0 + 12.0;
+    // TODO(D5): once session.list carries `waiting` (B's "prompt" or "report"), say "asks you"
+    // only for "prompt" and "stopped · blocked" for "report", here and in the chat header.
     let when = a.last_output_at.as_deref().or(Some(a.updated_at.as_str()).filter(|s| !s.is_empty())).map(|s| crate::data::ago(s, now_ms)).unwrap_or_default();
     let wt = Text::new(ty::SMALL, t::INK3);
     let ww = if when.is_empty() { 0.0 } else { cx.c.measure(&when, wt) + 8.0 };
@@ -104,12 +106,15 @@ pub fn repo_chip(app: &mut App, right: f32, y: f32) -> f32 {
     let name = app.repo_name();
     let mut cx = crate::cx!(app);
     let tt = Text::new(ty::UI, t::INK).semi();
-    let w = cx.c.measure(&name, tt).min(170.0) + 58.0;
+    // Folder, words, chevron: the words get their own width and a little more, so a name that
+    // fits is never cut by rounding (D5: "Relay…" with room to spare).
+    let tw = cx.c.measure(&name, tt).min(170.0) + 2.0;
+    let w = tw + 32.0 + 30.0;
     let x = right - w;
     let h = 34.0;
     cx.c.rect(x, y, w, h, 10.0, if cx.pressed(x, y, w, h) { t::S2 } else { t::S1 });
     cx.c.icon("folder", x + 18.0, y + h / 2.0, 15.0, t::INK2);
-    cx.c.text_fit(&name, x + 32.0, y + (h - tt.lh()) / 2.0, w - 58.0, tt);
+    cx.c.text_fit(&name, x + 32.0, y + (h - tt.lh()) / 2.0, tw, tt);
     cx.c.icon("chevron-down", x + w - 16.0, y + h / 2.0, 12.0, t::INK3);
     if cx.tap(x - 4.0, y - 5.0, w + 8.0, h + 10.0) {
         app.st.drawer.repos = true;
@@ -159,7 +164,7 @@ fn panel(app: &mut App, pos: f32) -> bool {
     let x0 = -W * (1.0 - crate::draw::ease_out(pos));
     // The drawer and its veil cover the whole page: no tap reaches it while the drawer is out.
     kit::above(&mut crate::cx!(app), crate::ui::layer::DRAWER, [-1000.0, 0.0, WIDTH + 2000.0, screen]);
-    app.canvas.rect(-1000.0, 0.0, WIDTH + 2000.0, screen, 0.0, t::SCRIM.a(pos));
+    app.canvas.rect(-1000.0, 0.0, WIDTH + 2000.0, screen, 0.0, t::VEIL.a(pos));
     // A tap beside the drawer closes it.
     if app.ui.tap_here().is_some_and(|(x, _)| x > x0 + W) {
         app.ui.tap = None;
@@ -227,16 +232,22 @@ fn panel(app: &mut App, pos: f32) -> bool {
             y += 60.0;
         }
     } else {
+        // Nothing live: said first, above what stopped earlier.
+        if agents.is_empty() {
+            let tt = Text::new(ty::UI, t::INK3).line(1.45);
+            app.canvas.para("No agents running in this repo. New agent starts one.", x0 + t::PAD, y + 12.0, W - 2.0 * t::PAD, tt, 3);
+            y += 56.0;
+        }
         let (needs, rest): (Vec<Agent>, Vec<Agent>) = agents.iter().cloned().partition(|a| a.needs_you());
         for (label, list) in [("NEEDS YOU", needs), ("AGENTS", rest)] {
             open = open.or(crate::agents::section(app, label, &list, x0, &mut y, W, window));
         }
         open = open.or(crate::agents::earlier_section(app, x0, &mut y, W, window));
     }
-    if agents.is_empty() && query.trim().is_empty() {
-        let tt = Text::new(ty::UI, t::INK3).line(1.45);
-        app.canvas.para("No agents in this repo yet. New agent starts one.", x0 + t::PAD, y + 12.0, W - 2.0 * t::PAD, tt, 3);
-        y += 60.0;
+    // More below: the list fades into the panel instead of cutting a row in half (D5).
+    let more = y + 12.0 > list_bottom + 1.0;
+    if more {
+        app.canvas.rect_grad(x0, list_bottom - 32.0, W, 32.0, 0.0, t::PANEL.a(0.0), t::PANEL);
     }
     app.canvas.pop_clip();
     app.st.drawer.scroll.max = y + app.st.drawer.scroll.off - list_bottom + 12.0;
@@ -314,12 +325,12 @@ fn search(app: &mut App, x: f32, y: f32, w: f32) {
     let mut cx = crate::cx!(app);
     kit::inline(&mut cx, crate::agents::SEARCH, x + 36.0, y, fw, SEARCH_H, "Search agents", &mut q, Kb::Text, Text::new(ty::UI, t::INK));
     if has {
-        let (kx, ky) = (x + w - 40.0, y);
-        if cx.pressed(kx, ky, 40.0, SEARCH_H) {
-            cx.c.circle(kx + 20.0, ky + SEARCH_H / 2.0, 16.0, t::WASH);
+        let (kx, ky) = (x + w - 44.0, y - 2.0);
+        if cx.pressed(kx, ky, 44.0, 44.0) {
+            cx.c.circle(kx + 22.0, ky + 22.0, 16.0, t::WASH);
         }
-        cx.c.icon("close", kx + 20.0, ky + SEARCH_H / 2.0, 13.0, t::INK3);
-        if cx.tap(kx, ky, 40.0, SEARCH_H) {
+        cx.c.icon("close", kx + 22.0, ky + 22.0, 13.0, t::INK3);
+        if cx.tap(kx, ky, 44.0, 44.0) {
             q.clear();
             if focused {
                 cx.focus.text.clear();

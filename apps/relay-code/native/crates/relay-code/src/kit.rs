@@ -390,7 +390,8 @@ pub fn segmented_on(cx: &mut Ctx, x: f32, y: f32, w: f32, items: &[&str], on: us
         }
         let tt = Text::new(ty::UI, if i == on { t::INK } else { t::INK2 }).medium().center();
         cx.c.text_fit(item, ix + iw / 2.0, y + (h - tt.lh()) / 2.0, iw - 8.0, tt);
-        if cx.tap(ix, y, iw, h) {
+        // 44 units tall to the finger, though 36 to the eye.
+        if cx.tap(ix, y - 4.0, iw, h + 8.0) {
             hit = Some(i);
         }
     }
@@ -453,7 +454,7 @@ pub fn sheet(cx: &mut Ctx, h: f32) -> (f32, bool) {
     let screen = cx.c.h;
     // The veil covers everything: no tap reaches what is under a sheet.
     above(cx, crate::ui::layer::SHEET, [-1000.0, 0.0, WIDTH + 2000.0, screen]);
-    cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, screen, 0.0, t::SCRIM.a(0.6));
+    cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, screen, 0.0, t::SCRIM);
     let full = h + cx.c.inset_bottom;
     let top = (screen - full).max(cx.c.inset_top + 24.0);
     cx.c.rect(0.0, top, WIDTH, screen - top + 40.0, 18.0, t::S1);
