@@ -384,8 +384,8 @@ fn close_asks_first_and_a_tap_outside_the_dialog_reaches_nothing() {
     a.open("bold-puffin");
     a.st.agents.menu = Some("bold-puffin".into());
     frames(&mut a, &mut clock, 5);
-    // The menu's third row: Close agent (after Open terminal and Pause agent).
-    tap(&mut a, &mut clock, 280.0, 52.0 + 4.0 + 2.0 * 48.0 + 24.0);
+    // The menu's fourth row: Close agent (after Find in chat, Open terminal and Pause agent).
+    tap(&mut a, &mut clock, 280.0, 52.0 + 4.0 + 3.0 * 48.0 + 24.0);
     assert!(a.st.agents.menu.is_none());
     assert_eq!(a.st.agents.confirm, Some(("bold-puffin".into(), crate::agents::Confirm::Close)));
     tap(&mut a, &mut clock, 28.0, 28.0);
@@ -1047,8 +1047,8 @@ fn the_chat_menu_opens_the_terminal_and_back_comes_back() {
     a.open("bold-puffin");
     a.st.agents.menu = Some("bold-puffin".into());
     frames(&mut a, &mut clock, 5);
-    // The menu's first row: Open terminal.
-    tap(&mut a, &mut clock, 280.0, 52.0 + 4.0 + 24.0);
+    // The menu's second row: Open terminal (after Find in chat).
+    tap(&mut a, &mut clock, 280.0, 52.0 + 4.0 + 48.0 + 24.0);
     assert_eq!(a.route(), &Route::Terminal("bold-puffin".into()));
     crate::terminal::sample(&mut a, "bold-puffin");
     frames(&mut a, &mut clock, 3);
@@ -1147,4 +1147,18 @@ fn away_from_the_pc_the_pages_say_so_and_no_row_claims_work() {
     a.agents.clear();
     a.projects.clear();
     assert_eq!(crate::home::reach(&a).map(|r| r.1).as_deref(), Some("Connecting…"));
+}
+
+#[test]
+fn find_in_chat_from_the_menu_hands_the_chat_its_find() {
+    let mut a = app("find");
+    let mut clock = 1_000_000_000;
+    a.open("bold-puffin");
+    a.st.agents.menu = Some("bold-puffin".into());
+    frames(&mut a, &mut clock, 5);
+    tap(&mut a, &mut clock, 280.0, 52.0 + 4.0 + 24.0);
+    assert!(a.st.agents.menu.is_none());
+    frames(&mut a, &mut clock, 2);
+    assert!(a.focus.id.is_some(), "the chat's find took the keyboard");
+    assert_eq!(a.route(), &Route::Chat("bold-puffin".into()));
 }

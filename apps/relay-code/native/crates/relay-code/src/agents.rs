@@ -173,9 +173,13 @@ pub fn draw_over(app: &mut App) {
             app.st.agents.menu = None;
             return;
         };
-        let items: &[&str] = if live(&a) { &["Open terminal", "Pause agent", "Close agent"] } else { &["Close agent"] };
+        let items: &[&str] = if live(&a) { &["Find in chat", "Open terminal", "Pause agent", "Close agent"] } else { &["Find in chat", "Close agent"] };
         let top = app.canvas.inset_top + 52.0;
         match kit::menu(&mut crate::cx!(app), top, items) {
+            Some(i) if items.get(i) == Some(&"Find in chat") => {
+                app.st.agents.menu = None;
+                crate::chat::find_open(app);
+            }
             Some(i) if items.get(i) == Some(&"Open terminal") => {
                 app.st.agents.menu = None;
                 app.push(crate::app::Route::Terminal(name));
