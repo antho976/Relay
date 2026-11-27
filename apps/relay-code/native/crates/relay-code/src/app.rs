@@ -29,6 +29,12 @@ pub trait Host: Send + Sync {
     /// Show the soft keyboard for a field holding `text`, or hide it.
     fn keyboard(&self, _show: bool, _text: &str, _kind: Kb) {}
     fn copy_text(&self, _text: &str) {}
+    /// Hand words to another app (Android's share sheet).
+    fn share(&self, _text: &str) {}
+    /// Whether [`Host::share`] reaches anything here: the menu offers Share only then.
+    fn can_share(&self) -> bool {
+        false
+    }
     /// Tell the keyboard where the caret is (characters): after a tap in the field.
     fn caret(&self, _text: &str, _start: usize, _end: usize) {}
     /// Open a web address in the phone's browser (or the app that handles it).

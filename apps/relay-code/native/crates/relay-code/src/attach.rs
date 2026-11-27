@@ -3,7 +3,6 @@
 //! checkout with `session.upload`, and the path it was written to goes into the message, which is
 //! how Claude Code and Codex read a picture. Nothing of it runs on the UI thread.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -31,19 +30,33 @@ pub struct Thumb {
     pub pixels: Vec<u8>,
 }
 
-static THUMBS: Mutex<Option<HashMap<String, Arc<Thumb>>>> = Mutex::new(None);
+/// The newest [`KEEP_THUMBS`] copies, oldest first (A23: a long chat of photos holds no more).
+static THUMBS: Mutex<Vec<(String, Arc<Thumb>)>> = Mutex::new(Vec::new());
+
+/// How many sent pictures keep their copy; older bubbles show the path's chip.
+const KEEP_THUMBS: usize = 16;
+
+fn keep(path: &str, t: Thumb) {
+    let mut k = THUMBS.lock().unwrap_or_else(|e| e.into_inner());
+    k.retain(|(p, _)| p != path);
+    k.push((path.to_string(), Arc::new(t)));
+    if k.len() > KEEP_THUMBS {
+        let extra = k.len() - KEEP_THUMBS;
+        k.drain(..extra);
+    }
+}
 
 /// The longest side of a kept copy, in pixels: twice the size it is drawn at.
 const THUMB: u32 = 440;
 
 /// The copy of the picture sent as `path`, while the app has it.
 pub fn thumb(path: &str) -> Option<Arc<Thumb>> {
-    THUMBS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.get(path.trim()).cloned()
+    THUMBS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(p, _)| p == path.trim()).map(|(_, t)| t.clone())
 }
 
 /// Keep a copy for `path` (screenshots' sample data).
 pub fn keep_thumb(path: &str, t: Thumb) {
-    THUMBS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(path.to_string(), Arc::new(t));
+    keep(path, t);
 }
 
 /// A line of a message that names a picture: a path ending in an image's extension.
@@ -94,7 +107,7 @@ pub fn upload(link: Link, session: String, path: PathBuf) {
                 Ok(v) => {
                     let path = v.get("path").and_then(Value::as_str).map(str::to_string).ok_or_else(|| "The PC kept no path".to_string());
                     if let (Ok(p), Some(t)) = (&path, make_thumb(&b)) {
-                        THUMBS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(p.clone(), Arc::new(t));
+                        keep(p, t);
                     }
                     path
                 }
@@ -146,5 +159,15 @@ mod tests {
         let t = super::make_thumb(&png).unwrap();
         assert_eq!((t.w, t.h), (super::THUMB, super::THUMB / 2));
         assert_eq!(t.pixels.len(), (t.w * t.h * 4) as usize);
+    }
+
+    #[test]
+    fn only_the_newest_sent_pictures_keep_their_copy() {
+        let tag = format!("/keep-test-{}", std::process::id());
+        for i in 0..20 {
+            super::keep(&format!("{tag}/{i}.png"), super::Thumb { w: 1, h: 1, pixels: vec![0; 4] });
+        }
+        assert!(super::thumb(&format!("{tag}/19.png")).is_some());
+        assert!(super::thumb(&format!("{tag}/3.png")).is_none(), "the oldest went");
     }
 }

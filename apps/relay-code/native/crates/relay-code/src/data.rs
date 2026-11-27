@@ -348,7 +348,13 @@ pub const COMMAND_WAIT_MS: u64 = 10_000;
 #[derive(Clone, Debug, Default)]
 pub struct Sending {
     pub waiting: Vec<Pending>,
+    /// The ids of messages the log took by count or by a reset, not by id, and when (ms): for an
+    /// hour the PC may still list one as `pending`, and it must not be drawn again.
+    pub retired: Vec<(String, u64)>,
 }
+
+/// How long a message retired by count is remembered: as long as the PC lists sends as pending.
+pub const RETIRED_MS: u64 = 60 * 60 * 1000;
 
 /// How far one message has gone.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -432,7 +438,7 @@ impl Outbox {
                         p
                     })
                     .collect();
-                (k, Sending { waiting })
+                (k, Sending { waiting, ..Default::default() })
             })
             .collect()
     }
@@ -577,7 +583,20 @@ impl Sending {
     /// The log was read whole again (a first read, `/clear`, a new log): every message already
     /// entered is in it, or gone with what was cleared. Neither waits to be drawn again.
     pub fn reset(&mut self) {
+        let now = rc_link::link::now_ms();
+        let gone: Vec<(String, u64)> = self.waiting.iter().filter(|p| !p.failed && p.stage == Stage::Entered && !p.client_id.is_empty()).map(|p| (p.client_id.clone(), now)).collect();
+        self.retire(gone, now);
         self.waiting.retain(|p| p.failed || p.stage != Stage::Entered);
+    }
+
+    fn retire(&mut self, ids: Vec<(String, u64)>, now: u64) {
+        self.retired.retain(|(_, at)| now.saturating_sub(*at) < RETIRED_MS);
+        self.retired.extend(ids);
+    }
+
+    /// The log took this message by count or a reset within the hour.
+    pub fn was_retired(&self, client_id: &str) -> bool {
+        self.retired.iter().any(|(id, _)| id == client_id)
     }
 
     /// Your messages the log gave back by their ids (`chat.send`): their bubbles give way to them.
@@ -588,15 +607,21 @@ impl Sending {
     /// `n` of your messages came into the log: the oldest entered ones are in it now. One not
     /// entered yet cannot be (a message typed at the PC itself counts, as the old app's did).
     pub fn seen(&mut self, n: usize) {
+        let now = rc_link::link::now_ms();
         let mut left = n;
+        let mut gone = Vec::new();
         self.waiting.retain(|p| {
             if left > 0 && !p.failed && p.stage == Stage::Entered {
                 left -= 1;
+                if !p.client_id.is_empty() {
+                    gone.push((p.client_id.clone(), now));
+                }
                 false
             } else {
                 true
             }
         });
+        self.retire(gone, now);
     }
 }
 
@@ -1623,6 +1648,19 @@ mod tests {
         assert_eq!(tokens("x = 42  # n", Lang::Hash).last(), Some(&(Tok::Comment, "# n".into())));
         assert_eq!(lang_of("src/data.rs"), Some(Lang::Slashes));
         assert_eq!(lang_of("README.md"), None);
+    }
+
+    #[test]
+    fn a_message_retired_by_count_is_remembered_for_the_hour() {
+        let mut s = Sending::default();
+        s.push("words the PC logs otherwise", 0);
+        let Some(Step::Send(_, id)) = s.next_by(0, true) else { panic!() };
+        s.answered(Answer::Ok, 1);
+        // The log holds it under no id (its words logged otherwise): taken by count.
+        s.seen(1);
+        assert!(s.waiting.is_empty());
+        assert!(s.was_retired(&id), "the PC's pending entry for it is not drawn again");
+        assert!(!s.was_retired("another"));
     }
 
     #[test]
