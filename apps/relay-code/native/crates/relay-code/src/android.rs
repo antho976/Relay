@@ -239,6 +239,7 @@ impl crate::background::Notifier for ServiceNotifier {
     }
 
     fn line(&self, words: &str) {
+        log(&format!("link: {words}"));
         self.with_env(|env| {
             let w = env.new_string(words)?;
             let class: &JClass = self.class.as_obj().into();
@@ -278,13 +279,11 @@ pub extern "system" fn Java_com_quietsoftware_relaycode_CodeActivity_nativeOpen<
     }
 }
 
-/// The network changed (LinkService's callback): the link redials now.
-static NETWORK: AtomicBool = AtomicBool::new(false);
-
+/// The network changed (LinkService's callback): the process's link redials now, from this thread,
+/// whether or not an activity's loop is running to hear of it.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_quietsoftware_relaycode_LinkService_nativeNetwork<'local>(_env: JNIEnv<'local>, _class: JClass<'local>) {
-    NETWORK.store(true, Ordering::SeqCst);
-    wake();
+    crate::background::network_changed();
 }
 
 /// Something was done from a notification in the shade (ActionReceiver): a reply's words, or a
@@ -567,9 +566,6 @@ fn android_main(android: AndroidApp) {
             }
         }
 
-        if NETWORK.swap(false, Ordering::SeqCst) {
-            app.link.kick();
-        }
         // In the background the link's news is still read: a question becomes a notification.
         if foreground {
             away_due = None;

@@ -50,8 +50,17 @@ pub trait Notifier: Send + Sync {
 /// The one link for the process: Android starts the app's loop again for each new activity, and
 /// the service may run with none, so whichever comes first makes it.
 pub fn link(data: &Path) -> Link {
-    static LINK: OnceLock<Link> = OnceLock::new();
     LINK.get_or_init(|| Link::start(Arc::new(FileStore(data.join("pc.json"))), Arc::new(crate::wake::wake))).clone()
+}
+
+static LINK: OnceLock<Link> = OnceLock::new();
+
+/// The network changed: the link redials now, with or without the activity (its backoff is up to
+/// 30 s otherwise).
+pub fn network_changed() {
+    if let Some(l) = LINK.get() {
+        l.kick();
+    }
 }
 
 /// What is on the screen, so an agent you are looking at does not notify.
