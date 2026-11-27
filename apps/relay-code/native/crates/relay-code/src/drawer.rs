@@ -161,7 +161,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     if app.ui.horizontal
         && let Some((fx, fy)) = app.ui.drag_from
     {
-        if !app.st.drawer.open && fx < EDGE && app.ui.drag_dx > 0.0 && !app.ui.in_hzone(fx, fy) {
+        // Not from under a sheet or a dialog (it covered the page last frame): the drawer would
+        // be drawn over it yet take no tap, the sheet's layer being above its own.
+        if !app.st.drawer.open && fx < EDGE && app.ui.drag_dx > 0.0 && !app.ui.in_hzone(fx, fy) && !app.ui.was_covered() {
             app.st.drawer.swiping = true;
             app.st.drawer.open = true;
         } else if app.st.drawer.open && app.ui.drag_dx < -2.0 {
