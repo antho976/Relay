@@ -7,7 +7,7 @@
 use rc_link::Call;
 use serde_json::{Value, json};
 
-use crate::app::App;
+use crate::app::{App, Route};
 use crate::draw::{Rgba, Text, WIDTH, Weight};
 use crate::kit::{self, Kb};
 use crate::theme::{self as t, ty};
@@ -49,8 +49,16 @@ pub struct State {
     hunks: Vec<String>,
     pub message: String,
     picking: bool,
-    busy: Option<&'static str>,
-    pending: Vec<(Job, Call)>,
+    pending: Vec<Pending>,
+}
+
+/// A request in flight, with the repo and worktree it is about: an answer for one the page has
+/// left is dropped (a read) or finished where it belongs (a commit, a push).
+struct Pending {
+    job: Job,
+    repo: i64,
+    worktree: Option<String>,
+    call: Call,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -62,9 +70,28 @@ enum Job {
     File(String),
     Stage,
     Suggest,
-    Commit { push: bool },
+    /// `set_upstream` is the push's, read when the commit was asked, for the worktree it commits.
+    Commit { push: bool, set_upstream: bool },
     Push,
     Pr,
+}
+
+impl Job {
+    /// What the foot says while it runs; None for the quiet reads.
+    fn label(&self) -> Option<&'static str> {
+        match self {
+            Job::Suggest => Some("Writing a message…"),
+            Job::Commit { .. } => Some("Committing…"),
+            Job::Push => Some("Pushing…"),
+            Job::Pr => Some("Opening the pull request…"),
+            _ => None,
+        }
+    }
+
+    /// Done to the worktree whatever page is open: these finish even after a switch.
+    fn acts(&self) -> bool {
+        matches!(self, Job::Stage | Job::Commit { .. } | Job::Push | Job::Pr)
+    }
 }
 
 pub fn worktrees(v: &Value) -> Vec<Worktree> {
@@ -129,11 +156,36 @@ pub fn hunk_lines(v: &Value) -> Vec<String> {
 }
 
 impl State {
-    fn ask(&mut self, app_link: &rc_link::Link, job: Job, op: &str, payload: Value) {
-        if self.pending.iter().any(|(j, _)| *j == job) {
+    /// Ask about the open worktree, once per kind of question for it at a time.
+    fn ask(&mut self, link: &rc_link::Link, repo: i64, job: Job, op: &str, payload: Value) {
+        let worktree = self.worktree.clone();
+        self.ask_for(link, repo, worktree, job, op, payload);
+    }
+
+    fn ask_for(&mut self, link: &rc_link::Link, repo: i64, worktree: Option<String>, job: Job, op: &str, payload: Value) {
+        if self.pending.iter().any(|p| p.job == job && p.repo == repo && p.worktree == worktree) {
             return;
         }
-        self.pending.push((job, app_link.call(op, payload)));
+        self.pending.push(Pending { job, repo, worktree, call: link.call(op, payload) });
+    }
+
+    /// What the foot says while a commit, a push, a pull request or a message for the open
+    /// worktree is on its way.
+    pub fn busy(&self) -> Option<&'static str> {
+        self.pending.iter().filter(|p| Some(p.repo) == self.repo && p.worktree == self.worktree).find_map(|p| p.job.label())
+    }
+
+    /// Another worktree is open: what was being read for the last one is no longer wanted.
+    fn switch(&mut self, worktree: String) {
+        self.worktree = Some(worktree);
+        self.pending.retain(|p| p.job.acts());
+        self.files.clear();
+        self.loaded = false;
+        self.open = None;
+        self.hunks.clear();
+        self.branch.clear();
+        self.upstream = None;
+        self.ahead = 0;
     }
 }
 
@@ -141,35 +193,52 @@ fn wt(st: &State) -> Value {
     st.worktree.as_ref().map_or(Value::Null, |w| json!(w))
 }
 
+/// Read the open worktree again. Only the page reads: one that is not open reads when it opens.
 fn reload(app: &mut App) {
     let Some(repo) = app.repo else { return };
-    if !app.online() {
+    if !app.online() || *app.route() != Route::Changes {
         return;
     }
     let link = app.link.clone();
     let st = &mut app.st.changes;
-    st.ask(&link, Job::Worktrees, "worktree.list", json!({"project_id": repo, "include_dirty": true}));
+    st.ask_for(&link, repo, None, Job::Worktrees, "worktree.list", json!({"project_id": repo, "include_dirty": true}));
     if st.worktree.is_some() {
         let w = wt(st);
-        st.ask(&link, Job::Status, "git.status", json!({"project_id": repo, "worktree": w}));
-        st.ask(&link, Job::Diff, "git.diff", json!({"project_id": repo, "worktree": w}));
-        st.ask(&link, Job::Staged, "git.diff", json!({"project_id": repo, "worktree": w, "staged": true}));
+        st.ask(&link, repo, Job::Status, "git.status", json!({"project_id": repo, "worktree": w}));
+        st.ask(&link, repo, Job::Diff, "git.diff", json!({"project_id": repo, "worktree": w}));
+        st.ask(&link, repo, Job::Staged, "git.diff", json!({"project_id": repo, "worktree": w, "staged": true}));
     }
 }
 
-/// Take what the PC answered.
-fn take(app: &mut App) {
+/// Take what the PC answered, on every page: a commit chains its push from here, so the push goes
+/// out wherever you are when the commit lands.
+pub fn keep_up(app: &mut App) {
+    if app.st.changes.pending.is_empty() {
+        return;
+    }
     let mut done = Vec::new();
-    app.st.changes.pending.retain(|(j, c)| match c.poll() {
+    app.st.changes.pending.retain(|p| match p.call.poll() {
         Some(r) => {
-            done.push((j.clone(), r));
+            done.push((p.job.clone(), p.repo, p.worktree.clone(), r));
             false
         }
         None => true,
     });
+    for (job, repo, worktree, r) in done {
+        answered(app, job, repo, worktree, r);
+    }
+}
+
+/// One answer. A read for a repo or worktree that is no longer open is dropped: the old branch's
+/// files never fill the new branch's list.
+fn answered(app: &mut App, job: Job, repo: i64, worktree: Option<String>, r: Result<Value, rc_link::BusError>) {
+    let here = app.st.changes.repo == Some(repo) && (job == Job::Worktrees || app.st.changes.worktree == worktree);
+    if !here && !job.acts() {
+        return;
+    }
     let mut status: Option<Value> = None;
     let mut diffs: Vec<Value> = Vec::new();
-    for (job, r) in done {
+    {
         match (job, r) {
             (Job::Worktrees, Ok(v)) => {
                 let list = worktrees(&v);
@@ -178,7 +247,9 @@ fn take(app: &mut App) {
                 if st.worktree.as_ref().is_none_or(|w| !list.iter().any(|x| &x.path == w)) {
                     // The open chat's agent's branch first, else the first with changes, else the first.
                     let pick = agent.and_then(|b| list.iter().find(|w| w.branch == b)).or_else(|| list.iter().find(|w| w.dirty && w.session.is_some())).or_else(|| list.first());
-                    st.worktree = pick.map(|w| w.path.clone());
+                    if let Some(p) = pick.map(|w| w.path.clone()) {
+                        st.switch(p);
+                    }
                     st.worktrees = list;
                     reload(app);
                 } else {
@@ -198,38 +269,41 @@ fn take(app: &mut App) {
                     app.st.changes.hunks = hunk_lines(&v);
                 }
             }
-            (Job::Stage, Ok(_)) => reload(app),
+            (Job::Stage, Ok(_)) => {
+                if here {
+                    reload(app);
+                }
+            }
             (Job::Suggest, Ok(v)) => {
                 if let Some(m) = v.get("message").and_then(Value::as_str) {
                     app.st.changes.message = m.trim().to_string();
                 }
-                app.st.changes.busy = None;
             }
-            (Job::Commit { push }, Ok(_)) => {
-                app.st.changes.message.clear();
-                app.st.changes.busy = None;
+            (Job::Commit { push, set_upstream }, Ok(_)) => {
+                if here {
+                    app.st.changes.message.clear();
+                }
                 if push {
-                    push_now(app);
+                    push_to(app, repo, worktree, set_upstream);
                 } else {
                     app.toast("Committed");
                 }
-                reload(app);
+                if here {
+                    reload(app);
+                }
             }
             (Job::Push, Ok(_)) => {
-                app.st.changes.busy = None;
                 app.toast("Pushed");
-                reload(app);
+                if here {
+                    reload(app);
+                }
             }
             (Job::Pr, Ok(v)) => {
-                app.st.changes.busy = None;
                 let url = v.get("url").and_then(Value::as_str).unwrap_or_default().to_string();
                 app.host.copy_text(&url);
                 app.toast("Pull request opened · link copied");
             }
-            (_, Err(e)) => {
-                app.st.changes.busy = None;
-                app.toast(&e.message);
-            }
+            (_, Err(e)) => app.toast(&e.message),
         }
     }
     if let Some(s) = status {
@@ -256,24 +330,23 @@ fn take(app: &mut App) {
     }
 }
 
-fn push_now(app: &mut App) {
-    let Some(repo) = app.repo else { return };
+/// Push the worktree a commit was made on, not the one open now.
+fn push_to(app: &mut App, repo: i64, worktree: Option<String>, set_upstream: bool) {
     let link = app.link.clone();
-    let st = &mut app.st.changes;
-    st.busy = Some("Pushing…");
-    let w = wt(st);
-    let set_upstream = st.upstream.is_none();
-    st.ask(&link, Job::Push, "git.push", json!({"project_id": repo, "worktree": w, "set_upstream": set_upstream}));
+    let w = worktree.as_ref().map_or(Value::Null, |w| json!(w));
+    app.st.changes.ask_for(&link, repo, worktree, Job::Push, "git.push", json!({"project_id": repo, "worktree": w, "set_upstream": set_upstream}));
 }
 
 pub fn draw(app: &mut App, dt: f32) -> bool {
     if app.st.changes.repo != app.repo {
-        app.st.changes = State { repo: app.repo, ..State::default() };
+        // A commit or a push already asked for still finishes on the repo it was for.
+        let mut pending = std::mem::take(&mut app.st.changes.pending);
+        pending.retain(|p| p.job.acts());
+        app.st.changes = State { repo: app.repo, pending, ..State::default() };
     }
     if app.fresh || app.take_changed("git") || app.take_changed("worktree") {
         reload(app);
     }
-    take(app);
     let foot_h = 132.0;
     let page = app.page_begin(dt, crate::home::TOP_H, foot_h);
     let mut y = page.top + 4.0;
@@ -283,6 +356,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let branch = if st.branch.is_empty() { st.worktrees.iter().find(|w| Some(&w.path) == st.worktree.as_ref()).map(|w| w.branch.clone()).unwrap_or_default() } else { st.branch.clone() };
     let (add, rem): (i64, i64) = st.files.iter().fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
     let nfiles = st.files.len();
+    let busy = st.busy();
     {
         let mut cx = crate::cx!(app);
         let mono = Text::new(ty::MONO, t::INK).face(Weight::Mono);
@@ -293,7 +367,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         cx.c.icon("branch", x + 18.0, y + 17.0, 14.0, t::INK2);
         cx.c.text_fit(&label, x + 32.0, y + 9.0, bw - 58.0, mono);
         cx.c.icon("chevron-down", x + bw - 16.0, y + 17.0, 11.0, t::INK3);
-        if cx.tap(x, y - 4.0, bw, 42.0) {
+        // No switching while a commit or push for this branch is on its way.
+        if cx.tap(x, y - 4.0, bw, 42.0) && busy.is_none() {
             app.st.changes.picking = true;
         }
         if add + rem > 0 {
@@ -369,7 +444,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             let st = &mut app.st.changes;
             let w = wt(st);
             let op = if f.staged() { "git.unstage" } else { "git.stage" };
-            st.ask(&link, Job::Stage, op, json!({"project_id": repo, "worktree": w, "paths": [f.path]}));
+            st.ask(&link, repo, Job::Stage, op, json!({"project_id": repo, "worktree": w, "paths": [f.path]}));
         }
         if let Some(p) = open {
             let st = &mut app.st.changes;
@@ -382,7 +457,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     let link = app.link.clone();
                     let st = &mut app.st.changes;
                     let w = wt(st);
-                    st.ask(&link, Job::File(p.clone()), "git.diff.file", json!({"project_id": repo, "worktree": w, "path": p}));
+                    st.ask(&link, repo, Job::File(p.clone()), "git.diff.file", json!({"project_id": repo, "worktree": w, "path": p}));
                 }
             }
         }
@@ -446,7 +521,7 @@ fn foot(app: &mut App, foot_h: f32, nfiles: usize) {
     kit::inline(&mut crate::cx!(app), "commit-message", x + 14.0, my, w - 60.0, 46.0, "Commit message", &mut message, Kb::Text, Text::new(ty::UI, t::INK));
     app.st.changes.message = message.clone();
     // Ask the PC for a message from the diff.
-    let busy = app.st.changes.busy;
+    let busy = app.st.changes.busy();
     {
         let mut cx = crate::cx!(app);
         if kit::icon_key_ink(&mut cx, x + w - 44.0, my + 1.0, "sparkle", t::INK2)
@@ -457,9 +532,8 @@ fn foot(app: &mut App, foot_h: f32, nfiles: usize) {
             {
                 let link = app.link.clone();
                 let st = &mut app.st.changes;
-                st.busy = Some("Writing a message…");
                 let wv = wt(st);
-                st.ask(&link, Job::Suggest, "git.suggest_message", json!({"project_id": repo, "worktree": wv}));
+                st.ask(&link, repo, Job::Suggest, "git.suggest_message", json!({"project_id": repo, "worktree": wv}));
             }
         }
     }
@@ -481,20 +555,22 @@ fn foot(app: &mut App, foot_h: f32, nfiles: usize) {
         app.finish_typing();
         let st = &mut app.st.changes;
         let w = wt(st);
+        // The commit holds its worktree, what it takes and how it pushes, read now: a branch
+        // switched while it runs changes none of them.
+        let set_upstream = st.upstream.is_none();
         if nfiles > 0 {
-            st.busy = Some("Committing…");
             // Nothing ticked: the whole change goes, as "Include all".
             let all = !st.files.iter().any(File::staged);
-            st.ask(&link, Job::Commit { push: true }, "git.commit", json!({"project_id": repo, "worktree": w, "message": message.trim(), "all": all}));
+            st.ask(&link, repo, Job::Commit { push: true, set_upstream }, "git.commit", json!({"project_id": repo, "worktree": w, "message": message.trim(), "all": all}));
         } else {
-            push_now(app);
+            let worktree = st.worktree.clone();
+            push_to(app, repo, worktree, set_upstream);
         }
     }
     if pr && busy.is_none() {
         let st = &mut app.st.changes;
-        st.busy = Some("Opening the pull request…");
         let w = wt(st);
-        st.ask(&link, Job::Pr, "git.pr.open", json!({"project_id": repo, "worktree": w}));
+        st.ask(&link, repo, Job::Pr, "git.pr.open", json!({"project_id": repo, "worktree": w}));
     }
 }
 
@@ -530,12 +606,8 @@ fn picker(app: &mut App) {
     if let Some(p) = pick {
         let st = &mut app.st.changes;
         st.picking = false;
-        if st.worktree.as_ref() != Some(&p) {
-            st.worktree = Some(p);
-            st.files.clear();
-            st.loaded = false;
-            st.open = None;
-            st.branch.clear();
+        if st.worktree.as_ref() != Some(&p) && st.busy().is_none() {
+            st.switch(p);
             reload(app);
         }
     }
@@ -568,6 +640,83 @@ pub fn sample(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    struct NoHost(PathBuf);
+
+    impl crate::app::Host for NoHost {
+        fn data_dir(&self) -> PathBuf {
+            self.0.clone()
+        }
+        fn log(&self, _text: &str) {}
+    }
+
+    /// An app on repo 1 with `/w/b` open in Changes.
+    fn app_on_b(name: &str) -> App {
+        let dir = std::env::temp_dir().join(format!("relay-code-changes-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(Arc::new(NoHost(dir)), 1_000_000_000);
+        a.repo = Some(1);
+        a.st.changes.repo = Some(1);
+        a.st.changes.worktree = Some("/w/b".into());
+        a
+    }
+
+    fn add(a: &mut App, job: Job, worktree: &str) {
+        // Not connected: the call fails at once, which is all a test of the bookkeeping needs.
+        let call = a.link.call("git.status", json!({}));
+        a.st.changes.pending.push(Pending { job, repo: 1, worktree: Some(worktree.into()), call });
+    }
+
+    #[test]
+    fn the_branch_lefts_status_never_fills_the_new_branchs_list() {
+        let mut a = app_on_b("left");
+        let status = json!({"branch": "relay/a", "files": [{"path": "a.rs", "index": "?"}]});
+        answered(&mut a, Job::Status, 1, Some("/w/a".into()), Ok(status.clone()));
+        assert!(a.st.changes.files.is_empty() && !a.st.changes.loaded && a.st.changes.branch.is_empty());
+        answered(&mut a, Job::Status, 1, Some("/w/b".into()), Ok(status));
+        assert_eq!(a.st.changes.files.len(), 1);
+        assert_eq!(a.st.changes.branch, "relay/a");
+    }
+
+    #[test]
+    fn switching_branch_drops_the_reads_and_keeps_the_commit() {
+        let mut a = app_on_b("switch");
+        add(&mut a, Job::Status, "/w/b");
+        add(&mut a, Job::File("x.rs".into()), "/w/b");
+        add(&mut a, Job::Commit { push: true, set_upstream: false }, "/w/b");
+        assert_eq!(a.st.changes.busy(), Some("Committing…"));
+        a.st.changes.switch("/w/c".into());
+        let left: Vec<_> = a.st.changes.pending.iter().map(|p| (p.job.clone(), p.worktree.clone())).collect();
+        assert_eq!(left, [(Job::Commit { push: true, set_upstream: false }, Some("/w/b".to_string()))]);
+        // The commit is for the branch left: the open one is free.
+        assert_eq!(a.st.changes.busy(), None);
+    }
+
+    #[test]
+    fn a_commit_pushes_the_worktree_it_committed_not_the_open_one() {
+        let mut a = app_on_b("push");
+        a.st.changes.message = "for b".into();
+        answered(&mut a, Job::Commit { push: true, set_upstream: true }, 1, Some("/w/a".into()), Ok(json!({})));
+        let push: Vec<_> = a.st.changes.pending.iter().map(|p| (p.job.clone(), p.repo, p.worktree.clone())).collect();
+        assert_eq!(push, [(Job::Push, 1, Some("/w/a".to_string()))]);
+        assert_eq!(a.st.changes.message, "for b", "the open branch's message stays");
+        // A commit for a repo since left still pushes there.
+        a.st.changes.pending.clear();
+        a.st.changes.repo = Some(2);
+        answered(&mut a, Job::Commit { push: true, set_upstream: false }, 1, Some("/w/a".into()), Ok(json!({})));
+        assert_eq!(a.st.changes.pending.first().map(|p| (p.repo, p.job.clone())), Some((1, Job::Push)));
+    }
+
+    #[test]
+    fn a_commit_lands_on_any_page() {
+        let mut a = app_on_b("page");
+        assert_ne!(*a.route(), Route::Changes);
+        add(&mut a, Job::Commit { push: true, set_upstream: false }, "/w/b");
+        a.frame(1_016_666_666);
+        assert!(a.st.changes.pending.is_empty(), "the frame took the commit's answer off the Changes page");
+    }
 
     #[test]
     fn files_read_with_both_diffs_counted() {
