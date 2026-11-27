@@ -1258,7 +1258,23 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     if let Some(s) = app.sending.get_mut(name) {
         s.expire_commands(rc_link::link::now_ms());
     }
-    let waiting = app.sending.get(name).map(|s| s.waiting.clone()).unwrap_or_default();
+    let mut waiting = app.sending.get(name).map(|s| s.waiting.clone()).unwrap_or_default();
+    // What the PC typed for a send it has not logged yet, from another device or from before a
+    // restart: drawn once, as sent, unless it is one of these. A slash command the log never
+    // shows is let go after a while.
+    let now_ms = rc_link::link::now_ms();
+    let extra: Vec<data::Pending> = app
+        .convos
+        .get(name)
+        .map(|c| c.pending.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .filter(|p| !waiting.iter().any(|w| w.client_id == p.client_id))
+        .map(|p| (p, data::parse_ms(&p.sent_at).unwrap_or(now_ms)))
+        .filter(|(p, at)| !(p.text.starts_with('/') && now_ms.saturating_sub(*at) > data::COMMAND_WAIT_MS))
+        .map(|(p, at)| data::Pending { text: p.text.clone(), sent_ms: at, failed: false, stage: Stage::Entered, not_before_ms: 0, client_id: p.client_id.clone(), via_chat: true })
+        .collect();
+    waiting.extend(extra);
 
     // Measure, so a short conversation sits at the bottom, as a chat does.
     let mut total: f32 = heights.iter().sum();
@@ -2027,7 +2043,7 @@ mod tests {
     #[test]
     fn audit_a_chats_copy_is_read_off_the_ui_thread() {
         let (mut a, dir) = fresh_app("audit-open");
-        let c = data::Convo { msgs: vec![], cursor: Some(7), found: true };
+        let c = data::Convo { msgs: vec![], cursor: Some(7), found: true, ..Default::default() };
         std::fs::create_dir_all(dir.join("cache")).unwrap();
         std::fs::write(dir.join("cache/chat-swift-ocelot.json"), serde_json::to_vec(&c).unwrap()).unwrap();
         a.open("swift-ocelot");

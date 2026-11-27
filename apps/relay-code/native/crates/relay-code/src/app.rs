@@ -239,6 +239,8 @@ pub struct App {
     list_at: u64,
     /// The PC's Relay is older than `session.screen`: the chat makes do without the terminal's foot.
     pub no_screen: bool,
+    /// The PC's Relay is older than `chat.send`: messages go the old way (`session.input`).
+    pub no_chat_send: bool,
     /// Held commands waiting on you (the inbox counts them with agents that ask).
     pub holds: usize,
     screen_at: u64,
@@ -357,6 +359,7 @@ impl App {
             agents_at: 0,
             list_at: 0,
             no_screen: false,
+            no_chat_send: false,
             holds: 0,
             screen_at: 0,
             st: States::default(),
@@ -591,13 +594,19 @@ impl App {
         // entered: none of them may wait on to be drawn a second time.
         let reset = v.get("reset").and_then(Value::as_bool) == Some(true) || before.2.is_none();
         let full = v.get("messages").and_then(Value::as_array).is_some_and(|m| m.len() >= PAGE);
-        let seen = c.take(v);
+        let (seen, ids) = c.take_sent(v);
         let changed = before != (c.msgs.len(), c.msgs.last().map(|m| m.id.clone()), c.cursor);
+        // Your messages come back by their ids (chat.send); one with none (an older PC, or typed
+        // at the PC) takes the oldest entered bubble, never both for one message.
         if let Some(s) = self.sending.get_mut(name) {
+            s.seen_ids(&ids);
             if reset {
                 s.reset();
             }
             s.seen(seen);
+        }
+        if !ids.is_empty() {
+            self.outbox_changed();
         }
         if reset {
             self.outbox_changed();
@@ -620,6 +629,7 @@ impl App {
     /// foot (an older one) is asked again, since it may have been updated.
     pub(crate) fn came_online(&mut self) {
         self.no_screen = false;
+        self.no_chat_send = false;
         self.changed.insert("*".into());
         self.refresh();
     }
@@ -668,7 +678,8 @@ impl App {
             if self.asking(&Ask::Input(name.clone())) || self.asking(&Ask::Enter(name.clone())) {
                 continue;
             }
-            let Some(step) = self.sending.get_mut(&name).and_then(|s| s.next(now)) else { continue };
+            let chat = !self.no_chat_send;
+            let Some(step) = self.sending.get_mut(&name).and_then(|s| s.next_by(now, chat)) else { continue };
             if !matches!(step, data::Step::Wait(_)) {
                 self.outbox_changed();
             }
@@ -684,6 +695,11 @@ impl App {
                 data::Step::Enter => {
                     let call = self.link.call("session.input", json!({"session": name, "data": "\r"}));
                     self.calls.push((Ask::Enter(name), call));
+                }
+                data::Step::Send(text, client_id) => {
+                    // The PC types the words and Enter, once per id however often it is sent.
+                    let call = self.link.call("chat.send", json!({"session": name, "text": text, "client_id": client_id}));
+                    self.calls.push((Ask::Input(name), call));
                 }
                 data::Step::Wait(ms) => self.wake_at(self.now_ns + ms * 1_000_000),
             }
@@ -772,6 +788,11 @@ impl App {
                     let answer = match &r {
                         Ok(_) => data::Answer::Ok,
                         Err(e) if e.transient() => data::Answer::Dropped,
+                        // An older Relay has no chat.send: from now on the old way.
+                        Err(e) if !self.no_chat_send && (e.code == "remote.op" || e.code.contains("unknown")) => {
+                            self.no_chat_send = true;
+                            data::Answer::Unsupported
+                        }
                         Err(_) => data::Answer::Refused,
                     };
                     if let Some(s) = self.sending.get_mut(&name) {
