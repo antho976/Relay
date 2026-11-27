@@ -94,8 +94,10 @@ pub enum Ask {
     Projects,
     Agents,
     Transcript(String),
-    /// Words typed into an agent's terminal.
+    /// Words typed into an agent's terminal (a message's words, from its send queue).
     Input(String),
+    /// Enter after them, once the PC said it typed them.
+    Enter(String),
     Create,
     Spawn(String),
     /// The rendered foot of an agent's terminal (`session.screen`).
@@ -318,7 +320,7 @@ impl App {
         if self.shot || !self.link_state.online() {
             return;
         }
-        if !matches!(ask, Ask::Input(_)) && self.calls.iter().any(|(a, _)| *a == ask) {
+        if self.calls.iter().any(|(a, _)| *a == ask) {
             return;
         }
         let call = self.link.call(op, payload);
@@ -390,8 +392,9 @@ impl App {
         self.ask(Ask::Transcript(name.to_string()), "session.transcript", p);
     }
 
-    /// Type a message into an agent's terminal: the words, then Enter, as the old app and the
-    /// PC's own composer do. Several lines go as one paste.
+    /// Send a message to an agent: it joins the agent's send queue ([`data::Sending`]), which types
+    /// the words and then Enter into its terminal, as the old app and the PC's own composer do,
+    /// now or once the link is back. Several lines go as one paste.
     pub fn say(&mut self, name: &str, text: &str) {
         let text = text.trim_end();
         if text.is_empty() {
@@ -399,21 +402,40 @@ impl App {
         }
         let now = rc_link::link::now_ms();
         self.sending.entry(name.to_string()).or_default().push(text, now);
-        let mut p = json!({"session": name, "data": text});
-        if text.contains('\n') {
-            p["paste"] = json!(true);
-        }
-        self.ask(Ask::Input(name.to_string()), "session.input", p);
-        // Enter as its own write a moment later, so the program does not take both as a paste.
-        let link = self.link.clone();
-        let n = name.to_string();
-        if !self.shot {
-            let _ = std::thread::Builder::new().name("rc-enter".into()).spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(90));
-                link.post("session.input", json!({"session": n, "data": "\r"}));
-            });
-        }
+        self.send_queued();
         self.reread_at = self.now_ns + 600_000_000;
+    }
+
+    /// Send what each agent's queue holds next, while the link is up. Enter goes only after the
+    /// PC answered that it typed the words (and [`data::ENTER_AFTER_MS`] after them), never from a
+    /// timer of its own, so it cannot land alone or ahead of the words.
+    fn send_queued(&mut self) {
+        if self.shot || !self.link_state.online() {
+            return;
+        }
+        let now = rc_link::link::now_ms();
+        let names: Vec<String> = self.sending.keys().cloned().collect();
+        for name in names {
+            if self.asking(&Ask::Input(name.clone())) || self.asking(&Ask::Enter(name.clone())) {
+                continue;
+            }
+            let Some(step) = self.sending.get_mut(&name).and_then(|s| s.next(now)) else { continue };
+            match step {
+                data::Step::Type(text) => {
+                    let mut p = json!({"session": name, "data": text});
+                    if text.contains('\n') {
+                        p["paste"] = json!(true);
+                    }
+                    let call = self.link.call("session.input", p);
+                    self.calls.push((Ask::Input(name), call));
+                }
+                data::Step::Enter => {
+                    let call = self.link.call("session.input", json!({"session": name, "data": "\r"}));
+                    self.calls.push((Ask::Enter(name), call));
+                }
+                data::Step::Wait(ms) => self.wake_at(self.now_ns + ms * 1_000_000),
+            }
+        }
     }
 
     /// Raw keys (Esc, Shift-Tab, a menu's number), unanswered. The screen is read again soon
@@ -504,13 +526,14 @@ impl App {
                         write_owned(chat_file(&self.data, &name), self.convos[&name].clone());
                     }
                 }
-                (Ask::Input(name), Err(e)) => {
-                    if let Some(s) = self.sending.get_mut(&name)
-                        && let Some(p) = s.waiting.iter_mut().rev().find(|p| !p.failed)
-                    {
-                        p.failed = true;
+                (Ask::Input(name) | Ask::Enter(name), r) => {
+                    let now = rc_link::link::now_ms();
+                    if let Some(s) = self.sending.get_mut(&name) {
+                        s.answered(r.is_ok(), now);
                     }
-                    self.toast(&format!("Not sent: {}", e.message));
+                    if let Err(e) = r {
+                        self.toast(&format!("Not sent: {}", e.message));
+                    }
                 }
                 (Ask::Create, Ok(v)) => {
                     let name = v.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -535,9 +558,10 @@ impl App {
                 }
                 (Ask::Create | Ask::Spawn(_), Err(e)) => self.toast(&e.message),
                 (_, Err(e)) => self.host.log(&format!("{}: {}", e.code, e.message)),
-                (Ask::Input(_), Ok(_)) => {}
             }
         }
+        // What waited for the link, or for the write before it, goes now.
+        self.send_queued();
         // The lists say who works and who waits by how fresh each agent's output is: read them
         // again every five seconds while the app is in front.
         if self.link_state.online() && self.foreground && self.now_ns >= self.list_at {

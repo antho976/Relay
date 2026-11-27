@@ -257,35 +257,128 @@ pub const COMMAND_WAIT_MS: u64 = 10_000;
 /// message of yours that the log gains (after you sent) takes the oldest one waiting. Words can be
 /// logged otherwise than typed (a queued message, a picture's path), which is how the old app came
 /// to draw one message twice (design 44, D6); a count cannot.
+///
+/// It is also the agent's send queue: a message waits here while the link is down and goes once it
+/// is back, one at a time and in order, its words first and Enter only once the PC said it typed
+/// them ([`Sending::next`]). Nothing is lost while the phone reconnects.
 #[derive(Clone, Debug, Default)]
 pub struct Sending {
     pub waiting: Vec<Pending>,
 }
 
+/// How far one message has gone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Stage {
+    /// Not sent yet: the link is down, or a message before it is still going.
+    #[default]
+    Queued,
+    /// Its words are on their way.
+    Typing,
+    /// The PC typed its words; Enter is next.
+    Typed,
+    /// Enter is on its way.
+    Entering,
+    /// Typed and entered: waiting for the log to hold it.
+    Entered,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pending {
     pub text: String,
+    /// When it was written, then when its words went (Enter waits [`ENTER_AFTER_MS`] after them).
     pub sent_ms: u64,
+    /// The PC refused (or the link dropped) at [`Pending::stage`]: tap to send again from there.
     pub failed: bool,
+    pub stage: Stage,
+}
+
+/// Enter goes as its own write at least this long after the words, so the program does not take
+/// both as one paste.
+pub const ENTER_AFTER_MS: u64 = 90;
+
+/// What the queue wants sent next for one agent.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Step {
+    /// Type these words.
+    Type(String),
+    /// Press Enter after the words already typed.
+    Enter,
+    /// Enter is due in this many milliseconds.
+    Wait(u64),
 }
 
 impl Sending {
     pub fn push(&mut self, text: &str, now_ms: u64) {
-        self.waiting.push(Pending { text: text.to_string(), sent_ms: now_ms, failed: false });
+        self.waiting.push(Pending { text: text.to_string(), sent_ms: now_ms, failed: false, stage: Stage::Queued });
+    }
+
+    /// What to send now, if anything; the caller sends it and reports with [`Sending::answered`].
+    /// One message at a time, oldest first: nothing goes while a write is out, and a message is
+    /// typed only once the one before it was entered (or failed).
+    pub fn next(&mut self, now_ms: u64) -> Option<Step> {
+        if self.waiting.iter().any(|p| !p.failed && matches!(p.stage, Stage::Typing | Stage::Entering)) {
+            return None;
+        }
+        let p = self.waiting.iter_mut().find(|p| !p.failed && matches!(p.stage, Stage::Queued | Stage::Typed))?;
+        match p.stage {
+            Stage::Queued => {
+                p.stage = Stage::Typing;
+                p.sent_ms = now_ms;
+                Some(Step::Type(p.text.clone()))
+            }
+            _ => {
+                let due = p.sent_ms + ENTER_AFTER_MS;
+                if now_ms < due {
+                    return Some(Step::Wait(due - now_ms));
+                }
+                p.stage = Stage::Entering;
+                Some(Step::Enter)
+            }
+        }
+    }
+
+    /// The PC answered the write that was out: on success the message moves on, on failure it
+    /// stops where it was, to be sent again by a tap ([`Sending::retry`]).
+    pub fn answered(&mut self, ok: bool, now_ms: u64) {
+        let Some(p) = self.waiting.iter_mut().find(|p| !p.failed && matches!(p.stage, Stage::Typing | Stage::Entering)) else { return };
+        if !ok {
+            p.failed = true;
+            return;
+        }
+        if p.stage == Stage::Typing {
+            p.stage = Stage::Typed;
+        } else {
+            p.stage = Stage::Entered;
+            // Slash commands the log never shows are let go this long after they went in.
+            p.sent_ms = now_ms;
+        }
+    }
+
+    /// Send a failed message again, from where it stopped: its words were typed already when only
+    /// Enter failed, and are not typed twice.
+    pub fn retry(&mut self, i: usize) {
+        if let Some(p) = self.waiting.get_mut(i).filter(|p| p.failed) {
+            p.failed = false;
+            p.stage = match p.stage {
+                Stage::Typing => Stage::Queued,
+                Stage::Entering => Stage::Typed,
+                s => s,
+            };
+        }
     }
 
     /// A slash command is let go after a while: Claude Code logs some of its own commands
     /// (`/model`, `/effort`) only sometimes, and one it never logs must not wait forever.
     pub fn expire_commands(&mut self, now_ms: u64) {
-        self.waiting.retain(|p| !(p.text.starts_with('/') && !p.failed && now_ms.saturating_sub(p.sent_ms) > COMMAND_WAIT_MS));
+        self.waiting.retain(|p| !(p.text.starts_with('/') && !p.failed && p.stage == Stage::Entered && now_ms.saturating_sub(p.sent_ms) > COMMAND_WAIT_MS));
     }
 
-    /// `n` of your messages came into the log.
+    /// `n` of your messages came into the log: the oldest entered ones are in it now. One not
+    /// entered yet cannot be (a message typed at the PC itself counts, as the old app's did).
     pub fn seen(&mut self, n: usize) {
-        let k = n.min(self.waiting.iter().filter(|p| !p.failed).count());
-        let mut left = k;
+        let mut left = n;
         self.waiting.retain(|p| {
-            if left > 0 && !p.failed {
+            if left > 0 && !p.failed && p.stage == Stage::Entered {
                 left -= 1;
                 false
             } else {
@@ -630,6 +723,79 @@ fn inline(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// The PC takes everything: each message typed, then entered. Returns the steps sent and the
+    /// clock after them.
+    fn send_all(s: &mut Sending, mut now: u64) -> (Vec<Step>, u64) {
+        let mut sent = Vec::new();
+        while let Some(step) = s.next(now) {
+            match step {
+                Step::Wait(ms) => now += ms,
+                step => {
+                    sent.push(step);
+                    s.answered(true, now);
+                }
+            }
+        }
+        (sent, now)
+    }
+
+    #[test]
+    fn a_message_written_offline_waits_then_goes_once_in_order() {
+        let mut s = Sending::default();
+        // Offline: written, nothing asked of the queue, so nothing goes.
+        s.push("fix the test", 0);
+        s.push("then push", 0);
+        assert!(s.waiting.iter().all(|p| p.stage == Stage::Queued && !p.failed));
+        // Back online: the first one's words, and nothing more while they are out.
+        assert_eq!(s.next(5_000), Some(Step::Type("fix the test".into())));
+        assert_eq!(s.next(5_001), None, "one write at a time");
+        s.answered(true, 5_020);
+        // Enter waits for the PC's yes and then its moment, never a timer of its own.
+        assert_eq!(s.next(5_020), Some(Step::Wait(5_000 + ENTER_AFTER_MS - 5_020)));
+        assert_eq!(s.next(5_000 + ENTER_AFTER_MS), Some(Step::Enter));
+        assert_eq!(s.next(5_200), None, "the second waits for the first's Enter");
+        s.answered(true, 5_200);
+        assert_eq!(s.waiting[0].stage, Stage::Entered);
+        let (rest, _) = send_all(&mut s, 5_200);
+        assert_eq!(rest, [Step::Type("then push".into()), Step::Enter]);
+        assert_eq!(s.next(9_000), None, "each went exactly once");
+        s.seen(2);
+        assert!(s.waiting.is_empty());
+    }
+
+    #[test]
+    fn a_failed_send_is_tapped_to_go_again_from_where_it_stopped() {
+        let mut s = Sending::default();
+        s.push("a", 0);
+        assert_eq!(s.next(0), Some(Step::Type("a".into())));
+        s.answered(false, 10);
+        assert!(s.waiting[0].failed);
+        assert_eq!(s.next(10), None, "a failed one does not go by itself");
+        s.retry(0);
+        assert_eq!(s.next(20), Some(Step::Type("a".into())), "its words never went: typed again");
+        s.answered(true, 30);
+        assert_eq!(s.next(200), Some(Step::Enter));
+        s.answered(false, 210);
+        s.retry(0);
+        assert_eq!(s.next(400), Some(Step::Enter), "its words were typed: only Enter again");
+        s.answered(true, 410);
+        assert_eq!(s.waiting[0].stage, Stage::Entered);
+    }
+
+    #[test]
+    fn the_log_takes_only_what_was_entered() {
+        let mut s = Sending::default();
+        s.push("one", 0);
+        s.push("two", 0);
+        assert_eq!(s.next(0), Some(Step::Type("one".into())));
+        s.answered(true, 0);
+        assert_eq!(s.next(ENTER_AFTER_MS), Some(Step::Enter));
+        s.answered(true, ENTER_AFTER_MS);
+        // Two messages of yours come into the log (one typed at the PC): only "one" can be there.
+        s.seen(2);
+        assert_eq!(s.waiting.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["two"]);
+    }
+
     use super::*;
     use serde_json::json;
 
@@ -681,6 +847,7 @@ mod tests {
         let mut s = Sending::default();
         s.push("push it when the tests pass", 0);
         s.push("and open the PR", 0);
+        send_all(&mut s, 0);
         // The log names the first one otherwise than it was typed (a queued message): still one bubble.
         let n = c.take(&json!({"messages": [{"id": "u2", "role": "user", "body": {"text": "[queued] push it when the tests pass"}, "created_at": ""}], "cursor": 20, "reset": false, "found": true}));
         assert_eq!(n, 1);
@@ -715,8 +882,10 @@ mod tests {
     #[test]
     fn a_slash_command_the_log_never_shows_is_let_go() {
         let mut s = Sending::default();
-        s.push("/effort high", 1_000);
-        s.push("fix it", 1_000);
+        s.push("/effort high", 0);
+        s.push("fix it", 0);
+        // "/effort high" is entered at 1 000 ms: the wait counts from its Enter.
+        send_all(&mut s, 1_000 - ENTER_AFTER_MS);
         s.expire_commands(1_000 + COMMAND_WAIT_MS - 1);
         assert_eq!(s.waiting.len(), 2);
         s.expire_commands(1_000 + COMMAND_WAIT_MS + 1);
