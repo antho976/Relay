@@ -119,6 +119,16 @@ struct Pending {
     repo: i64,
     worktree: Option<String>,
     call: Call,
+    /// A read's op and payload, to ask again; and whether it was asked again while out, so its
+    /// answer is older than what was done since (a commit, a stage) and is dropped for a new one.
+    again: Option<(String, Value)>,
+    stale: bool,
+}
+
+impl Pending {
+    fn new(job: Job, repo: i64, worktree: Option<String>, call: Call) -> Pending {
+        Pending { job, repo, worktree, call, again: None, stale: false }
+    }
 }
 
 /// Which list a file is in: the branch's whole change since the base, or what is not committed.
@@ -588,13 +598,19 @@ impl State {
     }
 
     fn ask_for(&mut self, link: &rc_link::Link, repo: i64, worktree: Option<String>, job: Job, op: &str, payload: Value) {
-        if self.pending.iter().any(|p| p.job == job && p.repo == repo && p.worktree == worktree) {
+        if let Some(p) = self.pending.iter_mut().find(|p| p.job == job && p.repo == repo && p.worktree == worktree) {
+            // An action is one at a time. A read already out is from before whatever asked again:
+            // its answer is dropped when it comes and the read sent once more.
+            if !job.acts() {
+                p.stale = true;
+            }
             return;
         }
         // What runs git on the PC (and its hooks: RelayV4's pre-push takes minutes) waits as long
         // as the PC lets it run: given up on at the link's 30 s, a second tap began a second push.
+        let again = (!job.acts()).then(|| (op.to_string(), payload.clone()));
         let call = if job.long() { link.call_with(op, payload, LONG_CALL) } else { link.call(op, payload) };
-        self.pending.push(Pending { job, repo, worktree, call });
+        self.pending.push(Pending { again, ..Pending::new(job, repo, worktree, call) });
     }
 
     /// Back: the top one of this page's overlays closes (the discard dialog, the foot's menu, the
@@ -711,7 +727,15 @@ pub fn keep_up(app: &mut App) {
         return;
     }
     let mut done = Vec::new();
-    app.st.changes.pending.retain(|p| match p.call.poll() {
+    let link = app.link.clone();
+    app.st.changes.pending.retain_mut(|p| match p.call.poll() {
+        // Stale: the read goes again, and this older answer never lands.
+        Some(_) if p.stale && p.again.is_some() => {
+            let (op, payload) = p.again.clone().unwrap_or_default();
+            p.call = link.call(&op, payload);
+            p.stale = false;
+            true
+        }
         Some(r) => {
             done.push((p.job.clone(), p.repo, p.worktree.clone(), r));
             false
@@ -2171,7 +2195,7 @@ mod tests {
     fn add(a: &mut App, job: Job, worktree: &str) {
         // Not connected: the call fails at once, which is all a test of the bookkeeping needs.
         let call = a.link.call("git.status", json!({}));
-        a.st.changes.pending.push(Pending { job, repo: 1, worktree: Some(worktree.into()), call });
+        a.st.changes.pending.push(Pending::new(job, 1, Some(worktree.into()), call));
     }
 
     #[test]
@@ -2756,6 +2780,26 @@ mod tests {
         assert!(matches!(side, PicSide::Decoded(2, 2, _)));
         // Too big to read whole: said so, nothing decoded.
         assert!(matches!(side_answer(Ok(json!({"truncated": true, "size": 30000000}))), PicSide::Failed(w) if w.contains("Too large")));
+    }
+
+    #[test]
+    fn a_read_asked_again_while_out_drops_its_older_answer() {
+        let mut a = app_on_b("stale");
+        let link = a.link.clone();
+        // Offline, a call answers at once, as an old status would land after a commit.
+        a.st.changes.ask(&link, 1, Job::Status, "git.status", json!({"project_id": 1}));
+        a.st.changes.ask(&link, 1, Job::Status, "git.status", json!({"project_id": 1}));
+        assert_eq!(a.st.changes.pending.len(), 1, "one read out");
+        assert!(a.st.changes.pending[0].stale, "asked again while out");
+        keep_up(&mut a);
+        assert_eq!(a.st.changes.pending.len(), 1, "read again, its first answer never landed");
+        assert!(!a.st.changes.pending[0].stale && a.st.changes.error.is_none());
+        keep_up(&mut a);
+        assert!(a.st.changes.pending.is_empty() && a.st.changes.error.is_some(), "the fresh answer lands");
+        // An action asked twice stays one, and is never sent again.
+        a.st.changes.ask(&link, 1, Job::Push, "git.push", json!({}));
+        a.st.changes.ask(&link, 1, Job::Push, "git.push", json!({}));
+        assert!(!a.st.changes.pending[0].stale && a.st.changes.pending[0].again.is_none());
     }
 
     #[test]

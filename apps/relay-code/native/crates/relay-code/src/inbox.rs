@@ -80,7 +80,11 @@ pub struct State {
     /// Why the held commands could not be read, before they were.
     pub error: Option<String>,
     list: Option<Call>,
-    act: Option<Call>,
+    /// The list was asked for again while one was out: that one's answer is older than an
+    /// Allow or Deny made since, so it is dropped and the list read again.
+    stale: bool,
+    /// Every Allow and Deny on its way, so a second never drops the first one's error.
+    acts: Vec<Call>,
     /// The repo's tasks waiting in review, read by the page itself.
     pub review: Vec<crate::board::Task>,
     review_call: Option<Call>,
@@ -102,15 +106,26 @@ pub fn for_repo(all: &[Hold], repo: Option<i64>) -> Vec<Hold> {
 }
 
 fn reload(app: &mut App) {
-    if app.online() && app.st.inbox.list.is_none() {
-        app.st.inbox.list = Some(app.link.call("guardrail.holds.list", json!({"open_only": true, "limit": 50})));
+    if !app.online() {
+        return;
     }
+    if app.st.inbox.list.is_some() {
+        app.st.inbox.stale = true;
+        return;
+    }
+    app.st.inbox.list = Some(app.link.call("guardrail.holds.list", json!({"open_only": true, "limit": 50})));
 }
 
 fn take(app: &mut App) {
     if let Some(r) = app.st.inbox.list.as_ref().and_then(Call::poll) {
         app.st.inbox.list = None;
+        // Asked again since: this answer predates an Allow or Deny, so it could bring one back.
+        let stale = std::mem::take(&mut app.st.inbox.stale);
+        if stale {
+            reload(app);
+        }
         match r {
+            _ if stale => {}
             Ok(v) => {
                 app.st.inbox.all = holds(&v);
                 app.st.inbox.loaded = true;
@@ -130,11 +145,26 @@ fn take(app: &mut App) {
             app.st.inbox.review = crate::board::tasks(&v);
         }
     }
-    if let Some(r) = app.st.inbox.act.as_ref().and_then(Call::poll) {
-        app.st.inbox.act = None;
-        if let Err(e) = r {
-            app.toast(&crate::errors::words(&e));
+    let mut answers = Vec::new();
+    app.st.inbox.acts.retain(|c| match c.poll() {
+        Some(r) => {
+            answers.push(r);
+            false
         }
+        None => true,
+    });
+    // Every refusal said, once each, in one toast.
+    let mut said: Vec<String> = Vec::new();
+    for e in answers.iter().filter_map(|r| r.as_ref().err()) {
+        let w = crate::errors::words(e);
+        if !said.contains(&w) {
+            said.push(w);
+        }
+    }
+    if !said.is_empty() {
+        app.toast(&said.join(" "));
+    }
+    if !answers.is_empty() {
         reload(app);
     }
 }
@@ -235,11 +265,11 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             cy += 8.0;
             let kw = (w - 28.0 - 10.0) / 2.0;
             let mut cx = crate::cx!(app);
-            let busy = app.st.inbox.act.is_some();
-            if kit::primary(&mut cx, x + 14.0, cy, kw, 40.0, "Allow once", None) && !busy {
+            // A hold answered leaves the list at once, so its keys cannot be tapped twice.
+            if kit::primary(&mut cx, x + 14.0, cy, kw, 40.0, "Allow once", None) {
                 answer = Some(Answer::Allow(h.id, "once"));
             }
-            if kit::plain(&mut cx, x + 24.0 + kw, cy, kw, 40.0, "Deny", None) && !busy {
+            if kit::plain(&mut cx, x + 24.0 + kw, cy, kw, 40.0, "Deny", None) {
                 answer = Some(Answer::Deny(h.id));
             }
             if h.request {
@@ -251,7 +281,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                     cx.c.rect(x + 14.0, sy, lw, 36.0, 8.0, t::WASH);
                 }
                 cx.c.text(label, x + 26.0, sy + 9.0, small);
-                if cx.tap(x + 14.0, sy - 4.0, lw, 44.0) && !busy {
+                if cx.tap(x + 14.0, sy - 4.0, lw, 44.0) {
                     answer = Some(Answer::Allow(h.id, "session"));
                 }
             }
@@ -299,7 +329,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     match answer {
         Some(Answer::Allow(id, scope)) => {
             let request = app.st.inbox.holds.iter().any(|h| h.id == id && h.request);
-            app.st.inbox.act = Some(app.link.call("guardrail.confirm", confirm_payload(id, request, scope)));
+            let call = app.link.call("guardrail.confirm", confirm_payload(id, request, scope));
+            app.st.inbox.acts.push(call);
             answered(app, id);
             app.toast(if scope == "session" { "Allowed for this session" } else { "Allowed once" });
         }
@@ -345,9 +376,13 @@ pub fn reject_payload(id: i64, reason: &str) -> Value {
     if r.is_empty() { json!({"hold_id": id}) } else { json!({"hold_id": id, "reason": r}) }
 }
 
-/// The hold is answered: it leaves the list and the count at once.
+/// The hold is answered: it leaves the list and the count at once, and a list read already out
+/// (which still holds it) is not let bring it back.
 fn answered(app: &mut App, id: i64) {
     let st = &mut app.st.inbox;
+    if st.list.is_some() {
+        st.stale = true;
+    }
     st.all.retain(|h| h.id != id);
     st.holds.retain(|h| h.id != id);
     app.holds = st.holds.len();
@@ -372,7 +407,8 @@ fn deny_sheet(app: &mut App) {
     app.st.inbox.reason = reason.clone();
     if kit::primary(&mut crate::cx!(app), x, top + h - 62.0, w, 46.0, "Deny", None) {
         app.finish_typing();
-        app.st.inbox.act = Some(app.link.call("guardrail.reject", reject_payload(id, &reason)));
+        let call = app.link.call("guardrail.reject", reject_payload(id, &reason));
+        app.st.inbox.acts.push(call);
         app.st.inbox.denying = None;
         answered(app, id);
         app.toast("Denied");
@@ -510,12 +546,12 @@ mod tests {
         let top = a.canvas.h - 250.0;
         press(&mut a, &mut clock, 200.0, top + 30.0);
         assert_eq!(a.st.inbox.denying, Some(201), "the sheet stays");
-        assert!(a.st.inbox.act.is_none() && a.st.inbox.holds.len() == 2, "nothing under it was answered");
+        assert!(a.st.inbox.acts.is_empty() && a.st.inbox.holds.len() == 2, "nothing under it was answered");
         assert_eq!(*a.route(), Route::Inbox, "no review row under it opened");
         // A tap above it closes it, and answers nothing.
         press(&mut a, &mut clock, 200.0, 150.0);
         assert_eq!(a.st.inbox.denying, None);
-        assert!(a.st.inbox.act.is_none() && a.st.inbox.holds.len() == 2);
+        assert!(a.st.inbox.acts.is_empty() && a.st.inbox.holds.len() == 2);
     }
 
     #[test]
@@ -525,6 +561,26 @@ mod tests {
         let (asking, stopped) = split_blocked(&list);
         assert_eq!(asking.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["a", "c"]);
         assert_eq!(stopped.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["b"]);
+    }
+
+    #[test]
+    fn an_older_list_never_brings_back_a_hold_and_every_refusal_is_said() {
+        let dir = std::env::temp_dir().join(format!("relay-code-inbox-stale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(NoHost(dir)), 1_000_000_000);
+        a.sample();
+        let before = a.st.inbox.all.len();
+        // A list read is out (it answers at once here, offline: as an old list would land).
+        a.st.inbox.list = Some(a.link.call("guardrail.holds.list", json!({})));
+        answered(&mut a, 201);
+        assert!(a.st.inbox.stale, "the list out predates the Allow");
+        take(&mut a);
+        assert_eq!(a.st.inbox.all.len(), before - 1, "the allowed hold stays gone");
+        assert!(!a.st.inbox.stale && a.st.inbox.loaded, "its answer was dropped, not taken");
+        // Two Allows out: both answers are taken, neither dropped.
+        a.st.inbox.acts = vec![a.link.call("guardrail.confirm", json!({})), a.link.call("guardrail.confirm", json!({}))];
+        take(&mut a);
+        assert!(a.st.inbox.acts.is_empty());
     }
 
     #[test]

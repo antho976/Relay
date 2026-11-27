@@ -902,13 +902,15 @@ pub fn register(e: &mut Engine) {
             let project = ctx.read(|conn| get_project(conn, p.project_id))?;
             let repo = PathBuf::from(&project.path);
             let gh = crate::github::gh_path()?;
-            let checks = pr_checks(&gh, &repo, p.number)?;
-            let failing = failing_required(&checks.checks);
+            let (checks, required_known) = pr_checks_read(&gh, &repo, p.number)?;
+            let failing = holding_merge(&checks, required_known);
             if !failing.is_empty() {
-                return Err(BusError::conflict(
-                    "git.pr_checks_failing",
-                    format!("#{} cannot merge while a required check fails: {}", p.number, failing.join(", ")),
-                ).with_hint("fix the check (or re-run it), then merge"));
+                let why = if required_known {
+                    format!("#{} cannot merge while a required check fails: {}", p.number, failing.join(", "))
+                } else {
+                    format!("#{} cannot merge: GitHub did not say which checks are required, and these failed: {}", p.number, failing.join(", "))
+                };
+                return Err(BusError::conflict("git.pr_checks_failing", why).with_hint("fix the check (or re-run it), then merge"));
             }
             let method = p.method.unwrap_or(PrMergeMethod::Squash);
             let flag = match method {
@@ -2105,14 +2107,30 @@ struct GhCheck {
 /// A pull request's checks, all of them, each marked required or not: the two readings asked
 /// of GitHub at once.
 fn pr_checks(gh: &Path, root: &Path, number: u64) -> Result<PrChecksOut, BusError> {
+    Ok(PrChecksOut { checks: pr_checks_read(gh, root, number)?.0 })
+}
+
+/// [`pr_checks`], and whether the required reading came back: without it every check shows,
+/// none marked required, and a merge must not take that for "none required".
+fn pr_checks_read(gh: &Path, root: &Path, number: u64) -> Result<(Vec<PrCheck>, bool), BusError> {
     let (all, required) = std::thread::scope(|scope| {
         let required = scope.spawn(|| gh_checks(gh, root, number, true));
         let all = gh_checks(gh, root, number, false);
         (all, required.join().unwrap_or_else(|_| Err(BusError::internal("gh checks thread panicked"))))
     });
-    // Without the required reading every check still shows, none marked required.
+    let known = required.is_ok();
     let required: Vec<String> = required.map(|r| r.into_iter().map(|c| c.name).collect()).unwrap_or_default();
-    Ok(PrChecksOut { checks: checks_from(all?, &required) })
+    Ok((checks_from(all?, &required), known))
+}
+
+/// What holds a merge back: the required checks that failed, or, when which are required could
+/// not be read, every check that failed.
+fn holding_merge(checks: &[PrCheck], required_known: bool) -> Vec<String> {
+    if required_known {
+        failing_required(checks)
+    } else {
+        checks.iter().filter(|c| matches!(c.state.as_str(), "fail" | "cancel")).map(|c| c.name.clone()).collect()
+    }
 }
 
 fn checks_from(all: Vec<GhCheck>, required: &[String]) -> Vec<PrCheck> {
@@ -2652,6 +2670,11 @@ mod tests {
         let all = decode_checks(br#"[{"bucket":"fail","link":"","name":"native client (GTK)"},{"bucket":"pending","link":"","name":"cargo deny"}]"#, "").unwrap();
         let checks = checks_from(all, &["native client (GTK)".to_string(), "cargo deny".to_string()]);
         assert_eq!(failing_required(&checks), ["native client (GTK)"], "a pending required one is GitHub's to hold");
+        // Which are required could not be read: any failed check holds the merge, never none.
+        let unknown = checks_from(decode_checks(br#"[{"bucket":"fail","link":"","name":"gtk"},{"bucket":"pass","link":"","name":"engine"}]"#, "").unwrap(), &[]);
+        assert!(failing_required(&unknown).is_empty());
+        assert_eq!(holding_merge(&unknown, false), ["gtk"]);
+        assert!(holding_merge(&unknown, true).is_empty(), "known: nothing required failed");
     }
 
     /// A fetch (every session.create runs one) and a push never wait for a person: no terminal

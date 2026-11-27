@@ -69,12 +69,28 @@ fn strip_op(mut s: &str) -> &str {
     loop {
         let Some((head, rest)) = s.split_once(':') else { return s };
         let head = head.trim();
-        let op = head.strip_suffix(" failed").or_else(|| head.strip_suffix(" refused")).unwrap_or(head);
-        if !is_op(op) {
+        let (op, said) = match head.strip_suffix(" failed").or_else(|| head.strip_suffix(" refused")) {
+            Some(op) => (op, true),
+            None => (head, false),
+        };
+        // Only an op's name goes: one followed by "failed" or "refused", or one of the PC's own
+        // namespaces. "config.toml: missing field" keeps its file's name.
+        if !is_op(op) || !(said || known_op(op)) {
             return s;
         }
         s = rest.trim_start();
     }
+}
+
+/// The PC's op namespaces: a name under one of them, alone before a colon, is an op's.
+const OP_SPACES: &[&str] = &[
+    "aide", "app", "arbiter", "avd", "bus", "clips", "dashboard", "design", "device", "file", "git", "github", "guardrail", "gym",
+    "integration", "link", "mailbox", "module", "money", "notes", "notify", "phone", "plugin", "project", "remote", "session",
+    "settings", "skill", "task", "thread", "ui", "usage", "video", "workspace", "worktree",
+];
+
+fn known_op(op: &str) -> bool {
+    op.split('.').next().is_some_and(|space| OP_SPACES.contains(&space))
 }
 
 /// git's own prefixes taken off: "fatal: ", "error: ", "warning: ", and "git pull failed: " the
@@ -161,5 +177,9 @@ mod tests {
         // A file's name is not an op's: "app.rs" has no second lowercase-only word... and stays.
         assert_eq!(plain("src/app.rs could not be read"), "Src/app.rs could not be read.");
         assert!(!is_op("app.rs.bak/x") && is_op("git.pr.list") && !is_op("Git.pull"));
+        // A file's name before a colon stays; an op's goes.
+        assert_eq!(plain("config.toml: missing field `name`"), "Config.toml: missing field `name`.");
+        assert_eq!(plain("git.status: index is locked"), "Index is locked.");
+        assert_eq!(plain("foo.bar failed: it broke"), "It broke.");
     }
 }
