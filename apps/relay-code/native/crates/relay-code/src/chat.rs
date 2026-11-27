@@ -119,7 +119,8 @@ fn header(app: &mut App, a: Option<&Agent>, name: &str) {
     }
     let title = a.map_or(name, Agent::title).to_string();
     let sub = match a {
-        Some(a) => format!("{} · {} · {}", a.name, app.repo_name(), a.state_words()),
+        // Its terminal says when it works (`app.busy`): the list's freshness can lag it.
+        Some(a) => format!("{} · {} · {}", a.name, app.repo_name(), if a.alive() && !a.needs_you() && app.busy(name) { "working" } else { a.state_words() }),
         None => name.to_string(),
     };
     let mut x = 56.0;

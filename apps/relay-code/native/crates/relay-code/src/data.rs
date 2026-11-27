@@ -73,6 +73,7 @@ impl Agent {
             "parked" => "parked",
             "restorable" => "stopped",
             "created" => "starting",
+            "closed" | "exited" => "closed",
             _ => "done",
         }
     }
