@@ -863,7 +863,7 @@ mod tests {
                 "/link/token/create" => {
                     let hosted = body.get("hosted_link").is_some();
                     assert_eq!(body["transactions"]["days_requested"], 730);
-                    Ok(json!({"link_token": if hosted { "link-hosted" } else { "link-sdk" }, "expiration": "2026-11-19T12:30:00Z",
+                    Ok(json!({"link_token": if hosted { "link-hosted" } else { "link-sdk" }, "expiration": "2099-11-19T12:30:00Z",
                               "hosted_link_url": if hosted { json!("https://hosted.plaid.com/link/abc") } else { Value::Null }}))
                 }
                 "/item/public_token/exchange" => {
