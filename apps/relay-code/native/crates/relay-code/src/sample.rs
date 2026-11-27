@@ -49,6 +49,18 @@ pub fn fill(app: &mut App) {
         {"id": "k2", "role": "assistant", "created_at": at(300), "body": {"blocks": [{"type": "text", "text": "The timeline is in: clips, sound and captions on three tracks, scrubbed with a finger. Tests pass."}]}},
     ]}));
     app.convos.insert("keen-newt".into(), k);
+    // D12: the rows' latest words, and news you have not seen on two of them.
+    for (name, words) in [
+        ("umber-zebra", "Tests pass. Push relay/umber-zebra to origin?"),
+        ("swift-ocelot", "The autopilot now moves a series when its source stops answering."),
+        ("vivid-ferret", "All five review findings are fixed, with a test each."),
+    ] {
+        let mut c = Convo::default();
+        c.take(&json!({"cursor": 1, "reset": true, "found": true, "messages": [{"id": "1", "role": "assistant", "created_at": at(3), "body": {"blocks": [{"type": "text", "text": words}]}}]}));
+        app.convos.insert(name.into(), c);
+    }
+    crate::news::set_seen(app, "umber-zebra", now.saturating_sub(20 * 60_000));
+    crate::news::set_seen(app, "swift-ocelot", now.saturating_sub(20 * 60_000));
     let mut c = Convo::default();
     c.take(&json!({"cursor": 900, "reset": true, "found": true, "messages": [
         {"id": "1", "role": "user", "created_at": at(9), "body": {"text": "Bubbles duplicate when I send while it's working. Fix it?"}},

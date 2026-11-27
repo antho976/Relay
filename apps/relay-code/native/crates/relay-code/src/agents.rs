@@ -230,11 +230,11 @@ pub fn section(app: &mut App, label: &str, list: &[Agent], x: f32, y: &mut f32, 
     let mut open = None;
     for a in list {
         // Rows outside the list's window take no tap.
-        let visible = window.is_none_or(|(top, bottom)| *y + 60.0 > top && *y < bottom);
+        let visible = window.is_none_or(|(top, bottom)| *y + crate::drawer::AGENT_ROW_H > top && *y < bottom);
         if crate::drawer::agent_row(app, a, x, *y, w, now_ms) && visible {
             open = Some(a.name.clone());
         }
-        *y += 60.0;
+        *y += crate::drawer::AGENT_ROW_H;
     }
     *y += 4.0;
     open
