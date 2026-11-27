@@ -29,18 +29,18 @@ pub struct State {
     /// Kept at the newest message until the person scrolls up.
     unstuck: bool,
     /// Folded lines opened, by their place in the list.
-    open: HashSet<usize>,
+    open: HashSet<String>,
     /// Diffs shown whole.
-    open_diffs: HashSet<usize>,
+    open_diffs: HashSet<(String, usize)>,
     /// Calls whose fold (a command's output, a plan) was flipped from how it starts, by their
     /// item's place in the list and their own in it.
-    toggled: HashSet<(usize, usize)>,
+    toggled: HashSet<(String, usize)>,
     /// The newest to-do list in the conversation, pinned above the message box while it works.
     todos: Option<Vec<(data::Todo, String)>>,
     /// That pinned list opened whole.
     todos_open: bool,
     /// Code blocks shown whole, by their words.
-    open_code: HashSet<u64>,
+    open_code: HashSet<(String, usize)>,
     /// Wide tables' sideways scroll, by their words.
     tables: std::collections::HashMap<u64, crate::ui::HScroll>,
     /// This frame's step (seconds), for a table coasting sideways.
@@ -54,7 +54,13 @@ pub struct State {
     /// A long press's menu: the item (its place among those shown) and where the finger was.
     pub menu: Option<(usize, f32)>,
     /// Items whose fold changed: only they are measured again, on the next frame.
-    refolded: HashSet<usize>,
+    refolded: HashSet<String>,
+    /// Each item's key ([`data::items_timed`]): folds and heights follow it, not its place.
+    keys: Rc<Vec<String>>,
+    /// The question card last answered (its agent, the card, when): held until its terminal moves on.
+    answered: Option<(String, crate::screen::Ask, u64)>,
+    /// Items measured (not drawn) so far: what a new message costs, for tests.
+    measured: usize,
     pub model_sheet: bool,
     /// Where the message box starts on screen, for the model picker above it.
     pub box_top: f32,
@@ -219,6 +225,9 @@ pub fn day_name(ms: u64, now_ms: u64) -> String {
 }
 
 fn item_body(app: &mut App, it: &Item, index: usize, y: f32, draw: bool) -> f32 {
+    if !draw {
+        app.st.chat.measured += 1;
+    }
     let c_w = WIDTH - 2.0 * t::PAD;
     match it {
         Item::You(text) => bubble(app, text, y, draw),
@@ -227,7 +236,7 @@ fn item_body(app: &mut App, it: &Item, index: usize, y: f32, draw: bool) -> f32 
             6.0 + markdown(app, md, t::PAD, y + 6.0, c_w, st, draw)
         }
         Item::Did { line, failed, calls } => {
-            let open = app.st.chat.open.contains(&index);
+            let open = app.st.chat.open.contains(&ikey(app, index));
             // Plans and edits show under the line by themselves; the rest open with it.
             let folded = calls.iter().any(|c| !c.is_edit() && !c.is_plan());
             let mut h = 32.0;
@@ -250,18 +259,18 @@ fn item_body(app: &mut App, it: &Item, index: usize, y: f32, draw: bool) -> f32 
             // change"), a plan, and, opened or failed, what each call ran and what it answered.
             for (k, c) in calls.iter().enumerate() {
                 if c.is_edit() {
-                    h += diff(app, c, index * 64 + k, y + h, draw);
+                    h += diff(app, c, (ikey(app, index), k), y + h, draw);
                 } else if c.is_plan() {
-                    h += plan(app, c, (index, k), y + h, draw);
+                    h += plan(app, c, (ikey(app, index), k), y + h, draw);
                 } else if open || c.failed {
-                    h += call(app, c, (index, k), y + h, draw);
+                    h += call(app, c, (ikey(app, index), k), y + h, draw);
                 }
             }
             h + 2.0
         }
         Item::Thought(text) => {
             // Shown, not folded away: Claude Code's thinking is often the summary of what it does.
-            let open = app.st.chat.open.contains(&index);
+            let open = app.st.chat.open.contains(&ikey(app, index));
             let st = Text::new(ty::CAPTION, t::INK2).line(1.5);
             let clean = text.replace("**", "");
             let all = app.canvas.wrap(&clean, c_w - 14.0, st, 400).len();
@@ -275,10 +284,10 @@ fn item_body(app: &mut App, it: &Item, index: usize, y: f32, draw: bool) -> f32 
                     let mut cx = crate::cx!(app);
                     if cx.tap(0.0, y, WIDTH, body + 28.0) {
                         if open {
-                            app.st.chat.open.remove(&index);
+                            app.st.chat.open.remove(&ikey(app, index));
                             refold(app);
                         } else {
-                            app.st.chat.open.insert(index);
+                            app.st.chat.open.insert(ikey(app, index));
                             refold(app);
                         }
                     }
@@ -311,6 +320,7 @@ fn item_body(app: &mut App, it: &Item, index: usize, y: f32, draw: bool) -> f32 
 /// measures, by the same layout.
 pub fn markdown(app: &mut App, md: &str, x: f32, y: f32, w: f32, prose: Text, draw: bool) -> f32 {
     let mut h = 0.0;
+    let mut blocks = 0;
     for p in data::pieces(md) {
         match p {
             Piece::Prose(s) => {
@@ -335,7 +345,8 @@ pub fn markdown(app: &mut App, md: &str, x: f32, y: f32, w: f32, prose: Text, dr
                 h += 6.0;
             }
             Piece::Code(code) => {
-                h += code_block(app, &code, x, y + h, w, draw) + 12.0;
+                h += code_block(app, &code, blocks, x, y + h, w, draw) + 12.0;
+                blocks += 1;
             }
             Piece::Table(rows) => {
                 h += table(app, &rows, x, y + h, w, draw) + 12.0;
@@ -359,11 +370,12 @@ const CODE_LINES: usize = 40;
 
 /// A fenced code block on its own ground, with a copy key. A long one shows its first
 /// [`CODE_LINES`] and a key for the rest.
-fn code_block(app: &mut App, code: &str, x: f32, y: f32, w: f32, draw: bool) -> f32 {
+fn code_block(app: &mut App, code: &str, n: usize, x: f32, y: f32, w: f32, draw: bool) -> f32 {
     let st = Text::new(ty::MONO, t::INK).face(Weight::Mono).line(1.5);
     // The words keep clear of the copy key at the top right.
     let cw = w - 28.0 - 26.0;
-    let key = key_of(code);
+    // Its fold follows its message and its place there, not its words (two alike stay apart).
+    let key = (ikey(app, app.st.chat.drawing), n);
     // Folded by the code's own lines, each wrapped as it must be.
     let src = code.lines().count();
     let open = app.st.chat.open_code.contains(&key);
@@ -523,6 +535,24 @@ fn effort_tick(app: &mut App, name: &str, agent: Option<&Agent>) -> Option<&'sta
         app.efforts.remove(name);
     }
     app.efforts.get(name).copied().or(real)
+}
+
+/// How long an answered card waits for its terminal to move on before it takes taps again.
+const ANSWER_LOCK_NS: u64 = 5_000_000_000;
+
+/// The card `q` for `name` was answered a moment ago and its terminal still shows it.
+fn answered(app: &App, name: &str, q: &crate::screen::Ask) -> bool {
+    app.st.chat.answered.as_ref().is_some_and(|(n, a, at)| n == name && a == q && app.now_ns.saturating_sub(*at) < ANSWER_LOCK_NS)
+}
+
+/// Answer card `q`: true when the answer may go (the first tap), and the card is held until the
+/// terminal shows something else.
+fn answer(app: &mut App, name: &str, q: &crate::screen::Ask) -> bool {
+    if answered(app, name, q) {
+        return false;
+    }
+    app.st.chat.answered = Some((name.to_string(), q.clone(), app.now_ns));
+    true
 }
 
 /// How an answer's words are set on its key.
@@ -703,21 +733,27 @@ fn live_status(app: &mut App, name: &str, status: Option<&crate::screen::Status>
 /// shown and the rest a tap away. Returns its height.
 /// A fold in the item being drawn opened or closed: its height is measured again.
 fn refold(app: &mut App) {
-    let i = app.st.chat.drawing;
-    app.st.chat.refolded.insert(i);
+    let k = ikey(app, app.st.chat.drawing);
+    app.st.chat.refolded.insert(k);
+}
+
+/// Item `index`'s key: what its folds and its kept height go by.
+fn ikey(app: &App, index: usize) -> String {
+    index.checked_sub(app.st.chat.base).and_then(|j| app.st.chat.keys.get(j)).cloned().unwrap_or_else(|| format!("#{index}"))
 }
 
 /// Open or close the folded line of item `index` (its calls), as a tap on it does.
 fn fold(app: &mut App, index: usize) {
-    if !app.st.chat.open.remove(&index) {
-        app.st.chat.open.insert(index);
+    let k = ikey(app, index);
+    if !app.st.chat.open.remove(&k) {
+        app.st.chat.open.insert(k);
     }
     app.st.chat.drawing = index;
     refold(app);
 }
 
 /// Flip a call's fold from how it starts.
-fn toggle(app: &mut App, key: (usize, usize)) {
+fn toggle(app: &mut App, key: (String, usize)) {
     if !app.st.chat.toggled.remove(&key) {
         app.st.chat.toggled.insert(key);
     }
@@ -728,7 +764,7 @@ fn toggle(app: &mut App, key: (usize, usize)) {
 const TAIL: usize = 12;
 
 /// One call, opened: what it ran or asked in full, then what it answered. Returns the height.
-fn call(app: &mut App, c: &data::ToolCall, key: (usize, usize), y: f32, draw: bool) -> f32 {
+fn call(app: &mut App, c: &data::ToolCall, key: (String, usize), y: f32, draw: bool) -> f32 {
     let (x, w) = (t::PAD + 24.0, WIDTH - 2.0 * t::PAD - 24.0);
     let mono = Text::new(ty::SMALL, t::INK2).face(Weight::Mono).line(1.45);
     let caption = Text::new(ty::CAPTION, t::INK2).line(1.45);
@@ -769,7 +805,7 @@ fn call(app: &mut App, c: &data::ToolCall, key: (usize, usize), y: f32, draw: bo
 /// What a call answered, on code ground. A command's or a failure's tail shows ([`TAIL`] lines);
 /// other answers (a file read, a search) fold to one line. A tap shows all or folds.
 #[allow(clippy::too_many_arguments)]
-fn output(app: &mut App, c: &data::ToolCall, out: &str, key: (usize, usize), x: f32, y: f32, w: f32, draw: bool) -> f32 {
+fn output(app: &mut App, c: &data::ToolCall, out: &str, key: (String, usize), x: f32, y: f32, w: f32, draw: bool) -> f32 {
     let ink = if c.failed { t::DANGER } else { t::INK2 };
     let st = Text::new(ty::SMALL, ink).face(Weight::Mono).line(1.45);
     let mut rows: Vec<String> = Vec::new();
@@ -807,7 +843,7 @@ fn output(app: &mut App, c: &data::ToolCall, out: &str, key: (usize, usize), x: 
         if note.is_some() {
             let mut cx = crate::cx!(app);
             if cx.tap(x, y, w, h) {
-                toggle(app, key);
+                toggle(app, key.clone());
             }
         }
     }
@@ -839,7 +875,7 @@ fn checklist(app: &mut App, list: &[(data::Todo, String)], x: f32, y: f32, w: f3
 
 /// A plan put to you, as Markdown on its own card: open while it waits for your answer (it has no
 /// answer until you give one), folded to its title once answered. A tap on its head flips that.
-fn plan(app: &mut App, c: &data::ToolCall, key: (usize, usize), y: f32, draw: bool) -> f32 {
+fn plan(app: &mut App, c: &data::ToolCall, key: (String, usize), y: f32, draw: bool) -> f32 {
     let awaiting = c.output.is_none();
     let open = awaiting != app.st.chat.toggled.contains(&key);
     let (x, w) = (t::PAD, WIDTH - 2.0 * t::PAD);
@@ -908,7 +944,7 @@ fn pinned(app: &mut App, y: f32, h: f32) {
     }
 }
 
-fn diff(app: &mut App, c: &data::ToolCall, key: usize, y: f32, draw: bool) -> f32 {
+fn diff(app: &mut App, c: &data::ToolCall, key: (String, usize), y: f32, draw: bool) -> f32 {
     const SHOWN: usize = 14;
     let lines = data::diff_lines(c.detail.as_deref().unwrap_or_default());
     let lang = data::lang_of(&c.summary);
@@ -1086,29 +1122,36 @@ fn picture(app: &mut App, path: &str, y: f32, draw: bool) -> f32 {
 
 /// Photos picked go to this agent's checkout; each path, once written, joins the message.
 fn attachments(app: &mut App, name: &str) {
-    for p in crate::attach::take_picked() {
-        crate::attach::upload(app.link.clone(), name.to_string(), p);
+    // A photo goes to the agent whose chat it was picked in, and its path into that agent's
+    // draft only, wherever you are when it lands.
+    for (agent, p) in crate::attach::take_picked() {
+        crate::attach::upload(app.link.clone(), agent.unwrap_or_else(|| name.to_string()), p);
         app.st.chat.uploading += 1;
     }
-    for r in crate::attach::take_done() {
+    for (agent, r) in crate::attach::take_done() {
         app.st.chat.uploading = app.st.chat.uploading.saturating_sub(1);
         match r {
-            Ok(path) => {
-                let typed = if app.focus.is(FIELD) { app.focus.text.clone() } else { app.draft(name) };
-                let joined = if typed.trim().is_empty() { path } else { format!("{}\n{path}", typed.trim_end()) };
-                if app.focus.is(FIELD) {
-                    app.focus.text = joined.clone();
-                    app.focus.sel = None;
-                    app.host.keyboard(true, &joined, Kb::Prose);
-                }
-                app.set_draft(name, &joined);
-            }
+            Ok(path) => place_upload(app, name, &agent, path),
             Err(e) => app.toast(&e),
         }
     }
     if app.st.chat.uploading > 0 {
         app.toast("Sending the picture…");
     }
+}
+
+/// An uploaded picture's path joins `agent`'s draft: the box being typed in when that is the open
+/// chat (`name`), else the draft kept for it.
+fn place_upload(app: &mut App, name: &str, agent: &str, path: String) {
+    let here = agent == name && app.focus.is(FIELD);
+    let typed = if here { app.focus.text.clone() } else { app.draft(agent) };
+    let joined = if typed.trim().is_empty() { path } else { format!("{}\n{path}", typed.trim_end()) };
+    if here {
+        app.focus.text = joined.clone();
+        app.focus.sel = None;
+        app.host.keyboard(true, &joined, Kb::Prose);
+    }
+    app.set_draft(agent, &joined);
 }
 
 pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
@@ -1158,29 +1201,38 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     };
     if app.st.chat.shown_from != from {
         let msgs = app.convos.get(name).map(|c| c.msgs.as_slice()).unwrap_or_default();
-        let (mut items, mut times) = data::items_timed(msgs);
-        app.st.chat.todos = items.iter().rev().find_map(|it| match it {
+        let (mut items, mut times, mut keys) = data::items_timed(msgs);
+        // The to-do list of this turn only: one from before your last message is done with.
+        let turn = items.iter().rposition(|it| matches!(it, Item::You(_))).map_or(0, |i| i + 1);
+        app.st.chat.todos = items[turn..].iter().rev().find_map(|it| match it {
             Item::Did { calls, .. } => calls.iter().rev().find(|c| c.is_todos()).map(|c| data::todos(c.detail.as_deref().unwrap_or_default())),
             _ => None,
         });
         let base = items.len().saturating_sub(SHOWN);
         items.drain(..base);
         times.drain(..base);
+        keys.drain(..base);
         app.st.chat.times = Rc::new(times);
         app.st.chat.last_said_ms = msgs.iter().rev().find(|m| m.role == "user").and_then(|m| data::parse_ms(&m.created_at));
-        // What was already measured keeps its height: a new message measures itself alone.
-        let (old, old_base, old_h) = (app.st.chat.items.clone(), app.st.chat.base, app.st.chat.heights.clone());
+        // What was already measured keeps its height, found by its key: a new message measures
+        // itself alone, however far the list moved (past 400 its oldest are cut).
+        let (old, old_keys, old_h) = (app.st.chat.items.clone(), app.st.chat.keys.clone(), app.st.chat.heights.clone());
         let same_log = app.st.chat.shown_from.as_ref().is_some_and(|f| Some(&f.0) == from.as_ref().map(|f| &f.0));
+        let old_at: std::collections::HashMap<&str, usize> = if same_log { old_keys.iter().enumerate().map(|(j, k)| (k.as_str(), j)).collect() } else { Default::default() };
+        let keys = Rc::new(keys);
+        // Measuring reads the new keys and place (day names, folds).
+        app.st.chat.keys = keys.clone();
+        app.st.chat.base = base;
         let mut hs = Vec::with_capacity(items.len());
         for (i, it) in items.iter().enumerate() {
-            let at = (base + i).checked_sub(old_base).filter(|&j| same_log && j < old.len() && j < old_h.len() && old[j] == *it);
+            let at = old_at.get(keys[i].as_str()).copied().filter(|&j| j < old.len() && j < old_h.len() && old[j] == *it && i > 0);
             hs.push(match at {
                 Some(j) => old_h[j],
                 None => item(app, it, base + i, 0.0, false),
             });
         }
+        drop(old_at);
         app.st.chat.items = Rc::new(items);
-        app.st.chat.base = base;
         app.st.chat.heights = Rc::new(hs);
         app.st.chat.shown_from = from;
     }
@@ -1193,9 +1245,11 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     // A fold opened or closed: that item alone is measured again (a whole long chat took ~15 ms).
     if !app.st.chat.refolded.is_empty() {
         let mut hs = (*app.st.chat.heights).clone();
-        for i in std::mem::take(&mut app.st.chat.refolded) {
-            if let Some(j) = i.checked_sub(base).filter(|&j| j < items.len() && j < hs.len()) {
-                hs[j] = item(app, &items[j], i, 0.0, false);
+        let refolded = std::mem::take(&mut app.st.chat.refolded);
+        let keys = app.st.chat.keys.clone();
+        for (j, k) in keys.iter().enumerate() {
+            if refolded.contains(k) && j < items.len() && j < hs.len() {
+                hs[j] = item(app, &items[j], base + j, 0.0, false);
             }
         }
         app.st.chat.heights = Rc::new(hs);
@@ -1358,7 +1412,11 @@ fn composer(
         let card_h = ask_h - 10.0;
         app.canvas.rect(x, y, w, card_h, 16.0, t::S1);
         app.canvas.outline(x, y, w, card_h, 16.0, 1.0, t::ACCENT.a(0.55));
-        app.canvas.text("WAITING FOR YOUR ANSWER", x + 14.0, y + 14.0, Text::new(ty::SMALL, t::ACCENT).semi());
+        // Answered already: the card waits for the terminal to move on, and a second tap types
+        // nothing into whatever comes next.
+        let locked = answered(app, name, q);
+        let head = if locked { "SENT · WAITING FOR IT" } else { "WAITING FOR YOUR ANSWER" };
+        app.canvas.text(head, x + 14.0, y + 14.0, Text::new(ty::SMALL, if locked { t::INK3 } else { t::ACCENT }).semi());
         let qh = question_words(app, &q.question, x + 14.0, y + 36.0, w - 28.0, true);
         let mut oy = y + 36.0 + qh + 10.0;
         let mut pick = None;
@@ -1382,11 +1440,11 @@ fn composer(
         if !q.options.iter().any(|(_, l)| l.ends_with("(esc)")) {
             let mut cx = crate::cx!(app);
             let ew = 92.0;
-            if kit::plain(&mut cx, x + w - 10.0 - ew, oy, ew, 30.0, "Esc", None) {
+            if kit::plain(&mut cx, x + w - 10.0 - ew, oy, ew, 30.0, "Esc", None) && answer(app, name, q) {
                 app.key(name, "\x1b");
             }
         }
-        if let Some((n, write)) = pick {
+        if let Some((n, write)) = pick.filter(|_| answer(app, name, q)) {
             app.key(name, &n);
             // "No, and tell Claude…", "Type something": your words go in the message box next.
             if write {
@@ -1516,6 +1574,7 @@ fn composer(
         cx.c.outline(px, ky, 34.0, 34.0, 17.0, 1.0, t::LINE);
         cx.c.icon("plus", px + 17.0, ky + 17.0, 15.0, t::INK2);
         if cx.tap(px - 4.0, ky - 6.0, 42.0, 46.0) {
+            crate::attach::pick_for(name);
             cx.host.pick_photo();
         }
     }
@@ -1565,9 +1624,10 @@ fn composer(
             app.focus.text.clear();
             app.focus.sel = None;
             app.set_draft(name, "");
-            app.host.keyboard(true, "", Kb::Prose);
-            if !app.focus.is(FIELD) {
-                app.focus.id = None;
+            // Typing on: the field keeps the keys. Sent from a box not being typed in, the
+            // keyboard stays down (raised with no field, it would drop what you type next).
+            if app.focus.is(FIELD) {
+                app.host.keyboard(true, "", Kb::Prose);
             }
             app.host.haptic();
             app.say(name, &text);
@@ -1924,6 +1984,193 @@ mod tests {
             frames(&mut a, 2);
             assert!(a.st.chat.model_sheet, "a tap at {y} (chip drawn from {ky}) opened the model sheet");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn fresh_app(tag: &str) -> (App, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("relay-code-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(Host(dir.clone())), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        (a, dir)
+    }
+
+    #[test]
+    fn audit_reading_the_log() {
+        let (mut a, dir) = fresh_app("audit-log");
+        let msg = |i: usize| serde_json::json!({"id": format!("m{i}"), "role": "assistant", "created_at": "", "body": {"blocks": [{"type": "text", "text": "x"}]}});
+        a.took_transcript("x", &serde_json::json!({"messages": [msg(0)], "cursor": 10, "reset": true, "found": true}));
+        // `/clear`: what you entered before is in the reset log, so it stops waiting.
+        let mut s = data::Sending::default();
+        s.push("/clear", 0);
+        s.next(0);
+        s.answered(data::Answer::Ok, 0);
+        s.next(data::ENTER_AFTER_MS);
+        s.answered(data::Answer::Ok, data::ENTER_AFTER_MS);
+        a.sending.insert("x".into(), s);
+        a.took_transcript("x", &serde_json::json!({"messages": [msg(1)], "cursor": 20, "reset": true, "found": true}));
+        assert!(a.sending["x"].waiting.is_empty(), "no second bubble after a reset");
+        // Catching up: a full page is read on at once, a short one waits its turn.
+        a.reread_at = 5_000_000_000;
+        a.took_transcript("x", &serde_json::json!({"messages": [msg(2)], "cursor": 30, "reset": false, "found": true}));
+        assert_eq!(a.reread_at, 5_000_000_000);
+        let page: Vec<_> = (3..203).map(msg).collect();
+        a.took_transcript("x", &serde_json::json!({"messages": page, "cursor": 40, "reset": false, "found": true}));
+        assert_eq!(a.reread_at, 0, "a full page: the next one at once");
+        // Back online, an older PC's missing foot is asked for again.
+        a.no_screen = true;
+        a.came_online();
+        assert!(!a.no_screen);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audit_a_chats_copy_is_read_off_the_ui_thread() {
+        let (mut a, dir) = fresh_app("audit-open");
+        let c = data::Convo { msgs: vec![], cursor: Some(7), found: true };
+        std::fs::create_dir_all(dir.join("cache")).unwrap();
+        std::fs::write(dir.join("cache/chat-swift-ocelot.json"), serde_json::to_vec(&c).unwrap()).unwrap();
+        a.open("swift-ocelot");
+        assert!(!a.convos.contains_key("swift-ocelot"), "not read on the UI thread");
+        for i in 0..200 {
+            a.tick(2_000_000_000 + i * 10_000_000);
+            if a.convos.contains_key("swift-ocelot") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(a.convos.get("swift-ocelot").and_then(|c| c.cursor), Some(7));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audit_past_400_messages_folds_and_heights_follow_their_message() {
+        let (mut a, dir) = fresh_app("audit-keys");
+        a.sample();
+        let msg = |i: usize| {
+            if i.is_multiple_of(2) {
+                serde_json::json!({"id": format!("m{i}"), "role": "user", "created_at": "", "body": {"text": format!("go {i}")}})
+            } else {
+                serde_json::json!({"id": format!("m{i}"), "role": "assistant", "created_at": "", "body": {"blocks": [
+                    {"type": "tool_use", "id": format!("c{i}"), "name": "Bash", "summary": "cargo test"},
+                    {"type": "text", "text": format!("done {i}\n```\nsame code\n```")}]}})
+            }
+        };
+        let mut c = data::Convo::default();
+        c.take(&serde_json::json!({"messages": (0..400).map(msg).collect::<Vec<_>>(), "cursor": 1, "reset": true, "found": true}));
+        a.convos.insert("bold-puffin".into(), c);
+        a.open("bold-puffin");
+        let mut clock = 1_000_000_000u64;
+        let mut frame = |a: &mut App| {
+            clock += 16_666_666;
+            a.frame(clock);
+        };
+        frame(&mut a);
+        // Open the last folded line, and the second-last message's code block.
+        let did = a.st.chat.items.iter().rposition(|it| matches!(it, Item::Did { .. })).unwrap();
+        let did_key = a.st.chat.keys[did].clone();
+        let at0 = a.st.chat.base + did;
+        fold(&mut a, at0);
+        frame(&mut a);
+        // Two more messages: the log keeps the newest 400, so every place moves by two.
+        let more = serde_json::json!({"messages": [msg(400), msg(401)], "cursor": 2, "reset": false, "found": true});
+        a.convos.get_mut("bold-puffin").unwrap().take(&more);
+        let before = a.st.chat.measured;
+        frame(&mut a);
+        let measured = a.st.chat.measured - before;
+        assert!(measured <= 4, "only the three new items (and the first, for its day) are measured, not 160: {measured}");
+        let at = a.st.chat.keys.iter().position(|k| *k == did_key).unwrap();
+        assert!(a.st.chat.open.contains(&a.st.chat.keys[at]), "the fold stayed with its message");
+        assert!(matches!(a.st.chat.items[at], Item::Did { .. }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audit_the_todo_list_pinned_is_this_turns() {
+        let (mut a, dir) = fresh_app("audit-todos");
+        a.sample();
+        let todo = serde_json::json!({"type": "tool_use", "id": "t", "name": "TodoWrite", "summary": "", "detail": "[x] a\n[~] b"});
+        let mut c = data::Convo::default();
+        c.take(&serde_json::json!({"messages": [
+            {"id": "1", "role": "assistant", "created_at": "", "body": {"blocks": [todo]}},
+            {"id": "2", "role": "user", "created_at": "", "body": {"text": "something new"}},
+        ], "cursor": 1, "reset": true, "found": true}));
+        a.convos.insert("bold-puffin".into(), c);
+        a.open("bold-puffin");
+        a.frame(2_000_000_000);
+        assert!(a.st.chat.todos.is_none(), "last turn's list is not pinned on this one");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audit_a_card_takes_one_answer_until_its_terminal_moves_on() {
+        let (mut a, dir) = fresh_app("audit-card");
+        let q = crate::screen::read("Proceed?\n❯ 1. Yes\n  2. No").ask.unwrap();
+        assert!(answer(&mut a, "x", &q), "the first tap answers");
+        assert!(!answer(&mut a, "x", &q), "a second tap on the same card types nothing");
+        // The terminal moved on to another card: it takes its answer.
+        let next = crate::screen::read("Then this?\n❯ 1. Yes\n  2. No").ask.unwrap();
+        assert!(answer(&mut a, "x", &next));
+        // Or the same card is still up a while later (the answer was lost): it may go again.
+        a.now_ns += ANSWER_LOCK_NS + 1;
+        assert!(answer(&mut a, "x", &next));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audit_an_upload_goes_to_its_own_agents_draft() {
+        let (mut a, dir) = fresh_app("audit-upload");
+        a.set_draft("b", "see this");
+        a.focus.id = Some(FIELD);
+        a.focus.text = "typing to a".into();
+        // Picked in b's chat, landed while a's is open and being typed in.
+        place_upload(&mut a, "a", "b", "/wt/.relay/uploads/x.png".into());
+        assert_eq!(a.draft("b"), "see this\n/wt/.relay/uploads/x.png");
+        assert_eq!(a.focus.text, "typing to a", "a's box is untouched");
+        assert_eq!(a.draft("a"), "");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audit_send_with_the_keyboard_down_leaves_it_down() {
+        struct KbHost(std::path::PathBuf, std::sync::Mutex<Vec<bool>>);
+        impl crate::app::Host for KbHost {
+            fn data_dir(&self) -> std::path::PathBuf {
+                self.0.clone()
+            }
+            fn log(&self, _text: &str) {}
+            fn keyboard(&self, show: bool, _text: &str, _kind: Kb) {
+                self.1.lock().unwrap().push(show);
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("relay-code-audit-send-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let host = std::sync::Arc::new(KbHost(dir.clone(), Default::default()));
+        let mut a = App::new(host.clone(), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        a.open("swift-ocelot");
+        a.set_draft("swift-ocelot", "ship it");
+        let mut clock = 1_000_000_000u64;
+        for _ in 0..3 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        host.1.lock().unwrap().clear();
+        // The send key: at the box's right, on the row under the words.
+        let lh = Text::new(ty::BODY, t::INK).line(1.4).lh();
+        let ky = a.st.chat.box_top + 14.0 + lh + 10.0;
+        let (x, y) = (12.0 + (WIDTH - 24.0) - 10.0 - 17.0, ky + 17.0);
+        a.touch(crate::ui::Touch { id: 1, phase: crate::ui::Phase::Down, x, y, t_ns: clock });
+        clock += 16_666_666;
+        a.frame(clock);
+        a.touch(crate::ui::Touch { id: 1, phase: crate::ui::Phase::Up, x, y, t_ns: clock + 30_000_000 });
+        for _ in 0..2 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        assert_eq!(a.sending["swift-ocelot"].waiting.last().map(|p| p.text.as_str()), Some("ship it"), "it was sent");
+        assert!(!host.1.lock().unwrap().contains(&true), "the keyboard was not raised with no field to take its keys");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

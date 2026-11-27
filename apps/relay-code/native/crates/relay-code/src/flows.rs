@@ -585,8 +585,11 @@ fn the_rows_say_working_when_the_terminal_does_as_the_header_does() {
     let ocelot = a.agent("swift-ocelot").cloned().expect("sample agent");
     // Its output is a minute old, so the list alone reads it as ready.
     assert_eq!(a.agent_words(&ocelot), "ready");
-    a.screens.insert("swift-ocelot".into(), crate::screen::read("· Pondering… (3s · thought for 1s)\n────\n❯ \n────\n  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt"));
+    a.put_screen("swift-ocelot", crate::screen::read("· Pondering… (3s · thought for 1s)\n────\n❯ \n────\n  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt"));
     assert_eq!(a.agent_words(&ocelot), "working");
+    // A11: read long ago for a chat no longer open, it no longer says so: the list does.
+    a.now_ns += 11_000_000_000;
+    assert_eq!(a.agent_words(&ocelot), "ready", "a stale foot is not trusted");
     // One that asks says so, whatever its terminal shows.
     let zebra = a.agent("umber-zebra").cloned().expect("sample agent");
     assert_eq!(a.agent_words(&zebra), "asks you");

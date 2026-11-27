@@ -11,8 +11,17 @@ use std::time::Duration;
 use rc_link::Link;
 use serde_json::{Value, json};
 
-static PICKED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
-static DONE: Mutex<Vec<Result<String, String>>> = Mutex::new(Vec::new());
+/// Pictures picked, each with the agent whose chat asked for it.
+static PICKED: Mutex<Vec<(Option<String>, PathBuf)>> = Mutex::new(Vec::new());
+/// Uploads that finished, each with its agent.
+static DONE: Mutex<Vec<(String, Result<String, String>)>> = Mutex::new(Vec::new());
+/// The chat the picker was last opened from.
+static PICK_FOR: Mutex<Option<String>> = Mutex::new(None);
+
+/// The picker is opening from `agent`'s chat: what it brings goes to that agent.
+pub fn pick_for(agent: &str) {
+    *PICK_FOR.lock().unwrap_or_else(|e| e.into_inner()) = Some(agent.to_string());
+}
 
 /// A small copy of each picture sent, by the path the PC wrote it to: your message shows it
 /// instead of the path (RGBA, premultiplied, row by row).
@@ -61,16 +70,17 @@ fn make_thumb(bytes: &[u8]) -> Option<Thumb> {
 
 /// The picker brought a file (any thread).
 pub fn picked(p: PathBuf) {
-    PICKED.lock().unwrap_or_else(|e| e.into_inner()).push(p);
+    let agent = PICK_FOR.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    PICKED.lock().unwrap_or_else(|e| e.into_inner()).push((agent, p));
     crate::wake::wake();
 }
 
-pub fn take_picked() -> Vec<PathBuf> {
+pub fn take_picked() -> Vec<(Option<String>, PathBuf)> {
     std::mem::take(&mut *PICKED.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
-/// Uploads that finished: the path to name in the message, or why it failed.
-pub fn take_done() -> Vec<Result<String, String>> {
+/// Uploads that finished, with their agent: the path to name in the message, or why it failed.
+pub fn take_done() -> Vec<(String, Result<String, String>)> {
     std::mem::take(&mut *DONE.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
@@ -92,7 +102,7 @@ pub fn upload(link: Link, session: String, path: PathBuf) {
             },
         };
         let _ = std::fs::remove_file(&path);
-        DONE.lock().unwrap_or_else(|e| e.into_inner()).push(out);
+        DONE.lock().unwrap_or_else(|e| e.into_inner()).push((session, out));
         crate::wake::wake();
     });
 }

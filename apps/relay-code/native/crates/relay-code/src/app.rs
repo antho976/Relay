@@ -84,6 +84,12 @@ pub const FONTS: [&[u8]; crate::draw::FACES] = [
 /// pixels per unit, which the canvas never goes past (with a tenth to spare for wider phones).
 const WIDTH_DP: f32 = 411.0;
 
+/// How long a terminal's foot read for a chat no longer open still says whether it works.
+const SCREEN_FRESH_NS: u64 = 10_000_000_000;
+
+/// Messages asked for in one transcript read.
+const PAGE: usize = 200;
+
 /// The most a field holds, in characters.
 const MAX_TYPED: usize = 8000;
 
@@ -213,6 +219,10 @@ pub struct App {
     pub repo: Option<i64>,
     pub convos: HashMap<String, Convo>,
     pub sending: HashMap<String, Sending>,
+    /// When each terminal's foot was read (ns).
+    screens_at: HashMap<String, u64>,
+    /// Chats' copies being read off the UI thread ([`App::open`]).
+    opening: Vec<(String, std::sync::mpsc::Receiver<Option<Convo>>)>,
     /// What you started writing to each agent, kept across agents and restarts.
     pub drafts: HashMap<String, String>,
     /// The drafts or a send queue changed at this time (ns): written to the phone a second later.
@@ -339,6 +349,8 @@ impl App {
             sending,
             drafts,
             outbox_at: None,
+            opening: Vec::new(),
+            screens_at: HashMap::new(),
             screens: HashMap::new(),
             efforts: HashMap::new(),
             busy_since: HashMap::new(),
@@ -506,7 +518,12 @@ impl App {
         if a.needs_you() {
             return false;
         }
+        // The terminal's foot is read only for the open chat: trusted there, or for a few seconds
+        // after a read elsewhere. Past that it is stale (an agent last seen working would show
+        // working for ever).
+        let fresh = self.open_chat().as_deref() == Some(name) || self.screens_at.get(name).is_some_and(|t| self.now_ns.saturating_sub(*t) < SCREEN_FRESH_NS);
         if !self.no_screen
+            && fresh
             && let Some(s) = self.screens.get(name)
         {
             return s.status.is_some();
@@ -541,7 +558,7 @@ impl App {
     /// Read what the agent wrote since the last read.
     pub fn read_chat(&mut self, name: &str) {
         let after = self.convos.get(name).and_then(|c| c.cursor);
-        let mut p = json!({"session": name, "limit": 200});
+        let mut p = json!({"session": name, "limit": PAGE});
         if let Some(a) = after {
             p["after"] = json!(a);
         }
@@ -563,6 +580,54 @@ impl App {
         self.outbox_changed();
         self.send_queued();
         self.reread_at = self.now_ns + 600_000_000;
+    }
+
+    /// An answer of `session.transcript` for `name`: what came in joins its conversation, and what
+    /// you sent that it now holds stops waiting.
+    pub fn took_transcript(&mut self, name: &str, v: &Value) {
+        let c = self.convos.entry(name.to_string()).or_default();
+        let before = (c.msgs.len(), c.msgs.last().map(|m| m.id.clone()), c.cursor);
+        // A reset (a first read, `/clear`, a new log) holds every message of yours already
+        // entered: none of them may wait on to be drawn a second time.
+        let reset = v.get("reset").and_then(Value::as_bool) == Some(true) || before.2.is_none();
+        let full = v.get("messages").and_then(Value::as_array).is_some_and(|m| m.len() >= PAGE);
+        let seen = c.take(v);
+        let changed = before != (c.msgs.len(), c.msgs.last().map(|m| m.id.clone()), c.cursor);
+        if let Some(s) = self.sending.get_mut(name) {
+            if reset {
+                s.reset();
+            }
+            s.seen(seen);
+        }
+        if reset {
+            self.outbox_changed();
+        }
+        // A full page means more came after it (away a while): read on at once.
+        if full && !reset {
+            self.reread_at = 0;
+        }
+        if seen > 0 {
+            self.outbox_changed();
+        }
+        // Kept for the next start only when something came in; written (and turned
+        // into JSON) off the UI thread.
+        if changed {
+            write_owned(chat_file(&self.data, name), self.convos[name].clone());
+        }
+    }
+
+    /// The link came back: every page reads again, and a PC that could not send the terminal's
+    /// foot (an older one) is asked again, since it may have been updated.
+    pub(crate) fn came_online(&mut self) {
+        self.no_screen = false;
+        self.changed.insert("*".into());
+        self.refresh();
+    }
+
+    /// What `name`'s terminal shows at its foot, read now.
+    pub fn put_screen(&mut self, name: &str, s: crate::screen::Screen) {
+        self.screens.insert(name.to_string(), s);
+        self.screens_at.insert(name.to_string(), self.now_ns);
     }
 
     /// What you started writing to `name`.
@@ -643,11 +708,7 @@ impl App {
             self.link_state = state.clone();
             self.service();
             match &state {
-                LinkState::Online { .. } if !was_online => {
-                    // Back online: every page reads again.
-                    self.changed.insert("*".into());
-                    self.refresh();
-                }
+                LinkState::Online { .. } if !was_online => self.came_online(),
                 LinkState::Unpaired | LinkState::Revoked { .. } if self.route() != &Route::Pair => {
                     self.nav = vec![(Route::Pair, Scroll::default())];
                     self.shown();
@@ -705,23 +766,7 @@ impl App {
                     self.agents = data::agents(&v);
                     write_json(self.data.join("cache/agents.json"), &self.agents);
                 }
-                (Ask::Transcript(name), Ok(v)) => {
-                    let c = self.convos.entry(name.clone()).or_default();
-                    let before = (c.msgs.len(), c.msgs.last().map(|m| m.id.clone()), c.cursor);
-                    let seen = c.take(&v);
-                    let changed = before != (c.msgs.len(), c.msgs.last().map(|m| m.id.clone()), c.cursor);
-                    if let Some(s) = self.sending.get_mut(&name) {
-                        s.seen(seen);
-                    }
-                    if seen > 0 {
-                        self.outbox_changed();
-                    }
-                    // Kept for the next start only when something came in; written (and turned
-                    // into JSON) off the UI thread.
-                    if changed {
-                        write_owned(chat_file(&self.data, &name), self.convos[&name].clone());
-                    }
-                }
+                (Ask::Transcript(name), Ok(v)) => self.took_transcript(&name, &v),
                 (Ask::Input(name) | Ask::Enter(name), r) => {
                     let now = rc_link::link::now_ms();
                     let answer = match &r {
@@ -749,7 +794,8 @@ impl App {
                 }
                 (Ask::Screen(name), Ok(v)) => {
                     let text = v.get("text").and_then(Value::as_str).unwrap_or_default();
-                    self.screens.insert(name, crate::screen::read(text));
+                    let scr = crate::screen::read(text);
+                    self.put_screen(&name, scr);
                 }
                 (Ask::Screen(_), Err(e)) => {
                     if e.code == "remote.op" || e.code.contains("unknown") {
@@ -808,6 +854,20 @@ impl App {
                 (_, Err(e)) => self.host.log(&format!("{}: {}", e.code, e.message)),
             }
         }
+        // Chats' copies read off the UI thread: kept unless the PC's answer came first.
+        let convos = &mut self.convos;
+        self.opening.retain(|(name, rx)| match rx.try_recv() {
+            Ok(c) => {
+                if let Some(c) = c
+                    && !convos.contains_key(name)
+                {
+                    convos.insert(name.clone(), c);
+                }
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(_) => false,
+        });
         // What waited for the link, or for the write before it, goes now.
         self.send_queued();
         // Drafts and queues are written a second after they last changed, not on each key.
@@ -906,10 +966,16 @@ impl App {
 
     /// Open an agent's conversation over Home.
     pub fn open(&mut self, name: &str) {
-        if !self.convos.contains_key(name)
-            && let Some(c) = read_json::<Convo>(chat_file(&self.data, name))
-        {
-            self.convos.insert(name.to_string(), c);
+        // The phone's copy is read and parsed off the UI thread (a long chat is megabytes of JSON);
+        // it shows as soon as it is in, unless the PC answered first.
+        if !self.convos.contains_key(name) && !self.shot {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (file, n) = (chat_file(&self.data, name), name.to_string());
+            let _ = std::thread::Builder::new().name("rc-open".into()).spawn(move || {
+                let _ = tx.send(read_json::<Convo>(file));
+                crate::wake::wake();
+            });
+            self.opening.push((n, rx));
         }
         if let Some(a) = self.agent(name)
             && Some(a.project_id) != self.repo
