@@ -24,6 +24,8 @@ struct Door {
     /// Refuse the phone's proof from now on (the PC forgot it).
     forget: Arc<AtomicBool>,
     connections: Arc<AtomicUsize>,
+    /// bus.ping requests answered.
+    pings: Arc<AtomicUsize>,
 }
 
 /// Who a door is and how it behaves.
@@ -52,13 +54,14 @@ fn door_as(who: Who) -> Door {
     let drop_all = Arc::new(AtomicBool::new(false));
     let forget = Arc::new(AtomicBool::new(false));
     let connections = Arc::new(AtomicUsize::new(0));
-    let (d, f, c) = (drop_all.clone(), forget.clone(), connections.clone());
+    let pings = Arc::new(AtomicUsize::new(0));
+    let (d, f, c, pc) = (drop_all.clone(), forget.clone(), connections.clone(), pings.clone());
     std::thread::spawn(move || {
         rt.block_on(async move {
             let listener = TcpListener::from_std(std_listener).unwrap();
             loop {
                 let (mut tcp, _) = listener.accept().await.unwrap();
-                let (d, f, c, who) = (d.clone(), f.clone(), c.clone(), who.clone());
+                let (d, f, c, who, pc) = (d.clone(), f.clone(), c.clone(), who.clone(), pc.clone());
                 tokio::spawn(async move {
                     // `GET /info` on the same port, as the real door answers it.
                     let mut head = [0u8; 9];
@@ -106,6 +109,9 @@ fn door_as(who: Who) -> Door {
                         let Ok(msg) = msg else { continue };
                         let Some(Ok(Message::Text(line))) = msg else { return };
                         let req: Value = serde_json::from_str(line.as_str()).unwrap();
+                        if req["op"] == "bus.ping" {
+                            pc.fetch_add(1, Ordering::SeqCst);
+                        }
                         if req["op"] == "bus.ping" && !who.ping_delay.is_zero() {
                             tokio::time::sleep(who.ping_delay).await;
                         }
@@ -138,7 +144,7 @@ fn door_as(who: Who) -> Door {
             }
         });
     });
-    Door { port, drop_all, forget, connections }
+    Door { port, drop_all, forget, connections, pings }
 }
 
 #[derive(Default)]
@@ -382,4 +388,42 @@ fn forgetting_the_pc_right_after_connecting_stays_forgotten() {
     link.forget();
     let seen = states_for(&link, Duration::from_secs(2));
     assert!(seen.iter().all(|s| *s == LinkState::Unpaired), "{seen:?}");
+}
+
+#[test]
+fn a_network_switch_while_online_redials_at_once() {
+    let d = door();
+    let store = Arc::new(Memory::default());
+    store.save(&profile(&[&d], None));
+    let link = Link::start(store, Arc::new(|| {}));
+    wait_for(&link, "online", Duration::from_secs(5), LinkState::online);
+    // Past the five seconds a session needs to count as stable would not matter: a switch skips it.
+    let before = d.connections.load(Ordering::SeqCst);
+    let start = Instant::now();
+    link.network_switched();
+    wait_for(&link, "online again", Duration::from_secs(5), |s| s.online() && d.connections.load(Ordering::SeqCst) > before);
+    let took = start.elapsed();
+    eprintln!("a network switch to online again: {took:?}");
+    assert!(took < Duration::from_secs(2), "{took:?}");
+}
+
+#[test]
+fn the_keepalive_follows_the_interval_set() {
+    let d = door();
+    let store = Arc::new(Memory::default());
+    store.save(&profile(&[&d], None));
+    let link = Link::start(store, Arc::new(|| {}));
+    wait_for(&link, "online", Duration::from_secs(5), LinkState::online);
+    link.set_keepalive(Duration::from_millis(200));
+    std::thread::sleep(Duration::from_millis(150));
+    let a = d.pings.load(Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(1000));
+    let fast = d.pings.load(Ordering::SeqCst) - a;
+    // Away with the screen off: the wait already running is cut short and none comes for a while.
+    link.set_keepalive(Duration::from_secs(180));
+    std::thread::sleep(Duration::from_millis(100));
+    let b = d.pings.load(Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(1000));
+    let slow = d.pings.load(Ordering::SeqCst) - b;
+    assert!((3..=6).contains(&fast) && slow == 0, "pings in a second: {fast} at 200 ms, {slow} at 3 min");
 }

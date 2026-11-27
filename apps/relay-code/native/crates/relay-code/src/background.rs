@@ -57,9 +57,34 @@ static LINK: OnceLock<Link> = OnceLock::new();
 
 /// The network changed: the link redials now, with or without the activity (its backoff is up to
 /// 30 s otherwise).
-pub fn network_changed() {
-    if let Some(l) = LINK.get() {
+pub fn network_changed(network: i64) {
+    // The first word is the network the service started on: nothing changed yet.
+    static LAST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+    let before = LAST.swap(network, Ordering::SeqCst);
+    let Some(l) = LINK.get() else { return };
+    if before != 0 && before != network {
+        // Another network: a session on the old one is dead whatever its socket says.
+        l.network_switched();
+    } else {
         l.kick();
+    }
+}
+
+/// How often the link pings the PC: as often as it always has in front, then less and less as
+/// the phone is less in use. Every ping wakes the radio; the door's own pings (every 30 s) keep
+/// the connection open between them.
+fn keepalive(foreground: bool, screen_on: bool) -> Duration {
+    match (foreground, screen_on) {
+        (true, _) => rc_link::link::KEEPALIVE,
+        (false, true) => Duration::from_secs(60),
+        (false, false) => Duration::from_secs(180),
+    }
+}
+
+fn retune() {
+    if let Some(l) = LINK.get() {
+        let foreground = FRONT.lock().unwrap_or_else(|e| e.into_inner()).foreground;
+        l.set_keepalive(keepalive(foreground, SCREEN_ON.load(Ordering::SeqCst)));
     }
 }
 
@@ -77,7 +102,12 @@ static FRONT: Mutex<Front> = Mutex::new(Front { foreground: false, chat: None })
 pub fn front(foreground: bool, chat: Option<String>) {
     let mut f = FRONT.lock().unwrap_or_else(|e| e.into_inner());
     if f.foreground != foreground || f.chat != chat {
+        let moved = f.foreground != foreground;
         *f = Front { foreground, chat };
+        drop(f);
+        if moved {
+            retune();
+        }
     }
 }
 
@@ -342,8 +372,11 @@ static SCREEN_ON: AtomicBool = AtomicBool::new(true);
 
 /// The screen went on or off (LinkService hears it). Off, nothing is read on a timer.
 pub fn screen(on: bool) {
-    if SCREEN_ON.swap(on, Ordering::SeqCst) != on && on {
-        tell_loop(Msg::Look);
+    if SCREEN_ON.swap(on, Ordering::SeqCst) != on {
+        retune();
+        if on {
+            tell_loop(Msg::Look);
+        }
     }
 }
 
@@ -537,6 +570,14 @@ mod tests {
         assert_eq!(kinds(&w.list(&at(20_000), NOW, &away())), [(Notify::Done, "x", "x finished")]);
         // Claude says it itself: no look on a timer.
         assert_eq!(Watch::next_look(&rows(&[("a", "claude", "running", None)]), NOW), None);
+    }
+
+    #[test]
+    fn the_link_pings_less_the_less_the_phone_is_in_use() {
+        assert_eq!(keepalive(true, true), rc_link::link::KEEPALIVE);
+        assert_eq!(keepalive(true, false), rc_link::link::KEEPALIVE, "in front wins");
+        assert_eq!(keepalive(false, true), Duration::from_secs(60));
+        assert_eq!(keepalive(false, false), Duration::from_secs(180));
     }
 
     #[test]

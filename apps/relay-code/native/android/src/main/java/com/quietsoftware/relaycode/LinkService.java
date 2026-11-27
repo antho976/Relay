@@ -49,7 +49,7 @@ public class LinkService extends Service {
     private static volatile LinkService running;
 
     /** The network changed: Rust redials now. */
-    static native void nativeNetwork();
+    static native void nativeNetwork(long network);
 
     /**
      * The link and the notifications start for the process (Rust, background.rs), so they run
@@ -216,7 +216,7 @@ public class LinkService extends Service {
                 public void onAvailable(Network network) {
                     if (!LOADED) return;
                     try {
-                        nativeNetwork();
+                        nativeNetwork(network.getNetworkHandle());
                     } catch (UnsatisfiedLinkError ignored) {
                         // A library without the call: the link redials on its own backoff.
                     }
