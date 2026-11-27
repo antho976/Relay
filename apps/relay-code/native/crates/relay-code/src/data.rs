@@ -383,6 +383,9 @@ pub struct Pending {
     /// Sent with `chat.send`: the PC types words and Enter in one go.
     #[serde(default)]
     pub via_chat: bool,
+    /// Taken back after the PC had it: drawn struck through; the agent still reads it.
+    #[serde(default)]
+    pub struck: bool,
 }
 
 /// Enter goes as its own write at least this long after the words, so the program does not take
@@ -466,7 +469,7 @@ pub enum Step {
 
 impl Sending {
     pub fn push(&mut self, text: &str, now_ms: u64) {
-        self.waiting.push(Pending { text: text.to_string(), sent_ms: now_ms, failed: false, stage: Stage::Queued, not_before_ms: 0, client_id: rc_link::wire::uuid_v4(), via_chat: false });
+        self.waiting.push(Pending { text: text.to_string(), sent_ms: now_ms, failed: false, stage: Stage::Queued, not_before_ms: 0, client_id: rc_link::wire::uuid_v4(), via_chat: false, struck: false });
     }
 
     /// What to send now, if anything; the caller sends it and reports with [`Sending::answered`].
@@ -536,6 +539,19 @@ impl Sending {
                 // Slash commands the log never shows are let go this long after they went in.
                 p.sent_ms = now_ms;
             }
+        }
+    }
+
+    /// Take message `i` back. One not sent yet (or refused) leaves the queue: true. One the PC
+    /// already has stays, struck through (the agent will still read it): false.
+    pub fn take_back(&mut self, i: usize) -> bool {
+        let Some(p) = self.waiting.get_mut(i) else { return true };
+        if p.stage == Stage::Queued || p.failed {
+            self.waiting.remove(i);
+            true
+        } else {
+            p.struck = true;
+            false
         }
     }
 
@@ -1661,6 +1677,23 @@ mod tests {
         let links: Vec<_> = s.iter().filter_map(|x| x.link.as_deref()).collect();
         assert_eq!(links, ["file:src/chat.rs:42", "file:apps/x/Cargo.toml"]);
         assert_eq!(s.iter().map(|x| x.text.as_str()).collect::<String>(), "Fixed in src/chat.rs:42 and apps/x/Cargo.toml.");
+    }
+
+    #[test]
+    fn a_waiting_message_is_taken_back_or_struck() {
+        let mut s = Sending::default();
+        s.push("sent", 0);
+        s.push("not yet", 0);
+        assert!(matches!(s.next_by(0, true), Some(Step::Send(..))));
+        s.answered(Answer::Ok, 1);
+        // Not sent yet: it leaves the queue and never goes.
+        assert!(s.take_back(1));
+        assert_eq!(s.next_by(2, true), None);
+        // The PC has it: it stays, struck, until the log takes it.
+        assert!(!s.take_back(0));
+        assert!(s.waiting[0].struck);
+        s.seen(1);
+        assert!(s.waiting.is_empty());
     }
 
     #[test]
