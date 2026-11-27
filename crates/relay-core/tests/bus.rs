@@ -1064,6 +1064,8 @@ async fn one_connection_runs_its_queries_concurrently_and_keeps_writes_in_order(
         assert!(!e.runs_unlocked(op), "{op} is connection bookkeeping, not a free-standing query");
     }
     assert!(e.runs_unlocked("git.pr.list") && e.runs_unlocked("file.search"));
+    // GitHub round trips: off the lock, or every keystroke waits on the network.
+    assert!(e.runs_unlocked("git.pr.checks"));
 
     let server = SocketServer::start_in(e.clone(), dir.path().to_path_buf()).await.unwrap();
     let mut c = Client::connect(&server.path).await.unwrap();

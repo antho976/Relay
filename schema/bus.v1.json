@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 446,
+  "op_count": 448,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -3085,6 +3085,44 @@
       },
       "result": {
         "$ref": "#/$defs/GitPrOpenOut"
+      }
+    },
+    "git.pr.checks": {
+      "summary": "A pull request's checks (gh pr checks): each one's state, link and whether it is required; cached 20 s unless refresh",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 8,
+      "payload": {
+        "$ref": "#/$defs/GitPrChecksIn"
+      },
+      "result": {
+        "$ref": "#/$defs/GitPrChecksOut"
+      }
+    },
+    "git.pr.merge": {
+      "summary": "Merge a pull request on GitHub (gh pr merge); refused while a required check fails",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "project",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "git.changed"
+      ],
+      "since": "1.0",
+      "phase": 8,
+      "payload": {
+        "$ref": "#/$defs/GitPrMergeIn"
+      },
+      "result": {
+        "$ref": "#/$defs/GitPrMergeOut"
       }
     },
     "git.branch.clean_merged": {
@@ -17129,6 +17167,141 @@
       },
       "required": [
         "url"
+      ]
+    },
+    "GitPrChecksIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "project_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "number": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "refresh": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Ask GitHub now instead of answering from the last reading (kept 20 s)."
+        }
+      },
+      "required": [
+        "project_id",
+        "number"
+      ]
+    },
+    "GitPrChecksOut": {
+      "type": "object",
+      "properties": {
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GitPrCheck"
+          }
+        }
+      },
+      "required": [
+        "checks"
+      ]
+    },
+    "GitPrCheck": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "description": "As `gh pr checks` buckets it: `pass`, `fail`, `pending`, `skipping` or `cancel`."
+        },
+        "link": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The check's page (its run on GitHub), when it has one."
+        },
+        "required": {
+          "type": "boolean",
+          "description": "Branch protection requires it to pass before the pull request may merge."
+        }
+      },
+      "required": [
+        "name",
+        "state",
+        "required"
+      ]
+    },
+    "GitPrMergeIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "project_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "number": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "method": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitPrMergeMethod"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default `squash`."
+        }
+      },
+      "required": [
+        "project_id",
+        "number"
+      ]
+    },
+    "GitPrMergeMethod": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "squash",
+          "description": "One commit on the base (the default)."
+        },
+        {
+          "type": "string",
+          "const": "merge",
+          "description": "A merge commit."
+        },
+        {
+          "type": "string",
+          "const": "rebase",
+          "description": "Each commit replayed on the base."
+        }
+      ],
+      "description": "How a pull request's commits land on its base."
+    },
+    "GitPrMergeOut": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "method": {
+          "$ref": "#/$defs/GitPrMergeMethod"
+        }
+      },
+      "required": [
+        "number",
+        "method"
       ]
     },
     "GitCleanMergedIn": {
