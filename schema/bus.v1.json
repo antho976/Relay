@@ -17800,6 +17800,13 @@
           ],
           "format": "uint64",
           "minimum": 0
+        },
+        "rev": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The file as it was at this revision (a commit, a branch, `HEAD`), from git, in place of\nthe one on disk: what a change's \"before\" side shows."
         }
       },
       "required": [

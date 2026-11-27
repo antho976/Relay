@@ -78,6 +78,12 @@ impl Picture {
         Picture { w, h, levels }
     }
 
+    /// Its full-size pixels (premultiplied RGBA), as a canvas takes them.
+    pub fn into_rgba(mut self) -> (u32, u32, Vec<u8>) {
+        let l = self.levels.swap_remove(0);
+        (l.w, l.h, l.data)
+    }
+
     pub fn bytes(&self) -> usize {
         self.levels.iter().map(|l| l.data.len()).sum()
     }

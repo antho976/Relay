@@ -42,12 +42,20 @@ pub fn register(e: &mut Engine) {
         let (project, root) = root_unlocked(ctx, p.project_id, p.worktree.as_deref())?;
         crate::watch::ensure_after_commit(ctx, root.clone(), project.id);
         let rel = rel(&p.path, false)?;
+        let limit = p.max_bytes.unwrap_or(4 * 1024 * 1024).min(32 * 1024 * 1024);
+        // As it was at a revision: the blob git keeps, read with gix, never the file on disk.
+        if let Some(rev) = &p.rev {
+            let (bytes, size) = read_at(&root, rev, &rel, limit)?;
+            let truncated = size > limit;
+            let mime = mime(&rel);
+            let (text, bytes_b64) = decode(bytes, truncated);
+            return Ok(ReadOut { text, bytes_b64, mime, size, truncated });
+        }
         let path = safe_join(&root, &rel, false)?;
         let md = fs::metadata(&path).map_err(|e| io_err("file.read_failed", &rel, e))?;
         if !md.is_file() {
             return Err(BusError::invalid("file.type", "path is not a file"));
         }
-        let limit = p.max_bytes.unwrap_or(4 * 1024 * 1024).min(32 * 1024 * 1024);
         use std::io::Read;
         let mut bytes = Vec::new();
         fs::File::open(&path)
@@ -611,6 +619,30 @@ pub(crate) fn root_verify(
         ));
     }
     Ok(chosen)
+}
+
+/// `rel` as it was at `rev` in the checkout at `root`: up to `limit` bytes of its blob, and the
+/// blob's whole size. A path the revision does not hold is `file.not_found`.
+fn read_at(root: &Path, rev: &str, rel: &Path, limit: u64) -> Result<(Vec<u8>, u64), BusError> {
+    let repo = gix::open(root).map_err(|e| BusError::unavailable("file.read_failed", e.to_string()))?;
+    let id = repo
+        .rev_parse_single(rev)
+        .map_err(|e| BusError::invalid("file.rev", format!("{rev} is not a revision here: {e}")))?;
+    let not_commit = |e: &dyn std::fmt::Display| BusError::invalid("file.rev", format!("{rev} is not a commit: {e}"));
+    let commit = id.object().map_err(|e| not_commit(&e))?.peel_to_commit().map_err(|e| not_commit(&e))?;
+    let tree = commit.tree().map_err(|e| not_commit(&e))?;
+    let entry = tree
+        .lookup_entry_by_path(rel)
+        .map_err(|e| BusError::unavailable("file.read_failed", e.to_string()))?
+        .ok_or_else(|| BusError::not_found("file.not_found", format!("{} is not in {rev}", rel.display())))?;
+    if !entry.mode().is_blob() {
+        return Err(BusError::invalid("file.type", "path is not a file at that revision"));
+    }
+    let blob = entry.object().map_err(|e| BusError::unavailable("file.read_failed", e.to_string()))?;
+    let size = blob.data.len() as u64;
+    let mut bytes = blob.data.clone();
+    bytes.truncate(limit as usize);
+    Ok((bytes, size))
 }
 
 /// The one spelling that means "the project root, deliberately".
