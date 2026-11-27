@@ -421,6 +421,52 @@ fn spans(app: &mut App, s: &str, x: f32, y: f32, w: f32, st: Text, max_lines: us
     h
 }
 
+/// The foot's height for a blocked agent with nothing to answer (a line) or a prompt the phone
+/// cannot read (Yes and No keys).
+const BLOCKED_LINE_H: f32 = 30.0;
+const BLOCKED_KEYS_H: f32 = 70.0;
+
+fn blocked_h(app: &App, agent: Option<&Agent>, name: &str) -> f32 {
+    match agent.and_then(|a| a.waiting.as_deref()) {
+        Some("report") => BLOCKED_LINE_H,
+        Some("prompt") => BLOCKED_KEYS_H,
+        _ if app.no_screen => BLOCKED_KEYS_H,
+        _ if app.screens.contains_key(name) => BLOCKED_LINE_H,
+        _ => 0.0,
+    }
+}
+
+/// The effort the model picker ticks: what the phone sent, until the PC reports it (then that is
+/// forgotten), else what the PC reports for the agent (`session.list`).
+fn effort_tick(app: &mut App, name: &str, agent: Option<&Agent>) -> Option<&'static str> {
+    let real = agent.and_then(|a| a.effort.as_deref()).and_then(|e| EFFORTS.iter().find(|(l, _)| l.eq_ignore_ascii_case(e.trim())).map(|(l, _)| *l));
+    if real.is_some() && app.efforts.get(name).copied() == real {
+        app.efforts.remove(name);
+    }
+    app.efforts.get(name).copied().or(real)
+}
+
+/// How an answer's words are set on its key.
+const OPTION: Text = Text { size: ty::UI, weight: Weight::Medium, color: t::INK, align: crate::draw::Align::Left, line: 1.35 };
+
+/// An answer's words as its key shows them: "(esc)" is the Esc key's job, so the words drop it.
+fn option_words(label: &str) -> &str {
+    label.strip_suffix("(esc)").map_or(label, str::trim_end)
+}
+
+/// An answer's key height: its words wrapped, up to four lines.
+fn option_h(app: &mut App, label: &str) -> f32 {
+    let w = WIDTH - 2.0 * t::PAD - 48.0;
+    (app.canvas.para_h(option_words(label), w, OPTION, 4) + 22.0).max(40.0)
+}
+
+/// An answer that is followed by your own words ("No, and tell Claude what to do differently",
+/// "Type something", "Other"): the message box takes them.
+fn writes(label: &str) -> bool {
+    let l = label.to_lowercase();
+    l.contains("tell claude") || l.starts_with("type something") || l.starts_with("other") || l.contains("something else")
+}
+
 /// A question's words as its terminal set them: a first line naming the tool ("Bash command"),
 /// what it would run in monospace, and the question itself. Returns the height.
 fn question_words(app: &mut App, q: &str, x: f32, y: f32, w: f32, draw: bool) -> f32 {
@@ -825,13 +871,14 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
         Some(q) => {
             let qh = question_words(app, &q.question, t::PAD + 14.0, 0.0, WIDTH - 2.0 * t::PAD - 28.0, false);
             let esc_row = if q.options.iter().any(|(_, l)| l.ends_with("(esc)")) { 14.0 } else { 52.0 };
-            16.0 + 20.0 + qh + 10.0 + q.options.len() as f32 * 46.0 + esc_row
+            let opts: f32 = q.options.iter().map(|(_, l)| option_h(app, l) + 6.0).sum();
+            16.0 + 20.0 + qh + 10.0 + opts + esc_row
         }
-        // Blocked with no card on its screen: it stopped and reported being blocked, or the PC
-        // cannot show the phone its terminal. Only the second gets keys (Yes and No); the first
-        // has nothing to answer, so it gets a line.
-        None if asking && app.no_screen => 70.0,
-        None if asking && app.screens.contains_key(name) => 30.0,
+        // Blocked with no card read off its screen. The PC says why (`waiting`): it reported
+        // being blocked (nothing to answer: a line), or a prompt is up that the phone could not
+        // read (the two answers that always work: Yes and No). An older PC says neither: keys
+        // when the phone cannot read the screen, else a line.
+        None if asking => blocked_h(app, agent.as_ref(), name),
         None => 0.0,
     };
     // The newest to-do list, pinned while it works with nothing to ask (needs the list read: the
@@ -1048,20 +1095,20 @@ fn composer(
         let mut oy = y + 36.0 + qh + 10.0;
         let mut pick = None;
         for (i, (n, label)) in q.options.iter().enumerate() {
+            let oh = option_h(app, label);
             let mut cx = crate::cx!(app);
-            let pressed = cx.pressed(x + 10.0, oy, w - 20.0, 40.0);
+            let pressed = cx.pressed(x + 10.0, oy, w - 20.0, oh);
             let fill = if i == 0 { t::ACCENT_DIM } else { t::S2 };
-            cx.c.rect(x + 10.0, oy, w - 20.0, 40.0, t::KEY_R, if pressed { t::S3 } else { fill });
+            cx.c.rect(x + 10.0, oy, w - 20.0, oh, t::KEY_R, if pressed { t::S3 } else { fill });
             if i == 0 {
-                cx.c.outline(x + 10.0, oy, w - 20.0, 40.0, t::KEY_R, 1.0, t::ACCENT);
+                cx.c.outline(x + 10.0, oy, w - 20.0, oh, t::KEY_R, 1.0, t::ACCENT);
             }
-            // "(esc)" is the Esc key's job here: the option is the Esc answer, so the words drop it.
-            let words = label.strip_suffix("(esc)").map_or(label.as_str(), str::trim_end);
-            cx.c.text_fit(words, x + 24.0, oy + 11.0, w - 48.0, Text::new(ty::UI, t::INK).medium());
-            if cx.tap(x + 10.0, oy, w - 20.0, 40.0) {
-                pick = Some(n.clone());
+            // A long answer wraps, never cut: its key grows with it.
+            cx.c.para(option_words(label), x + 24.0, oy + 11.0, w - 48.0, OPTION, 4);
+            if cx.tap(x + 10.0, oy, w - 20.0, oh) {
+                pick = Some((n.clone(), writes(label)));
             }
-            oy += 46.0;
+            oy += oh + 6.0;
         }
         // A separate Esc only when no answer already is one.
         if !q.options.iter().any(|(_, l)| l.ends_with("(esc)")) {
@@ -1071,11 +1118,20 @@ fn composer(
                 app.key(name, "\x1b");
             }
         }
-        if let Some(n) = pick {
+        if let Some((n, write)) = pick {
             app.key(name, &n);
+            // "No, and tell Claude…", "Type something": your words go in the message box next.
+            if write {
+                let text = app.draft(name);
+                app.focus.id = Some(FIELD);
+                app.focus.text = text.clone();
+                app.focus.kind = Kb::Text;
+                app.focus.sel = None;
+                app.host.keyboard(true, &text, Kb::Text);
+            }
         }
         y += ask_h;
-    } else if ask_h > 0.0 && !app.no_screen {
+    } else if ask_h == BLOCKED_LINE_H {
         app.canvas.text("It stopped and reported it is blocked · reply to go on", t::PAD + 2.0, y + 2.0, Text::new(ty::CAPTION, t::WARN).medium());
         y += ask_h;
     } else if ask_h > 0.0 {
@@ -1355,7 +1411,7 @@ fn model_picker(app: &mut App, name: &str, agent: Option<&Agent>) {
     app.canvas.rect(x + 18.0, ry + 4.0, w - 36.0, 1.0, 0.0, t::LINE);
     app.canvas.text("EFFORT", x + 18.0, ry + 18.0, Text::new(ty::SMALL, t::INK3).semi());
     let ey = ry + 38.0;
-    let sent = app.efforts.get(name).copied();
+    let sent = effort_tick(app, name, agent);
     let (gap, n) = (6.0, EFFORTS.len() as f32);
     let kw = (w - 36.0 - gap * (n - 1.0)) / n;
     let mut effort = None;
@@ -1525,6 +1581,37 @@ mod tests {
         }
         times.sort_by(f64::total_cmp);
         println!("frame after a fold: p50 {:.0} µs, p95 {:.0} µs, max {:.0} µs ({} runs)", times[20], times[38], times[40], times.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn answering_a_question_wraps_writes_and_knows_why_it_is_blocked() {
+        let dir = std::env::temp_dir().join(format!("relay-code-answer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(Host(dir.clone())), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        // A long answer wraps: its key grows instead of cutting it.
+        let long = "Yes, and don't ask again for git push commands in /home/anthony/dev3/RelayV4/.relay/worktrees/umber-zebra";
+        assert!(option_h(&mut a, long) > option_h(&mut a, "Yes") + 10.0);
+        // Answers your own words follow put the caret in the message box.
+        assert!(writes("No, and tell Claude what to do differently (esc)"));
+        assert!(writes("Type something."));
+        assert!(!writes("Yes, and auto-accept edits"));
+        // Blocked: a report gets a line, a prompt the phone cannot read gets Yes and No.
+        let mut ag = a.agent("umber-zebra").cloned().unwrap();
+        ag.waiting = Some("report".into());
+        assert_eq!(blocked_h(&a, Some(&ag), "umber-zebra"), BLOCKED_LINE_H);
+        ag.waiting = Some("prompt".into());
+        assert_eq!(blocked_h(&a, Some(&ag), "umber-zebra"), BLOCKED_KEYS_H);
+        // Effort: the phone's choice until the PC reports it, then the PC's.
+        ag.effort = Some("medium".into());
+        assert_eq!(effort_tick(&mut a, "umber-zebra", Some(&ag)), Some("medium"));
+        a.efforts.insert("umber-zebra".into(), "high");
+        assert_eq!(effort_tick(&mut a, "umber-zebra", Some(&ag)), Some("high"), "sent, not reported yet");
+        ag.effort = Some("High".into());
+        assert_eq!(effort_tick(&mut a, "umber-zebra", Some(&ag)), Some("high"));
+        assert!(!a.efforts.contains_key("umber-zebra"), "reported: the PC's word from now on");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

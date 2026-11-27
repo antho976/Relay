@@ -176,6 +176,11 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             crate::sample::tools(&mut app, screen == "plan");
             app.open("swift-ocelot");
         }
+        "asks-long" => {
+            // A7: long answers wrap on their keys.
+            app.open("umber-zebra");
+            app.screens.insert("umber-zebra".into(), crate::screen::read("│ Bash command │\n│   git push -u origin relay/umber-zebra │\n│ Do you want to proceed? │\n│ ❯ 1. Yes │\n│   2. Yes, and don't ask again for git push commands in /home/anthony/dev3/RelayV4/.relay/worktrees/umber-zebra │\n│   3. No, and tell Claude what to do differently (esc) │\n  ⏵⏵ accept edits on (shift+tab to cycle)"));
+        }
         "blocked" => {
             // Blocked by its own report (session.done blocked), with no card on its screen.
             app.open("umber-zebra");
