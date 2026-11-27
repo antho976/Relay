@@ -12,7 +12,8 @@
 # the owner's to do, so it prints the one command to run in a second terminal, which writes the
 # pairing link to a file. Once the link is there it runs rc-link's live test (tests/live_door.rs):
 # pair, connect by itself, chat.send typed once under one id, session.transcript with `before`,
-# phone.app.latest and phone.app.apk. What it started is stopped at the end; the test instance's
+# phone.app.latest and phone.app.apk, and the door's own pings in a minute at the screen-off
+# keep-alive. What it started is stopped at the end; the test instance's
 # store stays in ~/.local/share/relay-v4/test.
 #
 # RELAY_LIVE_PORT (7431) is the door's port, RELAY_LIVE_WAIT (600) how many seconds to wait for
@@ -102,6 +103,6 @@ done
 
 echo "Running the live test..."
 cd "$root/apps/relay-code/native"
-RELAY_E2E_LINK="$link" RELAY_E2E_URL="ws://127.0.0.1:$port" RELAY_E2E_PROJECT="$project" RELAY_E2E_BUILD="$build" \
+RELAY_E2E_LINK="$link" RELAY_E2E_URL="ws://127.0.0.1:$port" RELAY_E2E_PROJECT="$project" RELAY_E2E_BUILD="$build" RELAY_E2E_PACE=1 \
     cargo test --locked -p rc-link --test live_door -- --nocapture
 echo "Live check passed."
