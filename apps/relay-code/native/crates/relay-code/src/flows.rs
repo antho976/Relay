@@ -942,3 +942,68 @@ fn a_first_seen_agent_starts_seen() {
     let lit: Vec<String> = a.agents.clone().iter().filter(|x| crate::news::unseen(&a, x)).map(|x| x.name.clone()).collect();
     assert_eq!(lit, ["umber-zebra", "swift-ocelot"]);
 }
+
+// D11: Back closes every overlay, and leaving a page leaves nothing open for the next visit.
+
+#[test]
+fn back_closes_changes_sheets_one_at_a_time_then_leaves_the_page() {
+    let mut a = app("back-changes");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.push(Route::Changes);
+    frames(&mut a, &mut clock, 3);
+    a.st.changes.picking = true;
+    a.st.changes.pr_sheet = true;
+    assert!(a.back());
+    assert!(!a.st.changes.pr_sheet && a.st.changes.picking, "the top one first");
+    assert!(a.back());
+    assert!(!a.st.changes.picking);
+    assert_eq!(a.route(), &Route::Changes);
+    assert!(a.back());
+    assert_eq!(a.route(), &Route::Home);
+}
+
+#[test]
+fn leaving_a_page_leaves_none_of_its_overlays_for_the_next_visit() {
+    let mut a = app("leave-clean");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.push(Route::Changes);
+    frames(&mut a, &mut clock, 3);
+    a.st.changes.pr_sheet = true;
+    // Away by the drawer (no Back): the next visit opens on the page, not the sheet.
+    a.reset_to(Route::Home);
+    a.push(Route::Changes);
+    frames(&mut a, &mut clock, 3);
+    assert!(!a.st.changes.pr_sheet);
+    a.reset_to(Route::Home);
+    a.push(Route::Inbox);
+    a.st.inbox.denying = Some(7);
+    a.reset_to(Route::Home);
+    a.push(Route::Inbox);
+    assert_eq!(a.st.inbox.denying, None);
+}
+
+#[test]
+fn back_closes_the_deny_sheet_and_the_forget_confirm_on_their_pages() {
+    let mut a = app("back-deny");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.push(Route::Inbox);
+    frames(&mut a, &mut clock, 3);
+    a.st.inbox.denying = Some(7);
+    assert!(a.back());
+    assert_eq!((a.st.inbox.denying, a.route()), (None, &Route::Inbox));
+    a.reset_to(Route::Home);
+    a.push(Route::Settings);
+    frames(&mut a, &mut clock, 3);
+    tap(&mut a, &mut clock, 200.0, FORGET_TOP + 23.0);
+    assert!(crate::settings::confirming(&a));
+    assert!(a.back());
+    assert!(!crate::settings::confirming(&a));
+    assert_eq!(a.route(), &Route::Settings);
+    // A flag left on another page never takes a Back here.
+    a.st.inbox.denying = Some(7);
+    assert!(a.back());
+    assert_eq!(a.route(), &Route::Home);
+}
