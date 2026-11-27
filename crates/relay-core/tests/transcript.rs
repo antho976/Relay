@@ -69,6 +69,12 @@ fn a_claude_agent_reads_as_a_conversation_from_its_cursor_on() {
     assert_eq!(messages[0]["role"], "tool");
     assert_eq!(messages[0]["body"]["text"], "test result: ok");
 
+    // Scrolling back from the first answer: the page older than it (none here), never both ways.
+    let back = ok(&e, Actor::User, "session.transcript", json!({"session": name, "before": first["before"]}));
+    assert_eq!((back["messages"].as_array().unwrap().len(), back["older"].as_bool()), (0, Some(false)));
+    let both = e.dispatch(Request::new(Actor::User, "session.transcript", json!({"session": name, "after": first["cursor"], "before": first["before"]})), Door::InProcess).into_result();
+    assert_eq!(both.unwrap_err().code, "session.transcript_cursor");
+
     // Another agent may not read it.
     let other = ok(&e, Actor::User, "session.create", json!({"project_id": 1, "provider": "codex"}))["name"].as_str().unwrap().to_string();
     let refused = e.dispatch(Request::new(Actor::agent(&other), "session.transcript", json!({"session": name})), Door::InProcess).into_result();

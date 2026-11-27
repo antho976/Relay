@@ -14358,6 +14358,15 @@
           "minimum": 0,
           "description": "The `cursor` of the previous answer: only what the agent wrote since. Absent, the\nconversation's last `limit` messages."
         },
+        "before": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The `before` of an earlier answer: the page of messages older than it (scrolling back),\nits newest `limit`. Not with `after`."
+        },
         "limit": {
           "type": [
             "integer",
@@ -14385,7 +14394,19 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0,
-          "description": "Pass it back as `after` for what comes next."
+          "description": "Pass it back as `after` for what comes next. A `before` page gives back its `before`."
+        },
+        "before": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Pass it back as `before` for the page older than these messages.",
+          "default": 0
+        },
+        "older": {
+          "type": "boolean",
+          "description": "Whether the log holds anything older than `before`.",
+          "default": false
         },
         "reset": {
           "type": "boolean",
