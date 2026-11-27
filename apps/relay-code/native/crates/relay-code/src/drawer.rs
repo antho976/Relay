@@ -213,10 +213,20 @@ fn panel(app: &mut App, pos: f32) -> bool {
         }
         cx.c.icon("folder", rx + 18.0, ry + rh / 2.0, 17.0, t::INK2);
         cx.c.text_fit(&name, rx + 38.0, ry + 8.0, rw - 70.0, Text::new(ty::SECTION, t::INK).semi());
-        let mut sub = format!("{branch} · {} agent{}", agents.len(), if agents.len() == 1 { "" } else { "s" });
-        if asking > 0 {
-            sub.push_str(&format!(" · {asking} need{} you", if asking == 1 { "s" } else { "" }));
+        // Only what is known: no branch before the PC says one, and an honest count.
+        let mut parts: Vec<String> = Vec::new();
+        if !branch.is_empty() {
+            parts.push(branch.clone());
         }
+        parts.push(match agents.len() {
+            0 => "no agents running".to_string(),
+            1 => "1 agent".to_string(),
+            n => format!("{n} agents"),
+        });
+        if asking > 0 {
+            parts.push(format!("{asking} need{} you", if asking == 1 { "s" } else { "" }));
+        }
+        let sub = parts.join(" · ");
         cx.c.text_fit(&sub, rx + 38.0, ry + 31.0, rw - 70.0, Text::new(ty::CAPTION, t::INK3));
         cx.c.icon("chevron-down", rx + rw - 18.0, ry + rh / 2.0, 13.0, t::INK3);
         if cx.tap(rx, ry, rw, rh) {

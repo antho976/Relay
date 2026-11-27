@@ -38,6 +38,12 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // The Java shell's own rules (what a notification lets you do on a locked phone) run on
+    // Robolectric, no device needed: ./gradlew :app:testDebugUnitTest -x :app:checkNativeLib
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 // The library is built outside Gradle (tools/build-lib.sh). Without it the APK would install and
@@ -54,6 +60,8 @@ val checkNativeLib = tasks.register("checkNativeLib") {
 tasks.named("preBuild") { dependsOn(checkNativeLib) }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.16.1")
     // The version android-activity 0.6 is written against.
     implementation("androidx.games:games-activity:4.4.0")
     implementation("androidx.appcompat:appcompat:1.7.1")

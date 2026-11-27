@@ -200,18 +200,41 @@ impl ServiceNotifier {
 }
 
 impl crate::background::Notifier for ServiceNotifier {
-    fn alert(&self, id: i32, title: &str, body: &str, agent: &str) {
+    fn alert(&self, id: i32, title: &str, body: &str, agent: &str, actions: crate::background::Actions) {
+        use crate::background::Actions;
         log(&format!("notify: {title}"));
+        // LinkService.alert's kinds: 0 open, 1 reply, 2 a hold (with its id), 3 quiet.
+        let (kind, hold) = match actions {
+            Actions::Open => (0, 0),
+            Actions::Reply => (1, 0),
+            Actions::Hold(h) => (2, h),
+            Actions::Quiet => (3, 0),
+        };
         self.with_env(|env| {
             let (t, b, a) = (env.new_string(title)?, env.new_string(body)?, env.new_string(agent)?);
             let class: &JClass = self.class.as_obj().into();
             env.call_static_method(
                 class,
                 "alert",
-                "(Landroid/content/Context;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
-                &[JValue::Object(self.context.as_obj()), JValue::Int(id), JValue::Object(&t), JValue::Object(&b), JValue::Object(&a)],
+                "(Landroid/content/Context;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;IJ)V",
+                &[
+                    JValue::Object(self.context.as_obj()),
+                    JValue::Int(id),
+                    JValue::Object(&t),
+                    JValue::Object(&b),
+                    JValue::Object(&a),
+                    JValue::Int(kind),
+                    JValue::Long(hold),
+                ],
             )
             .map(|_| ())
+        });
+    }
+
+    fn clear(&self, id: i32) {
+        self.with_env(|env| {
+            let class: &JClass = self.class.as_obj().into();
+            env.call_static_method(class, "clear", "(Landroid/content/Context;I)V", &[JValue::Object(self.context.as_obj()), JValue::Int(id)]).map(|_| ())
         });
     }
 
@@ -262,6 +285,24 @@ static NETWORK: AtomicBool = AtomicBool::new(false);
 pub extern "system" fn Java_com_quietsoftware_relaycode_LinkService_nativeNetwork<'local>(_env: JNIEnv<'local>, _class: JClass<'local>) {
     NETWORK.store(true, Ordering::SeqCst);
     wake();
+}
+
+/// Something was done from a notification in the shade (ActionReceiver): a reply's words, or a
+/// held command allowed once or denied (D18). Handed to the loop, which asks the PC.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_relaycode_LinkService_nativeAct<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    kind: jni::objects::JString<'local>,
+    agent: jni::objects::JString<'local>,
+    hold: jni::sys::jlong,
+    text: jni::objects::JString<'local>,
+) {
+    let mut read = |s: &jni::objects::JString<'local>| -> String { if s.is_null() { String::new() } else { env.get_string(s).map(Into::into).unwrap_or_default() } };
+    let (kind, agent, text) = (read(&kind), read(&agent), read(&text));
+    if let Some(a) = crate::background::Act::read(&kind, &agent, hold, &text) {
+        crate::background::act(a);
+    }
 }
 
 /// The screen went on or off (LinkService's receiver): off, the notifications read nothing on a

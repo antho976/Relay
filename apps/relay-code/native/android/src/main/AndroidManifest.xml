@@ -46,6 +46,10 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps the owner's link to their own PC open, so their coding agents can reach them" />
         </service>
+        <!-- What is done from a notification in the shade: a reply, Allow once or Deny (D18). -->
+        <receiver
+            android:name="com.quietsoftware.relaycode.ActionReceiver"
+            android:exported="false" />
         <!-- Lends a downloaded update (files/updates/) to Android's installer. -->
         <provider
             android:name="androidx.core.content.FileProvider"
