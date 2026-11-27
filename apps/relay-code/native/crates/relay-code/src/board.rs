@@ -540,6 +540,35 @@ mod tests {
     }
 
     #[test]
+    fn a_column_chip_takes_a_tap_44_tall() {
+        use crate::ui::{Phase, Touch};
+        let dir = std::env::temp_dir().join(format!("relay-code-board-chips-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(NoHost(dir)), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        a.push(Route::Board);
+        let mut clock = 2_000_000_000u64;
+        let mut tap = |a: &mut App, x: f32, y: f32| {
+            for phase in [Phase::Down, Phase::Up] {
+                clock += 30_000_000;
+                a.touch(Touch { id: 1, phase, x, y, t_ns: clock });
+                a.frame(clock);
+            }
+        };
+        tap(&mut a, 1.0, 1.0);
+        // The chips' row: 32 tall, drawn 6 under the top bar.
+        let chip_top = a.canvas.inset_top + crate::home::TOP_H + 6.0;
+        // 5 above the Backlog chip's top, then 5 under its foot: both are the chip's.
+        a.st.board.column = 2;
+        tap(&mut a, t::PAD + 12.0, chip_top - 5.0);
+        assert_eq!(a.st.board.column, 0, "a tap just above the chip");
+        a.st.board.column = 2;
+        tap(&mut a, t::PAD + 12.0, chip_top + 32.0 + 5.0);
+        assert_eq!(a.st.board.column, 0, "a tap just under the chip");
+    }
+
+    #[test]
     fn a_task_that_cannot_be_read_says_why_and_a_comment_stays_until_ok() {
         let dir = std::env::temp_dir().join(format!("relay-code-board-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
