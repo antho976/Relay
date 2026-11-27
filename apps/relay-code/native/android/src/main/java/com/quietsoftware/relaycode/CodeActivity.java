@@ -112,6 +112,11 @@ public class CodeActivity extends GameActivity {
         });
     }
 
+    /** A light tick under the finger: on send, on a long press that copies, on a switch (Rust's Host::haptic). */
+    public void haptic() {
+        runOnUiThread(() -> getWindow().getDecorView().performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK));
+    }
+
     /** The system's picker, for one photo or screenshot. */
     public void pickPhoto() {
         runOnUiThread(() -> {

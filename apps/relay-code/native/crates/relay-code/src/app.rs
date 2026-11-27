@@ -42,6 +42,9 @@ pub trait Host: Send + Sync {
     fn notify(&self, _id: i32, _title: &str, _body: &str) {}
     /// Ask the person for a photo or screenshot; it comes back through [`crate::attach::picked`].
     fn pick_photo(&self) {}
+    /// A light tick under the finger (Android's `performHapticFeedback`): on send, on a long press
+    /// that copies, on a switch.
+    fn haptic(&self) {}
 }
 
 /// When the next frame is wanted.

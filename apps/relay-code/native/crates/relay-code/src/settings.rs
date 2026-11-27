@@ -54,13 +54,14 @@ fn label(app: &mut App, y: f32, words: &str) -> f32 {
     30.0
 }
 
-/// A switch: a short track with its knob at the end it is set to. Drawn only; the row takes the tap.
+/// A switch: a short track with its knob at the end it is set to, the accent when on, so on
+/// reads at a glance by colour and by where the knob sits. Drawn only; the row takes the tap.
 pub fn switch(c: &mut crate::draw::Canvas, right: f32, cy: f32, on: bool) {
     let (w, h) = (40.0, 24.0);
     let x = right - w;
-    c.rect(x, cy - h / 2.0, w, h, h / 2.0, if on { t::INK } else { t::S3 });
+    c.rect(x, cy - h / 2.0, w, h, h / 2.0, if on { t::ACCENT } else { t::S3 });
     let kx = if on { x + w - h / 2.0 } else { x + h / 2.0 };
-    c.circle(kx, cy, h / 2.0 - 3.0, if on { t::BG } else { t::INK3 });
+    c.circle(kx, cy, h / 2.0 - 3.0, if on { t::ON_ACCENT } else { t::INK3 });
 }
 
 pub fn draw(app: &mut App, dt: f32) -> bool {
@@ -105,6 +106,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         cx.c.text_fit(words, t::PAD, y + (h - 20.0) / 2.0, WIDTH - 2.0 * t::PAD - 56.0, Text::new(ty::BODY, t::INK));
         switch(cx.c, WIDTH - t::PAD, y + h / 2.0, on);
         if cx.tap(0.0, y, WIDTH, h) {
+            app.host.haptic();
             app.set_notifies(kind, !on);
             // Android asks once for the right to post: when one is switched on.
             if !on && !app.shot {

@@ -911,6 +911,7 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     }
     if let Some(words) = copy {
         app.ui.swallow();
+        app.host.haptic();
         app.host.copy_text(&words);
         app.toast("Copied");
     }
@@ -1213,6 +1214,7 @@ fn composer(
             if !app.focus.is(FIELD) {
                 app.focus.id = None;
             }
+            app.host.haptic();
             app.say(name, &text);
         } else if working {
             // Stop: Esc, as at the PC.

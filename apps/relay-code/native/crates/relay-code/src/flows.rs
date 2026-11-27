@@ -591,3 +591,46 @@ fn a_bang_command_you_sent_heads_that_agents_list_and_no_other() {
     assert_eq!(crate::commands::list(&mut a, "swift-ocelot", "!")[0].text, "!cargo test -p relaycode flows");
     assert!(crate::commands::list(&mut a, "swift-ocelot", "Run").is_empty());
 }
+
+// D8: first run.
+
+/// Where the pairing screen's keys start, below its mark, title and lead (no insets).
+fn pair_keys_top(a: &mut App) -> f32 {
+    use crate::theme::ty;
+    let lead = "Once, here. After that this phone connects to your PC by itself, every time.";
+    let lead_h = a.canvas.para_h(lead, 390.0 - 48.0, crate::draw::Text::new(ty::UI, crate::theme::INK2).line(1.45), 3);
+    48.0 + 48.0 + 36.0 + lead_h + 28.0
+}
+
+#[test]
+fn pairing_offers_the_link_way_behind_a_quiet_key_and_comes_back() {
+    let mut a = app("pair-ways");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Pair);
+    frames(&mut a, &mut clock, 3);
+    // The server field (its label and box), the key, then the quiet key.
+    let field_h = crate::draw::Text::new(crate::theme::ty::CAPTION, crate::theme::INK2).lh() + 6.0 + 48.0 + 14.0;
+    let quiet = pair_keys_top(&mut a) + field_h + 48.0 + 8.0 + 22.0;
+    tap(&mut a, &mut clock, 195.0, quiet);
+    assert!(a.st.pair.by_link, "the quiet key shows the link way");
+    // The link way has the same shape: its field, its key, and the way back.
+    tap(&mut a, &mut clock, 195.0, quiet);
+    assert!(!a.st.pair.by_link, "and its own quiet key goes back");
+    assert_eq!(a.route(), &Route::Pair);
+}
+
+#[test]
+fn cancel_leaves_the_wait_for_discord() {
+    let mut a = app("pair-cancel");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Pair);
+    crate::pair::sample_waiting(&mut a, false);
+    frames(&mut a, &mut clock, 3);
+    assert!(a.st.pair.error.is_none());
+    // Under the code, its two steps (one line and two lines at 390 wide), then Cancel.
+    let steps_top = pair_keys_top(&mut a) + 22.0 + 64.0;
+    let step_lh = crate::draw::Text::new(crate::theme::ty::BODY, crate::theme::INK).line(1.4).lh();
+    let cancel = steps_top + (2.0 * step_lh + 14.0) + (step_lh + 14.0) + 16.0 + 23.0;
+    tap(&mut a, &mut clock, 195.0, cancel);
+    assert!(!crate::pair::waiting(&a), "Cancel stops waiting");
+}

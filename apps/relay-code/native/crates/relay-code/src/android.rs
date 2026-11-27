@@ -101,6 +101,10 @@ impl Host for AndroidHost {
         with_activity(&self.app, |env, activity| env.call_method(activity, "pickPhoto", "()V", &[]).map(|_| ()));
     }
 
+    fn haptic(&self) {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "haptic", "()V", &[]).map(|_| ()));
+    }
+
     fn notify(&self, id: i32, title: &str, body: &str) {
         with_activity(&self.app, |env, activity| {
             let t = env.new_string(title)?;
