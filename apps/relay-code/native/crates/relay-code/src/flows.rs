@@ -683,3 +683,63 @@ fn a_stopped_agents_foot_takes_its_own_taps() {
     assert_eq!(a.route(), &Route::Chat("keen-newt".into()));
     assert!(a.st.agents.menu.is_none() && a.st.agents.confirm.is_none());
 }
+
+// D10: updates from the PC.
+
+fn update_sheet_keys_y(a: &mut App) -> f32 {
+    use crate::theme::ty;
+    let w = 390.0 - 2.0 * (crate::theme::PAD + 4.0);
+    let line = format!("{}. It downloads from your PC, then Android asks to install it.", if crate::update::BUILD == 0 { "This build has no number".to_string() } else { format!("You have {}", crate::update::version_of(crate::update::BUILD)) });
+    let note_h = a.canvas.para_h(&line, w, crate::draw::Text::new(ty::UI, crate::theme::INK3).line(1.4), 4);
+    let h = 30.0 + 26.0 + 10.0 + note_h + 22.0 + 48.0 + 18.0;
+    844.0 - h + 30.0 + 26.0 + 10.0 + note_h + 22.0 + 24.0
+}
+
+#[test]
+fn a_newer_build_on_the_pc_is_offered_and_later_hides_it_for_a_day() {
+    let mut a = app("update-later");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    let l = |build| crate::update::Latest { build, version: format!("0.{build}"), size: 18_400_000, sha256: "00".into(), made_at: 0 };
+    // Not newer than this app: nothing.
+    crate::update::offered(&mut a, l(crate::update::BUILD));
+    assert!(!a.st.update.open);
+    crate::update::offered(&mut a, l(crate::update::BUILD + 5));
+    assert!(a.st.update.open, "a newer build opens the sheet");
+    frames(&mut a, &mut clock, 5);
+    // Later, the left key.
+    let y = update_sheet_keys_y(&mut a);
+    tap(&mut a, &mut clock, 80.0, y);
+    assert!(!a.st.update.open);
+    assert_eq!(a.update_later().map(|l| l.0), Some(crate::update::BUILD + 5));
+    // The same build again (the next check): still put off.
+    a.st.update.latest = None;
+    crate::update::offered(&mut a, l(crate::update::BUILD + 5));
+    assert!(!a.st.update.open, "put off for a day");
+    // A newer one still comes.
+    crate::update::offered(&mut a, l(crate::update::BUILD + 6));
+    assert!(a.st.update.open);
+}
+
+#[test]
+fn a_tap_above_the_update_sheet_closes_it_and_reaches_nothing_and_update_says_where_it_installs() {
+    let mut a = app("update-outside");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    crate::update::sample(&mut a, crate::update::BUILD + 1, None);
+    frames(&mut a, &mut clock, 5);
+    // Home's NEEDS YOU row is under this spot.
+    tap(&mut a, &mut clock, 150.0, 56.0 + 4.0 + 34.0 + 30.0);
+    assert!(!a.st.update.open);
+    assert_eq!(a.route(), &Route::Home, "the row under the veil did not open");
+    // On a host that cannot install (tests, the desktop), Update says so and downloads nothing.
+    a.st.update.open = true;
+    frames(&mut a, &mut clock, 5);
+    let y = update_sheet_keys_y(&mut a);
+    tap(&mut a, &mut clock, 300.0, y);
+    assert!(!a.st.update.open && !a.st.update.downloading);
+    // Back closes the sheet as it closes any.
+    a.st.update.open = true;
+    assert!(a.back());
+    assert!(!a.st.update.open);
+}

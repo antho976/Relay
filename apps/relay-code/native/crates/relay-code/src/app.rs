@@ -45,6 +45,14 @@ pub trait Host: Send + Sync {
     /// A light tick under the finger (Android's `performHapticFeedback`): on send, on a long press
     /// that copies, on a switch.
     fn haptic(&self) {}
+    /// This app may hand an APK to the system's installer (Android; never the desktop).
+    fn can_install(&self) -> bool {
+        false
+    }
+    /// Hand a downloaded and checked APK to the system's installer (`update.rs`).
+    fn install_apk(&self, _path: &std::path::Path) -> crate::update::Install {
+        crate::update::Install::Failed
+    }
 }
 
 /// When the next frame is wanted.
@@ -130,6 +138,9 @@ struct Config {
     model: Option<String>,
     #[serde(default)]
     effort: Option<String>,
+    /// "Later" on an update: that build stays hidden until then (ms).
+    #[serde(default)]
+    update_later: Option<(u32, u64)>,
     /// Notifications switched off in Settings (D6): each kind is on until then.
     #[serde(default)]
     quiet: Vec<String>,
@@ -162,6 +173,7 @@ pub struct States {
     pub designs: crate::designs::State,
     pub agents: crate::agents::State,
     pub commands: crate::commands::State,
+    pub update: crate::update::State,
 }
 
 pub struct App {
@@ -383,6 +395,16 @@ impl App {
             self.ask(Ask::Spawn(name.clone()), "session.spawn", json!({"session": name}));
             self.open(&name);
         }
+    }
+
+    /// The build "Later" put off, and until when (ms).
+    pub fn update_later(&self) -> Option<(u32, u64)> {
+        self.config.update_later
+    }
+
+    pub fn set_update_later(&mut self, build: u32, until_ms: u64) {
+        self.config.update_later = Some((build, until_ms));
+        self.save_config();
     }
 
     /// Whether this kind of notification is on (Settings).
@@ -1019,7 +1041,8 @@ impl App {
             self.ui.reset();
             return true;
         }
-        if self.st.agents.close_over()
+        if self.st.update.close_over()
+            || self.st.agents.close_over()
             || self.st.drawer.close_over()
             || self.st.chat.close_over()
             || self.st.newagent.open
@@ -1163,6 +1186,11 @@ impl App {
             }
             crate::agents::draw_over(self);
         }
+        // App updates from the PC (D10): asked for while in front, offered over any page but pairing.
+        if route != Route::Pair && !self.shot {
+            crate::update::keep_up(self);
+        }
+        moving |= crate::update::draw(self);
         if let Some((words, until)) = self.toast.clone() {
             if now_ns < until {
                 let bottom = self.canvas.h - self.canvas.inset_bottom - 96.0;

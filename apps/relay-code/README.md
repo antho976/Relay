@@ -64,7 +64,7 @@ cd apps/relay-code/native
 cargo test                                         # the link (with a stand-in door) and the app's rules and flows
 cargo clippy --all-targets -- -D warnings
 cargo run                                          # a phone-shaped window that pairs and connects like the phone
-cargo run -- --shot out.png --screen chat          # first-run, home, drawer, repos, chat, models, commands, asks, new-agent, settings, changes, board, task, inbox (sample data)
+cargo run -- --shot out.png --screen chat          # first-run, home, drawer, repos, chat, models, commands, asks, new-agent, settings, changes, board, task, inbox, update (sample data)
 tools/build-lib.sh                                 # librelaycode.so for arm64 (add x86_64 for the emulator)
 cd .. && ./gradlew :app:assembleDebug              # native/android/build/outputs/apk/debug/app-debug.apk
 ```
@@ -73,6 +73,25 @@ Shots run capped, as Leaf's: `systemd-run --user --scope -q -p MemoryMax=3G -p M
 
 The personal build fills in the owner's server so the first screen needs one tap:
 `RELAY_CODE_SERVER=<server> tools/build-lib.sh` (read at build time; blank in every other build).
+
+### Updates from the PC
+
+The phone updates from the PC it is paired with, as Leaf does from its server (`update.rs`). It
+knows its build (`RELAY_CODE_BUILD`, the commit count `tools/build-lib.sh` builds at; Gradle's
+`versionCode` takes the same number), asks the PC's `phone.app.latest` when it opens, when it comes
+back to the front and every 15 minutes while in front, and offers a newer build in a sheet: Update
+downloads `phone.app.apk` in 3 MiB pieces, checks its SHA-256 and hands it to Android's installer
+(Later hides that build for a day). To publish a build to the phone:
+
+```fish
+tools/build-lib.sh && cd .. && ./gradlew :app:assembleDebug
+tools/publish-apk.sh native/android/build/outputs/apk/debug/app-debug.apk dev   # or stable
+```
+
+`publish-apk.sh` copies the APK and its `latest.json` into the instance's data folder
+(`~/.local/share/relay-v4/<instance>/phone/`), where the engine reads them. Nothing to deploy or
+restart. Android installs an update only over a build signed with the same key, so publish the
+kind of build the phone has.
 
 ### Testing against a real door
 

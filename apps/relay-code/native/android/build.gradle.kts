@@ -6,6 +6,17 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+// The build number: the commit count, the same one tools/build-lib.sh builds the library with
+// (RELAY_CODE_BUILD, which the app compares with the PC's phone.app.latest). RELAY_CODE_BUILD wins
+// when set.
+val relayCodeBuild: Int = (System.getenv("RELAY_CODE_BUILD")?.trim()?.toIntOrNull()
+    ?: providers.exec {
+        commandLine("git", "rev-list", "--count", "HEAD")
+        workingDir = rootDir
+        isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim().toIntOrNull()
+    ?: 1)
+
 android {
     namespace = "com.quietsoftware.relaycode"
     compileSdk = 37
@@ -16,8 +27,8 @@ android {
         applicationId = "com.quietsoftware.relaycode"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = relayCodeBuild
+        versionName = "0.$relayCodeBuild"
     }
 
     buildTypes {

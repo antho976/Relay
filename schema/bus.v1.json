@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 443,
+  "op_count": 445,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -8530,6 +8530,49 @@
       },
       "result": {
         "$ref": "#/$defs/ClipYoutube"
+      }
+    },
+    "phone.app.latest": {
+      "summary": "The phone app build the PC holds for its paired phone, or null when none is published",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PhoneAppLatest"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "phone.app.apk": {
+      "summary": "The published phone app's APK, in pieces of at most 3 MiB from offset",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/PhoneAppApkIn"
+      },
+      "result": {
+        "$ref": "#/$defs/PhoneAppApkOut"
       }
     }
   },
@@ -39693,6 +39736,91 @@
       },
       "required": [
         "url"
+      ]
+    },
+    "PhoneAppLatest": {
+      "type": "object",
+      "properties": {
+        "build": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The build: the commit count the APK was built at (Gradle's `versionCode`)."
+        },
+        "version": {
+          "type": "string",
+          "description": "What the build is called (`0.312`)."
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The APK's length in bytes."
+        },
+        "sha256": {
+          "type": "string",
+          "description": "Its SHA-256, lowercase hex: the phone checks the download against it."
+        },
+        "made_at": {
+          "type": "integer",
+          "format": "int64",
+          "description": "When it was published, ms since the epoch."
+        }
+      },
+      "required": [
+        "build",
+        "version",
+        "size",
+        "sha256",
+        "made_at"
+      ]
+    },
+    "PhoneAppApkIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "offset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Where this piece starts, in bytes (default 0)."
+        },
+        "len": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "At most this many bytes (default and most 3 MiB)."
+        }
+      }
+    },
+    "PhoneAppApkOut": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The whole APK's length in bytes."
+        },
+        "bytes_b64": {
+          "type": "string",
+          "description": "This piece, base64."
+        },
+        "eof": {
+          "type": "boolean",
+          "description": "This piece ends the file."
+        }
+      },
+      "required": [
+        "size",
+        "bytes_b64",
+        "eof"
       ]
     }
   }

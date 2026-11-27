@@ -731,6 +731,15 @@ impl Store {
 
     /// Where `design.asset.add` keeps pictures, beside the store: one file per content hash,
     /// named as an image node's `src`, shared by every design that shows it.
+    /// Where `publish-apk.sh` puts the phone app's APK and its `latest.json`, beside the store
+    /// (`phone.app.*`).
+    pub fn phone_dir(&self) -> PathBuf {
+        match self.path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+            Some(dir) => dir.join("phone"),
+            None => std::env::temp_dir().join(format!("relay-phone-{}", std::process::id())),
+        }
+    }
+
     pub fn design_assets_dir(&self) -> PathBuf {
         match self.path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
             Some(dir) => dir.join("design-assets"),

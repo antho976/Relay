@@ -1457,6 +1457,18 @@ announces every change, a stage's progress included.
 | `clips.youtube.connect` | mutation · person · staged · plugin `video` | `{}` → `{ url }` — Google's consent page (PKCE, a one-shot listener on 127.0.0.1); `clips.changed` once the browser comes back |
 | `clips.youtube.disconnect` | mutation · person · staged · plugin `video` | `{}` → `ClipYoutube` |
 
+### 10.21 phone
+
+What the PC serves its paired phone app (Relay Code, `apps/relay-code`): the app updates from the PC
+it is linked to, not from a server. `apps/relay-code/tools/publish-apk.sh` writes `relay-code.apk`,
+then `latest.json`, into `phone/` beside the store, each under a temporary name then renamed. Both
+ops are disk reads registered unlocked, and in `PHONE_OPS`.
+
+| op | attrs | payload → result |
+|---|---|---|
+| `phone.app.latest` | query | `{}` → `{ build, version, size, sha256, made_at } \| null` — the published build (`build` is the commit count, Gradle's `versionCode`), or null when none is |
+| `phone.app.apk` | query | `{ offset?, len? }` → `{ size, bytes_b64, eof }` — the APK from `offset`, at most `len` and 3 MiB decoded (well under the remote door's 8 MiB cap); `eof` on the last piece. `not_found`/`phone.app_missing` when nothing is published |
+
 ## 11. Entity shapes (results)
 
 Common: every row has `id: Id`, `created_at`, `updated_at` (RFC 3339 UTC); soft-deletable rows

@@ -19,6 +19,11 @@ SDK="${ANDROID_HOME:-$HOME/Android/Sdk}"
 NDK="${ANDROID_NDK_HOME:-$(ls -d "$SDK"/ndk/* | sort -V | tail -1)}"
 BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 API=26
+# The build number the app knows itself by (update.rs, BUILD) and compares with the PC's
+# phone.app.latest: the commit count. Gradle's versionCode takes the same number. Set
+# RELAY_CODE_BUILD to choose another.
+export RELAY_CODE_BUILD="${RELAY_CODE_BUILD:-$(git rev-list --count HEAD)}"
+echo "RELAY_CODE_BUILD=$RELAY_CODE_BUILD"
 ABIS=("$@"); [ ${#ABIS[@]} -eq 0 ] && ABIS=(arm64-v8a)
 
 for abi in "${ABIS[@]}"; do
