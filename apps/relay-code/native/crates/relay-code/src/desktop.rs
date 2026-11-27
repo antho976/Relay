@@ -43,9 +43,6 @@ impl Host for DesktopHost {
             let _ = std::process::Command::new("xdg-open").arg(url).spawn();
         }
     }
-    fn notify(&self, _id: i32, title: &str, body: &str) {
-        eprintln!("relay-code: notice: {title}: {body}");
-    }
     /// The file named by `RELAY_CODE_PICK` is the one picked (a copy: the upload removes it).
     fn pick_photo(&self) {
         let Some(src) = std::env::var_os("RELAY_CODE_PICK") else {

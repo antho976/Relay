@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use rc_link::link::Profile;
-use rc_link::{Link, LinkState, PairLink, Route, Store};
+use rc_link::{Link, LinkState, Note, PairLink, Route, Store};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
@@ -83,6 +83,13 @@ fn door() -> Door {
                         let res = json!({"v": 1, "id": id, "ok": true, "result": result});
                         if ws.send(Message::Text(res.to_string().into())).await.is_err() {
                             return;
+                        }
+                        // Something happens on the PC right after the phone subscribes.
+                        if req["op"] == "bus.subscribe" {
+                            let ev = json!({"v": 1, "ev": "session.changed", "ts": "t", "project_id": 1, "payload": {"name": "a-b", "state": "idle"}});
+                            if ws.send(Message::Text(ev.to_string().into())).await.is_err() {
+                                return;
+                            }
                         }
                     }
                 });
@@ -177,4 +184,36 @@ fn a_route_that_does_not_answer_gives_way_to_the_next() {
     let link = Link::start(store.clone(), Arc::new(|| {}));
     wait_for(&link, "online through the second route", Duration::from_secs(10), LinkState::online);
     assert_eq!(store.load().unwrap().last_route.as_deref(), Some(format!("ws://127.0.0.1:{}", d.port).as_str()), "the route that worked is kept");
+}
+
+#[test]
+fn a_listener_beside_the_app_hears_every_event_and_state_and_takes_none() {
+    let d = door();
+    let p = Profile {
+        host_id: "h1".into(),
+        name: "desk".into(),
+        instance: "test".into(),
+        device: DEVICE.into(),
+        token: TOKEN.into(),
+        routes: vec![Route::new(&format!("ws://127.0.0.1:{}", d.port))],
+        last_route: None,
+        paired_at_ms: 0,
+        version: String::new(),
+    };
+    let store = Arc::new(Memory::default());
+    store.save(&p);
+    let link = Link::start(store, Arc::new(|| {}));
+    let heard = link.listen();
+    let mut notes = Vec::new();
+    let start = Instant::now();
+    while !notes.iter().any(|n| matches!(n, Note::Event(_))) && start.elapsed() < Duration::from_secs(10) {
+        if let Ok(n) = heard.recv_timeout(Duration::from_millis(100)) {
+            notes.push(n);
+        }
+    }
+    assert!(notes.iter().any(|n| matches!(n, Note::State(s) if s.online())), "online is heard: {notes:?}");
+    let Some(Note::Event(e)) = notes.iter().find(|n| matches!(n, Note::Event(_))) else { panic!("no event heard: {notes:?}") };
+    assert_eq!((e.ev.as_str(), e.payload["state"].as_str()), ("session.changed", Some("idle")));
+    // The app's own buffer still has it.
+    assert_eq!(link.take_events().iter().map(|e| e.ev.as_str()).collect::<Vec<_>>(), ["session.changed"]);
 }

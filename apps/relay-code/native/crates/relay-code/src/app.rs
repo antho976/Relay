@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rc_link::{Call, FileStore, Link, LinkState};
+use rc_link::{Call, Link, LinkState};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -38,8 +38,6 @@ pub trait Host: Send + Sync {
     /// Keep the app alive in the background while a PC is paired (Android's `LinkService`), its
     /// ongoing notification saying `words`; off when none is.
     fn link_service(&self, _on: bool, _words: &str) {}
-    /// A notification: an agent asks you something while the app is in the background.
-    fn notify(&self, _id: i32, _title: &str, _body: &str) {}
     /// Ask the person for a photo or screenshot; it comes back through [`crate::attach::picked`].
     fn pick_photo(&self) {}
     /// A light tick under the finger (Android's `performHapticFeedback`): on send, on a long press
@@ -215,8 +213,6 @@ pub struct App {
     /// `guardrail`, `notify`, ...): the first part of each event's name. A page takes its own with
     /// [`App::take_changed`] and reads again.
     changed: std::collections::HashSet<String>,
-    /// Agents that asked you something, already told about.
-    told: std::collections::HashSet<String>,
     pub foreground: bool,
     pub data: PathBuf,
     config: Config,
@@ -276,10 +272,8 @@ impl App {
         let config: Config = read_json(data.join("config.json")).unwrap_or_default();
         let projects: Vec<Project> = read_json(data.join("cache/projects.json")).unwrap_or_default();
         let agents: Vec<Agent> = read_json(data.join("cache/agents.json")).unwrap_or_default();
-        // One link for the process: Android starts the app's loop again for each new activity
-        // while LinkService keeps the process (and the link) alive between them.
-        static LINK: std::sync::OnceLock<Link> = std::sync::OnceLock::new();
-        let link = LINK.get_or_init(|| Link::start(Arc::new(FileStore(data.join("pc.json"))), Arc::new(crate::wake::wake))).clone();
+        // One link for the process, which LinkService may have made already (background.rs).
+        let link = crate::background::link(&data);
         let link_state = link.state();
         let mut convos = HashMap::new();
         // The last conversation, from the phone's copy: drawn on the first frame (D3).
@@ -328,7 +322,6 @@ impl App {
             calls: Vec::new(),
             agents_stale: true,
             reread_at: 0,
-            told: Default::default(),
             changed: Default::default(),
             foreground: true,
             data,
@@ -653,7 +646,6 @@ impl App {
                 }
                 (Ask::Agents, Ok(v)) => {
                     self.agents = data::agents(&v);
-                    self.tell_new_questions();
                     write_json(self.data.join("cache/agents.json"), &self.agents);
                 }
                 (Ask::Transcript(name), Ok(v)) => {
@@ -821,18 +813,6 @@ impl App {
         }
     }
 
-    /// Agents that just started asking you something get a notification while the app is away.
-    fn tell_new_questions(&mut self) {
-        let asking: std::collections::HashSet<String> = self.agents.iter().filter(|a| a.needs_you()).map(|a| a.name.clone()).collect();
-        for a in self.agents.iter().filter(|a| a.needs_you() && !self.told.contains(&a.name)) {
-            if !self.foreground && !self.shot && self.notifies(crate::settings::Notify::Asks) {
-                let id = a.name.bytes().fold(7i32, |h, b| h.wrapping_mul(31).wrapping_add(b as i32));
-                self.host.notify(id, &format!("{} asks you", a.name), a.title());
-            }
-        }
-        self.told = asking;
-    }
-
     // Repos
 
     pub fn repo_name(&self) -> String {
@@ -937,10 +917,11 @@ impl App {
         self.foreground = false;
         // Android may stop the process once it is away: what you wrote is kept now.
         self.save_outbox();
+        crate::background::front(false, None);
     }
 
-    /// In the background: take what the link brought (an agent that now asks you is a
-    /// notification) without drawing.
+    /// In the background: take what the link brought without drawing (notifications are
+    /// background.rs's, which runs with no activity too).
     pub fn tick(&mut self, now_ns: u64) {
         self.now_ns = now_ns;
         self.take_answers();
@@ -1121,6 +1102,8 @@ impl App {
         self.now_ns = now_ns;
         self.wake = None;
         self.take_answers();
+        // What is on the screen: the chat open here does not notify (background.rs).
+        crate::background::front(self.foreground, self.open_chat());
         self.focus.keyboard_up = self.keyboard_up;
         let tapped = self.ui.tap.is_some();
         let (w, h) = self.size;

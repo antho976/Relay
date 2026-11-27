@@ -1,0 +1,401 @@
+//! What runs for the process, with or without the activity: the one link to the PC, and the
+//! notifications that reach you while the app is away.
+//!
+//! Android keeps the process alive through `LinkService` after the app is swiped away, and can
+//! start the service again by itself in a fresh process with no activity at all. So neither the
+//! link nor the notifications may live in the activity's loop: the service starts [`start`], which
+//! makes the link if no activity has, and runs one thread that hears the link's events beside the
+//! app ([`rc_link::Link::listen`]), reads `session.list` when an agent's state changes, and posts
+//! through the [`Notifier`] the service gave.
+//!
+//! What notifies ([`Watch`], tested): an agent asks you (a live prompt), an agent finished its
+//! turn (working to waiting at its prompt, or it reported that it stopped), a command is held for
+//! you. Never for the agent whose chat is open on the screen, and only what Settings leaves on.
+
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+
+use rc_link::{FileStore, Link, LinkState, Note};
+use serde::Deserialize;
+use serde_json::{Value, json};
+
+use crate::settings::Notify;
+
+/// How the platform posts what the loop decides.
+pub trait Notifier: Send + Sync {
+    /// A notification about `agent`; a tap opens its chat. One per agent: a newer one replaces it.
+    fn alert(&self, id: i32, title: &str, body: &str, agent: &str);
+    /// The background service's ongoing line: where the link stands.
+    fn line(&self, words: &str);
+}
+
+/// The one link for the process: Android starts the app's loop again for each new activity, and
+/// the service may run with none, so whichever comes first makes it.
+pub fn link(data: &Path) -> Link {
+    static LINK: OnceLock<Link> = OnceLock::new();
+    LINK.get_or_init(|| Link::start(Arc::new(FileStore(data.join("pc.json"))), Arc::new(crate::wake::wake))).clone()
+}
+
+/// What is on the screen, so an agent you are looking at does not notify.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Front {
+    pub foreground: bool,
+    /// The agent whose chat is open.
+    pub chat: Option<String>,
+}
+
+static FRONT: Mutex<Front> = Mutex::new(Front { foreground: false, chat: None });
+
+/// The app says what it shows: each frame, and when it goes to the background.
+pub fn front(foreground: bool, chat: Option<String>) {
+    let mut f = FRONT.lock().unwrap_or_else(|e| e.into_inner());
+    if f.foreground != foreground || f.chat != chat {
+        *f = Front { foreground, chat };
+    }
+}
+
+fn front_now() -> Front {
+    FRONT.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// An agent that a notification tap asked to open, for the app's loop to take.
+static OPENED: Mutex<Option<String>> = Mutex::new(None);
+
+/// A notification about `agent` was tapped (Android's intent extra `agent`).
+pub fn opened(agent: String) {
+    *OPENED.lock().unwrap_or_else(|e| e.into_inner()) = Some(agent);
+    crate::wake::wake();
+}
+
+/// The agent a tapped notification names, once.
+pub fn take_opened() -> Option<String> {
+    OPENED.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// One agent as `session.list` gives it: only what the rules read.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct Row {
+    pub name: String,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub state: String,
+    /// Why a blocked agent waits: "prompt" or "report" (engine v37); absent from an older PC.
+    #[serde(default)]
+    pub waiting: Option<String>,
+    #[serde(default)]
+    pub intent: Option<String>,
+    #[serde(default)]
+    pub last_output_at: Option<String>,
+}
+
+impl Row {
+    fn title(&self) -> &str {
+        self.intent.as_deref().filter(|i| !i.trim().is_empty()).unwrap_or(&self.name)
+    }
+
+    /// Waiting at a live prompt. A blocked agent from a PC that does not say why counts as one.
+    fn asks(&self) -> bool {
+        self.state == "blocked" && self.waiting.as_deref() != Some("report")
+    }
+
+    /// It reported blocked or partial: it stopped, and there is nothing to answer.
+    fn stopped(&self) -> bool {
+        self.state == "blocked" && self.waiting.as_deref() == Some("report")
+    }
+
+    /// Claude Code says when a turn starts and ends (its hooks: running, then idle). Other
+    /// providers stay "running" at their prompt, so their terminal going quiet says it instead.
+    fn has_hooks(&self) -> bool {
+        self.provider == "claude"
+    }
+
+    fn working(&self, now_ms: u64) -> bool {
+        if self.state != "running" {
+            return false;
+        }
+        self.has_hooks() || self.last_output_at.as_deref().and_then(crate::data::parse_ms).is_none_or(|t| now_ms.saturating_sub(t) < crate::data::BUSY_QUIET_MS)
+    }
+}
+
+/// A notification to post, if Settings leaves its kind on.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tell {
+    pub kind: Notify,
+    pub agent: String,
+    pub title: String,
+    pub body: String,
+}
+
+/// What the loop has seen, so each change notifies once.
+#[derive(Default)]
+pub struct Watch {
+    /// A list has been read since the process started.
+    known: bool,
+    asking: HashSet<String>,
+    stopped: HashSet<String>,
+    working: HashSet<String>,
+    holds: HashSet<i64>,
+}
+
+impl Watch {
+    /// The agents now: what changed since the last list, for those not on the screen.
+    pub fn list(&mut self, rows: &[Row], now_ms: u64, front: &Front) -> Vec<Tell> {
+        let first = !self.known;
+        self.known = true;
+        let mut out = Vec::new();
+        let (mut asking, mut stopped, mut working) = (HashSet::new(), HashSet::new(), HashSet::new());
+        for r in rows {
+            let name = &r.name;
+            let looking = front.foreground && front.chat.as_deref() == Some(name.as_str());
+            let tell = |kind: Notify, title: String| Tell { kind, agent: name.clone(), title, body: r.title().to_string() };
+            if r.asks() {
+                asking.insert(name.clone());
+                // A question already waiting when the process started is told too, unless the
+                // app is open: Android may have restarted the service after it was missed.
+                if !self.asking.contains(name) && !looking && !(first && front.foreground) {
+                    out.push(tell(Notify::Asks, format!("{name} asks you")));
+                }
+            } else if r.stopped() {
+                stopped.insert(name.clone());
+                if !self.stopped.contains(name) && !first && !looking {
+                    out.push(tell(Notify::Done, format!("{name} stopped: blocked")));
+                }
+            } else if r.working(now_ms) {
+                working.insert(name.clone());
+            } else if self.working.contains(name) && matches!(r.state.as_str(), "idle" | "running") && !looking {
+                out.push(tell(Notify::Done, format!("{name} finished")));
+            }
+        }
+        (self.asking, self.stopped, self.working) = (asking, stopped, working);
+        out
+    }
+
+    /// A command held for you (`guardrail.held`), once per hold.
+    pub fn held(&mut self, hold_id: i64, agent: &str, front: &Front) -> Option<Tell> {
+        if !self.holds.insert(hold_id) || (front.foreground && front.chat.as_deref() == Some(agent)) {
+            return None;
+        }
+        Some(Tell { kind: Notify::Holds, agent: agent.to_string(), title: format!("{agent} needs your OK"), body: "A command is held until you allow it".into() })
+    }
+
+    /// When to read the list again by itself: the moment a working agent without hooks would
+    /// fall quiet. Claude Code says so itself (an event), so it needs no look.
+    pub fn next_look(rows: &[Row], now_ms: u64) -> Option<u64> {
+        rows.iter()
+            .filter(|r| r.state == "running" && !r.has_hooks())
+            .filter_map(|r| r.last_output_at.as_deref().and_then(crate::data::parse_ms))
+            .map(|t| (t + crate::data::BUSY_QUIET_MS + 500).max(now_ms + 1_000))
+            .min()
+    }
+}
+
+/// The ongoing line for a link state; none once no PC is paired, when the app stops the service
+/// (a line posted then would outlive it).
+pub fn line(state: &LinkState, pc: &str) -> Option<String> {
+    let pc = if pc.is_empty() { "your PC" } else { pc };
+    match state {
+        LinkState::Online { host, .. } => Some(format!("Connected to {host}")),
+        LinkState::Unpaired | LinkState::Revoked { .. } => None,
+        _ => Some(format!("Reconnecting to {pc}")),
+    }
+}
+
+/// The same agent always gets the same notification, so a newer one replaces the older.
+pub fn alert_id(agent: &str) -> i32 {
+    // Away from 1, the service's own ongoing notification.
+    agent.bytes().fold(7i32, |h, b| h.wrapping_mul(31).wrapping_add(b as i32)) | 0x100
+}
+
+/// Start the notifications for the process, once; later calls do nothing.
+pub fn start(data: PathBuf, notifier: Arc<dyn Notifier>) {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    if STARTED.set(()).is_err() {
+        return;
+    }
+    let link = link(&data);
+    let heard = link.listen();
+    let _ = std::thread::Builder::new().name("rc-alerts".into()).spawn(move || run(link, heard, data, notifier));
+}
+
+/// How long after an agent's change to read the list: several events come together.
+const SETTLE: Duration = Duration::from_millis(300);
+const LIST_TIMEOUT: Duration = Duration::from_secs(20);
+
+fn run(link: Link, heard: std::sync::mpsc::Receiver<Note>, data: PathBuf, notifier: Arc<dyn Notifier>) {
+    let mut watch = Watch::default();
+    let mut due: Option<u64> = link.state().online().then(rc_link::link::now_ms);
+    let pc = || link.profile().map(|p| p.name).unwrap_or_default();
+    if let Some(l) = line(&link.state(), &pc()) {
+        notifier.line(&l);
+    }
+    loop {
+        let now = rc_link::link::now_ms();
+        let note = match due {
+            Some(at) if at <= now => None,
+            Some(at) => match heard.recv_timeout(Duration::from_millis(at - now)) {
+                Ok(n) => Some(n),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+                Err(_) => return,
+            },
+            None => match heard.recv() {
+                Ok(n) => Some(n),
+                Err(_) => return,
+            },
+        };
+        let soon = || Some(rc_link::link::now_ms() + SETTLE.as_millis() as u64);
+        match note {
+            Some(Note::State(s)) => {
+                if let Some(l) = line(&s, &pc()) {
+                    notifier.line(&l);
+                }
+                if s.online() {
+                    due = soon();
+                }
+            }
+            Some(Note::Event(e)) => match e.ev.as_str() {
+                "guardrail.held" => {
+                    let agent = e.payload.get("session").and_then(Value::as_str).unwrap_or_default();
+                    let hold = e.payload.get("hold_id").and_then(Value::as_i64).unwrap_or_default();
+                    if !agent.is_empty()
+                        && let Some(t) = watch.held(hold, agent, &front_now())
+                    {
+                        post(&*notifier, &data, &t);
+                    }
+                }
+                ev if ev.starts_with("session.") => due = due.min(soon()).or(soon()),
+                _ => {}
+            },
+            None => {
+                due = None;
+                let Ok(v) = link.call("session.list", json!({})).wait(LIST_TIMEOUT) else { continue };
+                let rows: Vec<Row> = v.get("sessions").cloned().and_then(|s| serde_json::from_value(s).ok()).unwrap_or_default();
+                let now = rc_link::link::now_ms();
+                for t in watch.list(&rows, now, &front_now()) {
+                    post(&*notifier, &data, &t);
+                }
+                due = Watch::next_look(&rows, now);
+            }
+        }
+    }
+}
+
+fn post(notifier: &dyn Notifier, data: &Path, t: &Tell) {
+    if crate::app::notifies_in(data, t.kind) {
+        notifier.alert(alert_id(&t.agent), &t.title, &t.body, &t.agent);
+    }
+}
+
+/// Rows by name, for tests.
+#[cfg(test)]
+fn rows(list: &[(&str, &str, &str, Option<&str>)]) -> Vec<Row> {
+    list.iter()
+        .map(|(name, provider, state, waiting)| Row { name: name.to_string(), provider: provider.to_string(), state: state.to_string(), waiting: waiting.map(str::to_string), ..Default::default() })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NOW: u64 = 1_800_000_000_000;
+    fn away() -> Front {
+        Front::default()
+    }
+    fn kinds(t: &[Tell]) -> Vec<(Notify, &str, &str)> {
+        t.iter().map(|t| (t.kind, t.agent.as_str(), t.title.as_str())).collect()
+    }
+
+    #[test]
+    fn a_prompt_asks_once_and_a_report_stops_never_asks() {
+        let mut w = Watch::default();
+        assert!(w.list(&rows(&[("a", "claude", "running", None), ("b", "claude", "running", None)]), NOW, &away()).is_empty());
+        let t = w.list(&rows(&[("a", "claude", "blocked", Some("prompt")), ("b", "claude", "blocked", Some("report"))]), NOW, &away());
+        assert_eq!(kinds(&t), [(Notify::Asks, "a", "a asks you"), (Notify::Done, "b", "b stopped: blocked")]);
+        // Still the same: nothing new.
+        assert!(w.list(&rows(&[("a", "claude", "blocked", Some("prompt")), ("b", "claude", "blocked", Some("report"))]), NOW, &away()).is_empty());
+        // An older PC that does not say why: a blocked agent asks.
+        let mut old = Watch::default();
+        old.list(&[], NOW, &away());
+        assert_eq!(kinds(&old.list(&rows(&[("c", "claude", "blocked", None)]), NOW, &away())), [(Notify::Asks, "c", "c asks you")]);
+    }
+
+    #[test]
+    fn a_turn_that_ends_is_told_finished() {
+        let mut w = Watch::default();
+        w.list(&rows(&[("a", "claude", "running", None)]), NOW, &away());
+        assert_eq!(kinds(&w.list(&rows(&[("a", "claude", "idle", None)]), NOW, &away())), [(Notify::Done, "a", "a finished")]);
+        // Idle and idle again: once.
+        assert!(w.list(&rows(&[("a", "claude", "idle", None)]), NOW, &away()).is_empty());
+        // An agent first seen idle did not finish anything you saw start.
+        assert!(w.list(&rows(&[("a", "claude", "idle", None), ("z", "claude", "idle", None)]), NOW, &away()).is_empty());
+    }
+
+    #[test]
+    fn an_agent_without_hooks_finishes_when_its_terminal_goes_quiet() {
+        let at = |ms_ago: u64| {
+            let t = chrono_like(NOW - ms_ago);
+            vec![Row { name: "x".into(), provider: "codex".into(), state: "running".into(), last_output_at: Some(t), ..Default::default() }]
+        };
+        let mut w = Watch::default();
+        assert!(w.list(&at(1_000), NOW, &away()).is_empty(), "writing: working");
+        assert_eq!(Watch::next_look(&at(1_000), NOW), Some(NOW - 1_000 + crate::data::BUSY_QUIET_MS + 500), "looks again when it would fall quiet");
+        assert_eq!(kinds(&w.list(&at(20_000), NOW, &away())), [(Notify::Done, "x", "x finished")]);
+        // Claude says it itself: no look on a timer.
+        assert_eq!(Watch::next_look(&rows(&[("a", "claude", "running", None)]), NOW), None);
+    }
+
+    #[test]
+    fn the_chat_on_the_screen_does_not_notify_and_others_do() {
+        let mut w = Watch::default();
+        let looking = Front { foreground: true, chat: Some("a".into()) };
+        w.list(&rows(&[("a", "claude", "running", None), ("b", "claude", "running", None)]), NOW, &looking);
+        let t = w.list(&rows(&[("a", "claude", "blocked", Some("prompt")), ("b", "claude", "blocked", Some("prompt"))]), NOW, &looking);
+        assert_eq!(kinds(&t), [(Notify::Asks, "b", "b asks you")]);
+        assert_eq!(w.held(7, "a", &looking), None, "held for the chat on the screen");
+        assert_eq!(w.held(8, "b", &looking).map(|t| t.title), Some("b needs your OK".into()));
+        assert_eq!(w.held(8, "b", &looking), None, "once per hold");
+    }
+
+    #[test]
+    fn what_waited_before_the_process_started_asks_only_while_away() {
+        let blocked = rows(&[("a", "claude", "blocked", Some("prompt")), ("b", "claude", "blocked", Some("report"))]);
+        // The service came back by itself, no activity: a question may have been missed.
+        assert_eq!(kinds(&Watch::default().list(&blocked, NOW, &away())), [(Notify::Asks, "a", "a asks you")]);
+        // The app is open: its lists show it already.
+        assert!(Watch::default().list(&blocked, NOW, &Front { foreground: true, chat: None }).is_empty());
+    }
+
+    #[test]
+    fn rows_read_from_session_list_and_ids_stay_off_the_service() {
+        let v = json!([{"name": "a", "provider": "claude", "state": "blocked", "waiting": "report", "intent": "Fix it", "project_id": 1}]);
+        let r: Vec<Row> = serde_json::from_value(v).unwrap();
+        assert!(r[0].stopped() && !r[0].asks());
+        assert_eq!(r[0].title(), "Fix it");
+        assert_ne!(alert_id("a"), 1);
+        assert_eq!(line(&LinkState::Connecting { attempt: 1 }, "").as_deref(), Some("Reconnecting to your PC"));
+        assert_eq!(line(&LinkState::Unpaired, "desk"), None, "the service is stopping");
+    }
+
+    /// An RFC 3339 time for `ms`, as the engine writes it.
+    fn chrono_like(ms: u64) -> String {
+        let secs = ms / 1000;
+        let (days, rest) = (secs / 86_400, secs % 86_400);
+        let (y, m, d) = civil(days as i64);
+        format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{:03}Z", rest / 3600, rest % 3600 / 60, rest % 60, ms % 1000)
+    }
+
+    fn civil(z: i64) -> (i64, u32, u32) {
+        let z = z + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z.rem_euclid(146_097);
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+        (yoe + era * 400 + if m <= 2 { 1 } else { 0 }, m, d)
+    }
+}

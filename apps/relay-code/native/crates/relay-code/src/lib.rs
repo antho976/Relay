@@ -8,6 +8,7 @@
 pub mod agents;
 pub mod app;
 pub mod attach;
+pub mod background;
 pub mod board;
 pub mod changes;
 pub mod design_paint;
