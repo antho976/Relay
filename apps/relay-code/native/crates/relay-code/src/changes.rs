@@ -1331,28 +1331,38 @@ fn message_style() -> Text {
 
 const MESSAGE_LINES: usize = 5;
 
-/// The message's text as the box shows it: the keyboard's while it is being typed.
-fn message_text(app: &App) -> String {
-    if app.focus.is("commit-message") { app.focus.text.clone() } else { app.st.changes.message.clone() }
+/// A field's text as its box shows it: the keyboard's while it is being typed.
+fn prose_text(app: &App, id: &str, value: &str) -> String {
+    if app.focus.is(id) { app.focus.text.clone() } else { value.to_string() }
 }
 
-/// How much taller than one line the box is: a message of several lines (a subject, a blank
-/// line, a body, as git.suggest_message writes them) shows up to five of them.
-fn message_extra(app: &mut App) -> f32 {
-    let text = message_text(app);
+/// How much taller than one line a box of writing `w` wide is: up to five lines show.
+fn prose_extra(app: &mut App, id: &str, value: &str, w: f32) -> f32 {
+    let text = prose_text(app, id, value);
     if text.is_empty() {
         return 0.0;
     }
     let st = message_style();
-    let w = WIDTH - 2.0 * t::PAD - 60.0;
     let n = app.canvas.wrap_spans(&text, w, st).len().clamp(1, MESSAGE_LINES);
     (n - 1) as f32 * st.lh()
 }
 
-/// The commit message: every line, wrapped, with the caret at its end while typing. A tap gives it
-/// the keyboard, as kit::inline does.
+/// How much taller than one line the commit message's box is: a subject, a blank line and a
+/// body, as git.suggest_message writes them, show up to five lines.
+fn message_extra(app: &mut App) -> f32 {
+    let message = app.st.changes.message.clone();
+    prose_extra(app, "commit-message", &message, WIDTH - 2.0 * t::PAD - 60.0)
+}
+
 fn message_box(app: &mut App, x: f32, y: f32, w: f32, h: f32, value: &mut String) {
-    let id = "commit-message";
+    prose_box(app, "commit-message", "Commit message", x, y, w, h, value);
+}
+
+/// A field of writing (the commit message, a pull request's description): every line, wrapped,
+/// with the caret at its end while typing, on the writing keyboard (Enter is a new line). A tap
+/// gives it the keyboard, as kit::inline does.
+#[allow(clippy::too_many_arguments)]
+fn prose_box(app: &mut App, id: &'static str, placeholder: &str, x: f32, y: f32, w: f32, h: f32, value: &mut String) {
     let mut cx = crate::cx!(app);
     let focused = cx.focus.is(id);
     if focused {
@@ -1361,7 +1371,7 @@ fn message_box(app: &mut App, x: f32, y: f32, w: f32, h: f32, value: &mut String
     }
     let st = message_style();
     if value.is_empty() {
-        cx.c.text("Commit message", x, y + (46.0 - st.lh()) / 2.0, st.color(t::INK3));
+        cx.c.text(placeholder, x, y + (46.0 - st.lh()) / 2.0, st.color(t::INK3));
         if focused {
             cx.c.rect(x, y + 12.0, 2.0, 22.0, 1.0, t::ACCENT);
         }
@@ -1387,9 +1397,9 @@ fn message_box(app: &mut App, x: f32, y: f32, w: f32, h: f32, value: &mut String
         if !focused {
             cx.focus.id = Some(id);
             cx.focus.text = value.clone();
-            cx.focus.kind = Kb::Text;
+            cx.focus.kind = Kb::Prose;
         }
-        cx.host.keyboard(true, value, Kb::Text);
+        cx.host.keyboard(true, value, Kb::Prose);
     }
 }
 
@@ -1501,7 +1511,10 @@ fn branch_line(app: &mut App, mut y: f32) -> f32 {
 /// The sheet that opens a pull request for the branch: its title and body, both optional (the PC
 /// writes them from the commits when left empty).
 fn pr_sheet(app: &mut App) {
-    let h = 330.0;
+    let body_w = WIDTH - 2.0 * t::PAD - 28.0;
+    let pr_body = app.st.changes.pr_body.clone();
+    let extra = prose_extra(app, "pr-body", &pr_body, body_w);
+    let h = 330.0 + extra;
     let (top, outside) = kit::sheet(&mut crate::cx!(app), h);
     if outside {
         app.finish_typing();
@@ -1517,7 +1530,17 @@ fn pr_sheet(app: &mut App) {
     let mut body = app.st.changes.pr_body.clone();
     let mut y = top + 88.0;
     y += kit::field(&mut crate::cx!(app), "pr-title", x, y, w, "Title", "From the commits", &mut title, Kb::Text) + 12.0;
-    kit::field(&mut crate::cx!(app), "pr-body", x, y, w, "Description", "Optional", &mut body, Kb::Text);
+    {
+        // As kit::field draws its box, several lines tall.
+        let lt = Text::new(ty::CAPTION, t::INK2).medium();
+        app.canvas.text("Description", x + 2.0, y, lt);
+        let fy = y + lt.lh() + 6.0;
+        let fh = 48.0 + extra;
+        let focused = app.focus.is("pr-body");
+        app.canvas.rect(x, fy, w, fh, t::KEY_R, t::S1);
+        app.canvas.outline(x, fy, w, fh, t::KEY_R, 1.0, if focused { t::INK3 } else { t::LINE });
+        prose_box(app, "pr-body", "Optional", x + 14.0, fy + 1.0, body_w, fh, &mut body);
+    }
     app.st.changes.pr_title = title.clone();
     app.st.changes.pr_body = body.clone();
     let ky = top + h - 62.0;
@@ -2088,6 +2111,19 @@ mod tests {
         }
         assert!((a.scroll().off - off).abs() < 1.0, "{} vs {off}", a.scroll().off);
         assert_eq!(a.st.changes.open, Some((Group::Work, "src/a/f11.rs".into())));
+    }
+
+    #[test]
+    fn the_commit_message_and_the_pr_description_take_the_writing_keyboard() {
+        let (mut a, mut clock) = on_changes("prose");
+        let my = 844.0 - (132.0 + message_extra(&mut a)) + 12.0;
+        lift(&mut a, &mut clock, 120.0, my + 20.0);
+        assert!(a.focus.is("commit-message") && a.focus.kind == Kb::Prose);
+        a.finish_typing();
+        // A description of several lines grows its sheet, so the key stays under it.
+        let w = WIDTH - 2.0 * t::PAD - 28.0;
+        assert_eq!(prose_extra(&mut a, "pr-body", "", w), 0.0);
+        assert!(prose_extra(&mut a, "pr-body", "What it does.\n\nWhy.\nHow to check it.", w) > 2.5 * message_style().lh());
     }
 
     #[test]
