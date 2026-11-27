@@ -208,6 +208,26 @@ fn quiet_key(n: crate::settings::Notify) -> &'static str {
 
 /// Whether this kind of notification is on, read from the app's settings in `data` (the host's
 /// data dir): for code that posts notifications without an [`App`], as the background loop does.
+/// How many answers in a row each poll got with nothing new in them (B14).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Rest {
+    pub list: u32,
+    pub chat: u32,
+    pub screen: u32,
+}
+
+/// A poll's wait after `level` answers with nothing new: `base`, doubled for each, at most `cap`.
+pub fn rested(base: u64, level: u32, cap: u64) -> u64 {
+    base.saturating_mul(1 << level.min(8)).min(cap)
+}
+
+const LIST_EVERY: u64 = 5_000_000_000;
+const LIST_REST: u64 = 60_000_000_000;
+const CHAT_EVERY: u64 = 4_000_000_000;
+const CHAT_REST: u64 = 30_000_000_000;
+const SCREEN_EVERY: u64 = 3_000_000_000;
+const SCREEN_REST: u64 = 20_000_000_000;
+
 pub fn notifies_in(data: &std::path::Path, n: crate::settings::Notify) -> bool {
     read_json::<Config>(data.join("config.json")).is_none_or(|c| !c.quiet.iter().any(|q| q == quiet_key(n)))
 }
@@ -294,6 +314,9 @@ pub struct App {
     agents_asked: u64,
     /// The open conversation is read again at this time.
     pub reread_at: u64,
+    /// How long each poll has found nothing new: each answer the same as the last doubles its
+    /// wait, up to a cap; anything new, an event or a touch brings it back to fast.
+    pub rest: Rest,
     /// Kinds of thing the PC said changed since a page last looked (`git`, `design`, `task`,
     /// `guardrail`, `notify`, ...): the first part of each event's name. A page takes its own with
     /// [`App::take_changed`] and reads again.
@@ -418,6 +441,7 @@ impl App {
             acts: 0,
             agents_asked: 0,
             reread_at: 0,
+            rest: Rest::default(),
             changed: Default::default(),
             foreground: true,
             data,
@@ -696,6 +720,7 @@ impl App {
         let full = v.get("messages").and_then(Value::as_array).is_some_and(|m| m.len() >= PAGE);
         let (seen, ids) = c.take_sent(v);
         let changed = before != (c.msgs.len(), c.msgs.last().map(|m| m.id.clone()), c.cursor);
+        self.rest.chat = if changed { 0 } else { self.rest.chat.saturating_add(1) };
         // Your messages come back by their ids (chat.send); one with none (an older PC, or typed
         // at the PC) takes the oldest entered bubble, never both for one message.
         if let Some(s) = self.sending.get_mut(name) {
@@ -837,7 +862,11 @@ impl App {
                 _ => {}
             }
         }
-        for e in self.link.take_events() {
+        let events = self.link.take_events();
+        if !events.is_empty() {
+            self.stir();
+        }
+        for e in events {
             if let Some((domain, _)) = e.ev.split_once('.') {
                 self.changed.insert(domain.to_string());
             }
@@ -896,6 +925,9 @@ impl App {
                     if agents != self.agents {
                         self.agents = agents;
                         write_json(self.data.join("cache/agents.json"), &self.agents);
+                        self.rest.list = 0;
+                    } else {
+                        self.rest.list = self.rest.list.saturating_add(1);
                     }
                 }
                 (Ask::Transcript(name), Ok(v)) => self.took_transcript(&name, &v),
@@ -947,6 +979,7 @@ impl App {
                 (Ask::Screen(name), Ok(v)) => {
                     let text = v.get("text").and_then(Value::as_str).unwrap_or_default();
                     let scr = crate::screen::read(text);
+                    self.rest.screen = if self.screens.get(&name) == Some(&scr) { self.rest.screen.saturating_add(1) } else { 0 };
                     self.put_screen(&name, scr);
                 }
                 (Ask::Screen(_), Err(e)) => {
@@ -1042,7 +1075,7 @@ impl App {
         // again every five seconds while the app is in front.
         if self.link_state.online() && self.foreground && self.now_ns >= self.list_at {
             self.agents_stale = true;
-            self.list_at = self.now_ns + 5_000_000_000;
+            self.list_at = self.now_ns + rested(LIST_EVERY, self.rest.list, LIST_REST);
         }
         if self.link_state.online() && self.foreground {
             self.wake_at(self.list_at);
@@ -1057,12 +1090,12 @@ impl App {
             if self.now_ns >= self.reread_at && !self.asking(&Ask::Transcript(name.clone())) {
                 self.read_chat(&name);
                 // Close behind the PC while it works; slower once it waits.
-                self.reread_at = self.now_ns + if busy { 700_000_000 } else { 4_000_000_000 };
+                self.reread_at = self.now_ns + if busy { 700_000_000 } else { rested(CHAT_EVERY, self.rest.chat, CHAT_REST) };
             }
             // The terminal's foot: the live status, the mode, a question.
             if !self.no_screen && self.now_ns >= self.screen_at && !self.asking(&Ask::Screen(name.clone())) && self.live(&name) {
                 self.ask(Ask::Screen(name.clone()), "session.screen", json!({"session": name, "rows": 16}));
-                self.screen_at = self.now_ns + if busy { 700_000_000 } else { 3_000_000_000 };
+                self.screen_at = self.now_ns + if busy { 700_000_000 } else { rested(SCREEN_EVERY, self.rest.screen, SCREEN_REST) };
             }
             // Without the terminal's foot, how fresh its output is tells working from waiting:
             // the agent list (which carries it) is read every two seconds while a chat is open.
@@ -1289,7 +1322,20 @@ impl App {
         self.insets = (inset_top, inset_bottom);
     }
 
+    /// Something happened (an event, a touch): the polls that had slowed down go back to fast,
+    /// from now.
+    pub fn stir(&mut self) {
+        if self.rest == Rest::default() {
+            return;
+        }
+        self.rest = Rest::default();
+        self.list_at = self.list_at.min(self.now_ns + LIST_EVERY);
+        self.reread_at = self.reread_at.min(self.now_ns + CHAT_EVERY);
+        self.screen_at = self.screen_at.min(self.now_ns + SCREEN_EVERY);
+    }
+
     pub fn touch(&mut self, t: Touch) {
+        self.stir();
         let u = self.canvas.u.max(0.01);
         let x0 = ((self.size.0 - WIDTH * u) * 0.5).max(0.0);
         self.ui.touch(t, (t.x - x0) / u, t.y / u);

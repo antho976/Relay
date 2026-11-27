@@ -6,7 +6,8 @@
 //! - `RELAY_E2E_URL`: the door to dial, in place of the link's own addresses (a door on loopback);
 //! - `RELAY_E2E_PROJECT`: a project to open a shell in, for `chat.send` (once, and once again with
 //!   the same id) and `session.transcript` with `before`;
-//! - `RELAY_E2E_BUILD`: the build of a fake APK published for `phone.app.latest` and `phone.app.apk`.
+//! - `RELAY_E2E_BUILD`: the build of a fake APK published for `phone.app.latest` and `phone.app.apk`;
+//! - `RELAY_E2E_PACE`: watch the door's own pings for a minute at the screen-off keep-alive.
 //!
 //! A pairing code is spent once, so it is one test.
 
@@ -67,6 +68,9 @@ fn pairs_then_connects_by_itself_and_answers() {
     if let Ok(build) = std::env::var("RELAY_E2E_BUILD") {
         app_update(&link, build.parse().expect("a build number"));
     }
+    if std::env::var("RELAY_E2E_PACE").is_ok() {
+        door_pace(&link);
+    }
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -110,6 +114,18 @@ fn app_update(link: &Link, build: u64) {
     let sha: String = sha2::Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(Some(sha.as_str()), latest["sha256"].as_str());
     eprintln!("phone.app.latest and phone.app.apk: ok ({} bytes)", bytes.len());
+}
+
+/// The door's own pings over a minute at the screen-off keep-alive (3 min), which the door was
+/// told: it spares them while it hears the phone (an untold phone gets one every 30 s).
+fn door_pace(link: &Link) {
+    link.set_keepalive(Duration::from_secs(180));
+    std::thread::sleep(Duration::from_secs(5));
+    let before = link.door_pings();
+    std::thread::sleep(Duration::from_secs(60));
+    let pings = link.door_pings() - before;
+    eprintln!("door pings in 60 s at a 3 min keep-alive: {pings} (an untold phone gets 2)");
+    assert!(pings <= 1, "the door kept pinging a told phone: {pings} in a minute");
 }
 
 fn unbase64(s: &str) -> Vec<u8> {

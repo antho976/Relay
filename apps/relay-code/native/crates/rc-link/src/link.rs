@@ -529,6 +529,8 @@ struct Inner {
     switched: AtomicBool,
     /// The paired PC's name, kept here: the profile is a file read.
     pc: Mutex<String>,
+    /// Pings the door sent this phone, all sessions together.
+    door_pings: std::sync::atomic::AtomicU64,
     waker: Waker,
     /// Bumped by [`Link::forget`] and [`Link::paired`]: a loop of an older generation stops.
     generation: Mutex<u64>,
@@ -581,6 +583,7 @@ impl Link {
             retime: Notify::new(),
             switched: AtomicBool::new(false),
             pc,
+            door_pings: std::sync::atomic::AtomicU64::new(0),
             waker,
             generation: Mutex::new(0),
             listeners: Mutex::new(Vec::new()),
@@ -599,6 +602,11 @@ impl Link {
 
     pub fn profile(&self) -> Option<Profile> {
         self.inner.store.load()
+    }
+
+    /// How many pings the door has sent this phone (it spares them once told the keep-alive).
+    pub fn door_pings(&self) -> u64 {
+        self.inner.door_pings.load(Ordering::SeqCst)
     }
 
     /// The paired PC's name ("" when none is paired), without reading the profile: for every frame.
@@ -875,6 +883,10 @@ fn open(inner: &Arc<Inner>, conn: Conn) -> Arc<Session> {
                     for l in t.as_str().split('\n').filter(|l| !l.trim().is_empty()) {
                         dispatch(&inner, &s, l);
                     }
+                }
+                // The door's own pings (answered by the socket by itself): counted, for the live check.
+                Message::Ping(_) => {
+                    inner.door_pings.fetch_add(1, Ordering::SeqCst);
                 }
                 Message::Close(_) => break,
                 _ => {}

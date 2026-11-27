@@ -1404,3 +1404,22 @@ fn with_notifications_off_in_android_the_switches_read_off_and_lead_there() {
     assert_eq!(host.1.load(std::sync::atomic::Ordering::SeqCst), 1, "a switch leads to Android's settings");
     assert!(a.notifies(crate::settings::Notify::Asks), "and changes nothing here");
 }
+
+// B14: polls that found nothing new slow down; a touch brings them back.
+
+#[test]
+fn a_poll_with_nothing_new_waits_longer_and_a_touch_brings_it_back() {
+    use crate::app::{Rest, rested};
+    assert_eq!(rested(5_000, 0, 60_000), 5_000);
+    assert_eq!(rested(5_000, 1, 60_000), 10_000);
+    assert_eq!(rested(5_000, 4, 60_000), 60_000, "at most the cap");
+    assert_eq!(rested(5_000, 40, 60_000), 60_000, "a long rest never overflows");
+    let mut a = app("rest");
+    let mut clock = 1_000_000_000;
+    frames(&mut a, &mut clock, 2);
+    a.rest = Rest { list: 4, chat: 3, screen: 3 };
+    a.reread_at = clock + 30_000_000_000;
+    tap(&mut a, &mut clock, 200.0, 400.0);
+    assert_eq!(a.rest, Rest::default());
+    assert!(a.reread_at <= clock + 4_000_000_000, "the chat reads again soon");
+}
