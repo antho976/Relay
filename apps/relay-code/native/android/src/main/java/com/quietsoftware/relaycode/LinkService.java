@@ -109,21 +109,44 @@ public class LinkService extends Service {
                 .setContentIntent(tap)
                 .setAutoCancel(true);
         // What can be done from the shade (D18): a reply, or a held command allowed once or denied.
+        // Each acts as the owner, so each needs the phone unlocked; Open unlocks through the app.
         if (kind == KIND_REPLY) {
             RemoteInput words = new RemoteInput.Builder(ActionReceiver.REPLY).setLabel("Reply to " + agent).build();
-            b.addAction(new Notification.Action.Builder(null, "Reply", ActionReceiver.intent(context, id, "reply", agent, 0, true))
+            b.addAction(unlocked(new Notification.Action.Builder(null, "Reply", ActionReceiver.intent(context, id, "reply", agent, 0, true))
                     .addRemoteInput(words)
-                    .setAllowGeneratedReplies(false)
-                    .build());
+                    .setAllowGeneratedReplies(false)));
             b.addAction(new Notification.Action.Builder(null, "Open", tap).build());
         } else if (kind == KIND_HOLD) {
-            b.addAction(new Notification.Action.Builder(null, "Allow once", ActionReceiver.intent(context, id, "allow", agent, hold, false)).build());
-            b.addAction(new Notification.Action.Builder(null, "Deny", ActionReceiver.intent(context, id, "deny", agent, hold, false)).build());
+            b.addAction(unlocked(new Notification.Action.Builder(null, "Allow once", ActionReceiver.intent(context, id, "allow", agent, hold, false))));
+            b.addAction(unlocked(new Notification.Action.Builder(null, "Deny", ActionReceiver.intent(context, id, "deny", agent, hold, false))));
         } else if (kind == KIND_QUIET) {
             // What was done: no sound again, and it clears by itself.
             b.setOnlyAlertOnce(true).setTimeoutAfter(10_000);
         }
+        // On a locked screen only that something waits shows: no question, no command, no actions
+        // (on every Android, so also where actions cannot ask for the phone unlocked).
+        b.setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(new Notification.Builder(context, ASKS)
+                .setSmallIcon(R.drawable.ic_notify)
+                .setContentTitle("Relay Code")
+                .setContentText(lockedWords(kind))
+                .build());
         nm.notify(id, b.build());
+    }
+
+    /** An action that acts as the owner: it needs the phone unlocked (Android 12 and later). */
+    static Notification.Action unlocked(Notification.Action.Builder action) {
+        if (android.os.Build.VERSION.SDK_INT >= 31) action.setAuthenticationRequired(true);
+        return action.build();
+    }
+
+    /** What a notification says on a locked screen, by its kind: that something waits, not what. */
+    static String lockedWords(int kind) {
+        switch (kind) {
+            case KIND_REPLY: return "An agent asks you";
+            case KIND_HOLD: return "A command needs your OK";
+            case KIND_QUIET: return "Done";
+            default: return "An agent has news";
+        }
     }
 
     /** Takes a notification away (what it asked was done). Any thread. */
