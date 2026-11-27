@@ -27,11 +27,17 @@ struct DesktopHost {
     data: PathBuf,
     /// Pixels per dp a shot pretends to have (`--density`), 0 for a window.
     density: f32,
+    /// Android's font scale a shot pretends to have (`--font-scale`), 1 for a window.
+    font_scale: f32,
 }
 
 impl Host for DesktopHost {
     fn density(&self) -> f32 {
         self.density
+    }
+
+    fn font_scale(&self) -> f32 {
+        self.font_scale
     }
 
     fn data_dir(&self) -> PathBuf {
@@ -116,7 +122,8 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
     let mut clock = 1_000_000_000u64;
     // `--density 2` is a tablet's 320 dpi; `--text small|large` the Settings choice (D9).
     let density = arg(args, "--density").and_then(|d| d.parse().ok()).unwrap_or(0.0);
-    let mut app = App::new(Arc::new(DesktopHost { data: dir.clone(), density }), clock);
+    let font_scale = arg(args, "--font-scale").and_then(|d| d.parse().ok()).unwrap_or(1.0);
+    let mut app = App::new(Arc::new(DesktopHost { data: dir.clone(), density, font_scale }), clock);
     app.canvas.set_images_size(gfx.images_size());
     // Roughly a phone's status bar and gesture bar.
     app.resize(w as f32, h as f32, w as f32 * 0.085, w as f32 * 0.04);
@@ -407,7 +414,7 @@ impl ApplicationHandler<()> for Windowed {
         let window = Arc::new(event_loop.create_window(attributes).expect("a window"));
         let size = window.inner_size();
         let (gfx, screen) = Gfx::with_surface(window.clone(), size.width, size.height).expect("graphics");
-        let mut app = App::new(Arc::new(DesktopHost { data: self.data.clone(), density: 0.0 }), now_ns());
+        let mut app = App::new(Arc::new(DesktopHost { data: self.data.clone(), density: 0.0, font_scale: 1.0 }), now_ns());
         app.canvas.set_images_size(gfx.images_size());
         app.resize(size.width as f32, size.height as f32, 0.0, 0.0);
         self.app = Some(app);

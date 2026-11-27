@@ -81,7 +81,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             if crate::drawer::agent_row(app, a, 0.0, y, WIDTH, now_ms) {
                 open = Some(a.name.clone());
             }
-            y += crate::drawer::AGENT_ROW_H;
+            y += crate::drawer::agent_row_h();
         }
         y += 8.0;
     }

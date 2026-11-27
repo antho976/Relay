@@ -35,6 +35,18 @@ pub enum Notify {
 /// The text sizes, and how much each scales the type.
 pub const TEXT_SIZES: [&str; 3] = ["Small", "Default", "Large"];
 pub const TEXT_SCALES: [f32; 3] = [0.92, 1.0, 1.12];
+/// How far Default follows the phone's own font scale (D20): the app's layout holds within these.
+pub const FONT_SCALE_LEAST: f32 = 0.85;
+pub const FONT_SCALE_MOST: f32 = 1.3;
+
+/// The scale the type is set at: Small and Large as chosen here, Default as the phone's own text
+/// size, within what the layout holds.
+pub fn text_scale(size: usize, font_scale: f32) -> f32 {
+    match size {
+        1 => if font_scale.is_finite() && font_scale > 0.0 { font_scale.clamp(FONT_SCALE_LEAST, FONT_SCALE_MOST) } else { 1.0 },
+        i => TEXT_SCALES[i.min(2)],
+    }
+}
 
 pub const NOTIFY: [(Notify, &str); 3] =
     [(Notify::Asks, "When an agent asks you"), (Notify::Done, "When an agent finishes"), (Notify::Holds, "When a command is held for you")];

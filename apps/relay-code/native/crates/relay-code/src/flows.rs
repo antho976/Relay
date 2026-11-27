@@ -1227,3 +1227,25 @@ fn leaving_the_task_leaves_no_send_back_sheet_for_the_next_visit() {
     frames(&mut a, &mut clock, 2);
     assert!(a.st.board.back.is_none());
 }
+
+// D20: Default follows the phone's text size.
+
+#[test]
+fn default_follows_the_phones_font_scale_within_bounds_and_small_large_override() {
+    use crate::settings::text_scale;
+    assert_eq!(text_scale(1, 1.0), 1.0);
+    assert_eq!(text_scale(1, 1.15), 1.15);
+    assert_eq!(text_scale(1, 2.0), 1.3, "a huge phone setting is held to what the layout takes");
+    assert_eq!(text_scale(1, 0.5), 0.85);
+    assert_eq!(text_scale(1, f32::NAN), 1.0, "an unreadable setting is the default");
+    assert_eq!(text_scale(0, 1.3), 0.92, "Small is Small whatever the phone says");
+    assert_eq!(text_scale(2, 0.85), 1.12);
+    // In the app: a phone at 1.3 sets the type at 1.3 and its rows grow to hold three lines.
+    let mut a = app("font-scale");
+    let mut clock = 1_000_000_000;
+    a.font_scale = 1.3;
+    a.reset_to(Route::Home);
+    frames(&mut a, &mut clock, 2);
+    assert!((crate::draw::text_scale() - 1.3).abs() < 0.001);
+    assert!((crate::drawer::agent_row_h() - 72.0 * 1.3).abs() < 0.01);
+}
