@@ -399,7 +399,7 @@ pub fn now_ms() -> u64 {
 
 /// Where an answer goes, and whether its coming wakes the app (a call of the app's own) or not
 /// (the link's pings, the background's reads: the activity sleeps through them).
-type Answer = (std::sync::mpsc::Sender<Result<Value, BusError>>, bool);
+type Answer = (Box<dyn FnOnce(Result<Value, BusError>) + Send>, bool);
 
 struct Session {
     tx: mpsc::UnboundedSender<String>,
@@ -415,7 +415,7 @@ impl Session {
         if self.open.swap(false, Ordering::SeqCst) {
             let down = BusError::link("link.down", "The link to the PC closed");
             for (_, (a, _)) in self.pending.lock().unwrap_or_else(|e| e.into_inner()).drain() {
-                let _ = a.send(Err(down.clone()));
+                a(Err(down.clone()));
             }
             self.ended.notify_waiters();
             self.ended.notify_one();
@@ -509,7 +509,7 @@ struct Inner {
     store: Arc<dyn Store>,
     state: Mutex<LinkState>,
     session: Mutex<Option<Arc<Session>>>,
-    events: Mutex<Vec<Event>>,
+    events: Mutex<VecDeque<Event>>,
     kick: Notify,
     waker: Waker,
     /// Bumped by [`Link::forget`] and [`Link::paired`]: a loop of an older generation stops.
@@ -555,7 +555,7 @@ impl Link {
             store,
             state: Mutex::new(state),
             session: Mutex::new(None),
-            events: Mutex::new(Vec::new()),
+            events: Mutex::new(VecDeque::new()),
             kick: Notify::new(),
             waker,
             generation: Mutex::new(0),
@@ -628,18 +628,28 @@ impl Link {
         };
         let id = wire::uuid_v4();
         let (tx, rx) = std::sync::mpsc::channel();
-        if !s.send(op, &payload, &id, Some((tx, wake))) {
+        // The answer also ends the call's timer, so an answered call leaves nothing waiting.
+        let (answered, timer_ends) = tokio::sync::oneshot::channel::<()>();
+        let deliver = Box::new(move |r| {
+            let _ = tx.send(r);
+            let _ = answered.send(());
+        });
+        if !s.send(op, &payload, &id, Some((deliver, wake))) {
             return Call::failed(BusError::link("link.down", "Not connected to the PC"));
         }
         let (s2, waker, op) = (s.clone(), self.inner.waker.clone(), op.to_string());
         self.handle.spawn(async move {
-            tokio::time::sleep(timeout).await;
-            let gone = s2.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-            if let Some((a, wake)) = gone {
-                let _ = a.send(Err(BusError::link("link.timeout", &format!("The PC did not answer {op} in time"))));
-                if wake {
-                    waker();
+            tokio::select! {
+                _ = tokio::time::sleep(timeout) => {
+                    let gone = s2.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+                    if let Some((a, wake)) = gone {
+                        a(Err(BusError::link("link.timeout", &format!("The PC did not answer {op} in time"))));
+                        if wake {
+                            waker();
+                        }
+                    }
                 }
+                _ = timer_ends => {}
             }
         });
         Call { rx, _never: None }
@@ -658,9 +668,15 @@ impl Link {
         rx
     }
 
+    /// How many tasks the link's runtime holds now (its socket halves, call timers): tests keep
+    /// them from piling up.
+    pub fn tasks(&self) -> usize {
+        self.handle.metrics().num_alive_tasks()
+    }
+
     /// Events since the last take, oldest first.
     pub fn take_events(&self) -> Vec<Event> {
-        std::mem::take(&mut *self.inner.events.lock().unwrap_or_else(|e| e.into_inner()))
+        std::mem::take(&mut *self.inner.events.lock().unwrap_or_else(|e| e.into_inner())).into()
     }
 
     fn session(&self) -> Option<Arc<Session>> {
@@ -816,7 +832,7 @@ fn dispatch(inner: &Inner, s: &Session, line: &str) {
                 } else {
                     Err(r.error.unwrap_or_else(|| BusError { kind: "internal".into(), code: "bus.no_error".into(), message: "The PC refused without saying why".into(), hint: None }))
                 };
-                let _ = a.send(out);
+                a(out);
                 if wake {
                     (inner.waker)();
                 }
@@ -826,9 +842,9 @@ fn dispatch(inner: &Inner, s: &Session, line: &str) {
             let mut ev = inner.events.lock().unwrap_or_else(|e| e.into_inner());
             // A phone that stopped drawing (asleep) keeps the newest 2000.
             if ev.len() >= 2000 {
-                ev.remove(0);
+                ev.pop_front();
             }
-            ev.push(e.clone());
+            ev.push_back(e.clone());
             drop(ev);
             inner.tell(Note::Event(e));
             (inner.waker)();
@@ -840,22 +856,21 @@ fn dispatch(inner: &Inner, s: &Session, line: &str) {
 /// A call from inside the link's own thread.
 async fn ask(s: &Arc<Session>, op: &str, payload: Value, timeout: Duration) -> Result<Value, BusError> {
     let id = wire::uuid_v4();
-    let (tx, rx) = std::sync::mpsc::channel();
-    if !s.send(op, &payload, &id, Some((tx, false))) {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let deliver = Box::new(move |r| {
+        let _ = tx.send(r);
+    });
+    if !s.send(op, &payload, &id, Some((deliver, false))) {
         return Err(BusError::link("link.down", "Not connected to the PC"));
     }
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        match rx.try_recv() {
-            Ok(r) => return r,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => return Err(BusError::link("link.down", "The link to the PC closed")),
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-        }
-        if tokio::time::Instant::now() >= deadline || !s.open.load(Ordering::SeqCst) {
+    // Woken by the answer itself, or by the session shutting (which answers link.down).
+    match tokio::time::timeout(timeout, rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => Err(BusError::link("link.down", "The link to the PC closed")),
+        Err(_) => {
             s.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-            return Err(BusError::link("link.timeout", &format!("The PC did not answer {op} in time")));
+            Err(BusError::link("link.timeout", &format!("The PC did not answer {op} in time")))
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
