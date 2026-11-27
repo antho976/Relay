@@ -18,7 +18,13 @@ pub const LATEST: &str = "latest.json";
 
 pub fn register(e: &mut Engine) {
     e.register_unlocked::<Latest>(|ctx, _p| latest(&ctx.engine().store.phone_dir()));
-    e.register_unlocked::<Apk>(|ctx, p| piece(&ctx.engine().store.phone_dir(), p.offset.unwrap_or(0), p.len));
+    e.register_unlocked::<Apk>(|ctx, p| {
+        let dir = ctx.engine().store.phone_dir();
+        if let Some(want) = p.sha256.as_deref() {
+            same_build(&dir, want)?;
+        }
+        piece(&dir, p.offset.unwrap_or(0), p.len)
+    });
 }
 
 /// What `latest.json` says, or none when nothing is published.
@@ -31,6 +37,16 @@ pub fn latest(dir: &Path) -> Result<Option<AppLatest>, BusError> {
     serde_json::from_str(&text)
         .map(Some)
         .map_err(|e| BusError::unavailable("phone.app", format!("{} does not read: {e}", dir.join(LATEST).display())).with_hint("publish again with apps/relay-code/tools/publish-apk.sh"))
+}
+
+/// Refuse when the published build is no longer the one being downloaded: a publish mid-download
+/// would otherwise hand the phone the rest of another APK.
+pub fn same_build(dir: &Path, sha256: &str) -> Result<(), BusError> {
+    match latest(dir)? {
+        Some(l) if l.sha256.eq_ignore_ascii_case(sha256) => Ok(()),
+        _ => Err(BusError::conflict("phone.app_changed", "the PC published another build of the phone app since this download began")
+            .with_hint("start again from phone.app.latest")),
+    }
 }
 
 /// The piece of the APK from `offset`: at most `len` (and [`APK_PIECE`]) bytes.
@@ -93,5 +109,15 @@ mod tests {
         let end = piece(dir.path(), 10, None).unwrap();
         assert!(end.eof && end.bytes_b64.is_empty());
         assert_eq!(piece(dir.path(), 11, None).unwrap_err().code, "phone.app");
+    }
+
+    #[test]
+    fn a_download_of_a_build_published_over_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(LATEST), r#"{"build":2,"version":"0.2","size":3,"sha256":"bb","made_at":1}"#).unwrap();
+        assert!(same_build(dir.path(), "BB").is_ok());
+        assert_eq!(same_build(dir.path(), "aa").unwrap_err().code, "phone.app_changed");
+        std::fs::remove_file(dir.path().join(LATEST)).unwrap();
+        assert_eq!(same_build(dir.path(), "bb").unwrap_err().code, "phone.app_changed", "unpublished since");
     }
 }

@@ -143,9 +143,6 @@ pub fn position(path: &Path) -> Option<(u64, u64)> {
     Some((file_tag(path), fs::metadata(path).ok()?.len()))
 }
 
-/// How far before a read the log is searched for the messages sends already matched.
-const SENT_LOOKBACK: u64 = 1024 * 1024;
-
 /// The messages in `path` after `after` (a cursor this function returned), the newest `limit`
 /// before `before` (one too: a page further back), or its last `limit`. A person's message that
 /// `sends` holds comes back with its `client_id`; the sends the log does not hold yet come back
@@ -222,10 +219,19 @@ pub fn read(provider: Provider, path: &Path, worktree: &Path, after: Option<u64>
     Ok(TranscriptOut { messages, cursor, before: (tag << OFFSET_BITS) | head, older: head > 0, reset, found: true, pending })
 }
 
+/// Which person's message each send was matched to, by log (its tag) and the send's id: the line
+/// it is on, and whether by its words. A send matched once stays matched without reading back to
+/// it, so a read goes back only to the oldest send not matched yet, however far the log has grown.
+type SentMatches = std::collections::HashMap<(u64, String), (u64, bool)>;
+static SENT_MATCHES: Mutex<Option<SentMatches>> = Mutex::new(None);
+/// Matches kept at most; sends are an hour's, so this is never reached in use.
+const SENT_MATCHES_MAX: usize = 20_000;
+
 /// Give each send the first person's message with its words logged after it was typed, oldest
-/// send first, so two sends of the same words take two messages. A send matched before this read
-/// finds its message in the log just before it ([`SENT_LOOKBACK`]); one typed longer ago than
-/// that was answered long since. The sends left over are returned: typed, not logged yet.
+/// send first, so two sends of the same words take two messages; that message comes back with the
+/// send's id. A send whose words the log holds otherwise (Claude Code logs some differently) takes
+/// the first person's message after it that no send claims by its words, and is no longer pending,
+/// so it never shows twice. The sends left over are returned: typed, not logged yet.
 #[allow(clippy::too_many_arguments)]
 fn sent_messages(
     provider: Provider, file: &mut File, worktree: &Path, tag: u64, from: u64, messages: &mut [TranscriptMessage],
@@ -233,11 +239,17 @@ fn sent_messages(
 ) -> std::io::Result<Vec<relay_bus::ops::session::TranscriptPending>> {
     if sends.is_empty() { return Ok(Vec::new()); }
     let since = |s: &Sent| if s.log_tag == Some(tag) { s.log_offset.unwrap_or(0) } else { 0 };
-    let mut live: Vec<&Sent> = sends.iter().filter(|s| since(s) >= from.saturating_sub(SENT_LOOKBACK)).collect();
+    let mut live: Vec<&Sent> = sends.iter().collect();
     live.sort_by_key(|s| since(s));
-    // The person's words in the log from the oldest send on: (line offset, words, index here).
+    // The sends matched by an earlier read: their lines are taken, and are given their ids here.
+    let known: Vec<Option<(u64, bool)>> = {
+        let matches = SENT_MATCHES.lock().unwrap_or_else(|e| e.into_inner());
+        live.iter().map(|s| matches.as_ref().and_then(|m| m.get(&(tag, s.client_id.clone())).copied())).collect()
+    };
+    // The person's words in the log from the oldest unmatched send on: (line, words, index here).
     let mut said: Vec<(u64, String, Option<usize>)> = Vec::new();
-    if let Some(lo) = live.first().map(|s| since(s)).filter(|lo| *lo < from) {
+    let oldest = live.iter().zip(&known).filter(|(_, k)| k.is_none()).map(|(s, _)| since(s)).min();
+    if let Some(lo) = oldest.filter(|lo| *lo < from) {
         let mut bytes = Vec::with_capacity((from - lo) as usize + 1);
         file.seek(SeekFrom::Start(lo.saturating_sub(1)))?;
         file.by_ref().take(from - lo.saturating_sub(1)).read_to_end(&mut bytes)?;
@@ -262,21 +274,49 @@ fn sent_messages(
         let end = lines.get(i + 1).map_or(messages.len(), |next| next.0);
         said.extend((first..end).filter(|k| messages[*k].role == "user").map(|k| (at, words(&messages[k].body), Some(k))));
     }
-    let mut taken = vec![false; said.len()];
-    let mut pending = Vec::new();
-    for s in live {
+    let mut taken: Vec<bool> = said.iter().map(|(at, _, _)| known.iter().flatten().any(|(line, _)| line == at)).collect();
+    // Matched before: by its words, its message here carries its id again.
+    for (s, k) in live.iter().zip(&known) {
+        if let Some((line, true)) = k {
+            if let Some((_, _, Some(idx))) = said.iter().find(|(at, _, _)| at == line) {
+                messages[*idx].client_id = Some(s.client_id.clone());
+            }
+        }
+    }
+    let unmatched: Vec<&Sent> = live.iter().zip(&known).filter(|(_, k)| k.is_none()).map(|(s, _)| *s).collect();
+    let mut found: Vec<(String, u64, bool)> = Vec::new();
+    // By words first, for every send, so a send whose words were logged keeps its own message.
+    let mut left = Vec::new();
+    for s in unmatched {
         // The log is redacted before anyone reads it: the words are compared as it holds them.
         let mut sent = s.text.trim().as_bytes().to_vec();
         crate::redact::Redactor::default().redact(&mut sent);
         let sent = String::from_utf8_lossy(&sent);
-        let hit = said.iter().enumerate().find(|(j, (at, text, _))| !taken[*j] && *at >= since(s) && text.trim() == sent.trim()).map(|(j, (_, _, k))| (j, *k));
+        let hit = said.iter().enumerate().find(|(j, (at, text, _))| !taken[*j] && *at >= since(s) && text.trim() == sent.trim()).map(|(j, (at, _, k))| (j, *at, *k));
         match hit {
-            Some((j, k)) => {
+            Some((j, at, k)) => {
                 taken[j] = true;
                 if let Some(k) = k { messages[k].client_id = Some(s.client_id.clone()); }
+                found.push((s.client_id.clone(), at, true));
+            }
+            None => left.push(s),
+        }
+    }
+    let mut pending = Vec::new();
+    for s in left {
+        match said.iter().enumerate().find(|(j, (at, _, _))| !taken[*j] && *at >= since(s)).map(|(j, (at, _, _))| (j, *at)) {
+            Some((j, at)) => {
+                taken[j] = true;
+                found.push((s.client_id.clone(), at, false));
             }
             None => pending.push(relay_bus::ops::session::TranscriptPending { client_id: s.client_id.clone(), text: s.text.clone(), sent_at: s.sent_at.clone() }),
         }
+    }
+    if !found.is_empty() {
+        let mut matches = SENT_MATCHES.lock().unwrap_or_else(|e| e.into_inner());
+        let m = matches.get_or_insert_with(Default::default);
+        if m.len() + found.len() > SENT_MATCHES_MAX { m.clear(); }
+        for (id, at, exact) in found { m.insert((tag, id), (at, exact)); }
     }
     Ok(pending)
 }
@@ -1020,6 +1060,41 @@ mod tests {
         assert_eq!(tail.messages.iter().filter_map(|m| m.client_id.as_deref()).collect::<Vec<_>>(), ["a", "c", "b"]);
         let back = read(Provider::Claude, &path, wt, None, Some(last.cursor), 50, &sends).unwrap();
         assert!(back.pending.is_empty());
+    }
+
+    /// A send made mid-turn while the agent writes megabytes stays pending until its message is
+    /// logged, however far back it was typed; one whose words are logged otherwise stops showing
+    /// as pending once a person's message is logged after it, and its id goes on no message.
+    #[test]
+    fn a_send_far_back_or_logged_in_other_words_shows_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("far.jsonl");
+        let say = |n: usize, text: &str| json!({"type": "user", "uuid": format!("far{n}"), "message": {"content": text}});
+        let filler = |n: usize| json!({"type": "assistant", "uuid": format!("fill{n}"), "message": {"content": [{"type": "text", "text": "x".repeat(4000)}]}});
+        fs::write(&path, lines(&[say(0, "start")])).unwrap();
+        let wt = Path::new("/wt");
+        let (tag, len) = position(&path).unwrap();
+        let sent = |id: &str, text: &str| Sent { client_id: id.into(), text: text.into(), log_tag: Some(tag), log_offset: Some(len), sent_at: "t".into() };
+        let sends = [sent("far-a", "keep going"), sent("far-b", "and fix the test")];
+        let mut cursor = read(Provider::Claude, &path, wt, None, None, 50, &sends).unwrap().cursor;
+        let append = |records: &[Value]| fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(lines(records).as_bytes()).unwrap();
+        // The agent writes 1.6 MB before either is taken.
+        for chunk in 0..4 {
+            append(&(0..100).map(|n| filler(chunk * 100 + n)).collect::<Vec<_>>());
+            let out = read(Provider::Claude, &path, wt, Some(cursor), None, 1000, &sends).unwrap();
+            assert_eq!(out.pending.len(), 2, "still pending after {} KB", (chunk + 1) * 400);
+            cursor = out.cursor;
+        }
+        // The first is logged by its words, the second as Claude Code wrote it otherwise.
+        append(&[say(1, "keep going"), say(2, "and fix the test, please")]);
+        let out = read(Provider::Claude, &path, wt, Some(cursor), None, 1000, &sends).unwrap();
+        let ids: Vec<_> = out.messages.iter().filter(|m| m.role == "user").map(|m| (m.id.as_str(), m.client_id.as_deref())).collect();
+        assert_eq!(ids, [("far1", Some("far-a")), ("far2", None)]);
+        assert!(out.pending.is_empty(), "{:?}", out.pending);
+        // And so on later reads: matched once, never pending again.
+        let tail = read(Provider::Claude, &path, wt, None, None, 1000, &sends).unwrap();
+        assert!(tail.pending.is_empty());
+        assert_eq!(tail.messages.iter().filter_map(|m| m.client_id.as_deref()).collect::<Vec<_>>(), ["far-a"]);
     }
 
     /// One line longer than a whole read is passed over with a note, once it has ended; before
