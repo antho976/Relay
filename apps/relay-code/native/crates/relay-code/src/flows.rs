@@ -384,8 +384,8 @@ fn close_asks_first_and_a_tap_outside_the_dialog_reaches_nothing() {
     a.open("bold-puffin");
     a.st.agents.menu = Some("bold-puffin".into());
     frames(&mut a, &mut clock, 5);
-    // The menu's second row: Close agent.
-    tap(&mut a, &mut clock, 280.0, 52.0 + 4.0 + 48.0 + 24.0);
+    // The menu's third row: Close agent (after Open terminal and Pause agent).
+    tap(&mut a, &mut clock, 280.0, 52.0 + 4.0 + 2.0 * 48.0 + 24.0);
     assert!(a.st.agents.menu.is_none());
     assert_eq!(a.st.agents.confirm, Some(("bold-puffin".into(), crate::agents::Confirm::Close)));
     tap(&mut a, &mut clock, 28.0, 28.0);
@@ -1009,4 +1009,54 @@ fn back_closes_the_deny_sheet_and_the_forget_confirm_on_their_pages() {
     a.st.inbox.denying = Some(7);
     assert!(a.back());
     assert_eq!(a.route(), &Route::Home);
+}
+
+// D13: when the card can't help.
+
+#[test]
+fn the_key_toggle_opens_the_strip_above_the_box_and_closes_it() {
+    let mut a = app("keys");
+    let mut clock = 1_000_000_000;
+    a.open("bold-puffin");
+    frames(&mut a, &mut clock, 5);
+    let box_top = a.st.chat.box_top;
+    let lh = crate::draw::Text::new(crate::theme::ty::BODY, crate::theme::INK).line(1.4).lh();
+    let box_h = 14.0 + lh + 10.0 + 34.0 + 10.0;
+    let (kx, ky) = (12.0 + (390.0 - 24.0) - 10.0 - 34.0 - 8.0 - 34.0, box_top + box_h - 44.0);
+    tap(&mut a, &mut clock, kx + 17.0, ky + 17.0);
+    assert!(a.st.keys.open, "the toggle opened the strip");
+    // The box stays at the foot; the strip takes its own room above it, the conversation ending higher.
+    assert!((box_top - a.st.chat.box_top).abs() < 0.5, "the box stayed where it was");
+    let max_closed = a.nav.last().unwrap().1.max;
+    a.st.keys.open = false;
+    frames(&mut a, &mut clock, 3);
+    let max_without = a.nav.last().unwrap().1.max;
+    assert!((max_closed - max_without - crate::keys::STRIP_H).abs() < 0.5, "the page made room for the strip, no more");
+    a.st.keys.open = true;
+    frames(&mut a, &mut clock, 3);
+    assert!(a.focus.id.is_none() && !a.st.chat.model_sheet, "nothing else took the tap");
+    let ky = a.st.chat.box_top + box_h - 44.0;
+    tap(&mut a, &mut clock, kx + 17.0, ky + 17.0);
+    assert!(!a.st.keys.open);
+}
+
+#[test]
+fn the_chat_menu_opens_the_terminal_and_back_comes_back() {
+    let mut a = app("terminal");
+    let mut clock = 1_000_000_000;
+    a.open("bold-puffin");
+    a.st.agents.menu = Some("bold-puffin".into());
+    frames(&mut a, &mut clock, 5);
+    // The menu's first row: Open terminal.
+    tap(&mut a, &mut clock, 280.0, 52.0 + 4.0 + 24.0);
+    assert_eq!(a.route(), &Route::Terminal("bold-puffin".into()));
+    crate::terminal::sample(&mut a, "bold-puffin");
+    frames(&mut a, &mut clock, 3);
+    // A key at the foot reads the screen again a moment later.
+    let before = crate::terminal::next_read(&a);
+    tap(&mut a, &mut clock, 40.0, 844.0 - (crate::keys::STRIP_H + 8.0) + 6.0 + 20.0);
+    assert!(crate::terminal::next_read(&a) <= before.min(a.now_ns + 250_000_000));
+    assert_eq!(a.route(), &Route::Terminal("bold-puffin".into()), "the key went to the terminal, not under it");
+    assert!(a.back());
+    assert_eq!(a.route(), &Route::Chat("bold-puffin".into()));
 }
