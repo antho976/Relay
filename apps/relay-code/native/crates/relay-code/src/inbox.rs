@@ -313,7 +313,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         deny_sheet(app);
     }
     // Approve and Send back answer here too, and the send-back sheet opens over the Inbox.
-    crate::board::keep_up(app);
+    crate::board::take_answers(app);
     crate::board::draw_send_back(app);
     if let Some(n) = open {
         app.open(&n);

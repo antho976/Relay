@@ -195,7 +195,7 @@ fn take(app: &mut App) {
             Err(e) => app.toast(&e.message),
         }
     }
-    keep_up(app);
+    take_answers(app);
     let o = &mut app.st.board.open;
     if let Some(r) = o.get.as_ref().and_then(Call::poll) {
         o.get = None;
@@ -242,9 +242,12 @@ pub fn send_back(app: &mut App, id: i64, title: &str) {
     app.st.board.back = Some((id, title.to_string()));
 }
 
-/// Take what the Board's actions answered, on the Board and on the Inbox (which approves and sends
-/// back too): a send-back's comment, then its move.
-pub fn keep_up(app: &mut App) {
+/// Take what the Board's actions answered (an approval, a move, a send-back), on any page: it only
+/// polls what is already on its way. The one request it may start is a send-back's second step,
+/// the move to Active once its comment is in, which finishes that same action. The board is read
+/// again only while the Board or a task shows; elsewhere the PC's task event refreshes the lists
+/// when they next show.
+pub fn take_answers(app: &mut App) {
     if let Some(r) = app.st.board.act.as_ref().and_then(Call::poll) {
         app.st.board.act = None;
         match r {
@@ -257,7 +260,7 @@ pub fn keep_up(app: &mut App) {
                         app.st.board.open.task = Some(tk);
                     }
                 }
-                reload(app);
+                reload_shown(app);
             }
             Err(e) => app.toast(&e.message),
         }
@@ -285,10 +288,17 @@ pub fn keep_up(app: &mut App) {
                     app.st.board.open.task = Some(tk);
                 }
             }
-            reload(app);
+            reload_shown(app);
         }
         // The words stay in the sheet to send again.
         (_, Err(e)) => app.toast(&e.message),
+    }
+}
+
+/// Read the board again, only while a page of it shows.
+fn reload_shown(app: &mut App) {
+    if matches!(app.route(), Route::Board | Route::Task(_)) {
+        reload(app);
     }
 }
 
@@ -822,7 +832,7 @@ mod tests {
         // With words, offline: the comment fails at once, the words and the sheet stay.
         a.st.board.back_words = "The drawer test fails on a tablet.".into();
         a.st.board.back_call = Some((41, a.link.call("task.comment", json!({"task_id": 41, "body": "x"})), false));
-        keep_up(&mut a);
+        take_answers(&mut a);
         assert!(a.st.board.back_call.is_none() && a.st.board.back.is_some());
         assert_eq!(a.st.board.back_words, "The drawer test fails on a tablet.");
         // While it sends, Back leaves it; after, Back closes it.
