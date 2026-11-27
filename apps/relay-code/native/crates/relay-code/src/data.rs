@@ -207,6 +207,19 @@ pub struct Msg {
     pub role: String,
     pub body: Value,
     pub created_at: String,
+    /// On a message of yours sent with `chat.send`: the id the phone (or another device) sent it
+    /// under. Its bubble gives way to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+}
+
+/// A message the PC typed for a `chat.send` that its log does not hold yet (from any device).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PcPending {
+    pub client_id: String,
+    pub text: String,
+    #[serde(default)]
+    pub sent_at: String,
 }
 
 pub fn messages(v: &Value) -> Vec<Msg> {
@@ -222,6 +235,9 @@ pub struct Convo {
     pub msgs: Vec<Msg>,
     pub cursor: Option<u64>,
     pub found: bool,
+    /// What the PC has typed but not logged yet (`pending`), as of the last read.
+    #[serde(default)]
+    pub pending: Vec<PcPending>,
 }
 
 /// The newest this many messages are kept.
@@ -231,7 +247,17 @@ impl Convo {
     /// Take an answer of `session.transcript`: what came after the cursor, or (on `reset`) all of it.
     /// Returns how many of the person's own messages came in, for [`Sending::seen`].
     pub fn take(&mut self, v: &Value) -> usize {
+        self.take_sent(v).0
+    }
+
+    /// [`Convo::take`], also giving the ids your messages that came in were sent under
+    /// (`chat.send`); the count is of those that came in without one (an older PC, or a message
+    /// typed at the PC).
+    pub fn take_sent(&mut self, v: &Value) -> (usize, Vec<String>) {
         let got = messages(v);
+        if let Some(p) = v.get("pending").and_then(Value::as_array) {
+            self.pending = p.iter().filter_map(|x| serde_json::from_value(x.clone()).ok()).collect();
+        }
         let reset = v.get("reset").and_then(Value::as_bool) == Some(true) || self.cursor.is_none();
         self.found = v.get("found").and_then(Value::as_bool).unwrap_or(true);
         if let Some(c) = v.get("cursor").and_then(Value::as_u64) {
@@ -250,10 +276,12 @@ impl Convo {
         if self.msgs.len() > KEEP {
             self.msgs.drain(..self.msgs.len() - KEEP);
         }
+        let new: Vec<&Msg> = self.msgs.iter().filter(|m| m.role == "user" && !users_before.contains(&m.id)).collect();
+        let ids: Vec<String> = new.iter().filter_map(|m| m.client_id.clone()).collect();
         if reset {
-            return 0;
+            return (0, ids);
         }
-        self.msgs.iter().filter(|m| m.role == "user" && !users_before.contains(&m.id)).count()
+        (new.iter().filter(|m| m.client_id.is_none()).count(), ids)
     }
 }
 
@@ -299,6 +327,13 @@ pub struct Pending {
     pub stage: Stage,
     /// The link dropped under it: it goes again by itself, not before this time.
     pub not_before_ms: u64,
+    /// Its own id, for `chat.send` (sent again under the same id, the PC types it once) and for
+    /// the log to give it back by.
+    #[serde(default)]
+    pub client_id: String,
+    /// Sent with `chat.send`: the PC types words and Enter in one go.
+    #[serde(default)]
+    pub via_chat: bool,
 }
 
 /// Enter goes as its own write at least this long after the words, so the program does not take
@@ -363,6 +398,8 @@ pub enum Answer {
     Dropped,
     /// The PC said no: it waits for a tap.
     Refused,
+    /// The PC has no `chat.send` (an older Relay): it goes again at once, the old way.
+    Unsupported,
 }
 
 /// What the queue wants sent next for one agent.
@@ -374,11 +411,13 @@ pub enum Step {
     Enter,
     /// Something is due in this many milliseconds.
     Wait(u64),
+    /// Send these words under this id with `chat.send`: the PC types them and Enter.
+    Send(String, String),
 }
 
 impl Sending {
     pub fn push(&mut self, text: &str, now_ms: u64) {
-        self.waiting.push(Pending { text: text.to_string(), sent_ms: now_ms, failed: false, stage: Stage::Queued, not_before_ms: 0 });
+        self.waiting.push(Pending { text: text.to_string(), sent_ms: now_ms, failed: false, stage: Stage::Queued, not_before_ms: 0, client_id: rc_link::wire::uuid_v4(), via_chat: false });
     }
 
     /// What to send now, if anything; the caller sends it and reports with [`Sending::answered`].
@@ -386,6 +425,12 @@ impl Sending {
     /// typed only once the one before it was entered. A refused message whose words were typed
     /// holds the ones after it: typed behind those words, one Enter would send both as one.
     pub fn next(&mut self, now_ms: u64) -> Option<Step> {
+        self.next_by(now_ms, false)
+    }
+
+    /// [`Sending::next`], with `chat` when the PC takes `chat.send`: a message then goes in one
+    /// call (words and Enter by the PC), and a drop resends it under the same id.
+    pub fn next_by(&mut self, now_ms: u64, chat: bool) -> Option<Step> {
         if self.waiting.iter().any(|p| !p.failed && matches!(p.stage, Stage::Typing | Stage::Entering)) {
             return None;
         }
@@ -400,6 +445,13 @@ impl Sending {
         if p.stage == Stage::Queued {
             p.stage = Stage::Typing;
             p.sent_ms = now_ms;
+            p.via_chat = chat;
+            if chat {
+                if p.client_id.is_empty() {
+                    p.client_id = rc_link::wire::uuid_v4();
+                }
+                return Some(Step::Send(p.text.clone(), p.client_id.clone()));
+            }
             Some(Step::Type(p.text.clone()))
         } else {
             p.stage = Stage::Entering;
@@ -414,6 +466,15 @@ impl Sending {
         let Some(p) = self.waiting.iter_mut().find(|p| !p.failed && matches!(p.stage, Stage::Typing | Stage::Entering)) else { return };
         match (a, p.stage) {
             (Answer::Refused, _) => p.failed = true,
+            (Answer::Unsupported, _) => {
+                p.stage = Stage::Queued;
+                p.not_before_ms = 0;
+            }
+            // Sent with chat.send: the PC typed the words and Enter.
+            (Answer::Ok, Stage::Typing) if p.via_chat => {
+                p.stage = Stage::Entered;
+                p.sent_ms = now_ms;
+            }
             (Answer::Dropped, s) => {
                 // Its words again if they may not have gone (a drop answers before the write
                 // left far more often than after), else Enter again.
@@ -452,6 +513,11 @@ impl Sending {
     /// entered is in it, or gone with what was cleared. Neither waits to be drawn again.
     pub fn reset(&mut self) {
         self.waiting.retain(|p| p.failed || p.stage != Stage::Entered);
+    }
+
+    /// Your messages the log gave back by their ids (`chat.send`): their bubbles give way to them.
+    pub fn seen_ids(&mut self, ids: &[String]) {
+        self.waiting.retain(|p| p.client_id.is_empty() || !ids.contains(&p.client_id));
     }
 
     /// `n` of your messages came into the log: the oldest entered ones are in it now. One not
@@ -1284,7 +1350,7 @@ mod tests {
 
     #[test]
     fn a_tool_answer_goes_to_its_call_by_id() {
-        let msg = |id: &str, role: &str, body: Value| Msg { id: id.into(), role: role.into(), body, created_at: String::new() };
+        let msg = |id: &str, role: &str, body: Value| Msg { id: id.into(), role: role.into(), body, created_at: String::new(), client_id: None };
         let msgs = [
             msg("1", "assistant", json!({"blocks": [
                 {"type": "tool_use", "id": "a", "name": "Bash", "summary": "cargo test"},
@@ -1329,7 +1395,7 @@ mod tests {
 
     #[test]
     fn each_item_keeps_when_it_was_written() {
-        let msg = |id: &str, role: &str, at: &str, body: Value| Msg { id: id.into(), role: role.into(), body, created_at: at.into() };
+        let msg = |id: &str, role: &str, at: &str, body: Value| Msg { id: id.into(), role: role.into(), body, created_at: at.into(), client_id: None };
         let msgs = [
             msg("1", "user", "2026-11-25T10:00:00Z", json!({"text": "go"})),
             msg("2", "assistant", "2026-11-25T10:01:00Z", json!({"blocks": [{"type": "tool_use", "id": "a", "name": "Read", "summary": "x"}]})),
@@ -1383,6 +1449,40 @@ mod tests {
         s.reset();
         s.seen(0);
         assert_eq!(s.waiting.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["after it"]);
+    }
+
+    #[test]
+    fn chat_send_goes_once_by_id_and_its_log_message_replaces_it() {
+        let mut s = Sending::default();
+        s.push("fix it", 0);
+        s.push("then push", 0);
+        let Some(Step::Send(text, id)) = s.next_by(0, true) else { panic!() };
+        assert_eq!(text, "fix it");
+        // The link drops: it goes again under the same id (the PC types it once).
+        s.answered(Answer::Dropped, 10);
+        assert_eq!(s.next_by(10 + RESEND_AFTER_MS, true), Some(Step::Send("fix it".into(), id.clone())));
+        s.answered(Answer::Ok, 1_100);
+        assert_eq!(s.waiting[0].stage, Stage::Entered, "words and Enter in one call");
+        let Some(Step::Send(_, id2)) = s.next_by(1_100, true) else { panic!() };
+        s.answered(Answer::Ok, 1_200);
+        // The log gives the first back by its id: that bubble goes, by id, not by count.
+        let mut c = Convo::default();
+        c.take(&json!({"messages": [], "cursor": 1, "reset": true, "found": true}));
+        let (plain, ids) = c.take_sent(&json!({"messages": [{"id": "u1", "role": "user", "body": {"text": "fix it"}, "created_at": "", "client_id": id}], "cursor": 2, "reset": false, "found": true, "pending": [{"client_id": id2, "text": "then push", "sent_at": ""}]}));
+        assert_eq!(plain, 0, "a message with its id is not counted as well");
+        s.seen_ids(&ids);
+        s.seen(plain);
+        assert_eq!(s.waiting.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["then push"]);
+        assert_eq!(c.pending.len(), 1, "what the PC typed and has not logged yet");
+    }
+
+    #[test]
+    fn an_older_pc_without_chat_send_gets_the_old_way() {
+        let mut s = Sending::default();
+        s.push("hi", 0);
+        assert!(matches!(s.next_by(0, true), Some(Step::Send(..))));
+        s.answered(Answer::Unsupported, 5);
+        assert_eq!(s.next_by(5, false), Some(Step::Type("hi".into())), "at once, words then Enter");
     }
 
     #[test]
