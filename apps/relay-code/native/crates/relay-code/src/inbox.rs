@@ -77,6 +77,8 @@ pub struct State {
     pub all: Vec<Hold>,
     pub holds: Vec<Hold>,
     loaded: bool,
+    /// Why the held commands could not be read, before they were.
+    pub error: Option<String>,
     list: Option<Call>,
     act: Option<Call>,
     /// The repo's tasks waiting in review, read by the page itself.
@@ -108,9 +110,14 @@ fn reload(app: &mut App) {
 fn take(app: &mut App) {
     if let Some(r) = app.st.inbox.list.as_ref().and_then(Call::poll) {
         app.st.inbox.list = None;
-        if let Ok(v) = r {
-            app.st.inbox.all = holds(&v);
-            app.st.inbox.loaded = true;
+        match r {
+            Ok(v) => {
+                app.st.inbox.all = holds(&v);
+                app.st.inbox.loaded = true;
+                app.st.inbox.error = None;
+            }
+            Err(e) if !app.st.inbox.loaded => app.st.inbox.error = Some(e.message),
+            Err(_) => {}
         }
     }
     // The repo chip can change on any page: the count follows it.
@@ -169,8 +176,18 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let holds = app.st.inbox.holds.clone();
     let review = app.st.inbox.review.clone();
     if asking.is_empty() && holds.is_empty() && review.is_empty() && stopped.is_empty() {
-        let (title, body) = if app.online() { ("Nothing needs you", "Agents that ask you something and commands held for you show here.") } else { ("Waiting for your PC", "What needs you shows here as soon as the PC answers.") };
-        let (h, _) = kit::empty(&mut crate::cx!(app), y, title, Some(body), None);
+        let online = app.online();
+        let (h, retry) = match app.st.inbox.error.clone() {
+            Some(e) => kit::problem(&mut crate::cx!(app), y, "Held commands didn't load", &e, online),
+            None => {
+                let (title, body) = if app.online() { ("Nothing needs you", "Agents that ask you something and commands held for you show here.") } else { ("Waiting for your PC", "What needs you shows here as soon as the PC answers.") };
+                kit::empty(&mut crate::cx!(app), y, title, Some(body), None)
+            }
+        };
+        if retry {
+            app.st.inbox.error = None;
+            reload(app);
+        }
         y += h;
     }
     let mut open = None;
@@ -348,6 +365,17 @@ fn deny_sheet(app: &mut App) {
         answered(app, id);
         app.toast("Denied");
     }
+}
+
+/// The Inbox's error for the shot tool (`--state error`).
+pub fn sample_error(app: &mut App) {
+    let st = &mut app.st.inbox;
+    st.all.clear();
+    st.holds.clear();
+    st.review.clear();
+    st.loaded = false;
+    st.error = Some("guardrail.holds.list failed: the PC's store is busy; try again in a moment.".into());
+    app.holds = 0;
 }
 
 /// Sample holds for screenshots.

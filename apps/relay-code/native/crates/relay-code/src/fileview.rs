@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use crate::app::App;
 use crate::data::{self, Lang, Tok};
 use crate::draw::{Rgba, Text, WIDTH, Weight};
+use crate::kit;
 use crate::theme::{self as t, ty};
 
 /// The most of a file the phone reads.
@@ -61,8 +62,10 @@ enum Stage {
     Finding(Call),
     Reading(Call),
     Ready,
-    /// Why there is nothing to show: outside the repo, binary, or the PC's refusal.
+    /// Why there is nothing to show: outside the repo, or binary.
     Note(String),
+    /// The PC refused it, or the link failed: worth trying again.
+    Failed(String),
 }
 
 /// One line as drawn: wrapped pieces after the first carry no number.
@@ -155,7 +158,7 @@ fn found(app: &mut App, repo: i64, r: Result<Value, rc_link::BusError>) {
                 None => st.stage = Stage::Note("This file is not in this repo, so the phone does not read it.".into()),
             }
         }
-        Err(e) => st.stage = Stage::Note(e.message),
+        Err(e) => st.stage = Stage::Failed(e.message),
     }
 }
 
@@ -177,7 +180,7 @@ fn got(app: &mut App, r: Result<Value, rc_link::BusError>) {
                 }
             }
         }
-        Err(e) => st.stage = Stage::Note(e.message),
+        Err(e) => st.stage = Stage::Failed(e.message),
     }
 }
 
@@ -265,12 +268,22 @@ pub fn draw(app: &mut App, repo: i64, worktree: Option<String>, path: &str, dt: 
         }
         Stage::Note(words) => {
             let words = words.clone();
-            y += app.canvas.para(&words, x, y, w, Text::new(ty::UI, t::INK3).line(1.45), 5) + 12.0;
+            let (h, _) = kit::empty(&mut crate::cx!(app), y - kit::EMPTY_GAP + 24.0, "Nothing to show", Some(&words), None);
+            y += h - kit::EMPTY_GAP + 24.0;
+        }
+        Stage::Failed(words) => {
+            let words = words.clone();
+            let online = app.online();
+            let (h, retry) = kit::problem(&mut crate::cx!(app), y - kit::EMPTY_GAP + 24.0, "The file didn't load", &words, online);
+            y += h - kit::EMPTY_GAP + 24.0;
+            if retry {
+                read(app, repo);
+            }
         }
         _ => {
-            let words = if app.online() { "Reading the file…" } else { "The file shows here once the PC answers." };
-            app.canvas.text(words, x, y, Text::new(ty::UI, t::INK3));
-            y += 32.0;
+            let (title, body) = if app.online() { ("Reading the file…", None) } else { ("Waiting for your PC", Some("The file shows here once the PC answers.")) };
+            let (h, _) = kit::empty(&mut crate::cx!(app), y - kit::EMPTY_GAP + 24.0, title, body, None);
+            y += h - kit::EMPTY_GAP + 24.0;
         }
     }
     app.page_end(&page, y + 12.0);
@@ -321,6 +334,13 @@ fn code(app: &mut App, page: &crate::app::Page, x: f32, y: f32, w: f32, gutter: 
         end += 34.0;
     }
     end
+}
+
+/// The file view's error for the shot tool (`--state error`).
+pub fn sample_error(app: &mut App) {
+    let fv = &mut app.st.fileview;
+    fv.stage = Stage::Failed("file.read refused: the path is outside every worktree of this repo.".into());
+    fv.rows.clear();
 }
 
 /// A sample file for screenshots: opened at a line.

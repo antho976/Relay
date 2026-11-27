@@ -82,6 +82,8 @@ pub struct State {
     shown: Option<(String, String, Vec<File>)>,
     pub message: String,
     pub picking: bool,
+    /// Why the open worktree could not be read, before anything of it was.
+    pub error: Option<String>,
     /// The branch picker's list, when it holds more than fits.
     pick_scroll: crate::ui::Scroll,
     /// The foot's menu (Commit without pushing), and the file whose discard waits for a yes.
@@ -757,6 +759,8 @@ fn answered(app: &mut App, job: Job, repo: i64, worktree: Option<String>, r: Res
                 app.st.changes.ask_for(&link, repo, None, Job::Prs, "git.pr.list", json!({"project_id": repo, "refresh": true}));
                 reload(app);
             }
+            // Nothing read yet: the page says why, with Try again. Read before: a toast.
+            (Job::Worktrees | Job::Status | Job::Diff, Err(e)) if !app.st.changes.loaded => app.st.changes.error = Some(e.message),
             (_, Err(e)) => app.toast(&e.message),
         }
     }
@@ -768,6 +772,7 @@ fn answered(app: &mut App, job: Job, repo: i64, worktree: Option<String>, r: Res
         };
         app.st.changes.files = files(&s, &c);
         app.st.changes.loaded = true;
+        app.st.changes.error = None;
     } else if let Some(d) = diffs.last() {
         let c = counts(d);
         for f in &mut app.st.changes.files {
@@ -795,7 +800,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     if app.fresh || changed {
         reload(app);
     }
-    let foot_h = 132.0 + message_extra(app);
+    let footed = foot_shown(&app.st.changes);
+    let foot_h = if footed { 132.0 + message_extra(app) } else { 0.0 };
     // Back on Changes: the place it was left at, with the file that was open.
     if app.fresh
         && let Some((off, max)) = app.st.changes.kept_scroll
@@ -815,15 +821,18 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let (add, rem): (i64, i64) = whole.iter().fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
     let nfiles = st.files.len();
     let busy = st.busy();
-    {
+    // The chip once there are branches to pick from: while connecting there are none.
+    let chip = app.st.changes.loaded || !app.st.changes.worktrees.is_empty();
+    if chip {
         let mut cx = crate::cx!(app);
         let mono = Text::new(ty::MONO, t::INK).face(Weight::Mono);
         let label = if branch.is_empty() { "Pick a branch".to_string() } else { branch.clone() };
-        let bw = cx.c.measure(&label, mono).min(220.0) + 58.0;
+        // Room for the whole label up to 240, a couple of units spare so it is never cut.
+        let bw = cx.c.measure(&label, mono).min(240.0) + 60.0;
         let x = t::PAD;
         cx.c.rect(x, y, bw, 34.0, 10.0, if cx.pressed(x, y, bw, 34.0) { t::S2 } else { t::S1 });
         cx.c.icon("branch", x + 18.0, y + 17.0, 14.0, t::INK2);
-        cx.c.text_fit(&label, x + 32.0, y + 9.0, bw - 58.0, mono);
+        cx.c.text_fit(&label, x + 32.0, y + 9.0, bw - 56.0, mono);
         cx.c.icon("chevron-down", x + bw - 16.0, y + 17.0, 11.0, t::INK3);
         // No switching while a commit or push for this branch is on its way.
         if cx.tap(x, y - 4.0, bw, 42.0) && busy.is_none() {
@@ -838,13 +847,23 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             app.canvas.text(&a, WIDTH - t::PAD - rw - 10.0, y + 9.0, at.right());
         }
     }
-    y += 44.0;
+    if chip {
+        y += 44.0;
+    }
     y = branch_line(app, y);
 
     if !app.st.changes.loaded {
-        let words = if app.online() { "Reading what changed…" } else { "Changes show here once the PC answers." };
-        app.canvas.text(words, t::PAD, y + 10.0, Text::new(ty::UI, t::INK3));
-        y += 40.0;
+        let error = app.st.changes.error.clone();
+        let (h, retry) = match (&error, app.online()) {
+            (Some(e), online) => kit::problem(&mut crate::cx!(app), y, "Changes didn't load", e, online),
+            (None, true) => kit::empty(&mut crate::cx!(app), y, "Reading what changed…", None, None),
+            (None, false) => kit::empty(&mut crate::cx!(app), y, "Waiting for your PC", Some("Changes show here once the PC answers."), None),
+        };
+        if retry {
+            app.st.changes.error = None;
+            reload(app);
+        }
+        y += h;
     } else {
         let mut open: Option<(Group, String)> = None;
         let mut toggle_stage: Option<File> = None;
@@ -876,9 +895,13 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             toggle_stage = t;
         } else if commits.is_empty() {
             let ahead = app.st.changes.ahead;
-            let words = if ahead > 0 { format!("Nothing to commit. {} not pushed yet.", plural(ahead as usize, "commit").to_lowercase()) } else { "Nothing changed on this branch.".to_string() };
-            app.canvas.para(&words, t::PAD, y + 10.0, WIDTH - 2.0 * t::PAD, Text::new(ty::UI, t::INK3).line(1.45), 3);
-            y += 50.0;
+            let (title, body) = if ahead > 0 {
+                ("Nothing to commit".to_string(), format!("{} not pushed yet.", plural(ahead as usize, "commit").to_lowercase()))
+            } else {
+                ("Nothing changed on this branch".to_string(), "What an agent changes on it shows here, file by file.".to_string())
+            };
+            let (h, _) = kit::empty(&mut crate::cx!(app), y - 60.0, &title, Some(&body), None);
+            y += h - 60.0;
         }
         if let Some(f) = toggle_stage
             && let Some(repo) = app.repo
@@ -898,7 +921,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let kept = (sc.off, sc.max);
     app.st.changes.kept_scroll = Some(kept);
     crate::home::top(app, "Changes");
-    foot(app, foot_h, nfiles);
+    if footed {
+        foot(app, foot_h, nfiles);
+    }
     if app.st.changes.picking {
         picker(app, dt);
     } else if app.st.changes.pr_sheet {
@@ -1549,6 +1574,24 @@ fn confirm_discard(app: &mut App) {
     let w = wt(st);
     let op = if f.index == "?" { "file.delete" } else { "file.restore_head" };
     st.ask(&link, repo, Job::Discard(f.path.clone()), op, json!({"project_id": repo, "worktree": w, "path": f.path}));
+}
+
+/// The foot's message and keys show once there is a branch and something to do on it: files to
+/// commit, commits to push, or a pull request to open or look at. Not while connecting, and not on
+/// the base with nothing in hand.
+fn foot_shown(st: &State) -> bool {
+    let branch = st.branch.as_str();
+    st.loaded && !branch.is_empty() && (!st.files.is_empty() || (branch != "HEAD" && (st.ahead > 0 || st.upstream.is_none() || branch != st.base)))
+}
+
+/// Errors on this page for the shot tool (`--state error`): the worktree could not be read.
+pub fn sample_error(app: &mut App) {
+    let st = &mut app.st.changes;
+    st.loaded = false;
+    st.files.clear();
+    st.commits.clear();
+    st.branch_files.clear();
+    st.error = Some("git status failed: not a git repository (or any of the parent directories): .git".into());
 }
 
 /// Under the branch chip: how it stands against its upstream, and Fetch; then its pull request,
@@ -2360,6 +2403,27 @@ mod tests {
         a.st.changes.merging = Some(pr);
         a.st.changes.picking = true;
         assert!(a.st.changes.close_over() && a.st.changes.merging.is_none() && a.st.changes.picking);
+    }
+
+    #[test]
+    fn the_foot_shows_only_with_a_branch_and_something_to_do() {
+        let st = |loaded: bool, branch: &str, files: usize, ahead: i64, upstream: bool| State {
+            loaded,
+            branch: branch.into(),
+            base: "main".into(),
+            files: vec![File::default(); files],
+            ahead,
+            upstream: upstream.then(|| format!("origin/{branch}")),
+            ..State::default()
+        };
+        assert!(!foot_shown(&st(false, "relay/x", 3, 0, true)), "connecting: not yet");
+        assert!(!foot_shown(&st(true, "", 0, 0, false)), "no branch");
+        assert!(!foot_shown(&st(true, "main", 0, 0, true)), "the base, in step, nothing in hand");
+        assert!(foot_shown(&st(true, "main", 2, 0, true)), "files to commit");
+        assert!(foot_shown(&st(true, "main", 0, 1, true)), "a commit to push");
+        assert!(foot_shown(&st(true, "relay/x", 0, 0, true)), "a branch's pull request");
+        assert!(!foot_shown(&st(true, "HEAD", 0, 0, false)), "detached, nothing to commit");
+        assert!(foot_shown(&st(true, "HEAD", 1, 0, false)), "detached, a commit to make");
     }
 
     #[test]
