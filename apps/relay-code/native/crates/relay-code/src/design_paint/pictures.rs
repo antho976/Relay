@@ -23,6 +23,16 @@ const MAX_SOURCE_PX: u64 = 100_000_000;
 /// The most a picture decoded whole before it is shrunk may be (WebP, GIF and interlaced PNG
 /// have no row-by-row reading here).
 const MAX_WHOLE_PX: u64 = 24_000_000;
+/// The longest side a picture is decoded from: past it (a 100 000 px wide strip) it stays a tile,
+/// as the decoders' row buffers grow with the width.
+const MAX_SOURCE_SIDE: u32 = 20_000;
+/// The most pixels a progressive JPEG is decoded from. Its decoder keeps every coefficient of the
+/// whole picture before it can shrink it (2 bytes a sample: 3 bytes a pixel at 4:2:0, 6 at 4:4:4),
+/// so a 50 MP photo took 150 MB at once; past this it stays a tile.
+const MAX_PROGRESSIVE_PX: u64 = 16_000_000;
+/// The most the JPEG decoder may hand back (after its 1/2, 1/4 or 1/8 scaling): a kept picture
+/// at most 4 MP, scaled at most 2× past it on each side, 3 bytes a pixel, with room.
+const MAX_JPEG_OUT: usize = 64 << 20;
 /// The most pixels a picture is kept at, and its longest side.
 const MAX_KEEP_PX: f64 = 4_000_000.0;
 const MAX_KEEP_SIDE: f64 = 4096.0;
@@ -208,6 +218,7 @@ pub fn decode(bytes: &[u8], want: (u32, u32)) -> Result<Picture, Why> {
         Kind::Webp => {
             let mut d = image_webp::WebPDecoder::new(Cursor::new(bytes)).map_err(|e| broken(&e))?;
             let (w, h) = d.dimensions();
+            source_size(w, h)?;
             whole_size(w, h)?;
             let n = d.output_buffer_size().ok_or(Why::TooBig)?;
             let mut buf = vec![0u8; n];
@@ -227,6 +238,7 @@ pub fn decode(bytes: &[u8], want: (u32, u32)) -> Result<Picture, Why> {
             o.set_memory_limit(gif::MemoryLimit::Bytes(std::num::NonZeroU64::new(MAX_WHOLE_PX * 4).expect("not zero")));
             let mut d = o.read_info(Cursor::new(bytes)).map_err(|e| broken(&e))?;
             let (w, h) = (u32::from(d.width()), u32::from(d.height()));
+            source_size(w, h)?;
             whole_size(w, h)?;
             let f = d.read_next_frame().map_err(|e| broken(&e))?.ok_or_else(|| Why::Broken("no frames".into()))?;
             // The first frame on the screen it is part of, clear around it.
@@ -250,6 +262,14 @@ pub fn decode(bytes: &[u8], want: (u32, u32)) -> Result<Picture, Why> {
     }
 }
 
+/// Whether a `w`×`h` source may be decoded at all.
+fn source_size(w: u32, h: u32) -> Result<(), Why> {
+    if w == 0 || h == 0 {
+        return Err(Why::Broken("no pixels".into()));
+    }
+    if u64::from(w) * u64::from(h) > MAX_SOURCE_PX || w.max(h) > MAX_SOURCE_SIDE { Err(Why::TooBig) } else { Ok(()) }
+}
+
 fn whole_size(w: u32, h: u32) -> Result<(), Why> {
     if w == 0 || h == 0 {
         return Err(Why::Broken("no pixels".into()));
@@ -263,12 +283,7 @@ fn png_decode(bytes: &[u8], want: (u32, u32)) -> Result<Picture, Why> {
     d.set_transformations(png::Transformations::normalize_to_color8());
     let mut r = d.read_info().map_err(broken)?;
     let (w, h) = (r.info().width, r.info().height);
-    if w == 0 || h == 0 {
-        return Err(Why::Broken("no pixels".into()));
-    }
-    if u64::from(w) * u64::from(h) > MAX_SOURCE_PX {
-        return Err(Why::TooBig);
-    }
+    source_size(w, h)?;
     let ch = match r.output_color_type().0 {
         png::ColorType::Grayscale => 1,
         png::ColorType::GrayscaleAlpha => 2,
@@ -299,13 +314,14 @@ fn png_decode(bytes: &[u8], want: (u32, u32)) -> Result<Picture, Why> {
 fn jpeg_decode(bytes: &[u8], want: (u32, u32)) -> Result<Picture, Why> {
     let broken = |e: jpeg_decoder::Error| Why::Broken(e.to_string());
     let mut d = jpeg_decoder::Decoder::new(Cursor::new(bytes));
+    d.set_max_decoding_buffer_size(MAX_JPEG_OUT);
     d.read_info().map_err(broken)?;
     let info = d.info().ok_or_else(|| Why::Broken("no header".into()))?;
     let (sw, sh_) = (u32::from(info.width), u32::from(info.height));
-    if sw == 0 || sh_ == 0 {
-        return Err(Why::Broken("no pixels".into()));
-    }
-    if u64::from(sw) * u64::from(sh_) > MAX_SOURCE_PX {
+    source_size(sw, sh_)?;
+    // Asked before decoding: the decoder's own limit is checked only once the coefficients of the
+    // whole picture are already held.
+    if info.coding_process == jpeg_decoder::CodingProcess::DctProgressive && u64::from(sw) * u64::from(sh_) > MAX_PROGRESSIVE_PX {
         return Err(Why::TooBig);
     }
     // Decoded straight at 1/2, 1/4 or 1/8 when that still covers what is kept.
@@ -361,8 +377,9 @@ struct Shrink {
     sh: u32,
     w: u32,
     h: u32,
-    /// Per source column: the kept column it falls in, its share there and in the next.
-    cols: Vec<(u32, f32, f32)>,
+    /// Source columns to a kept one: worked out per pixel, so nothing here grows with the
+    /// source's width.
+    kx: f64,
     ky: f64,
     y: u32,
     /// The kept row `at` and the one after, summed so far.
@@ -375,20 +392,12 @@ struct Shrink {
 impl Shrink {
     fn new(sw: u32, sh: u32, want: (u32, u32)) -> Shrink {
         let (w, h) = keep_size(sw, sh, want);
-        let kx = f64::from(sw) / f64::from(w);
-        let cols = (0..sw)
-            .map(|x| {
-                let j = ((f64::from(x) / kx).floor() as u32).min(w - 1);
-                let end = f64::from(j + 1) * kx;
-                if f64::from(x + 1) <= end + 1e-9 || j + 1 >= w { (j, 1.0, 0.0) } else { (j, (end - f64::from(x)) as f32, (f64::from(x + 1) - end) as f32) }
-            })
-            .collect();
         Shrink {
             sw,
             sh,
             w,
             h,
-            cols,
+            kx: f64::from(sw) / f64::from(w),
             ky: f64::from(sh) / f64::from(h),
             y: 0,
             at: 0,
@@ -403,7 +412,8 @@ impl Shrink {
             return;
         }
         self.line.iter_mut().for_each(|v| *v = 0.0);
-        for (x, &(j, a, b)) in self.cols.iter().enumerate() {
+        for x in 0..self.sw as usize {
+            let (j, a, b) = self.col(x as u32);
             let p = &row[x * 4..x * 4 + 4];
             let al = f32::from(p[3]) / 255.0;
             let px = [f32::from(p[0]) * al, f32::from(p[1]) * al, f32::from(p[2]) * al, f32::from(p[3])];
@@ -433,6 +443,13 @@ impl Shrink {
             }
         }
         self.y += 1;
+    }
+
+    /// The kept column source column `x` falls in, its share there and in the next.
+    fn col(&self, x: u32) -> (u32, f32, f32) {
+        let j = ((f64::from(x) / self.kx).floor() as u32).min(self.w - 1);
+        let end = f64::from(j + 1) * self.kx;
+        if f64::from(x + 1) <= end + 1e-9 || j + 1 >= self.w { (j, 1.0, 0.0) } else { (j, (end - f64::from(x)) as f32, (f64::from(x + 1) - end) as f32) }
     }
 
     /// Write kept row `at` and move on to the next.
@@ -573,6 +590,65 @@ pub fn mark<'a>(srcs: impl IntoIterator<Item = &'a str>) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+
+    #[test]
+    fn a_big_progressive_jpeg_or_a_very_wide_one_stays_a_tile_before_any_decoding() {
+        // Tiny files whose headers say 6000×3000 progressive (18 MP) and 25 000×100 baseline:
+        // turned away on the header, before the decoder holds a coefficient.
+        let prog = hex("ffd8ffe000104a46494600010100000100010000ffdb004300100b0c0e0c0a100e0d0e1211101318281a181616183123251d283a333d3c3933383740485c4e404457453738506d51575f626768673e4d71797064785c656763ffdb0043011112121815182f1a1a2f634238426363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363ffc20011080bb8177003012200021101031101ffc4001500010100000000000000000000000000000003ffc40014010100000000000000000000000000000004ffda000c03010002100310000001902bff00ffc40014100100000000000000000000000000000020ffda00080101000105021fffc40014110100000000000000000000000000000000ffda0008010301013f017fffc40014110100000000000000000000000000000000ffda0008010201013f017fffc40014100100000000000000000000000000000020ffda0008010100063f021fffc40014100100000000000000000000000000000020ffda0008010100013f211fffda000c03010002000300000010fbffc40014110100000000000000000000000000000000ffda0008010301013f107fffc40014110100000000000000000000000000000000ffda0008010201013f107fffc40014100100000000000000000000000000000020ffda0008010100013f101fffd9");
+        let wide = hex("ffd8ffe000104a46494600010100000100010000ffdb004300100b0c0e0c0a100e0d0e1211101318281a181616183123251d283a333d3c3933383740485c4e404457453738506d51575f626768673e4d71797064785c656763ffdb0043011112121815182f1a1a2f634238426363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363ffc0001108006461a803012200021101031101ffc4001f0000010501010101010100000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01020300041105122131410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a25262728292a3435363738393a434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9faffc4001f0100030101010101010101010000000000000102030405060708090a0bffc400b51100020102040403040705040400010277000102031104052131061241510761711322328108144291a1b1c109233352f0156272d10a162434e125f11718191a262728292a35363738393a434445464748494a535455565758595a636465666768696a737475767778797a82838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae2e3e4e5e6e7e8e9eaf2f3f4f5f6f7f8f9faffda000c03010002110311003f00ad451457987bc7ffd9");
+        assert_eq!(sniff(&prog), Kind::Jpeg);
+        assert!(matches!(decode(&prog, (1080, 720)), Err(Why::TooBig)));
+        assert!(matches!(decode(&wide, (1080, 720)), Err(Why::TooBig)));
+        assert!(source_size(20_000, 10).is_ok() && source_size(20_001, 10).is_err());
+    }
+
+    #[test]
+    fn shrinking_works_out_its_columns_from_the_kept_width() {
+        // 10 columns to 4: each kept column the mean of 2.5 source ones, shares split across.
+        let mut sh = Shrink::new(10, 1, (4, 0));
+        assert_eq!((sh.w, sh.h), (4, 1));
+        assert_eq!(sh.col(0), (0, 1.0, 0.0));
+        assert_eq!(sh.col(2), (0, 0.5, 0.5));
+        assert_eq!(sh.col(9), (3, 1.0, 0.0));
+        let row: Vec<u8> = (0..10u8).flat_map(|x| [x * 20, 0, 0, 255]).collect();
+        sh.push(&row);
+        let p = sh.finish();
+        let reds: Vec<u8> = p.levels[0].data.chunks(4).map(|c| c[0]).collect();
+        // (0+20+20/2)/2.5, (20/2+60+80)/2.5, (100+120+140/2)/2.5, (140/2+160+180)/2.5
+        assert_eq!(reds, [16, 64, 116, 164]);
+    }
+
+    /// Peak memory of decoding one picture, for a phone-sized box, on this machine:
+    /// `RC_PICTURE=big.jpg cargo test --release picture_peak_memory -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn picture_peak_memory() {
+        let Ok(path) = std::env::var("RC_PICTURE") else { return };
+        let bytes = std::fs::read(&path).unwrap();
+        let field = |name: &str| {
+            let s = std::fs::read_to_string("/proc/self/status").unwrap();
+            s.lines().find(|l| l.starts_with(name)).and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok()).unwrap()
+        };
+        // Start the peak from here (Linux: 5 resets VmHWM to the current size).
+        std::fs::write("/proc/self/clear_refs", "5").unwrap();
+        let (base, t) = (field("VmRSS:"), std::time::Instant::now());
+        let r = decode(&bytes, (1080, 720));
+        println!(
+            "{path}: {} in {:.0} ms; peak {} MB over {} MB before",
+            match &r {
+                Ok(p) => format!("{}x{} kept, {} MB", p.w, p.h, p.bytes() >> 20),
+                Err(e) => format!("{e:?}"),
+            },
+            t.elapsed().as_secs_f64() * 1000.0,
+            (field("VmHWM:").saturating_sub(base)) >> 10,
+            base >> 10
+        );
+    }
 
     #[test]
     fn base64_decodes_what_attach_encodes() {
