@@ -74,6 +74,27 @@ Shots run capped, as Leaf's: `systemd-run --user --scope -q -p MemoryMax=3G -p M
 The personal build fills in the owner's server so the first screen needs one tap:
 `RELAY_CODE_SERVER=<server> tools/build-lib.sh` (read at build time; blank in every other build).
 
+### First install on your phone
+
+Once, by cable; every build after that comes from the PC (below).
+
+1. **The personal library**, with your server so the first screen needs one tap, from `native/`:
+   `RELAY_CODE_SERVER=<your server> tools/build-lib.sh` (arm64; it also sets the build number,
+   `RELAY_CODE_BUILD`, the commit count).
+2. **The APK**: `cd .. && ./gradlew :app:assembleDebug`, which writes
+   `native/android/build/outputs/apk/debug/app-debug.apk` (about 20 MB; 19.7 MB at build 2826, versionCode
+   and versionName `0.2826` from the commit count), signed with this PC's debug key.
+3. **Install** with the phone on USB debugging: `adb install -r native/android/build/outputs/apk/debug/app-debug.apk`.
+4. **Pair**: open Relay Code, Pair through my server, then Allow on Discord. It connects by itself
+   from then on.
+5. **Notifications**: allow them when Android asks, so an agent that asks you, finishes or has a
+   command held reaches you (Settings has a switch for each).
+6. **Installs for updates**: the first update opens Android's "Install unknown apps" page for
+   Relay Code. Allow it, come back, and tap Install.
+7. **Every later build**: `tools/publish-apk.sh <apk> <instance>`. The phone offers it within 15
+   minutes, or at once from Settings › Check for updates now. Updates install only over a build
+   signed with the same key, so publish debug builds from this PC.
+
 ### Updates from the PC
 
 The phone updates from the PC it is paired with, as Leaf does from its server (`update.rs`). It

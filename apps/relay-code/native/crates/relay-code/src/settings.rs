@@ -141,11 +141,33 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     y += 36.0 + 8.0 + 22.0;
 
     // The app, and forgetting the PC.
-    y += label(app, y, "THIS APP");
+    // About: the build this is (Gradle's versionName says the same), and an update check now.
+    y += label(app, y, "ABOUT");
     let st = Text::new(ty::BODY, t::INK);
+    let build = crate::update::BUILD;
+    let version = if build == 0 { "Development build".to_string() } else { crate::update::version_of(build) };
     app.canvas.text("Relay Code", t::PAD, y + 14.0, st);
-    app.canvas.text(env!("CARGO_PKG_VERSION"), WIDTH - t::PAD, y + 14.0, Text::new(ty::UI, t::INK2).right());
-    y += 52.0 + 12.0;
+    app.canvas.text(&version, WIDTH - t::PAD, y + 14.0, Text::new(ty::UI, t::INK2).right());
+    y += 48.0;
+    {
+        let h = 52.0;
+        let checking = crate::update::checking(app);
+        let mut cx = crate::cx!(app);
+        if cx.pressed(0.0, y, WIDTH, h) {
+            cx.c.rect(8.0, y, WIDTH - 16.0, h, 10.0, t::WASH);
+        }
+        cx.c.text("Check for updates now", t::PAD, y + (h - st.lh()) / 2.0, st);
+        if checking {
+            cx.c.text("Checking…", WIDTH - t::PAD, y + (h - 18.0) / 2.0, Text::new(ty::UI, t::INK3).right());
+        } else {
+            cx.c.icon("refresh", WIDTH - t::PAD - 9.0, y + h / 2.0, 16.0, t::INK2);
+        }
+        if cx.tap(0.0, y, WIDTH, h) && !checking {
+            app.host.haptic();
+            crate::update::check_now(app);
+        }
+        y += h + 12.0;
+    }
     let forget = profile.is_some() || !matches!(app.link_state, LinkState::Unpaired);
     if forget {
         let (x, w, h) = (t::PAD, WIDTH - 2.0 * t::PAD, 46.0);

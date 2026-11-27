@@ -538,7 +538,10 @@ fn the_drawers_list_scrolls_to_earlier_under_its_links() {
 const NOTIFY_TOP: f32 = 56.0 + 52.0 + 30.0 + 36.0 + 24.0 + 22.0 + 30.0;
 /// Under the switches: the text size row (its label, the choices and their room), then the app.
 const TEXT_TOP: f32 = NOTIFY_TOP + 3.0 * 52.0 + 22.0;
-const FORGET_TOP: f32 = TEXT_TOP + 30.0 + 36.0 + 8.0 + 22.0 + 30.0 + 64.0;
+/// About: its label, the build's row, Check for updates now, then Forget.
+const ABOUT_TOP: f32 = TEXT_TOP + 30.0 + 36.0 + 8.0 + 22.0;
+const CHECK_TOP: f32 = ABOUT_TOP + 30.0 + 48.0;
+const FORGET_TOP: f32 = CHECK_TOP + 52.0 + 12.0;
 
 #[test]
 fn a_notification_row_switches_it_and_the_choice_is_kept() {
@@ -1161,4 +1164,20 @@ fn find_in_chat_from_the_menu_hands_the_chat_its_find() {
     frames(&mut a, &mut clock, 2);
     assert!(a.focus.id.is_some(), "the chat's find took the keyboard");
     assert_eq!(a.route(), &Route::Chat("bold-puffin".into()));
+}
+
+// D17: ready for the phone.
+
+#[test]
+fn check_for_updates_now_says_what_it_can() {
+    let mut a = app("check-now");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.push(Route::Settings);
+    frames(&mut a, &mut clock, 3);
+    // Tests, like shots, never reach the PC: the row says so in words rather than doing nothing.
+    tap(&mut a, &mut clock, 200.0, CHECK_TOP + 26.0);
+    assert_eq!(a.toast_words(), Some("Your PC is out of reach. Try again once it answers"));
+    assert_eq!(a.route(), &Route::Settings);
+    assert!(!crate::settings::confirming(&a), "the Forget key under it was not hit");
 }

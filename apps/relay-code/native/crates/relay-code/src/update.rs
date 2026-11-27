@@ -114,6 +114,9 @@ pub struct State {
     pub ready: Option<PathBuf>,
     /// One line under the title: why it waits, or what went wrong.
     pub note: Option<String>,
+    /// "Check for updates now" asked: the answer is said in words, whatever it is, and Later
+    /// does not hide a build asked for by hand.
+    pub by_hand: bool,
 }
 
 impl State {
@@ -128,14 +131,24 @@ pub fn keep_up(app: &mut App) {
         && let Some(r) = call.poll()
     {
         app.st.update.call = None;
+        let by_hand = std::mem::take(&mut app.st.update.by_hand);
         match r {
             Ok(v) if !v.is_null() => {
                 if let Ok(l) = serde_json::from_value::<Latest>(v) {
+                    let mine = this_build();
+                    if by_hand && l.build <= mine {
+                        app.toast(&format!("You have the newest, {}", version_of(mine.max(l.build))));
+                    }
+                    if by_hand && l.build > mine {
+                        app.clear_update_later();
+                    }
                     offered(app, l);
                 }
             }
+            Ok(_) if by_hand => app.toast("No build is published on your PC yet"),
             Ok(_) => {}
-            // An older PC without phone.app.* has nothing to offer: not an error to show.
+            // An older PC without phone.app.* has nothing to offer: said only when asked by hand.
+            Err(e) if by_hand => app.toast(&format!("Couldn't ask your PC: {}", e.message)),
             Err(e) => app.host.log(&format!("update: {}: {}", e.code, e.message)),
         }
     }
@@ -147,6 +160,31 @@ pub fn keep_up(app: &mut App) {
     if let Some(at) = app.st.update.checked {
         app.wake_at(app.now_ns + (at + CHECK_EVERY_MS).saturating_sub(now) * 1_000_000);
     }
+}
+
+/// [`BUILD`], read as a value: a build without a number is 0, which is still compared at run time.
+fn this_build() -> u32 {
+    BUILD
+}
+
+/// "Check for updates now": ask the PC at once, and say what it answered.
+pub fn check_now(app: &mut App) {
+    if !app.online() {
+        app.toast("Your PC is out of reach. Try again once it answers");
+        return;
+    }
+    if app.st.update.call.is_some() {
+        app.st.update.by_hand = true;
+        return;
+    }
+    app.st.update.by_hand = true;
+    app.st.update.checked = Some(rc_link::link::now_ms());
+    app.st.update.call = Some(app.link.call("phone.app.latest", json!({})));
+}
+
+/// A check is on its way.
+pub fn checking(app: &App) -> bool {
+    app.st.update.call.is_some()
 }
 
 /// The PC holds `l`: offered when it is newer than this app and not put off.

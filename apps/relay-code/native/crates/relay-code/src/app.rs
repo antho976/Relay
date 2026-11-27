@@ -406,6 +406,12 @@ impl App {
         }
     }
 
+    /// The toast up now: tests.
+    #[cfg(test)]
+    pub fn toast_words(&self) -> Option<&str> {
+        self.toast.as_ref().map(|t| t.0.as_str())
+    }
+
     pub fn toast(&mut self, words: &str) {
         self.toast = Some((words.to_string(), self.now_ns + 2_500_000_000));
     }
@@ -452,6 +458,12 @@ impl App {
     /// The build "Later" put off, and until when (ms).
     pub fn update_later(&self) -> Option<(u32, u64)> {
         self.config.update_later
+    }
+
+    pub fn clear_update_later(&mut self) {
+        if self.config.update_later.take().is_some() {
+            self.save_config();
+        }
     }
 
     pub fn set_update_later(&mut self, build: u32, until_ms: u64) {
