@@ -200,3 +200,34 @@ pub fn helper(app: &mut App) {
     app.helpers.insert(("swift-ocelot".into(), "toolu_map".into()), crate::app::Helper { items: data::items(&data::messages(&steps)), found: true, at: u64::MAX / 2 });
     app.screens.insert("swift-ocelot".into(), crate::screen::read("────\n❯ \n────\n  ? for shortcuts"));
 }
+
+/// A long conversation for measuring on a phone (A19): 400 messages, as the chat bench's, with
+/// thinking, a command, a 60-line diff and prose in each answer. On bold-puffin.
+pub fn long_chat(app: &mut App) {
+    let long = "The phone matched its own copy to the log by the words, and a queued message is logged differently, so the match missed and both stayed. ".repeat(3);
+    let diff = (0..30).map(|i| format!("-    let old_{i} = users.any {{ it.clientId == mine.id }}\n+    let new_{i} = users.any {{ it.id == mine.id && it.text == mine.text }}")).collect::<Vec<_>>().join("\n");
+    let now = rc_link::link::now_ms();
+    let at = |i: u64| {
+        let s = (now / 1000).saturating_sub((400 - i) * 90);
+        let (y, m, d) = civil((s / 86_400) as i64);
+        let r = s % 86_400;
+        format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", r / 3600, r / 60 % 60, r % 60)
+    };
+    let msgs: Vec<serde_json::Value> = (0..400u64)
+        .map(|i| {
+            if i % 2 == 0 {
+                json!({"id": format!("l{i}"), "role": "user", "created_at": at(i), "body": {"text": format!("Message {i}: push it when the tests pass, and check the board.")}})
+            } else {
+                json!({"id": format!("l{i}"), "role": "assistant", "created_at": at(i), "body": {"blocks": [
+                    {"type": "thinking", "text": long},
+                    {"type": "tool_use", "id": format!("b{i}"), "name": "Bash", "summary": "cargo test --locked"},
+                    {"type": "tool_use", "id": format!("e{i}"), "name": "Edit", "summary": "data/SessionChat.kt", "detail": diff},
+                    {"type": "text", "text": format!("{long}\n\n- **Matched by count**, never by words\n- `cargo test` passes ({i})")},
+                ]}})
+            }
+        })
+        .collect();
+    let mut c = Convo::default();
+    c.take(&json!({"messages": msgs, "cursor": 1, "reset": true, "found": true}));
+    app.convos.insert("bold-puffin".into(), c);
+}

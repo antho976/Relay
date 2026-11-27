@@ -322,9 +322,65 @@ pub extern "system" fn Java_com_quietsoftware_relaycode_CodeActivity_nativeSampl
         return;
     }
     let n: String = env.get_string(&name).map(Into::into).unwrap_or_default();
+    PERF.store(n == "chat400", Ordering::SeqCst);
     if !n.is_empty() {
         *SAMPLE.lock().unwrap_or_else(|e| e.into_inner()) = Some(n);
         wake();
+    }
+}
+
+/// Frames timed into the log (`RelayCodePerf`), for the long-chat sample only (A19).
+static PERF: AtomicBool = AtomicBool::new(false);
+
+/// What the frame-time log keeps between reports: each frame's build (app.frame) and present
+/// (s.frame) times and the gap since the frame before it while frames run back to back, and when
+/// typed text came in.
+#[derive(Default)]
+struct Perf {
+    build: Vec<u64>,
+    present: Vec<u64>,
+    gaps: Vec<u64>,
+    last: Option<u64>,
+    text_at: Option<u64>,
+}
+
+impl Perf {
+    fn frame(&mut self, start: u64, built: u64, shown: u64) {
+        self.build.push(built - start);
+        self.present.push(shown - built);
+        // Back to back: a fling or an animation, not a frame after a pause.
+        if let Some(l) = self.last.filter(|l| start - l < 70_000_000) {
+            self.gaps.push(start - l);
+        }
+        self.last = Some(start);
+        if let Some(t) = self.text_at.take() {
+            log(&format!("RelayCodePerf text in to glyph shown {:.1} ms", (shown - t) as f64 / 1e6));
+        }
+        if self.build.len() >= 120 {
+            let pct = |v: &mut Vec<u64>, p: f64| {
+                v.sort_unstable();
+                v.get(((v.len() as f64 - 1.0) * p).round() as usize).map_or(0.0, |x| *x as f64 / 1e6)
+            };
+            let over = self.gaps.iter().filter(|g| **g > 16_700_000 + 4_000_000).count();
+            let n_gaps = self.gaps.len();
+            log(&format!(
+                "RelayCodePerf frames {} build p50 {:.2} p95 {:.2} max {:.2} ms | present p50 {:.2} p95 {:.2} ms | gaps {} p50 {:.2} p95 {:.2} max {:.2} ms, over 20.7 ms {}",
+                self.build.len(),
+                pct(&mut self.build, 0.5),
+                pct(&mut self.build, 0.95),
+                pct(&mut self.build, 1.0),
+                pct(&mut self.present, 0.5),
+                pct(&mut self.present, 0.95),
+                n_gaps,
+                pct(&mut self.gaps, 0.5),
+                pct(&mut self.gaps, 0.95),
+                pct(&mut self.gaps, 1.0),
+                over
+            ));
+            self.build.clear();
+            self.present.clear();
+            self.gaps.clear();
+        }
     }
 }
 
@@ -436,6 +492,7 @@ const RETRY_NS: u64 = 16_000_000;
 fn android_main(android: AndroidApp) {
     let started = now_ns();
     let mut first_frame = true;
+    let mut perf = Perf::default();
     std::panic::set_hook(Box::new(|info| log(&format!("panic: {info}"))));
     *WAKER.lock().unwrap_or_else(|e| e.into_inner()) = Some(android.create_waker());
     crate::wake::set(Box::new(wake));
@@ -636,6 +693,9 @@ fn android_main(android: AndroidApp) {
         if let Some((t, sel)) = text {
             app.set_text_sel(&t, Some(sel));
             dirty = true;
+            if PERF.load(Ordering::Relaxed) {
+                perf.text_at = Some(now_ns());
+            }
         }
         if done_typing || (go_back && app.focus.id.is_some()) {
             app.done_typing();
@@ -660,14 +720,20 @@ fn android_main(android: AndroidApp) {
             && let (Some(g), Some(s)) = (&mut gfx, &mut screen)
         {
             dirty = false;
-            next = app.frame(now_ns());
+            let frame_start = now_ns();
+            next = app.frame(frame_start);
             if app.canvas.take_late_pictures() {
                 next = Next::Now;
             }
             g.upload_glyphs(&mut app.canvas.uploads);
             g.upload_images(&mut app.canvas.image_uploads);
             let (globals, clear) = (app.canvas.globals, app.clear_colour());
-            if !s.frame(g, &globals, clear, &app.canvas.insts, &app.canvas.batches) {
+            let built = now_ns();
+            let shown_ok = s.frame(g, &globals, clear, &app.canvas.insts, &app.canvas.batches);
+            if PERF.load(Ordering::Relaxed) {
+                perf.frame(frame_start, built, now_ns());
+            }
+            if !shown_ok {
                 next = Next::At(now_ns() + RETRY_NS);
             } else if first_frame {
                 // Read by the smoke run beside `am start -W`'s TotalTime.
