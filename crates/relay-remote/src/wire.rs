@@ -146,6 +146,8 @@ pub const PHONE_OPS: &[&str] = &[
     "arbiter.strategy.get", "arbiter.summary",
     "avd.boot", "avd.list",
     "bus.ping", "bus.subscribe", "bus.unsubscribe",
+    // A person's message to an agent, kept under the phone's id (Relay Code's chat).
+    "chat.send",
     "dashboard.get",
     // A project's design canvases, to list, open and draw with their pictures
     // (docs/DESIGN-CANVAS.md).
