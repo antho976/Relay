@@ -149,6 +149,9 @@ pub struct State {
     /// Sending a task in review back to Active: the task (id, title), what to change, and the
     /// comment then the move on their way (`moved` once the comment is in).
     pub back: Option<(i64, String)>,
+    /// A task being written on the phone, and its create on its way.
+    pub new_task: Option<NewTask>,
+    creating: Option<Call>,
     pub back_words: String,
     back_call: Option<(i64, Call, bool)>,
     /// Each card's title height, measured once per title: wrapping 80 titles every frame was
@@ -226,6 +229,100 @@ fn take(app: &mut App) {
             // The words stay in the box to send again.
             Err(e) => app.toast(&crate::errors::words(&e)),
         }
+    }
+}
+
+/// A task written on the phone: its title, what it is, and the column it starts in.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NewTask {
+    pub title: String,
+    pub body: String,
+    /// Into [`NEW_COLUMNS`].
+    pub column: usize,
+}
+
+/// The columns a task may start in from the phone.
+pub const NEW_COLUMNS: [(&str, &str); 3] = [("backlog", "Backlog"), ("ready", "Ready"), ("active", "Active")];
+
+/// What `task.create` is sent for a task written on the phone.
+pub fn create_payload(repo: i64, t: &NewTask) -> Value {
+    let mut p = json!({"project_id": repo, "title": t.title.trim(), "column": NEW_COLUMNS[t.column.min(2)].0});
+    if !t.body.trim().is_empty() {
+        p["body"] = json!(t.body.trim());
+    }
+    p
+}
+
+/// Open the New task sheet, starting in the column the Board shows (Backlog past Active).
+pub fn new_task(app: &mut App) {
+    let shown = COLUMNS[app.st.board.column.min(4)].0;
+    let column = NEW_COLUMNS.iter().position(|(k, _)| *k == shown).unwrap_or(0);
+    app.st.board.new_task = Some(NewTask { column, ..NewTask::default() });
+}
+
+/// The New task sheet: a title, what it is (optional), the column; Create makes it and opens it.
+fn draw_new_task(app: &mut App) {
+    let Some(mut nt) = app.st.board.new_task.clone() else { return };
+    let creating = app.st.board.creating.is_some();
+    let body_w = WIDTH - 2.0 * t::PAD - 28.0;
+    let extra = crate::changes::prose_extra(app, "new-task-body", &nt.body, body_w);
+    let h = 380.0 + extra;
+    let (top, outside) = kit::sheet(&mut crate::cx!(app), h);
+    if outside && !creating {
+        app.finish_typing();
+        app.st.board.new_task = None;
+        return;
+    }
+    let (x, w) = (t::PAD, WIDTH - 2.0 * t::PAD);
+    app.canvas.text("New task", x + 4.0, top + 28.0, Text::new(ty::SECTION, t::INK).semi());
+    app.canvas.text_fit(&format!("On the board of {}", app.repo_name()), x + 4.0, top + 52.0, w - 8.0, Text::new(ty::CAPTION, t::INK3));
+    let mut y = top + 84.0;
+    y += kit::field(&mut crate::cx!(app), "new-task-title", x, y, w, "Title", "What needs doing", &mut nt.title, kit::Kb::Text) + 14.0;
+    let lt = Text::new(ty::CAPTION, t::INK2).medium();
+    app.canvas.text("What it is (optional)", x + 2.0, y, lt);
+    let by = y + lt.lh() + 6.0;
+    let bh = 48.0 + extra;
+    let focused = app.focus.is("new-task-body");
+    app.canvas.rect(x, by, w, bh, t::KEY_R, t::S1);
+    app.canvas.outline(x, by, w, bh, t::KEY_R, 1.0, if focused { t::INK3 } else { t::LINE });
+    crate::changes::prose_box(app, "new-task-body", "The details an agent needs", x + 14.0, by + 1.0, body_w, bh, &mut nt.body);
+    y = by + bh + 16.0;
+    let names: Vec<&str> = NEW_COLUMNS.iter().map(|(_, n)| *n).collect();
+    if let Some(i) = kit::segmented_on(&mut crate::cx!(app), x, y, w, &names, nt.column, t::S2) {
+        nt.column = i;
+    }
+    let ready = !nt.title.trim().is_empty() && !creating && app.online();
+    let label = if creating { "Creating…" } else { "Create task" };
+    let ky = top + h - 62.0;
+    let mut cx = crate::cx!(app);
+    let go = if ready { kit::primary(&mut cx, x, ky, w, 46.0, label, None) } else { kit::plain(&mut cx, x, ky, w, 46.0, label, None) && false };
+    if go && let Some(repo) = app.repo {
+        app.finish_typing();
+        app.st.board.creating = Some(app.link.call("task.create", create_payload(repo, &nt)));
+    }
+    // Only while the sheet is still the one being written (a create's answer may have closed it).
+    if let Some(cur) = app.st.board.new_task.as_mut() {
+        *cur = nt;
+    }
+}
+
+/// A create's answer: the task joins the board and opens; a refusal keeps the sheet's words.
+fn take_created(app: &mut App) {
+    let Some(r) = app.st.board.creating.as_ref().and_then(Call::poll) else { return };
+    app.st.board.creating = None;
+    match r {
+        Ok(v) => {
+            app.st.board.new_task = None;
+            if let Some(tk) = task(&v) {
+                let id = tk.id;
+                app.st.board.tasks.push(Task { body: String::new(), ..tk.clone() });
+                app.st.board.open = Opened { id, task: Some(tk), ..Opened::default() };
+                app.toast("Task created");
+                app.push(Route::Task(id));
+            }
+            reload_shown(app);
+        }
+        Err(e) => app.toast(&crate::errors::words(&e)),
     }
 }
 
@@ -343,6 +440,9 @@ pub fn draw_send_back(app: &mut App) {
 impl State {
     /// Back: the send-back sheet closes (unless it is sending). False when it was not open.
     pub fn close_over(&mut self) -> bool {
+        if self.creating.is_none() && self.new_task.take().is_some() {
+            return true;
+        }
         self.back_call.is_none() && self.back.take().is_some()
     }
 }
@@ -374,7 +474,13 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         let column = COLUMNS[app.st.board.column.min(4)].1;
         let empty_body = format!("Tasks moved to {column} show here.");
         let (h, retry) = match (app.st.board.loaded, &error, app.online()) {
-            (true, _, _) => kit::empty(&mut crate::cx!(app), y, &format!("Nothing in {column}"), Some(&empty_body), None),
+            (true, _, _) => {
+                let (h, add) = kit::empty(&mut crate::cx!(app), y, &format!("Nothing in {column}"), Some(&empty_body), Some("New task"));
+                if add {
+                    new_task(app);
+                }
+                (h, false)
+            }
             (false, Some(e), online) => kit::problem(&mut crate::cx!(app), y, "The board didn't load", e, online),
             (false, None, true) => kit::empty(&mut crate::cx!(app), y, "Reading the board…", None, None),
             (false, None, false) => kit::empty(&mut crate::cx!(app), y, "Waiting for your PC", Some("The board shows here once the PC answers."), None),
@@ -415,6 +521,23 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         }
         y += h + 10.0;
     }
+    // At the list's foot: a new task, starting in this column.
+    if app.st.board.loaded && !list.is_empty() {
+        let label = "New task";
+        let small = Text::new(ty::UI, t::INK2).medium();
+        let lw = app.canvas.measure(label, small) + 52.0;
+        let mut cx = crate::cx!(app);
+        let x = t::PAD;
+        if cx.pressed(x, y, lw, 44.0) {
+            cx.c.rect(x, y, lw, 44.0, 10.0, t::WASH);
+        }
+        cx.c.icon("plus", x + 20.0, y + 22.0, 14.0, t::INK2);
+        cx.c.text(label, x + 38.0, y + (44.0 - small.lh()) / 2.0, small);
+        if cx.tap(x, y, lw, 44.0) {
+            new_task(app);
+        }
+        y += 54.0;
+    }
     app.page_end(&page, y);
     crate::home::top(app, "Board");
     // The column tabs, under the top bar, on its layer.
@@ -440,7 +563,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     if let Some(id) = open {
         app.push(Route::Task(id));
     }
-    page.moving
+    take_created(app);
+    draw_new_task(app);
+    page.moving || app.st.board.creating.is_some() && !crate::wake::has()
 }
 
 /// One task: its words, who is on it, the next step, a comment.
@@ -850,6 +975,46 @@ mod tests {
         a.st.board.act = Some(rc_link::Call::never());
         approve(&mut a, 41);
         assert!(a.st.board.act.is_some());
+    }
+
+    #[test]
+    fn a_new_task_is_sent_with_its_title_column_and_body_when_there_is_one() {
+        let t = NewTask { title: "  Pinch zoom jumps  ".into(), body: " ".into(), column: 2 };
+        assert_eq!(create_payload(7, &t), json!({"project_id": 7, "title": "Pinch zoom jumps", "column": "active"}));
+        let t = NewTask { title: "A".into(), body: "Why\nand how".into(), column: 0 };
+        assert_eq!(create_payload(7, &t)["body"], "Why\nand how");
+    }
+
+    #[test]
+    fn the_new_task_sheet_starts_on_the_column_shown_and_keeps_its_taps() {
+        let dir = std::env::temp_dir().join(format!("relay-code-board-new-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(NoHost(dir)), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        a.push(Route::Board);
+        a.st.board.column = 2;
+        new_task(&mut a);
+        assert_eq!(a.st.board.new_task.as_ref().map(|t| t.column), Some(2), "Active, as shown");
+        a.st.board.column = 3;
+        new_task(&mut a);
+        assert_eq!(a.st.board.new_task.as_ref().map(|t| t.column), Some(0), "In review is no place to start: Backlog");
+        a.st.board.column = 2;
+        let mut clock = 2_000_000_000u64;
+        for _ in 0..3 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        // On the sheet's title, over the board's cards: the sheet stays, no card opens.
+        let top = 844.0 - 380.0;
+        lift(&mut a, &mut clock, 200.0, top + 30.0);
+        assert!(a.st.board.new_task.is_some() && *a.route() == Route::Board);
+        // A failed create keeps the words; Back then closes the sheet.
+        a.st.board.new_task.as_mut().unwrap().title = "Pinch zoom jumps".into();
+        a.st.board.creating = Some(a.link.call("task.create", json!({})));
+        take_created(&mut a);
+        assert_eq!(a.st.board.new_task.as_ref().map(|t| t.title.as_str()), Some("Pinch zoom jumps"));
+        assert!(a.st.board.close_over() && a.st.board.new_task.is_none());
     }
 
     #[test]
