@@ -360,8 +360,8 @@ pub fn markdown(app: &mut App, md: &str, x: f32, y: f32, w: f32, prose: Text, dr
                 h += spans(app, &text, ix + hang, y + h, tw, prose, 200, draw);
                 h += 6.0;
             }
-            Piece::Code(code) => {
-                h += code_block(app, &code, blocks, x, y + h, w, draw) + 12.0;
+            Piece::Code(code, tag) => {
+                h += code_block(app, &code, data::lang_of_fence(&tag, &code), blocks, x, y + h, w, draw) + 12.0;
                 blocks += 1;
             }
             Piece::Table(rows) => {
@@ -386,24 +386,42 @@ const CODE_LINES: usize = 40;
 
 /// A fenced code block on its own ground, with a copy key. A long one shows its first
 /// [`CODE_LINES`] and a key for the rest.
-fn code_block(app: &mut App, code: &str, n: usize, x: f32, y: f32, w: f32, draw: bool) -> f32 {
+#[allow(clippy::too_many_arguments)]
+fn code_block(app: &mut App, code: &str, lang: Option<data::Lang>, n: usize, x: f32, y: f32, w: f32, draw: bool) -> f32 {
     let st = Text::new(ty::MONO, t::INK).face(Weight::Mono).line(1.5);
+    let lh = st.lh();
     // The words keep clear of the copy key at the top right.
     let cw = w - 28.0 - 26.0;
     // Its fold follows its message and its place there, not its words (two alike stay apart).
     let key = (ikey(app, app.st.chat.drawing), n);
-    // Folded by the code's own lines, each wrapped as it must be.
-    let src = code.lines().count();
+    // Each line as coloured runs (by its language, A21), its indent kept, wrapped as it must be.
+    let lines: Vec<(Vec<crate::draw::Run>, f32, usize)> = code
+        .lines()
+        .map(|l| {
+            let body = l.trim_start_matches(' ');
+            let indent = app.canvas.measure(&l[..l.len() - body.len()], st);
+            let runs: Vec<crate::draw::Run> = match lang {
+                Some(lg) => data::tokens(body, lg).into_iter().map(|(k, text)| crate::draw::Run { text, style: st.color(tok_ink(k, t::INK)), chip: None, underline: false }).collect(),
+                None => vec![crate::draw::Run { text: body.to_string(), style: st, chip: None, underline: false }],
+            };
+            let rows = if body.is_empty() { 1 } else { app.canvas.rich_lines(&runs, (cw - indent).max(40.0)).len().max(1) };
+            (runs, indent, rows)
+        })
+        .collect();
+    let src = lines.len();
     let open = app.st.chat.open_code.contains(&key);
-    let rows = app.canvas.wrap(code, cw, st, 4000);
+    // Folded by the code's own lines.
     let more = src > CODE_LINES;
-    let shown = if open || !more { rows.len() } else { code.lines().take(CODE_LINES).map(|l| app.canvas.wrap(l, cw, st, 4000).len()).sum::<usize>().min(rows.len()) };
-    let ch = shown as f32 * st.lh() + if more { 30.0 } else { 0.0 };
+    let take = if open || !more { src } else { CODE_LINES };
+    let shown: usize = lines.iter().take(take).map(|l| l.2).sum();
+    let ch = shown as f32 * lh + if more { 30.0 } else { 0.0 };
     if draw {
         app.canvas.rect(x, y, w, ch + 24.0, 12.0, t::CODE);
         app.canvas.outline(x, y, w, ch + 24.0, 12.0, 1.0, t::LINE);
-        for (i, l) in rows.iter().take(shown).enumerate() {
-            app.canvas.text(l, x + 14.0, y + 12.0 + i as f32 * st.lh(), st);
+        let mut ly = y + 12.0;
+        for (runs, indent, rows) in lines.iter().take(take) {
+            app.canvas.rich(runs, x + 14.0 + indent, ly, (cw - indent).max(40.0), lh, *rows, true);
+            ly += *rows as f32 * lh;
         }
         let (kx, ky) = (x + w - 22.0, y + 21.0);
         let mut cx = crate::cx!(app);
@@ -883,7 +901,7 @@ fn plain_words(it: &Item) -> Option<String> {
         .map(|p| match p {
             Piece::Prose(s) | Piece::Heading(s) => flat(&s),
             Piece::Item { mark, text, depth } => format!("{}{mark} {}", "  ".repeat(depth as usize), flat(&text)),
-            Piece::Code(c) => c,
+            Piece::Code(c, _) => c,
             Piece::Table(rows) => rows.iter().map(|r| r.join("\t")).collect::<Vec<_>>().join("\n"),
         })
         .collect();

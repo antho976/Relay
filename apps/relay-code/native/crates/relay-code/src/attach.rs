@@ -98,7 +98,7 @@ pub fn upload(link: Link, session: String, path: PathBuf) {
                     }
                     path
                 }
-                Err(e) => Err(e.message),
+                Err(e) => Err(crate::errors::words(&e)),
             },
         };
         let _ = std::fs::remove_file(&path);

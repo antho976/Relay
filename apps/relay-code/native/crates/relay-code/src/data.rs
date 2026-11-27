@@ -713,6 +713,36 @@ pub enum Lang {
     Dashes,
 }
 
+/// The language of fenced code: from its fence's tag (`rust`, `kotlin`, `py`, `sh`…), else
+/// guessed from how it reads.
+pub fn lang_of_fence(tag: &str, code: &str) -> Option<Lang> {
+    let t = tag.trim().to_ascii_lowercase();
+    let ext = match t.as_str() {
+        "rust" => "rs",
+        "kotlin" => "kt",
+        "python" => "py",
+        "javascript" | "node" => "js",
+        "typescript" => "ts",
+        "bash" | "shell" | "console" | "zsh" | "fish" => "sh",
+        "golang" => "go",
+        "c++" => "cpp",
+        "" => "",
+        other => other,
+    };
+    if !ext.is_empty() {
+        return lang_of(&format!("x.{ext}"));
+    }
+    // No tag: a light guess, else no colour.
+    let has = |w: &str| code.lines().any(|l| l.trim_start().starts_with(w));
+    if has("fn ") || has("let ") || has("pub ") || has("use ") || has("val ") || has("fun ") || has("const ") || has("import {") || code.contains("//") {
+        Some(Lang::Slashes)
+    } else if has("def ") || has("import ") || has("$ ") || has("#!") || has("cargo ") || has("git ") || has("cd ") {
+        Some(Lang::Hash)
+    } else {
+        None
+    }
+}
+
 pub fn lang_of(path: &str) -> Option<Lang> {
     let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase())?;
     Some(match ext.as_str() {
@@ -1041,7 +1071,8 @@ pub enum Piece {
     Heading(String),
     /// A list item: its mark ("•" or "2."), its words, how deep it is nested (0 to 2).
     Item { mark: String, text: String, depth: u8 },
-    Code(String),
+    /// Fenced code and its fence's language tag ("" when it has none).
+    Code(String, String),
     /// A table's rows, each its cells (the head first), their words plain.
     Table(Vec<Vec<String>>),
 }
@@ -1053,6 +1084,7 @@ pub fn pieces(md: &str) -> Vec<Piece> {
     let mut out = Vec::new();
     let mut para = String::new();
     let mut code: Option<String> = None;
+    let mut tag = String::new();
     let mut table: Vec<Vec<String>> = Vec::new();
     // An item's words go on across lines until a blank line or another block.
     let mut in_item = false;
@@ -1071,12 +1103,13 @@ pub fn pieces(md: &str) -> Vec<Piece> {
     for line in md.lines() {
         if line.trim_start().starts_with("```") {
             match code.take() {
-                Some(c) => out.push(Piece::Code(c.trim_end_matches('\n').to_string())),
+                Some(c) => out.push(Piece::Code(c.trim_end_matches('\n').to_string(), std::mem::take(&mut tag))),
                 None => {
                     flush_para(&mut out, &mut para);
                     flush_table(&mut out, &mut table);
                     in_item = false;
                     code = Some(String::new());
+                    tag = line.trim_start().trim_start_matches('`').split_whitespace().next().unwrap_or_default().to_string();
                 }
             }
             continue;
@@ -1128,7 +1161,7 @@ pub fn pieces(md: &str) -> Vec<Piece> {
         para.push_str(t);
     }
     if let Some(c) = code {
-        out.push(Piece::Code(c.trim_end_matches('\n').to_string()));
+        out.push(Piece::Code(c.trim_end_matches('\n').to_string(), tag));
     }
     flush_table(&mut out, &mut table);
     flush_para(&mut out, &mut para);
@@ -1571,6 +1604,17 @@ mod tests {
     }
 
     #[test]
+    fn fenced_code_takes_its_language_from_the_tag_or_a_guess() {
+        assert_eq!(pieces("```kotlin\nval a = 1\n```"), [Piece::Code("val a = 1".into(), "kotlin".into())]);
+        assert_eq!(lang_of_fence("kotlin", ""), Some(Lang::Slashes));
+        assert_eq!(lang_of_fence("bash", ""), Some(Lang::Hash));
+        assert_eq!(lang_of_fence("", "fn main() {}"), Some(Lang::Slashes));
+        assert_eq!(lang_of_fence("", "cargo test --locked"), Some(Lang::Hash));
+        assert_eq!(lang_of_fence("", "just some words"), None);
+        assert_eq!(lang_of_fence("text", "fn a"), None, "a tag that names no language: plain");
+    }
+
+    #[test]
     fn code_is_coloured_lightly() {
         let t = tokens("let s = \"a // b\"; // done 2", Lang::Slashes);
         assert_eq!(t, [(Tok::Keyword, "let".into()), (Tok::Plain, " s = ".into()), (Tok::Str, "\"a // b\"".into()), (Tok::Plain, "; ".into()), (Tok::Comment, "// done 2".into())]);
@@ -1776,7 +1820,7 @@ mod tests {
     #[test]
     fn markdown_is_drawn_simply() {
         let p = pieces("**Fixed.** Run `cargo test`:\n```rust\nfn a() {}\n```\nDone.");
-        assert_eq!(p, [Piece::Prose("**Fixed.** Run `cargo test`:".into()), Piece::Code("fn a() {}".into()), Piece::Prose("Done.".into())]);
+        assert_eq!(p, [Piece::Prose("**Fixed.** Run `cargo test`:".into()), Piece::Code("fn a() {}".into(), "rust".into()), Piece::Prose("Done.".into())]);
     }
 
     fn sp(text: &str, bold: bool, italic: bool, code: bool, link: Option<&str>) -> Span {
