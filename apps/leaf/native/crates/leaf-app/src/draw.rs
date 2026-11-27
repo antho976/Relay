@@ -161,11 +161,17 @@ struct ImageAtlas {
     pics: HashMap<String, Picture>,
     /// The frame being drawn (counted by [`Canvas::begin`]).
     frame: u64,
+    /// A picture found no room while pictures not drawn lately held it, in slots of another
+    /// size that could not take it (Home's covers when a chapter's tiles come): the atlas starts
+    /// over at the next frame's start ([`Canvas::begin`]), and what is on screen goes up again.
+    crowded: bool,
+    /// The frame it last started over so, so it never does every frame.
+    crowded_at: u64,
 }
 
 impl ImageAtlas {
     fn new(size: u32) -> ImageAtlas {
-        ImageAtlas { size, shelf: (1, 1, 0), free: Vec::new(), pics: HashMap::new(), frame: 0 }
+        ImageAtlas { size, shelf: (1, 1, 0), free: Vec::new(), pics: HashMap::new(), frame: 0, crowded: false, crowded_at: 0 }
     }
 
     fn reset(&mut self) {
@@ -217,6 +223,12 @@ impl ImageAtlas {
             self.reset();
             self.shelf_place(sw, sh)
         } else {
+            // Room held by pictures not drawn lately, none of whose slots fits this one: only
+            // starting over frees it (2026-11-27: covers left from Home kept a webtoon to one tile
+            // slot, so each page coming on screen pushed out the one above).
+            if self.pics.values().any(|p| p.used < keep_from) {
+                self.crowded = true;
+            }
             None
         }?;
         let s = self.size as f32;
@@ -255,6 +267,8 @@ type Waiting = (String, u32, u32, (u32, u32), Vec<u8>);
 
 /// How many decoded pictures may wait for room in the atlas.
 const MAX_WAITING: usize = 6;
+/// The picture atlas starts over for crowding at most once in this many frames.
+const PICTURES_START_OVER_EVERY: u64 = 120;
 
 pub struct Canvas {
     pub insts: Vec<Inst>,
@@ -345,6 +359,13 @@ impl Canvas {
         if self.shelf_y > GLYPHS_START_OVER {
             self.reset_glyphs();
         }
+        // The same for pictures crowded out by ones not drawn lately: what this frame draws goes
+        // up again in it (a page's tiles from their decoded pixels, a cover from disk).
+        if self.images.crowded && (self.images.crowded_at == 0 || self.images.frame >= self.images.crowded_at + PICTURES_START_OVER_EVERY) {
+            self.images.reset();
+            self.images.crowded_at = self.images.frame;
+        }
+        self.images.crowded = false;
     }
 
     /// Forget every glyph and icon in the atlas; they are rasterised again as they are asked for.
@@ -1080,6 +1101,47 @@ mod tests {
             assert!(a.place("p12", PW, PH, frame - 1).is_none());
             assert_eq!(a.pics.len(), 12);
         }
+    }
+
+    #[test]
+    fn covers_left_from_another_page_make_room_for_a_chapters_tiles() {
+        // Home's covers fill most of the atlas, then a chapter opens: its tiles, drawn every
+        // frame, must not take turns in the one slot left (2026-11-27: each page coming on screen
+        // pushed out the one above, which went dark).
+        let mut c = Canvas::new(crate::app::FONTS);
+        let cover = vec![90u8; (240 * 360 * 4) as usize];
+        c.begin(1080.0, 2340.0, 0.0, 0.0);
+        let mut n = 0;
+        while c.add_image_slot(&format!("cover{n}"), 240, 360, (240, 360), cover.clone()) {
+            n += 1;
+        }
+        assert!(n > 100, "{n} covers");
+        c.image_waiting.clear();
+        // In the reader: one picture is still drawn every frame (the page sliding away, then the
+        // tiles themselves), so the atlas never finds itself unused and starts over on its own.
+        let tile = vec![10u8; (800 * 1020 * 4) as usize];
+        for frame in 0..80 {
+            c.begin(1080.0, 2340.0, 0.0, 0.0);
+            // A picture gone from the atlas is sent again, as `images.rs` does.
+            if !c.has_image("cover0") {
+                c.add_image_slot("cover0", 240, 360, (240, 360), cover.clone());
+            }
+            c.image_tile("cover0", 0.0, 0.0, 10.0, 10.0);
+            for i in 0..4 {
+                let k = format!("t{i}");
+                if !c.has_image(&k) {
+                    c.add_image_slot(&k, 800, 1020, (800, 1020), tile.clone());
+                }
+                c.image_tile(&k, 0.0, 0.0, 10.0, 10.0);
+            }
+            c.finish();
+            if frame > 40 {
+                for i in 0..4 {
+                    assert!(c.has_image(&format!("t{i}")), "t{i} on screen at frame {frame}");
+                }
+            }
+        }
+        assert!(c.has_image("cover0"), "what is drawn goes up again");
     }
 
     #[test]
