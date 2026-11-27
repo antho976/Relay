@@ -725,18 +725,24 @@ pub fn items(msgs: &[Msg]) -> Vec<Item> {
     items_timed(msgs).0
 }
 
-/// [`items`], with when each was written (ms since 1970; 0 when the log does not say): a folded
-/// line takes the time of its first call.
-pub fn items_timed(msgs: &[Msg]) -> (Vec<Item>, Vec<u64>) {
+/// [`items`], with when each was written (ms since 1970; 0 when the log does not say) and a key
+/// that names it however the list around it grows or is cut (its message's id and its place in
+/// it): a folded line takes its first call's time and key.
+pub fn items_timed(msgs: &[Msg]) -> (Vec<Item>, Vec<u64>, Vec<String>) {
     let mut out: Vec<Item> = Vec::new();
     let mut times: Vec<u64> = Vec::new();
+    let mut keys: Vec<String> = Vec::new();
+    let mut calls_key = String::new();
+    let mut did_keys: std::collections::VecDeque<String> = Default::default();
     let mut calls: Vec<ToolCall> = Vec::new();
     // When the calls waiting to fold began, and the folded lines' times in the order they fold.
     let mut calls_t = 0u64;
     let mut did_ts: std::collections::VecDeque<u64> = Default::default();
     let mut failed = false;
-    let flush = |out: &mut Vec<Item>, calls: &mut Vec<ToolCall>, failed: &mut bool, did_ts: &mut std::collections::VecDeque<u64>, calls_t: u64| {
+    let flush = |out: &mut Vec<Item>, calls: &mut Vec<ToolCall>, failed: &mut bool, did: (&mut std::collections::VecDeque<u64>, &mut std::collections::VecDeque<String>), calls_t: u64, calls_key: &str| {
+        let (did_ts, did_keys) = did;
         if !calls.is_empty() {
+            did_keys.push_back(calls_key.to_string());
             let pairs: Vec<(String, String)> = calls.iter().map(|c| (c.name.clone(), c.summary.clone())).collect();
             out.push(Item::Did { line: did_line(&pairs), failed: *failed, calls: std::mem::take(calls) });
             did_ts.push_back(calls_t);
@@ -745,10 +751,11 @@ pub fn items_timed(msgs: &[Msg]) -> (Vec<Item>, Vec<u64>) {
     };
     for m in msgs {
         let t_m = parse_ms(&m.created_at).unwrap_or(0);
+        let mut calls_n = 0;
         let text = |k: &str| m.body.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
         match m.role.as_str() {
             "user" => {
-                flush(&mut out, &mut calls, &mut failed, &mut did_ts, calls_t);
+                flush(&mut out, &mut calls, &mut failed, (&mut did_ts, &mut did_keys), calls_t, &calls_key);
                 let t = text("text");
                 if !t.trim().is_empty() {
                     out.push(Item::You(t));
@@ -761,15 +768,17 @@ pub fn items_timed(msgs: &[Msg]) -> (Vec<Item>, Vec<u64>) {
                         Some("tool_use") => {
                             if calls.is_empty() {
                                 calls_t = t_m;
+                                calls_key = format!("{}:c{}", m.id, calls_n);
                             }
+                            calls_n += 1;
                             calls.push(ToolCall { id: s("id"), name: s("name"), summary: s("summary"), detail: b.get("detail").and_then(Value::as_str).map(str::to_string), ..Default::default() })
                         }
                         Some("text") => {
-                            flush(&mut out, &mut calls, &mut failed, &mut did_ts, calls_t);
+                            flush(&mut out, &mut calls, &mut failed, (&mut did_ts, &mut did_keys), calls_t, &calls_key);
                             out.push(Item::Said(s("text")));
                         }
                         Some("thinking") => {
-                            flush(&mut out, &mut calls, &mut failed, &mut did_ts, calls_t);
+                            flush(&mut out, &mut calls, &mut failed, (&mut did_ts, &mut did_keys), calls_t, &calls_key);
                             out.push(Item::Thought(s("text")));
                         }
                         _ => {}
@@ -801,11 +810,11 @@ pub fn items_timed(msgs: &[Msg]) -> (Vec<Item>, Vec<u64>) {
                 }
             }
             "error" => {
-                flush(&mut out, &mut calls, &mut failed, &mut did_ts, calls_t);
+                flush(&mut out, &mut calls, &mut failed, (&mut did_ts, &mut did_keys), calls_t, &calls_key);
                 out.push(Item::Error(text("text")));
             }
             "note" => {
-                flush(&mut out, &mut calls, &mut failed, &mut did_ts, calls_t);
+                flush(&mut out, &mut calls, &mut failed, (&mut did_ts, &mut did_keys), calls_t, &calls_key);
                 let t = text("text");
                 if !t.trim().is_empty() {
                     out.push(Item::Note(t));
@@ -813,17 +822,26 @@ pub fn items_timed(msgs: &[Msg]) -> (Vec<Item>, Vec<u64>) {
             }
             _ => {}
         }
-        // What this message added: a folded line keeps its first call's time, the rest this one's.
+        // What this message added: a folded line keeps its first call's time and key, the rest
+        // this one's.
+        let mut k = 0;
         while times.len() < out.len() {
-            let t = if matches!(out[times.len()], Item::Did { .. }) { did_ts.pop_front().unwrap_or(t_m) } else { t_m };
-            times.push(t);
+            if matches!(out[times.len()], Item::Did { .. }) {
+                times.push(did_ts.pop_front().unwrap_or(t_m));
+                keys.push(did_keys.pop_front().unwrap_or_default());
+            } else {
+                times.push(t_m);
+                keys.push(format!("{}:{k}", m.id));
+                k += 1;
+            }
         }
     }
-    flush(&mut out, &mut calls, &mut failed, &mut did_ts, calls_t);
+    flush(&mut out, &mut calls, &mut failed, (&mut did_ts, &mut did_keys), calls_t, &calls_key);
     while times.len() < out.len() {
         times.push(did_ts.pop_front().unwrap_or(0));
+        keys.push(did_keys.pop_front().unwrap_or_default());
     }
-    (out, times)
+    (out, times, keys)
 }
 
 /// One tool call in words ("Ran `cargo test`"), or several counted by kind.
@@ -1318,7 +1336,8 @@ mod tests {
             msg("3", "assistant", "2026-11-25T10:05:00Z", json!({"blocks": [{"type": "tool_use", "id": "b", "name": "Read", "summary": "y"}, {"type": "text", "text": "done"}]})),
             msg("4", "note", "", json!({"text": "Interrupted"})),
         ];
-        let (it, times) = items_timed(&msgs);
+        let (it, times, keys) = items_timed(&msgs);
+        assert_eq!(keys, ["1:0", "2:c0", "3:0", "4:0"], "each named by its message, the reads by their first call's");
         assert_eq!(it.len(), times.len());
         let t = |s: &str| parse_ms(s).unwrap();
         // You, the folded reads (from the first call's time), the words, the note with no time.
