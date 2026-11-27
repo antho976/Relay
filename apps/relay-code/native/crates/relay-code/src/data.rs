@@ -448,6 +448,12 @@ impl Sending {
         self.waiting.retain(|p| !(p.text.starts_with('/') && !p.failed && p.stage == Stage::Entered && now_ms.saturating_sub(p.sent_ms) > COMMAND_WAIT_MS));
     }
 
+    /// The log was read whole again (a first read, `/clear`, a new log): every message already
+    /// entered is in it, or gone with what was cleared. Neither waits to be drawn again.
+    pub fn reset(&mut self) {
+        self.waiting.retain(|p| p.failed || p.stage != Stage::Entered);
+    }
+
     /// `n` of your messages came into the log: the oldest entered ones are in it now. One not
     /// entered yet cannot be (a message typed at the PC itself counts, as the old app's did).
     pub fn seen(&mut self, n: usize) {
@@ -1342,6 +1348,22 @@ mod tests {
         assert_eq!(tokens("x = 42  # n", Lang::Hash).last(), Some(&(Tok::Comment, "# n".into())));
         assert_eq!(lang_of("src/data.rs"), Some(Lang::Slashes));
         assert_eq!(lang_of("README.md"), None);
+    }
+
+    #[test]
+    fn a_reset_log_holds_what_was_entered() {
+        let mut s = Sending::default();
+        s.push("/clear", 0);
+        s.push("after it", 0);
+        assert_eq!(s.next(0), Some(Step::Type("/clear".into())));
+        s.answered(Answer::Ok, 0);
+        assert_eq!(s.next(ENTER_AFTER_MS), Some(Step::Enter));
+        s.answered(Answer::Ok, ENTER_AFTER_MS);
+        // The log comes back reset (count 0): what was entered does not wait to show twice; the
+        // message not yet sent still does.
+        s.reset();
+        s.seen(0);
+        assert_eq!(s.waiting.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["after it"]);
     }
 
     #[test]

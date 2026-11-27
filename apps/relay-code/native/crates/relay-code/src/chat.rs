@@ -1927,6 +1927,62 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn fresh_app(tag: &str) -> (App, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("relay-code-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(Host(dir.clone())), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        (a, dir)
+    }
+
+    #[test]
+    fn audit_reading_the_log() {
+        let (mut a, dir) = fresh_app("audit-log");
+        let msg = |i: usize| serde_json::json!({"id": format!("m{i}"), "role": "assistant", "created_at": "", "body": {"blocks": [{"type": "text", "text": "x"}]}});
+        a.took_transcript("x", &serde_json::json!({"messages": [msg(0)], "cursor": 10, "reset": true, "found": true}));
+        // `/clear`: what you entered before is in the reset log, so it stops waiting.
+        let mut s = data::Sending::default();
+        s.push("/clear", 0);
+        s.next(0);
+        s.answered(data::Answer::Ok, 0);
+        s.next(data::ENTER_AFTER_MS);
+        s.answered(data::Answer::Ok, data::ENTER_AFTER_MS);
+        a.sending.insert("x".into(), s);
+        a.took_transcript("x", &serde_json::json!({"messages": [msg(1)], "cursor": 20, "reset": true, "found": true}));
+        assert!(a.sending["x"].waiting.is_empty(), "no second bubble after a reset");
+        // Catching up: a full page is read on at once, a short one waits its turn.
+        a.reread_at = 5_000_000_000;
+        a.took_transcript("x", &serde_json::json!({"messages": [msg(2)], "cursor": 30, "reset": false, "found": true}));
+        assert_eq!(a.reread_at, 5_000_000_000);
+        let page: Vec<_> = (3..203).map(msg).collect();
+        a.took_transcript("x", &serde_json::json!({"messages": page, "cursor": 40, "reset": false, "found": true}));
+        assert_eq!(a.reread_at, 0, "a full page: the next one at once");
+        // Back online, an older PC's missing foot is asked for again.
+        a.no_screen = true;
+        a.came_online();
+        assert!(!a.no_screen);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audit_a_chats_copy_is_read_off_the_ui_thread() {
+        let (mut a, dir) = fresh_app("audit-open");
+        let c = data::Convo { msgs: vec![], cursor: Some(7), found: true };
+        std::fs::create_dir_all(dir.join("cache")).unwrap();
+        std::fs::write(dir.join("cache/chat-swift-ocelot.json"), serde_json::to_vec(&c).unwrap()).unwrap();
+        a.open("swift-ocelot");
+        assert!(!a.convos.contains_key("swift-ocelot"), "not read on the UI thread");
+        for i in 0..200 {
+            a.tick(2_000_000_000 + i * 10_000_000);
+            if a.convos.contains_key("swift-ocelot") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(a.convos.get("swift-ocelot").and_then(|c| c.cursor), Some(7));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn days_are_named_as_people_say_them() {
         let now = 1_795_000_000_000u64;
