@@ -49,8 +49,22 @@ pub struct State {
     ahead: i64,
     pub files: Vec<File>,
     loaded: bool,
-    open: Option<String>,
+    /// The project's base branch: an agent's work is read against where it left it.
+    pub base: String,
+    /// The branch's walk back from its tip, and the base's, until both are in: the commits the
+    /// branch has of its own are the ones before the first the base also has (the fork).
+    log: Option<Vec<Commit>>,
+    base_log: Option<Vec<String>>,
+    pub commits: Vec<Commit>,
+    fork: Option<String>,
+    /// The whole change since the fork, committed or not (`git.diff` with `base`).
+    pub branch_files: Vec<File>,
+    branch_loaded: bool,
+    open: Option<(Group, String)>,
     diff: Diff,
+    /// The commit opened in the list, and what `git.show` said of it: its body and files.
+    open_commit: Option<String>,
+    shown: Option<(String, String, Vec<File>)>,
     pub message: String,
     picking: bool,
     pending: Vec<Pending>,
@@ -63,6 +77,21 @@ struct Pending {
     repo: i64,
     worktree: Option<String>,
     call: Call,
+}
+
+/// Which list a file is in: the branch's whole change since the base, or what is not committed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Group {
+    Branch,
+    Work,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Commit {
+    pub sha: String,
+    pub subject: String,
+    pub author: String,
+    pub at: String,
 }
 
 /// The open file's diff.
@@ -103,7 +132,13 @@ enum Job {
     Worktrees,
     Status,
     Diff,
-    File(String),
+    /// The branch's commits, then the base's, to find where they part.
+    Log,
+    BaseLog,
+    /// The whole change since the fork.
+    BranchDiff,
+    Show(String),
+    File(Group, String),
     Stage,
     Suggest,
     /// `set_upstream` is the push's, read when the commit was asked, for the worktree it commits.
@@ -180,6 +215,51 @@ pub fn files(status: &Value, counts: &[Count]) -> Vec<File> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The files a `git.diff` or `git.show` lists, as rows.
+pub fn diff_files(v: &Value) -> Vec<File> {
+    v.get("files")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|f| {
+                    let n = |k: &str| f.get(k).and_then(Value::as_i64).unwrap_or(0);
+                    Some(File {
+                        path: f.get("path")?.as_str()?.to_string(),
+                        index: f.get("status").and_then(Value::as_str).unwrap_or_default().to_string(),
+                        added: n("added"),
+                        removed: n("removed"),
+                        old_path: f.get("old_path").and_then(Value::as_str).map(str::to_string),
+                        binary: f.get("binary").and_then(Value::as_bool) == Some(true),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn commits(v: &Value) -> Vec<Commit> {
+    v.get("commits")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| {
+                    let s = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+                    Some(Commit { sha: c.get("sha")?.as_str()?.to_string(), subject: s("subject"), author: s("author"), at: s("at") })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The branch's own commits, newest first, and the commit where it left the base: the first in
+/// its walk the base has too. None when the walks never meet (the branch's own go past the read).
+pub fn since_base(log: &[Commit], base: &[String]) -> (Vec<Commit>, Option<String>) {
+    match log.iter().position(|c| base.contains(&c.sha)) {
+        Some(i) => (log[..i].to_vec(), Some(log[i].sha.clone())),
+        None => (log.to_vec(), None),
+    }
 }
 
 pub fn counts(v: &Value) -> Vec<Count> {
@@ -286,6 +366,19 @@ impl State {
         self.branch.clear();
         self.upstream = None;
         self.ahead = 0;
+        self.log = None;
+        self.base_log = None;
+        self.commits.clear();
+        self.fork = None;
+        self.branch_files.clear();
+        self.branch_loaded = false;
+        self.open_commit = None;
+        self.shown = None;
+    }
+
+    /// What the branch's whole change is read against: the fork, else the base's tip.
+    fn since(&self) -> String {
+        self.fork.clone().unwrap_or_else(|| self.base.clone())
     }
 }
 
@@ -300,14 +393,41 @@ fn reload(app: &mut App) {
         return;
     }
     let link = app.link.clone();
+    let base = app.projects.iter().find(|p| p.id == repo).map(|p| p.base_branch.clone()).unwrap_or_default();
     let st = &mut app.st.changes;
+    st.base = base;
     st.ask_for(&link, repo, None, Job::Worktrees, "worktree.list", json!({"project_id": repo, "include_dirty": true}));
     if st.worktree.is_some() {
         let w = wt(st);
         st.ask(&link, repo, Job::Status, "git.status", json!({"project_id": repo, "worktree": w}));
         // Against HEAD: the whole change, staged or not.
         st.ask(&link, repo, Job::Diff, "git.diff", json!({"project_id": repo, "worktree": w}));
+        // An agent commits its own work: what the branch did since it left the base.
+        st.ask(&link, repo, Job::Log, "git.log", json!({"project_id": repo, "worktree": w, "limit": 60}));
+        if !st.base.is_empty() {
+            let base = st.base.clone();
+            st.ask(&link, repo, Job::BaseLog, "git.log", json!({"project_id": repo, "worktree": w, "branch": base, "limit": 400}));
+        }
     }
+}
+
+/// Both walks are in: the branch's own commits, and its whole change since the fork.
+fn fork_point(app: &mut App, repo: i64) {
+    let st = &mut app.st.changes;
+    let (Some(log), Some(base)) = (&st.log, &st.base_log) else { return };
+    let (own, fork) = since_base(log, base);
+    st.commits = own;
+    st.fork = fork;
+    if st.commits.is_empty() {
+        // Nothing committed of its own: the uncommitted files are the whole change.
+        st.branch_files.clear();
+        st.branch_loaded = true;
+        return;
+    }
+    let link = app.link.clone();
+    let w = wt(st);
+    let since = st.since();
+    st.ask(&link, repo, Job::BranchDiff, "git.diff", json!({"project_id": repo, "worktree": w, "base": since}));
 }
 
 /// Take what the PC answered, on every page: a commit chains its push from here, so the push goes
@@ -364,13 +484,44 @@ fn answered(app: &mut App, job: Job, repo: i64, worktree: Option<String>, r: Res
                 status = Some(v);
             }
             (Job::Diff, Ok(v)) => diffs.push(v),
-            (Job::File(p), r) => {
+            (Job::Log, r) => {
+                app.st.changes.log = Some(r.map(|v| commits(&v)).unwrap_or_default());
+                fork_point(app, repo);
+            }
+            // No base to read (renamed, or never fetched): the branch shows its uncommitted files.
+            (Job::BaseLog, r) => {
+                app.st.changes.base_log = Some(r.map(|v| commits(&v).into_iter().map(|c| c.sha).collect()).unwrap_or_default());
+                fork_point(app, repo);
+            }
+            (Job::BranchDiff, Ok(v)) => {
+                app.st.changes.branch_files = diff_files(&v);
+                app.st.changes.branch_loaded = true;
+            }
+            // Said where the commit opens, not in a toast that leaves "Reading the commit…" up.
+            (Job::Show(sha), Err(e)) => {
+                if app.st.changes.open_commit.as_deref() == Some(sha.as_str()) {
+                    app.st.changes.shown = Some((sha, e.message, Vec::new()));
+                }
+            }
+            (Job::BranchDiff, Err(e)) => {
+                app.st.changes.branch_loaded = true;
+                app.toast(&e.message);
+            }
+            (Job::Show(sha), Ok(v)) => {
                 let st = &mut app.st.changes;
-                if st.open.as_deref() == Some(p.as_str()) {
+                if st.open_commit.as_deref() == Some(sha.as_str()) {
+                    let body = v.pointer("/commit/body").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+                    st.shown = Some((sha, body, diff_files(&v)));
+                }
+            }
+            (Job::File(g, p), r) => {
+                let st = &mut app.st.changes;
+                if st.open.as_ref() == Some(&(g, p.clone())) {
+                    let list = if g == Group::Branch { &st.branch_files } else { &st.files };
                     st.diff = match r {
                         Ok(v) => {
                             let lines = diff_lines(&v);
-                            if lines.is_empty() { Diff::Note(empty_note(st.files.iter().find(|f| f.path == p))) } else { Diff::Lines(lines, Vec::new()) }
+                            if lines.is_empty() { Diff::Note(empty_note(list.iter().find(|f| f.path == p))) } else { Diff::Lines(lines, Vec::new()) }
                         }
                         Err(e) if e.code == "git.diff_too_large" => Diff::Note("Too large to show here: over 1 MB of text.".into()),
                         Err(e) if e.code == "git.diff_binary" => Diff::Note("A binary file: there is no text to show.".into()),
@@ -456,7 +607,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     // The branch chip and the totals.
     let st = &app.st.changes;
     let branch = if st.branch.is_empty() { st.worktrees.iter().find(|w| Some(&w.path) == st.worktree.as_ref()).map(|w| w.branch.clone()).unwrap_or_default() } else { st.branch.clone() };
-    let (add, rem): (i64, i64) = st.files.iter().fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
+    // The whole change: since the base when the branch has commits of its own.
+    let whole = if st.commits.is_empty() { &st.files } else { &st.branch_files };
+    let (add, rem): (i64, i64) = whole.iter().fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
     let nfiles = st.files.len();
     let busy = st.busy();
     {
@@ -488,69 +641,56 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         let words = if app.online() { "Reading what changed…" } else { "Changes show here once the PC answers." };
         app.canvas.text(words, t::PAD, y + 10.0, Text::new(ty::UI, t::INK3));
         y += 40.0;
-    } else if nfiles == 0 {
-        let ahead = app.st.changes.ahead;
-        let words = if ahead > 0 { format!("Nothing to commit. {ahead} commit{} not pushed yet.", if ahead == 1 { "" } else { "s" }) } else { "Nothing changed on this branch.".to_string() };
-        app.canvas.para(&words, t::PAD, y + 10.0, WIDTH - 2.0 * t::PAD, Text::new(ty::UI, t::INK3).line(1.45), 3);
-        y += 50.0;
     } else {
-        app.canvas.text(&format!("{nfiles} FILE{}", if nfiles == 1 { "" } else { "S" }), t::PAD, y + 4.0, Text::new(ty::SMALL, t::INK3).semi());
-        y += 26.0;
-        let list = app.st.changes.files.clone();
+        let mut open: Option<(Group, String)> = None;
         let mut toggle_stage: Option<File> = None;
-        let mut open: Option<String> = None;
-        for f in &list {
-            let h = 52.0;
-            let mut cx = crate::cx!(app);
-            if cx.pressed(44.0, y, WIDTH - 44.0, h) {
-                cx.c.rect(8.0, y, WIDTH - 16.0, h, 8.0, t::WASH);
+        // An agent's branch: everything it changed since it left the base, file by file, then
+        // its commits. Agents commit their own work, so this is what there is to review.
+        let commits = app.st.changes.commits.clone();
+        if !commits.is_empty() {
+            let base = app.st.changes.base.clone();
+            let list = app.st.changes.branch_files.clone();
+            let label = if app.st.changes.branch_loaded { format!("SINCE {} · {}", base.to_uppercase(), plural(list.len(), "FILE")) } else { format!("SINCE {}", base.to_uppercase()) };
+            y = section(app, y, &label);
+            if !app.st.changes.branch_loaded {
+                app.canvas.text("Reading the branch…", t::PAD, y + 4.0, Text::new(ty::SMALL, t::INK3));
+                y += 30.0;
             }
-            // The box: in the next commit or not.
-            let bx = t::PAD;
-            if f.staged() {
-                cx.c.rect(bx, y + 17.0, 18.0, 18.0, 5.0, t::ACCENT);
-                cx.c.icon("check", bx + 9.0, y + 26.0, 12.0, t::ON_ACCENT);
-            } else {
-                cx.c.outline(bx, y + 17.0, 18.0, 18.0, 5.0, 1.5, t::INK3);
+            for f in &list {
+                let (_, tapped) = file_row(app, y, f, false);
+                if tapped {
+                    open = Some((Group::Branch, f.path.clone()));
+                }
+                y += 52.0;
+                if app.st.changes.open.as_ref() == Some(&(Group::Branch, f.path.clone())) {
+                    y += hunks(app, y, &page);
+                }
             }
-            if cx.tap(0.0, y, 44.0, h) {
-                toggle_stage = Some(f.clone());
+            y = section(app, y + 10.0, &plural(commits.len(), "COMMIT"));
+            y = commit_list(app, y, &commits);
+        }
+        if nfiles > 0 {
+            let label = if commits.is_empty() { plural(nfiles, "FILE") } else { format!("UNCOMMITTED · {}", plural(nfiles, "FILE")) };
+            y = section(app, y + if commits.is_empty() { 0.0 } else { 10.0 }, &label);
+            let list = app.st.changes.files.clone();
+            for f in &list {
+                let (ticked, tapped) = file_row(app, y, f, true);
+                if ticked {
+                    toggle_stage = Some(f.clone());
+                }
+                if tapped {
+                    open = Some((Group::Work, f.path.clone()));
+                }
+                y += 52.0;
+                if app.st.changes.open.as_ref() == Some(&(Group::Work, f.path.clone())) {
+                    y += hunks(app, y, &page);
+                }
             }
-            // A file git does not track yet has no counts to show: it is new.
-            let counts = if f.binary {
-                "binary".to_string()
-            } else if f.index == "?" && f.added == 0 && f.removed == 0 {
-                "new".to_string()
-            } else {
-                format!("+{} −{}", f.added, f.removed)
-            };
-            let ct = Text::new(ty::SMALL, t::INK3).face(Weight::Mono);
-            let cw = cx.c.measure(&counts, ct);
-            // The file's name first, its folder under it: a long path never hides the name.
-            let trimmed = f.path.trim_end_matches('/');
-            let (dir, name) = trimmed.rsplit_once('/').map_or(("", trimmed), |(d, n)| (d, n));
-            let tw = WIDTH - bx - 30.0 - cw - 26.0;
-            cx.c.text_fit(name, bx + 30.0, y + 8.0, tw, Text::new(ty::MONO, t::INK).face(Weight::Mono));
-            let st = Text::new(ty::SMALL, t::INK3);
-            if let Some(old) = &f.old_path {
-                // A rename says where it came from in place of its folder: the old name alone
-                // when the folder is the same.
-                let old = old.trim_end_matches('/');
-                let (odir, oname) = old.rsplit_once('/').map_or(("", old), |(d, n)| (d, n));
-                let from = format!("renamed from {}", if odir == dir { oname } else { old });
-                cx.c.text_fit(&from, bx + 30.0, y + 28.0, tw, st);
-            } else if !dir.is_empty() {
-                let dir = cx.c.fit_start(dir, tw, st);
-                cx.c.text(&dir, bx + 30.0, y + 28.0, st);
-            }
-            cx.c.text(&counts, WIDTH - t::PAD, y + 9.0, ct.right());
-            if cx.tap(44.0, y, WIDTH - 44.0, h) {
-                open = Some(f.path.clone());
-            }
-            y += h;
-            if app.st.changes.open.as_deref() == Some(f.path.as_str()) {
-                y += hunks(app, y, &page);
-            }
+        } else if commits.is_empty() {
+            let ahead = app.st.changes.ahead;
+            let words = if ahead > 0 { format!("Nothing to commit. {} not pushed yet.", plural(ahead as usize, "commit").to_lowercase()) } else { "Nothing changed on this branch.".to_string() };
+            app.canvas.para(&words, t::PAD, y + 10.0, WIDTH - 2.0 * t::PAD, Text::new(ty::UI, t::INK3).line(1.45), 3);
+            y += 50.0;
         }
         if let Some(f) = toggle_stage
             && let Some(repo) = app.repo
@@ -561,28 +701,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             let op = if f.staged() { "git.unstage" } else { "git.stage" };
             st.ask(&link, repo, Job::Stage, op, json!({"project_id": repo, "worktree": w, "paths": [f.path]}));
         }
-        if let Some(p) = open {
-            let st = &mut app.st.changes;
-            if st.open.as_deref() == Some(p.as_str()) {
-                st.open = None;
-            } else {
-                st.open = Some(p.clone());
-                let file = st.files.iter().find(|f| f.path == p).cloned();
-                // Binary files and folders have no text diff: say so without asking.
-                st.diff = file.as_ref().and_then(no_lines).map_or(Diff::Reading, Diff::Note);
-                if st.diff == Diff::Reading
-                    && let Some(repo) = app.repo
-                {
-                    let link = app.link.clone();
-                    let st = &mut app.st.changes;
-                    let w = wt(st);
-                    let mut payload = json!({"project_id": repo, "worktree": w, "path": p});
-                    if let Some(old) = file.and_then(|f| f.old_path) {
-                        payload["old_path"] = json!(old);
-                    }
-                    st.ask(&link, repo, Job::File(p.clone()), "git.diff.file", payload);
-                }
-            }
+        if let Some(key) = open {
+            open_file(app, key);
         }
     }
     app.page_end(&page, y);
@@ -592,6 +712,172 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         picker(app);
     }
     page.moving || !app.st.changes.pending.is_empty() && !crate::wake::has()
+}
+
+fn plural(n: usize, word: &str) -> String {
+    format!("{n} {word}{}", if n == 1 { "" } else { "S" })
+}
+
+/// A list's small caps label. Returns where the list starts.
+fn section(app: &mut App, y: f32, label: &str) -> f32 {
+    app.canvas.text(label, t::PAD, y + 4.0, Text::new(ty::SMALL, t::INK3).semi());
+    y + 26.0
+}
+
+/// One file: the box (when it can be ticked), its name over its folder, its counts. Returns
+/// whether the box and whether the row were tapped.
+fn file_row(app: &mut App, y: f32, f: &File, tick: bool) -> (bool, bool) {
+    let h = 52.0;
+    let mut cx = crate::cx!(app);
+    let left = if tick { 44.0 } else { 0.0 };
+    if cx.pressed(left, y, WIDTH - left, h) {
+        cx.c.rect(8.0, y, WIDTH - 16.0, h, 8.0, t::WASH);
+    }
+    let bx = t::PAD;
+    let mut ticked = false;
+    // The box: in the next commit or not.
+    if tick {
+        if f.staged() {
+            cx.c.rect(bx, y + 17.0, 18.0, 18.0, 5.0, t::ACCENT);
+            cx.c.icon("check", bx + 9.0, y + 26.0, 12.0, t::ON_ACCENT);
+        } else {
+            cx.c.outline(bx, y + 17.0, 18.0, 18.0, 5.0, 1.5, t::INK3);
+        }
+        ticked = cx.tap(0.0, y, 44.0, h);
+    }
+    let tx = if tick { bx + 30.0 } else { bx };
+    // A file git does not track yet has no counts to show: it is new.
+    let counts = if f.binary {
+        "binary".to_string()
+    } else if f.index == "?" && f.added == 0 && f.removed == 0 {
+        "new".to_string()
+    } else {
+        format!("+{} −{}", f.added, f.removed)
+    };
+    let ct = Text::new(ty::SMALL, t::INK3).face(Weight::Mono);
+    let cw = cx.c.measure(&counts, ct);
+    // The file's name first, its folder under it: a long path never hides the name.
+    let trimmed = f.path.trim_end_matches('/');
+    let (dir, name) = trimmed.rsplit_once('/').map_or(("", trimmed), |(d, n)| (d, n));
+    let tw = WIDTH - tx - cw - 26.0;
+    cx.c.text_fit(name, tx, y + 8.0, tw, Text::new(ty::MONO, t::INK).face(Weight::Mono));
+    let st = Text::new(ty::SMALL, t::INK3);
+    if let Some(old) = &f.old_path {
+        // A rename says where it came from in place of its folder: the old name alone when the
+        // folder is the same.
+        let old = old.trim_end_matches('/');
+        let (odir, oname) = old.rsplit_once('/').map_or(("", old), |(d, n)| (d, n));
+        let from = format!("renamed from {}", if odir == dir { oname } else { old });
+        cx.c.text_fit(&from, tx, y + 28.0, tw, st);
+    } else if !dir.is_empty() {
+        let dir = cx.c.fit_start(dir, tw, st);
+        cx.c.text(&dir, tx, y + 28.0, st);
+    }
+    cx.c.text(&counts, WIDTH - t::PAD, y + 9.0, ct.right());
+    let tapped = cx.tap(left, y, WIDTH - left, h);
+    (ticked, tapped)
+}
+
+/// Open a file's diff, or close it when it is the open one. Binary files and folders have no
+/// text diff: they say so without asking.
+fn open_file(app: &mut App, key: (Group, String)) {
+    let st = &mut app.st.changes;
+    if st.open.as_ref() == Some(&key) {
+        st.open = None;
+        return;
+    }
+    let (group, p) = key.clone();
+    st.open = Some(key);
+    let list = if group == Group::Branch { &st.branch_files } else { &st.files };
+    let file = list.iter().find(|f| f.path == p).cloned();
+    st.diff = file.as_ref().and_then(no_lines).map_or(Diff::Reading, Diff::Note);
+    let Some(repo) = app.repo else { return };
+    if st.diff != Diff::Reading {
+        return;
+    }
+    let link = app.link.clone();
+    let w = wt(st);
+    let mut payload = json!({"project_id": repo, "worktree": w, "path": p});
+    if let Some(old) = file.and_then(|f| f.old_path) {
+        payload["old_path"] = json!(old);
+    }
+    // The branch's diff is against the fork: everything the agent changed in this file.
+    if group == Group::Branch {
+        payload["base"] = json!(st.since());
+    }
+    st.ask(&link, repo, Job::File(group, p.clone()), "git.diff.file", payload);
+}
+
+/// The branch's commits, newest first: a tap opens one, its message and its files.
+fn commit_list(app: &mut App, mut y: f32, commits: &[Commit]) -> f32 {
+    let now = rc_link::link::now_ms();
+    let mut tapped: Option<String> = None;
+    for c in commits {
+        let h = 56.0;
+        let mut cx = crate::cx!(app);
+        if cx.pressed(0.0, y, WIDTH, h) {
+            cx.c.rect(8.0, y, WIDTH - 16.0, h, 8.0, t::WASH);
+        }
+        let w = WIDTH - 2.0 * t::PAD;
+        cx.c.text_fit(&c.subject, t::PAD, y + 8.0, w, Text::new(ty::UI, t::INK));
+        // The short sha in mono, then who and when.
+        let sha: String = c.sha.chars().take(7).collect();
+        let mono = Text::new(ty::SMALL, t::INK3).face(Weight::Mono);
+        cx.c.text(&sha, t::PAD, y + 31.0, mono);
+        let sw = cx.c.measure(&sha, mono);
+        let sub = [c.author.clone(), crate::data::ago(&c.at, now)].into_iter().filter(|s| !s.is_empty()).map(|s| format!(" · {s}")).collect::<String>();
+        cx.c.text_fit(&sub, t::PAD + sw, y + 31.0, w - sw, Text::new(ty::SMALL, t::INK3));
+        if cx.tap(0.0, y, WIDTH, h) {
+            tapped = Some(c.sha.clone());
+        }
+        y += h;
+        if app.st.changes.open_commit.as_deref() == Some(c.sha.as_str()) {
+            y = commit_detail(app, y, &c.sha);
+        }
+    }
+    if let Some(sha) = tapped {
+        let st = &mut app.st.changes;
+        if st.open_commit.as_deref() == Some(sha.as_str()) {
+            st.open_commit = None;
+        } else {
+            st.open_commit = Some(sha.clone());
+            if st.shown.as_ref().is_none_or(|s| s.0 != sha)
+                && let Some(repo) = app.repo
+            {
+                let link = app.link.clone();
+                st.ask(&link, repo, Job::Show(sha.clone()), "git.show", json!({"project_id": repo, "sha": sha}));
+            }
+        }
+    }
+    y
+}
+
+/// An open commit: its message's body and the files it touched, with their counts.
+fn commit_detail(app: &mut App, mut y: f32, sha: &str) -> f32 {
+    let x = t::PAD + 14.0;
+    let w = WIDTH - t::PAD - x;
+    let Some((_, body, files)) = app.st.changes.shown.clone().filter(|s| s.0 == sha) else {
+        app.canvas.text("Reading the commit…", x, y, Text::new(ty::SMALL, t::INK3));
+        return y + 30.0;
+    };
+    let top = y;
+    if !body.is_empty() {
+        y += app.canvas.para(&body, x, y, w, Text::new(ty::SMALL, t::INK2).line(1.45), 8) + 10.0;
+    }
+    let mono = Text::new(ty::SMALL, t::INK2).face(Weight::Mono);
+    let ct = Text::new(ty::SMALL, t::INK3).face(Weight::Mono);
+    for f in &files {
+        let counts = if f.binary { "binary".to_string() } else { format!("+{} −{}", f.added, f.removed) };
+        let cw = app.canvas.measure(&counts, ct);
+        let name = f.path.trim_end_matches('/').rsplit('/').next().unwrap_or(&f.path).to_string();
+        let name = app.canvas.fit_start(&name, w - cw - 12.0, mono);
+        app.canvas.text(&name, x, y, mono);
+        app.canvas.text(&counts, WIDTH - t::PAD, y, ct.right());
+        y += 24.0;
+    }
+    // A rule down the side ties the detail to its commit.
+    app.canvas.rect(t::PAD, top, 2.0, (y - top - 4.0).max(0.0), 1.0, t::S3);
+    y + 10.0
 }
 
 /// The open file's diff on red and green, with a gutter of line numbers. Its lines wrap once,
@@ -774,15 +1060,37 @@ fn picker(app: &mut App) {
 
 /// Sample changes for screenshots.
 pub fn sample(app: &mut App) {
-    let files = vec![
-        File { path: "apps/relay-code/native/crates/relay-code/src/chat.rs".into(), index: "M".into(), added: 214, removed: 61, ..File::default() },
-        File { path: "apps/relay-code/native/crates/relay-code/src/ui.rs".into(), index: " ".into(), added: 38, removed: 4, ..File::default() },
-        File { path: "apps/relay-code/native/crates/relay-code/src/screen.rs".into(), index: "?".into(), added: 0, removed: 0, ..File::default() },
-        File { path: "apps/relay-code/native/crates/relay-code/src/changes.rs".into(), index: "R".into(), added: 12, removed: 3, old_path: Some("apps/relay-code/native/crates/relay-code/src/git.rs".into()), binary: false },
-        File { path: "apps/relay-code/native/android/res/icon.png".into(), index: " ".into(), binary: true, ..File::default() },
+    let src = "apps/relay-code/native/crates/relay-code/src";
+    let f = |name: &str, index: &str, added: i64, removed: i64| File { path: format!("{src}/{name}"), index: index.into(), added, removed, ..File::default() };
+    let branch_files = vec![
+        f("chat.rs", "M", 214, 61),
+        f("ui.rs", "M", 38, 4),
+        f("screen.rs", "A", 179, 0),
+        File { old_path: Some(format!("{src}/git.rs")), ..f("changes.rs", "R", 12, 3) },
+        File { path: "apps/relay-code/native/android/res/icon.png".into(), index: "M".into(), binary: true, ..File::default() },
     ];
-    let text = "@@ -195,9 +195,10 @@ impl Ui {\n     fn inside(p: Option<(f32, f32)>, x: f32, y: f32, w: f32, h: f32) -> bool {\n-        Self::inside(self.tap, x, y, w, h)\n+        Self::inside(self.tap, x, y, w, h)\n+            && !self.tap.is_some_and(|p| self.hidden(p))\n     }\n@@ -240,3 +241,3 @@ impl Ui {\n     pub fn reset(&mut self) {\n-        self.tap = None;\n+        self.tap.take();\n";
-    let diff = Diff::Lines(diff_lines(&json!({"hunks": [{"text": text}]})), Vec::new());
+    let files = vec![f("ui.rs", " ", 6, 1), File { path: "apps/relay-code/native/android/res/icon.png".into(), index: " ".into(), binary: true, ..File::default() }];
+    let at = |mins: u64| {
+        let ms = rc_link::link::now_ms().saturating_sub(mins * 60_000) / 1000;
+        let (d, s) = (ms / 86_400, ms % 86_400);
+        // Days since 1970 to a date (civil from days, Howard Hinnant's).
+        let z = d as i64 + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = yoe + era * 400 + i64::from(month <= 2);
+        format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", s / 3600, s % 3600 / 60, s % 60)
+    };
+    let commits = vec![
+        Commit { sha: "3b5b460e4f1c".into(), subject: "Chat: live status, mode and questions from session.screen".into(), author: "bold-puffin".into(), at: at(12) },
+        Commit { sha: "9c0d7aa21e55".into(), subject: "Changes: rename git.rs, read diffs against the fork".into(), author: "bold-puffin".into(), at: at(95) },
+        Commit { sha: "1f8369210b3d".into(), subject: "Ui: a tap under a sheet reaches nothing".into(), author: "bold-puffin".into(), at: at(260) },
+    ];
+    let shown = ("3b5b460e4f1c".to_string(), "The terminal's own status line says what the agent is doing.".to_string(), vec![f("chat.rs", "M", 120, 40), f("screen.rs", "A", 179, 0)]);
     app.st.changes = State {
         repo: app.repo,
         worktrees: vec![Worktree { path: "/w/bold-puffin".into(), branch: "relay/bold-puffin".into(), session: Some("bold-puffin".into()), dirty: true }],
@@ -792,9 +1100,14 @@ pub fn sample(app: &mut App) {
         ahead: 0,
         files,
         loaded: true,
-        open: Some("apps/relay-code/native/crates/relay-code/src/ui.rs".into()),
-        diff,
-        message: "Chat: live status, mode and diffs".into(),
+        base: "main".into(),
+        commits,
+        fork: Some("3549249d40c9".into()),
+        branch_files,
+        branch_loaded: true,
+        open_commit: Some("3b5b460e4f1c".into()),
+        shown: Some(shown),
+        message: "Ui: keep the tap on the sheet".into(),
         ..State::default()
     };
 }
@@ -846,7 +1159,7 @@ mod tests {
     fn switching_branch_drops_the_reads_and_keeps_the_commit() {
         let mut a = app_on_b("switch");
         add(&mut a, Job::Status, "/w/b");
-        add(&mut a, Job::File("x.rs".into()), "/w/b");
+        add(&mut a, Job::File(Group::Work, "x.rs".into()), "/w/b");
         add(&mut a, Job::Commit { push: true, set_upstream: false }, "/w/b");
         assert_eq!(a.st.changes.busy(), Some("Committing…"));
         a.st.changes.switch("/w/c".into());
@@ -937,9 +1250,11 @@ mod tests {
             .chain((0..1000).flat_map(|i| [format!("-    let old_{i} = users.iter().any(|u| u.client_id == mine.id);"), format!("+    let new_{i} = users.iter().any(|u| u.id == mine.id && u.text == mine.text);")]))
             .collect::<Vec<_>>()
             .join("\n");
-        let path = a.st.changes.open.clone().unwrap();
+        let path = a.st.changes.branch_files[1].path.clone();
+        a.st.changes.open_commit = None;
+        a.st.changes.open = Some((Group::Branch, path.clone()));
         let w = a.st.changes.worktree.clone();
-        answered(&mut a, Job::File(path), repo, w, Ok(json!({"hunks": [{"text": text}]})));
+        answered(&mut a, Job::File(Group::Branch, path), repo, w, Ok(json!({"hunks": [{"text": text}]})));
         let mut clock = 2_000_000_000;
         for _ in 0..5 {
             clock += 16_666_666;
@@ -956,6 +1271,58 @@ mod tests {
     }
 
     #[test]
+    fn a_branch_has_the_commits_before_it_meets_the_base() {
+        let c = |s: &str| Commit { sha: s.into(), ..Commit::default() };
+        let log = [c("c3"), c("c2"), c("c1"), c("m1"), c("m0")];
+        let base = ["m2".to_string(), "m1".into(), "m0".into()];
+        let (own, fork) = since_base(&log, &base);
+        assert_eq!(own.iter().map(|c| c.sha.as_str()).collect::<Vec<_>>(), ["c3", "c2", "c1"]);
+        assert_eq!(fork.as_deref(), Some("m1"));
+        // On the base itself: nothing of its own.
+        assert_eq!(since_base(&log[3..], &base), (vec![], Some("m1".into())));
+        // Walks that never meet: all its commits, and the base's tip to diff against.
+        assert_eq!(since_base(&log[..2], &base).1, None);
+    }
+
+    #[test]
+    fn an_agents_branch_reads_its_whole_change_since_the_fork() {
+        let mut a = app_on_b("branch");
+        a.st.changes.base = "main".into();
+        let log = json!({"commits": [{"sha": "c2", "subject": "Two"}, {"sha": "c1", "subject": "One"}, {"sha": "m1"}]});
+        answered(&mut a, Job::Log, 1, Some("/w/b".into()), Ok(log));
+        assert!(a.st.changes.commits.is_empty(), "waits for the base's walk");
+        answered(&mut a, Job::BaseLog, 1, Some("/w/b".into()), Ok(json!({"commits": [{"sha": "m2"}, {"sha": "m1"}]})));
+        assert_eq!(a.st.changes.commits.len(), 2);
+        assert_eq!(a.st.changes.since(), "m1");
+        assert!(a.st.changes.pending.iter().any(|p| p.job == Job::BranchDiff && p.worktree.as_deref() == Some("/w/b")));
+        let diff = json!({"files": [{"path": "a.rs", "status": "M", "added": 5, "removed": 1, "binary": false}, {"path": "n.rs", "old_path": "o.rs", "status": "R", "added": 0, "removed": 0, "binary": false}]});
+        answered(&mut a, Job::BranchDiff, 1, Some("/w/b".into()), Ok(diff));
+        assert_eq!(a.st.changes.branch_files.len(), 2);
+        assert_eq!(a.st.changes.branch_files[1].old_path.as_deref(), Some("o.rs"));
+        // Opening one of its files reads it against the fork, in its own group.
+        a.st.changes.pending.clear();
+        open_file(&mut a, (Group::Branch, "a.rs".into()));
+        assert_eq!(a.st.changes.pending.first().map(|p| p.job.clone()), Some(Job::File(Group::Branch, "a.rs".into())));
+        // A commit opens what git.show says of it.
+        a.st.changes.open_commit = Some("c1".into());
+        answered(&mut a, Job::Show("c1".into()), 1, Some("/w/b".into()), Ok(json!({"commit": {"sha": "c1", "body": "Why.\n"}, "files": [{"path": "a.rs", "status": "M", "added": 5, "removed": 1, "binary": false}]})));
+        let (sha, body, files) = a.st.changes.shown.clone().unwrap();
+        assert_eq!((sha.as_str(), body.as_str(), files.len()), ("c1", "Why.", 1));
+    }
+
+    #[test]
+    fn a_branch_with_no_base_to_read_shows_its_uncommitted_files() {
+        let mut a = app_on_b("nobase");
+        a.st.changes.base = "trunk".into();
+        answered(&mut a, Job::Log, 1, Some("/w/b".into()), Ok(json!({"commits": [{"sha": "c1"}]})));
+        let gone = rc_link::BusError { kind: "not_found".into(), code: "git.revision".into(), message: "no trunk".into(), hint: None };
+        answered(&mut a, Job::BaseLog, 1, Some("/w/b".into()), Err(gone));
+        // Its commits are listed, and the change is read against the base's name as asked.
+        assert_eq!(a.st.changes.commits.len(), 1);
+        assert_eq!(a.st.changes.since(), "trunk");
+    }
+
+    #[test]
     fn files_with_no_hunks_say_why() {
         let mut a = app_on_b("nohunks");
         a.st.changes.files = vec![
@@ -966,14 +1333,14 @@ mod tests {
             Diff::Note(w) => w.clone(),
             d => panic!("no note: {d:?}"),
         };
-        a.st.changes.open = Some("same.sh".into());
-        answered(&mut a, Job::File("same.sh".into()), 1, Some("/w/b".into()), Ok(json!({"old": "x", "new": "x", "hunks": []})));
+        a.st.changes.open = Some((Group::Work, "same.sh".into()));
+        answered(&mut a, Job::File(Group::Work, "same.sh".into()), 1, Some("/w/b".into()), Ok(json!({"old": "x", "new": "x", "hunks": []})));
         assert!(note(&a).contains("mode"));
-        a.st.changes.open = Some("empty.txt".into());
-        answered(&mut a, Job::File("empty.txt".into()), 1, Some("/w/b".into()), Ok(json!({"old": "", "new": "", "hunks": []})));
+        a.st.changes.open = Some((Group::Work, "empty.txt".into()));
+        answered(&mut a, Job::File(Group::Work, "empty.txt".into()), 1, Some("/w/b".into()), Ok(json!({"old": "", "new": "", "hunks": []})));
         assert!(note(&a).contains("empty"));
         let too = rc_link::BusError { kind: "refused".into(), code: "git.diff_too_large".into(), message: "big".into(), hint: None };
-        answered(&mut a, Job::File("empty.txt".into()), 1, Some("/w/b".into()), Err(too));
+        answered(&mut a, Job::File(Group::Work, "empty.txt".into()), 1, Some("/w/b".into()), Err(too));
         assert!(note(&a).contains("Too large"));
         // Binary files and new folders are known from git.diff and git.status: nothing to ask.
         assert!(no_lines(&File { path: "a.png".into(), binary: true, ..File::default() }).is_some_and(|w| w.contains("binary")));
