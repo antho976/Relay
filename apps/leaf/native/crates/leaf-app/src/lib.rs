@@ -42,6 +42,7 @@ pub mod search;
 pub mod series;
 pub mod settings;
 pub mod shelf;
+pub mod smart;
 pub mod space;
 pub mod stats;
 pub mod strip;

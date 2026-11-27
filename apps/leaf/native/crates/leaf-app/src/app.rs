@@ -322,11 +322,6 @@ struct Config {
     reading_now: Option<i64>,
 }
 
-/// "Download Next up": how many series, how many chapters of each, and how often it looks.
-pub const AUTO_SERIES: usize = 3;
-pub const AUTO_CHAPTERS: usize = 2;
-const AUTO_EVERY_MS: i64 = 3 * 3_600_000;
-
 /// How reading feels, kept in `config.json`.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
@@ -339,8 +334,8 @@ pub struct ReadPrefs {
     pub speeds: std::collections::BTreeMap<i64, u8>,
     /// Scanlators' promo pages ("join our Discord") are left out: the server skips them.
     pub skip_promo: bool,
-    /// The next chapters of the series closest to their end are kept on this phone, on Wi-Fi
-    /// ([`App::auto_next_tick`]). Off until turned on.
+    /// "Download Next up on Wi-Fi", replaced by Auto downloads (2026-11-27): read once, to turn
+    /// those on for a phone that had it on.
     pub auto_next: bool,
     /// Warmth: an amber veil over the page this strong (0 to 1), for reading at night.
     pub warm: f32,
@@ -350,11 +345,13 @@ pub struct ReadPrefs {
     /// Leaf opens in the chapter it was closed in, if it was closed while reading. Off until
     /// turned on.
     pub reopen: bool,
+    /// Auto downloads ([`crate::smart`]); Android's night job reads them here too.
+    pub smart: crate::smart::SmartPrefs,
 }
 
 impl Default for ReadPrefs {
     fn default() -> ReadPrefs {
-        ReadPrefs { trim_gutters: true, dim: 0.0, speeds: Default::default(), skip_promo: true, auto_next: false, warm: 0.0, delete_read: false, reopen: false }
+        ReadPrefs { trim_gutters: true, dim: 0.0, speeds: Default::default(), skip_promo: true, auto_next: false, warm: 0.0, delete_read: false, reopen: false, smart: Default::default() }
     }
 }
 
@@ -430,7 +427,11 @@ pub struct App {
     /// Restore was tapped once with books on this phone: the next tap replaces them.
     pub restore_asked: bool,
     /// When "Download Next up" looks again (ms).
-    pub auto_next_at: i64,
+    /// Auto downloads look again then (ms); `smart_now`: a setting changed, run at once.
+    pub smart_at: i64,
+    /// Chapters already sent to another source for a blank page (once each).
+    pub moved_blank: std::collections::HashSet<i64>,
+    pub smart_now: bool,
     /// Chapters that came for series in My space (`/v1/updates`).
     pub updates: Loaded<Vec<Update>>,
     /// The server's status, as Settings shows it (AniList).
@@ -563,7 +564,15 @@ impl App {
             oldest_first: config.oldest_first.iter().copied().collect(),
             following_sort: config.following_sort.min(2),
             asked_notifications: config.asked_notifications,
-            prefs: config.reading.clone(),
+            prefs: {
+                let mut p = config.reading.clone();
+                // "Download Next up on Wi-Fi" on: Auto downloads on in its place.
+                if p.auto_next {
+                    p.auto_next = false;
+                    p.smart.on = true;
+                }
+                p
+            },
             notify: config.notify,
             updates_all: config.updates_all,
             backup: config.backup.clone(),
@@ -573,7 +582,9 @@ impl App {
             reading_now: config.reading_now,
             booksync: Default::default(),
             restore_asked: false,
-            auto_next_at: 0,
+            smart_at: 0,
+            moved_blank: Default::default(),
+            smart_now: false,
             updates: Loaded::default(),
             status: Loaded::default(),
             health: Loaded::default(),
@@ -600,7 +611,7 @@ impl App {
             hidden_pages: Loaded::default(),
             dim_dirty: false,
             late_toast: Arc::new(std::sync::Mutex::new(None)),
-            saver: crate::offline::Saver::new(data.clone()),
+            saver: crate::offline::Saver::shared(data.clone()),
             paid: HashMap::new(),
             watch: HashMap::new(),
             more: HashMap::new(),
@@ -1434,39 +1445,30 @@ impl App {
         self.ask(Job::NotSame(a, b));
     }
 
-    /// "Download Next up on Wi-Fi": the next [`AUTO_CHAPTERS`] chapters of the [`AUTO_SERIES`]
-    /// series closest to their end ([`logic::next_ups`]) put in the download line, quietly. Looked
-    /// at every few hours, sooner while a series' chapters are still being asked for; only once the
-    /// server has answered, and only off a metered network.
-    fn auto_next_tick(&mut self) {
+    /// Auto downloads ([`crate::smart`]): tonight's run once it is due (after midnight), or at once
+    /// when a setting changed (`smart_now`), on a thread; looked at every few minutes, only once
+    /// the server answered, and only on Wi-Fi when so set.
+    fn smart_tick(&mut self) {
         let now = crate::shelf::now_ms();
-        if !self.prefs.auto_next || self.shot || self.server.is_none() || self.st.online.reach != Some(true) || now < self.auto_next_at {
+        let s = self.prefs.smart;
+        if !s.on || self.shot || now < self.smart_at || self.st.online.reach != Some(true) || crate::smart::running() {
             return;
         }
-        let Some(list) = self.library.data.clone() else { return };
-        if !self.host.unmetered() {
-            self.auto_next_at = now + 10 * 60_000;
+        let Some(server) = self.server.clone() else { return };
+        self.smart_at = now + 5 * 60_000;
+        let off = crate::shelf::zone_offset();
+        if !self.smart_now && !crate::smart::due(&s, &crate::smart::last_night(&self.data), now, off) {
             return;
         }
-        let downloaded = self.saver.series_ids();
-        let targets: Vec<i64> = logic::next_ups(&list, -1, |s| logic::in_space(s, downloaded.contains(&s.id)), AUTO_SERIES).into_iter().map(|(s, _)| s.id).collect();
-        let mut waiting = false;
-        for id in targets {
-            match self.series.get(&id).map(|l| (l.data.clone(), l.loading)) {
-                Some((Some(d), _)) => {
-                    let want: Vec<leaf_proto::Chapter> = logic::next_unread(&d, AUTO_CHAPTERS).into_iter().filter(|c| !self.saver.is_saved(c.id)).collect();
-                    if !want.is_empty() {
-                        self.saver.add(id, &d.series.title, &want);
-                    }
-                }
-                Some((None, true)) => waiting = true,
-                _ => {
-                    waiting = true;
-                    self.ask(Job::Series(id));
-                }
-            }
+        if s.wifi_only && !self.host.unmetered() {
+            return;
         }
-        self.auto_next_at = now + if waiting { 20_000 } else { AUTO_EVERY_MS };
+        self.smart_now = false;
+        let (saver, data) = (self.saver.clone(), self.data.clone());
+        let _ = std::thread::Builder::new().name("leaf-smart".into()).spawn(move || {
+            crate::smart::refresh(&crate::net::Client::new(), &server, &saver, &data, &s, now, off);
+            crate::wake::wake();
+        });
     }
 
     /// Copy the books now (Settings), over a copy found from another phone too when `over`.
@@ -1494,7 +1496,7 @@ impl App {
     fn take_answers(&mut self) {
         self.shelf.take();
         self.books_tick();
-        self.auto_next_tick();
+        self.smart_tick();
         let picked = crate::shelf::take_delivered();
         if !picked.is_empty() {
             let files = picked.into_iter().map(|(p, n)| (p, n, true)).collect();
@@ -2616,6 +2618,13 @@ impl App {
         for chapter in self.images.take_broken_saved() {
             self.drop_saved(chapter);
             self.toast("The copy saved on this phone was broken: reading it from your server");
+        }
+        // A page its source sent blank: the chapter from another source, without a tap (once a
+        // chapter; Other source stays on the page for a second try).
+        for chapter in self.images.take_blank() {
+            if self.moved_blank.insert(chapter) {
+                self.read_elsewhere(chapter);
+            }
         }
         let route = self.route().clone();
         // Out of reach: the server is tried again now and then, and the prompt shows once a spell.

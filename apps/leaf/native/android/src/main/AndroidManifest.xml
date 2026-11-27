@@ -4,7 +4,7 @@
     <!-- The owner's leaf-server: the library, covers and pages. No other host. Books come from the
          system's file picker, which needs no permission. -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- "Download Next up on Wi-Fi" asks whether the network is metered. -->
+    <!-- Auto downloads ask whether the network is metered ("Only on Wi-Fi"). -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- New chapters of a series whose bell is on: an hourly job asks the server and posts a
          notice per new chapter run (Android 13+ asks the person first, the first time a bell is
@@ -62,6 +62,12 @@
         </activity>
         <service
             android:name="com.quietsoftware.leaf.LeafChaptersJob"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false" />
+        <!-- Auto downloads' night run while Leaf is closed (smart.rs): hourly, it acts once a
+             night after midnight. -->
+        <service
+            android:name="com.quietsoftware.leaf.LeafNightJob"
             android:permission="android.permission.BIND_JOB_SERVICE"
             android:exported="false" />
         <!-- Lends a book's notes (Markdown under the cache's shared/ folder) to the app picked in

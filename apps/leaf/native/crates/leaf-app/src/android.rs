@@ -300,6 +300,25 @@ pub extern "system" fn Java_com_quietsoftware_leaf_LeafChaptersJob_nativePlan<'l
     env.new_string(out).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
 }
 
+/// Auto downloads' night run (`LeafNightJob`): what it did, in words for the log.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_leaf_LeafNightJob_nativeNight<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    files: JString<'local>,
+    now_ms: jni::sys::jlong,
+    offset_min: jni::sys::jint,
+    unmetered: jni::sys::jboolean,
+) -> jni::sys::jstring {
+    let dir: String = if files.is_null() { String::new() } else { env.get_string(&files).map(Into::into).unwrap_or_default() };
+    let out = if dir.is_empty() {
+        "no folder".to_string()
+    } else {
+        std::panic::catch_unwind(|| crate::smart::night(std::path::Path::new(&dir), now_ms, offset_min as i64 * 60, unmetered != 0)).unwrap_or_else(|_| "failed".into())
+    };
+    env.new_string(out).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
+}
+
 /// The server's second address built in (`LEAF_ALT_BASE`), for the chapter job; "" when none.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_quietsoftware_leaf_LeafChaptersJob_nativeAltBase<'local>(env: JNIEnv<'local>, _class: JClass<'local>) -> jni::sys::jstring {

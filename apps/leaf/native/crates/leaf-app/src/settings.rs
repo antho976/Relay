@@ -43,6 +43,8 @@ pub enum Act {
     DiskCap(Option<u32>),
     /// Check the address and token typed, and use them once the server answers.
     Connect,
+    /// An Auto downloads setting changed: keep it, and run now.
+    Smart,
 }
 
 /// A page of Settings, opened from its row.
@@ -50,6 +52,7 @@ pub enum Act {
 pub enum Part {
     Reading,
     Downloads,
+    Auto,
     Notifications,
     Server,
     Sources,
@@ -62,6 +65,7 @@ impl Part {
         match self {
             Part::Reading => "Reading",
             Part::Downloads => "Downloads",
+            Part::Auto => "Auto downloads",
             Part::Notifications => "Notifications",
             Part::Server => "Server",
             Part::Sources => "Sources",
@@ -72,13 +76,14 @@ impl Part {
 
     /// By its name in lower case ("server"), for the desktop's shots.
     pub fn named(name: &str) -> Option<Part> {
-        [Part::Reading, Part::Downloads, Part::Notifications, Part::Server, Part::Sources, Part::Anilist, Part::Backups].into_iter().find(|p| p.title().eq_ignore_ascii_case(name))
+        [Part::Reading, Part::Downloads, Part::Auto, Part::Notifications, Part::Server, Part::Sources, Part::Anilist, Part::Backups].into_iter().find(|p| p.title().eq_ignore_ascii_case(name))
     }
 
     fn glyph(self) -> &'static str {
         match self {
             Part::Reading => "book-open",
             Part::Downloads => "download",
+            Part::Auto => "sparkle",
             Part::Notifications => "bell",
             Part::Server => "server",
             Part::Sources => "globe",
@@ -89,7 +94,7 @@ impl Part {
 }
 
 /// The index's groups, in order: a heading and its rows.
-const GROUPS: [(&str, &[Part]); 2] = [("THIS PHONE", &[Part::Reading, Part::Downloads, Part::Notifications]), ("YOUR SERVER", &[Part::Sources, Part::Anilist, Part::Backups])];
+const GROUPS: [(&str, &[Part]); 2] = [("THIS PHONE", &[Part::Reading, Part::Downloads, Part::Auto, Part::Notifications]), ("YOUR SERVER", &[Part::Sources, Part::Anilist, Part::Backups])];
 
 /// The server's address and token, folded under its row until Change.
 pub struct Conn<'a> {
@@ -151,8 +156,22 @@ fn wrap_chars(cx: &mut Ctx, s: &str, w: f32, tt: Text) -> Vec<String> {
     out
 }
 
+/// Auto downloads' page: the series it keeps, best first (title, why in words, kept in words),
+/// what it has on this phone, and its last run.
+#[derive(Default)]
+pub struct AutoView {
+    /// The library and the reading lately are in (until then, "Asking your server").
+    pub ready: bool,
+    pub ranked: Vec<(String, String, String)>,
+    pub chapters: usize,
+    pub bytes: u64,
+    pub last: crate::smart::Night,
+}
+
 /// What Settings shows and changes.
 pub struct Parts<'a> {
+    /// What Auto downloads would keep now and has kept (its page only).
+    pub auto: Option<AutoView>,
     pub prefs: &'a mut ReadPrefs,
     pub notify: &'a mut Notify,
     pub status: &'a Loaded<Status>,
@@ -278,26 +297,98 @@ pub fn draw(cx: &mut Ctx, p: Parts, part: Part, x: f32, mut y: f32, w: f32, now_
             }
         }
         Part::Downloads => {
-            let (h, tap) = toggle_row(
-                cx,
-                x,
-                y,
-                w,
-                "Download Next up on Wi-Fi",
-                "The next 2 chapters of the 3 series closest to their end are kept on this phone, ready to read with no connection.",
-                p.prefs.auto_next,
-            );
-            if tap {
-                p.prefs.auto_next = !p.prefs.auto_next;
-                acts.push(Act::Save);
-            }
-            y += h;
             let (h, tap) = toggle_row(cx, x, y, w, "Delete downloads once read", "A chapter downloaded to this phone goes when you finish it and leave the reader.", p.prefs.delete_read);
             if tap {
                 p.prefs.delete_read = !p.prefs.delete_read;
                 acts.push(Act::Save);
             }
             y += h;
+        }
+        Part::Auto => {
+            let sm = &mut p.prefs.smart;
+            let (h, tap) = toggle_row(
+                cx,
+                x,
+                y,
+                w,
+                "Auto downloads",
+                "The next chapters of the series you're reading most right now, kept on this phone. Every night after midnight, the ones you've read go and newer ones take their place.",
+                sm.on,
+            );
+            if tap {
+                sm.on = !sm.on;
+                acts.push(Act::Smart);
+            }
+            y += h;
+            if sm.on {
+                let (h, up) = step_row(cx, x, y, w, "Room on this phone", &crate::space::size_words(sm.room_mb as u64 * 1_000_000));
+                if let Some(up) = up {
+                    sm.room_mb = crate::smart::step(&crate::smart::ROOMS_MB, sm.room_mb, up);
+                    acts.push(Act::Smart);
+                }
+                y += h;
+                let (h, up) = step_row(cx, x, y, w, "Chapters per series", &sm.per_series.to_string());
+                if let Some(up) = up {
+                    sm.per_series = crate::smart::step(&crate::smart::PER_SERIES, sm.per_series, up);
+                    acts.push(Act::Smart);
+                }
+                y += h;
+                let (h, tap) = toggle_row(cx, x, y, w, "Only on Wi-Fi", "Nothing is downloaded on mobile data.", sm.wifi_only);
+                if tap {
+                    sm.wifi_only = !sm.wifi_only;
+                    acts.push(Act::Smart);
+                }
+                y += h + GAP;
+                y += heading(cx, x, y, "WHICH SERIES");
+                let (h, tap) = toggle_row(cx, x, y, w, "Series you've just started", "Fewer than 10 chapters read.", sm.started);
+                if tap {
+                    sm.started = !sm.started;
+                    acts.push(Act::Smart);
+                }
+                y += h;
+                let (h, tap) = toggle_row(cx, x, y, w, "Series you've slowed down on", "Nothing read in 3 weeks, or read only before Leaf.", sm.slowed);
+                if tap {
+                    sm.slowed = !sm.slowed;
+                    acts.push(Act::Smart);
+                }
+                y += h + GAP;
+                y += heading(cx, x, y, "RIGHT NOW");
+                let small = Text::new(ty::CAPTION, t::INK3).line(1.4);
+                if let Some(a) = &p.auto {
+                    let size = crate::space::size_words(a.bytes);
+                    let room = crate::space::size_words(sm.room_mb as u64 * 1_000_000);
+                    let mut line = match a.chapters {
+                        0 => format!("Nothing kept yet, room for {room}"),
+                        1 => format!("1 chapter on this phone, {size} of {room}"),
+                        n => format!("{n} chapters on this phone, {size} of {room}"),
+                    };
+                    if a.last.at > 0 {
+                        line.push_str(&format!(" · looked {}", logic::ago(a.last.at, p.now_ms)));
+                    }
+                    y += cx.c.para(&line, x, y, w, small, 2) + 4.0;
+                    if let Some(e) = &a.last.error {
+                        y += cx.c.para(e, x, y, w, small.color(t::WARN), 2) + 4.0;
+                    }
+                    y += 6.0;
+                    if !a.ready {
+                        y += asking(cx, x, y, now_ns);
+                    } else if a.ranked.is_empty() {
+                        y += cx.c.para("No series to keep yet: the ones you read most these days show here.", x, y, w, Text::new(ty::UI, t::INK2).line(1.45), 3) + 8.0;
+                    }
+                    for (title, why, kept) in &a.ranked {
+                        let rh = 54.0;
+                        let tt = Text::new(ty::BODY, t::INK);
+                        let lt = Text::new(ty::CAPTION, t::INK3);
+                        let kt = Text::new(ty::UI, t::INK2).right();
+                        let kw = cx.c.measure(kept, kt) + 12.0;
+                        let ty0 = y + (rh - tt.lh() - 3.0 - lt.lh()) / 2.0;
+                        cx.c.text_fit(title, x, ty0, w - kw, tt);
+                        cx.c.text_fit(why, x, ty0 + tt.lh() + 3.0, w - kw, lt);
+                        cx.c.text(kept, x + w, y + (rh - kt.lh()) / 2.0, kt);
+                        y += rh;
+                    }
+                }
+            }
         }
         Part::Notifications => {
             let (h, tap) = toggle_row(cx, x, y, w, "Quiet hours", "Notices that come in these hours wait until they end.", p.notify.quiet);
@@ -466,6 +557,7 @@ pub fn draw(cx: &mut Ctx, p: Parts, part: Part, x: f32, mut y: f32, w: f32, now_
 /// What the index needs to say on its rows.
 pub struct Index<'a> {
     pub label: &'a str,
+    pub smart: crate::smart::SmartPrefs,
     pub status: &'a Loaded<Status>,
     pub health: &'a Loaded<Vec<SourceHealth>>,
     pub server: &'a Loaded<crate::net::ServerInfo>,
@@ -561,6 +653,8 @@ fn row_value(part: Part, ix: &Index) -> (String, Rgba) {
             Some(false) => ("Off".into(), t::INK3),
             None => (String::new(), t::INK3),
         },
+        Part::Auto if ix.smart.on => (format!("On, {}", crate::space::size_words(ix.smart.room_mb as u64 * 1_000_000)), t::INK3),
+        Part::Auto => ("Off".into(), t::INK3),
         Part::Backups => match &ix.server.data {
             Some(i) if i.backup_at > 0 => (logic::ago(i.backup_at, ix.now_ms), t::INK3),
             Some(_) => ("None yet".into(), t::WARN),
@@ -718,6 +812,25 @@ fn server_part(cx: &mut Ctx, s: &Loaded<crate::net::ServerInfo>, x: f32, y0: f32
         y += cx.c.para("Over 90% with nothing read left to delete: chapters not read yet fill it. A larger size makes room.", x, y, w, small.color(t::WARN), 3) + 4.0;
     }
     y - y0
+}
+
+/// Words with − and + at the right and the value between. Returns its height and the step
+/// tapped (true: up).
+fn step_row(cx: &mut Ctx, x: f32, y: f32, w: f32, words: &str, value: &str) -> (f32, Option<bool>) {
+    let h = 52.0;
+    let tt = Text::new(ty::BODY, t::INK);
+    cx.c.text_fit(words, x, y + (h - tt.lh()) / 2.0, w - 190.0, tt);
+    let right = x + w + 10.0;
+    let mut out = None;
+    if kit::icon_key(cx, right - 44.0, y + 4.0, "plus") {
+        out = Some(true);
+    }
+    let vt = Text::new(ty::BODY, t::INK).semi().center();
+    cx.c.text(value, right - 44.0 - 40.0, y + (h - vt.lh()) / 2.0, vt);
+    if kit::icon_key(cx, right - 44.0 - 80.0 - 44.0, y + 4.0, "minus") {
+        out = Some(false);
+    }
+    (h, out)
 }
 
 /// "Room for chapters" with − and + at the right. Returns its height and the size stepped to.

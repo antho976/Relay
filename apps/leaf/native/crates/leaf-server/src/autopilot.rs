@@ -420,7 +420,47 @@ impl Ctx {
     }
 
     pub(crate) fn detail_now(&self, w: &Work, m: &Manga) -> SeriesDetail {
-        detail_of(w, m, &self.extras(w), &self.prefs)
+        let mut d = detail_of(w, m, &self.extras(w), &self.prefs);
+        // A chapter moved to another copy is downloaded when that copy is.
+        let moved = self.moved();
+        if !moved.is_empty() {
+            for c in &mut d.chapters {
+                if let Some(to) = moved.get(&c.id) {
+                    c.downloaded = self.moved_copy(c.id, to).is_some_and(|x| x.2);
+                }
+            }
+        }
+        d
+    }
+
+    /// Chapters moved to another copy of their work (`elsewhere:{id}`: one you said was broken,
+    /// or one downloaded blank), and the source each moved to ("" or "1": the best ranked).
+    pub fn moved(&self) -> HashMap<i64, String> {
+        self.store().with_prefix("elsewhere:").into_iter().filter_map(|(k, v)| Some((k.strip_prefix("elsewhere:")?.parse().ok()?, v))).collect()
+    }
+
+    /// The copy a moved chapter comes from: its chapter id there, the source, and whether it is
+    /// downloaded there. From Suwayomi's records: no site is asked.
+    fn moved_copy(&self, chapter_id: i64, to: &str) -> Option<(i64, String, bool)> {
+        let (manga_id, number) = self.suwa.chapter_place(chapter_id).ok()?;
+        let work = self.store().work_of_any(manga_id)?;
+        let mut copies: Vec<Manga> = std::iter::once(work.manga_id).chain(self.store().links(work.id)).filter(|id| *id != manga_id).filter_map(|id| self.suwa.manga(id).ok()).collect();
+        copies.sort_by_key(|m| (m.source_name != to, rank(&m.source_name, &self.prefs)));
+        copies.iter().find_map(|m| m.chapters.iter().find(|c| c.number == number).map(|c| (c.id, m.source_name.clone(), c.downloaded)))
+    }
+
+    /// A chapter downloaded blank (a source that sent zeros for its pictures, as MangaFire did
+    /// for one chapter on 2026-11-26): the download goes, and the chapter is read and downloaded
+    /// from another copy of the work from now on.
+    pub fn move_blank(&self, chapter_id: i64) {
+        log(&format!("chapter {chapter_id}: downloaded blank; read from another source from now on"));
+        let _ = self.suwa.delete_downloads(&[chapter_id]);
+        let key = format!("elsewhere:{chapter_id}");
+        if self.store().get(&key).is_none() {
+            self.store().set(&key, "");
+        }
+        self.forget_pages(chapter_id);
+        self.queue_downloads(&[(chapter_id, String::new())]);
     }
 
     pub fn detail(&self, id: i64) -> Result<SeriesDetail, String> {
@@ -880,6 +920,14 @@ impl Ctx {
             self.store().unqueue_downloads(&[chapter_id]);
             return self.suwa.delete_downloads(&[chapter_id]);
         }
+        // A moved chapter downloads from the copy it moved to.
+        if let Some(to) = self.moved().get(&chapter_id) {
+            return match self.moved_copy(chapter_id, to) {
+                Some((id, source, false)) => self.ask(&source, Lane::Fore, || self.suwa.enqueue(&[id])),
+                Some(_) => Ok(()),
+                None => Err("No other source has this chapter".into()),
+            };
+        }
         let info = self.suwa.chapter_info(chapter_id)?;
         self.store().unqueue_downloads(&[chapter_id]);
         self.ask(&info.source, Lane::Fore, || self.suwa.enqueue(&[chapter_id]))
@@ -887,10 +935,20 @@ impl Ctx {
 
     /// Chapters to download, put in line: handed to Suwayomi as each source's budget allows.
     pub fn queue_downloads(&self, chapters: &[(i64, String)]) {
+        // A moved chapter is the copy's to download (nothing when that one is downloaded already,
+        // or no copy has it): never the source that sent it blank again.
+        let moved = self.moved();
+        let chapters: Vec<(i64, String)> = chapters
+            .iter()
+            .filter_map(|(id, source)| match moved.get(id) {
+                Some(to) => self.moved_copy(*id, to).filter(|c| !c.2).map(|(cid, s, _)| (cid, s)),
+                None => Some((*id, source.clone())),
+            })
+            .collect();
         if chapters.is_empty() {
             return;
         }
-        self.store().queue_downloads(chapters, now_ms());
+        self.store().queue_downloads(&chapters, now_ms());
         self.wake();
     }
 

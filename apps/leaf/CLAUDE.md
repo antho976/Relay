@@ -145,10 +145,21 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
   in My space twice", and Merge keeps the one read further (`logic::merge_keep`, `POST
   /v1/series/{id}/merge`: the other's copies become links, its bell, shelf and progress carried).
   "Not the same" is kept for good (`notdup:` in kv).
-- "Download Next up on Wi-Fi" (Settings › Reading, off by default, 2026-11-25): the next 2
-  chapters of the 3 series closest to their end go in the download line, quietly, every 3 hours,
-  only on an unmetered network (`Host::unmetered`, `LeafActivity.unmetered`; the one place the
-  platform's network state is read). It is the owner's ask for those downloads.
+- Auto downloads (Settings › Auto downloads, off by default, 2026-11-27; `smart.rs`) replaced
+  "Download Next up on Wi-Fi" (a phone that had that on gets this on). Series are ranked by how
+  much you read them *lately*: each chapter read counts e^(-days/7) from `/v1/history` (the owner:
+  50 chapters in 2 days beats 300 read 3 months ago). Settings: room on this phone, chapters per
+  series, only on Wi-Fi, series just started (<10 read), series slowed down on (21 days, or read
+  only before Leaf). Once a night after midnight the read ones go and newer ones take their place
+  (`LeafNightJob`, hourly, while Leaf is closed; the app does it itself when open; one run at a
+  time, `offline/smart.json`). It only ever deletes its own (`auto` in the manifest); one saver
+  per data folder per process (`Saver::shared`). Pages come through the server's line as any
+  download, within each source's budget.
+- Blank pages (2026-11-26: MangaFire sent zeros for a chapter): the server checks each downloaded
+  chapter as it cuts its picture (`thumbs::blank_chapter`) and moves a blank one to another copy
+  (`elsewhere:{id}`, which downloads and the detail's `downloaded` follow); a page served blank is
+  an error (`BLANK_PAGE`) on which the reader moves the chapter itself, once; a phone copy saved
+  blank is dropped (`SAVED_BROKEN`) and downloads refuse blank pages.
 - A series' description (2026-11-25, design 42 page 18: B on the page, A in the sheet) is taken
   apart by `logic::about`: the source's rating and bookmarks become readings (★ 9.29 · 41.1K
   bookmarks · Ongoing under the title), a bracketed tagline its own line, a quotation standing as

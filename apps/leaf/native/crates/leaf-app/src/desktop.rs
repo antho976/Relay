@@ -19,7 +19,8 @@
 //!   down the strip; `--overlay 1`; `--auto 1` auto-scroll on; `--dim 0..0.85`; `--fake-pages 1`
 //!   draws made-up pages instead of asking the server for any; `--sheet hide` the long press's
 //!   sheet on the page at the top), `settings` (the
-//!   Settings page, `--scroll UNITS`, `--backup 1` to export the latest backup, `--part reading|downloads|notifications|server|sources|anilist|backups` one of its pages,
+//!   Settings page, `--scroll UNITS`, `--backup 1` to export the latest backup, `--part reading|downloads|auto downloads|notifications|server|sources|anilist|backups` one of its pages
+//!   (`--smart 1`: Auto downloads on),
 //!   `--fold server,anilist` the address and AniList steps
 //!   folded out).
 //!   `--fake-recs 1` makes Home's picks (and a series' Readers also like) from the library, for the
@@ -394,7 +395,7 @@ fn fake_saved(app: &mut App, dir: &std::path::Path, n: usize, only: Option<i64>)
         for (j, c) in d.chapters[from..k.saturating_sub(1)].iter().enumerate() {
             let pages = if c.pages > 0 { c.pages } else { 30 + (c.number as u32 * 7) % 25 };
             let bytes = 4_200_000 + (c.number * 137_000.0) as u64 % 3_100_000;
-            list.push(crate::offline::Manifest { series: *id, title: d.series.title.clone(), chapter: c.clone(), pages, skipped: vec![], bytes, saved_at: now - (i as i64) * 3 * 3_600_000 - j as i64 * 60_000 });
+            list.push(crate::offline::Manifest { series: *id, title: d.series.title.clone(), chapter: c.clone(), pages, skipped: vec![], bytes, saved_at: now - (i as i64) * 3 * 3_600_000 - j as i64 * 60_000, auto: false });
         }
     }
     for m in &list {
@@ -413,7 +414,7 @@ fn fake_saving(app: &mut App, id: i64) {
         .filter(|c| !app.saver.is_saved(c.id))
         .skip(1)
         .take(3)
-        .map(|c| crate::offline::Item { series: id, title: d.series.title.clone(), chapter: c.clone(), asked: true, failed: None })
+        .map(|c| crate::offline::Item { series: id, title: d.series.title.clone(), chapter: c.clone(), asked: true, failed: None, auto: false })
         .collect();
     app.saver.shot_line(items, 12, 40);
 }
@@ -567,6 +568,10 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             let fold = arg(args, "--fold").unwrap_or_default();
             app.st.connect.editing = fold.contains("server");
             app.st.connect.anilist_open = fold.contains("anilist");
+            // `--smart 1`: Auto downloads on (the shot keeps nothing).
+            if arg(args, "--smart").is_some() {
+                app.prefs.smart.on = true;
+            }
         }
         "saved" => {
             app.set_server(server);

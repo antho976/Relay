@@ -85,6 +85,13 @@ pub fn draw(app: &mut App, dt: f32, part: Option<Part>) -> bool {
         if part == Some(Part::Reading) {
             app.ask(Job::HiddenPages);
         }
+        // Auto downloads ranks by what was read lately: the server's record of it.
+        if part == Some(Part::Auto) {
+            app.ask(Job::History);
+            if app.library.data.is_none() {
+                app.ask(Job::Library);
+            }
+        }
         // A page opens with its folds closed (a shot sets them on purpose).
         if part.is_some() && !app.shot {
             app.st.connect.editing = false;
@@ -111,6 +118,7 @@ pub fn draw(app: &mut App, dt: f32, part: Option<Part>) -> bool {
     let mut connect = false;
     let mut open_library = false;
     let mut open_part = None;
+    let mut auto = (part == Some(Part::Auto)).then(|| auto_view(app));
     let st = &mut app.st.connect;
     let mut cx = cx!(app);
     let x = PAD;
@@ -172,7 +180,7 @@ pub fn draw(app: &mut App, dt: f32, part: Option<Part>) -> bool {
             None => {}
         }
     } else if part.is_none() {
-        let ix = crate::settings::Index { label: &label, status: &app.status, health: &app.health, server: &app.server_info, now_ms: crate::shelf::now_ms() };
+        let ix = crate::settings::Index { label: &label, smart: app.prefs.smart, status: &app.status, health: &app.health, server: &app.server_info, now_ms: crate::shelf::now_ms() };
         let (end, open) = crate::settings::index(&mut cx, ix, x, y, w, app.now_ns);
         y = end + 32.0;
         open_part = open;
@@ -182,6 +190,7 @@ pub fn draw(app: &mut App, dt: f32, part: Option<Part>) -> bool {
             _ => None,
         };
         let parts = crate::settings::Parts {
+            auto: auto.take(),
             prefs: &mut app.prefs,
             notify: &mut app.notify,
             status: &app.status,
@@ -276,6 +285,11 @@ pub fn draw(app: &mut App, dt: f32, part: Option<Part>) -> bool {
                 app.toast("Copied");
             }
             Act::Connect => connect = true,
+            Act::Smart => {
+                app.save_config();
+                app.smart_now = true;
+                app.smart_at = 0;
+            }
         }
     }
     if done == Some("anilist") && !app.st.connect.anilist.trim().is_empty() {
@@ -312,6 +326,41 @@ pub fn draw(app: &mut App, dt: f32, part: Option<Part>) -> bool {
         app.wake_at(app.now_ns + 50_000_000);
     }
     pg.moving
+}
+
+/// What Auto downloads would keep now (its ranking, from the library and the reading lately) and
+/// what it keeps on this phone.
+fn auto_view(app: &App) -> crate::settings::AutoView {
+    use crate::smart::Kind;
+    let now = crate::shelf::now_ms();
+    let (saved, queued) = app.saver.autos();
+    let ranked = match (&app.library.data, &app.history.data) {
+        (Some(lib), Some(reads)) => crate::smart::rank(lib, reads, &app.prefs.smart, now),
+        _ => Vec::new(),
+    };
+    let rows = ranked
+        .iter()
+        .take(6)
+        .map(|r| {
+            let why = match (r.kind, r.week) {
+                (Kind::Now, 0) => "Read lately".to_string(),
+                (Kind::Now | Kind::Started, 1) => "1 chapter read this week".to_string(),
+                (Kind::Now | Kind::Started, n) if n > 1 => format!("{n} chapters read this week"),
+                (Kind::Started, _) => "Just started".to_string(),
+                (Kind::Slowed, _) => "Slowed down on".to_string(),
+                _ => String::new(),
+            };
+            let (have, waiting) = (saved.iter().filter(|m| m.series == r.id).count(), queued.iter().filter(|i| i.series == r.id && i.failed.is_none()).count());
+            let kept = match (have, waiting) {
+                (0, 0) => String::new(),
+                (h, 0) => format!("{h} kept"),
+                (h, w) => format!("{} of {}", h, h + w),
+            };
+            (r.title.clone(), why, kept)
+        })
+        .collect();
+    let ready = app.library.data.is_some() && app.history.data.is_some();
+    crate::settings::AutoView { ready, ranked: rows, chapters: saved.len(), bytes: saved.iter().map(|m| m.bytes).sum(), last: crate::smart::last_night(&app.data) }
 }
 
 /// Check the address typed (Connect, or Done on the token's keyboard).

@@ -207,14 +207,14 @@ fn settings_is_an_index_whose_rows_open_their_pages_and_back_returns_to_it() {
     app.push(Route::Connect);
     step(&mut app, &mut t);
     step(&mut app, &mut t);
-    // The server's card first, then the groups: This phone (3 rows), Your server (3).
+    // The server's card first, then the groups: This phone (4 rows), Your server (3).
     let top = app.canvas.inset_top + 56.0 + 8.0;
     tap(&mut app, &mut t, 200.0, top + 36.0);
     assert_eq!(app.route(), &Route::Setting(crate::settings::Part::Server), "the server's card");
     app.back();
     step(&mut app, &mut t);
     assert_eq!(app.route(), &Route::Connect, "Back returns to the index");
-    let group2 = top + 72.0 + 26.0 + 26.0 + 3.0 * 56.0 + 4.0 + 26.0 + 26.0;
+    let group2 = top + 72.0 + 26.0 + 26.0 + 4.0 * 56.0 + 6.0 + 26.0 + 26.0;
     tap(&mut app, &mut t, 200.0, group2 + 58.0 + 28.0);
     assert_eq!(app.route(), &Route::Setting(crate::settings::Part::Anilist), "the second row of Your server");
     // The page's own Back key.
@@ -594,7 +594,7 @@ fn a_chapter_saved_blank_on_the_phone_is_dropped_and_read_from_the_server() {
     for n in 0..5 {
         std::fs::write(folder.join(n.to_string()), vec![0u8; 5000]).unwrap();
     }
-    let m = crate::offline::Manifest { series: 1, title: "Series 1".into(), chapter: c.clone(), pages: 5, skipped: vec![], bytes: 25_000, saved_at: 0 };
+    let m = crate::offline::Manifest { series: 1, title: "Series 1".into(), chapter: c.clone(), pages: 5, skipped: vec![], bytes: 25_000, saved_at: 0, auto: false };
     std::fs::write(folder.join("manifest.json"), serde_json::to_vec(&m).unwrap()).unwrap();
     app.saver.shot_saved(vec![m]);
     app.open_chapter(&d, 1, 0);
@@ -714,6 +714,8 @@ mod fake {
         pub counts: HashMap<i64, u32>,
         pub fail_counts: HashSet<i64>,
         pub fail_pages: HashSet<i64>,
+        /// Chapters whose pages the source sent blank (`502`, the server's words).
+        pub blank_pages: HashSet<i64>,
         /// Pages answered as a scanlator's promo page: `204`, `x-leaf-skip: 1`.
         pub skip_pages: HashSet<(i64, u32)>,
         /// Series answered by `/v1/series/{id}`.
@@ -733,6 +735,8 @@ mod fake {
         pub bells: Vec<(i64, bool)>,
         /// Collections' pictures, by slug (the rest are a 404).
         pub tagart: HashSet<String>,
+        /// Chapters read and when (`/v1/history`).
+        pub history: Vec<leaf_proto::HistoryRead>,
         /// The phone's copy of its books (`/v1/phone/files`), by (kind, name).
         pub phone: std::collections::BTreeMap<(String, String), Vec<u8>>,
     }
@@ -814,6 +818,8 @@ mod fake {
                     if st.skip_pages.contains(&page) {
                         extra.push_str("x-leaf-skip: 1\r\n");
                         (204, "image/png", Vec::new())
+                    } else if st.blank_pages.contains(&page.0) {
+                        (502, "application/json", br#"{"error":"The source sent this page blank"}"#.to_vec())
                     } else if st.fail_pages.contains(&page.0) {
                         (503, "text/plain", b"busy".to_vec())
                     } else {
@@ -834,6 +840,7 @@ mod fake {
                     }
                     (200, "application/json", format!("{{\"ok\":true,\"count\":{}}}", ids.len()).into_bytes())
                 }
+                ("GET", ["v1", q]) if q.starts_with("history") => (200, "application/json", serde_json::to_vec(&st.history).unwrap()),
                 ("GET", ["v1", "library"]) => {
                     let list: Vec<&leaf_proto::Series> = st.details.values().map(|d| &d.series).collect();
                     (200, "application/json", serde_json::to_vec(&list).unwrap())
@@ -873,6 +880,11 @@ mod fake {
                         st.progress.push((id.parse().unwrap_or(0), p));
                     }
                     (200, "application/json", b"{\"ok\":true}".to_vec())
+                }
+                ("POST", ["v1", "chapters", id, "elsewhere"]) => {
+                    let id: i64 = id.parse().unwrap_or(0);
+                    st.blank_pages.remove(&id);
+                    (200, "application/json", br#"{"ok":true,"count":2}"#.to_vec())
                 }
                 ("GET", ["v1", "duplicates"]) => (200, "application/json", b"[]".to_vec()),
                 ("POST", ["v1", "series", _, "merge"]) | ("POST", ["v1", "duplicates", "dismiss"]) => (200, "application/json", b"{\"ok\":true}".to_vec()),
@@ -1165,6 +1177,26 @@ fn a_page_whose_early_fetch_failed_still_loads_when_reached() {
         r.pos = crate::strip::Pos { item: crate::strip::Item::Head(1), off: 0.0 };
     }
     assert!(until(&mut app, &mut t, 5.0, |a| (0..3).all(|n| a.images.size(1002, n).is_some())), "its pages load: {:?}", (0..3).map(|n| app.images.failed(1002, n)).collect::<Vec<_>>());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_page_its_source_sent_blank_moves_the_chapter_to_another_source_by_itself() {
+    let (mut app, mut t, dir) = app("reader-blank");
+    // Not a shot: the request for another source is sent.
+    app.shot = false;
+    let fake = fake::Fake::start();
+    app.server = Some(fake.server());
+    app.images.set_server(app.server.clone());
+    fake.state.lock().unwrap().blank_pages.insert(1001);
+    let d = comic(1, &[2]);
+    app.open_chapter(&d, 0, 0);
+    assert!(until(&mut app, &mut t, 5.0, |_| fake.hits("/v1/chapters/1001/elsewhere") == 1), "asked for another source without a tap");
+    assert!(until(&mut app, &mut t, 5.0, |a| a.images.size(1001, 0).is_some()), "and its pages load from there");
+    for _ in 0..20 {
+        step(&mut app, &mut t);
+    }
+    assert_eq!(fake.hits("/v1/chapters/1001/elsewhere"), 1, "once");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -1495,7 +1527,7 @@ fn saved_on_disk(dir: &std::path::Path, series: i64, chapter: i64, number: f64, 
     }
     let bytes = p.len() as u64 * pages as u64;
     let chapter = leaf_proto::Chapter { id: chapter, number, name: String::new(), group: None, pages, read, last_page: 0, downloaded: false, uploaded_at: 0, from: None };
-    let m = crate::offline::Manifest { series, title: format!("Series {series}"), chapter, pages, skipped: vec![], bytes, saved_at: 1_700_000_000_000 + series * 1000 + number as i64 };
+    let m = crate::offline::Manifest { series, title: format!("Series {series}"), chapter, pages, skipped: vec![], bytes, saved_at: 1_700_000_000_000 + series * 1000 + number as i64, auto: false };
     std::fs::write(d.join("manifest.json"), serde_json::to_vec(&m).unwrap()).unwrap();
     bytes
 }
@@ -1742,32 +1774,56 @@ fn a_series_followed_twice_is_merged_into_the_one_read_further() {
 }
 
 #[test]
-fn next_up_is_downloaded_on_wi_fi_only_once_turned_on() {
-    let (mut app, mut t, dir) = app("auto-next");
+fn auto_downloads_keep_the_series_read_lately_and_swap_read_chapters_for_newer_ones() {
+    let (mut app, mut t, dir) = app("auto-downloads");
     let fake = fake::Fake::start();
     app.shot = false;
     app.server = Some(fake.server());
     app.st.online.reach = Some(true);
-    // Series 2 has 2 chapters left of 10, the others 6: it is first.
-    let mut d = comic(2, &[3; 10]);
+    let now = crate::shelf::now_ms();
+    // Series 2: chapters 1 to 8 read yesterday. Series 3: read far, long ago (its last read in 2023).
+    let mut d = comic(2, &[3; 20]);
     for c in &mut d.chapters {
         c.read = c.number <= 8.0;
     }
     d.series.read_upto = Some(8.0);
-    d.series.unread = 2;
-    fake.state.lock().unwrap().details.insert(2, d.clone());
-    if let Some(l) = &mut app.library.data {
-        l[1] = d.series.clone();
+    d.series.latest = Some(20.0);
+    let mut old = comic(3, &[3; 20]);
+    old.series.read_upto = Some(15.0);
+    old.series.latest = Some(20.0);
+    for c in &mut old.chapters {
+        c.id += 100;
+    }
+    {
+        let mut st = fake.state.lock().unwrap();
+        st.details.insert(2, d.clone());
+        st.details.insert(3, old);
+        st.history = (1..=8).map(|n| leaf_proto::HistoryRead { series: 2, number: n as f64, at: now - 86_400_000 }).collect();
     }
     let kept = |app: &App, id: i64| !matches!(app.saver.state(id), crate::offline::Kept::None);
     for _ in 0..30 {
         step(&mut app, &mut t);
     }
     assert!(!kept(&app, 1009), "off until turned on");
-    app.prefs.auto_next = true;
-    app.series.insert(2, loaded(d));
-    assert!(until(&mut app, &mut t, 5.0, |a| kept(a, 1009) && kept(a, 1010)), "chapters 9 and 10 in the line");
-    assert!(!kept(&app, 1008), "not one already read");
+    app.prefs.smart = crate::smart::SmartPrefs { on: true, per_series: 3, wifi_only: false, ..Default::default() };
+    app.smart_now = true;
+    assert!(until(&mut app, &mut t, 5.0, |a| kept(a, 1009) && kept(a, 1010) && kept(a, 1011)), "chapters 9 to 11 in the line");
+    assert!(!kept(&app, 1012) && !kept(&app, 1008), "three, none read");
+    assert!(!(1101..=1120).any(|id| kept(&app, id)), "not the one slowed down on");
+    // 9 and 10 read since: tonight they go and 12 and 13 come.
+    {
+        let mut st = fake.state.lock().unwrap();
+        let s2 = st.details.get_mut(&2).unwrap();
+        s2.series.read_upto = Some(10.0);
+        for c in &mut s2.chapters {
+            c.read = c.number <= 10.0;
+        }
+    }
+    app.smart_now = true;
+    app.smart_at = 0;
+    let swapped = until(&mut app, &mut t, 5.0, |a| !kept(a, 1009) && !kept(a, 1010) && kept(a, 1012) && kept(a, 1013));
+    assert!(swapped, "read ones swapped for newer ones: {:?} {:?}", (1009..=1014).map(|id| app.saver.state(id)).collect::<Vec<_>>(), crate::smart::last_night(&app.data));
+    assert!(kept(&app, 1011));
     let _ = std::fs::remove_dir_all(dir);
 }
 

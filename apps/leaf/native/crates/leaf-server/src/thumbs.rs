@@ -219,6 +219,23 @@ pub fn pages_in(dir: &Path) -> Vec<PathBuf> {
     v
 }
 
+/// A chapter folder whose pages are blank (zeros where the pictures should be): its first,
+/// middle and last pages all are.
+pub fn blank_chapter(dir: &Path) -> bool {
+    use std::io::Read;
+    let pages = pages_in(dir);
+    if pages.is_empty() {
+        return false;
+    }
+    let mut at = vec![0, pages.len() / 2, pages.len() - 1];
+    at.dedup();
+    at.iter().all(|&i| {
+        let mut head = vec![0u8; 4096];
+        let n = std::fs::File::open(&pages[i]).and_then(|mut f| f.read(&mut head)).unwrap_or(0);
+        n > 0 && crate::promo::blank(&head[..n])
+    })
+}
+
 /// The chapter's picture as WebP, from up to [`TRIES`] of its pages; None when no page could
 /// be read or cut from.
 pub fn make(dir: &Path, seed: u64) -> Option<Vec<u8>> {
@@ -286,7 +303,14 @@ impl Ctx {
     /// under the store's lock). True when one was made.
     fn make_thumb(&self, m: &Manga, c: &Ch) -> bool {
         let Some(root) = &self.downloads else { return false };
-        let picture = chapter_dir(root, &m.source_name, &m.title, c.group.as_deref(), &c.name).and_then(|dir| make(&dir, c.id as u64));
+        let dir = chapter_dir(root, &m.source_name, &m.title, c.group.as_deref(), &c.name);
+        // Every chapter downloaded passes here once: one saved blank moves to another source.
+        if dir.as_deref().is_some_and(blank_chapter) {
+            self.store().set(&format!("thumb_no:{}", c.id), &now_ms().to_string());
+            self.move_blank(c.id);
+            return false;
+        }
+        let picture = dir.and_then(|dir| make(&dir, c.id as u64));
         let Some(bytes) = picture else {
             self.store().set(&format!("thumb_no:{}", c.id), &now_ms().to_string());
             return false;
@@ -437,6 +461,14 @@ mod tests {
         let w = make(&ch, 3).expect("a picture");
         let img = image::load_from_memory(&w).unwrap();
         assert_eq!((img.width(), img.height()), (THUMB_W, THUMB_H));
+        assert!(!blank_chapter(&ch), "real pages are not blank");
+        // MangaFire's chapter 58 as Suwayomi saved it (2026-11-26): pictures' sizes, all zeros.
+        let blank = root.join("MangaFire (EN)").join("Return of the Frozen Player").join("unofficial_Ch. 58");
+        std::fs::create_dir_all(&blank).unwrap();
+        for i in 1..=69u32 {
+            std::fs::write(blank.join(format!("{i:03}.jpg")), vec![0u8; 404_770]).unwrap();
+        }
+        assert!(blank_chapter(&blank));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

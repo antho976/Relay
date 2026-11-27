@@ -41,6 +41,9 @@ pub struct Manifest {
     pub bytes: u64,
     /// When it was saved (ms).
     pub saved_at: i64,
+    /// Saved by Auto downloads ([`crate::smart`]): its own to delete once read.
+    #[serde(default)]
+    pub auto: bool,
 }
 
 /// A chapter waiting to be saved (`offline/queue.json`).
@@ -55,6 +58,9 @@ pub struct Item {
     /// Why it didn't save, until it is tried again.
     #[serde(default)]
     pub failed: Option<String>,
+    /// Put in line by Auto downloads ([`crate::smart`]).
+    #[serde(default)]
+    pub auto: bool,
 }
 
 /// A chapter as this phone holds it.
@@ -146,7 +152,10 @@ impl Shared {
     }
 }
 
-/// The downloads and their line. The app holds one; its worker thread does the fetching.
+/// The downloads and their line. The app holds one; its worker thread does the fetching. One per
+/// data folder in a process ([`Saver::shared`]): the night's Auto downloads job runs in the app's
+/// process when it is alive, and the two must not save into one folder side by side.
+#[derive(Clone)]
 pub struct Saver {
     sh: Arc<Shared>,
 }
@@ -167,6 +176,20 @@ fn now_ms() -> i64 {
 impl Saver {
     pub fn new(data: PathBuf) -> Saver {
         Saver::with_timing(data, Timing::default())
+    }
+
+    /// The process's saver for `data`, made the first time it is asked for.
+    pub fn shared(data: PathBuf) -> Saver {
+        // One folder by two spellings (the app's and the night job's) is still one.
+        let data = std::fs::canonicalize(&data).unwrap_or(data);
+        static ALL: Mutex<Vec<(PathBuf, Saver)>> = Mutex::new(Vec::new());
+        let mut all = ALL.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, s)) = all.iter().find(|(d, _)| *d == data) {
+            return s.clone();
+        }
+        let s = Saver::new(data.clone());
+        all.push((data, s.clone()));
+        s
     }
 
     pub fn with_timing(data: PathBuf, timing: Timing) -> Saver {
@@ -199,6 +222,15 @@ impl Saver {
     /// Put chapters in line: those not saved or waiting already (one that didn't save is tried
     /// again). How many were added.
     pub fn add(&self, series: i64, title: &str, chapters: &[Chapter]) -> usize {
+        self.add_as(series, title, chapters, false)
+    }
+
+    /// Put chapters in line for Auto downloads: deleted by it once read.
+    pub fn add_auto(&self, series: i64, title: &str, chapters: &[Chapter]) -> usize {
+        self.add_as(series, title, chapters, true)
+    }
+
+    fn add_as(&self, series: i64, title: &str, chapters: &[Chapter], auto: bool) -> usize {
         let mut g = self.sh.lock();
         let mut n = 0;
         for c in chapters {
@@ -212,7 +244,7 @@ impl Saver {
                     }
                 }
                 None => {
-                    g.queue.push(Item { series, title: title.to_string(), chapter: c.clone(), asked: false, failed: None });
+                    g.queue.push(Item { series, title: title.to_string(), chapter: c.clone(), asked: false, failed: None, auto });
                     n += 1;
                 }
             }
@@ -294,6 +326,17 @@ impl Saver {
                 _ => Kept::Waiting,
             },
         }
+    }
+
+    /// Auto downloads' chapters: saved, and in line (not failed).
+    pub fn autos(&self) -> (Vec<Manifest>, Vec<Item>) {
+        let g = self.sh.lock();
+        (g.saved.values().filter(|m| m.auto).cloned().collect(), g.queue.iter().filter(|i| i.auto).cloned().collect())
+    }
+
+    /// Every chapter saved, for the size of one ([`crate::smart::chapter_bytes`]).
+    pub fn all_saved(&self) -> Vec<Manifest> {
+        self.sh.lock().saved.values().cloned().collect()
     }
 
     pub fn is_saved(&self, chapter: i64) -> bool {
@@ -400,16 +443,19 @@ impl Saver {
         g.queue = items;
     }
 
-    #[cfg(test)]
+    /// Wait until the line has nothing left it can do (all saved, or failed), at most `secs`:
+    /// whether it got there. The night job holds its time open for it.
     pub fn wait_idle(&self, secs: f32) -> bool {
-        for _ in 0..(secs * 200.0) as usize {
+        let until = std::time::Instant::now() + Duration::from_secs_f32(secs);
+        let nap = Duration::from_millis(if secs > 10.0 { 250 } else { 5 });
+        while std::time::Instant::now() < until {
             {
                 let g = self.sh.lock();
                 if g.scanned && g.now.is_none() && g.queue.iter().all(|i| i.failed.is_some()) {
                     return true;
                 }
             }
-            std::thread::sleep(Duration::from_millis(5));
+            std::thread::sleep(nap);
         }
         false
     }
@@ -691,7 +737,7 @@ fn save(sh: &Arc<Shared>, client: &Client, s: &Server, item: &Item, promo: bool,
     }
     progress(sh, id, all, all);
     let bytes = std::fs::read_dir(&dir).into_iter().flatten().flatten().filter_map(|f| f.metadata().ok()).map(|m| m.len()).sum();
-    let m = Manifest { series: item.series, title: item.title.clone(), chapter: Chapter { pages: all, downloaded: false, ..chapter }, pages: all, skipped, bytes, saved_at: now_ms() };
+    let m = Manifest { series: item.series, title: item.title.clone(), chapter: Chapter { pages: all, downloaded: false, ..chapter }, pages: all, skipped, bytes, saved_at: now_ms(), auto: item.auto };
     match write_atomic(&dir.join("manifest.json"), &serde_json::to_vec(&m).unwrap_or_default()) {
         Ok(()) => End::Saved(m),
         Err(_) => End::Failed("This phone couldn't keep it".into()),

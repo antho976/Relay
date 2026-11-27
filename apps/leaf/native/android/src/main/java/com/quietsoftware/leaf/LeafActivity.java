@@ -75,6 +75,7 @@ public class LeafActivity extends GameActivity {
         c.setAppearanceLightStatusBars(false);
         c.setAppearanceLightNavigationBars(false);
         LeafChaptersJob.schedule(this);
+        LeafNightJob.schedule(this);
         getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
@@ -206,7 +207,7 @@ public class LeafActivity extends GameActivity {
         runOnUiThread(() -> getWindow().getDecorView().performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK));
     }
 
-    /** On a network that isn't metered (Wi-Fi, as people mean it): "Download Next up" may run. */
+    /** On a network that isn't metered (Wi-Fi, as people mean it): Auto downloads may run. */
     public boolean unmetered() {
         ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
         if (cm == null) return false;

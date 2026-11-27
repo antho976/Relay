@@ -264,6 +264,8 @@ pub struct Images {
     failed: HashMap<(i64, u32), String>,
     /// Chapters saved on this phone found broken ([`SAVED_BROKEN`]), for the app to drop.
     broken_saved: std::collections::HashSet<i64>,
+    /// Chapters a page of which the source sent blank ([`BLANK_PAGE`]): read from another source.
+    blank: std::collections::HashSet<i64>,
     /// Pages that would not load when only kept ahead on disk: not kept ahead again, but fetched
     /// when they come near, as any other (the server tries another source for them meanwhile).
     ahead_failed: HashSet<(i64, u32)>,
@@ -338,6 +340,7 @@ impl Images {
             decoded: HashMap::new(),
             failed: HashMap::new(),
             broken_saved: Default::default(),
+            blank: Default::default(),
             ahead_failed: HashSet::new(),
             soft: HashSet::new(),
             last_firm: 0,
@@ -674,6 +677,9 @@ impl Images {
                             self.broken_saved.insert(chapter);
                         }
                         Err(e) if decode && !self.soft.contains(&k) => {
+                            if e.contains(BLANK_PAGE) {
+                                self.blank.insert(chapter);
+                            }
                             self.failed.insert(k, e);
                         }
                         Err(_) => {
@@ -841,6 +847,11 @@ impl Images {
     #[cfg(test)]
     pub fn fake_skip(&mut self, chapter: i64, n: u32) {
         self.skipped.insert((chapter, n));
+    }
+
+    /// The chapters a page of which came blank from its source, since last asked.
+    pub fn take_blank(&mut self) -> Vec<i64> {
+        self.blank.drain().collect()
     }
 
     /// The chapters saved on this phone found broken since last asked.
@@ -1318,6 +1329,9 @@ fn made_up_page(chapter: i64, n: u32) -> PageImg {
     let tiles = crate::logic::tile_rows(h).into_iter().map(|(y, th)| raw[y as usize * row..(y + th) as usize * row].to_vec()).collect();
     PageImg { w, h, tiles }
 }
+
+/// What the server says of a page its source sent blank (`leaf-server`'s `BLANK_PAGE`).
+pub const BLANK_PAGE: &str = "The source sent this page blank";
 
 /// A page saved on this phone that is blank or won't decode: the saved chapter is dropped.
 pub const SAVED_BROKEN: &str = "This chapter was saved broken on this phone";
