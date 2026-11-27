@@ -93,6 +93,25 @@ tools/publish-apk.sh native/android/build/outputs/apk/debug/app-debug.apk dev   
 restart. Android installs an update only over a build signed with the same key, so publish the
 kind of build the phone has.
 
+### A smoke run on an emulator
+
+```fish
+tools/smoke.sh            # builds for x86_64, installs, screenshots Home, a chat, Changes and Settings
+```
+
+It runs on an emulator only (one already running, else it boots `$AVD` headless and closes it
+after), under a Relay device lease, on sample data: the debug build's `screen` extra
+(`smoke.rs`), so it needs no PC and no pairing. It writes the shots and `startup.tsv` to
+`smoke-out/`: `am start -W`'s TotalTime and the app's own "first frame N ms after start", each
+from a cold start. First run, 2026-11-27, Tally_API36 (x86_64, Android 16) on the desktop:
+
+| Screen | TotalTime | First frame |
+|---|---|---|
+| Home | 661 ms | 463 ms |
+| Chat | 812 ms | 424 ms |
+| Changes | 766 ms | 502 ms |
+| Settings | 936 ms | 444 ms |
+
 ### Testing against a real door
 
 `tests/live_door.rs` pairs, connects, and tries what the app is new to (`chat.send` once under one
