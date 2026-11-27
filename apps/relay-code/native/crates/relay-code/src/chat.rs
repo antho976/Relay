@@ -151,7 +151,9 @@ fn header(app: &mut App, a: Option<&Agent>, name: &str) {
     };
     let mut x = 56.0;
     if let Some(a) = a {
-        crate::drawer::badge(&mut app.canvas, a, x, y + 7.0, 30.0);
+        // Its lamp as the rows light it: never from an old read while the PC is away.
+        let working = app.link_state.online() && app.busy(&a.name);
+        crate::drawer::badge_lit(&mut app.canvas, a, x, y + 7.0, 30.0, working);
         x += 42.0;
     }
     // Pause and Close, at the right (D1).
@@ -1535,8 +1537,12 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     if working || last_working {
         total += 40.0;
     }
+    // Nothing to show: kit's empty shape, or its problem shape (with Try again) when the PC
+    // could not read the conversation (D16).
+    let failed = app.chat_errors.contains_key(name);
+    let empty_h = if failed { 190.0 } else { 120.0 };
     if items.is_empty() && waiting.is_empty() {
-        total += 120.0;
+        total += empty_h;
     }
     let view = page.bottom - page.top;
     let lead = (view - total - 8.0).max(0.0);
@@ -1592,10 +1598,26 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     }
 
     let mut y = page.top + lead;
-    if items.is_empty() && waiting.is_empty() {
-        let words = if found { "Nothing said yet." } else { "The conversation shows once the PC sends it." };
-        app.canvas.para(words, 40.0, y + 40.0, WIDTH - 80.0, Text::new(ty::UI, t::INK3).center().line(1.45), 3);
-        y += 120.0;
+    let nothing = items.is_empty() && waiting.is_empty();
+    if nothing {
+        let top = y + 24.0 - kit::EMPTY_GAP;
+        match app.chat_errors.get(name).cloned() {
+            Some(why) => {
+                let can = app.online();
+                let (_, retry) = kit::problem(&mut crate::cx!(app), top, "The PC couldn't read this conversation", &why, can);
+                if retry {
+                    app.chat_errors.remove(name);
+                    app.reread_at = 0;
+                }
+            }
+            None if found => {
+                kit::empty(&mut crate::cx!(app), top, "Nothing said yet", None, None);
+            }
+            None => {
+                kit::empty(&mut crate::cx!(app), top, "Waiting for the conversation", Some("It shows once the PC sends it."), None);
+            }
+        }
+        y += empty_h;
     }
     let screen_top = page.top + off;
     let screen_bottom = page.bottom + off;
@@ -1683,8 +1705,9 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
         app.outbox_changed();
     }
 
-    if let Some(why) = app.chat_errors.get(name).cloned() {
-        // The PC could not read this conversation: said once, at the top, until it can.
+    if let Some(why) = app.chat_errors.get(name).cloned().filter(|_| !nothing) {
+        // The PC could not read this conversation: said once, at the top, until it can (over what
+        // was kept; with nothing kept the page itself says it, above).
         let st = Text::new(ty::SMALL, t::INK2);
         let w = WIDTH - 2.0 * t::PAD;
         let h = app.canvas.para_h(&why, w - 40.0, st, 3) + 34.0;
