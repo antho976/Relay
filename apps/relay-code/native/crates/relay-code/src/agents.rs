@@ -292,6 +292,18 @@ mod tests {
     }
 
     #[test]
+    fn blocked_asks_you_only_at_a_prompt() {
+        let blocked = |waiting: Option<&str>| {
+            crate::data::agents(&json!({"sessions": [{"name": "a-b", "project_id": 1, "provider": "claude", "state": "blocked", "waiting": waiting}]})).remove(0)
+        };
+        assert_eq!(blocked(Some("prompt")).state_words(), "asks you");
+        assert_eq!(blocked(Some("report")).state_words(), "stopped · blocked");
+        // An older PC says nothing of why: as before.
+        assert_eq!(blocked(None).state_words(), "asks you");
+        assert!(blocked(Some("report")).needs_you(), "it still waits on you, under Needs you");
+    }
+
+    #[test]
     fn search_looks_in_the_name_and_the_intent_ignoring_case() {
         let a = agent("umber-zebra", "running", Some("Fix the Leaf reader"));
         assert!(matches(&a, "ZEBRA"));

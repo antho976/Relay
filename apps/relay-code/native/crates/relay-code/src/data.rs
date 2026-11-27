@@ -26,6 +26,10 @@ pub struct Agent {
     pub task_id: Option<i64>,
     pub last_output_at: Option<String>,
     pub updated_at: String,
+    /// Why a blocked agent waits: "prompt" (a question in its terminal) or "report" (it ended its
+    /// turn blocked or partial, and its blockers say what it needs); none from an older PC.
+    #[serde(default)]
+    pub waiting: Option<String>,
 }
 
 /// How long without terminal output before a running agent reads as waiting, not working.
@@ -65,6 +69,7 @@ impl Agent {
     /// Its state in words.
     pub fn state_words(&self) -> &'static str {
         match self.state.as_str() {
+            "blocked" if self.waiting.as_deref() == Some("report") => "stopped · blocked",
             "blocked" => "asks you",
             "spawning" => "starting",
             "running" if self.working() => "working",
@@ -130,6 +135,7 @@ pub fn agents(v: &Value) -> Vec<Agent> {
                         task_id: s.get("task_id").and_then(Value::as_i64),
                         last_output_at: str_of(s, "last_output_at"),
                         updated_at: str_of(s, "updated_at").unwrap_or_default(),
+                        waiting: str_of(s, "waiting"),
                     })
                 })
                 .filter(|a| a.provider != "shell")
