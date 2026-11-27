@@ -1036,6 +1036,12 @@ impl App {
     fn shown(&mut self) {
         self.fresh = true;
         self.ui.reset();
+        // A page is shown clean (D11): what was open over the last one, a confirm, a sheet or a
+        // menu, does not wait for the next visit ("Discard changes to X?" on opening Changes).
+        while self.st.changes.close_over() {}
+        while self.st.inbox.close_over() {}
+        self.st.settings.close_over();
+        while self.st.agents.close_over() {}
         if self.focus.id.take().is_some() {
             self.host.keyboard(false, "", Kb::Text);
         }
@@ -1075,12 +1081,18 @@ impl App {
             self.ui.reset();
             return true;
         }
+        // What is over the page closes first, the top one first; a page's own overlays only on
+        // that page, so a flag left elsewhere never takes a Back (D11).
+        let route = self.route().clone();
         if self.st.update.close_over()
             || self.st.agents.close_over()
             || self.st.drawer.close_over()
             || self.st.chat.close_over()
             || self.st.newagent.open
-            || matches!(self.route(), Route::Design(_)) && self.st.designs.close_over()
+            || matches!(route, Route::Design(_)) && self.st.designs.close_over()
+            || route == Route::Changes && self.st.changes.close_over()
+            || route == Route::Inbox && self.st.inbox.close_over()
+            || route == Route::Settings && self.st.settings.close_over()
         {
             self.st.newagent.open = false;
             self.ui.reset();

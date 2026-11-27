@@ -14,6 +14,13 @@ pub struct State {
     confirm: bool,
 }
 
+impl State {
+    /// Close the Forget confirm; false when it was not up.
+    pub fn close_over(&mut self) -> bool {
+        std::mem::take(&mut self.confirm)
+    }
+}
+
 /// What may post a notification while the app is away (each on unless switched off here).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Notify {
