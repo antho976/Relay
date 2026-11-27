@@ -525,8 +525,7 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     let tst = Text::new(ty::BODY, t::INK).line(1.4);
     let lines = if typed.is_empty() { 1 } else { app.canvas.wrap_spans(&typed, fw, tst).len().clamp(1, FIELD_LINES) };
     let box_h = 14.0 + lines as f32 * tst.lh() + 10.0 + 34.0 + 10.0;
-    // A question it waits on: read off its terminal when the PC can send that, else the two
-    // answers that always work.
+    // A question it waits on, read off its terminal (only a real card: `screen::ask`).
     let scr = app.screens.get(name).cloned().unwrap_or_default();
     let question = scr.ask.clone().filter(|_| asking || scr.status.is_none());
     let ask_h = match &question {
@@ -535,7 +534,11 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
             let esc_row = if q.options.iter().any(|(_, l)| l.ends_with("(esc)")) { 14.0 } else { 52.0 };
             16.0 + 20.0 + qh + 10.0 + q.options.len() as f32 * 46.0 + esc_row
         }
-        None if asking => 70.0,
+        // Blocked with no card on its screen: it stopped and reported being blocked, or the PC
+        // cannot show the phone its terminal. Only the second gets keys (Yes and No); the first
+        // has nothing to answer, so it gets a line.
+        None if asking && app.no_screen => 70.0,
+        None if asking && app.screens.contains_key(name) => 30.0,
         None => 0.0,
     };
     let foot_h = box_h + 20.0 + ask_h;
@@ -750,6 +753,9 @@ fn composer(
         if let Some(n) = pick {
             app.key(name, &n);
         }
+        y += ask_h;
+    } else if ask_h > 0.0 && !app.no_screen {
+        app.canvas.text("It stopped and reported it is blocked · reply to go on", t::PAD + 2.0, y + 2.0, Text::new(ty::CAPTION, t::WARN).medium());
         y += ask_h;
     } else if ask_h > 0.0 {
         // Held at a question this PC cannot show the phone: the two answers that always work.
