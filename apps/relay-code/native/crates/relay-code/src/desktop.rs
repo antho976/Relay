@@ -157,6 +157,11 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.st.drawer.open = true;
             app.st.agents.query = "leaf".into();
         }
+        "blocked" => {
+            // Blocked by its own report (session.done blocked), with no card on its screen.
+            app.open("umber-zebra");
+            app.screens.insert("umber-zebra".into(), crate::screen::read("● I could not push: the remote refused.\n────\n❯ \n────\n  ? for shortcuts"));
+        }
         "new-agent" => {
             app.reset_to(Route::Home);
             app.st.newagent.open = true;
