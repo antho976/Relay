@@ -203,8 +203,22 @@ fn a_finger_held_on_a_message_copies_it_and_is_no_tap() {
     frames(&mut a, &mut clock, 2);
     a.touch(Touch { id: 1, phase: Phase::Up, x, y, t_ns: clock });
     frames(&mut a, &mut clock, 2);
+    // A9: the hold opens a small menu (its time, Copy, Copy as text), and copies nothing yet.
+    assert!(a.st.chat.menu.is_some(), "the menu opened");
+    assert!(host.1.lock().unwrap().is_empty());
+    let [mx, my, mw, _] = crate::chat::menu_rect(&a).unwrap();
+    // A tap beside the menu closes it and reaches nothing under it (the fold at the top stays).
+    let open_before = a.st.chat.menu;
+    tap(&mut a, &mut clock, if mx > 100.0 { 40.0 } else { 370.0 }, my + 20.0);
+    assert!(a.st.chat.menu.is_none() && open_before.is_some(), "a tap elsewhere closed it");
+    assert_eq!(a.route(), &Route::Chat("bold-puffin".into()));
+    // Again, then Copy: one copy.
+    a.st.chat.menu = open_before;
+    frames(&mut a, &mut clock, 2);
+    tap(&mut a, &mut clock, mx + mw / 2.0, my + 36.0 + 22.0);
     let copied = host.1.lock().unwrap().clone();
     assert_eq!(copied.len(), 1, "one copy: {copied:?}");
+    assert!(a.st.chat.menu.is_none());
     assert_eq!(a.route(), &Route::Chat("bold-puffin".into()));
 }
 
