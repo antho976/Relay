@@ -128,16 +128,16 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.st.drawer.open = true;
             app.st.drawer.repos = screen == "repos";
         }
-        "chat" | "models" | "commands" | "chat-offline" => {
+        "chat" | "models" | "commands" | "bang" | "chat-offline" => {
             app.open("bold-puffin");
             if screen == "chat-offline" {
                 // A message written while the link reconnects waits for it.
                 app.set_link_state(rc_link::LinkState::Offline { reason: "No route".into(), retry_at_ms: 0 });
             }
             app.st.chat.model_sheet = screen == "models";
-            if screen == "commands" {
+            if screen == "commands" || screen == "bang" {
                 app.focus.id = Some("chat");
-                app.focus.text = "/".into();
+                app.focus.text = if screen == "bang" { "!" } else { "/" }.into();
             }
         }
         "asks" => app.open("umber-zebra"),

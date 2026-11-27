@@ -573,3 +573,21 @@ fn the_rows_say_working_when_the_terminal_does_as_the_header_does() {
     let zebra = a.agent("umber-zebra").cloned().expect("sample agent");
     assert_eq!(a.agent_words(&zebra), "asks you");
 }
+
+// D3: commands that fit the repo.
+
+#[test]
+fn a_bang_command_you_sent_heads_that_agents_list_and_no_other() {
+    let mut a = app("bang");
+    a.open("swift-ocelot");
+    a.say("swift-ocelot", "!cargo test -p relaycode flows");
+    let l = crate::commands::list(&mut a, "swift-ocelot", "!");
+    assert_eq!(l[0].text, "!cargo test -p relaycode flows");
+    assert_eq!(l[0].what, "You ran this");
+    let other = crate::commands::list(&mut a, "umber-zebra", "!");
+    assert!(other.iter().all(|c| c.text != "!cargo test -p relaycode flows"));
+    // Words to the agent are not commands.
+    a.say("swift-ocelot", "Run the tests please");
+    assert_eq!(crate::commands::list(&mut a, "swift-ocelot", "!")[0].text, "!cargo test -p relaycode flows");
+    assert!(crate::commands::list(&mut a, "swift-ocelot", "Run").is_empty());
+}

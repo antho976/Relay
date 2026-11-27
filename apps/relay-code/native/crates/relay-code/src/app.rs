@@ -158,6 +158,7 @@ pub struct States {
     pub inbox: crate::inbox::State,
     pub designs: crate::designs::State,
     pub agents: crate::agents::State,
+    pub commands: crate::commands::State,
 }
 
 pub struct App {
@@ -228,12 +229,12 @@ pub struct App {
     wake: Option<u64>,
 }
 
-fn read_json<T: for<'a> Deserialize<'a>>(p: PathBuf) -> Option<T> {
+pub(crate) fn read_json<T: for<'a> Deserialize<'a>>(p: PathBuf) -> Option<T> {
     serde_json::from_slice(&std::fs::read(p).ok()?).ok()
 }
 
 /// Write a copy off the UI thread.
-fn write_json<T: Serialize>(p: PathBuf, v: &T) {
+pub(crate) fn write_json<T: Serialize>(p: PathBuf, v: &T) {
     let Ok(bytes) = serde_json::to_vec(v) else { return };
     let _ = std::thread::Builder::new().name("rc-save".into()).spawn(move || {
         if let Some(dir) = p.parent() {
@@ -502,6 +503,8 @@ impl App {
         if text.is_empty() {
             return;
         }
+        // A shell command heads this agent's `!` list next time (D3).
+        crate::commands::remember(self, name, text);
         let now = rc_link::link::now_ms();
         self.sending.entry(name.to_string()).or_default().push(text, now);
         self.outbox_changed();

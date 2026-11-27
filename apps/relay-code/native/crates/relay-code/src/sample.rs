@@ -71,6 +71,7 @@ pub fn fill(app: &mut App) {
     crate::board::sample(app);
     crate::inbox::sample(app);
     crate::designs::sample(app);
+    crate::commands::sample(app);
     let mut s = data::Sending::default();
     s.push("Good. Push it when the tests pass", now);
     app.sending.insert("bold-puffin".into(), s);

@@ -81,18 +81,6 @@ impl State {
     }
 }
 
-/// The agent's commands and the repo's pinned shell commands, for `/` and `!`.
-pub const COMMANDS: &[(&str, &str)] = &[
-    ("/compact", "Free memory, keep the gist"),
-    ("/clear", "Start fresh"),
-    ("/review", "Review the changes"),
-    ("/model", "Change model"),
-    ("/cost", "What this conversation cost"),
-    ("!cargo test", "Run the tests"),
-    ("!git status", "What changed"),
-    ("!cargo clippy --all-targets -- -D warnings", "Lints"),
-];
-
 /// The models the sheet offers, as `/model` takes them.
 pub const MODELS: &[(&str, &str, &str)] = &[
     ("opus", "Opus", "The most capable, and the slowest"),
@@ -1076,7 +1064,9 @@ fn composer(
 
     // `/` and `!`: the commands, over the conversation.
     if app.focus.is(FIELD) && (typed.starts_with('/') || typed.starts_with('!')) && !typed.contains('\n') {
-        let list: Vec<&(&str, &str)> = COMMANDS.iter().filter(|(c, _)| c.starts_with(typed.trim_end()) || typed.len() <= 1 && c.starts_with(&typed[..1])).collect();
+        // Fitted to the repo and this agent (commands.rs): built-ins, the repo's, its skills; for
+        // `!`, what you ran here and what this kind of repo runs.
+        let list = crate::commands::list(app, name, typed);
         if !list.is_empty() {
             let rh = 42.0;
             let h = list.len() as f32 * rh + 12.0;
@@ -1089,9 +1079,9 @@ fn composer(
             // The commands' column is as wide as the longest shown, up to half the card: a long
             // `!` command is cut, a description never is.
             let mono = Text::new(ty::MONO, t::INK).face(Weight::Mono);
-            let col = list.iter().map(|(c, _)| app.canvas.measure(c, mono)).fold(0.0, f32::max).min((WIDTH - 24.0) * 0.5);
+            let col = list.iter().map(|c| app.canvas.measure(&c.text, mono)).fold(0.0, f32::max).min((WIDTH - 24.0) * 0.5);
             let mut pick = None;
-            for (i, (cmd, what)) in list.iter().enumerate() {
+            for (i, crate::commands::Command { text: cmd, what }) in list.iter().enumerate() {
                 let ry = py + 6.0 + i as f32 * rh;
                 let mut cx = crate::cx!(app);
                 if cx.pressed(px, ry, WIDTH - 24.0, rh) {
