@@ -28,6 +28,10 @@ payload!(#[schemars(rename = "PhoneAppApkIn")] ApkIn {
     pub offset: Option<u64>,
     /// At most this many bytes (default and most 3 MiB).
     pub len: Option<u64>,
+    /// The `sha256` of the build being downloaded (`phone.app.latest`'s): a newer one published
+    /// since is refused (`phone.app_changed`) rather than read into the middle of the older.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 });
 result!(#[schemars(rename = "PhoneAppApkOut")] ApkOut {
     /// The whole APK's length in bytes.

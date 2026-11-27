@@ -370,3 +370,16 @@ fn answered_calls_leave_nothing_behind_and_connecting_is_quick() {
     eprintln!("connect median {:?} (min {:?}, max {:?}); tasks {before} before 500 calls, {after} after", times[10], times[0], times[19]);
     assert!(after <= before + 2, "500 answered calls left {} tasks behind", after - before);
 }
+
+#[test]
+fn forgetting_the_pc_right_after_connecting_stays_forgotten() {
+    let d = door();
+    let store = Arc::new(Memory::default());
+    store.save(&profile(&[&d], None));
+    let link = Link::start(store, Arc::new(|| {}));
+    wait_for(&link, "online", Duration::from_secs(5), LinkState::online);
+    // Within the five seconds a session must last to count as stable.
+    link.forget();
+    let seen = states_for(&link, Duration::from_secs(2));
+    assert!(seen.iter().all(|s| *s == LinkState::Unpaired), "{seen:?}");
+}
