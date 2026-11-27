@@ -342,3 +342,31 @@ fn a_subscribe_the_pc_refuses_is_a_reconnect_not_online() {
     assert!(!seen.iter().any(LinkState::online), "{seen:?}");
     assert!(d.connections.load(Ordering::SeqCst) >= 2, "it dials again");
 }
+
+/// What a call costs once answered: its timer ends with it, so 500 answered calls leave the
+/// runtime as they found it; and how long a link takes to come online (bus.ping and
+/// bus.subscribe are asked on the way).
+#[test]
+fn answered_calls_leave_nothing_behind_and_connecting_is_quick() {
+    let d = door();
+    let store = Arc::new(Memory::default());
+    store.save(&profile(&[&d], None));
+    let mut times = Vec::new();
+    for _ in 0..20 {
+        let start = Instant::now();
+        let link = Link::start(store.clone(), Arc::new(|| {}));
+        wait_for(&link, "online", Duration::from_secs(5), LinkState::online);
+        times.push(start.elapsed());
+    }
+    times.sort();
+    let link = Link::start(store, Arc::new(|| {}));
+    wait_for(&link, "online", Duration::from_secs(5), LinkState::online);
+    let before = link.tasks();
+    for _ in 0..500 {
+        link.call("session.list", json!({})).wait(Duration::from_secs(5)).expect("an answer");
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    let after = link.tasks();
+    eprintln!("connect median {:?} (min {:?}, max {:?}); tasks {before} before 500 calls, {after} after", times[10], times[0], times[19]);
+    assert!(after <= before + 2, "500 answered calls left {} tasks behind", after - before);
+}
