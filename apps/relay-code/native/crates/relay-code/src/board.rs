@@ -191,8 +191,8 @@ fn take(app: &mut App) {
                 app.st.board.loaded = true;
                 app.st.board.error = None;
             }
-            Err(e) if !app.st.board.loaded => app.st.board.error = Some(e.message),
-            Err(e) => app.toast(&e.message),
+            Err(e) if !app.st.board.loaded => app.st.board.error = Some(crate::errors::words(&e)),
+            Err(e) => app.toast(&crate::errors::words(&e)),
         }
     }
     take_answers(app);
@@ -205,7 +205,7 @@ fn take(app: &mut App) {
                 o.error = None;
             }
             // Said where the task would be: never "Reading the task…" for ever.
-            Err(e) => o.error = Some(e.message),
+            Err(e) => o.error = Some(crate::errors::words(&e)),
         }
     }
     if let Some(r) = o.activity.as_ref().and_then(Call::poll) {
@@ -224,7 +224,7 @@ fn take(app: &mut App) {
                 app.toast("Commented");
             }
             // The words stay in the box to send again.
-            Err(e) => app.toast(&e.message),
+            Err(e) => app.toast(&crate::errors::words(&e)),
         }
     }
 }
@@ -262,7 +262,7 @@ pub fn take_answers(app: &mut App) {
                 }
                 reload_shown(app);
             }
-            Err(e) => app.toast(&e.message),
+            Err(e) => app.toast(&crate::errors::words(&e)),
         }
     }
     let Some((id, call, moved)) = app.st.board.back_call.take() else { return };
@@ -291,7 +291,7 @@ pub fn take_answers(app: &mut App) {
             reload_shown(app);
         }
         // The words stay in the sheet to send again.
-        (_, Err(e)) => app.toast(&e.message),
+        (_, Err(e)) => app.toast(&crate::errors::words(&e)),
     }
 }
 
@@ -608,8 +608,8 @@ pub fn sample_error(app: &mut App) {
     let st = &mut app.st.board;
     st.loaded = false;
     st.tasks.clear();
-    st.error = Some("The PC took too long to answer.".into());
-    st.open = Opened { id: 41, error: Some("Task #41 is not in this repo's board (it may have been deleted).".into()), ..Opened::default() };
+    st.error = Some(crate::errors::words(&rc_link::BusError { kind: "unavailable".into(), code: "link.timeout".into(), message: "The PC did not answer in time".into(), hint: None }));
+    st.open = Opened { id: 41, error: Some(crate::errors::words(&rc_link::BusError { kind: "unavailable".into(), code: "task.not_found".into(), message: "task 41 not found".into(), hint: None })), ..Opened::default() };
 }
 
 /// A pushed page's top: Back and a title.

@@ -177,7 +177,7 @@ fn fetch(link: &Link, design: i64, src: &str, want: (u32, u32)) -> Result<dp::pi
         let v = link
             .call_with("design.asset.get", json!({"design_id": design, "src": src, "offset": offset}), PIECE_WAIT)
             .wait(PIECE_WAIT + Duration::from_secs(5))
-            .map_err(|e| if e.code.starts_with("link.") { Why::Link(e.message) } else { Why::Refused(e.message) })?;
+            .map_err(|e| if e.code.starts_with("link.") { Why::Link(crate::errors::words(&e)) } else { Why::Refused(crate::errors::words(&e)) })?;
         if v.get("size").and_then(Value::as_u64).is_some_and(|n| n > pictures::MAX_FILE as u64) {
             return Err(Why::TooBig);
         }
@@ -633,7 +633,7 @@ fn take(app: &mut App) {
                 st.loaded = true;
                 st.error = None;
             }
-            Err(e) => st.error = Some(e.message),
+            Err(e) => st.error = Some(crate::errors::words(&e)),
         }
     }
     let mut jobs = Vec::new();
@@ -678,7 +678,7 @@ fn take(app: &mut App) {
                     load_page(st, &link, &p);
                 }
             }
-            Err(e) => o.error = Some(e.message),
+            Err(e) => o.error = Some(crate::errors::words(&e)),
         }
     }
     if let Some(o) = st.open.as_mut()
@@ -691,7 +691,7 @@ fn take(app: &mut App) {
                 let id = o.id;
                 st.submit(Job::Plan { tag: Tag::Open(id, page), design: id, value: v });
             }
-            Err(e) => o.error = Some(e.message),
+            Err(e) => o.error = Some(crate::errors::words(&e)),
         }
     }
     let done: Vec<Done> = st.worker.as_ref().map(|w| w.rx.try_iter().collect()).unwrap_or_default();
@@ -1340,7 +1340,7 @@ pub fn sample_error(app: &mut App) {
     let st = &mut app.st.designs;
     st.list.clear();
     st.loaded = false;
-    st.error = Some("design.list failed: the PC's store is busy; try again in a moment.".into());
+    st.error = Some(crate::errors::words(&rc_link::BusError { kind: "unavailable".into(), code: "design.list_failed".into(), message: "design.list failed: the PC's store is busy; try again in a moment".into(), hint: None }));
     if let Some(o) = st.open.as_mut() {
         o.plan = None;
         o.error = Some("This page could not be laid out on the phone".into());

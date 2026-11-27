@@ -158,7 +158,7 @@ fn found(app: &mut App, repo: i64, r: Result<Value, rc_link::BusError>) {
                 None => st.stage = Stage::Note("This file is not in this repo, so the phone does not read it.".into()),
             }
         }
-        Err(e) => st.stage = Stage::Failed(e.message),
+        Err(e) => st.stage = Stage::Failed(crate::errors::words(&e)),
     }
 }
 
@@ -180,7 +180,7 @@ fn got(app: &mut App, r: Result<Value, rc_link::BusError>) {
                 }
             }
         }
-        Err(e) => st.stage = Stage::Failed(e.message),
+        Err(e) => st.stage = Stage::Failed(crate::errors::words(&e)),
     }
 }
 
@@ -339,7 +339,7 @@ fn code(app: &mut App, page: &crate::app::Page, x: f32, y: f32, w: f32, gutter: 
 /// The file view's error for the shot tool (`--state error`).
 pub fn sample_error(app: &mut App) {
     let fv = &mut app.st.fileview;
-    fv.stage = Stage::Failed("file.read refused: the path is outside every worktree of this repo.".into());
+    fv.stage = Stage::Failed(crate::errors::words(&rc_link::BusError { kind: "unavailable".into(), code: "file.path".into(), message: "file.read refused: the path is outside every worktree of this repo".into(), hint: None }));
     fv.rows.clear();
 }
 

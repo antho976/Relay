@@ -116,7 +116,7 @@ fn take(app: &mut App) {
                 app.st.inbox.loaded = true;
                 app.st.inbox.error = None;
             }
-            Err(e) if !app.st.inbox.loaded => app.st.inbox.error = Some(e.message),
+            Err(e) if !app.st.inbox.loaded => app.st.inbox.error = Some(crate::errors::words(&e)),
             Err(_) => {}
         }
     }
@@ -133,7 +133,7 @@ fn take(app: &mut App) {
     if let Some(r) = app.st.inbox.act.as_ref().and_then(Call::poll) {
         app.st.inbox.act = None;
         if let Err(e) = r {
-            app.toast(&e.message);
+            app.toast(&crate::errors::words(&e));
         }
         reload(app);
     }
@@ -386,7 +386,7 @@ pub fn sample_error(app: &mut App) {
     st.holds.clear();
     st.review.clear();
     st.loaded = false;
-    st.error = Some("guardrail.holds.list failed: the PC's store is busy; try again in a moment.".into());
+    st.error = Some(crate::errors::words(&rc_link::BusError { kind: "unavailable".into(), code: "guardrail.list_failed".into(), message: "guardrail.holds.list failed: the PC's store is busy; try again in a moment".into(), hint: None }));
     app.holds = 0;
 }
 
