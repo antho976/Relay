@@ -1181,3 +1181,49 @@ fn check_for_updates_now_says_what_it_can() {
     assert_eq!(a.route(), &Route::Settings);
     assert!(!crate::settings::confirming(&a), "the Forget key under it was not hit");
 }
+
+// D11 follow-up: C18's Send back sheet.
+
+#[test]
+fn back_closes_the_send_back_sheet_on_the_task_and_in_the_inbox() {
+    let mut a = app("send-back");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.push(Route::Board);
+    a.push(Route::Task(41));
+    frames(&mut a, &mut clock, 3);
+    crate::board::send_back(&mut a, 41, "Relay Code: Designs open on artboards");
+    frames(&mut a, &mut clock, 2);
+    assert!(a.back());
+    assert!(a.st.board.back.is_none(), "Back closed the sheet");
+    assert_eq!(a.route(), &Route::Task(41), "and stayed on the task");
+    // In the Inbox too.
+    a.reset_to(Route::Home);
+    a.push(Route::Inbox);
+    frames(&mut a, &mut clock, 2);
+    crate::board::send_back(&mut a, 41, "Relay Code: Designs open on artboards");
+    assert!(a.back());
+    assert!(a.st.board.back.is_none());
+    assert_eq!(a.route(), &Route::Inbox);
+    // Elsewhere a stray sheet never takes a Back.
+    a.reset_to(Route::Home);
+    a.push(Route::Settings);
+    a.st.board.back = Some((41, "x".into()));
+    assert!(a.back());
+    assert_eq!(a.route(), &Route::Home);
+}
+
+#[test]
+fn leaving_the_task_leaves_no_send_back_sheet_for_the_next_visit() {
+    let mut a = app("send-back-leave");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.push(Route::Task(41));
+    frames(&mut a, &mut clock, 2);
+    crate::board::send_back(&mut a, 41, "Relay Code: Designs open on artboards");
+    // Away by the drawer, then back to the task.
+    a.reset_to(Route::Home);
+    a.push(Route::Task(41));
+    frames(&mut a, &mut clock, 2);
+    assert!(a.st.board.back.is_none());
+}

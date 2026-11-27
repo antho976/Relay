@@ -1225,6 +1225,8 @@ impl App {
         // menu, does not wait for the next visit ("Discard changes to X?" on opening Changes).
         while self.st.changes.close_over() {}
         while self.st.inbox.close_over() {}
+        // The Send back sheet (Task, Inbox): kept while it sends, when take_answers closes it.
+        self.st.board.close_over();
         self.st.settings.close_over();
         while self.st.agents.close_over() {}
         if self.focus.id.take().is_some() {
@@ -1277,6 +1279,7 @@ impl App {
             || matches!(route, Route::Design(_)) && self.st.designs.close_over()
             || route == Route::Changes && self.st.changes.close_over()
             || route == Route::Inbox && self.st.inbox.close_over()
+            || matches!(route, Route::Task(_) | Route::Inbox) && self.st.board.close_over()
             || route == Route::Settings && self.st.settings.close_over()
         {
             self.st.newagent.open = false;
@@ -1402,6 +1405,9 @@ impl App {
         if self.online() {
             crate::inbox::keep_up(self);
         }
+        // A send-back (or an approval) already on its way finishes on any page, online or not: a
+        // call the link dropped fails at once and frees its key (C18; it starts nothing new).
+        crate::board::take_answers(self);
         // A commit's push goes out from here, whatever page is open.
         crate::changes::keep_up(self);
         // Layers keep each tap on the surface it landed on (ui.rs): the page first, on the bottom.
