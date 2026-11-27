@@ -12,3 +12,5 @@ native/android/src/main/jniLibs/
 *.jks
 *.keystore
 keystore.properties
+# tools/smoke.sh writes its shots and numbers here.
+smoke-out/
