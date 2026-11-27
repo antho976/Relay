@@ -141,6 +141,22 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             }
         }
         "asks" => app.open("umber-zebra"),
+        // D1: a stopped agent's chat, a closed one's, the chat menu, its confirm, and search.
+        "stopped" => app.open("keen-newt"),
+        "closed" => app.open("vivid-dingo"),
+        "agent-menu" => {
+            app.open("bold-puffin");
+            app.st.agents.menu = Some("bold-puffin".into());
+        }
+        "close-agent" => {
+            app.open("bold-puffin");
+            app.st.agents.confirm = Some(("bold-puffin".into(), crate::agents::Confirm::Close));
+        }
+        "search" => {
+            app.open("bold-puffin");
+            app.st.drawer.open = true;
+            app.st.agents.query = "leaf".into();
+        }
         "new-agent" => {
             app.reset_to(Route::Home);
             app.st.newagent.open = true;

@@ -5,6 +5,7 @@
 //! (tested); the link to the PC is the `rc-link` crate. `draw` and `gfx` are the canvas and the GPU
 //! (Leaf's and Tally RS's renderer); `desktop` and `android` the two front ends.
 
+pub mod agents;
 pub mod app;
 pub mod attach;
 pub mod board;

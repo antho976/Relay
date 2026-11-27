@@ -120,7 +120,11 @@ fn header(app: &mut App, a: Option<&Agent>, name: &str) {
         crate::drawer::badge(&mut app.canvas, a, x, y + 7.0, 30.0);
         x += 42.0;
     }
-    let w = WIDTH - x - 16.0;
+    // Pause and Close, at the right (D1).
+    let w = WIDTH - x - 16.0 - 44.0;
+    if let Some(a) = a {
+        crate::agents::more_key(app, a, WIDTH - 50.0, y + 1.0);
+    }
     app.canvas.text_fit(&title, x, y + 2.0, w, Text::new(ty::BODY + 1.0, t::INK).semi());
     let sub_ink = if a.is_some_and(Agent::needs_you) { t::WARN } else { t::INK3 };
     app.canvas.text_fit(&sub, x, y + 24.0, w, Text::new(ty::CAPTION, sub_ink));
@@ -515,7 +519,9 @@ fn attachments(app: &mut App, name: &str) {
 
 pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     attachments(app, name);
-    let agent = app.agents.iter().find(|a| a.name == name).cloned();
+    let agent = app.agent(name).cloned();
+    // A stopped or closed agent reads, with Resume in place of the message box (D1).
+    let stopped = agent.as_ref().filter(|a| !crate::agents::live(a)).cloned();
     let working = app.busy(name);
     let asking = agent.as_ref().is_some_and(Agent::needs_you);
 
@@ -538,7 +544,7 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
         None if asking => 70.0,
         None => 0.0,
     };
-    let foot_h = box_h + 20.0 + ask_h;
+    let foot_h = if stopped.is_some() { crate::agents::STOPPED_H } else { box_h + 20.0 + ask_h };
 
     let page = app.page_begin(dt, TOP_H, foot_h);
     // The log is read into items and measured only when it or a fold changed: a long
@@ -683,7 +689,10 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     }
     header(app, agent.as_ref(), name);
     let mut moving = page.moving;
-    moving |= composer(app, name, agent.as_ref(), foot_h, box_h, ask_h, question.as_ref(), scr.mode, &typed, lines, working);
+    match &stopped {
+        Some(a) => crate::agents::stopped_foot(app, a),
+        None => moving |= composer(app, name, agent.as_ref(), foot_h, box_h, ask_h, question.as_ref(), scr.mode, &typed, lines, working),
+    }
     if app.st.chat.model_sheet {
         model_picker(app, name, agent.as_ref());
     }

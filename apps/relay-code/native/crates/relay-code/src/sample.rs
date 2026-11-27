@@ -31,6 +31,24 @@ pub fn fill(app: &mut App) {
         {"name": "vivid-ferret", "project_id": 1, "provider": "claude", "role": "reviewer", "state": "idle", "intent": "Leaf review fixes", "branch": "relay/vivid-ferret", "last_output_at": at(190)},
         {"name": "calm-heron", "project_id": 2, "provider": "claude", "role": "builder", "state": "idle", "intent": "Hit windows on fast songs", "branch": "relay/calm-heron", "last_output_at": at(600)},
     ]}));
+    // Stopped and closed ones, for Earlier (D1).
+    app.agents.extend(data::agents(&json!({"sessions": [
+        {"name": "keen-newt", "project_id": 1, "provider": "claude", "role": "builder", "state": "restorable", "intent": "Video plugin round two", "branch": "relay/keen-newt", "last_output_at": at(300), "updated_at": at(240)},
+    ]})));
+    app.restorable.insert("keen-newt".into(), ("app_restart".into(), false));
+    app.earlier = data::agents(&json!({"sessions": [
+        {"name": "vivid-dingo", "project_id": 1, "provider": "claude", "role": "builder", "state": "closed", "intent": "Design canvas round two", "branch": "relay/vivid-dingo", "updated_at": at(1500)},
+        {"name": "jade-ibis", "project_id": 1, "provider": "claude", "role": "builder", "state": "closed", "intent": "Polish Clips, Notes and Board", "branch": "relay/jade-ibis", "updated_at": at(3000)},
+        {"name": "lucky-gecko", "project_id": 1, "provider": "claude", "role": "reviewer", "state": "closed", "intent": "Read-only audit, ten sessions", "branch": "relay/lucky-gecko", "updated_at": at(4400)},
+        {"name": "coral-osprey", "project_id": 1, "provider": "claude", "role": "builder", "state": "closed", "intent": "Assistant round two", "branch": "relay/coral-osprey", "updated_at": at(6000)},
+        {"name": "lucky-jackal", "project_id": 1, "provider": "claude", "role": "builder", "state": "exited", "intent": "Threads v2 readings", "branch": "relay/lucky-jackal", "updated_at": at(9000)},
+    ]}));
+    let mut k = Convo::default();
+    k.take(&json!({"cursor": 40, "reset": true, "found": true, "messages": [
+        {"id": "k1", "role": "user", "created_at": at(320), "body": {"text": "Add the timeline to the video preview."}},
+        {"id": "k2", "role": "assistant", "created_at": at(300), "body": {"blocks": [{"type": "text", "text": "The timeline is in: clips, sound and captions on three tracks, scrubbed with a finger. Tests pass."}]}},
+    ]}));
+    app.convos.insert("keen-newt".into(), k);
     let mut c = Convo::default();
     c.take(&json!({"cursor": 900, "reset": true, "found": true, "messages": [
         {"id": "1", "role": "user", "created_at": at(9), "body": {"text": "Bubbles duplicate when I send while it's working. Fix it?"}},

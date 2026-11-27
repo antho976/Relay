@@ -50,7 +50,8 @@ fn the_menu_opens_the_drawer_and_a_row_there_opens_its_chat() {
     tap(&mut a, &mut clock, 28.0, 28.0);
     assert!(a.st.drawer.open, "the menu key opened the drawer");
     // The first row under NEEDS YOU: umber-zebra.
-    let list_top = 8.0 + 56.0 + 10.0 + 46.0 + 12.0;
+    // The repo, New agent and the search field above the list.
+    let list_top = 8.0 + 56.0 + 10.0 + 46.0 + 10.0 + 40.0 + 8.0;
     tap(&mut a, &mut clock, 150.0, list_top + 32.0 + 30.0);
     assert!(!a.st.drawer.open);
     assert_eq!(a.route(), &Route::Chat("umber-zebra".into()));
@@ -327,4 +328,79 @@ fn a_tap_in_the_words_moves_the_caret_there() {
     tap(&mut a, &mut clock, 12.0 + 14.0 + 1.0, top + 14.0 + 8.0);
     assert_eq!(a.focus.selection(), (0, 0), "a tap before the first letter puts the caret first");
     assert!(a.focus.is("chat"));
+}
+
+// D1: agents you manage.
+
+#[test]
+fn an_earlier_agent_on_home_opens_its_chat_read_only() {
+    let mut a = app("earlier");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    frames(&mut a, &mut clock, 3);
+    // Under NEEDS YOU (one row) and AGENTS (three), EARLIER's first row: keen-newt, stopped.
+    let earlier = 56.0 + 4.0 + (34.0 + 60.0 + 8.0) + (34.0 + 3.0 * 60.0 + 8.0) + 32.0;
+    tap(&mut a, &mut clock, 150.0, earlier + 30.0);
+    assert_eq!(a.route(), &Route::Chat("keen-newt".into()));
+    // No message box: a tap where it would be gives no keyboard.
+    tap(&mut a, &mut clock, 120.0, 844.0 - 38.0);
+    assert!(a.focus.id.is_none(), "a stopped agent's chat takes no message");
+}
+
+#[test]
+fn the_chat_menu_opens_from_its_key_and_a_tap_outside_it_reaches_nothing() {
+    let mut a = app("agent-menu");
+    let mut clock = 1_000_000_000;
+    a.open("bold-puffin");
+    frames(&mut a, &mut clock, 5);
+    tap(&mut a, &mut clock, 390.0 - 50.0 + 22.0, 8.0 + 1.0 + 22.0);
+    assert_eq!(a.st.agents.menu.as_deref(), Some("bold-puffin"));
+    // On the header's drawer key, under the menu: it closes, and the drawer stays shut.
+    tap(&mut a, &mut clock, 28.0, 28.0);
+    assert!(a.st.agents.menu.is_none());
+    assert!(!a.st.drawer.open, "the key under the menu took no tap");
+}
+
+#[test]
+fn close_asks_first_and_a_tap_outside_the_dialog_reaches_nothing() {
+    let mut a = app("close");
+    let mut clock = 1_000_000_000;
+    a.open("bold-puffin");
+    a.st.agents.menu = Some("bold-puffin".into());
+    frames(&mut a, &mut clock, 5);
+    // The menu's second row: Close agent.
+    tap(&mut a, &mut clock, 280.0, 52.0 + 4.0 + 48.0 + 24.0);
+    assert!(a.st.agents.menu.is_none());
+    assert_eq!(a.st.agents.confirm, Some(("bold-puffin".into(), crate::agents::Confirm::Close)));
+    tap(&mut a, &mut clock, 28.0, 28.0);
+    assert!(a.st.agents.confirm.is_none(), "a tap outside cancels");
+    assert!(!a.st.drawer.open, "and reaches nothing under the dialog");
+    assert_eq!(a.route(), &Route::Chat("bold-puffin".into()));
+    // Back closes the menu as it closes any sheet.
+    a.st.agents.menu = Some("bold-puffin".into());
+    assert!(a.back());
+    assert!(a.st.agents.menu.is_none());
+    assert_eq!(a.route(), &Route::Chat("bold-puffin".into()));
+}
+
+#[test]
+fn the_drawer_search_keeps_its_keyboard_and_finds_by_intent() {
+    let mut a = app("search");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.st.drawer.open = true;
+    frames(&mut a, &mut clock, 30);
+    let search_y = 8.0 + 56.0 + 10.0 + 46.0 + 10.0;
+    tap(&mut a, &mut clock, 150.0, search_y + 20.0);
+    assert_eq!(a.focus.id, Some(crate::agents::SEARCH));
+    a.set_text("LEAF");
+    frames(&mut a, &mut clock, 3);
+    assert_eq!(a.focus.id, Some(crate::agents::SEARCH), "the open drawer keeps its own field");
+    let found = crate::agents::found(&a, "LEAF");
+    assert_eq!(found.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["swift-ocelot", "vivid-ferret"]);
+    // The first found row opens it.
+    let list_top = search_y + 40.0 + 8.0;
+    tap(&mut a, &mut clock, 150.0, list_top + 32.0 + 30.0);
+    assert_eq!(a.route(), &Route::Chat("swift-ocelot".into()));
+    assert!(!a.st.drawer.open);
 }
