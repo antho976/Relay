@@ -143,7 +143,11 @@ pub struct State {
     /// Why the board could not be read, before it was.
     pub error: Option<String>,
     list: Option<Call>,
+    /// The list was asked for again while one was out: its answer predates a move made since.
+    stale: bool,
     act: Option<Call>,
+    /// What to say once `act` answers well ("Approved").
+    act_done: Option<&'static str>,
     pub comment: String,
     pub open: Opened,
     /// Sending a task in review back to Active: the task (id, title), what to change, and the
@@ -161,10 +165,15 @@ pub struct State {
 
 fn reload(app: &mut App) {
     let Some(repo) = app.repo else { return };
-    if app.online() && app.st.board.list.is_none() {
-        // Titles, not essays: the open task reads its own body.
-        app.st.board.list = Some(app.link.call("task.list", json!({"project_id": repo, "limit": 500, "summary": true})));
+    if !app.online() {
+        return;
     }
+    if app.st.board.list.is_some() {
+        app.st.board.stale = true;
+        return;
+    }
+    // Titles, not essays: the open task reads its own body.
+    app.st.board.list = Some(app.link.call("task.list", json!({"project_id": repo, "limit": 500, "summary": true})));
 }
 
 /// Read the open task and its activity again.
@@ -188,7 +197,13 @@ fn reload_task(app: &mut App, id: i64) {
 fn take(app: &mut App) {
     if let Some(r) = app.st.board.list.as_ref().and_then(Call::poll) {
         app.st.board.list = None;
+        // Asked again since (a move, an approval): this older list could move a task back.
+        let stale = std::mem::take(&mut app.st.board.stale);
+        if stale {
+            reload(app);
+        }
         match r {
+            _ if stale => {}
             Ok(v) => {
                 app.st.board.tasks = tasks(&v);
                 app.st.board.loaded = true;
@@ -330,7 +345,7 @@ fn take_created(app: &mut App) {
 pub fn approve(app: &mut App, id: i64) {
     if app.online() && app.st.board.act.is_none() {
         app.st.board.act = Some(app.link.call("task.approve", json!({"task_id": id})));
-        app.toast("Approved");
+        app.st.board.act_done = Some("Approved");
     }
 }
 
@@ -347,8 +362,12 @@ pub fn send_back(app: &mut App, id: i64, title: &str) {
 pub fn take_answers(app: &mut App) {
     if let Some(r) = app.st.board.act.as_ref().and_then(Call::poll) {
         app.st.board.act = None;
+        let done = app.st.board.act_done.take();
         match r {
             Ok(v) => {
+                if let Some(words) = done {
+                    app.toast(words);
+                }
                 if let Some(tk) = task(&v) {
                     if let Some(old) = app.st.board.tasks.iter_mut().find(|x| x.id == tk.id) {
                         *old = Task { body: String::new(), ..tk.clone() };
@@ -967,6 +986,23 @@ mod tests {
         assert!(a.st.board.close_over() && a.st.board.back.is_none());
         clock += 1;
         let _ = clock;
+    }
+
+    #[test]
+    fn approved_is_said_once_it_is_and_an_older_board_never_moves_a_task_back() {
+        let (mut a, _) = on_task("approved", "in_review");
+        // Refused: no "Approved".
+        a.st.board.act = Some(a.link.call("task.approve", json!({})));
+        a.st.board.act_done = Some("Approved");
+        take_answers(&mut a);
+        assert!(a.st.board.act.is_none() && a.st.board.act_done.is_none());
+        // An older list out, asked again: dropped, the cards stay as they are.
+        let tasks = a.st.board.tasks.clone();
+        a.st.board.list = Some(a.link.call("task.list", json!({})));
+        a.st.board.stale = true;
+        take(&mut a);
+        assert_eq!(a.st.board.tasks, tasks);
+        assert!(!a.st.board.stale);
     }
 
     #[test]
