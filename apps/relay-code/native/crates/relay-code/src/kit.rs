@@ -163,6 +163,26 @@ pub fn notice(cx: &mut Ctx, x: f32, y: f32, w: f32, title: &str, body: Option<&s
     (h, tapped)
 }
 
+// Every page's empty and problem states (D16): one shape, centred under the top, as Home has it.
+
+/// The room above an empty or problem state, under a page's top.
+pub const EMPTY_GAP: f32 = 96.0;
+
+/// What an empty page says: a title, a line under it, and an action when there is one to take
+/// ("Start an agent"). From `y`, the room above included. Returns its height (with room under
+/// it) and whether the action was tapped.
+pub fn empty(cx: &mut Ctx, y: f32, title: &str, body: Option<&str>, action: Option<&str>) -> (f32, bool) {
+    let (h, tapped) = notice(cx, 32.0, y + EMPTY_GAP, WIDTH - 64.0, title, body, action);
+    (EMPTY_GAP + h + 24.0, tapped)
+}
+
+/// What went wrong, in words, with Try again when trying again can help: the same place and
+/// size as [`empty`], its title the problem, its line what to do. Returns its height and
+/// whether Try again was tapped.
+pub fn problem(cx: &mut Ctx, y: f32, title: &str, words: &str, retry: bool) -> (f32, bool) {
+    empty(cx, y, title, Some(words), retry.then_some("Try again"))
+}
+
 /// A small label on a surface ("MangaDex").
 pub fn tag(c: &mut Canvas, x: f32, y: f32, words: &str) -> f32 {
     let tt = Text::new(ty::SMALL, t::INK2).medium();
