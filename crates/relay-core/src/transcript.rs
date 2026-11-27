@@ -47,6 +47,28 @@ pub fn locate(provider: Provider, reference: &str, worktree: &Path) -> Option<Pa
     }
 }
 
+/// The log Claude Code keeps for the helper a Task call `tool_use_id` started: beside the
+/// session's log, `<session>/subagents/agent-<id>.jsonl`, named in its `.meta.json` by the call.
+pub fn locate_task(session_log: &Path, tool_use_id: &str) -> Option<PathBuf> {
+    let dir = session_log.with_extension("").join("subagents");
+    for entry in fs::read_dir(&dir).ok()?.flatten() {
+        let path = entry.path();
+        let Some(stem) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".meta.json")) else { continue };
+        let Ok(bytes) = fs::read(&path) else { continue };
+        let Ok(meta) = serde_json::from_slice::<Value>(&bytes) else { continue };
+        if meta.get("toolUseId").and_then(Value::as_str) == Some(tool_use_id) {
+            let log = dir.join(format!("{stem}.jsonl"));
+            return log.is_file().then_some(log);
+        }
+    }
+    None
+}
+
+/// A helper's own log (`subagents/`): its turns are all sidechain ones, and they are what is read.
+fn is_helper_log(path: &Path) -> bool {
+    path.parent().and_then(Path::file_name).is_some_and(|n| n == "subagents")
+}
+
 fn locate_claude(reference: &str, worktree: &Path) -> Option<PathBuf> {
     let file = format!("{reference}.jsonl");
     // Its config folder, and `~/.claude` too: an agent started without the variable wrote there.
@@ -130,6 +152,7 @@ const SENT_LOOKBACK: u64 = 1024 * 1024;
 /// as `pending` (not on a page back).
 pub fn read(provider: Provider, path: &Path, worktree: &Path, after: Option<u64>, before: Option<u64>, limit: usize, sends: &[Sent]) -> std::io::Result<TranscriptOut> {
     let tag = file_tag(path);
+    let helper = is_helper_log(path);
     let mut file = File::open(path)?;
     let len = file.metadata()?.len();
     let in_file = |cursor: u64| (cursor >> OFFSET_BITS == tag).then_some(cursor & ((1 << OFFSET_BITS) - 1)).filter(|offset| *offset <= len);
@@ -175,7 +198,7 @@ pub fn read(provider: Provider, path: &Path, worktree: &Path, after: Option<u64>
         let Ok(record) = serde_json::from_slice::<Value>(line) else { continue };
         let had = messages.len();
         match provider {
-            Provider::Claude => claude_record(&record, at, worktree, &mut messages),
+            Provider::Claude => claude_record(&record, at, worktree, helper, &mut messages),
             Provider::Codex => codex_record(&record, at, &mut messages),
             Provider::Shell => {}
         }
@@ -228,7 +251,7 @@ fn sent_messages(
             let Ok(record) = serde_json::from_slice::<Value>(line) else { continue };
             let mut found = Vec::new();
             match provider {
-                Provider::Claude => claude_record(&record, line_at, worktree, &mut found),
+                Provider::Claude => claude_record(&record, line_at, worktree, false, &mut found),
                 Provider::Codex => codex_record(&record, line_at, &mut found),
                 Provider::Shell => {}
             }
@@ -299,9 +322,11 @@ fn line_of(text: &str) -> String { cut(text.trim().lines().next().unwrap_or_defa
 
 // ---- Claude Code ----
 
-fn claude_record(record: &Value, at: u64, worktree: &Path, out: &mut Vec<TranscriptMessage>) {
-    // A subagent's own turns, and the context Claude Code adds for the model, are not the conversation.
-    if record.get("isSidechain").and_then(Value::as_bool) == Some(true) || record.get("isMeta").and_then(Value::as_bool) == Some(true) {
+fn claude_record(record: &Value, at: u64, worktree: &Path, helper: bool, out: &mut Vec<TranscriptMessage>) {
+    // A subagent's own turns (unless this is its own log), and the context Claude Code adds for
+    // the model, are not the conversation.
+    let sidechain = record.get("isSidechain").and_then(Value::as_bool) == Some(true);
+    if (sidechain && !helper) || record.get("isMeta").and_then(Value::as_bool) == Some(true) {
         return;
     }
     let id = record.get("uuid").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| format!("o{at}"));
@@ -776,6 +801,37 @@ mod tests {
     #[test]
     fn claude_slug_makes_every_other_character_a_dash() {
         assert_eq!(crate::providers::claude_project_key(Path::new("/home/a/dev3/RelayV4/.relay/worktrees/proud-llama")), "-home-a-dev3-RelayV4--relay-worktrees-proud-llama");
+    }
+
+    #[test]
+    fn a_task_reads_its_helpers_own_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = dir.path().join("c5201e10.jsonl");
+        let wt = Path::new("/wt");
+        fs::write(&session, lines(&[
+            json!({"type": "assistant", "uuid": "a1", "message": {"content": [{"type": "tool_use", "id": "toolu_01", "name": "Task", "input": {"description": "Map the roots", "prompt": "Find where guardrail roots are set"}}]}}),
+        ])).unwrap();
+        let helpers = dir.path().join("c5201e10").join("subagents");
+        fs::create_dir_all(&helpers).unwrap();
+        fs::write(helpers.join("agent-a2d3.meta.json"), r#"{"agentType":"Explore","description":"Map the roots","toolUseId":"toolu_01","finished":true}"#).unwrap();
+        fs::write(helpers.join("agent-zzzz.meta.json"), r#"{"toolUseId":"toolu_other"}"#).unwrap();
+        // As this Claude Code writes it: every turn a sidechain one, its brief first.
+        fs::write(helpers.join("agent-a2d3.jsonl"), lines(&[
+            json!({"type": "user", "uuid": "h0", "isSidechain": true, "agentId": "a2d3", "message": {"role": "user", "content": "Find where guardrail roots are set"}}),
+            json!({"type": "user", "uuid": "hm", "isSidechain": true, "isMeta": true, "message": {"content": "context"}}),
+            json!({"type": "assistant", "uuid": "h1", "isSidechain": true, "message": {"content": [{"type": "tool_use", "id": "g1", "name": "Grep", "input": {"pattern": "write_roots"}}]}}),
+            json!({"type": "user", "uuid": "h2", "isSidechain": true, "message": {"content": [{"type": "tool_result", "tool_use_id": "g1", "content": "crates/relay-core/src/guardrails.rs:40"}]}}),
+            json!({"type": "assistant", "uuid": "h3", "isSidechain": true, "message": {"content": [{"type": "text", "text": "They are set in guardrails.rs."}]}}),
+        ])).unwrap();
+        let log = locate_task(&session, "toolu_01").unwrap();
+        assert_eq!(log, helpers.join("agent-a2d3.jsonl"));
+        assert_eq!(locate_task(&session, "toolu_nope"), None);
+        let out = read(Provider::Claude, &log, wt, None, None, 200, &[]).unwrap();
+        let got: Vec<(&str, &str)> = out.messages.iter().map(|m| (m.id.as_str(), m.role.as_str())).collect();
+        assert_eq!(got, [("h0", "user"), ("h1", "assistant"), ("h2:0", "tool"), ("h3", "assistant")], "its own turns, its context left out");
+        // The session's own log still leaves a helper's turns out.
+        let main = read(Provider::Claude, &session, wt, None, None, 200, &[]).unwrap();
+        assert_eq!(main.messages.len(), 1);
     }
 
     #[test]

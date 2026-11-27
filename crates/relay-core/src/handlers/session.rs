@@ -2546,6 +2546,12 @@ pub fn register(e: &mut Engine) {
         let worktree = Path::new(&s.worktree);
         let path = s.provider_ref.as_deref().filter(|reference| crate::providers::is_provider_ref(reference))
             .and_then(|reference| crate::transcript::locate(s.provider, reference, worktree));
+        // A Task call's helper: its own log beside the session's, read the same way.
+        let path = match (&p.task, path) {
+            (Some(task), Some(log)) => crate::transcript::locate_task(&log, task),
+            (None, path) => path,
+            (Some(_), None) => None,
+        };
         let Some(path) = path else {
             return Ok(TranscriptOut { messages: Vec::new(), cursor: 0, before: 0, older: false, reset: false, found: false, pending: Vec::new() });
         };
@@ -2566,6 +2572,7 @@ pub fn register(e: &mut Engine) {
             })).bus()?;
             rows.collect::<Result<Vec<_>, _>>().bus()
         })?;
+        let sends = if p.task.is_some() { Vec::new() } else { sends };
         crate::transcript::read(s.provider, &path, worktree, p.after, p.before, limit, &sends)
             .map_err(|e| BusError::unavailable("session.transcript_unreadable", format!("{}: {e}", path.display())))
     });
