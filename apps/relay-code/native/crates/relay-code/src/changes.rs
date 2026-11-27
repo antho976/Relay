@@ -47,6 +47,13 @@ pub struct State {
     pub branch: String,
     upstream: Option<String>,
     ahead: i64,
+    behind: i64,
+    /// The repo's pull requests (`git.pr.list`): the open branch's is shown and opened.
+    prs: Vec<Pr>,
+    /// The sheet that opens a pull request, with its title and body.
+    pr_sheet: bool,
+    pub pr_title: String,
+    pub pr_body: String,
     pub files: Vec<File>,
     loaded: bool,
     /// The project's base branch: an agent's work is read against where it left it.
@@ -84,6 +91,37 @@ struct Pending {
 pub enum Group {
     Branch,
     Work,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Pr {
+    pub number: u64,
+    pub branch: String,
+    pub title: String,
+    pub url: String,
+    /// "open", "closed" or "merged", as GitHub says.
+    pub state: String,
+    pub draft: bool,
+}
+
+pub fn prs(v: &Value) -> Vec<Pr> {
+    v.get("pull_requests")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| {
+                    let s = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+                    Some(Pr { number: p.get("number")?.as_u64()?, branch: s("branch"), title: s("title"), url: s("url"), state: s("state").to_lowercase(), draft: p.get("draft").and_then(Value::as_bool) == Some(true) })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The branch's pull request: an open one first, else the latest closed or merged.
+pub fn pr_for<'a>(prs: &'a [Pr], branch: &str) -> Option<&'a Pr> {
+    let mine = || prs.iter().filter(move |p| p.branch == branch);
+    mine().find(|p| p.state == "open").or_else(|| mine().max_by_key(|p| p.number))
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -145,9 +183,17 @@ enum Job {
     Commit { push: bool, set_upstream: bool },
     Push,
     Pr,
+    /// The repo's pull requests, and a fetch: both for the whole repo, not one worktree.
+    Prs,
+    Fetch,
 }
 
 impl Job {
+    /// About the repo, not the open worktree: its answer is kept across a branch switch.
+    fn repo_wide(&self) -> bool {
+        matches!(self, Job::Worktrees | Job::Prs | Job::Fetch)
+    }
+
     /// What the foot says while it runs; None for the quiet reads.
     fn label(&self) -> Option<&'static str> {
         match self {
@@ -366,6 +412,8 @@ impl State {
         self.branch.clear();
         self.upstream = None;
         self.ahead = 0;
+        self.behind = 0;
+        self.pr_sheet = false;
         self.log = None;
         self.base_log = None;
         self.commits.clear();
@@ -397,6 +445,7 @@ fn reload(app: &mut App) {
     let st = &mut app.st.changes;
     st.base = base;
     st.ask_for(&link, repo, None, Job::Worktrees, "worktree.list", json!({"project_id": repo, "include_dirty": true}));
+    st.ask_for(&link, repo, None, Job::Prs, "git.pr.list", json!({"project_id": repo}));
     if st.worktree.is_some() {
         let w = wt(st);
         st.ask(&link, repo, Job::Status, "git.status", json!({"project_id": repo, "worktree": w}));
@@ -452,7 +501,7 @@ pub fn keep_up(app: &mut App) {
 /// One answer. A read for a repo or worktree that is no longer open is dropped: the old branch's
 /// files never fill the new branch's list.
 fn answered(app: &mut App, job: Job, repo: i64, worktree: Option<String>, r: Result<Value, rc_link::BusError>) {
-    let here = app.st.changes.repo == Some(repo) && (job == Job::Worktrees || app.st.changes.worktree == worktree);
+    let here = app.st.changes.repo == Some(repo) && (job.repo_wide() || app.st.changes.worktree == worktree);
     if !here && !job.acts() {
         return;
     }
@@ -481,6 +530,7 @@ fn answered(app: &mut App, job: Job, repo: i64, worktree: Option<String>, r: Res
                 st.branch = v.get("branch").and_then(Value::as_str).unwrap_or_default().to_string();
                 st.upstream = v.get("upstream").and_then(Value::as_str).map(str::to_string);
                 st.ahead = v.get("ahead").and_then(Value::as_i64).unwrap_or(0);
+                st.behind = v.get("behind").and_then(Value::as_i64).unwrap_or(0);
                 status = Some(v);
             }
             (Job::Diff, Ok(v)) => diffs.push(v),
@@ -560,8 +610,24 @@ fn answered(app: &mut App, job: Job, repo: i64, worktree: Option<String>, r: Res
             }
             (Job::Pr, Ok(v)) => {
                 let url = v.get("url").and_then(Value::as_str).unwrap_or_default().to_string();
-                app.host.copy_text(&url);
-                app.toast("Pull request opened · link copied");
+                if !url.is_empty() {
+                    app.host.open_url(&url);
+                }
+                app.toast("Pull request opened");
+                let st = &mut app.st.changes;
+                st.pr_title.clear();
+                st.pr_body.clear();
+                // The PC dropped its cached list when it opened it: read the new one.
+                let link = app.link.clone();
+                app.st.changes.ask_for(&link, repo, None, Job::Prs, "git.pr.list", json!({"project_id": repo}));
+            }
+            (Job::Prs, Ok(v)) => app.st.changes.prs = prs(&v),
+            // No GitHub (not connected, no gh): the page simply shows no pull request.
+            (Job::Prs, Err(_)) => {}
+            (Job::Fetch, Ok(_)) => {
+                let link = app.link.clone();
+                app.st.changes.ask_for(&link, repo, None, Job::Prs, "git.pr.list", json!({"project_id": repo, "refresh": true}));
+                reload(app);
             }
             (_, Err(e)) => app.toast(&e.message),
         }
@@ -635,7 +701,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             app.canvas.text(&a, WIDTH - t::PAD - rw - 10.0, y + 9.0, at.right());
         }
     }
-    y += 48.0;
+    y += 44.0;
+    y = branch_line(app, y);
 
     if !app.st.changes.loaded {
         let words = if app.online() { "Reading what changed…" } else { "Changes show here once the PC answers." };
@@ -710,6 +777,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     foot(app, foot_h, nfiles);
     if app.st.changes.picking {
         picker(app);
+    } else if app.st.changes.pr_sheet {
+        pr_sheet(app);
     }
     page.moving || !app.st.changes.pending.is_empty() && !crate::wake::has()
 }
@@ -984,16 +1053,38 @@ fn foot(app: &mut App, foot_h: f32, nfiles: usize) {
     }
     let ky = my + 46.0 + 12.0;
     let pr_w = 120.0;
-    let ahead = app.st.changes.ahead;
+    let st = &app.st.changes;
+    let ahead = st.ahead;
+    // A detached HEAD has no branch to push to: it commits, and that is all.
+    let detached = st.branch == "HEAD";
     let (label, can) = if nfiles > 0 {
-        ("Commit and push", !message.trim().is_empty())
+        (if detached { "Commit" } else { "Commit and push" }, !message.trim().is_empty())
+    } else if detached {
+        ("Detached HEAD", false)
     } else {
-        ("Push", ahead > 0 || app.st.changes.upstream.is_none() && !app.st.changes.branch.is_empty())
+        ("Push", ahead > 0 || st.upstream.is_none() && !st.branch.is_empty())
     };
     let label = busy.unwrap_or(label);
+    // The branch's pull request opens on GitHub; with none, the key opens one.
+    let open_pr = pr_for(&st.prs, &st.branch).filter(|p| p.state == "open").map(|p| p.url.clone());
+    let can_pr = !detached && !st.branch.is_empty() && st.branch != st.base;
     let mut cx = crate::cx!(app);
     let go = if can && busy.is_none() { kit::primary(&mut cx, x, ky, w - pr_w - 10.0, 46.0, label, None) } else { kit::plain(&mut cx, x, ky, w - pr_w - 10.0, 46.0, label, None) && false };
-    let pr = kit::plain(&mut cx, x + w - pr_w, ky, pr_w, 46.0, "Pull request", None);
+    let pr = kit::plain(&mut cx, x + w - pr_w, ky, pr_w, 46.0, if open_pr.is_some() { "View PR" } else { "Pull request" }, None);
+    if pr {
+        if let Some(url) = &open_pr {
+            app.host.open_url(url);
+        } else if can_pr && busy.is_none() {
+            app.finish_typing();
+            let st = &mut app.st.changes;
+            // The title starts as the branch's one commit, when it has one; the PC fills in the
+            // rest from the commits when left empty.
+            if st.pr_title.is_empty() && st.commits.len() == 1 {
+                st.pr_title = st.commits[0].subject.clone();
+            }
+            st.pr_sheet = true;
+        }
+    }
     let Some(repo) = app.repo else { return };
     let link = app.link.clone();
     if go {
@@ -1006,16 +1097,111 @@ fn foot(app: &mut App, foot_h: f32, nfiles: usize) {
         if nfiles > 0 {
             // Nothing ticked: the whole change goes, as "Include all".
             let all = !st.files.iter().any(File::staged);
-            st.ask(&link, repo, Job::Commit { push: true, set_upstream }, "git.commit", json!({"project_id": repo, "worktree": w, "message": message.trim(), "all": all}));
+            st.ask(&link, repo, Job::Commit { push: !detached, set_upstream }, "git.commit", json!({"project_id": repo, "worktree": w, "message": message.trim(), "all": all}));
         } else {
             let worktree = st.worktree.clone();
             push_to(app, repo, worktree, set_upstream);
         }
     }
-    if pr && busy.is_none() {
+}
+
+/// Under the branch chip: how it stands against its upstream, and Fetch; then its pull request,
+/// which opens on GitHub. Returns where the page goes on.
+fn branch_line(app: &mut App, mut y: f32) -> f32 {
+    let st = &app.st.changes;
+    if !st.loaded {
+        return y + 4.0;
+    }
+    let words = if st.branch == "HEAD" {
+        "Detached HEAD: commits here are on no branch.".to_string()
+    } else {
+        match &st.upstream {
+            None => "Not pushed yet.".to_string(),
+            Some(up) => match (st.ahead, st.behind) {
+                (0, 0) => format!("Up to date with {up}."),
+                (a, 0) => format!("{a} to push to {up}."),
+                (0, b) => format!("{b} behind {up}."),
+                (a, b) => format!("{a} to push, {b} behind {up}."),
+            },
+        }
+    };
+    let fetching = st.pending.iter().any(|p| p.job == Job::Fetch);
+    let pr = pr_for(&st.prs, &st.branch).cloned();
+    let small = Text::new(ty::SMALL, t::INK3);
+    let key = if fetching { "Fetching…" } else { "Fetch" };
+    let kw = app.canvas.measure(key, small.color(t::INK2)) + 24.0;
+    app.canvas.text_fit(&words, t::PAD + 2.0, y + 9.0, WIDTH - 2.0 * t::PAD - kw - 8.0, small);
+    let fetch = {
+        let mut cx = crate::cx!(app);
+        let kx = WIDTH - t::PAD - kw;
+        if cx.pressed(kx, y - 6.0, kw, 44.0) {
+            cx.c.rect(kx, y, kw, 32.0, 8.0, t::WASH);
+        }
+        cx.c.text(key, kx + kw / 2.0, y + 9.0, small.color(t::INK2).center());
+        cx.tap(kx, y - 6.0, kw, 44.0)
+    };
+    if fetch
+        && !fetching
+        && let Some(repo) = app.repo
+    {
+        let link = app.link.clone();
+        app.st.changes.ask_for(&link, repo, None, Job::Fetch, "git.fetch", json!({"project_id": repo}));
+    }
+    y += 40.0;
+    if let Some(p) = pr {
+        let (x, w, h) = (t::PAD, WIDTH - 2.0 * t::PAD, 58.0);
+        let mut cx = crate::cx!(app);
+        cx.c.rect(x, y, w, h, 12.0, if cx.pressed(x, y, w, h) { t::S2 } else { t::S1 });
+        cx.c.icon("merge", x + 22.0, y + h / 2.0, 16.0, if p.state == "open" { t::ACCENT } else { t::INK3 });
+        let state = match (p.state.as_str(), p.draft) {
+            ("open", true) => "Draft",
+            ("open", false) => "Open",
+            ("merged", _) => "Merged",
+            _ => "Closed",
+        };
+        cx.c.text_fit(&p.title, x + 44.0, y + 10.0, w - 80.0, Text::new(ty::UI, t::INK));
+        cx.c.text(&format!("#{} · {state}", p.number), x + 44.0, y + 33.0, Text::new(ty::SMALL, t::INK3));
+        cx.c.icon("external", x + w - 20.0, y + h / 2.0, 14.0, t::INK3);
+        if cx.tap(x, y, w, h) {
+            app.host.open_url(&p.url);
+        }
+        y += h + 14.0;
+    }
+    y
+}
+
+/// The sheet that opens a pull request for the branch: its title and body, both optional (the PC
+/// writes them from the commits when left empty).
+fn pr_sheet(app: &mut App) {
+    let h = 330.0;
+    let (top, outside) = kit::sheet(&mut crate::cx!(app), h);
+    if outside {
+        app.finish_typing();
+        app.st.changes.pr_sheet = false;
+        return;
+    }
+    let (x, w) = (t::PAD, WIDTH - 2.0 * t::PAD);
+    let st = &app.st.changes;
+    let into = format!("{} into {}", st.branch, if st.base.is_empty() { "the base" } else { &st.base });
+    app.canvas.text("Pull request", x + 4.0, top + 28.0, Text::new(ty::SECTION, t::INK).semi());
+    app.canvas.text_fit(&into, x + 4.0, top + 58.0, w - 8.0, Text::new(ty::SMALL, t::INK3).face(Weight::Mono));
+    let mut title = app.st.changes.pr_title.clone();
+    let mut body = app.st.changes.pr_body.clone();
+    let mut y = top + 88.0;
+    y += kit::field(&mut crate::cx!(app), "pr-title", x, y, w, "Title", "From the commits", &mut title, Kb::Text) + 12.0;
+    kit::field(&mut crate::cx!(app), "pr-body", x, y, w, "Description", "Optional", &mut body, Kb::Text);
+    app.st.changes.pr_title = title.clone();
+    app.st.changes.pr_body = body.clone();
+    let ky = top + h - 62.0;
+    let go = kit::primary(&mut crate::cx!(app), x, ky, w, 46.0, "Open pull request", None);
+    if go && let Some(repo) = app.repo {
+        app.finish_typing();
+        let link = app.link.clone();
         let st = &mut app.st.changes;
+        st.pr_sheet = false;
         let w = wt(st);
-        st.ask(&link, repo, Job::Pr, "git.pr.open", json!({"project_id": repo, "worktree": w}));
+        let some = |s: &str| if s.trim().is_empty() { Value::Null } else { json!(s.trim()) };
+        st.ask(&link, repo, Job::Pr, "git.pr.open", json!({"project_id": repo, "worktree": w, "title": some(&title), "body": some(&body)}));
     }
 }
 
@@ -1096,8 +1282,10 @@ pub fn sample(app: &mut App) {
         worktrees: vec![Worktree { path: "/w/bold-puffin".into(), branch: "relay/bold-puffin".into(), session: Some("bold-puffin".into()), dirty: true }],
         worktree: Some("/w/bold-puffin".into()),
         branch: "relay/bold-puffin".into(),
-        upstream: None,
-        ahead: 0,
+        upstream: Some("origin/relay/bold-puffin".into()),
+        ahead: 2,
+        behind: 1,
+        prs: vec![Pr { number: 209, branch: "relay/bold-puffin".into(), title: "Relay Code: the phone app rewritten in Rust + wgpu".into(), url: "https://github.com/antho976/Relay/pull/209".into(), state: "open".into(), draft: false }],
         files,
         loaded: true,
         base: "main".into(),
@@ -1320,6 +1508,66 @@ mod tests {
         // Its commits are listed, and the change is read against the base's name as asked.
         assert_eq!(a.st.changes.commits.len(), 1);
         assert_eq!(a.st.changes.since(), "trunk");
+    }
+
+    #[test]
+    fn the_branchs_pull_request_is_its_open_one_else_its_latest() {
+        let p = |n: u64, b: &str, st: &str| Pr { number: n, branch: b.into(), state: st.into(), ..Pr::default() };
+        let list = [p(3, "relay/x", "closed"), p(7, "relay/x", "merged"), p(5, "relay/x", "open"), p(9, "relay/y", "open")];
+        assert_eq!(pr_for(&list, "relay/x").map(|p| p.number), Some(5));
+        assert_eq!(pr_for(&list[..2], "relay/x").map(|p| p.number), Some(7));
+        assert_eq!(pr_for(&list, "relay/z"), None);
+        let v = json!({"pull_requests": [{"number": 209, "branch": "relay/x", "draft": true, "url": "u", "title": "T", "state": "OPEN", "same_repository": true}], "complete": true});
+        assert_eq!(prs(&v), [Pr { number: 209, branch: "relay/x".into(), title: "T".into(), url: "u".into(), state: "open".into(), draft: true }]);
+    }
+
+    /// Press and lift a finger at (x, y), in the app's units, with frames between.
+    fn press(a: &mut App, clock: &mut u64, x: f32, y: f32) {
+        use crate::ui::{Phase, Touch};
+        let u = a.canvas.u.max(0.01);
+        let (px, py) = (x * u + ((390.0 - WIDTH * u) * 0.5).max(0.0), y * u);
+        for phase in [Phase::Down, Phase::Up] {
+            *clock += 30_000_000;
+            a.touch(Touch { id: 1, phase, x: px, y: py, t_ns: *clock });
+            a.frame(*clock);
+        }
+        for _ in 0..20 {
+            *clock += 16_666_666;
+            a.frame(*clock);
+        }
+    }
+
+    #[test]
+    fn a_tap_on_the_pull_request_sheet_reaches_nothing_under_it() {
+        let mut a = app_on_b("prsheet");
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        a.push(Route::Changes);
+        a.st.changes.open_commit = None;
+        a.st.changes.pr_sheet = true;
+        let mut clock = 2_000_000_000;
+        for _ in 0..3 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        // On the sheet's title, over the page's file rows.
+        let y = a.canvas.h - 330.0 + 40.0;
+        press(&mut a, &mut clock, 40.0, y);
+        assert!(a.st.changes.pr_sheet, "a tap on the sheet keeps it");
+        assert_eq!(a.st.changes.open, None, "no file under it opened");
+        assert!(a.st.changes.pending.is_empty(), "no key under it was pressed");
+        // A tap above it closes it, and still reaches nothing.
+        press(&mut a, &mut clock, 40.0, 150.0);
+        assert!(!a.st.changes.pr_sheet);
+        assert_eq!(a.st.changes.open, None);
+    }
+
+    #[test]
+    fn a_detached_head_commits_without_pushing() {
+        let mut a = app_on_b("detached");
+        a.st.changes.branch = "HEAD".into();
+        answered(&mut a, Job::Commit { push: false, set_upstream: false }, 1, Some("/w/b".into()), Ok(json!({})));
+        assert!(a.st.changes.pending.is_empty(), "no push after the commit");
     }
 
     #[test]
