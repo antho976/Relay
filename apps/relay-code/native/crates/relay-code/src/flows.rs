@@ -487,3 +487,31 @@ fn a_made_agent_opens_its_chat_at_once_starting() {
     assert_eq!(made.state_words(), "starting");
     assert!(a.busy("brisk-lynx"), "its chat shows it starting");
 }
+
+// D5: the look pass.
+
+#[test]
+fn the_drawers_list_scrolls_to_earlier_under_its_links() {
+    let mut a = app("drawer-scroll");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.st.drawer.open = true;
+    frames(&mut a, &mut clock, 30);
+    assert!(a.st.drawer.scroll.max > 0.0, "live and earlier agents overflow the drawer's list");
+    // A drag up the list moves it, not the page under the drawer.
+    let (x, from) = (150.0, 400.0);
+    clock += 16_666_666;
+    a.touch(Touch { id: 1, phase: Phase::Down, x, y: from, t_ns: clock });
+    frames(&mut a, &mut clock, 1);
+    for i in 1..=10 {
+        clock += 16_666_666;
+        a.touch(Touch { id: 1, phase: Phase::Move, x, y: from - 20.0 * i as f32, t_ns: clock });
+        frames(&mut a, &mut clock, 1);
+    }
+    clock += 100_000_000;
+    a.touch(Touch { id: 1, phase: Phase::Up, x, y: from - 200.0, t_ns: clock });
+    frames(&mut a, &mut clock, 30);
+    assert!(a.st.drawer.scroll.off > 100.0, "the list scrolled: {}", a.st.drawer.scroll.off);
+    assert!(a.st.drawer.open);
+    assert_eq!(a.route(), &Route::Home);
+}

@@ -26,6 +26,8 @@ pub const WARN: Rgba = Rgba::hex(0xE5B567);
 pub const DANGER: Rgba = Rgba::hex(0xEC8574);
 pub const GLASS: Rgba = Rgba::argb(0xF2181716);
 pub const SCRIM: Rgba = Rgba::argb(0x8C000000);
+/// The veil behind the drawer: deep enough that the page reads as behind it (D5).
+pub const VEIL: Rgba = Rgba::argb(0xB8000000);
 /// A press over anything.
 pub const WASH: Rgba = Rgba::argb(0x14FFFFFF);
 
