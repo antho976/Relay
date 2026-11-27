@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::app::App;
-use crate::data::{self, Agent, Item, Piece};
+use crate::data::{self, Agent, Item, Piece, Stage};
 use crate::draw::{Text, WIDTH, Weight};
 use crate::kit::{self, Kb};
 use crate::theme::{self as t, ty};
@@ -635,12 +635,17 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     let mut retry = None;
     for (i, p) in waiting.iter().enumerate() {
         y += bubble(app, &p.text, y, true);
+        let online = app.link_state.online();
         let (words, ink) = if p.failed {
             ("Not sent · tap to send again", t::DANGER)
+        } else if p.stage == Stage::Queued && !online {
+            ("Waiting for your PC", t::INK3)
+        } else if p.stage < Stage::Entered {
+            ("Sending…", t::INK3)
         } else if working {
             ("Queued · it reads this after its current step", t::INK3)
         } else {
-            ("Sending…", t::INK3)
+            ("Sent", t::INK3)
         };
         let st = Text::new(ty::SMALL, ink);
         app.canvas.text(words, WIDTH - t::PAD, y - 4.0, st.right());
@@ -658,8 +663,7 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     if let Some(i) = retry
         && let Some(s) = app.sending.get_mut(name)
     {
-        let p = s.waiting.remove(i);
-        app.say(name, &p.text);
+        s.retry(i);
     }
 
     // Scrolled up: a key back to the newest, just above the message box.
