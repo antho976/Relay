@@ -232,6 +232,9 @@ payload!(#[schemars(rename = "SessionTranscriptIn")] TranscriptIn {
     #[serde(default, skip_serializing_if = "Option::is_none")] pub before: Option<u64>,
     /// At most this many messages, the newest kept (default 200, at most 1000).
     #[serde(default, skip_serializing_if = "Option::is_none")] pub limit: Option<u32>,
+    /// The id of a Task (sub-agent) call in this conversation: the helper's own steps, from the
+    /// log Claude Code keeps for it, instead of the conversation. `found` false while it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub task: Option<String>,
 });
 result!(#[schemars(rename = "SessionTranscriptMessage")] TranscriptMessage {
     /// Stable across reads: the provider's own id for the record, or its byte offset.

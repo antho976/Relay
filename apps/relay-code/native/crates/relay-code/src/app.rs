@@ -119,6 +119,16 @@ pub enum Route {
     Terminal(String),
 }
 
+/// What a Task call's helper did, as last read.
+#[derive(Clone, Debug, Default)]
+pub struct Helper {
+    pub items: Vec<crate::data::Item>,
+    /// The PC keeps a log for it.
+    pub found: bool,
+    /// When it was read (ns).
+    pub at: u64,
+}
+
 /// What a request was for, so its answer lands in the right place.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Ask {
@@ -127,6 +137,8 @@ pub enum Ask {
     Transcript(String),
     /// A page older than what the phone holds of a conversation (scrolled to its top).
     Older(String),
+    /// What a Task call's helper did: the agent and the call.
+    Helper(String, String),
     /// Words typed into an agent's terminal (a message's words, from its send queue).
     Input(String),
     /// Enter after them, once the PC said it typed them.
@@ -225,6 +237,8 @@ pub struct App {
     pub repo: Option<i64>,
     pub convos: HashMap<String, Convo>,
     pub sending: HashMap<String, Sending>,
+    /// What each Task call's helper did, by agent and call, and when it was read.
+    pub helpers: HashMap<(String, String), Helper>,
     /// Why the PC could not read a conversation, until it next can.
     pub chat_errors: HashMap<String, String>,
     /// When each terminal's foot was read (ns).
@@ -362,6 +376,7 @@ impl App {
             opening: Vec::new(),
             screens_at: HashMap::new(),
             chat_errors: HashMap::new(),
+            helpers: HashMap::new(),
             screens: HashMap::new(),
             efforts: HashMap::new(),
             busy_since: HashMap::new(),
@@ -591,6 +606,13 @@ impl App {
             p["after"] = json!(a);
         }
         self.ask(Ask::Transcript(name.to_string()), "session.transcript", p);
+    }
+
+    /// Read what the helper of `name`'s Task call `call` did (its own log on the PC).
+    pub fn read_helper(&mut self, name: &str, call: &str) {
+        if self.online() {
+            self.ask(Ask::Helper(name.to_string(), call.to_string()), "session.transcript", json!({"session": name, "task": call, "limit": PAGE}));
+        }
     }
 
     /// Read the page older than what the phone holds of `name`'s conversation, when there is one.
@@ -834,6 +856,15 @@ impl App {
                     }
                 }
                 (Ask::Transcript(name), Ok(v)) => self.took_transcript(&name, &v),
+                (Ask::Helper(name, call), Ok(v)) => {
+                    let found = v.get("found").and_then(Value::as_bool).unwrap_or(false);
+                    let items = data::items(&data::messages(&v));
+                    let changed = self.helpers.get(&(name.clone(), call.clone())).is_none_or(|h| h.items != items || h.found != found);
+                    self.helpers.insert((name, call.clone()), Helper { items, found, at: self.now_ns });
+                    if changed {
+                        crate::chat::helper_came(self, &call);
+                    }
+                }
                 (Ask::Older(name), Ok(v)) => {
                     if let Some(c) = self.convos.get_mut(&name) {
                         c.take_older(&v);

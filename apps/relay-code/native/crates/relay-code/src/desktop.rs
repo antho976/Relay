@@ -249,6 +249,13 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             crate::chat::find_open(&mut app);
             app.set_text("draft");
         }
+        "helper" => {
+            // A18: a Task call opened on what its helper did.
+            crate::sample::helper(&mut app);
+            app.open("swift-ocelot");
+            app.frame(clock);
+            crate::chat::unfold_all(&mut app);
+        }
         "blocked" => {
             // Blocked by its own report (session.done blocked), with no card on its screen.
             app.open("umber-zebra");
