@@ -141,6 +141,22 @@ fn a_file_reads_as_it_was_at_a_revision() {
     assert!(call(&e, "file.read", json!({"project_id": 1, "path": "../README.md", "rev": "HEAD"})).into_result().is_err());
 }
 
+/// A big committed file read at a revision: up to file.read's ceiling it is read and cut to
+/// `max_bytes`; past it, refused on its header's size, never loaded.
+#[test]
+fn a_big_blob_at_a_revision_is_cut_or_refused_by_its_size() {
+    let (e, _ws, repo) = project();
+    // Zeros pack small, so the test stays quick whatever the sizes.
+    std::fs::write(repo.join("big.bin"), vec![0u8; 5 << 20]).unwrap();
+    std::fs::write(repo.join("huge.bin"), vec![0u8; 40 << 20]).unwrap();
+    git(&repo, &["add", "big.bin", "huge.bin"]);
+    git(&repo, &["commit", "-q", "-m", "big"]);
+    let cut = ok(&e, "file.read", json!({"project_id": 1, "path": "big.bin", "rev": "HEAD", "max_bytes": 1024}));
+    assert_eq!((cut["size"].as_u64(), cut["truncated"].as_bool()), (Some(5 << 20), Some(true)));
+    let refused = call(&e, "file.read", json!({"project_id": 1, "path": "huge.bin", "rev": "HEAD", "max_bytes": 1024}));
+    assert_eq!(err(&refused).code, "file.too_large");
+}
+
 /// `file.write` reads the file it replaces under the store lock, so it reads only a regular file:
 /// `fs::read_to_string` on a FIFO there never returned, and every request queued behind it.
 #[test]

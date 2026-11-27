@@ -321,7 +321,8 @@ fn draw_new_task(app: &mut App) {
     }
 }
 
-/// A create's answer: the task joins the board and opens; a refusal keeps the sheet's words.
+/// A create's answer, on any page (from take_answers): the task joins the board, and opens when
+/// the Board is still where you are; a refusal keeps the sheet's words.
 fn take_created(app: &mut App) {
     let Some(r) = app.st.board.creating.as_ref().and_then(Call::poll) else { return };
     app.st.board.creating = None;
@@ -333,7 +334,9 @@ fn take_created(app: &mut App) {
                 app.st.board.tasks.push(Task { body: String::new(), ..tk.clone() });
                 app.st.board.open = Opened { id, task: Some(tk), ..Opened::default() };
                 app.toast("Task created");
-                app.push(Route::Task(id));
+                if *app.route() == Route::Board {
+                    app.push(Route::Task(id));
+                }
             }
             reload_shown(app);
         }
@@ -360,6 +363,7 @@ pub fn send_back(app: &mut App, id: i64, title: &str) {
 /// again only while the Board or a task shows; elsewhere the PC's task event refreshes the lists
 /// when they next show.
 pub fn take_answers(app: &mut App) {
+    take_created(app);
     if let Some(r) = app.st.board.act.as_ref().and_then(Call::poll) {
         app.st.board.act = None;
         let done = app.st.board.act_done.take();
@@ -582,7 +586,6 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     if let Some(id) = open {
         app.push(Route::Task(id));
     }
-    take_created(app);
     draw_new_task(app);
     page.moving || app.st.board.creating.is_some() && !crate::wake::has()
 }
@@ -1051,6 +1054,20 @@ mod tests {
         take_created(&mut a);
         assert_eq!(a.st.board.new_task.as_ref().map(|t| t.title.as_str()), Some("Pinch zoom jumps"));
         assert!(a.st.board.close_over() && a.st.board.new_task.is_none());
+    }
+
+    #[test]
+    fn a_task_created_after_leaving_the_board_is_kept_but_does_not_pull_you_back() {
+        let (mut a, _) = on_task("created-away", "active");
+        a.reset_to(Route::Home);
+        let before = a.st.board.tasks.len();
+        // As task.create answers, on the Home page: take_answers runs from App::frame.
+        a.st.board.new_task = Some(NewTask { title: "Later".into(), ..NewTask::default() });
+        a.st.board.creating = Some(rc_link::Call::never());
+        take_answers(&mut a);
+        assert!(a.st.board.creating.is_some(), "still on its way");
+        assert_eq!(*a.route(), Route::Home);
+        assert_eq!(a.st.board.tasks.len(), before);
     }
 
     #[test]

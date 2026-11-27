@@ -1428,6 +1428,8 @@ impl App {
         crate::board::take_answers(self);
         // A commit's push goes out from here, whatever page is open.
         crate::changes::keep_up(self);
+        // Designs' finished paints are taken (never left to pile up), and leaving drops its queue.
+        crate::designs::keep_up(self);
         // Layers keep each tap on the surface it landed on (ui.rs): the page first, on the bottom.
         self.ui.layer = crate::ui::layer::CONTENT;
         let mut moving = match &route {
