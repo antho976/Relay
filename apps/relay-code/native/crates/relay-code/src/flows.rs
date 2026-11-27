@@ -515,3 +515,61 @@ fn the_drawers_list_scrolls_to_earlier_under_its_links() {
     assert!(a.st.drawer.open);
     assert_eq!(a.route(), &Route::Home);
 }
+
+// D6: Settings.
+
+/// Settings' rows on a 390 × 844 screen with sample data (no profile, so no version line).
+const NOTIFY_TOP: f32 = 56.0 + 52.0 + 30.0 + 36.0 + 24.0 + 22.0 + 30.0;
+const FORGET_TOP: f32 = NOTIFY_TOP + 3.0 * 52.0 + 22.0 + 30.0 + 64.0;
+
+#[test]
+fn a_notification_row_switches_it_and_the_choice_is_kept() {
+    use crate::settings::Notify;
+    let mut a = app("notify");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.push(Route::Settings);
+    frames(&mut a, &mut clock, 3);
+    assert!(a.notifies(Notify::Done), "on until switched off");
+    tap(&mut a, &mut clock, 200.0, NOTIFY_TOP + 52.0 + 26.0);
+    assert!(!a.notifies(Notify::Done));
+    assert!(a.notifies(Notify::Asks) && a.notifies(Notify::Holds), "only that row");
+    // Kept in the app's config, where the background loop reads it without an App.
+    let dir = a.data.clone();
+    let kept = (0..100).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        !crate::app::notifies_in(&dir, Notify::Done)
+    });
+    assert!(kept, "written to config.json");
+    assert!(crate::app::notifies_in(&dir, Notify::Asks));
+    tap(&mut a, &mut clock, 200.0, NOTIFY_TOP + 52.0 + 26.0);
+    assert!(a.notifies(Notify::Done), "and on again");
+}
+
+#[test]
+fn forget_this_pc_asks_first_and_a_tap_outside_keeps_it() {
+    let mut a = app("forget");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.push(Route::Settings);
+    frames(&mut a, &mut clock, 3);
+    tap(&mut a, &mut clock, 200.0, FORGET_TOP + 23.0);
+    assert!(crate::settings::confirming(&a));
+    // On the Back key, outside the dialog: it closes, and Back under it is not pressed.
+    tap(&mut a, &mut clock, 28.0, 28.0);
+    assert!(!crate::settings::confirming(&a));
+    assert_eq!(a.route(), &Route::Settings, "nothing under the dialog took the tap");
+}
+
+#[test]
+fn the_rows_say_working_when_the_terminal_does_as_the_header_does() {
+    let mut a = app("words");
+    let ocelot = a.agent("swift-ocelot").cloned().expect("sample agent");
+    // Its output is a minute old, so the list alone reads it as ready.
+    assert_eq!(a.agent_words(&ocelot), "ready");
+    a.screens.insert("swift-ocelot".into(), crate::screen::read("· Pondering… (3s · thought for 1s)\n────\n❯ \n────\n  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt"));
+    assert_eq!(a.agent_words(&ocelot), "working");
+    // One that asks says so, whatever its terminal shows.
+    let zebra = a.agent("umber-zebra").cloned().expect("sample agent");
+    assert_eq!(a.agent_words(&zebra), "asks you");
+}

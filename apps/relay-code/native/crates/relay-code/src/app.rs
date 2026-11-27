@@ -125,6 +125,23 @@ struct Config {
     model: Option<String>,
     #[serde(default)]
     effort: Option<String>,
+    /// Notifications switched off in Settings (D6): each kind is on until then.
+    #[serde(default)]
+    quiet: Vec<String>,
+}
+
+fn quiet_key(n: crate::settings::Notify) -> &'static str {
+    match n {
+        crate::settings::Notify::Asks => "asks",
+        crate::settings::Notify::Done => "done",
+        crate::settings::Notify::Holds => "holds",
+    }
+}
+
+/// Whether this kind of notification is on, read from the app's settings in `data` (the host's
+/// data dir): for code that posts notifications without an [`App`], as the background loop does.
+pub fn notifies_in(data: &std::path::Path, n: crate::settings::Notify) -> bool {
+    read_json::<Config>(data.join("config.json")).is_none_or(|c| !c.quiet.iter().any(|q| q == quiet_key(n)))
 }
 
 #[derive(Default)]
@@ -353,6 +370,19 @@ impl App {
         }
     }
 
+    /// Whether this kind of notification is on (Settings).
+    pub fn notifies(&self, n: crate::settings::Notify) -> bool {
+        !self.config.quiet.iter().any(|q| q == quiet_key(n))
+    }
+
+    pub fn set_notifies(&mut self, n: crate::settings::Notify, on: bool) {
+        self.config.quiet.retain(|q| q != quiet_key(n));
+        if !on {
+            self.config.quiet.push(quiet_key(n).to_string());
+        }
+        self.save_config();
+    }
+
     /// The model and effort New agent offers first: the last ones used.
     pub fn last_choice(&self) -> (Option<String>, Option<String>) {
         (self.config.model.clone(), self.config.effort.clone())
@@ -417,6 +447,12 @@ impl App {
             return s.status.is_some();
         }
         a.working()
+    }
+
+    /// An agent's state in words, as its chat header says it: "working" while its terminal says
+    /// so ([`App::busy`]), which the list's freshness can lag.
+    pub fn agent_words(&self, a: &Agent) -> &'static str {
+        if a.alive() && !a.needs_you() && self.busy(&a.name) { "working" } else { a.state_words() }
     }
 
     /// The link is up: pages may ask the PC.
@@ -730,7 +766,7 @@ impl App {
     fn tell_new_questions(&mut self) {
         let asking: std::collections::HashSet<String> = self.agents.iter().filter(|a| a.needs_you()).map(|a| a.name.clone()).collect();
         for a in self.agents.iter().filter(|a| a.needs_you() && !self.told.contains(&a.name)) {
-            if !self.foreground && !self.shot {
+            if !self.foreground && !self.shot && self.notifies(crate::settings::Notify::Asks) {
                 let id = a.name.bytes().fold(7i32, |h, b| h.wrapping_mul(31).wrapping_add(b as i32));
                 self.host.notify(id, &format!("{} asks you", a.name), a.title());
             }
