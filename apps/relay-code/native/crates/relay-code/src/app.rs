@@ -901,7 +901,7 @@ impl App {
                     if let Err(e) = r
                         && answer == data::Answer::Refused
                     {
-                        self.toast(&format!("Not sent: {}", e.message));
+                        self.toast(&format!("Not sent. {}", crate::errors::words(&e)));
                     }
                 }
                 (Ask::Create, Ok(v)) => self.created(&v),
@@ -969,10 +969,10 @@ impl App {
                 (Ask::Close(name), Err(e)) if e.code == "worktree.dirty" => {
                     self.st.agents.confirm = Some((name, crate::agents::Confirm::Discard));
                 }
-                (Ask::Create | Ask::Spawn(_) | Ask::Resume(_) | Ask::Park(_) | Ask::Close(_), Err(e)) => self.toast(&e.message),
+                (Ask::Create | Ask::Spawn(_) | Ask::Resume(_) | Ask::Park(_) | Ask::Close(_), Err(e)) => self.toast(&crate::errors::words(&e)),
                 // A conversation the PC could not read (not a dropped link): the chat says so.
                 (Ask::Transcript(name), Err(e)) if !e.transient() => {
-                    self.chat_errors.insert(name, e.message);
+                    self.chat_errors.insert(name, crate::errors::words(&e));
                 }
                 (_, Err(e)) => self.host.log(&format!("{}: {}", e.code, e.message)),
             }

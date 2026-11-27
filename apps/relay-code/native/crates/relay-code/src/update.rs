@@ -148,7 +148,7 @@ pub fn keep_up(app: &mut App) {
             Ok(_) if by_hand => app.toast("No build is published on your PC yet"),
             Ok(_) => {}
             // An older PC without phone.app.* has nothing to offer: said only when asked by hand.
-            Err(e) if by_hand => app.toast(&format!("Couldn't ask your PC: {}", e.message)),
+            Err(e) if by_hand => app.toast(&crate::errors::words(&e)),
             Err(e) => app.host.log(&format!("update: {}: {}", e.code, e.message)),
         }
     }
@@ -233,7 +233,7 @@ fn fetch(link: &Link, dir: &Path, l: &Latest, got: &AtomicU64) -> Result<PathBuf
         let v = link
             .call("phone.app.apk", json!({"offset": offset, "len": PIECE}))
             .wait(Duration::from_secs(90))
-            .map_err(|e| format!("The PC stopped sending the update ({}). Try again", e.message))?;
+            .map_err(|e| format!("The PC stopped sending the update. {}", crate::errors::words(&e)))?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(v.get("bytes_b64").and_then(Value::as_str).unwrap_or_default())
             .map_err(|_| "The update came garbled. Try again".to_string())?;

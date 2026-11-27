@@ -61,7 +61,7 @@ fn keep_up(app: &mut App, name: &str) {
                 app.st.terminal.error = None;
             }
             Err(e) if e.code == "session.not_spawned" => app.st.terminal.error = Some("This agent has no terminal running.".into()),
-            Err(e) => app.st.terminal.error = Some(format!("Couldn't read its terminal: {}", e.message)),
+            Err(e) => app.st.terminal.error = Some(crate::errors::words(&e)),
         }
     }
     if app.online() && app.st.terminal.call.is_none() && app.now_ns >= app.st.terminal.at {

@@ -206,8 +206,9 @@ impl Act {
             (Act::Reply { text, .. }, Ok(())) => (format!("Sent to {agent}"), text.clone()),
             (Act::Allow { .. }, Ok(())) => (format!("Allowed for {agent}"), "The command runs now".into()),
             (Act::Deny { .. }, Ok(())) => (format!("Denied for {agent}"), "The command does not run".into()),
-            (Act::Reply { .. }, Err(e)) => (format!("Not sent to {agent}"), format!("{e}. Open the chat to send it again")),
-            (_, Err(e)) => (format!("Not done for {agent}"), format!("{e}. Open the chat to answer there")),
+            // The PC's refusal in words (errors::words), which end with a full stop.
+            (Act::Reply { .. }, Err(e)) => (format!("Not sent to {agent}"), format!("{e} Open the chat to send it again.")),
+            (_, Err(e)) => (format!("Not done for {agent}"), format!("{e} Open the chat to answer there.")),
         }
     }
 }
@@ -405,7 +406,7 @@ fn run(link: Link, heard: std::sync::mpsc::Receiver<Msg>, data: PathBuf, notifie
                 let (link, notifier) = (link.clone(), notifier.clone());
                 let _ = std::thread::Builder::new().name("rc-act".into()).spawn(move || {
                     let (op, payload) = a.request(rc_link::link::now_ms());
-                    let outcome = link.call_quiet(op, payload, LIST_TIMEOUT).wait(LIST_TIMEOUT).map(|_| ()).map_err(|e| e.message);
+                    let outcome = link.call_quiet(op, payload, LIST_TIMEOUT).wait(LIST_TIMEOUT).map(|_| ()).map_err(|e| crate::errors::words(&e));
                     let ok = outcome.is_ok();
                     let id = alert_id(a.agent());
                     let (title, body) = a.after(outcome);
