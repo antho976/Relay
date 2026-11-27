@@ -195,6 +195,14 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.convos.insert("swift-ocelot".into(), c);
             app.open("swift-ocelot");
         }
+        "days" | "menu" => {
+            crate::sample::days(&mut app);
+            app.open("swift-ocelot");
+            if screen == "menu" {
+                // Held on the agent's last words (the sixth item).
+                app.st.chat.menu = Some((5, 640.0));
+            }
+        }
         "blocked" => {
             // Blocked by its own report (session.done blocked), with no card on its screen.
             app.open("umber-zebra");

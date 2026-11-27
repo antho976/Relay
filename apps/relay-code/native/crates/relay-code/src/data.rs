@@ -542,21 +542,33 @@ pub enum Item {
 
 /// The conversation as the chat draws it: tool calls in a row fold into one line.
 pub fn items(msgs: &[Msg]) -> Vec<Item> {
+    items_timed(msgs).0
+}
+
+/// [`items`], with when each was written (ms since 1970; 0 when the log does not say): a folded
+/// line takes the time of its first call.
+pub fn items_timed(msgs: &[Msg]) -> (Vec<Item>, Vec<u64>) {
     let mut out: Vec<Item> = Vec::new();
+    let mut times: Vec<u64> = Vec::new();
     let mut calls: Vec<ToolCall> = Vec::new();
+    // When the calls waiting to fold began, and the folded lines' times in the order they fold.
+    let mut calls_t = 0u64;
+    let mut did_ts: std::collections::VecDeque<u64> = Default::default();
     let mut failed = false;
-    let flush = |out: &mut Vec<Item>, calls: &mut Vec<ToolCall>, failed: &mut bool| {
+    let flush = |out: &mut Vec<Item>, calls: &mut Vec<ToolCall>, failed: &mut bool, did_ts: &mut std::collections::VecDeque<u64>, calls_t: u64| {
         if !calls.is_empty() {
             let pairs: Vec<(String, String)> = calls.iter().map(|c| (c.name.clone(), c.summary.clone())).collect();
             out.push(Item::Did { line: did_line(&pairs), failed: *failed, calls: std::mem::take(calls) });
+            did_ts.push_back(calls_t);
             *failed = false;
         }
     };
     for m in msgs {
+        let t_m = parse_ms(&m.created_at).unwrap_or(0);
         let text = |k: &str| m.body.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
         match m.role.as_str() {
             "user" => {
-                flush(&mut out, &mut calls, &mut failed);
+                flush(&mut out, &mut calls, &mut failed, &mut did_ts, calls_t);
                 let t = text("text");
                 if !t.trim().is_empty() {
                     out.push(Item::You(t));
@@ -566,13 +578,18 @@ pub fn items(msgs: &[Msg]) -> Vec<Item> {
                 for b in m.body.get("blocks").and_then(Value::as_array).into_iter().flatten() {
                     let s = |k: &str| b.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
                     match b.get("type").and_then(Value::as_str) {
-                        Some("tool_use") => calls.push(ToolCall { id: s("id"), name: s("name"), summary: s("summary"), detail: b.get("detail").and_then(Value::as_str).map(str::to_string), ..Default::default() }),
+                        Some("tool_use") => {
+                            if calls.is_empty() {
+                                calls_t = t_m;
+                            }
+                            calls.push(ToolCall { id: s("id"), name: s("name"), summary: s("summary"), detail: b.get("detail").and_then(Value::as_str).map(str::to_string), ..Default::default() })
+                        }
                         Some("text") => {
-                            flush(&mut out, &mut calls, &mut failed);
+                            flush(&mut out, &mut calls, &mut failed, &mut did_ts, calls_t);
                             out.push(Item::Said(s("text")));
                         }
                         Some("thinking") => {
-                            flush(&mut out, &mut calls, &mut failed);
+                            flush(&mut out, &mut calls, &mut failed, &mut did_ts, calls_t);
                             out.push(Item::Thought(s("text")));
                         }
                         _ => {}
@@ -604,11 +621,11 @@ pub fn items(msgs: &[Msg]) -> Vec<Item> {
                 }
             }
             "error" => {
-                flush(&mut out, &mut calls, &mut failed);
+                flush(&mut out, &mut calls, &mut failed, &mut did_ts, calls_t);
                 out.push(Item::Error(text("text")));
             }
             "note" => {
-                flush(&mut out, &mut calls, &mut failed);
+                flush(&mut out, &mut calls, &mut failed, &mut did_ts, calls_t);
                 let t = text("text");
                 if !t.trim().is_empty() {
                     out.push(Item::Note(t));
@@ -616,9 +633,17 @@ pub fn items(msgs: &[Msg]) -> Vec<Item> {
             }
             _ => {}
         }
+        // What this message added: a folded line keeps its first call's time, the rest this one's.
+        while times.len() < out.len() {
+            let t = if matches!(out[times.len()], Item::Did { .. }) { did_ts.pop_front().unwrap_or(t_m) } else { t_m };
+            times.push(t);
+        }
     }
-    flush(&mut out, &mut calls, &mut failed);
-    out
+    flush(&mut out, &mut calls, &mut failed, &mut did_ts, calls_t);
+    while times.len() < out.len() {
+        times.push(did_ts.pop_front().unwrap_or(0));
+    }
+    (out, times)
 }
 
 /// One tool call in words ("Ran `cargo test`"), or several counted by kind.
@@ -1102,6 +1127,22 @@ mod tests {
         // The entered one is the log's now; the one that was out waits for a tap; the last waits.
         assert_eq!(q.waiting.iter().map(|p| (p.text.as_str(), p.failed)).collect::<Vec<_>>(), [("out", true), ("waiting", false)]);
         assert_eq!(q.next(1_000), Some(Step::Type("waiting".into())), "words never typed hold nothing");
+    }
+
+    #[test]
+    fn each_item_keeps_when_it_was_written() {
+        let msg = |id: &str, role: &str, at: &str, body: Value| Msg { id: id.into(), role: role.into(), body, created_at: at.into() };
+        let msgs = [
+            msg("1", "user", "2026-11-25T10:00:00Z", json!({"text": "go"})),
+            msg("2", "assistant", "2026-11-25T10:01:00Z", json!({"blocks": [{"type": "tool_use", "id": "a", "name": "Read", "summary": "x"}]})),
+            msg("3", "assistant", "2026-11-25T10:05:00Z", json!({"blocks": [{"type": "tool_use", "id": "b", "name": "Read", "summary": "y"}, {"type": "text", "text": "done"}]})),
+            msg("4", "note", "", json!({"text": "Interrupted"})),
+        ];
+        let (it, times) = items_timed(&msgs);
+        assert_eq!(it.len(), times.len());
+        let t = |s: &str| parse_ms(s).unwrap();
+        // You, the folded reads (from the first call's time), the words, the note with no time.
+        assert_eq!(times, [t("2026-11-25T10:00:00Z"), t("2026-11-25T10:01:00Z"), t("2026-11-25T10:05:00Z"), 0]);
     }
 
     #[test]

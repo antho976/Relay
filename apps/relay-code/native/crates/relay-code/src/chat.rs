@@ -49,6 +49,10 @@ pub struct State {
     moving: bool,
     /// The item being drawn (its place in the whole list), for a fold inside it.
     drawing: usize,
+    /// When each item shown was written (ms; 0 unknown), for day names and the long press.
+    times: Rc<Vec<u64>>,
+    /// A long press's menu: the item (its place among those shown) and where the finger was.
+    pub menu: Option<(usize, f32)>,
     /// Items whose fold changed: only they are measured again, on the next frame.
     refolded: HashSet<usize>,
     pub model_sheet: bool,
@@ -81,7 +85,7 @@ impl State {
     }
 
     pub fn close_over(&mut self) -> bool {
-        std::mem::take(&mut self.model_sheet)
+        std::mem::take(&mut self.model_sheet) | self.menu.take().is_some()
     }
 }
 
@@ -140,6 +144,74 @@ fn header(app: &mut App, a: Option<&Agent>, name: &str) {
 /// Heights and drawing share one walk: `draw` false only measures.
 fn item(app: &mut App, it: &Item, index: usize, y: f32, draw: bool) -> f32 {
     app.st.chat.drawing = index;
+    // A new day starts here: its name above, as Claude's app does.
+    let mut top = 0.0;
+    if let Some(day) = day_break(app, index) {
+        if draw {
+            app.canvas.text(&day, WIDTH / 2.0, y + 12.0, Text::new(ty::SMALL, t::INK3).medium().center());
+        }
+        top = DAY_H;
+    }
+    top + item_body(app, it, index, y + top, draw)
+}
+
+/// The room a day's name takes above its first message.
+const DAY_H: f32 = 40.0;
+
+/// The day's name when item `index` is the first of a day: the first one there is, or one
+/// written on another day than the one before it.
+fn day_break(app: &App, index: usize) -> Option<String> {
+    let times = &app.st.chat.times;
+    let j = index.checked_sub(app.st.chat.base)?;
+    let t = *times.get(j).filter(|t| **t > 0)?;
+    let prev = times[..j].iter().rev().find(|t| **t > 0).copied();
+    let first_ever = j == 0 && app.st.chat.base == 0;
+    match prev {
+        Some(p) if local(p).map(|l| (l.year, l.yday)) == local(t).map(|l| (l.year, l.yday)) => None,
+        None if !first_ever => None,
+        _ => Some(day_name(t, rc_link::link::now_ms())),
+    }
+}
+
+/// A moment in the phone's own time zone.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Local {
+    pub year: i32,
+    pub yday: i32,
+    pub month: usize,
+    pub mday: i32,
+    pub wday: usize,
+    pub hour: i32,
+    pub min: i32,
+}
+
+/// `ms` since 1970 in the phone's time zone (the C library's, as Android sets it).
+pub fn local(ms: u64) -> Option<Local> {
+    let secs = (ms / 1000) as libc::time_t;
+    // SAFETY: localtime_r writes only to the tm it is given and reads the zone the process has.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let ok = unsafe { !libc::localtime_r(&secs, &mut tm).is_null() };
+    ok.then(|| Local { year: tm.tm_year + 1900, yday: tm.tm_yday, month: tm.tm_mon.clamp(0, 11) as usize, mday: tm.tm_mday, wday: tm.tm_wday.clamp(0, 6) as usize, hour: tm.tm_hour, min: tm.tm_min })
+}
+
+/// "Today", "Yesterday", "Mon 24 Nov", or with its year when it is another year's.
+pub fn day_name(ms: u64, now_ms: u64) -> String {
+    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let (Some(d), Some(now)) = (local(ms), local(now_ms)) else { return String::new() };
+    let yesterday = local(now_ms.saturating_sub(86_400_000));
+    if (d.year, d.yday) == (now.year, now.yday) {
+        "Today".into()
+    } else if yesterday.is_some_and(|y| (y.year, y.yday) == (d.year, d.yday)) {
+        "Yesterday".into()
+    } else if d.year == now.year {
+        format!("{} {} {}", DAYS[d.wday], d.mday, MONTHS[d.month])
+    } else {
+        format!("{} {} {} {}", DAYS[d.wday], d.mday, MONTHS[d.month], d.year)
+    }
+}
+
+fn item_body(app: &mut App, it: &Item, index: usize, y: f32, draw: bool) -> f32 {
     let c_w = WIDTH - 2.0 * t::PAD;
     match it {
         Item::You(text) => bubble(app, text, y, draw),
@@ -493,6 +565,80 @@ fn question_words(app: &mut App, q: &str, x: f32, y: f32, w: f32, draw: bool) ->
 
 /// How long a finger rests on a message before it is copied.
 const HOLD_NS: u64 = 450_000_000;
+
+/// Where the long press's menu sits, from where the finger was.
+pub fn menu_rect(app: &App) -> Option<[f32; 4]> {
+    let (j, fy) = app.st.chat.menu?;
+    let mine = matches!(app.st.chat.items.get(j), Some(Item::You(_)));
+    let (w, h) = (220.0, MENU_H);
+    let x = if mine { WIDTH - t::PAD - w } else { t::PAD };
+    let lo = app.canvas.inset_top + TOP_H + 8.0;
+    let hi = app.st.chat.box_top - 8.0 - h;
+    Some([x, (fy - h - 12.0).max(lo).min(hi.max(lo)), w, h])
+}
+
+const MENU_H: f32 = 36.0 + 2.0 * 44.0 + 8.0;
+
+/// A long press's menu: when the message was written, Copy (as written, Markdown kept) and Copy
+/// as text (the words as read). It takes every tap while open: a row, or anywhere to close it.
+fn message_menu(app: &mut App) {
+    let Some([x, y, w, h]) = menu_rect(app) else { return };
+    let Some((j, _)) = app.st.chat.menu else { return };
+    let Some(it) = app.st.chat.items.get(j).cloned() else {
+        app.st.chat.menu = None;
+        return;
+    };
+    let screen = app.canvas.h;
+    app.canvas.dy = 0.0;
+    kit::above(&mut crate::cx!(app), crate::ui::layer::POPUP, [-1000.0, 0.0, WIDTH + 2000.0, screen]);
+    app.canvas.shadow(x, y, w, h, 14.0, 20.0, crate::draw::Rgba::hex(0x000000).a(0.45));
+    app.canvas.rect(x, y, w, h, 14.0, t::PANEL);
+    app.canvas.outline(x, y, w, h, 14.0, 1.0, t::LINE);
+    let when = app.st.chat.times.get(j).copied().filter(|t| *t > 0).and_then(|t| local(t).map(|l| format!("{}, {:02}:{:02}", day_name(t, rc_link::link::now_ms()), l.hour, l.min)));
+    app.canvas.text_fit(when.as_deref().unwrap_or("When: not in the log"), x + 16.0, y + 11.0, w - 32.0, Text::new(ty::SMALL, t::INK3).medium());
+    let mut pick = None;
+    for (k, (words, glyph)) in [("Copy", "copy"), ("Copy as text", "file-text")].iter().enumerate() {
+        let ry = y + 36.0 + k as f32 * 44.0;
+        let mut cx = crate::cx!(app);
+        if cx.pressed(x + 4.0, ry, w - 8.0, 44.0) {
+            cx.c.rect(x + 4.0, ry, w - 8.0, 44.0, 10.0, t::S2);
+        }
+        cx.c.icon(glyph, x + 24.0, ry + 22.0, 14.0, t::INK2);
+        cx.c.text(words, x + 42.0, ry + (44.0 - Text::new(ty::UI, t::INK).lh()) / 2.0, Text::new(ty::UI, t::INK));
+        if cx.tap(x + 4.0, ry, w - 8.0, 44.0) {
+            pick = Some(k);
+        }
+    }
+    if let Some(k) = pick {
+        let words = if k == 0 { copy_words(&it) } else { plain_words(&it) };
+        if let Some(words) = words {
+            app.host.copy_text(&words);
+            app.toast("Copied");
+        }
+        app.st.chat.menu = None;
+    } else if app.ui.tap_here().is_some() {
+        // Anywhere else closes it, and reaches nothing under it.
+        app.ui.swallow();
+        app.st.chat.menu = None;
+    }
+}
+
+/// What "Copy as text" copies: the words as read, without Markdown's marks (a table's cells
+/// apart by tabs, code as it is).
+fn plain_words(it: &Item) -> Option<String> {
+    let Item::Said(md) = it else { return copy_words(it) };
+    let flat = |s: &str| data::spans(s).into_iter().map(|sp| sp.text).collect::<String>();
+    let parts: Vec<String> = data::pieces(md)
+        .into_iter()
+        .map(|p| match p {
+            Piece::Prose(s) | Piece::Heading(s) => flat(&s),
+            Piece::Item { mark, text, depth } => format!("{}{mark} {}", "  ".repeat(depth as usize), flat(&text)),
+            Piece::Code(c) => c,
+            Piece::Table(rows) => rows.iter().map(|r| r.join("\t")).collect::<Vec<_>>().join("\n"),
+        })
+        .collect();
+    Some(parts.join("\n\n"))
+}
 
 /// What a long press on `it` copies: the words as written (markdown kept, so code stays code).
 fn copy_words(it: &Item) -> Option<String> {
@@ -940,13 +1086,15 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     };
     if app.st.chat.shown_from != from {
         let msgs = app.convos.get(name).map(|c| c.msgs.as_slice()).unwrap_or_default();
-        let mut items = data::items(msgs);
+        let (mut items, mut times) = data::items_timed(msgs);
         app.st.chat.todos = items.iter().rev().find_map(|it| match it {
             Item::Did { calls, .. } => calls.iter().rev().find(|c| c.is_todos()).map(|c| data::todos(c.detail.as_deref().unwrap_or_default())),
             _ => None,
         });
         let base = items.len().saturating_sub(SHOWN);
         items.drain(..base);
+        times.drain(..base);
+        app.st.chat.times = Rc::new(times);
         app.st.chat.last_said_ms = msgs.iter().rev().find(|m| m.role == "user").and_then(|m| data::parse_ms(&m.created_at));
         // What was already measured keeps its height: a new message measures itself alone.
         let (old, old_base, old_h) = (app.st.chat.items.clone(), app.st.chat.base, app.st.chat.heights.clone());
@@ -1027,16 +1175,16 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
         if y + h >= screen_top && y <= screen_bottom {
             item(app, it, base + i, y, true);
         }
-        if held.is_some_and(|hy| hy >= y && hy < y + h) {
-            copy = copy_words(it);
+        if let Some(hy) = held.filter(|hy| *hy >= y && *hy < y + h && copy_words(it).is_some()) {
+            copy = Some((i, hy - off));
         }
         y += h;
     }
-    if let Some(words) = copy {
+    // A finger held still on a message: its time, and Copy, in a small menu.
+    if let Some(at) = copy {
         app.ui.swallow();
         app.host.haptic();
-        app.host.copy_text(&words);
-        app.toast("Copied");
+        app.st.chat.menu = Some(at);
     }
     let mut retry = None;
     for (i, p) in waiting.iter().enumerate() {
@@ -1096,6 +1244,9 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     }
     if app.st.chat.model_sheet {
         model_picker(app, name, agent.as_ref());
+    }
+    if app.st.chat.menu.is_some() {
+        message_menu(app);
     }
     moving
 }
@@ -1658,6 +1809,16 @@ mod tests {
         assert_eq!(effort_tick(&mut a, "umber-zebra", Some(&ag)), Some("high"));
         assert!(!a.efforts.contains_key("umber-zebra"), "reported: the PC's word from now on");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn days_are_named_as_people_say_them() {
+        let now = 1_795_000_000_000u64;
+        assert_eq!(day_name(now, now), "Today");
+        assert_eq!(day_name(now - 86_400_000, now), "Yesterday");
+        let n = day_name(now - 3 * 86_400_000, now);
+        assert!(n.split(' ').count() == 3, "a weekday, a date and a month: {n}");
+        assert!(day_name(now - 400 * 86_400_000, now).ends_with(&local(now - 400 * 86_400_000).unwrap().year.to_string()));
     }
 
     #[test]

@@ -146,3 +146,26 @@ pub fn markdown(app: &mut App) {
     app.convos.insert("swift-ocelot".into(), c);
     app.screens.insert("swift-ocelot".into(), crate::screen::read("────\n❯ \n────\n  ? for shortcuts"));
 }
+
+/// A conversation over three days, for day names and the long press's menu (A9). On swift-ocelot.
+pub fn days(app: &mut App) {
+    let now = rc_link::link::now_ms();
+    let at = |ago_ms: u64| {
+        let s = (now - ago_ms) / 1000;
+        let (y, m, d) = civil((s / 86_400) as i64);
+        let r = s % 86_400;
+        format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", r / 3600, r / 60 % 60, r % 60)
+    };
+    let day = 86_400_000;
+    let mut c = Convo::default();
+    c.take(&json!({"messages": [
+        {"id": "d1", "role": "user", "body": {"text": "Start on the drafts"}, "created_at": at(3 * day)},
+        {"id": "d2", "role": "assistant", "body": {"blocks": [{"type": "text", "text": "Each agent keeps its own draft now."}]}, "created_at": at(3 * day - 60_000)},
+        {"id": "d3", "role": "user", "body": {"text": "And across restarts?"}, "created_at": at(day + 600_000)},
+        {"id": "d4", "role": "assistant", "body": {"blocks": [{"type": "text", "text": "Yes: they are written a second after they change, and when the app goes away."}]}, "created_at": at(day)},
+        {"id": "d5", "role": "user", "body": {"text": "Ship it"}, "created_at": at(120_000)},
+        {"id": "d6", "role": "assistant", "body": {"blocks": [{"type": "text", "text": "Committed and reported."}]}, "created_at": at(60_000)},
+    ], "cursor": 1, "reset": true, "found": true}));
+    app.convos.insert("swift-ocelot".into(), c);
+    app.screens.insert("swift-ocelot".into(), crate::screen::read("────\n❯ \n────\n  ? for shortcuts"));
+}
