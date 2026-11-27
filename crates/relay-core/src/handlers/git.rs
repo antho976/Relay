@@ -274,6 +274,7 @@ pub fn register(e: &mut Engine) {
             truncated: (files.len() as u64) < total,
             total,
             files,
+            operation: operation_in(repo.git_dir()),
         })
     });
     e.register_unlocked::<Diff>(|ctx, p| {
@@ -779,6 +780,28 @@ pub fn register(e: &mut Engine) {
             Ok(relay_bus::Empty {})
         },
     );
+    // `git pull --ff-only`: network and hooks, never under the store lock.
+    e.register_staged::<Pull, _>(
+        |ctx, p| {
+            let (project, root) = resolve_root_unlocked(ctx, p.project_id, p.worktree.as_deref())?;
+            let repo = gix::open(&root).map_err(gix_err("git.open_failed"))?;
+            if repo.head_name().ok().flatten().is_none() {
+                return Err(BusError::conflict("git.detached", "a detached HEAD has no branch to pull into"));
+            }
+            let mut command = push_command(&root, &["pull", "--ff-only"]);
+            // Its refusals are told apart by their English text, which gettext would translate.
+            command.env("LC_ALL", "C").env("LANGUAGE", "C");
+            let out = crate::proc::output_with_timeout(&mut command, std::time::Duration::from_secs(600))
+                .map_err(|error| BusError::unavailable("git.pull_failed", error.to_string()))?
+                .ok_or_else(|| BusError::unavailable("git.pull_failed", "git pull did not finish within 10 minutes; check the branch before pulling again"))?;
+            let up_to_date = pull_outcome(out.status.success(), &String::from_utf8_lossy(&out.stdout), &String::from_utf8_lossy(&out.stderr))?;
+            Ok((project, root, up_to_date))
+        },
+        |ctx: &mut Ctx, _p, (project, root, up_to_date)| {
+            changed(ctx, project.id, &root);
+            Ok(PullOut { up_to_date })
+        },
+    );
     e.register_unlocked::<PrList>(|ctx, p| {
         let project = ctx.read(|conn| get_project(conn, p.project_id))?;
         let repo = Path::new(&project.path);
@@ -1028,6 +1051,49 @@ impl Pending {
     fn read(root: &Path, git_dir: &Path) -> Pending {
         Pending { merge: read_merge_head(git_dir), pick: ref_oid(root, "CHERRY_PICK_HEAD"), revert: ref_oid(root, "REVERT_HEAD") }
     }
+}
+
+/// What a pull came to: up to date or moved forward, or why it could not, in words a person can
+/// act on.
+fn pull_outcome(ok: bool, stdout: &str, stderr: &str) -> Result<bool, BusError> {
+    if ok {
+        return Ok(stdout.contains("Already up to date") || stdout.contains("Already up-to-date"));
+    }
+    let lower = stderr.to_lowercase();
+    if lower.contains("not possible to fast-forward") || lower.contains("diverging branches") {
+        return Err(BusError::conflict(
+            "git.pull_not_fast_forward",
+            "This branch and its upstream have both moved, so it cannot simply move forward. Merge or rebase it on the PC.",
+        ));
+    }
+    if lower.contains("no tracking information") {
+        return Err(BusError::conflict("git.pull_no_upstream", "This branch has no upstream to pull from. Push it first."));
+    }
+    if lower.contains("would be overwritten") {
+        return Err(BusError::conflict(
+            "git.pull_would_overwrite",
+            "The pull would overwrite changes not committed here. Commit them or put them aside first.",
+        ));
+    }
+    Err(BusError::conflict("git.pull_failed", format!("git pull failed: {}", stderr.trim())))
+}
+
+/// What a checkout is in the middle of, from what git leaves in its own git dir meanwhile. Files
+/// only: no process for a query asked on every refresh. (A reftable repository keeps
+/// CHERRY_PICK_HEAD and REVERT_HEAD in its tables, so those two read as none there.)
+fn operation_in(git_dir: &Path) -> Option<String> {
+    let op = if git_dir.join("rebase-merge").is_dir() || git_dir.join("rebase-apply").is_dir() {
+        "rebase"
+    } else if git_dir.join("MERGE_HEAD").is_file() {
+        "merge"
+    } else if git_dir.join("CHERRY_PICK_HEAD").is_file() {
+        "cherry_pick"
+    } else if git_dir.join("REVERT_HEAD").is_file() {
+        "revert"
+    } else {
+        return None;
+    };
+    Some(op.to_string())
 }
 
 fn read_merge_head(git_dir: &Path) -> Option<String> {
@@ -2543,6 +2609,32 @@ fn branches_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pull_says_plainly_why_it_could_not_move_forward() {
+        assert!(pull_outcome(true, "Already up to date.\n", "").unwrap());
+        assert!(!pull_outcome(true, "Updating 1a2b..3c4d\nFast-forward\n", "").unwrap());
+        let code = |stderr: &str| pull_outcome(false, "", stderr).unwrap_err().code;
+        assert_eq!(code("hint: Diverging branches can't be fast-forwarded\nfatal: Not possible to fast-forward, aborting.\n"), "git.pull_not_fast_forward");
+        assert_eq!(code("There is no tracking information for the current branch.\n"), "git.pull_no_upstream");
+        assert_eq!(code("error: Your local changes to the following files would be overwritten by merge:\n\ta.rs\n"), "git.pull_would_overwrite");
+        assert_eq!(code("fatal: unable to access 'https://x/': Could not resolve host"), "git.pull_failed");
+    }
+
+    #[test]
+    fn a_checkout_in_the_middle_of_something_says_what() {
+        let dir = tempfile::tempdir().unwrap();
+        let g = dir.path();
+        assert_eq!(operation_in(g), None);
+        std::fs::write(g.join("MERGE_HEAD"), "abc\n").unwrap();
+        assert_eq!(operation_in(g).as_deref(), Some("merge"));
+        std::fs::create_dir(g.join("rebase-merge")).unwrap();
+        assert_eq!(operation_in(g).as_deref(), Some("rebase"), "a rebase stopped on a merge is a rebase");
+        std::fs::remove_dir(g.join("rebase-merge")).unwrap();
+        std::fs::remove_file(g.join("MERGE_HEAD")).unwrap();
+        std::fs::write(g.join("CHERRY_PICK_HEAD"), "abc\n").unwrap();
+        assert_eq!(operation_in(g).as_deref(), Some("cherry_pick"));
+    }
 
     #[test]
     fn checks_read_as_gh_writes_them_and_only_a_failed_required_one_holds_a_merge() {

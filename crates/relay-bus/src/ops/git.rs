@@ -55,6 +55,10 @@ result!(#[schemars(rename = "GitStatusOut")] StatusOut {
     /// How many entries git reported, `files` included; more than `files.len()` when truncated.
     #[serde(default)]
     pub total: u64,
+    /// What the checkout is in the middle of, when anything: `merge`, `rebase` (or `git am`),
+    /// `cherry_pick` or `revert`, from the files git keeps in its git dir while it waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
 });
 op!(Status, "git.status", WtIn => StatusOut, OpMeta::query(Scope::Project, 8, "Working tree status (gix)"));
 payload!(#[schemars(rename = "GitDiffIn")] DiffIn { pub project_id: Id, pub worktree: Option<String>, pub base: Option<String>, pub staged: Option<bool> });
@@ -138,6 +142,11 @@ result!(#[schemars(rename = "GitFetchOut")] FetchOut { pub ahead: Option<i64>, p
 op!(Fetch, "git.fetch", ProjectIn => FetchOut, OpMeta::mutation(Scope::Project, 8, "Fetch upstream").audit(Audit::AgentOnly).emits(&["git.changed"]));
 payload!(#[schemars(rename = "GitPushIn")] PushIn { pub project_id: Id, pub worktree: Option<String>, pub set_upstream: Option<bool> });
 op!(Push, "git.push", PushIn => Empty, OpMeta::mutation(Scope::Project, 8, "Push (system git)").emits(&["git.changed"]));
+result!(#[schemars(rename = "GitPullOut")] PullOut {
+    /// Already level with its upstream: nothing moved.
+    pub up_to_date: bool,
+});
+op!(Pull, "git.pull", WtIn => PullOut, OpMeta::mutation(Scope::Project, 8, "Fast-forward the branch to its upstream (git pull --ff-only); refused when it cannot simply move forward").emits(&["git.changed"]));
 result!(#[schemars(rename = "GitPullRequest")] PullRequest {
     pub number: u64,
     pub branch: String,
@@ -263,6 +272,7 @@ entries!(
     CommitOp,
     Fetch,
     Push,
+    Pull,
     PrList,
     PrOpen,
     PrChecks,
