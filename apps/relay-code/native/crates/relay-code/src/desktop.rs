@@ -331,6 +331,16 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.st.fileview = Default::default();
             app.st.terminal = Default::default();
         }
+        if st == "error" {
+            // A17: the chat's own errors, on whichever chat is open.
+            if let Some(name) = app.open_chat() {
+                let mut q = crate::data::Sending::default();
+                q.push("Push it when the tests pass", 0);
+                q.waiting[0].failed = true;
+                app.sending.insert(name.clone(), q);
+                app.chat_errors.insert(name, "Its log file is missing: the agent was started outside Relay, or the log was moved.".into());
+            }
+        }
         if st == "connecting" {
             app.projects.clear();
             app.repo = None;

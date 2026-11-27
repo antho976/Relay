@@ -140,10 +140,14 @@ fn header(app: &mut App, a: Option<&Agent>, name: &str) {
         app.st.drawer.open = true;
     }
     let title = a.map_or(name, Agent::title).to_string();
-    let sub = match a {
+    // Out of reach, the PC's last word on it is old: the header says where the link stands.
+    let reach = crate::home::reach(app);
+    let sub = match (a, &reach) {
+        (Some(a), Some((_, words))) => format!("{} · {words}", a.name),
         // Its terminal says when it works (`app.busy`): the list's freshness can lag it.
-        Some(a) => format!("{} · {} · {}", a.name, app.repo_name(), if a.alive() && !a.needs_you() && app.busy(name) { "working" } else { a.state_words() }),
-        None => name.to_string(),
+        (Some(a), None) => format!("{} · {} · {}", a.name, app.repo_name(), if a.alive() && !a.needs_you() && app.busy(name) { "working" } else { a.state_words() }),
+        (None, Some((_, words))) => words.clone(),
+        (None, None) => String::new(),
     };
     let mut x = 56.0;
     if let Some(a) = a {
@@ -156,7 +160,11 @@ fn header(app: &mut App, a: Option<&Agent>, name: &str) {
         crate::agents::more_key(app, a, WIDTH - 50.0, y + 1.0);
     }
     app.canvas.text_fit(&title, x, y + 2.0, w, Text::new(ty::BODY + 1.0, t::INK).semi());
-    let sub_ink = if a.is_some_and(Agent::needs_you) { t::WARN } else { t::INK3 };
+    let sub_ink = match &reach {
+        Some((ink, _)) => *ink,
+        None if a.is_some_and(Agent::needs_you) => t::WARN,
+        None => t::INK3,
+    };
     app.canvas.text_fit(&sub, x, y + 24.0, w, Text::new(ty::CAPTION, sub_ink));
 }
 
@@ -1396,6 +1404,8 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     // A stopped or closed agent reads, with Resume in place of the message box (D1).
     let stopped = agent.as_ref().filter(|a| !crate::agents::live(a)).cloned();
     let working = app.busy(name);
+    // Away from the PC: the agent was last seen working, frozen there (not animated).
+    let last_working = !working && !app.link_state.online() && app.screens.get(name).is_some_and(|s| s.status.is_some());
     let asking = agent.as_ref().is_some_and(Agent::needs_you);
 
     // The composer's height first: the page ends above it.
@@ -1522,7 +1532,7 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     for p in &waiting {
         total += bubble(app, &p.text, 0.0, false) + 18.0;
     }
-    if working {
+    if working || last_working {
         total += 40.0;
     }
     if items.is_empty() && waiting.is_empty() {
@@ -1649,6 +1659,15 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     if working {
         live_status(app, name, scr.status.as_ref(), y);
         y += 40.0;
+    } else if last_working {
+        let ago = app.screen_age_ms(name).map(|ms| match ms / 60_000 {
+            0 => " · just now".to_string(),
+            m if m < 60 => format!(" · {m}m ago"),
+            m => format!(" · {}h ago", m / 60),
+        });
+        app.canvas.icon("claude", t::PAD + 10.0, y + 20.0, 17.0, t::INK3);
+        app.canvas.text(&format!("Last seen working{}", ago.unwrap_or_default()), t::PAD + 28.0, y + 11.0, Text::new(ty::CAPTION, t::INK3).medium());
+        y += 40.0;
     }
     app.page_end(&page, y + 8.0);
     app.canvas.dy = 0.0;
@@ -1664,7 +1683,17 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
         app.outbox_changed();
     }
 
-    if loading {
+    if let Some(why) = app.chat_errors.get(name).cloned() {
+        // The PC could not read this conversation: said once, at the top, until it can.
+        let st = Text::new(ty::SMALL, t::INK2);
+        let w = WIDTH - 2.0 * t::PAD;
+        let h = app.canvas.para_h(&why, w - 40.0, st, 3) + 34.0;
+        let (lx, ly) = (t::PAD, page.top + 8.0);
+        app.canvas.rect(lx, ly, w, h, 12.0, t::S1);
+        app.canvas.circle(lx + 16.0, ly + 17.0, 4.0, t::DANGER);
+        app.canvas.text("The PC could not read this conversation", lx + 28.0, ly + 9.0, Text::new(ty::SMALL, t::INK).medium());
+        app.canvas.para(&why, lx + 28.0, ly + 27.0, w - 40.0, st, 3);
+    } else if loading {
         // Earlier messages on their way: a quiet line at the top of the page.
         let st = Text::new(ty::SMALL, t::INK3).medium();
         let words = "Loading earlier messages";
@@ -2556,6 +2585,26 @@ mod tests {
         // Back closes it.
         assert!(a.st.chat.close_over());
         assert!(a.st.chat.find.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn away_from_the_pc_the_chat_says_so_and_stops_moving() {
+        let (mut a, dir) = fresh_app("away");
+        a.sample();
+        a.open("bold-puffin");
+        a.frame(2_000_000_000);
+        assert!(a.busy("bold-puffin"), "the sample's foot says Crunching");
+        a.set_link_state(rc_link::LinkState::Offline { reason: "gone".into(), retry_at_ms: 0 });
+        assert!(!a.busy("bold-puffin"), "out of reach, the last foot is old news");
+        assert!(crate::home::reach(&a).is_some_and(|(_, w)| w == "PC out of reach"));
+        // Away, nothing animates: no wake is asked for the live line.
+        let next = a.frame(2_100_000_000);
+        assert!(!matches!(next, crate::app::Next::At(t) if t < 2_100_000_000 + 1_000_000_000), "{next:?}");
+        // A log the PC could not read is said until it can.
+        a.chat_errors.insert("bold-puffin".into(), "missing".into());
+        a.took_transcript("bold-puffin", &serde_json::json!({"messages": [], "cursor": 3, "reset": false, "found": true}));
+        assert!(!a.chat_errors.contains_key("bold-puffin"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

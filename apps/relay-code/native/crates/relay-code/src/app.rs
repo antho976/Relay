@@ -225,6 +225,8 @@ pub struct App {
     pub repo: Option<i64>,
     pub convos: HashMap<String, Convo>,
     pub sending: HashMap<String, Sending>,
+    /// Why the PC could not read a conversation, until it next can.
+    pub chat_errors: HashMap<String, String>,
     /// When each terminal's foot was read (ns).
     screens_at: HashMap<String, u64>,
     /// Chats' copies being read off the UI thread ([`App::open`]).
@@ -359,6 +361,7 @@ impl App {
             outbox_at: None,
             opening: Vec::new(),
             screens_at: HashMap::new(),
+            chat_errors: HashMap::new(),
             screens: HashMap::new(),
             efforts: HashMap::new(),
             busy_since: HashMap::new(),
@@ -531,6 +534,10 @@ impl App {
         // after a read elsewhere. Past that it is stale (an agent last seen working would show
         // working for ever).
         let fresh = self.open_chat().as_deref() == Some(name) || self.screens_at.get(name).is_some_and(|t| self.now_ns.saturating_sub(*t) < SCREEN_FRESH_NS);
+        // Out of reach, the last foot read is old news: no live line from it.
+        if !self.link_state.online() {
+            return false;
+        }
         if !self.no_screen
             && fresh
             && let Some(s) = self.screens.get(name)
@@ -609,6 +616,7 @@ impl App {
     /// An answer of `session.transcript` for `name`: what came in joins its conversation, and what
     /// you sent that it now holds stops waiting.
     pub fn took_transcript(&mut self, name: &str, v: &Value) {
+        self.chat_errors.remove(name);
         let c = self.convos.entry(name.to_string()).or_default();
         let before = (c.msgs.len(), c.msgs.last().map(|m| m.id.clone()), c.cursor);
         // A reset (a first read, `/clear`, a new log) holds every message of yours already
@@ -653,6 +661,11 @@ impl App {
         self.no_chat_send = false;
         self.changed.insert("*".into());
         self.refresh();
+    }
+
+    /// How long ago `name`'s terminal foot was read (ms), when it was.
+    pub fn screen_age_ms(&self, name: &str) -> Option<u64> {
+        self.screens_at.get(name).map(|t| self.now_ns.saturating_sub(*t) / 1_000_000)
     }
 
     /// What `name`'s terminal shows at its foot, read now.
@@ -904,6 +917,10 @@ impl App {
                     self.st.agents.confirm = Some((name, crate::agents::Confirm::Discard));
                 }
                 (Ask::Create | Ask::Spawn(_) | Ask::Resume(_) | Ask::Park(_) | Ask::Close(_), Err(e)) => self.toast(&e.message),
+                // A conversation the PC could not read (not a dropped link): the chat says so.
+                (Ask::Transcript(name), Err(e)) if !e.transient() => {
+                    self.chat_errors.insert(name, e.message);
+                }
                 (_, Err(e)) => self.host.log(&format!("{}: {}", e.code, e.message)),
             }
         }
