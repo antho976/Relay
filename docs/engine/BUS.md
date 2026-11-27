@@ -1071,7 +1071,7 @@ at it; one moved by hand without `git worktree move` is refused until `git workt
 | op | attrs | payload → result |
 |---|---|---|
 | `file.tree` | query | `{ project_id, worktree?, path? = "", depth? = 1, git_badges? = true, limit? (2000, ≤5000) }` → `{ entries: Entry[], truncated?: {path: total} }` (optional git badges; omits VCS metadata and high-churn build/cache directories). Each directory lists at most `limit` entries, folders first; one cut short is named in `truncated` with its full count |
-| `file.read` | query | `{ project_id, worktree?, path, max_bytes?, rev? }` → `{ text?, bytes_b64?, mime, size, truncated }` — with `rev` (a commit, branch or `HEAD`), the file as that revision holds it, read from git (gix), not from disk: `file.not_found` when it does not hold the path, `file.rev` when it is no revision |
+| `file.read` | query | `{ project_id, worktree?, path, max_bytes?, rev? }` → `{ text?, bytes_b64?, mime, size, truncated }` — with `rev` (a commit, branch or `HEAD`), the file as that revision holds it, read from git (gix), not from disk: `file.not_found` when it does not hold the path, `file.rev` when it is no revision, `file.too_large` past 32 MB (its size read from the object's header, nothing loaded) |
 | `file.write` | mutation · always · project | `{ project_id, worktree?, path, text }` → `{ bytes, removed_lines, added_lines }` — guardrails §9.2 |
 | `file.create` | mutation · always | `{ project_id, worktree?, path, kind: "file"\|"dir", text? }` → `Entry` |
 | `file.rename` | mutation · always | `{ project_id, worktree?, path, new_name }` → `Entry` |

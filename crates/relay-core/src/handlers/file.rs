@@ -638,12 +638,24 @@ fn read_at(root: &Path, rev: &str, rel: &Path, limit: u64) -> Result<(Vec<u8>, u
     if !entry.mode().is_blob() {
         return Err(BusError::invalid("file.type", "path is not a file at that revision"));
     }
-    let blob = entry.object().map_err(|e| BusError::unavailable("file.read_failed", e.to_string()))?;
-    let size = blob.data.len() as u64;
-    let mut bytes = blob.data.clone();
+    // Its size from the object's header, before anything is loaded: git keeps a packed blob
+    // compressed whole, so reading part of it means reading it all. Past what file.read ever
+    // answers it is refused, never loaded (a 300 MB file was 600 MB here for an 8 MB answer).
+    let size = repo.find_header(entry.object_id()).map_err(|e| BusError::unavailable("file.read_failed", e.to_string()))?.size();
+    if size > REV_READ_MAX {
+        return Err(BusError::refused(
+            "file.too_large",
+            format!("{} is {} MB at {rev}: too large to read from git (at most {} MB)", rel.display(), size >> 20, REV_READ_MAX >> 20),
+        ));
+    }
+    // Its own bytes, truncated in place: no second copy.
+    let mut bytes = entry.object().map_err(|e| BusError::unavailable("file.read_failed", e.to_string()))?.detach().data;
     bytes.truncate(limit as usize);
     Ok((bytes, size))
 }
+
+/// The largest blob `file.read` with `rev` loads: what it answers at most.
+const REV_READ_MAX: u64 = 32 * 1024 * 1024;
 
 /// The one spelling that means "the project root, deliberately".
 pub(crate) const PROJECT_ROOT: &str = "@project";

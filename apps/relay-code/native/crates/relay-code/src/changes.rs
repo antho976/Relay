@@ -286,19 +286,24 @@ pub fn decode_side(bytes: &[u8]) -> Decoded {
 
 /// A side's answer: its bytes go to a thread to decode, or it says why it can't show.
 fn side_answer(r: Result<Value, rc_link::BusError>) -> PicSide {
-    let v = match r {
+    let mut v = match r {
         Ok(v) => v,
         Err(e) => return PicSide::Failed(crate::errors::words(&e)),
     };
     if v.get("truncated").and_then(Value::as_bool) == Some(true) {
         return PicSide::Failed("Too large to show here: over 8 MB.".into());
     }
-    let Some(bytes) = v.get("bytes_b64").and_then(Value::as_str).and_then(crate::design_paint::pictures::base64_decode) else {
+    // Its text (up to about 11 MB) moves to the thread, where it is unpacked and decoded.
+    let Some(b64) = v.get_mut("bytes_b64").map(Value::take).and_then(|b| b.as_str().map(str::to_string)) else {
         return PicSide::Failed("The picture would not open.".into());
     };
     let (tx, rx) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("change-picture".into()).spawn(move || {
-        let r = std::panic::catch_unwind(|| decode_side(&bytes)).unwrap_or_else(|_| Err("The picture would not open.".into()));
+        let decoded = || match crate::design_paint::pictures::base64_decode(&b64) {
+            Some(bytes) => decode_side(&bytes),
+            None => Err("The picture would not open.".to_string()),
+        };
+        let r = std::panic::catch_unwind(decoded).unwrap_or_else(|_| Err("The picture would not open.".into()));
         let _ = tx.send(r);
         crate::wake::wake();
     });
@@ -2778,7 +2783,20 @@ mod tests {
         tx.send(Ok((2, 2, vec![0; 16]))).unwrap();
         side.step();
         assert!(matches!(side, PicSide::Decoded(2, 2, _)));
-        // Too big to read whole: said so, nothing decoded.
+        // Its text is unpacked and decoded on its own thread: the answer is Decoding at once.
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(crate::designs::SAMPLE_PICTURE);
+        let mut side = side_answer(Ok(json!({"bytes_b64": b64, "mime": "image/jpeg", "size": 1, "truncated": false})));
+        assert!(matches!(side, PicSide::Decoding(_)));
+        for _ in 0..500 {
+            side.step();
+            if !matches!(side, PicSide::Decoding(_)) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(matches!(side, PicSide::Decoded(..)), "decoded off the thread");
+                // Too big to read whole: said so, nothing decoded.
         assert!(matches!(side_answer(Ok(json!({"truncated": true, "size": 30000000}))), PicSide::Failed(w) if w.contains("Too large")));
     }
 
