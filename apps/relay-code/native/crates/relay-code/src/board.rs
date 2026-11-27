@@ -140,6 +140,8 @@ pub struct State {
     loaded: bool,
     pub column: usize,
     tabs: crate::ui::HScroll,
+    /// Why the board could not be read, before it was.
+    pub error: Option<String>,
     list: Option<Call>,
     act: Option<Call>,
     pub comment: String,
@@ -182,7 +184,9 @@ fn take(app: &mut App) {
             Ok(v) => {
                 app.st.board.tasks = tasks(&v);
                 app.st.board.loaded = true;
+                app.st.board.error = None;
             }
+            Err(e) if !app.st.board.loaded => app.st.board.error = Some(e.message),
             Err(e) => app.toast(&e.message),
         }
     }
@@ -259,13 +263,21 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let list: Vec<Task> = app.st.board.tasks.iter().filter(|x| x.column == col).cloned().collect();
     let mut y = page.top + 6.0;
     let mut open = None;
-    if !app.st.board.loaded {
-        let words = if app.online() { "Reading the board…" } else { "The board shows here once the PC answers." };
-        app.canvas.text(words, t::PAD, y + 10.0, Text::new(ty::UI, t::INK3));
-        y += 40.0;
-    } else if list.is_empty() {
-        app.canvas.text(&format!("Nothing in {}.", COLUMNS[app.st.board.column].1), t::PAD, y + 10.0, Text::new(ty::UI, t::INK3));
-        y += 40.0;
+    if !app.st.board.loaded || list.is_empty() {
+        let error = app.st.board.error.clone();
+        let column = COLUMNS[app.st.board.column.min(4)].1;
+        let empty_body = format!("Tasks moved to {column} show here.");
+        let (h, retry) = match (app.st.board.loaded, &error, app.online()) {
+            (true, _, _) => kit::empty(&mut crate::cx!(app), y, &format!("Nothing in {column}"), Some(&empty_body), None),
+            (false, Some(e), online) => kit::problem(&mut crate::cx!(app), y, "The board didn't load", e, online),
+            (false, None, true) => kit::empty(&mut crate::cx!(app), y, "Reading the board…", None, None),
+            (false, None, false) => kit::empty(&mut crate::cx!(app), y, "Waiting for your PC", Some("The board shows here once the PC answers."), None),
+        };
+        if retry {
+            app.st.board.error = None;
+            reload(app);
+        }
+        y += h;
     }
     let tt = Text::new(ty::BODY, t::INK).semi().line(1.35);
     for tk in &list {
@@ -335,13 +347,17 @@ pub fn draw_task(app: &mut App, id: i64, dt: f32) -> bool {
     let read = app.st.board.open.task.clone().filter(|x| x.id == id);
     let Some(tk) = read.clone().or_else(|| app.st.board.tasks.iter().find(|x| x.id == id).cloned()) else {
         let page = app.page_begin(dt, 56.0, 0.0);
-        let words = match &app.st.board.open.error {
-            Some(e) => e.clone(),
-            None if app.online() => "Reading the task…".to_string(),
-            None => "The task shows here once the PC answers.".to_string(),
+        let error = app.st.board.open.error.clone();
+        let (h, retry) = match (&error, app.online()) {
+            (Some(e), online) => kit::problem(&mut crate::cx!(app), page.top, "The task didn't load", e, online),
+            (None, true) => kit::empty(&mut crate::cx!(app), page.top, "Reading the task…", None, None),
+            (None, false) => kit::empty(&mut crate::cx!(app), page.top, "Waiting for your PC", Some("The task shows here once the PC answers."), None),
         };
-        app.canvas.para(&words, t::PAD, page.top + 16.0, WIDTH - 2.0 * t::PAD, Text::new(ty::UI, t::INK3).line(1.45), 4);
-        app.page_end(&page, page.top + 40.0);
+        if retry {
+            app.st.board.open.error = None;
+            reload_task(app, id);
+        }
+        app.page_end(&page, page.top + h);
         back_bar(app, "");
         return page.moving;
     };
@@ -465,6 +481,15 @@ fn events(app: &mut App, x: f32, mut y: f32, w: f32) -> f32 {
         }
     }
     y
+}
+
+/// Errors on the Board and a task for the shot tool (`--state error`).
+pub fn sample_error(app: &mut App) {
+    let st = &mut app.st.board;
+    st.loaded = false;
+    st.tasks.clear();
+    st.error = Some("The PC took too long to answer.".into());
+    st.open = Opened { id: 41, error: Some("Task #41 is not in this repo's board (it may have been deleted).".into()), ..Opened::default() };
 }
 
 /// A pushed page's top: Back and a title.

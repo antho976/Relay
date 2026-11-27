@@ -879,13 +879,14 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     if list.is_empty() {
         let st = &app.st.designs;
         // One shape for every page's empty and problem states (kit::empty, kit::problem).
-        let (h, retry) = if !app.online() && !st.loaded {
+        // Why it failed first: it is the news, whether or not the PC is in reach now.
+        let online = app.online();
+        let (h, retry) = if let (false, Some(e)) = (st.loaded, st.error.clone()) {
+            kit::problem(&mut crate::cx!(app), y, "Designs didn't load", &e, online)
+        } else if !online && !st.loaded {
             kit::empty(&mut crate::cx!(app), y, "Waiting for your PC", Some("Designs show here once the PC answers."), None)
         } else if !st.loaded {
-            match st.error.clone() {
-                Some(e) => kit::problem(&mut crate::cx!(app), y, "Designs didn't load", &e, true),
-                None => kit::empty(&mut crate::cx!(app), y, "Reading designs…", None, None),
-            }
+            kit::empty(&mut crate::cx!(app), y, "Reading designs…", None, None)
         } else {
             kit::empty(&mut crate::cx!(app), y, "No designs in this repo", Some("Designs an agent draws for this repo show here, newest first."), None)
         };
@@ -1334,6 +1335,18 @@ pub fn sample_page() -> Value {
 
 /// Sample designs for the shots (`--shot`): the list (E1), design 44 open (E3); see
 /// [`sample_view`] for E4. Everything is painted in the frame (`inline`).
+/// Errors on Designs for the shot tool (`--state error`): the list, and an open design.
+pub fn sample_error(app: &mut App) {
+    let st = &mut app.st.designs;
+    st.list.clear();
+    st.loaded = false;
+    st.error = Some("design.list failed: the PC's store is busy; try again in a moment.".into());
+    if let Some(o) = st.open.as_mut() {
+        o.plan = None;
+        o.error = Some("This page could not be laid out on the phone".into());
+    }
+}
+
 pub fn sample(app: &mut App) {
     if pictures::status(SAMPLE_SRC) != pictures::Status::Ready {
         pictures::put(SAMPLE_SRC, pictures::decode(SAMPLE_PICTURE, (0, 0)));

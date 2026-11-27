@@ -341,6 +341,15 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
                 app.chat_errors.insert(name, "Its log file is missing: the agent was started outside Relay, or the log was moved.".into());
             }
         }
+        // Each page's error, so its problem state can be looked at (C16).
+        if st == "error" {
+            crate::changes::sample_error(&mut app);
+            crate::board::sample_error(&mut app);
+            crate::fileview::sample_error(&mut app);
+            crate::designs::sample_error(&mut app);
+            crate::inbox::sample_error(&mut app);
+            app.agents.clear();
+        }
         if st == "connecting" {
             app.projects.clear();
             app.repo = None;
