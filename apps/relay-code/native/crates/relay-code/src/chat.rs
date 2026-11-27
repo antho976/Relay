@@ -53,6 +53,8 @@ pub struct State {
     times: Rc<Vec<u64>>,
     /// A long press's menu: the item (its place among those shown) and where the finger was.
     pub menu: Option<(usize, f32)>,
+    /// Find in this conversation (A16), while its bar is open.
+    pub find: Option<Find>,
     /// A long press on a message of yours still waiting: its place in the queue, where the finger was.
     pub queued_menu: Option<(usize, f32)>,
     /// Items whose fold changed: only they are measured again, on the next frame.
@@ -102,7 +104,7 @@ impl State {
     }
 
     pub fn close_over(&mut self) -> bool {
-        std::mem::take(&mut self.model_sheet) | self.menu.take().is_some() | self.queued_menu.take().is_some()
+        std::mem::take(&mut self.model_sheet) | self.menu.take().is_some() | self.queued_menu.take().is_some() | self.find.take().is_some()
     }
 }
 
@@ -668,6 +670,134 @@ fn message_menu(app: &mut App) {
         app.ui.swallow();
         app.st.chat.menu = None;
     }
+}
+
+/// Find in a conversation: what is looked for, the messages that hold it (their keys and places
+/// in the whole log, oldest first), which one is shown, and a pending move to it.
+#[derive(Default, Clone, Debug)]
+pub struct Find {
+    pub query: String,
+    hits: Vec<(String, usize)>,
+    /// For which query and log the hits were found.
+    for_: (String, usize, Option<String>),
+    pub at: usize,
+    jump: Option<String>,
+}
+
+/// The find field's id.
+const FIND: &str = "find";
+const FIND_H: f32 = 52.0;
+
+/// Open the find bar (the chat menu's "Find in chat"), with the keyboard on its field.
+pub fn find_open(app: &mut App) {
+    app.st.chat.find = Some(Find::default());
+    app.focus.id = Some(FIND);
+    app.focus.text.clear();
+    app.focus.kind = Kb::Text;
+    app.focus.sel = None;
+    app.host.keyboard(true, "", Kb::Text);
+}
+
+/// The words a message is found by: as read (Markdown's marks dropped), with a folded line's
+/// calls (what they ran, read or asked).
+fn find_text(it: &Item) -> String {
+    match it {
+        Item::Did { line, calls, .. } => {
+            let mut t = line.clone();
+            for c in calls {
+                t.push('\n');
+                t.push_str(&c.summary);
+                if let Some(d) = &c.detail {
+                    t.push('\n');
+                    t.push_str(d);
+                }
+            }
+            t
+        }
+        other => plain_words(other).unwrap_or_default(),
+    }
+}
+
+/// The messages of `name`'s whole loaded log that hold `query` (any case): keys and places.
+pub fn find_hits(app: &App, name: &str, query: &str) -> Vec<(String, usize)> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Vec::new();
+    }
+    let msgs = app.convos.get(name).map(|c| c.msgs.as_slice()).unwrap_or_default();
+    let (items, _, keys) = data::items_timed(msgs);
+    items.iter().zip(keys).enumerate().filter(|(_, (it, _))| find_text(it).to_lowercase().contains(&q)).map(|(i, (_, k))| (k, i)).collect()
+}
+
+/// The find bar under the top bar: the field, "3 of 12", older and newer, and close. Returns
+/// whether it is open (the page starts under it).
+fn find_bar(app: &mut App, name: &str) {
+    let Some(mut f) = app.st.chat.find.clone() else { return };
+    let y = app.canvas.inset_top + TOP_H;
+    app.canvas.dy = 0.0;
+    app.canvas.rect(-1000.0, y, WIDTH + 2000.0, FIND_H, 0.0, t::BG);
+    kit::above(&mut crate::cx!(app), crate::ui::layer::CHROME, [-1000.0, y, WIDTH + 2000.0, FIND_H]);
+    let (x, w) = (12.0, WIDTH - 24.0);
+    let (fy, fh) = (y + 6.0, 40.0);
+    app.canvas.rect(x, fy, w, fh, 10.0, t::S1);
+    app.canvas.icon("search", x + 18.0, fy + fh / 2.0, 14.0, t::INK3);
+    // The hits follow the words and the log.
+    let log = app.convos.get(name).map(|c| (c.msgs.len(), c.msgs.last().map(|m| m.id.clone()))).unwrap_or_default();
+    let mut q = f.query.clone();
+    let keys_w = 3.0 * 40.0;
+    let count = if f.hits.is_empty() { if q.trim().is_empty() { String::new() } else { "None".into() } } else { format!("{} of {}", f.at + 1, f.hits.len()) };
+    let ct = Text::new(ty::SMALL, t::INK3).medium();
+    let cw = app.canvas.measure(&count, ct);
+    {
+        let mut cx = crate::cx!(app);
+        kit::inline(&mut cx, FIND, x + 34.0, fy, w - 34.0 - keys_w - cw - 12.0, fh, "Find in this chat", &mut q, Kb::Text, Text::new(ty::UI, t::INK));
+    }
+    if (q.clone(), log.0, log.1.clone()) != f.for_ {
+        let fresh = q != f.query;
+        f.hits = find_hits(app, name, &q);
+        f.for_ = (q.clone(), log.0, log.1);
+        if fresh {
+            // The newest first, as a chat is read from its end.
+            f.at = f.hits.len().saturating_sub(1);
+            f.jump = f.hits.last().map(|h| h.0.clone());
+        } else {
+            f.at = f.at.min(f.hits.len().saturating_sub(1));
+        }
+        f.query = q;
+    }
+    app.canvas.text(&count, x + w - keys_w - cw - 4.0, fy + (fh - ct.lh()) / 2.0, ct);
+    let mut step: i32 = 0;
+    for (k, glyph) in ["chevron-up", "chevron-down", "close"].iter().enumerate() {
+        let kx = x + w - keys_w + k as f32 * 40.0;
+        let mut cx = crate::cx!(app);
+        if cx.pressed(kx, fy, 40.0, fh) {
+            cx.c.rect(kx + 2.0, fy + 2.0, 36.0, fh - 4.0, 8.0, t::WASH);
+        }
+        cx.c.icon(glyph, kx + 20.0, fy + fh / 2.0, 13.0, t::INK2);
+        if cx.tap(kx, fy - 6.0, 40.0, fh + 12.0) {
+            step = [-1, 1, 0][k];
+            if k == 2 {
+                app.st.chat.find = None;
+                if app.focus.is(FIND) {
+                    app.finish_typing();
+                }
+                return;
+            }
+        }
+    }
+    if step < 0 {
+        if f.at > 0 {
+            f.at -= 1;
+        } else if !app.read_older(name) {
+            app.toast("No earlier match");
+        }
+    } else if step > 0 && f.at + 1 < f.hits.len() {
+        f.at += 1;
+    }
+    if step != 0 {
+        f.jump = f.hits.get(f.at).map(|h| h.0.clone());
+    }
+    app.st.chat.find = Some(f);
 }
 
 /// Where the waiting message's menu sits.
@@ -1297,7 +1427,8 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     let pin_h = if working && question.is_none() && stopped.is_none() { pinned_h(app) } else { 0.0 };
     let foot_h = if stopped.is_some() { crate::agents::STOPPED_H } else { box_h + 20.0 + ask_h + pin_h + crate::keys::height(app) };
 
-    let page = app.page_begin(dt, TOP_H, foot_h);
+    let find_h = if app.st.chat.find.is_some() { FIND_H } else { 0.0 };
+    let page = app.page_begin(dt, TOP_H + find_h, foot_h);
     // The log is read into items and measured only when it or a fold changed: a long
     // conversation costs nothing per frame but what is on screen.
     let (from, found) = match app.convos.get(name) {
@@ -1401,6 +1532,31 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     let lead = (view - total - 8.0).max(0.0);
     // Kept at the newest until the person scrolls up; back at the bottom, it follows again.
     let max = total + 8.0 - view;
+    // Find: to the match asked for, showing more of the log first when it is older than that.
+    if let Some(key) = app.st.chat.find.as_ref().and_then(|f| f.jump.clone()) {
+        match app.st.chat.keys.iter().position(|k| *k == key) {
+            Some(j) => {
+                let at: f32 = lead + heights[..j].iter().sum::<f32>() - 12.0;
+                app.st.chat.unstuck = true;
+                app.scroll().off = at.clamp(0.0, max.max(0.0));
+                if let Some(f) = &mut app.st.chat.find {
+                    f.jump = None;
+                }
+            }
+            None => {
+                let full = app.st.chat.find.as_ref().and_then(|f| f.hits.iter().find(|h| h.0 == key)).map(|h| h.1);
+                if let Some(full) = full.filter(|full| *full < app.st.chat.base) {
+                    app.st.chat.extra += app.st.chat.base - full + 4;
+                    if let Some(f) = &mut app.st.chat.shown_from {
+                        f.3.clear();
+                    }
+                    app.wake_at(app.now_ns);
+                } else if let Some(f) = &mut app.st.chat.find {
+                    f.jump = None;
+                }
+            }
+        }
+    }
     let stick = !app.st.chat.unstuck;
     let sc = app.scroll();
     if stick && !page.moving {
@@ -1436,10 +1592,14 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     // A finger held still on a message copies it, as Claude's app does.
     let held = app.ui.resting(crate::clock::now_ns()).filter(|(p, ns)| *ns >= HOLD_NS && !app.ui.hidden(*p) && p.1 > page.top && p.1 < page.bottom).map(|(p, _)| p.1 + off);
     let mut copy = None;
+    let hit = app.st.chat.find.as_ref().and_then(|f| f.hits.get(f.at)).map(|h| h.0.clone());
     for (i, it) in items.iter().enumerate() {
         let h = heights[i];
         // Only what is on screen is drawn.
         if y + h >= screen_top && y <= screen_bottom {
+            if hit.as_deref() == Some(app.st.chat.keys[i].as_str()) {
+                app.canvas.rect(6.0, y, WIDTH - 12.0, h, 12.0, t::ACCENT.a(0.10));
+            }
             item(app, it, base + i, y, true);
         }
         if let Some(hy) = held.filter(|hy| *hy >= y && *hy < y + h && copy_words(it).is_some()) {
@@ -1530,6 +1690,7 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
         }
     }
     header(app, agent.as_ref(), name);
+    find_bar(app, name);
     let mut moving = page.moving || std::mem::take(&mut app.st.chat.moving);
     match &stopped {
         Some(a) => crate::agents::stopped_foot(app, a),
@@ -2349,6 +2510,52 @@ mod tests {
         tap(&mut a, 30.0, 300.0, 3_600_000_000);
         assert!(a.st.chat.queued_menu.is_none());
         assert_eq!(a.sending["bold-puffin"].waiting.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_steps_through_the_messages_that_hold_the_words() {
+        let (mut a, dir) = fresh_app("find");
+        a.sample();
+        let msg = |i: usize| serde_json::json!({"id": format!("m{i}"), "role": "assistant", "created_at": "", "body": {"blocks": [{"type": "text", "text": if i % 50 == 7 { format!("the **needle** at {i}") } else { format!("hay {i}") }}]}});
+        let mut c = data::Convo::default();
+        c.take(&serde_json::json!({"messages": (0..300).map(msg).collect::<Vec<_>>(), "cursor": 1, "reset": true, "found": true}));
+        a.convos.insert("bold-puffin".into(), c);
+        a.open("bold-puffin");
+        let mut clock = 1_000_000_000u64;
+        let mut frame = |a: &mut App| {
+            clock += 16_666_666;
+            a.frame(clock);
+        };
+        frame(&mut a);
+        find_open(&mut a);
+        a.set_text("Needle");
+        frame(&mut a);
+        frame(&mut a);
+        let f = a.st.chat.find.clone().unwrap();
+        // Six messages hold it (7, 57, …, 257), the marks dropped; the newest is shown first.
+        assert_eq!(f.hits.len(), 6);
+        assert_eq!(f.at, 5);
+        assert!(a.st.chat.unstuck, "scrolled to it");
+        // Older, five times: the oldest (m7) is outside the 160 shown, so more is shown to reach it.
+        let (x, w) = (12.0, WIDTH - 24.0);
+        let up = (x + w - 120.0 + 20.0, a.canvas.inset_top + TOP_H + 6.0 + 20.0);
+        for k in 0..5 {
+            let t0 = 2_000_000_000 + k * 200_000_000;
+            a.touch(crate::ui::Touch { id: 1, phase: crate::ui::Phase::Down, x: up.0, y: up.1, t_ns: t0 });
+            a.frame(t0 + 16_666_666);
+            a.touch(crate::ui::Touch { id: 1, phase: crate::ui::Phase::Up, x: up.0, y: up.1, t_ns: t0 + 40_000_000 });
+            for n in 0..4 {
+                a.frame(t0 + 50_000_000 + n * 16_666_666);
+            }
+        }
+        let f = a.st.chat.find.clone().unwrap();
+        assert_eq!(f.at, 0);
+        assert!(a.st.chat.keys.iter().any(|k| *k == f.hits[0].0), "the oldest match is shown");
+        assert!(f.jump.is_none(), "and scrolled to");
+        // Back closes it.
+        assert!(a.st.chat.close_over());
+        assert!(a.st.chat.find.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
