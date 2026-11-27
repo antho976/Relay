@@ -10,7 +10,7 @@ use rc_link::Call;
 use serde_json::{Value, json};
 
 use crate::app::{App, Route};
-use crate::draw::{Text, WIDTH, Weight};
+use crate::draw::{Rgba, Text, WIDTH, Weight};
 use crate::kit::{self, Kb};
 use crate::theme::{self as t, ty};
 
@@ -57,6 +57,11 @@ pub struct State {
     pub pr_sheet: bool,
     pub pr_title: String,
     pub pr_body: String,
+    /// The open PR's checks, by its number, and whether they want reading again.
+    pub checks: Option<(u64, Vec<Check>)>,
+    checks_stale: bool,
+    /// The pull request whose merge waits for a yes.
+    pub merging: Option<Pr>,
     pub files: Vec<File>,
     loaded: bool,
     /// The project's base branch: an agent's work is read against where it left it.
@@ -116,6 +121,57 @@ pub struct Pr {
     /// "open", "closed" or "merged", as GitHub says.
     pub state: String,
     pub draft: bool,
+}
+
+/// One of a pull request's checks (`git.pr.checks`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Check {
+    pub name: String,
+    /// `pass`, `fail`, `pending`, `skipping` or `cancel`.
+    pub state: String,
+    pub link: Option<String>,
+    pub required: bool,
+}
+
+pub fn checks(v: &Value) -> Vec<Check> {
+    v.get("checks")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| {
+                    Some(Check {
+                        name: c.get("name")?.as_str()?.to_string(),
+                        state: c.get("state").and_then(Value::as_str).unwrap_or("pending").to_string(),
+                        link: c.get("link").and_then(Value::as_str).filter(|l| !l.is_empty()).map(str::to_string),
+                        required: c.get("required").and_then(Value::as_bool) == Some(true),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// What a PR's checks come to, in a line: (words, ink, the link a tap opens). None with no checks.
+pub fn checks_line(checks: &[Check]) -> Option<(String, Rgba, Option<String>)> {
+    if checks.is_empty() {
+        return None;
+    }
+    let failed: Vec<&Check> = checks.iter().filter(|c| matches!(c.state.as_str(), "fail" | "cancel")).collect();
+    if let Some(first) = failed.first() {
+        let more = if failed.len() > 1 { format!(" and {} more", failed.len() - 1) } else { String::new() };
+        return Some((format!("{} failed{more}", first.name), t::DANGER, first.link.clone()));
+    }
+    let running = checks.iter().filter(|c| c.state == "pending").count();
+    let passed = checks.iter().filter(|c| c.state == "pass").count();
+    if running > 0 {
+        return Some((format!("{running} running · {passed} passed"), t::INK3, None));
+    }
+    Some((format!("All {} checks passed", checks.len()), t::OK, None))
+}
+
+/// The required checks that failed: a merge waits for them (the PC refuses it too).
+pub fn blocking(checks: &[Check]) -> Vec<String> {
+    checks.iter().filter(|c| c.required && matches!(c.state.as_str(), "fail" | "cancel")).map(|c| c.name.clone()).collect()
 }
 
 pub fn prs(v: &Value) -> Vec<Pr> {
@@ -204,6 +260,9 @@ enum Job {
     /// The repo's pull requests, and a fetch: both for the whole repo, not one worktree.
     Prs,
     Fetch,
+    /// A pull request's checks, and its merge, by number.
+    Checks(u64),
+    Merge(u64),
 }
 
 /// How long a commit, a push, a pull request or a fetch may take: the PC's own limit for a push.
@@ -212,12 +271,12 @@ const LONG_CALL: std::time::Duration = std::time::Duration::from_secs(600);
 impl Job {
     /// Runs git on the PC, network and hooks included.
     fn long(&self) -> bool {
-        matches!(self, Job::Commit { .. } | Job::Push | Job::Pr | Job::Fetch)
+        matches!(self, Job::Commit { .. } | Job::Push | Job::Pr | Job::Fetch | Job::Merge(_))
     }
 
     /// About the repo, not the open worktree: its answer is kept across a branch switch.
     fn repo_wide(&self) -> bool {
-        matches!(self, Job::Worktrees | Job::Prs | Job::Fetch)
+        matches!(self, Job::Worktrees | Job::Prs | Job::Fetch | Job::Checks(_) | Job::Merge(_))
     }
 
     /// What the foot says while it runs; None for the quiet reads.
@@ -227,13 +286,14 @@ impl Job {
             Job::Commit { .. } => Some("Committing…"),
             Job::Push => Some("Pushing…"),
             Job::Pr => Some("Opening the pull request…"),
+            Job::Merge(_) => Some("Merging…"),
             _ => None,
         }
     }
 
     /// Done to the worktree whatever page is open: these finish even after a switch.
     fn acts(&self) -> bool {
-        matches!(self, Job::Stage(_) | Job::Discard(_) | Job::Commit { .. } | Job::Push | Job::Pr)
+        matches!(self, Job::Stage(_) | Job::Discard(_) | Job::Commit { .. } | Job::Push | Job::Pr | Job::Merge(_))
     }
 }
 
@@ -427,7 +487,7 @@ impl State {
     /// Back: the top one of this page's overlays closes (the discard dialog, the foot's menu, the
     /// pull request sheet, the branch picker). False when none was open.
     pub fn close_over(&mut self) -> bool {
-        if self.discard.take().is_some() {
+        if self.merging.take().is_some() || self.discard.take().is_some() {
             return true;
         }
         if std::mem::take(&mut self.menu) {
@@ -442,7 +502,7 @@ impl State {
     /// What the foot says while a commit, a push, a pull request or a message for the open
     /// worktree is on its way.
     pub fn busy(&self) -> Option<&'static str> {
-        self.pending.iter().filter(|p| Some(p.repo) == self.repo && p.worktree == self.worktree).find_map(|p| p.job.label())
+        self.pending.iter().filter(|p| Some(p.repo) == self.repo && (p.worktree == self.worktree || matches!(p.job, Job::Merge(_)))).find_map(|p| p.job.label())
     }
 
     /// Another worktree is open: what was being read for the last one is no longer wanted.
@@ -492,6 +552,7 @@ fn reload(app: &mut App) {
     st.base = base;
     st.ask_for(&link, repo, None, Job::Worktrees, "worktree.list", json!({"project_id": repo, "include_dirty": true}));
     st.ask_for(&link, repo, None, Job::Prs, "git.pr.list", json!({"project_id": repo}));
+    st.checks_stale = true;
     if st.worktree.is_some() {
         let w = wt(st);
         st.ask(&link, repo, Job::Status, "git.status", json!({"project_id": repo, "worktree": w}));
@@ -678,6 +739,17 @@ fn answered(app: &mut App, job: Job, repo: i64, worktree: Option<String>, r: Res
                 app.st.changes.ask_for(&link, repo, None, Job::Prs, "git.pr.list", json!({"project_id": repo}));
             }
             (Job::Prs, Ok(v)) => app.st.changes.prs = prs(&v),
+            (Job::Checks(n), Ok(v)) => app.st.changes.checks = Some((n, checks(&v))),
+            // No checks to show (no gh, GitHub down): the card says nothing of them.
+            (Job::Checks(_), Err(_)) => {}
+            (Job::Merge(n), Ok(_)) => {
+                app.toast(&format!("Merged #{n}"));
+                let link = app.link.clone();
+                app.st.changes.ask_for(&link, repo, None, Job::Prs, "git.pr.list", json!({"project_id": repo, "refresh": true}));
+                if here {
+                    reload(app);
+                }
+            }
             // No GitHub (not connected, no gh): the page simply shows no pull request.
             (Job::Prs, Err(_)) => {}
             (Job::Fetch, Ok(_)) => {
@@ -833,6 +905,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         pr_sheet(app);
     } else if app.st.changes.discard.is_some() {
         confirm_discard(app);
+    } else if app.st.changes.merging.is_some() {
+        confirm_merge(app);
     }
     page.moving || !app.st.changes.pending.is_empty() && !crate::wake::has()
 }
@@ -1521,9 +1595,32 @@ fn branch_line(app: &mut App, mut y: f32) -> f32 {
     }
     y += 40.0;
     if let Some(p) = pr {
-        let (x, w, h) = (t::PAD, WIDTH - 2.0 * t::PAD, 58.0);
+        // Its checks: read when it shows, again after a change.
+        if p.state == "open"
+            && (app.st.changes.checks_stale || app.st.changes.checks.as_ref().is_none_or(|(n, _)| *n != p.number))
+            && app.online()
+            && let Some(repo) = app.repo
+        {
+            app.st.changes.checks_stale = false;
+            let link = app.link.clone();
+            app.st.changes.ask_for(&link, repo, None, Job::Checks(p.number), "git.pr.checks", json!({"project_id": repo, "number": p.number}));
+        }
+        let list: Vec<Check> = app.st.changes.checks.as_ref().filter(|(n, _)| *n == p.number && p.state == "open").map(|(_, c)| c.clone()).unwrap_or_default();
+        let line = checks_line(&list);
+        let can_merge = p.state == "open" && !p.draft;
+        let held = blocking(&list);
+        let (x, w) = (t::PAD, WIDTH - 2.0 * t::PAD);
+        let h = if line.is_some() || can_merge { 86.0 } else { 58.0 };
         let mut cx = crate::cx!(app);
         cx.c.rect(x, y, w, h, 12.0, if cx.pressed(x, y, w, h) { t::S2 } else { t::S1 });
+        // The Merge key and the checks' line take their own taps; the rest of the card opens it.
+        let (mw, merge) = if can_merge { kit::pill(&mut cx, x + w - 12.0, y + h - 42.0, "Merge", !held.is_empty()) } else { (0.0, false) };
+        let line_hit = line.as_ref().is_some_and(|(_, _, l)| l.is_some()) && cx.tap(x + 30.0, y + 50.0, w - 40.0 - mw - 12.0, 36.0);
+        if let Some((words, ink, _)) = &line {
+            let glyph = if *ink == t::DANGER { "close" } else if *ink == t::OK { "check" } else { "pulse" };
+            cx.c.icon(glyph, x + 51.0, y + 63.0, 12.0, *ink);
+            cx.c.text_fit(words, x + 64.0, y + 54.0, w - 64.0 - mw - 20.0, Text::new(ty::SMALL, *ink));
+        }
         cx.c.icon("merge", x + 22.0, y + h / 2.0, 16.0, if p.state == "open" { t::ACCENT } else { t::INK3 });
         let state = match (p.state.as_str(), p.draft) {
             ("open", true) => "Draft",
@@ -1533,13 +1630,43 @@ fn branch_line(app: &mut App, mut y: f32) -> f32 {
         };
         cx.c.text_fit(&p.title, x + 44.0, y + 10.0, w - 80.0, Text::new(ty::UI, t::INK));
         cx.c.text(&format!("#{} · {state}", p.number), x + 44.0, y + 33.0, Text::new(ty::SMALL, t::INK3));
-        cx.c.icon("external", x + w - 20.0, y + h / 2.0, 14.0, t::INK3);
-        if cx.tap(x, y, w, h) {
+        cx.c.icon("external", x + w - 20.0, y + 29.0, 14.0, t::INK3);
+        let card = cx.tap(x, y, w, h);
+        if merge {
+            if held.is_empty() {
+                app.st.changes.merging = Some(p.clone());
+            } else {
+                app.toast(&format!("{} must pass first", held.join(", ")));
+            }
+        } else if line_hit {
+            if let Some(l) = line.and_then(|(_, _, l)| l) {
+                app.host.open_url(&l);
+            }
+        } else if card {
             app.host.open_url(&p.url);
         }
         y += h + 14.0;
     }
     y
+}
+
+/// Merging asks first, naming the pull request and where its checks stand. Squash: one commit on
+/// the base, as the repo's history is kept.
+fn confirm_merge(app: &mut App) {
+    let Some(p) = app.st.changes.merging.clone() else { return };
+    let list: Vec<Check> = app.st.changes.checks.as_ref().filter(|(n, _)| *n == p.number).map(|(_, c)| c.clone()).unwrap_or_default();
+    let checks = checks_line(&list).map_or("No checks reported.".to_string(), |(w, _, _)| format!("{w}."));
+    let into = if app.st.changes.base.is_empty() { "its base".to_string() } else { app.st.changes.base.clone() };
+    let body = format!("{}\n\nSquashed into {into} as one commit. {checks}", p.title);
+    let answer = kit::confirm(&mut crate::cx!(app), &format!("Merge #{}?", p.number), &body, "Merge");
+    let Some(yes) = answer else { return };
+    app.st.changes.merging = None;
+    if !yes {
+        return;
+    }
+    let Some(repo) = app.repo else { return };
+    let link = app.link.clone();
+    app.st.changes.ask_for(&link, repo, None, Job::Merge(p.number), "git.pr.merge", json!({"project_id": repo, "number": p.number, "method": "squash"}));
 }
 
 /// The sheet that opens a pull request for the branch: its title and body, both optional (the PC
@@ -1686,6 +1813,11 @@ pub fn sample(app: &mut App) {
         ahead: 2,
         behind: 1,
         prs: vec![Pr { number: 209, branch: "relay/bold-puffin".into(), title: "Relay Code: the phone app rewritten in Rust + wgpu".into(), url: "https://github.com/antho976/Relay/pull/209".into(), state: "open".into(), draft: false }],
+        checks: Some((209, vec![
+            Check { name: "engine, bus and CLI".into(), state: "pass".into(), link: None, required: false },
+            Check { name: "native client (GTK)".into(), state: "fail".into(), link: Some("https://github.com/antho976/Relay/actions".into()), required: false },
+            Check { name: "cargo deny".into(), state: "pass".into(), link: None, required: false },
+        ])),
         files,
         loaded: true,
         base: "main".into(),
@@ -2179,6 +2311,55 @@ mod tests {
         assert!(st.close_over() && !st.pr_sheet && st.picking);
         assert!(st.close_over() && !st.picking);
         assert!(!st.close_over(), "nothing left: Back goes on to the page");
+    }
+
+    #[test]
+    fn a_prs_checks_come_to_one_line_and_a_failed_required_one_holds_the_merge() {
+        let v = json!({"checks": [
+            {"name": "engine", "state": "pass", "link": "https://x/1", "required": true},
+            {"name": "gtk", "state": "fail", "link": "https://x/2", "required": false},
+            {"name": "deny", "state": "pending", "required": false}]});
+        let c = checks(&v);
+        assert_eq!(c.len(), 3);
+        assert_eq!(c[2].link, None);
+        let (words, ink, link) = checks_line(&c).unwrap();
+        assert_eq!((words.as_str(), ink, link.as_deref()), ("gtk failed", t::DANGER, Some("https://x/2")));
+        assert!(blocking(&c).is_empty(), "gtk is not required");
+        let running = [c[0].clone(), c[2].clone()];
+        assert_eq!(checks_line(&running).unwrap().0, "1 running · 1 passed");
+        assert_eq!(checks_line(&c[..1]).unwrap().0, "All 1 checks passed");
+        assert_eq!(checks_line(&[]), None);
+        let held = [Check { name: "engine".into(), state: "fail".into(), link: None, required: true }];
+        assert_eq!(blocking(&held), ["engine"]);
+    }
+
+    #[test]
+    fn merge_asks_first_and_squashes_on_yes() {
+        let (mut a, mut clock) = on_changes("merge");
+        let pr = a.st.changes.prs[0].clone();
+        a.st.changes.merging = Some(pr.clone());
+        clock += 16_666_666;
+        a.frame(clock);
+        // Outside the dialog: it closes, nothing is merged.
+        press(&mut a, &mut clock, 200.0, 140.0);
+        assert!(a.st.changes.merging.is_none() && !a.st.changes.pending.iter().any(|p| matches!(p.job, Job::Merge(_))));
+        let mut found = false;
+        for y in (300..560).step_by(4) {
+            a.st.changes.merging = Some(pr.clone());
+            clock += 16_666_666;
+            a.frame(clock);
+            lift(&mut a, &mut clock, 290.0, y as f32);
+            if a.st.changes.pending.iter().any(|p| p.job == Job::Merge(pr.number)) {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "the dialog's Merge key sends the merge");
+        assert_eq!(a.st.changes.busy(), Some("Merging…"));
+        // Back closes the dialog before anything else.
+        a.st.changes.merging = Some(pr);
+        a.st.changes.picking = true;
+        assert!(a.st.changes.close_over() && a.st.changes.merging.is_none() && a.st.changes.picking);
     }
 
     #[test]
