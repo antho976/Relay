@@ -56,6 +56,83 @@ pub fn next(column: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
+/// One line of a task's activity: a comment, or something done to it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Event {
+    Comment { author: String, body: String, at: String },
+    Did { who: String, what: String, at: String },
+}
+
+impl Event {
+    fn at(&self) -> &str {
+        match self {
+            Event::Comment { at, .. } | Event::Did { at, .. } => at,
+        }
+    }
+}
+
+/// Who did it, as a person reads it.
+fn who(actor: &str) -> String {
+    match actor {
+        "user" => "You".into(),
+        "system" => "Relay".into(),
+        a => a.strip_prefix("agent:").unwrap_or(a).to_string(),
+    }
+}
+
+fn column_words(key: &str) -> &str {
+    COLUMNS.iter().find(|(k, _)| *k == key).map_or(key, |(_, w)| w)
+}
+
+/// A task's comments and what was done to it (`task.activity`), oldest first.
+pub fn activity(v: &Value) -> Vec<Event> {
+    let s = |x: &Value, k: &str| x.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+    let mut out: Vec<Event> = Vec::new();
+    for c in v.get("comments").and_then(Value::as_array).into_iter().flatten() {
+        out.push(Event::Comment { author: who(&s(c, "author")), body: s(c, "body"), at: s(c, "created_at") });
+    }
+    for h in v.get("history").and_then(Value::as_array).into_iter().flatten() {
+        if h.get("kind").and_then(Value::as_str) != Some("ok") {
+            continue;
+        }
+        let p = h.get("payload").cloned().unwrap_or(Value::Null);
+        let what = match s(h, "op").as_str() {
+            "task.move" => format!("moved it to {}", column_words(&s(&p, "column"))),
+            "task.approve" => "approved it".into(),
+            "task.unapprove" => "reopened it".into(),
+            "task.dispatch" => "started an agent on it".into(),
+            "task.create" => "created it".into(),
+            "task.update" => "edited it".into(),
+            "task.label.add" => format!("labelled it {}", s(&p, "label")).trim_end().to_string(),
+            "task.label.remove" => "took a label off".into(),
+            "task.link_commit" => format!("linked {}", s(&p, "sha").chars().take(7).collect::<String>()),
+            "task.changelog.write" => "wrote its changelog".into(),
+            "session.done" => format!("reported it {}", s(&p, "status")).trim_end().to_string(),
+            // Comments come whole from `comments`.
+            "task.comment" => continue,
+            op => op.to_string(),
+        };
+        out.push(Event::Did { who: who(&s(h, "actor")), what, at: s(h, "ts") });
+    }
+    // RFC 3339 times of one clock sort as text.
+    out.sort_by(|a, b| a.at().cmp(b.at()));
+    out
+}
+
+/// The open task: read on its own (`task.get`), not from the board's list, which leaves bodies
+/// out, with its activity.
+#[derive(Default)]
+pub struct Opened {
+    pub id: i64,
+    pub task: Option<Task>,
+    pub error: Option<String>,
+    pub events: Vec<Event>,
+    get: Option<Call>,
+    activity: Option<Call>,
+    /// A comment on its way: the box keeps its words until the PC says it has it.
+    sending: Option<Call>,
+}
+
 #[derive(Default)]
 pub struct State {
     repo: Option<i64>,
@@ -66,12 +143,32 @@ pub struct State {
     list: Option<Call>,
     act: Option<Call>,
     pub comment: String,
+    pub open: Opened,
 }
 
 fn reload(app: &mut App) {
     let Some(repo) = app.repo else { return };
     if app.online() && app.st.board.list.is_none() {
-        app.st.board.list = Some(app.link.call("task.list", json!({"project_id": repo, "limit": 500})));
+        // Titles, not essays: the open task reads its own body.
+        app.st.board.list = Some(app.link.call("task.list", json!({"project_id": repo, "limit": 500, "summary": true})));
+    }
+}
+
+/// Read the open task and its activity again.
+fn reload_task(app: &mut App, id: i64) {
+    if app.st.board.open.id != id {
+        app.st.board.open = Opened { id, ..Opened::default() };
+        app.st.board.comment.clear();
+    }
+    if !app.online() {
+        return;
+    }
+    let o = &mut app.st.board.open;
+    if o.get.is_none() {
+        o.get = Some(app.link.call("task.get", json!({"task_id": id})));
+    }
+    if o.activity.is_none() {
+        o.activity = Some(app.link.call("task.activity", json!({"task_id": id, "limit": 40})));
     }
 }
 
@@ -90,13 +187,48 @@ fn take(app: &mut App) {
         app.st.board.act = None;
         match r {
             Ok(v) => {
-                if let Some(tk) = task(&v)
-                    && let Some(old) = app.st.board.tasks.iter_mut().find(|x| x.id == tk.id)
-                {
-                    *old = tk;
+                if let Some(tk) = task(&v) {
+                    if let Some(old) = app.st.board.tasks.iter_mut().find(|x| x.id == tk.id) {
+                        // The list's copy has no body: keep it so.
+                        *old = Task { body: String::new(), ..tk.clone() };
+                    }
+                    if app.st.board.open.id == tk.id {
+                        app.st.board.open.task = Some(tk);
+                    }
                 }
                 reload(app);
             }
+            Err(e) => app.toast(&e.message),
+        }
+    }
+    let o = &mut app.st.board.open;
+    if let Some(r) = o.get.as_ref().and_then(Call::poll) {
+        o.get = None;
+        match r {
+            Ok(v) => {
+                o.task = task(&v);
+                o.error = None;
+            }
+            // Said where the task would be: never "Reading the task…" for ever.
+            Err(e) => o.error = Some(e.message),
+        }
+    }
+    if let Some(r) = o.activity.as_ref().and_then(Call::poll) {
+        o.activity = None;
+        if let Ok(v) = r {
+            o.events = activity(&v);
+        }
+    }
+    if let Some(r) = app.st.board.open.sending.as_ref().and_then(Call::poll) {
+        app.st.board.open.sending = None;
+        match r {
+            Ok(v) => {
+                app.st.board.comment.clear();
+                let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+                app.st.board.open.events.push(Event::Comment { author: who(&s("author")), body: s("body"), at: s("created_at") });
+                app.toast("Commented");
+            }
+            // The words stay in the box to send again.
             Err(e) => app.toast(&e.message),
         }
     }
@@ -108,6 +240,9 @@ fn prepare(app: &mut App) {
     }
     if app.fresh || app.take_changed("task") {
         reload(app);
+        if let Route::Task(id) = *app.route() {
+            reload_task(app, id);
+        }
     }
     take(app);
 }
@@ -175,12 +310,22 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
 
 /// One task: its words, who is on it, the next step, a comment.
 pub fn draw_task(app: &mut App, id: i64, dt: f32) -> bool {
+    if app.st.board.open.id != id {
+        reload_task(app, id);
+    }
     prepare(app);
-    let Some(tk) = app.st.board.tasks.iter().find(|x| x.id == id).cloned() else {
+    // Its own read when it has come, else the board's line for it (a title, no body) meanwhile.
+    let read = app.st.board.open.task.clone().filter(|x| x.id == id);
+    let Some(tk) = read.clone().or_else(|| app.st.board.tasks.iter().find(|x| x.id == id).cloned()) else {
         let page = app.page_begin(dt, 56.0, 0.0);
-        app.canvas.text("Reading the task…", t::PAD, page.top + 16.0, Text::new(ty::UI, t::INK3));
+        let words = match &app.st.board.open.error {
+            Some(e) => e.clone(),
+            None if app.online() => "Reading the task…".to_string(),
+            None => "The task shows here once the PC answers.".to_string(),
+        };
+        app.canvas.para(&words, t::PAD, page.top + 16.0, WIDTH - 2.0 * t::PAD, Text::new(ty::UI, t::INK3).line(1.45), 4);
         app.page_end(&page, page.top + 40.0);
-        back_bar(app, "Task");
+        back_bar(app, "");
         return page.moving;
     };
     let foot_h = 124.0;
@@ -216,9 +361,13 @@ pub fn draw_task(app: &mut App, id: i64, dt: f32) -> bool {
     }
     if !tk.body.trim().is_empty() {
         y += crate::chat::markdown(app, &tk.body, x, y, w, Text::new(ty::BODY, t::INK2).line(1.5), true);
+    } else if read.is_none() && app.st.board.open.error.is_none() && app.online() {
+        app.canvas.text("Reading the task…", x, y, Text::new(ty::SMALL, t::INK3));
+        y += 24.0;
     }
+    y = events(app, x, y + 16.0, w);
     app.page_end(&page, y + 12.0);
-    back_bar(app, "Task");
+    back_bar(app, "");
 
     // The foot: a comment, then the next step (the one filled key) and Start an agent.
     let bottom = app.canvas.h - app.canvas.inset_bottom;
@@ -232,15 +381,14 @@ pub fn draw_task(app: &mut App, id: i64, dt: f32) -> bool {
     let mut comment = app.st.board.comment.clone();
     kit::inline(&mut crate::cx!(app), "task-comment", x + 14.0, my, w - 60.0, 44.0, "Comment", &mut comment, Kb::Text, Text::new(ty::UI, t::INK));
     app.st.board.comment = comment.clone();
+    let sending = app.st.board.open.sending.is_some();
     let send = {
         let mut cx = crate::cx!(app);
-        !comment.trim().is_empty() && kit::icon_key_ink(&mut cx, x + w - 44.0, my, "send", t::ACCENT)
+        !comment.trim().is_empty() && kit::icon_key_ink(&mut cx, x + w - 44.0, my, "send", if sending { t::INK3 } else { t::ACCENT })
     };
-    if send && app.online() {
+    if send && !sending && app.online() {
         app.finish_typing();
-        app.st.board.act = Some(app.link.call("task.comment", json!({"task_id": id, "body": comment.trim()})));
-        app.st.board.comment.clear();
-        app.toast("Commented");
+        app.st.board.open.sending = Some(app.link.call("task.comment", json!({"task_id": id, "body": comment.trim()})));
     }
     let ky = my + 44.0 + 12.0;
     let busy = app.st.board.act.is_some();
@@ -254,7 +402,9 @@ pub fn draw_task(app: &mut App, id: i64, dt: f32) -> bool {
     };
     let start = agent_w > 0.0 && kit::plain(&mut cx, x + w - agent_w, ky, agent_w, 44.0, "Start an agent", None);
     if step && let Some((col, _)) = next {
-        app.st.board.act = Some(app.link.call("task.move", json!({"task_id": id, "column": col})));
+        // Approving is its own op: it closes the task and links its commit.
+        let call = if tk.column == "in_review" { app.link.call("task.approve", json!({"task_id": id})) } else { app.link.call("task.move", json!({"task_id": id, "column": col})) };
+        app.st.board.act = Some(call);
     }
     if start && let Some(repo) = app.repo {
         let prompt = format!("Task #{}: {}\n\n{}", tk.id, tk.title, tk.body);
@@ -262,6 +412,37 @@ pub fn draw_task(app: &mut App, id: i64, dt: f32) -> bool {
         app.toast("Starting an agent on it…");
     }
     page.moving
+}
+
+/// The task's comments and what was done to it, oldest first. Returns where it ends.
+fn events(app: &mut App, x: f32, mut y: f32, w: f32) -> f32 {
+    let list = app.st.board.open.events.clone();
+    if list.is_empty() {
+        return y;
+    }
+    app.canvas.text("ACTIVITY", x, y, Text::new(ty::SMALL, t::INK3).semi());
+    y += 26.0;
+    let now = rc_link::link::now_ms();
+    let small = Text::new(ty::SMALL, t::INK3);
+    for e in &list {
+        let when = crate::data::ago(e.at(), now);
+        match e {
+            Event::Comment { author, body, .. } => {
+                let aw = app.canvas.text(author, x, y, Text::new(ty::CAPTION, t::INK).semi());
+                if !when.is_empty() {
+                    app.canvas.text(&format!(" · {when}"), x + aw, y, Text::new(ty::CAPTION, t::INK3));
+                }
+                y += 22.0;
+                y += app.canvas.para(body, x, y, w, Text::new(ty::UI, t::INK2).line(1.45), 12) + 14.0;
+            }
+            Event::Did { who, what, .. } => {
+                let line = if when.is_empty() { format!("{who} {what}") } else { format!("{who} {what} · {when}") };
+                app.canvas.text_fit(&line, x, y, w, small);
+                y += 24.0;
+            }
+        }
+    }
+    y
 }
 
 /// A pushed page's top: Back and a title.
@@ -283,7 +464,35 @@ pub fn sample(app: &mut App) {
         {"id": 38, "title": "Leaf comics autopilot: source switching", "column": "in_review", "sessions": ["swift-ocelot"]},
         {"id": 35, "title": "Board drag drops on Done", "column": "backlog"},
     ]});
-    app.st.board = State { repo: app.repo, tasks: tasks(&v), loaded: true, column: 2, ..State::default() };
+    let list = tasks(&v);
+    // Task 41 open, as task.get and task.activity read it.
+    let mut t41 = list[0].clone();
+    t41.body = "Designs open on their artboards, pinch to zoom, and a tap on a layer names it.\n\n- Pages as tabs\n- The canvas fits the phone's width first".into();
+    let now = rc_link::link::now_ms();
+    let at = |mins: u64| iso(now.saturating_sub(mins * 60_000));
+    let events = vec![
+        Event::Did { who: "You".into(), what: "created it".into(), at: at(600) },
+        Event::Did { who: "You".into(), what: "started an agent on it".into(), at: at(300) },
+        Event::Comment { author: "bold-puffin".into(), body: "Pinch zoom works; the pages bar still overlaps the notch on the Pixel.".into(), at: at(40) },
+        Event::Comment { author: "You".into(), body: "Leave the notch for now, ship the tabs.".into(), at: at(12) },
+    ];
+    let open = Opened { id: 41, task: Some(t41), events, ..Opened::default() };
+    app.st.board = State { repo: app.repo, tasks: list, loaded: true, column: 2, open, ..State::default() };
+}
+
+/// An RFC 3339 time from milliseconds since 1970 (samples only).
+fn iso(ms: u64) -> String {
+    let s = ms / 1000;
+    let (d, r) = ((s / 86_400) as i64 + 719_468, s % 86_400);
+    let era = d.div_euclid(146_097);
+    let doe = d - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", r / 3600, r % 3600 / 60, r % 60)
 }
 
 #[cfg(test)]
@@ -298,5 +507,53 @@ mod tests {
         assert_eq!(t[0].labels, ["ui"]);
         assert_eq!(next("active"), Some(("in_review", "Send to review")));
         assert_eq!(next("done"), None);
+    }
+
+    #[test]
+    fn activity_reads_comments_and_what_was_done_oldest_first() {
+        let v = json!({
+            "comments": [{"id": 1, "task_id": 7, "author": "user", "body": "Ship it.", "created_at": "2026-11-26T10:05:00Z"}],
+            "history": [
+                {"id": 9, "ts": "2026-11-26T10:09:00Z", "actor": "user", "op": "task.approve", "kind": "ok", "payload": {"task_id": 7}},
+                {"id": 8, "ts": "2026-11-26T10:01:00Z", "actor": "agent:bold-puffin", "op": "task.move", "kind": "ok", "payload": {"column": "in_review"}},
+                {"id": 7, "ts": "2026-11-26T10:00:30Z", "actor": "agent:bold-puffin", "op": "task.move", "kind": "refused", "payload": {}},
+                {"id": 6, "ts": "2026-11-26T10:05:00Z", "actor": "user", "op": "task.comment", "kind": "ok", "payload": {}},
+            ],
+            "messages": []});
+        let e = activity(&v);
+        assert_eq!(e, [
+            Event::Did { who: "bold-puffin".into(), what: "moved it to In review".into(), at: "2026-11-26T10:01:00Z".into() },
+            Event::Comment { author: "You".into(), body: "Ship it.".into(), at: "2026-11-26T10:05:00Z".into() },
+            Event::Did { who: "You".into(), what: "approved it".into(), at: "2026-11-26T10:09:00Z".into() },
+        ]);
+        assert_eq!(iso(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso(1_764_151_500_000), "2025-11-26T10:05:00Z");
+    }
+
+    struct NoHost(std::path::PathBuf);
+
+    impl crate::app::Host for NoHost {
+        fn data_dir(&self) -> std::path::PathBuf {
+            self.0.clone()
+        }
+        fn log(&self, _text: &str) {}
+    }
+
+    #[test]
+    fn a_task_that_cannot_be_read_says_why_and_a_comment_stays_until_ok() {
+        let dir = std::env::temp_dir().join(format!("relay-code-board-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(NoHost(dir)), 1_000_000_000);
+        a.repo = Some(1);
+        a.st.board.repo = Some(1);
+        // Not connected: task.get fails at once, as a refusal would.
+        a.st.board.open = Opened { id: 5, get: Some(a.link.call("task.get", json!({"task_id": 5}))), ..Opened::default() };
+        take(&mut a);
+        assert!(a.st.board.open.error.is_some(), "an answer, not \"Reading the task…\" for ever");
+        a.st.board.comment = "Looks good".into();
+        a.st.board.open.sending = Some(a.link.call("task.comment", json!({"task_id": 5, "body": "Looks good"})));
+        take(&mut a);
+        assert_eq!(a.st.board.comment, "Looks good", "a failed comment keeps its words");
+        assert!(a.st.board.open.sending.is_none());
     }
 }
