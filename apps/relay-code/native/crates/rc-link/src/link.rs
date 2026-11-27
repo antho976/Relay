@@ -429,7 +429,13 @@ impl Session {
             return false;
         }
         if let Some(a) = answer {
-            self.pending.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), a);
+            let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+            // Looked at again under the lock shut drains with: shut between the look above and
+            // this would otherwise leave the call unanswered until its timeout.
+            if !self.open.load(Ordering::SeqCst) {
+                return false;
+            }
+            pending.insert(id.to_string(), a);
         }
         if self.tx.send(wire::request(op, payload, id)).is_err() {
             self.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
@@ -765,6 +771,10 @@ async fn run(inner: Arc<Inner>) {
         keep_alive(&inner, &session).await;
         session.shut();
         inner.session.lock().unwrap_or_else(|e| e.into_inner()).take();
+        // Forgotten or paired again meanwhile: what they showed stands, not "Connection lost".
+        if !current() {
+            continue;
+        }
         if began.elapsed() < STABLE {
             backoff = wait_out(&inner, "Connection lost, reconnecting", backoff).await;
         } else {
