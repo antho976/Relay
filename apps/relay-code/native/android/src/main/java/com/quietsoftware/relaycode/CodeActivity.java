@@ -92,6 +92,18 @@ public class CodeActivity extends GameActivity {
         });
     }
 
+    /** Hands {@code text} to another app (the system's share sheet). */
+    public void share(final String text) {
+        runOnUiThread(() -> {
+            Intent send = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text);
+            try {
+                startActivity(Intent.createChooser(send, null));
+            } catch (android.content.ActivityNotFoundException ignored) {
+                // Nothing to share with: nothing opens.
+            }
+        });
+    }
+
     /** Opens a web address the agent wrote, in the browser or the app that handles it. */
     public void openUrl(final String url) {
         runOnUiThread(() -> {

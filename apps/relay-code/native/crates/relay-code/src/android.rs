@@ -97,6 +97,17 @@ impl Host for AndroidHost {
         });
     }
 
+    fn share(&self, text: &str) {
+        with_activity(&self.app, |env, activity| {
+            let t = env.new_string(text)?;
+            env.call_method(activity, "share", "(Ljava/lang/String;)V", &[JValue::Object(&t)]).map(|_| ())
+        });
+    }
+
+    fn can_share(&self) -> bool {
+        true
+    }
+
     fn link_service(&self, on: bool, words: &str) {
         with_activity(&self.app, |env, activity| {
             let w = env.new_string(words)?;
