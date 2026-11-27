@@ -144,6 +144,9 @@ pub struct State {
     act: Option<Call>,
     pub comment: String,
     pub open: Opened,
+    /// Each card's title height, measured once per title: wrapping 80 titles every frame was
+    /// most of the Board's frame.
+    heights: std::collections::HashMap<i64, (String, f32)>,
 }
 
 fn reload(app: &mut App) {
@@ -264,10 +267,23 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         app.canvas.text(&format!("Nothing in {}.", COLUMNS[app.st.board.column].1), t::PAD, y + 10.0, Text::new(ty::UI, t::INK3));
         y += 40.0;
     }
+    let tt = Text::new(ty::BODY, t::INK).semi().line(1.35);
     for tk in &list {
-        let tt = Text::new(ty::BODY, t::INK).semi().line(1.35);
-        let th = app.canvas.para_h(&tk.title, WIDTH - 2.0 * t::PAD - 28.0, tt, 3);
+        let th = match app.st.board.heights.get(&tk.id) {
+            Some((title, h)) if *title == tk.title => *h,
+            _ => {
+                let h = app.canvas.para_h(&tk.title, WIDTH - 2.0 * t::PAD - 28.0, tt, 3);
+                app.st.board.heights.insert(tk.id, (tk.title.clone(), h));
+                h
+            }
+        };
         let h = 14.0 + th + 6.0 + 18.0 + 14.0;
+        // Off screen: its place only.
+        let on_screen = y + app.canvas.dy;
+        if on_screen > page.bottom || on_screen + h < page.top {
+            y += h + 10.0;
+            continue;
+        }
         let mut cx = crate::cx!(app);
         let x = t::PAD;
         let w = WIDTH - 2.0 * t::PAD;
@@ -504,6 +520,52 @@ fn iso(ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Frames drawn at rest on `route`, after `warm` to settle: µs a frame (release, this machine).
+    fn frame_cost(a: &mut App, warm: usize, n: usize) -> f64 {
+        let mut clock = 2_000_000_000u64;
+        for _ in 0..warm {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        let t = std::time::Instant::now();
+        for _ in 0..n {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        t.elapsed().as_secs_f64() * 1e6 / n as f64
+    }
+
+    fn bench_app(name: &str) -> App {
+        struct NoHost(std::path::PathBuf);
+        impl crate::app::Host for NoHost {
+            fn data_dir(&self) -> std::path::PathBuf {
+                self.0.clone()
+            }
+            fn log(&self, _text: &str) {}
+        }
+        let dir = std::env::temp_dir().join(format!("relay-code-bench-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(NoHost(dir)), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        a
+    }
+
+    /// The Board with 200 tasks (80 in the column shown), at rest:
+    /// `cargo test --release board_frame_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn board_frame_cost() {
+        let mut a = bench_app("board");
+        let cols = ["backlog", "ready", "active", "in_review", "done"];
+        a.st.board.tasks = (0..200)
+            .map(|i| Task { id: i, title: format!("Task {i}: make the thing on the phone behave as the desktop's does"), column: (if i < 80 { "active" } else { cols[i as usize % 5] }).into(), sessions: vec!["bold-puffin".into()], labels: vec!["phone".into()], ..Task::default() })
+            .collect();
+        a.st.board.column = 2;
+        a.push(crate::app::Route::Board);
+        println!("board frame, 200 tasks: {:.0} µs", frame_cost(&mut a, 10, 200));
+    }
 
     #[test]
     fn tasks_read_and_move_along() {
