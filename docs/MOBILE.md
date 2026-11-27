@@ -252,6 +252,15 @@ comes from the PC link (**Stay connected**), not from a push service. The link r
 itself after a drop and when the app comes back to the foreground; **Disconnect** on the PC's page
 stops that until you connect again.
 
+**Keep-alive.** The direct door pings each phone every 30 s and closes one silent for 90 s. Relay
+Code (`apps/relay-code`) tells the door how often it pings itself, with the door's own request
+`door.keepalive {"ms": n}`, answered by the door and never passed to the engine: on connecting,
+then whenever its pace changes (25 s in front, 60 s away, 3 min with the screen off). A told door
+pings that phone only once it has been quiet for its interval, and closes it after three intervals
+of silence (90 s at least, 10 min at most). A phone that says nothing, as this app, keeps the
+30 s ping and the 90 s limit. Through a rendezvous the request is refused (`remote.op`) and
+changes nothing.
+
 ## 6. Security model, honestly
 
 - A phone is the user at the keyboard. The door refuses any envelope whose actor is not
