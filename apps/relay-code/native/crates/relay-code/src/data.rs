@@ -268,7 +268,7 @@ pub struct Sending {
 }
 
 /// How far one message has gone.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Stage {
     /// Not sent yet: the link is down, or a message before it is still going.
     #[default]
@@ -283,7 +283,7 @@ pub enum Stage {
     Entered,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Pending {
     pub text: String,
     /// When it was written, then when its words went (Enter waits [`ENTER_AFTER_MS`] after them).
@@ -298,6 +298,52 @@ pub struct Pending {
 /// Enter goes as its own write at least this long after the words, so the program does not take
 /// both as one paste.
 pub const ENTER_AFTER_MS: u64 = 90;
+
+/// What you wrote that the PC has not taken yet, kept on the phone (`cache/outbox.json`) so a
+/// restart loses none of it: each agent's draft, and each agent's send queue.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Outbox {
+    #[serde(default)]
+    pub drafts: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub queue: std::collections::HashMap<String, Vec<Pending>>,
+}
+
+impl Outbox {
+    /// What to keep: non-empty drafts, and the messages the log cannot have yet.
+    pub fn of(drafts: &std::collections::HashMap<String, String>, sending: &std::collections::HashMap<String, Sending>) -> Outbox {
+        Outbox {
+            drafts: drafts.iter().filter(|(_, d)| !d.trim().is_empty()).map(|(k, d)| (k.clone(), d.clone())).collect(),
+            queue: sending
+                .iter()
+                .map(|(k, s)| (k.clone(), s.waiting.iter().filter(|p| p.stage != Stage::Entered).cloned().collect::<Vec<_>>()))
+                .filter(|(_, q)| !q.is_empty())
+                .collect(),
+        }
+    }
+
+    /// The queues as they stand after a restart. A message that was out when the app stopped may
+    /// or may not have reached the terminal: it waits for a tap from where it was, never sent twice
+    /// by itself.
+    pub fn sending(self) -> std::collections::HashMap<String, Sending> {
+        self.queue
+            .into_iter()
+            .map(|(k, q)| {
+                let waiting = q
+                    .into_iter()
+                    .map(|mut p| {
+                        if matches!(p.stage, Stage::Typing | Stage::Entering) {
+                            p.failed = true;
+                        }
+                        p.not_before_ms = 0;
+                        p
+                    })
+                    .collect();
+                (k, Sending { waiting })
+            })
+            .collect()
+    }
+}
 
 /// How long a message the link dropped waits before it goes again (the link is back by then, or
 /// the PC no longer busy).
@@ -1026,6 +1072,30 @@ mod tests {
         assert_eq!((calls[1].output.as_deref(), calls[1].failed), (Some("ok"), false));
         assert!(calls[0].is_shell() && calls[1].is_todos());
         assert_eq!(todos(calls[1].detail.as_deref().unwrap()), [(Todo::Done, "Read it".into()), (Todo::Doing, "Fix it".into()), (Todo::Open, "Ship it".into())]);
+    }
+
+    #[test]
+    fn drafts_and_the_queue_come_back_after_a_restart() {
+        let mut sending = std::collections::HashMap::new();
+        let mut s = Sending::default();
+        s.push("entered", 0);
+        s.push("out", 0);
+        s.push("waiting", 0);
+        assert_eq!(s.next(0), Some(Step::Type("entered".into())));
+        s.answered(Answer::Ok, 0);
+        assert_eq!(s.next(ENTER_AFTER_MS), Some(Step::Enter));
+        s.answered(Answer::Ok, ENTER_AFTER_MS);
+        assert_eq!(s.next(200), Some(Step::Type("out".into())));
+        sending.insert("a".to_string(), s);
+        let drafts = std::collections::HashMap::from([("a".to_string(), "half a thought".to_string()), ("b".to_string(), " ".to_string())]);
+        let saved: Outbox = serde_json::from_slice(&serde_json::to_vec(&Outbox::of(&drafts, &sending)).unwrap()).unwrap();
+        assert_eq!(saved.drafts.len(), 1, "an empty draft is not kept");
+        assert_eq!(saved.drafts["a"], "half a thought");
+        let mut back = saved.sending();
+        let q = back.get_mut("a").unwrap();
+        // The entered one is the log's now; the one that was out waits for a tap; the last waits.
+        assert_eq!(q.waiting.iter().map(|p| (p.text.as_str(), p.failed)).collect::<Vec<_>>(), [("out", true), ("waiting", false)]);
+        assert_eq!(q.next(1_000), Some(Step::Type("waiting".into())), "words never typed hold nothing");
     }
 
     #[test]

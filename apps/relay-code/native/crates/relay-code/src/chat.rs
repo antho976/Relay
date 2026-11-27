@@ -48,7 +48,6 @@ pub struct State {
     /// A table still coasts: draw again.
     moving: bool,
     pub model_sheet: bool,
-    pub typed: String,
     /// Where the message box starts on screen, for the model picker above it.
     pub box_top: f32,
     /// Pictures on their way to the agent's checkout.
@@ -777,14 +776,14 @@ fn attachments(app: &mut App, name: &str) {
         app.st.chat.uploading = app.st.chat.uploading.saturating_sub(1);
         match r {
             Ok(path) => {
-                let typed = if app.focus.is(FIELD) { app.focus.text.clone() } else { app.st.chat.typed.clone() };
+                let typed = if app.focus.is(FIELD) { app.focus.text.clone() } else { app.draft(name) };
                 let joined = if typed.trim().is_empty() { path } else { format!("{}\n{path}", typed.trim_end()) };
                 if app.focus.is(FIELD) {
                     app.focus.text = joined.clone();
                     app.focus.sel = None;
                     app.host.keyboard(true, &joined, Kb::Text);
                 }
-                app.st.chat.typed = joined;
+                app.set_draft(name, &joined);
             }
             Err(e) => app.toast(&e),
         }
@@ -804,7 +803,8 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     let asking = agent.as_ref().is_some_and(Agent::needs_you);
 
     // The composer's height first: the page ends above it.
-    let typed = if app.focus.is(FIELD) { app.focus.text.clone() } else { app.st.chat.typed.clone() };
+    // What you started writing to this agent: its own draft, kept across agents and restarts.
+    let typed = if app.focus.is(FIELD) { app.focus.text.clone() } else { app.draft(name) };
     let fw = WIDTH - 2.0 * 12.0 - 28.0;
     let tst = Text::new(ty::BODY, t::INK).line(1.4);
     let lines = if typed.is_empty() { 1 } else { app.canvas.wrap_spans(&typed, fw, tst).len().clamp(1, FIELD_LINES) };
@@ -958,6 +958,7 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
         && let Some(s) = app.sending.get_mut(name)
     {
         s.retry(i);
+        app.outbox_changed();
     }
 
     // Scrolled up: a key back to the newest, just above the message box.
@@ -1151,7 +1152,8 @@ fn composer(
         }
     }
     if focused {
-        app.st.chat.typed = app.focus.text.clone();
+        let text = app.focus.text.clone();
+        app.set_draft(name, &text);
     }
     // The keys under the words: the model chip, then send or stop.
     let ky = y + field_h + 10.0;
@@ -1216,7 +1218,7 @@ fn composer(
             let text = typed.trim_end().to_string();
             app.focus.text.clear();
             app.focus.sel = None;
-            app.st.chat.typed.clear();
+            app.set_draft(name, "");
             app.host.keyboard(true, "", Kb::Text);
             if !app.focus.is(FIELD) {
                 app.focus.id = None;
@@ -1374,6 +1376,56 @@ fn model_picker(app: &mut App, name: &str, agent: Option<&Agent>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Host(std::path::PathBuf);
+    impl crate::app::Host for Host {
+        fn data_dir(&self) -> std::path::PathBuf {
+            self.0.clone()
+        }
+        fn log(&self, _text: &str) {}
+    }
+
+    #[test]
+    fn a_draft_stays_with_its_agent_and_comes_back_after_a_restart() {
+        let dir = std::env::temp_dir().join(format!("relay-code-drafts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(Host(dir.clone())), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        let mut clock = 1_000_000_000u64;
+        let mut frames = |a: &mut App, n: usize| {
+            for _ in 0..n {
+                clock += 16_666_666;
+                a.frame(clock);
+            }
+        };
+        a.open("bold-puffin");
+        frames(&mut a, 2);
+        a.focus.id = Some(FIELD);
+        a.set_text_sel("half a thought", None);
+        frames(&mut a, 2);
+        // Another agent: its own empty box; the first keeps its words.
+        a.open("swift-ocelot");
+        frames(&mut a, 2);
+        assert_eq!(a.draft("swift-ocelot"), "");
+        assert_eq!(a.draft("bold-puffin"), "half a thought");
+        a.open("bold-puffin");
+        frames(&mut a, 2);
+        assert_eq!(a.draft("bold-puffin"), "half a thought", "back on it, the words are there");
+        // Away, then a new start: written off the UI thread, read back on launch.
+        a.shot = false;
+        a.paused();
+        let file = dir.join("cache/outbox.json");
+        for _ in 0..200 {
+            if file.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let b = App::new(std::sync::Arc::new(Host(dir.clone())), 1_000_000_000);
+        assert_eq!(b.draft("bold-puffin"), "half a thought");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn models_read_as_people_say_them() {
