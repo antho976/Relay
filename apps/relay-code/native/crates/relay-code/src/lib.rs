@@ -30,6 +30,7 @@ pub mod screen;
 pub mod settings;
 pub mod theme;
 pub mod ui;
+pub mod update;
 pub mod wake;
 
 #[cfg(test)]

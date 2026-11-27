@@ -126,6 +126,46 @@ public class CodeActivity extends GameActivity {
         });
     }
 
+    /** Android lets this app install others (always below Android 8). */
+    public boolean canInstall() {
+        return android.os.Build.VERSION.SDK_INT < 26 || getPackageManager().canRequestPackageInstalls();
+    }
+
+    /**
+     * Hands the APK Rust downloaded from the PC (files/updates/, checked against its SHA-256) to
+     * Android's installer: 1 when it opened, 0 when the app may not install apps yet (Android's
+     * "Install unknown apps" page for it opens instead), -1 when it failed.
+     */
+    public int installApk(final String path) {
+        if (!canInstall()) {
+            runOnUiThread(() -> {
+                Intent allow = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()));
+                try {
+                    startActivity(allow);
+                } catch (android.content.ActivityNotFoundException ignored) {
+                    // No such page on this phone: the sheet still says what to allow.
+                }
+            });
+            return 0;
+        }
+        try {
+            Uri uri = androidx.core.content.FileProvider.getUriForFile(this, getPackageName() + ".files", new File(path));
+            Intent install = new Intent(Intent.ACTION_VIEW);
+            install.setDataAndType(uri, "application/vnd.android.package-archive");
+            install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            runOnUiThread(() -> {
+                try {
+                    startActivity(install);
+                } catch (android.content.ActivityNotFoundException ignored) {
+                    // No installer: nothing opens.
+                }
+            });
+            return 1;
+        } catch (Throwable e) {
+            return -1;
+        }
+    }
+
     /** A light tick under the finger: on send, on a long press that copies, on a switch (Rust's Host::haptic). */
     public void haptic() {
         runOnUiThread(() -> getWindow().getDecorView().performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK));

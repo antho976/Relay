@@ -150,6 +150,11 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             }
         }
         "asks" => app.open("umber-zebra"),
+        // D10: an update from the PC, offered and downloading.
+        "update" | "update-downloading" => {
+            app.reset_to(Route::Home);
+            crate::update::sample(&mut app, 312, (screen == "update-downloading").then_some(7_300_000));
+        }
         // D1: a stopped agent's chat, a closed one's, the chat menu, its confirm, and search.
         "stopped" => app.open("keen-newt"),
         "closed" => app.open("vivid-dingo"),

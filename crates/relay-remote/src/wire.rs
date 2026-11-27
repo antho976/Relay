@@ -179,6 +179,8 @@ pub const PHONE_OPS: &[&str] = &[
     "notes.restore", "notes.update",
     "notify.ack", "notify.ack_all", "notify.list", "notify.settings.get", "notify.settings.set",
     "overlap.list",
+    // Relay Code's updates, served by this PC (phone.app.*, read-only)
+    "phone.app.apk", "phone.app.latest",
     "plugin.enable", "plugin.get", "plugin.list",
     "project.add", "project.clone", "project.list", "project.remove", "project.update",
     "provider.list", "provider.refresh", "provider.update",

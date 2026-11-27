@@ -2051,6 +2051,7 @@ name = "relay-code"
 version = "0.1.0"
 dependencies = [
  "android-activity",
+ "base64",
  "bytemuck",
  "fontdue",
  "gif",
@@ -2066,6 +2067,7 @@ dependencies = [
  "relay-client",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "svgtypes",
  "vt100",
  "wgpu",

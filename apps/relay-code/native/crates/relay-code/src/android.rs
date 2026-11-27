@@ -105,6 +105,22 @@ impl Host for AndroidHost {
         with_activity(&self.app, |env, activity| env.call_method(activity, "haptic", "()V", &[]).map(|_| ()));
     }
 
+    fn can_install(&self) -> bool {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "canInstall", "()Z", &[])?.z()).unwrap_or(false)
+    }
+
+    fn install_apk(&self, path: &std::path::Path) -> crate::update::Install {
+        let r = with_activity(&self.app, |env, activity| {
+            let p = env.new_string(path.to_string_lossy())?;
+            env.call_method(activity, "installApk", "(Ljava/lang/String;)I", &[JValue::Object(&p)])?.i()
+        });
+        match r {
+            Some(1) => crate::update::Install::Started,
+            Some(0) => crate::update::Install::NeedsLeave,
+            _ => crate::update::Install::Failed,
+        }
+    }
+
 
 }
 
