@@ -1886,6 +1886,38 @@ mod tests {
     }
 
     #[test]
+    fn the_composers_chips_take_a_tap_44_tall() {
+        let dir = std::env::temp_dir().join(format!("relay-code-chips-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(Host(dir.clone())), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        a.open("bold-puffin");
+        let clock = std::cell::Cell::new(1_000_000_000u64);
+        let frames = |a: &mut App, n: usize| {
+            for _ in 0..n {
+                clock.set(clock.get() + 16_666_666);
+                a.frame(clock.get());
+            }
+        };
+        frames(&mut a, 3);
+        // The chip is drawn 34 tall from `ky`; its tap reaches past it above and below.
+        let lh = Text::new(ty::BODY, t::INK).line(1.4).lh();
+        let ky = a.st.chat.box_top + 14.0 + lh + 10.0;
+        // The words above take a tap down to 4 over it: 44 from there to 6 under it.
+        for y in [ky - 3.0, ky + 34.0 + 5.0] {
+            a.st.chat.model_sheet = false;
+            let t0 = clock.get();
+            a.touch(crate::ui::Touch { id: 1, phase: crate::ui::Phase::Down, x: 100.0, y, t_ns: t0 });
+            frames(&mut a, 1);
+            a.touch(crate::ui::Touch { id: 1, phase: crate::ui::Phase::Up, x: 100.0, y, t_ns: t0 + 40_000_000 });
+            frames(&mut a, 2);
+            assert!(a.st.chat.model_sheet, "a tap at {y} (chip drawn from {ky}) opened the model sheet");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn days_are_named_as_people_say_them() {
         let now = 1_795_000_000_000u64;
         assert_eq!(day_name(now, now), "Today");
