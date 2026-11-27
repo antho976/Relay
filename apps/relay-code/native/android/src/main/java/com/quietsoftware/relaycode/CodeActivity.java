@@ -91,11 +91,16 @@ public class CodeActivity extends GameActivity {
         });
     }
 
-    /** Starts or stops {@link LinkService}; {@code words} is its ongoing notification's line. */
+    /**
+     * Starts or stops {@link LinkService}; {@code words} is its ongoing notification's line. A
+     * running service only has its line changed: starting it again from the background (the link
+     * dropped while the app was away) is refused on Android 12 and later.
+     */
     public void linkService(final boolean on, final String words) {
         runOnUiThread(() -> {
             Intent i = new Intent(this, LinkService.class).putExtra(LinkService.WORDS, words);
             if (on) {
+                if (LinkService.words(this, words)) return;
                 try {
                     ContextCompat.startForegroundService(this, i);
                 } catch (RuntimeException ignored) {
