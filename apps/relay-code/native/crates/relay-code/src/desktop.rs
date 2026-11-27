@@ -330,7 +330,7 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
     let state = arg(args, "--state");
     if let Some(st) = state.as_deref() {
         if st == "offline" {
-            app.set_link_state(rc_link::LinkState::Offline { reason: "No route to the PC".into(), retry_at_ms: 0 });
+            app.set_link_state(rc_link::LinkState::Offline { reason: "No route to the PC".into(), retry_at_ms: rc_link::link::now_ms() + 12_000 });
         }
         if st == "connecting" || st == "empty" {
             app.agents.clear();
