@@ -279,6 +279,19 @@ const ATTACHMENTS: &str = ".relay/attachments";
 /// both as one paste (the phone's `ENTER_AFTER_MS`).
 const CHAT_ENTER_AFTER: std::time::Duration = std::time::Duration::from_millis(90);
 
+/// The typing lock of a terminal, for chat.send: held across a message's words, the wait and its
+/// Enter, so two sends a moment apart are two messages, never "A B" and two Enters. It keeps the
+/// ids it typed lately, so a resend racing the first answer types nothing. Keyed by the PTY, held
+/// weakly: a terminal gone takes its lock with it.
+fn typing_lock(pty: &Arc<Pty>) -> Arc<std::sync::Mutex<std::collections::VecDeque<String>>> {
+    type Lock = Arc<std::sync::Mutex<std::collections::VecDeque<String>>>;
+    type Locks = std::collections::HashMap<usize, (std::sync::Weak<Pty>, Lock)>;
+    static LOCKS: std::sync::LazyLock<std::sync::Mutex<Locks>> = std::sync::LazyLock::new(Default::default);
+    let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    locks.retain(|_, (pty, _)| pty.strong_count() > 0);
+    locks.entry(Arc::as_ptr(pty) as usize).or_insert_with(|| (Arc::downgrade(pty), Lock::default())).1.clone()
+}
+
 /// `.relay/attachments` in `worktree`, made if missing. The agent owns its checkout, so either
 /// folder may be a link it planted: a link is refused rather than written through.
 fn attachments_dir(worktree: &Path) -> Result<PathBuf, BusError> {
@@ -2578,8 +2591,8 @@ pub fn register(e: &mut Engine) {
     });
 
     // A person's message, kept under the sender's id so it is drawn once: the log is found and
-    // measured with the store unlocked (for Codex a walk), the send recorded in the transaction,
-    // and the words typed after it commits, Enter on its own a moment later, as the phone did.
+    // measured, and the words typed (Enter on its own a moment later, as the phone did), with the
+    // store unlocked; the send is then recorded in the transaction.
     e.register_staged::<ChatSend, _>(|ctx, p| {
         let ok_id = !p.client_id.is_empty() && p.client_id.len() <= 64 && p.client_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
         if !ok_id {
@@ -2594,27 +2607,35 @@ pub fn register(e: &mut Engine) {
         let at = s.provider_ref.as_deref().filter(|reference| crate::providers::is_provider_ref(reference))
             .and_then(|reference| crate::transcript::locate(s.provider, reference, Path::new(&s.worktree)))
             .and_then(|path| crate::transcript::position(&path));
-        Ok((id, pty, at))
-    }, |ctx: &mut Ctx, p, (id, pty, at): (Id, Arc<Pty>, Option<(u64, u64)>)| {
-        let added = ctx.tx().prepare_cached(
-            "INSERT OR IGNORE INTO chat_sends(session_id, client_id, text, log_tag, log_offset, sent_at) VALUES (?1,?2,?3,?4,?5,?6)",
-        ).bus()?.execute(params![id, p.client_id, p.text, at.map(|a| a.0 as i64), at.map(|a| a.1 as i64), ctx.now]).bus()?;
-        if added == 0 {
+        // Typed before the answer, with nothing locked but this terminal: `typed` is then true
+        // only of words that went in, and a write that fails refuses with no send kept.
+        let lock = typing_lock(&pty);
+        let mut recent = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let sent_before = recent.contains(&p.client_id) || ctx.read(|conn| {
+            conn.prepare_cached("SELECT 1 FROM chat_sends WHERE session_id=?1 AND client_id=?2").bus()?
+                .exists(params![id, p.client_id]).bus()
+        })?;
+        if !sent_before {
+            crate::engine::write_input(&pty, &p.text, true)?;
+            std::thread::sleep(CHAT_ENTER_AFTER);
+            crate::engine::write_input(&pty, "\r", false)?;
+            recent.push_back(p.client_id.clone());
+            if recent.len() > 64 {
+                recent.pop_front();
+            }
+        }
+        Ok((id, at, !sent_before))
+    }, |ctx: &mut Ctx, p, (id, at, typed): (Id, Option<(u64, u64)>, bool)| {
+        if !typed {
             // Sent before (a retry after a lost answer): typed once only.
             return Ok(ChatSendOut { client_id: p.client_id, typed: false });
         }
+        let added = ctx.tx().prepare_cached(
+            "INSERT OR IGNORE INTO chat_sends(session_id, client_id, text, log_tag, log_offset, sent_at) VALUES (?1,?2,?3,?4,?5,?6)",
+        ).bus()?.execute(params![id, p.client_id, p.text, at.map(|a| a.0 as i64), at.map(|a| a.1 as i64), ctx.now]).bus()?;
         ctx.tx().prepare_cached("DELETE FROM chat_sends WHERE session_id=?1 AND sent_at<?2").bus()?
             .execute(params![id, crate::time::days_ago(1)]).bus()?;
-        let text = p.text.clone();
-        ctx.after_commit(move |_| {
-            std::thread::spawn(move || {
-                if crate::engine::write_input(&pty, &text, true).is_ok() {
-                    std::thread::sleep(CHAT_ENTER_AFTER);
-                    let _ = crate::engine::write_input(&pty, "\r", false);
-                }
-            });
-        });
-        Ok(ChatSendOut { client_id: p.client_id, typed: true })
+        Ok(ChatSendOut { client_id: p.client_id, typed: added > 0 })
     });
 
     // A picture from the phone for the agent: decoded and written with the store lock released;

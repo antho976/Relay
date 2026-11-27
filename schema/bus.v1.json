@@ -40127,6 +40127,13 @@
           "format": "uint64",
           "minimum": 0,
           "description": "At most this many bytes (default and most 3 MiB)."
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The `sha256` of the build being downloaded (`phone.app.latest`'s): a newer one published\nsince is refused (`phone.app_changed`) rather than read into the middle of the older."
         }
       }
     },
