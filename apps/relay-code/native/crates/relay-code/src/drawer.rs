@@ -447,7 +447,15 @@ pub fn draw_new_agent(app: &mut App) -> bool {
     }
     let style = Text::new(ty::BODY, if task.is_empty() { t::INK3 } else { t::INK }).line(1.4);
     let shown = if task.is_empty() { "What should it do?" } else { task.as_str() };
-    app.canvas.para(shown, t::PAD + 14.0, fy + 12.0, fw - 28.0, style, 3);
+    // While writing, the last three lines show, so the line being typed is never hidden.
+    let lines = app.canvas.wrap(shown, fw - 28.0, style, usize::MAX);
+    if focused && lines.len() > 3 {
+        for (i, line) in lines[lines.len() - 3..].iter().enumerate() {
+            app.canvas.text(line, t::PAD + 14.0, fy + 12.0 + i as f32 * style.lh(), style);
+        }
+    } else {
+        app.canvas.para(shown, t::PAD + 14.0, fy + 12.0, fw - 28.0, style, 3);
+    }
     if focused && task.is_empty() {
         app.canvas.rect(t::PAD + 14.0, fy + 12.0, 2.0, style.lh(), 1.0, t::ACCENT);
     }
@@ -456,8 +464,9 @@ pub fn draw_new_agent(app: &mut App) -> bool {
         if cx.tap(t::PAD, fy, fw, FIELD_H) && !focused && !creating {
             cx.focus.id = Some("new-agent");
             cx.focus.text = task.clone();
-            cx.focus.kind = Kb::Text;
-            cx.host.keyboard(true, &task, Kb::Text);
+            // Writing a task: several lines, sentences capitalised, corrections (Kb::Prose).
+            cx.focus.kind = Kb::Prose;
+            cx.host.keyboard(true, &task, Kb::Prose);
         }
     }
     app.st.newagent.task = task.clone();

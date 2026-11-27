@@ -231,6 +231,7 @@ fn the_box_at_homes_foot_opens_new_agent_with_the_keyboard() {
     tap(&mut a, &mut clock, 195.0, 844.0 - 36.0);
     assert!(a.st.newagent.open);
     assert!(a.focus.is("new-agent"));
+    assert_eq!(a.focus.kind, crate::kit::Kb::Prose, "a task is written: several lines, corrections");
 }
 
 #[test]
