@@ -163,6 +163,16 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             }
         }
         "asks" => app.open("umber-zebra"),
+        // D13: the key strip over the message box, and the Terminal page.
+        "keys" => {
+            app.open("bold-puffin");
+            app.st.keys.open = true;
+        }
+        "terminal" => {
+            app.open("bold-puffin");
+            app.push(Route::Terminal("bold-puffin".into()));
+            crate::terminal::sample(&mut app, "bold-puffin");
+        }
         // D10: an update from the PC, offered and downloading.
         "update" | "update-downloading" => {
             app.reset_to(Route::Home);

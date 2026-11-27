@@ -1190,7 +1190,7 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     // The newest to-do list, pinned while it works with nothing to ask (needs the list read: the
     // log is read into items below, so this frame uses the last frame's list).
     let pin_h = if working && question.is_none() && stopped.is_none() { pinned_h(app) } else { 0.0 };
-    let foot_h = if stopped.is_some() { crate::agents::STOPPED_H } else { box_h + 20.0 + ask_h + pin_h };
+    let foot_h = if stopped.is_some() { crate::agents::STOPPED_H } else { box_h + 20.0 + ask_h + pin_h + crate::keys::height(app) };
 
     let page = app.page_begin(dt, TOP_H, foot_h);
     // The log is read into items and measured only when it or a fold changed: a long
@@ -1416,7 +1416,7 @@ fn composer(
     app.canvas.rect(-1000.0, top, WIDTH + 2000.0, foot_h + app.canvas.inset_bottom + 2.0, 0.0, t::BG);
     let mut y = top + 6.0;
     // The pinned to-do list, when the foot was made taller for it.
-    let pin_h = foot_h - (box_h + 20.0 + ask_h);
+    let pin_h = foot_h - (box_h + 20.0 + ask_h + crate::keys::height(app));
     if pin_h > 1.0 {
         pinned(app, y, pin_h);
         y += pin_h;
@@ -1531,6 +1531,8 @@ fn composer(
         }
     }
 
+    // The key strip (keys.rs), when it is up: just above the box, under the command list.
+    y += crate::keys::strip(app, name, y);
     let (bx, bw) = (12.0, WIDTH - 24.0);
     app.st.chat.box_top = y;
     // Back on the message box's own layer after the command list.
@@ -1623,6 +1625,8 @@ fn composer(
         }
     }
     let sx = bx + bw - 10.0 - 34.0;
+    // Esc, Tab, arrows, Enter for the terminal's own menus (keys.rs): beside send.
+    crate::keys::toggle(app, sx - 8.0 - 34.0, ky, 34.0);
     let has_text = !typed.trim().is_empty();
     let mut cx = crate::cx!(app);
     let pressed = cx.pressed(sx - 6.0, ky - 6.0, 46.0, 46.0);

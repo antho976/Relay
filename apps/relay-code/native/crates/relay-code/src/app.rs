@@ -115,6 +115,8 @@ pub enum Route {
     File { repo: i64, worktree: Option<String>, path: String },
     /// What needs you: held commands, agents that ask, finished work.
     Inbox,
+    /// One agent's whole terminal screen, read-only, with the key strip (D13).
+    Terminal(String),
 }
 
 /// What a request was for, so its answer lands in the right place.
@@ -195,6 +197,8 @@ pub struct States {
     pub commands: crate::commands::State,
     pub update: crate::update::State,
     pub news: crate::news::State,
+    pub keys: crate::keys::State,
+    pub terminal: crate::terminal::State,
 }
 
 pub struct App {
@@ -1320,6 +1324,7 @@ impl App {
             Route::Task(id) => crate::board::draw_task(self, *id, dt),
             Route::File { repo, worktree, path } => crate::fileview::draw(self, *repo, worktree.clone(), path, dt),
             Route::Inbox => crate::inbox::draw(self, dt),
+            Route::Terminal(name) => crate::terminal::draw(self, &name.clone(), dt),
         };
         // "*" (the link came back) has been seen by every page drawn this frame.
         self.changed.remove("*");
