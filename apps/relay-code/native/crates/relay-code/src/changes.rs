@@ -4,6 +4,8 @@
 //! file's diff, the box stages or unstages it; the foot writes the message (or asks the PC for
 //! one) and commits and pushes, and opens the pull request.
 
+use std::collections::HashSet;
+
 use rc_link::Call;
 use serde_json::{Value, json};
 
@@ -80,6 +82,12 @@ pub struct State {
     /// The foot's menu (Commit without pushing), and the file whose discard waits for a yes.
     pub menu: bool,
     pub discard: Option<File>,
+    /// Folders open in a list long enough to be grouped (by list and folder); the rest folded.
+    pub expanded: HashSet<(Group, String)>,
+    /// Bring the open file's row to the top on the next frame (Previous, Next).
+    jump: bool,
+    /// Where the page was scrolled and how far it went, kept for coming back to Changes.
+    kept_scroll: Option<(f32, f32)>,
     pending: Vec<Pending>,
 }
 
@@ -93,7 +101,7 @@ struct Pending {
 }
 
 /// Which list a file is in: the branch's whole change since the base, or what is not committed.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Group {
     Branch,
     Work,
@@ -419,6 +427,8 @@ impl State {
         self.loaded = false;
         self.open = None;
         self.diff = Diff::Reading;
+        self.expanded.clear();
+        self.kept_scroll = None;
         self.branch.clear();
         self.upstream = None;
         self.ahead = 0;
@@ -687,6 +697,14 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         reload(app);
     }
     let foot_h = 132.0 + message_extra(app);
+    // Back on Changes: the place it was left at, with the file that was open.
+    if app.fresh
+        && let Some((off, max)) = app.st.changes.kept_scroll
+    {
+        let sc = app.scroll();
+        sc.max = max;
+        sc.off = off.min(max.max(0.0));
+    }
     let page = app.page_begin(dt, crate::home::TOP_H, foot_h);
     let mut y = page.top + 4.0;
 
@@ -743,16 +761,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
                 app.canvas.text("Reading the branch…", t::PAD, y + 4.0, Text::new(ty::SMALL, t::INK3));
                 y += 30.0;
             }
-            for f in &list {
-                let (_, tapped) = file_row(app, y, f, false);
-                if tapped {
-                    open = Some((Group::Branch, f.path.clone()));
-                }
-                y += 52.0;
-                if app.st.changes.open.as_ref() == Some(&(Group::Branch, f.path.clone())) {
-                    y += hunks(app, y, &page);
-                }
-            }
+            let (ny, o, _) = file_list(app, y, &page, Group::Branch, &list);
+            y = ny;
+            open = open.or(o);
             y = section(app, y + 10.0, &plural(commits.len(), "COMMIT"));
             y = commit_list(app, y, &commits);
         }
@@ -760,20 +771,10 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             let label = if commits.is_empty() { plural(nfiles, "FILE") } else { format!("UNCOMMITTED · {}", plural(nfiles, "FILE")) };
             y = section(app, y + if commits.is_empty() { 0.0 } else { 10.0 }, &label);
             let list = app.st.changes.files.clone();
-            for f in &list {
-                let (ticked, tapped) = file_row(app, y, f, true);
-                if ticked {
-                    toggle_stage = Some(f.clone());
-                }
-                if tapped {
-                    open = Some((Group::Work, f.path.clone()));
-                }
-                y += 52.0;
-                if app.st.changes.open.as_ref() == Some(&(Group::Work, f.path.clone())) {
-                    y += hunks(app, y, &page);
-                    y += discard_key(app, y, f);
-                }
-            }
+            let (ny, o, t) = file_list(app, y, &page, Group::Work, &list);
+            y = ny;
+            open = open.or(o);
+            toggle_stage = t;
         } else if commits.is_empty() {
             let ahead = app.st.changes.ahead;
             let words = if ahead > 0 { format!("Nothing to commit. {} not pushed yet.", plural(ahead as usize, "commit").to_lowercase()) } else { "Nothing changed on this branch.".to_string() };
@@ -794,6 +795,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         }
     }
     app.page_end(&page, y);
+    let sc = app.scroll();
+    let kept = (sc.off, sc.max);
+    app.st.changes.kept_scroll = Some(kept);
     crate::home::top(app, "Changes");
     foot(app, foot_h, nfiles);
     if app.st.changes.picking {
@@ -816,9 +820,172 @@ fn section(app: &mut App, y: f32, label: &str) -> f32 {
     y + 26.0
 }
 
-/// One file: the box (when it can be ticked), its name over its folder, its counts. Returns
-/// whether the box and whether the row were tapped.
-fn file_row(app: &mut App, y: f32, f: &File, tick: bool) -> (bool, bool) {
+/// Past this many files a list groups by folder, each folded to one row until opened.
+const GROUP_OVER: usize = 15;
+
+/// A file's folder ("" at the top of the repo).
+fn folder(path: &str) -> &str {
+    path.trim_end_matches('/').rsplit_once('/').map_or("", |(d, _)| d)
+}
+
+/// The files in the order the list shows them: by folder when grouped, as given otherwise.
+fn shown_order(list: &[File]) -> Vec<File> {
+    let mut v = list.to_vec();
+    if v.len() > GROUP_OVER {
+        v.sort_by(|a, b| folder(&a.path).cmp(folder(&b.path)).then_with(|| a.path.cmp(&b.path)));
+    }
+    v
+}
+
+/// The file before or after the open one in its list (`step` -1 or 1), in the order shown.
+pub fn neighbour(list: &[File], open: &str, step: i32) -> Option<File> {
+    let v = shown_order(list);
+    let i = v.iter().position(|f| f.path == open)? as i32 + step;
+    usize::try_from(i).ok().and_then(|i| v.get(i)).cloned()
+}
+
+/// A list of files (`group`): file by file, or past [`GROUP_OVER`] by folder, a folder's row
+/// opening it. Returns where it ends, a file to open (or close) and a box ticked.
+fn file_list(app: &mut App, mut y: f32, page: &crate::app::Page, group: Group, list: &[File]) -> (f32, Option<(Group, String)>, Option<File>) {
+    let tick = group == Group::Work;
+    let mut open = None;
+    let mut ticked = None;
+    let order = shown_order(list);
+    let grouped = order.len() > GROUP_OVER;
+    if grouped {
+        // Fold or open every folder at once, on the right of the list's label.
+        let all_open = order.iter().all(|f| app.st.changes.expanded.contains(&(group, folder(&f.path).to_string())));
+        let label = if all_open { "Collapse all" } else { "Expand all" };
+        let small = Text::new(ty::SMALL, t::INK2).medium();
+        let lw = app.canvas.measure(label, small) + 24.0;
+        let (kx, ky) = (WIDTH - t::PAD - lw, y - 26.0);
+        let mut cx = crate::cx!(app);
+        if cx.pressed(kx, ky - 4.0, lw, 32.0) {
+            cx.c.rect(kx, ky - 4.0, lw, 28.0, 8.0, t::WASH);
+        }
+        cx.c.text(label, kx + 12.0, ky + 4.0, small);
+        if cx.tap(kx, ky - 10.0, lw, 44.0) {
+            let st = &mut app.st.changes;
+            if all_open {
+                st.expanded.retain(|(g, _)| *g != group);
+            } else {
+                for f in &order {
+                    st.expanded.insert((group, folder(&f.path).to_string()));
+                }
+            }
+        }
+    }
+    let mut i = 0;
+    while i < order.len() {
+        let dir = folder(&order[i].path).to_string();
+        let end = if grouped { order[i..].iter().position(|f| folder(&f.path) != dir).map_or(order.len(), |n| i + n) } else { order.len() };
+        let shown = !grouped || app.st.changes.expanded.contains(&(group, dir.clone()));
+        if grouped {
+            let files = &order[i..end];
+            let (a, r) = files.iter().fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
+            if folder_row(app, y, &dir, files.len(), a, r, shown) {
+                let st = &mut app.st.changes;
+                let key = (group, dir.clone());
+                if !st.expanded.remove(&key) {
+                    st.expanded.insert(key);
+                }
+            }
+            y += 48.0;
+        }
+        if shown {
+            for f in &order[i..end] {
+                let (t_, tapped) = file_row(app, y, f, tick, !grouped);
+                if t_ {
+                    ticked = Some(f.clone());
+                }
+                if tapped {
+                    open = Some((group, f.path.clone()));
+                }
+                if app.st.changes.jump && app.st.changes.open.as_ref() == Some(&(group, f.path.clone())) {
+                    app.st.changes.jump = false;
+                    // The opened row at the top of the page, under the bars.
+                    let sc = app.scroll();
+                    sc.off = (y - page.top - 8.0).clamp(0.0, sc.max.max(y));
+                }
+                y += 52.0;
+                if app.st.changes.open.as_ref() == Some(&(group, f.path.clone())) {
+                    y += hunks(app, y, page);
+                    y += diff_keys(app, y, group, list, f);
+                }
+            }
+        }
+        i = end;
+    }
+    (y, open, ticked)
+}
+
+/// A folder in a grouped list: its path, how many files and lines, folded or open. True when
+/// tapped.
+fn folder_row(app: &mut App, y: f32, dir: &str, n: usize, added: i64, removed: i64, open: bool) -> bool {
+    let h = 44.0;
+    let mut cx = crate::cx!(app);
+    if cx.pressed(0.0, y, WIDTH, h) {
+        cx.c.rect(8.0, y, WIDTH - 16.0, h, 8.0, t::WASH);
+    }
+    cx.c.icon(if open { "chevron-down" } else { "chevron-right" }, t::PAD + 8.0, y + h / 2.0, 12.0, t::INK3);
+    let ct = Text::new(ty::SMALL, t::INK3).face(Weight::Mono);
+    let counts = format!("{n} · +{added} −{removed}");
+    let cw = cx.c.measure(&counts, ct);
+    cx.c.text(&counts, WIDTH - t::PAD, y + 13.0, ct.right());
+    let name = if dir.is_empty() { "(top of the repo)" } else { dir };
+    let st = Text::new(ty::UI, t::INK).medium();
+    let name = cx.c.fit_start(name, WIDTH - 2.0 * t::PAD - 26.0 - cw - 12.0, st);
+    cx.c.text(&name, t::PAD + 24.0, y + 12.0, st);
+    cx.tap(0.0, y, WIDTH, h)
+}
+
+/// Under an open diff: the file before and after it, Collapse, and (uncommitted) Discard.
+/// Returns its height.
+fn diff_keys(app: &mut App, y: f32, group: Group, list: &[File], f: &File) -> f32 {
+    let small = Text::new(ty::SMALL, t::INK2).medium();
+    let prev = neighbour(list, &f.path, -1);
+    let next = neighbour(list, &f.path, 1);
+    let mut x = t::PAD - 12.0;
+    let mut go: Option<File> = None;
+    for (label, target) in [("Previous", prev), ("Next", next)] {
+        let lw = app.canvas.measure(label, small) + 24.0;
+        let mut cx = crate::cx!(app);
+        let ink = if target.is_some() { t::INK2 } else { t::INK3.a(0.5) };
+        if target.is_some() && cx.pressed(x, y - 4.0, lw, 40.0) {
+            cx.c.rect(x, y - 2.0, lw, 32.0, 8.0, t::WASH);
+        }
+        cx.c.text(label, x + 12.0, y + 5.0, small.color(ink));
+        if cx.tap(x, y - 6.0, lw, 44.0) && target.is_some() {
+            go = target;
+        }
+        x += lw;
+    }
+    let close = {
+        let label = "Collapse";
+        let lw = app.canvas.measure(label, small) + 24.0;
+        let mut cx = crate::cx!(app);
+        if cx.pressed(x, y - 4.0, lw, 40.0) {
+            cx.c.rect(x, y - 2.0, lw, 32.0, 8.0, t::WASH);
+        }
+        cx.c.text(label, x + 12.0, y + 5.0, small);
+        cx.tap(x, y - 6.0, lw, 44.0)
+    };
+    if group == Group::Work {
+        discard_key(app, y, f);
+    }
+    if close {
+        app.st.changes.open = None;
+    } else if let Some(t) = go {
+        app.st.changes.expanded.insert((group, folder(&t.path).to_string()));
+        open_file(app, (group, t.path.clone()));
+        app.st.changes.jump = true;
+    }
+    40.0
+}
+
+/// One file: the box (when it can be ticked), its name over its folder (`dir`: not in a folder's
+/// group, which names it), its counts. Returns whether the box and whether the row were tapped.
+fn file_row(app: &mut App, y: f32, f: &File, tick: bool, dir_line: bool) -> (bool, bool) {
     let h = 52.0;
     let mut cx = crate::cx!(app);
     let left = if tick { 44.0 } else { 0.0 };
@@ -852,7 +1019,11 @@ fn file_row(app: &mut App, y: f32, f: &File, tick: bool) -> (bool, bool) {
     let trimmed = f.path.trim_end_matches('/');
     let (dir, name) = trimmed.rsplit_once('/').map_or(("", trimmed), |(d, n)| (d, n));
     let tw = WIDTH - tx - cw - 26.0;
-    cx.c.text_fit(name, tx, y + 8.0, tw, Text::new(ty::MONO, t::INK).face(Weight::Mono));
+    // Alone (in a folder's group, which names its folder) the name sits in the row's middle.
+    let nt = Text::new(ty::MONO, t::INK).face(Weight::Mono);
+    let alone = f.old_path.is_none() && (!dir_line || dir.is_empty());
+    let ny = if alone { y + (h - nt.lh()) / 2.0 } else { y + 8.0 };
+    cx.c.text_fit(name, tx, ny, tw, nt);
     let st = Text::new(ty::SMALL, t::INK3);
     if let Some(old) = &f.old_path {
         // A rename says where it came from in place of its folder: the old name alone when the
@@ -861,11 +1032,11 @@ fn file_row(app: &mut App, y: f32, f: &File, tick: bool) -> (bool, bool) {
         let (odir, oname) = old.rsplit_once('/').map_or(("", old), |(d, n)| (d, n));
         let from = format!("renamed from {}", if odir == dir { oname } else { old });
         cx.c.text_fit(&from, tx, y + 28.0, tw, st);
-    } else if !dir.is_empty() {
+    } else if dir_line && !dir.is_empty() {
         let dir = cx.c.fit_start(dir, tw, st);
         cx.c.text(&dir, tx, y + 28.0, st);
     }
-    cx.c.text(&counts, WIDTH - t::PAD, y + 9.0, ct.right());
+    cx.c.text(&counts, WIDTH - t::PAD, ny + (nt.lh() - ct.lh()) / 2.0, ct.right());
     let tapped = cx.tap(left, y, WIDTH - left, h);
     (ticked, tapped)
 }
@@ -1160,28 +1331,38 @@ fn message_style() -> Text {
 
 const MESSAGE_LINES: usize = 5;
 
-/// The message's text as the box shows it: the keyboard's while it is being typed.
-fn message_text(app: &App) -> String {
-    if app.focus.is("commit-message") { app.focus.text.clone() } else { app.st.changes.message.clone() }
+/// A field's text as its box shows it: the keyboard's while it is being typed.
+fn prose_text(app: &App, id: &str, value: &str) -> String {
+    if app.focus.is(id) { app.focus.text.clone() } else { value.to_string() }
 }
 
-/// How much taller than one line the box is: a message of several lines (a subject, a blank
-/// line, a body, as git.suggest_message writes them) shows up to five of them.
-fn message_extra(app: &mut App) -> f32 {
-    let text = message_text(app);
+/// How much taller than one line a box of writing `w` wide is: up to five lines show.
+fn prose_extra(app: &mut App, id: &str, value: &str, w: f32) -> f32 {
+    let text = prose_text(app, id, value);
     if text.is_empty() {
         return 0.0;
     }
     let st = message_style();
-    let w = WIDTH - 2.0 * t::PAD - 60.0;
     let n = app.canvas.wrap_spans(&text, w, st).len().clamp(1, MESSAGE_LINES);
     (n - 1) as f32 * st.lh()
 }
 
-/// The commit message: every line, wrapped, with the caret at its end while typing. A tap gives it
-/// the keyboard, as kit::inline does.
+/// How much taller than one line the commit message's box is: a subject, a blank line and a
+/// body, as git.suggest_message writes them, show up to five lines.
+fn message_extra(app: &mut App) -> f32 {
+    let message = app.st.changes.message.clone();
+    prose_extra(app, "commit-message", &message, WIDTH - 2.0 * t::PAD - 60.0)
+}
+
 fn message_box(app: &mut App, x: f32, y: f32, w: f32, h: f32, value: &mut String) {
-    let id = "commit-message";
+    prose_box(app, "commit-message", "Commit message", x, y, w, h, value);
+}
+
+/// A field of writing (the commit message, a pull request's description): every line, wrapped,
+/// with the caret at its end while typing, on the writing keyboard (Enter is a new line). A tap
+/// gives it the keyboard, as kit::inline does.
+#[allow(clippy::too_many_arguments)]
+fn prose_box(app: &mut App, id: &'static str, placeholder: &str, x: f32, y: f32, w: f32, h: f32, value: &mut String) {
     let mut cx = crate::cx!(app);
     let focused = cx.focus.is(id);
     if focused {
@@ -1190,7 +1371,7 @@ fn message_box(app: &mut App, x: f32, y: f32, w: f32, h: f32, value: &mut String
     }
     let st = message_style();
     if value.is_empty() {
-        cx.c.text("Commit message", x, y + (46.0 - st.lh()) / 2.0, st.color(t::INK3));
+        cx.c.text(placeholder, x, y + (46.0 - st.lh()) / 2.0, st.color(t::INK3));
         if focused {
             cx.c.rect(x, y + 12.0, 2.0, 22.0, 1.0, t::ACCENT);
         }
@@ -1216,14 +1397,14 @@ fn message_box(app: &mut App, x: f32, y: f32, w: f32, h: f32, value: &mut String
         if !focused {
             cx.focus.id = Some(id);
             cx.focus.text = value.clone();
-            cx.focus.kind = Kb::Text;
+            cx.focus.kind = Kb::Prose;
         }
-        cx.host.keyboard(true, value, Kb::Text);
+        cx.host.keyboard(true, value, Kb::Prose);
     }
 }
 
-/// Under an open uncommitted file's diff: Discard, which asks first. Returns its height.
-fn discard_key(app: &mut App, y: f32, f: &File) -> f32 {
+/// Under an open uncommitted file's diff, at the right: Discard, which asks first.
+fn discard_key(app: &mut App, y: f32, f: &File) {
     let label = if f.index == "?" { "Delete this new file" } else { "Discard changes" };
     let small = Text::new(ty::SMALL, t::DANGER).medium();
     let lw = app.canvas.measure(label, small) + 24.0;
@@ -1236,7 +1417,6 @@ fn discard_key(app: &mut App, y: f32, f: &File) -> f32 {
     if cx.tap(x, y - 6.0, lw, 44.0) {
         app.st.changes.discard = Some(f.clone());
     }
-    40.0
 }
 
 /// Discard asks before it goes: a file put back as HEAD has it loses its edits, staged or not; a
@@ -1331,7 +1511,10 @@ fn branch_line(app: &mut App, mut y: f32) -> f32 {
 /// The sheet that opens a pull request for the branch: its title and body, both optional (the PC
 /// writes them from the commits when left empty).
 fn pr_sheet(app: &mut App) {
-    let h = 330.0;
+    let body_w = WIDTH - 2.0 * t::PAD - 28.0;
+    let pr_body = app.st.changes.pr_body.clone();
+    let extra = prose_extra(app, "pr-body", &pr_body, body_w);
+    let h = 330.0 + extra;
     let (top, outside) = kit::sheet(&mut crate::cx!(app), h);
     if outside {
         app.finish_typing();
@@ -1347,7 +1530,17 @@ fn pr_sheet(app: &mut App) {
     let mut body = app.st.changes.pr_body.clone();
     let mut y = top + 88.0;
     y += kit::field(&mut crate::cx!(app), "pr-title", x, y, w, "Title", "From the commits", &mut title, Kb::Text) + 12.0;
-    kit::field(&mut crate::cx!(app), "pr-body", x, y, w, "Description", "Optional", &mut body, Kb::Text);
+    {
+        // As kit::field draws its box, several lines tall.
+        let lt = Text::new(ty::CAPTION, t::INK2).medium();
+        app.canvas.text("Description", x + 2.0, y, lt);
+        let fy = y + lt.lh() + 6.0;
+        let fh = 48.0 + extra;
+        let focused = app.focus.is("pr-body");
+        app.canvas.rect(x, fy, w, fh, t::KEY_R, t::S1);
+        app.canvas.outline(x, fy, w, fh, t::KEY_R, 1.0, if focused { t::INK3 } else { t::LINE });
+        prose_box(app, "pr-body", "Optional", x + 14.0, fy + 1.0, body_w, fh, &mut body);
+    }
     app.st.changes.pr_title = title.clone();
     app.st.changes.pr_body = body.clone();
     let ky = top + h - 62.0;
@@ -1839,6 +2032,98 @@ mod tests {
             a.frame(clock);
         }
         assert!(a.st.changes.pick_scroll.max > 5.0 * 56.0, "the rows past eight scroll: {}", a.st.changes.pick_scroll.max);
+    }
+
+    fn many(n: usize) -> Vec<File> {
+        (0..n).map(|i| File { path: format!("{}/f{i:02}.rs", if i % 2 == 0 { "src/b" } else { "src/a" }), index: " ".into(), added: 1, ..File::default() }).collect()
+    }
+
+    #[test]
+    fn past_fifteen_files_the_list_goes_by_folder_and_next_follows_it() {
+        let few = many(4);
+        assert_eq!(shown_order(&few), few, "a short list stays as git gave it");
+        let big = many(20);
+        let order: Vec<String> = shown_order(&big).into_iter().map(|f| f.path).collect();
+        assert!(order[..10].iter().all(|p| p.starts_with("src/a/")) && order[10..].iter().all(|p| p.starts_with("src/b/")));
+        assert_eq!(neighbour(&big, "src/a/f19.rs", 1).map(|f| f.path), Some("src/b/f00.rs".to_string()));
+        assert_eq!(neighbour(&big, "src/a/f01.rs", -1), None);
+        assert_eq!(neighbour(&big, "src/b/f18.rs", 1), None);
+        assert_eq!(folder("a.rs"), "");
+        assert_eq!(folder("new/"), "");
+        assert_eq!(folder("x/y/z.rs"), "x/y");
+    }
+
+    /// The sample's Changes with only uncommitted files, `files` of them.
+    fn work_only(name: &str, files: Vec<File>) -> (App, u64) {
+        let (mut a, mut clock) = on_changes(name);
+        let st = &mut a.st.changes;
+        st.commits.clear();
+        st.branch_files.clear();
+        st.prs.clear();
+        st.files = files;
+        st.open = None;
+        for _ in 0..3 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        (a, clock)
+    }
+
+    #[test]
+    fn a_long_list_folds_by_folder_and_expand_all_opens_them() {
+        let (mut a, mut clock) = work_only("fold", many(20));
+        let folded = a.scroll().max;
+        for f in many(20) {
+            a.st.changes.expanded.insert((Group::Work, folder(&f.path).to_string()));
+        }
+        for _ in 0..2 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        let open = a.scroll().max;
+        assert!(open - folded > 19.0 * 52.0, "twenty rows show once both folders open: {folded} → {open}");
+    }
+
+    #[test]
+    fn next_brings_its_file_to_the_top_and_coming_back_keeps_the_place() {
+        let (mut a, mut clock) = work_only("jump", many(12));
+        a.st.changes.open = Some((Group::Work, "src/a/f11.rs".into()));
+        a.st.changes.diff = Diff::Note("x".into());
+        a.st.changes.jump = true;
+        for _ in 0..3 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        assert!(!a.st.changes.jump, "the jump happened");
+        let off = a.scroll().off;
+        // The last row goes as high as the page lets it: the page's end.
+        assert!(off > 150.0 && (off - a.scroll().max).abs() < 1.0, "row 12 is far down the list: {off}");
+        // Away to Home and back: the same place, the same file open.
+        a.reset_to(Route::Home);
+        for _ in 0..2 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        a.push(Route::Changes);
+        for _ in 0..2 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        assert!((a.scroll().off - off).abs() < 1.0, "{} vs {off}", a.scroll().off);
+        assert_eq!(a.st.changes.open, Some((Group::Work, "src/a/f11.rs".into())));
+    }
+
+    #[test]
+    fn the_commit_message_and_the_pr_description_take_the_writing_keyboard() {
+        let (mut a, mut clock) = on_changes("prose");
+        let my = 844.0 - (132.0 + message_extra(&mut a)) + 12.0;
+        lift(&mut a, &mut clock, 120.0, my + 20.0);
+        assert!(a.focus.is("commit-message") && a.focus.kind == Kb::Prose);
+        a.finish_typing();
+        // A description of several lines grows its sheet, so the key stays under it.
+        let w = WIDTH - 2.0 * t::PAD - 28.0;
+        assert_eq!(prose_extra(&mut a, "pr-body", "", w), 0.0);
+        assert!(prose_extra(&mut a, "pr-body", "What it does.\n\nWhy.\nHow to check it.", w) > 2.5 * message_style().lh());
     }
 
     #[test]
