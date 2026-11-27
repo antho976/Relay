@@ -5,6 +5,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.net.ConnectivityManager;
@@ -18,38 +19,92 @@ import androidx.core.app.ServiceCompat;
  * app is in the background, with one quiet ongoing notification saying where the link stands
  * (design 44, Q2: the owner approved this service). It also tells Rust when the network changes,
  * so the link redials at once instead of waiting out its backoff. It holds no connection itself.
+ *
+ * Android can start it again by itself (START_STICKY) in a fresh process with no activity, so it
+ * loads librelaycode.so itself, and no native call or Android refusal here may throw: a service
+ * that throws is restarted, throws again, and crash-loops.
  */
 public class LinkService extends Service {
     static final String WORDS = "words";
     private static final String CHANNEL = "link";
     private static final int ID = 1;
 
+    /** Whether librelaycode.so is loaded: only GameActivity loads it otherwise. */
+    private static final boolean LOADED = load();
+
+    private static boolean load() {
+        try {
+            System.loadLibrary("relaycode");
+            return true;
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    /** The service while it runs, on the main thread only: its line is changed in place. */
+    private static LinkService running;
+
     /** The network changed: Rust redials now. */
     static native void nativeNetwork();
 
     private ConnectivityManager.NetworkCallback callback;
 
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        String words = intent != null ? intent.getStringExtra(WORDS) : null;
-        NotificationManager nm = getSystemService(NotificationManager.class);
-        nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Link to your PC", NotificationManager.IMPORTANCE_MIN));
-        Intent open = new Intent(this, CodeActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        PendingIntent tap = PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        Notification n = new Notification.Builder(this, CHANNEL)
+    /**
+     * Changes the ongoing notification's line if the service runs, through NotificationManager
+     * (starting a foreground service again from the background is refused on Android 12 and
+     * later). False when it is not running, so the caller starts it. Main thread only.
+     */
+    static boolean words(Context context, String words) {
+        if (running == null) return false;
+        NotificationManager nm = context.getSystemService(NotificationManager.class);
+        if (nm != null) nm.notify(ID, notification(context, words));
+        return true;
+    }
+
+    private static Notification notification(Context context, String words) {
+        NotificationManager nm = context.getSystemService(NotificationManager.class);
+        if (nm != null) nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Link to your PC", NotificationManager.IMPORTANCE_MIN));
+        Intent open = new Intent(context, CodeActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent tap = PendingIntent.getActivity(context, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        return new Notification.Builder(context, CHANNEL)
                 .setSmallIcon(R.drawable.ic_notify)
                 .setContentTitle(words != null && !words.isEmpty() ? words : "Relay Code")
                 .setContentIntent(tap)
                 .setOngoing(true)
                 .build();
+    }
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        running = this;
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        // A sticky restart brings no intent: the line is the plain name until Rust says more.
+        String words = intent != null ? intent.getStringExtra(WORDS) : null;
         int type = android.os.Build.VERSION.SDK_INT >= 34 ? ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE : 0;
-        ServiceCompat.startForeground(this, ID, n, type);
+        try {
+            ServiceCompat.startForeground(this, ID, notification(this, words), type);
+        } catch (RuntimeException e) {
+            // Android refused a foreground start here (from the background, Android 12 and
+            // later): stop rather than be killed for not starting, and do not come back by
+            // ourselves. The next time the app is opened it starts the service again.
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         if (callback == null) {
             ConnectivityManager cm = getSystemService(ConnectivityManager.class);
             callback = new ConnectivityManager.NetworkCallback() {
                 @Override
                 public void onAvailable(Network network) {
-                    nativeNetwork();
+                    if (!LOADED) return;
+                    try {
+                        nativeNetwork();
+                    } catch (UnsatisfiedLinkError ignored) {
+                        // A library without the call: the link redials on its own backoff.
+                    }
                 }
             };
             try {
@@ -63,6 +118,7 @@ public class LinkService extends Service {
 
     @Override
     public void onDestroy() {
+        if (running == this) running = null;
         if (callback != null) {
             try {
                 getSystemService(ConnectivityManager.class).unregisterNetworkCallback(callback);
