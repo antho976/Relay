@@ -397,7 +397,9 @@ pub fn now_ms() -> u64 {
 
 // The session
 
-type Answer = std::sync::mpsc::Sender<Result<Value, BusError>>;
+/// Where an answer goes, and whether its coming wakes the app (a call of the app's own) or not
+/// (the link's pings, the background's reads: the activity sleeps through them).
+type Answer = (std::sync::mpsc::Sender<Result<Value, BusError>>, bool);
 
 struct Session {
     tx: mpsc::UnboundedSender<String>,
@@ -412,7 +414,7 @@ impl Session {
     fn shut(&self) {
         if self.open.swap(false, Ordering::SeqCst) {
             let down = BusError::link("link.down", "The link to the PC closed");
-            for (_, a) in self.pending.lock().unwrap_or_else(|e| e.into_inner()).drain() {
+            for (_, (a, _)) in self.pending.lock().unwrap_or_else(|e| e.into_inner()).drain() {
                 let _ = a.send(Err(down.clone()));
             }
             self.ended.notify_waiters();
@@ -440,6 +442,8 @@ impl Session {
 /// An answer on its way. Poll it each frame.
 pub struct Call {
     rx: std::sync::mpsc::Receiver<Result<Value, BusError>>,
+    /// Held by [`Call::never`] so its answer never comes.
+    _never: Option<std::sync::mpsc::Sender<Result<Value, BusError>>>,
 }
 
 impl Call {
@@ -460,7 +464,13 @@ impl Call {
     fn failed(e: BusError) -> Call {
         let (tx, rx) = std::sync::mpsc::channel();
         let _ = tx.send(Err(e));
-        Call { rx }
+        Call { rx, _never: None }
+    }
+
+    /// A call whose answer never comes, for tests of what shows while one is on its way.
+    pub fn never() -> Call {
+        let (tx, rx) = std::sync::mpsc::channel();
+        Call { rx, _never: Some(tx) }
     }
 }
 
@@ -603,24 +613,36 @@ impl Link {
     }
 
     pub fn call_with(&self, op: &str, payload: Value, timeout: Duration) -> Call {
+        self.call_as(op, payload, timeout, true)
+    }
+
+    /// [`Link::call_with`] whose answer does not wake the app: for a reader beside it (the
+    /// notifications), so an app asleep in the background stays asleep.
+    pub fn call_quiet(&self, op: &str, payload: Value, timeout: Duration) -> Call {
+        self.call_as(op, payload, timeout, false)
+    }
+
+    fn call_as(&self, op: &str, payload: Value, timeout: Duration, wake: bool) -> Call {
         let Some(s) = self.session() else {
             return Call::failed(BusError::link("link.down", "Not connected to the PC"));
         };
         let id = wire::uuid_v4();
         let (tx, rx) = std::sync::mpsc::channel();
-        if !s.send(op, &payload, &id, Some(tx)) {
+        if !s.send(op, &payload, &id, Some((tx, wake))) {
             return Call::failed(BusError::link("link.down", "Not connected to the PC"));
         }
         let (s2, waker, op) = (s.clone(), self.inner.waker.clone(), op.to_string());
         self.handle.spawn(async move {
             tokio::time::sleep(timeout).await;
             let gone = s2.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-            if let Some(a) = gone {
+            if let Some((a, wake)) = gone {
                 let _ = a.send(Err(BusError::link("link.timeout", &format!("The PC did not answer {op} in time"))));
-                waker();
+                if wake {
+                    waker();
+                }
             }
         });
-        Call { rx }
+        Call { rx, _never: None }
     }
 
     /// Fire and forget, for keys: the answer is read and dropped.
@@ -788,14 +810,16 @@ fn dispatch(inner: &Inner, s: &Session, line: &str) {
         Some(Incoming::Res(r)) => {
             let Some(id) = r.id else { return };
             let a = s.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-            if let Some(a) = a {
+            if let Some((a, wake)) = a {
                 let out = if r.ok {
                     Ok(r.result)
                 } else {
                     Err(r.error.unwrap_or_else(|| BusError { kind: "internal".into(), code: "bus.no_error".into(), message: "The PC refused without saying why".into(), hint: None }))
                 };
                 let _ = a.send(out);
-                (inner.waker)();
+                if wake {
+                    (inner.waker)();
+                }
             }
         }
         Some(Incoming::Ev(e)) => {
@@ -817,7 +841,7 @@ fn dispatch(inner: &Inner, s: &Session, line: &str) {
 async fn ask(s: &Arc<Session>, op: &str, payload: Value, timeout: Duration) -> Result<Value, BusError> {
     let id = wire::uuid_v4();
     let (tx, rx) = std::sync::mpsc::channel();
-    if !s.send(op, &payload, &id, Some(tx)) {
+    if !s.send(op, &payload, &id, Some((tx, false))) {
         return Err(BusError::link("link.down", "Not connected to the PC"));
     }
     let deadline = tokio::time::Instant::now() + timeout;

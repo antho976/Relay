@@ -264,6 +264,13 @@ pub extern "system" fn Java_com_quietsoftware_relaycode_LinkService_nativeNetwor
     wake();
 }
 
+/// The screen went on or off (LinkService's receiver): off, the notifications read nothing on a
+/// timer.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_relaycode_LinkService_nativeScreen<'local>(_env: JNIEnv<'local>, _class: JClass<'local>, on: jni::sys::jboolean) {
+    crate::background::screen(on != 0);
+}
+
 /// Back, from CodeActivity's back callback.
 static BACK: AtomicBool = AtomicBool::new(false);
 
@@ -386,6 +393,8 @@ fn android_main(android: AndroidApp) {
     let mut last_insets = (0.0, 0.0, 0.0);
     let mut insets_api: Option<InsetsApi> = None;
     let mut watch_until = 0u64;
+    // In the background: when the app has something due (a message's Enter, a write).
+    let mut away_due: Option<u64> = None;
 
     while !quit {
         let drawing = screen.is_some() && foreground;
@@ -395,7 +404,7 @@ fn android_main(android: AndroidApp) {
         }
         watch_until = watch_until.max(host.keyboard_at.load(Ordering::SeqCst).saturating_add(KEYBOARD_SETTLE_NS));
         let timeout = if !drawing {
-            None
+            away_due.map(|at| Duration::from_nanos(at.saturating_sub(now)))
         } else if dirty || matches!(next, Next::Now) {
             Some(Duration::ZERO)
         } else {
@@ -503,8 +512,10 @@ fn android_main(android: AndroidApp) {
             app.link.kick();
         }
         // In the background the link's news is still read: a question becomes a notification.
-        if woken && !foreground {
-            app.tick(now_ns());
+        if foreground {
+            away_due = None;
+        } else if woken || away_due.is_some_and(|at| now_ns() >= at) {
+            away_due = app.tick(now_ns());
         }
         let mut go_back = BACK.swap(false, Ordering::SeqCst);
         let mut text: Option<(String, (usize, usize))> = None;

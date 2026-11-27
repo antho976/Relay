@@ -761,7 +761,8 @@ impl App {
                 self.ask(Ask::Projects, "project.list", json!({}));
             }
         }
-        if self.agents_stale && self.link_state.online() && !self.asking(&Ask::Agents) {
+        // Away, the notifications' loop reads the list (background.rs): asked once, not twice.
+        if self.agents_stale && self.foreground && self.link_state.online() && !self.asking(&Ask::Agents) {
             self.agents_stale = false;
             self.ask(Ask::Agents, "session.list", json!({}));
         }
@@ -783,8 +784,12 @@ impl App {
                     write_json(self.data.join("cache/projects.json"), &self.projects);
                 }
                 (Ask::Agents, Ok(v)) => {
-                    self.agents = data::agents(&v);
-                    write_json(self.data.join("cache/agents.json"), &self.agents);
+                    crate::background::listed(&v);
+                    let agents = data::agents(&v);
+                    if agents != self.agents {
+                        self.agents = agents;
+                        write_json(self.data.join("cache/agents.json"), &self.agents);
+                    }
                 }
                 (Ask::Transcript(name), Ok(v)) => self.took_transcript(&name, &v),
                 (Ask::Input(name) | Ask::Enter(name), r) => {
@@ -1088,9 +1093,15 @@ impl App {
 
     /// In the background: take what the link brought without drawing (notifications are
     /// background.rs's, which runs with no activity too).
-    pub fn tick(&mut self, now_ns: u64) {
+    ///
+    /// A commit's push still goes out, and a message's Enter its moment after the words: the
+    /// answer is when to tick again, if anything is due.
+    pub fn tick(&mut self, now_ns: u64) -> Option<u64> {
         self.now_ns = now_ns;
+        self.wake = None;
         self.take_answers();
+        crate::changes::keep_up(self);
+        self.wake
     }
 
     pub fn tabbed(&self) -> bool {
