@@ -1249,3 +1249,42 @@ fn default_follows_the_phones_font_scale_within_bounds_and_small_large_override(
     assert!((crate::draw::text_scale() - 1.3).abs() < 0.001);
     assert!((crate::drawer::agent_row_h() - 72.0 * 1.3).abs() < 0.01);
 }
+
+#[test]
+fn an_edge_swipe_under_a_sheet_does_not_open_the_drawer() {
+    let mut a = app("edge-under-sheet");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.push(Route::Board);
+    frames(&mut a, &mut clock, 3);
+    crate::board::new_task(&mut a);
+    frames(&mut a, &mut clock, 3);
+    let y = 300.0;
+    clock += 16_666_666;
+    a.touch(Touch { id: 1, phase: Phase::Down, x: 6.0, y, t_ns: clock });
+    frames(&mut a, &mut clock, 1);
+    for i in 1..=10 {
+        clock += 16_666_666;
+        a.touch(Touch { id: 1, phase: Phase::Move, x: 6.0 + 20.0 * i as f32, y, t_ns: clock });
+        frames(&mut a, &mut clock, 1);
+    }
+    clock += 100_000_000;
+    a.touch(Touch { id: 1, phase: Phase::Up, x: 206.0, y, t_ns: clock });
+    frames(&mut a, &mut clock, 20);
+    assert!(!a.st.drawer.open, "the sheet's, not the drawer's");
+    // With no sheet up, the same swipe opens it.
+    a.st.board.new_task = None;
+    frames(&mut a, &mut clock, 3);
+    clock += 16_666_666;
+    a.touch(Touch { id: 2, phase: Phase::Down, x: 6.0, y, t_ns: clock });
+    frames(&mut a, &mut clock, 1);
+    for i in 1..=10 {
+        clock += 16_666_666;
+        a.touch(Touch { id: 2, phase: Phase::Move, x: 6.0 + 20.0 * i as f32, y, t_ns: clock });
+        frames(&mut a, &mut clock, 1);
+    }
+    clock += 100_000_000;
+    a.touch(Touch { id: 2, phase: Phase::Up, x: 206.0, y, t_ns: clock });
+    frames(&mut a, &mut clock, 20);
+    assert!(a.st.drawer.open);
+}
