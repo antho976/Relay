@@ -40,6 +40,8 @@ pub struct State {
     /// Sideways, for a screen wider than the page; and the screen it was last placed for.
     side: crate::ui::HScroll,
     marked_for: Option<String>,
+    /// The screen's rows as the mono face draws them, and the text they were mapped from.
+    mapped: Option<(String, std::rc::Rc<Vec<String>>)>,
     /// The screen's text size (A− / A+); 0 for the default. Kept across visits.
     pub size: f32,
 }
@@ -178,7 +180,15 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
             let style = mono(app);
             let adv = app.canvas.measure("M", style).max(0.1);
             let lh = style.lh();
-            let rows: Vec<String> = text.split('\n').map(|r| r.chars().map(|c| drawable(app, c)).collect()).collect();
+            // Mapped once per screen read, not per frame (each character through the face check).
+            let rows: std::rc::Rc<Vec<String>> = match &app.st.terminal.mapped {
+                Some((from, rows)) if from == text => rows.clone(),
+                _ => {
+                    let rows: std::rc::Rc<Vec<String>> = std::rc::Rc::new(text.split('\n').map(|r| r.chars().map(|c| drawable(app, c)).collect()).collect());
+                    app.st.terminal.mapped = Some((text.clone(), rows.clone()));
+                    rows
+                }
+            };
             let longest = rows.iter().map(|r| r.chars().count()).max().unwrap_or(0) as f32;
             // The block fills the page down to the keys, the newest rows at its foot, as a
             // terminal shows them; a longer screen scrolls up.
@@ -267,6 +277,12 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
 #[cfg(test)]
 pub fn sideways(app: &App) -> (f32, f32) {
     (app.st.terminal.side.off, app.st.terminal.side.max)
+}
+
+/// Put a screen in place, as an answer would: benches.
+#[cfg(test)]
+pub fn set_text(app: &mut App, text: &str) {
+    app.st.terminal.text = Some(text.to_string());
 }
 
 /// When the screen is read next (ns): tests.

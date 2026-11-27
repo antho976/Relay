@@ -119,16 +119,36 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
 
     // Notifications: one row each, the whole row its switch.
     y += label(app, y, "NOTIFICATIONS");
+    // Android said no: every switch reads off, whatever it was set to here, and a row says where
+    // they are turned on (D22). A tap on any of them goes there too.
+    let blocked = app.can_notify == Some(false);
+    if blocked {
+        let h = 60.0;
+        let mut cx = crate::cx!(app);
+        if cx.pressed(0.0, y, WIDTH, h) {
+            cx.c.rect(8.0, y, WIDTH - 16.0, h, 10.0, t::WASH);
+        }
+        cx.c.text_fit("Notifications are off for Relay Code", t::PAD, y + 8.0, WIDTH - 2.0 * t::PAD - 24.0, Text::new(ty::BODY, t::WARN));
+        cx.c.text_fit("Turn them on in Android's settings", t::PAD, y + 32.0, WIDTH - 2.0 * t::PAD - 24.0, Text::new(ty::CAPTION, t::INK3));
+        cx.c.icon("chevron-right", WIDTH - t::PAD - 7.0, y + h / 2.0, 13.0, t::INK3);
+        if cx.tap(0.0, y, WIDTH, h) {
+            app.host.open_notification_settings();
+        }
+        y += h + 4.0;
+    }
     for (kind, words) in NOTIFY {
-        let on = app.notifies(kind);
+        let on = app.notifies(kind) && !blocked;
         let h = 52.0;
         let mut cx = crate::cx!(app);
         if cx.pressed(0.0, y, WIDTH, h) {
             cx.c.rect(8.0, y, WIDTH - 16.0, h, 10.0, t::WASH);
         }
-        cx.c.text_fit(words, t::PAD, y + (h - 20.0) / 2.0, WIDTH - 2.0 * t::PAD - 56.0, Text::new(ty::BODY, t::INK));
+        cx.c.text_fit(words, t::PAD, y + (h - 20.0) / 2.0, WIDTH - 2.0 * t::PAD - 56.0, Text::new(ty::BODY, if blocked { t::INK3 } else { t::INK }));
         switch(cx.c, WIDTH - t::PAD, y + h / 2.0, on);
-        if cx.tap(0.0, y, WIDTH, h) {
+        let tapped = cx.tap(0.0, y, WIDTH, h);
+        if tapped && blocked {
+            app.host.open_notification_settings();
+        } else if tapped {
             app.host.haptic();
             app.set_notifies(kind, !on);
             // Android asks once for the right to post: when one is switched on.

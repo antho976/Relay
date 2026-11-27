@@ -138,6 +138,25 @@ public class CodeActivity extends GameActivity {
         });
     }
 
+    /** Android lets this app post notifications (Settings' switches read it, D22). */
+    public boolean canNotify() {
+        android.app.NotificationManager nm = getSystemService(android.app.NotificationManager.class);
+        return nm == null || nm.areNotificationsEnabled();
+    }
+
+    /** Android's notification settings for this app, where they are turned back on. */
+    public void openNotificationSettings() {
+        runOnUiThread(() -> {
+            Intent i = new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName());
+            try {
+                startActivity(i);
+            } catch (android.content.ActivityNotFoundException ignored) {
+                // No such page here: the row still says what to turn on.
+            }
+        });
+    }
+
     /** Android lets this app install others (always below Android 8). */
     public boolean canInstall() {
         return android.os.Build.VERSION.SDK_INT < 26 || getPackageManager().canRequestPackageInstalls();
