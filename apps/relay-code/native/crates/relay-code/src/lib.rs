@@ -15,6 +15,7 @@ pub mod designs;
 pub mod inbox;
 pub mod chat;
 pub mod clock;
+pub mod commands;
 pub mod data;
 pub mod draw;
 pub mod drawer;
