@@ -1099,7 +1099,7 @@ fn attachments(app: &mut App, name: &str) {
                 if app.focus.is(FIELD) {
                     app.focus.text = joined.clone();
                     app.focus.sel = None;
-                    app.host.keyboard(true, &joined, Kb::Text);
+                    app.host.keyboard(true, &joined, Kb::Prose);
                 }
                 app.set_draft(name, &joined);
             }
@@ -1393,9 +1393,9 @@ fn composer(
                 let text = app.draft(name);
                 app.focus.id = Some(FIELD);
                 app.focus.text = text.clone();
-                app.focus.kind = Kb::Text;
+                app.focus.kind = Kb::Prose;
                 app.focus.sel = None;
-                app.host.keyboard(true, &text, Kb::Text);
+                app.host.keyboard(true, &text, Kb::Prose);
             }
         }
         y += ask_h;
@@ -1452,7 +1452,7 @@ fn composer(
             if let Some(cmd) = pick {
                 app.focus.text = format!("{cmd} ");
                 app.focus.sel = None;
-                app.host.keyboard(true, &app.focus.text.clone(), Kb::Text);
+                app.host.keyboard(true, &app.focus.text.clone(), Kb::Prose);
             }
         }
     }
@@ -1483,11 +1483,11 @@ fn composer(
             if !focused {
                 cx.focus.id = Some(FIELD);
                 cx.focus.text = text.clone();
-                cx.focus.kind = Kb::Text;
+                cx.focus.kind = Kb::Prose;
                 cx.focus.sel = None;
             }
             if !focused || !cx.focus.keyboard_up {
-                cx.host.keyboard(true, &text, Kb::Text);
+                cx.host.keyboard(true, &text, Kb::Prose);
             }
             // A tap in the words puts the caret there, as any text box does.
             if focused && !text.is_empty() {
@@ -1565,7 +1565,7 @@ fn composer(
             app.focus.text.clear();
             app.focus.sel = None;
             app.set_draft(name, "");
-            app.host.keyboard(true, "", Kb::Text);
+            app.host.keyboard(true, "", Kb::Prose);
             if !app.focus.is(FIELD) {
                 app.focus.id = None;
             }
