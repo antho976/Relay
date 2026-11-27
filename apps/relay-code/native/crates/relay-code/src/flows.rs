@@ -757,3 +757,94 @@ fn a_tap_above_the_update_sheet_closes_it_and_reaches_nothing_and_update_says_wh
     assert!(a.back());
     assert!(!a.st.update.open);
 }
+
+// D4: notifications land right; Back closes what is over the page first.
+
+// What a tap hands over goes through background::take_opened, a process-wide slot every app's
+// frame reads; tests call what the frame does with it, so a parallel test's frames cannot take it.
+
+#[test]
+fn a_tapped_notification_opens_its_chat_over_whatever_was_open() {
+    let mut a = app("notified");
+    let mut clock = 1_000_000_000;
+    a.open("bold-puffin");
+    a.st.drawer.open = true;
+    a.st.drawer.repos = true;
+    a.st.chat.model_sheet = true;
+    frames(&mut a, &mut clock, 5);
+    a.open_notified("umber-zebra");
+    frames(&mut a, &mut clock, 3);
+    assert_eq!(a.route(), &Route::Chat("umber-zebra".into()));
+    assert!(!a.st.drawer.open && !a.st.drawer.repos && !a.st.chat.model_sheet, "nothing left over it");
+    // Back from it goes to Home, as from any chat.
+    assert!(a.back());
+    assert_eq!(a.route(), &Route::Home);
+}
+
+#[test]
+fn a_notification_while_pairing_opens_nothing() {
+    let mut a = app("notified-pair");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Pair);
+    a.open_notified("umber-zebra");
+    frames(&mut a, &mut clock, 3);
+    assert_eq!(a.route(), &Route::Pair);
+}
+
+#[test]
+fn back_closes_the_sheet_then_the_drawer_then_the_page() {
+    let mut a = app("back-order");
+    let mut clock = 1_000_000_000;
+    a.open("bold-puffin");
+    a.st.drawer.open = true;
+    a.st.drawer.repos = true;
+    frames(&mut a, &mut clock, 5);
+    assert!(a.back());
+    assert!(!a.st.drawer.repos && a.st.drawer.open, "the repo sheet first");
+    assert!(a.back());
+    assert!(!a.st.drawer.open, "then the drawer");
+    assert_eq!(a.route(), &Route::Chat("bold-puffin".into()));
+    // A menu over the chat, then the chat.
+    a.st.agents.menu = Some("bold-puffin".into());
+    assert!(a.back());
+    assert!(a.st.agents.menu.is_none());
+    assert!(a.back());
+    assert_eq!(a.route(), &Route::Home);
+    // Home is the bottom: Back leaves the app (the platform's).
+    assert!(!a.back());
+}
+
+// D7, Changes' sheets (C's): a tap outside closes each, and the page's top bar under it is not hit.
+
+#[test]
+fn a_tap_outside_the_pull_request_sheet_closes_it_and_reaches_nothing() {
+    let mut a = app("pr-sheet");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.push(Route::Changes);
+    a.st.changes.pr_sheet = true;
+    frames(&mut a, &mut clock, 5);
+    // On the sheet's title area: it stays, and nothing under it changes.
+    tap(&mut a, &mut clock, 195.0, 844.0 - 330.0 + 40.0);
+    assert!(a.st.changes.pr_sheet, "a tap on the sheet keeps it");
+    // On the top bar's menu key, above the sheet: it closes, and the drawer does not open.
+    tap(&mut a, &mut clock, 28.0, 28.0);
+    assert!(!a.st.changes.pr_sheet);
+    assert!(!a.st.drawer.open, "the menu key under the veil took no tap");
+    assert_eq!(a.route(), &Route::Changes);
+}
+
+#[test]
+fn a_tap_outside_the_branch_picker_closes_it_and_reaches_nothing() {
+    let mut a = app("branch-picker");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.push(Route::Changes);
+    frames(&mut a, &mut clock, 3);
+    a.st.changes.picking = true;
+    frames(&mut a, &mut clock, 5);
+    tap(&mut a, &mut clock, 28.0, 28.0);
+    assert!(!a.st.changes.picking);
+    assert!(!a.st.drawer.open, "the menu key under the veil took no tap");
+    assert_eq!(a.route(), &Route::Changes);
+}
