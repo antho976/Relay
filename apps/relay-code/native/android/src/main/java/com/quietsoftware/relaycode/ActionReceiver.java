@@ -6,6 +6,10 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+
+import androidx.core.content.ContextCompat;
 
 /**
  * What is done from a notification in the shade (D18): a reply to an agent that asks you, or a held
@@ -85,18 +89,35 @@ public class ActionReceiver extends BroadcastReceiver {
         }
     }
 
+    /** How long the process is kept awake for an act to reach the PC (a receiver may take ~10 s). */
+    private static final long KEEP_AWAKE_MS = 8_000;
+
     @Override
     public void onReceive(Context context, Intent intent) {
+        // Android 14 and later freeze a cached process within seconds of onReceive returning: an
+        // act handed to Rust's loop could sit there unsent (D22). So the process is kept awake for
+        // a few seconds (goAsync), and LinkService, which keeps the link, is started in the
+        // foreground, which a tap on a notification's action is allowed to do.
+        final PendingResult pending = goAsync();
         try {
             if (!LinkService.loaded()) return;
             Act a = read(intent);
             if (a == null) return;
+            try {
+                ContextCompat.startForegroundService(context, new Intent(context, LinkService.class));
+            } catch (RuntimeException ignored) {
+                // Refused here: goAsync alone keeps the process up while the act goes.
+            }
             // The link and its loop run for the process (once; later calls do nothing), so an act
             // from a process Android just started for this has somewhere to go.
             LinkService.nativeStart(context.getApplicationContext(), context.getFilesDir().getAbsolutePath());
             LinkService.nativeAct(a.kind, a.agent, a.hold, a.text);
         } catch (Throwable ignored) {
             // Nothing done: the notification stays, and the chat answers it.
+        } finally {
+            if (pending != null) {
+                new Handler(Looper.getMainLooper()).postDelayed(pending::finish, KEEP_AWAKE_MS);
+            }
         }
     }
 }

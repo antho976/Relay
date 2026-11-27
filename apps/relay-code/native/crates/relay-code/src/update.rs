@@ -107,6 +107,9 @@ pub struct State {
     call: Option<Call>,
     /// Bytes downloaded so far, while downloading.
     got: Arc<AtomicU64>,
+    /// Set to stop the download under way (Later, Back): its thread stops between pieces, and
+    /// what it ends with is never installed (D22).
+    cancel: Arc<std::sync::atomic::AtomicBool>,
     /// The download's end: the file, checked, or why not.
     done: Arc<Mutex<Option<Result<PathBuf, String>>>>,
     pub downloading: bool,
@@ -120,8 +123,20 @@ pub struct State {
 }
 
 impl State {
+    /// Back closes the sheet, and stops a download under way as Later does.
     pub fn close_over(&mut self) -> bool {
+        if self.open {
+            self.stop_download();
+        }
         std::mem::take(&mut self.open)
+    }
+
+    /// Stop the download under way, if one is: nothing it brings is installed.
+    pub fn stop_download(&mut self) {
+        if self.downloading {
+            self.cancel.store(true, Ordering::SeqCst);
+            self.downloading = false;
+        }
     }
 }
 
@@ -134,7 +149,11 @@ pub fn keep_up(app: &mut App) {
         let by_hand = std::mem::take(&mut app.st.update.by_hand);
         match r {
             Ok(v) if !v.is_null() => {
-                if let Ok(l) = serde_json::from_value::<Latest>(v) {
+                let parsed = serde_json::from_value::<Latest>(v);
+                if parsed.is_err() && by_hand {
+                    app.toast("Your PC's answer about updates did not read");
+                }
+                if let Ok(l) = parsed {
                     let mine = this_build();
                     if by_hand && l.build <= mine {
                         app.toast(&format!("You have the newest, {}", version_of(mine.max(l.build))));
@@ -209,18 +228,24 @@ fn start(app: &mut App, l: &Latest) {
     st.downloading = true;
     st.note = None;
     st.got.store(0, Ordering::Relaxed);
-    let (got, done) = (st.got.clone(), st.done.clone());
+    // A fresh stop for this download: one set for an earlier one stays with it.
+    st.cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (got, done, cancel) = (st.got.clone(), st.done.clone(), st.cancel.clone());
     let dir = app.data.join("updates");
     let link = app.link.clone();
     let l = l.clone();
     let _ = std::thread::Builder::new().name("rc-update".into()).spawn(move || {
-        let r = fetch(&link, &dir, &l, &got);
+        let r = fetch(&link, &dir, &l, &got, &cancel);
+        // Stopped: what it brought is let go, never installed.
+        if cancel.load(Ordering::SeqCst) {
+            return;
+        }
         *done.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
         crate::wake::wake();
     });
 }
 
-fn fetch(link: &Link, dir: &Path, l: &Latest, got: &AtomicU64) -> Result<PathBuf, String> {
+fn fetch(link: &Link, dir: &Path, l: &Latest, got: &AtomicU64, cancel: &std::sync::atomic::AtomicBool) -> Result<PathBuf, String> {
     // Only this build's file is kept: an older one is of no use.
     let _ = std::fs::remove_dir_all(dir);
     std::fs::create_dir_all(dir).map_err(|e| format!("Couldn't save the update: {e}"))?;
@@ -230,6 +255,11 @@ fn fetch(link: &Link, dir: &Path, l: &Latest, got: &AtomicU64) -> Result<PathBuf
     let mut sha = sha2::Sha256::new();
     let mut offset = 0u64;
     loop {
+        if cancel.load(Ordering::SeqCst) {
+            drop(out);
+            let _ = std::fs::remove_file(&part);
+            return Err("Stopped".into());
+        }
         let v = link
             .call("phone.app.apk", json!({"offset": offset, "len": PIECE}))
             .wait(Duration::from_secs(90))
@@ -261,6 +291,10 @@ fn fetch(link: &Link, dir: &Path, l: &Latest, got: &AtomicU64) -> Result<PathBuf
 fn take_done(app: &mut App) {
     let end = app.st.update.done.lock().unwrap_or_else(|e| e.into_inner()).take();
     let Some(end) = end else { return };
+    // A download stopped by Later or Back ends with nothing, ever (its thread hands nothing over).
+    if !app.st.update.downloading {
+        return;
+    }
     app.st.update.downloading = false;
     match end {
         Ok(file) => {
@@ -329,6 +363,8 @@ pub fn draw(app: &mut App) -> bool {
         app.st.update.open = false;
     }
     if later {
+        // Later while it downloads stops it: no installer over another page minutes after (D22).
+        app.st.update.stop_download();
         app.st.update.open = false;
         app.set_update_later(l.build, rc_link::link::now_ms() + LATER_MS);
     } else if update {
@@ -343,6 +379,18 @@ pub fn draw(app: &mut App) -> bool {
         }
     }
     downloading
+}
+
+/// The download thread ending with `r`, as it would (tests).
+#[cfg(test)]
+pub fn finish_download(app: &mut App, r: Result<PathBuf, String>) {
+    *app.st.update.done.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+}
+
+/// The download was stopped (tests).
+#[cfg(test)]
+pub fn stopped(app: &App) -> bool {
+    app.st.update.cancel.load(Ordering::SeqCst)
 }
 
 /// Screenshots: build `build` waiting, with how much of it came.

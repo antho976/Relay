@@ -54,6 +54,12 @@ pub trait Host: Send + Sync {
     fn density(&self) -> f32 {
         0.0
     }
+    /// Whether the platform lets this app post notifications; none when it cannot say.
+    fn can_notify(&self) -> Option<bool> {
+        None
+    }
+    /// Open the platform's notification settings for this app.
+    fn open_notification_settings(&self) {}
     /// The phone's own text size setting (Android's font scale; 1.0 is its default), which the
     /// app's Default text size follows (D20). Read when the app comes to the front.
     fn font_scale(&self) -> f32 {
@@ -281,6 +287,11 @@ pub struct App {
     calls: Vec<(Ask, Call)>,
     /// The agents' list is read again once this passes (an event said it changed).
     agents_stale: bool,
+    /// Acts that change an agent's state from here (close, pause, resume, create), counted; and
+    /// the count when the list now on its way was asked for. A list asked before the latest act
+    /// is dropped and asked again.
+    acts: u64,
+    agents_asked: u64,
     /// The open conversation is read again at this time.
     pub reread_at: u64,
     /// Kinds of thing the PC said changed since a page last looked (`git`, `design`, `task`,
@@ -295,6 +306,8 @@ pub struct App {
     pub keyboard_up: bool,
     /// Android's font scale when the app last came to the front (D20).
     pub font_scale: f32,
+    /// Whether Android lets this app post notifications, read when it comes to the front (D22).
+    pub can_notify: Option<bool>,
     /// Screenshots: nothing is sent to the PC.
     pub shot: bool,
     size: (f32, f32),
@@ -402,6 +415,8 @@ impl App {
             st: States::default(),
             calls: Vec::new(),
             agents_stale: true,
+            acts: 0,
+            agents_asked: 0,
             reread_at: 0,
             changed: Default::default(),
             foreground: true,
@@ -411,6 +426,7 @@ impl App {
             typed_done: None,
             keyboard_up: false,
             font_scale: 1.0,
+            can_notify: None,
             shot: false,
             size: (1080.0, 2340.0),
             insets: (0.0, 0.0),
@@ -421,6 +437,7 @@ impl App {
         app.service();
         let mut app = app;
         app.font_scale = app.host.font_scale();
+        app.can_notify = app.host.can_notify();
         app
     }
 
@@ -455,7 +472,8 @@ impl App {
             self.toast("The PC made no agent");
         } else {
             // Its chat opens now, starting, while the PC starts it.
-            if let Some(mut a) = data::agents(&json!({"sessions": [v.clone()]})).pop() {
+            self.acts += 1;
+        if let Some(mut a) = data::agents(&json!({"sessions": [v.clone()]})).pop() {
                 a.state = "spawning".into();
                 self.agents.retain(|b| b.name != name);
                 self.agents.push(a);
@@ -539,6 +557,9 @@ impl App {
         }
         if self.calls.iter().any(|(a, _)| *a == ask) {
             return;
+        }
+        if ask == Ask::Agents {
+            self.agents_asked = self.acts;
         }
         let call = self.link.call(op, payload);
         self.calls.push((ask, call));
@@ -863,6 +884,12 @@ impl App {
                     }
                     write_json(self.data.join("cache/projects.json"), &self.projects);
                 }
+                // A list asked before the latest act (a close, a pause, a resume, a new agent) may
+                // still hold the agent as it was: it would undo what the phone just showed. Asked
+                // again instead (D22).
+                (Ask::Agents, Ok(_)) if self.agents_asked < self.acts => {
+                    self.agents_stale = true;
+                }
                 (Ask::Agents, Ok(v)) => {
                     crate::background::listed(&v);
                     let agents = data::agents(&v);
@@ -950,6 +977,7 @@ impl App {
                         .unwrap_or_default();
                 }
                 (Ask::Resume(name), Ok(_)) => {
+                    self.acts += 1;
                     self.agents_stale = true;
                     self.st.agents.stale = true;
                     if self.open_chat().as_deref() == Some(name.as_str()) {
@@ -958,11 +986,13 @@ impl App {
                     }
                 }
                 (Ask::Park(name), Ok(_)) => {
+                    self.acts += 1;
                     self.agents_stale = true;
                     self.st.agents.stale = true;
                     self.toast(&format!("{name} is paused"));
                 }
                 (Ask::Close(name), Ok(_)) => {
+                    self.acts += 1;
                     self.agents_stale = true;
                     self.st.agents.stale = true;
                     // Kept as closed until the lists say so, so its chat turns read-only at once.
@@ -1070,9 +1100,13 @@ impl App {
         self.repo = Some(id);
         self.config.repo = Some(id);
         self.save_config();
-        if let Some(name) = self.open_chat()
-            && self.agents.iter().find(|a| a.name == name).is_some_and(|a| a.project_id != id)
-        {
+        // An agent's chat or Terminal of another repo, open or under the page, goes: back to Home,
+        // as Back from a chat goes (D22: the Terminal's keys would type into the old repo's agent).
+        let other = |r: &Route| match r {
+            Route::Chat(n) | Route::Terminal(n) => self.agent(n).is_some_and(|a| a.project_id != id),
+            _ => false,
+        };
+        if self.nav.iter().any(|(r, _)| other(r)) {
             self.nav.truncate(1);
             self.shown();
         }
@@ -1160,15 +1194,46 @@ impl App {
         self.link.forget();
         self.link_state = LinkState::Unpaired;
         self.service();
+        // Everything the old PC said goes, so a new pairing starts clean (D22): repo ids start at 1
+        // on every PC, so a kept page would show the old PC's branch, files, tasks or holds, and a
+        // kept update offer would install its build.
         self.agents.clear();
+        self.earlier.clear();
+        self.restorable.clear();
         self.projects.clear();
+        self.repo = None;
         self.convos.clear();
+        self.helpers.clear();
+        self.chat_errors.clear();
+        self.screens.clear();
+        self.screens_at.clear();
+        self.opening.clear();
+        self.efforts.clear();
+        self.busy_since.clear();
         self.drafts.clear();
         self.sending.clear();
         self.outbox_at = None;
-        self.config = Config::default();
+        self.holds = 0;
+        self.no_screen = false;
+        self.no_chat_send = false;
+        self.changed.clear();
+        // The old PC's answers still on their way land nowhere.
+        self.calls.clear();
+        // Every page's state, but the phone's own choices: the terminal's text size.
+        let terminal_size = self.st.terminal.size;
+        self.st = States::default();
+        self.st.terminal.size = terminal_size;
+        // What was the PC's goes; what is the phone's (text size, notification switches, the
+        // one-time ask for notifications) stays.
+        self.config = Config {
+            text_size: self.config.text_size.take(),
+            quiet: std::mem::take(&mut self.config.quiet),
+            asked_notifications: self.config.asked_notifications,
+            ..Config::default()
+        };
         self.save_config();
         let _ = std::fs::remove_dir_all(self.data.join("cache"));
+        let _ = std::fs::remove_dir_all(self.data.join("updates"));
         self.reset_to(Route::Pair);
     }
 
@@ -1178,6 +1243,7 @@ impl App {
     pub fn resumed(&mut self) {
         // Android's text size may have changed while away (it is set in its own Settings).
         self.font_scale = self.host.font_scale();
+        self.can_notify = self.host.can_notify();
         self.foreground = true;
         self.fresh = true;
         self.link.kick();

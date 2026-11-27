@@ -123,6 +123,14 @@ impl Host for AndroidHost {
         with_activity(&self.app, |env, activity| env.call_method(activity, "haptic", "()V", &[]).map(|_| ()));
     }
 
+    fn can_notify(&self) -> Option<bool> {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "canNotify", "()Z", &[])?.z())
+    }
+
+    fn open_notification_settings(&self) {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "openNotificationSettings", "()V", &[]).map(|_| ()));
+    }
+
     fn font_scale(&self) -> f32 {
         // Resources.getConfiguration().fontScale: the NDK's configuration does not carry it.
         with_activity(&self.app, |env, activity| {

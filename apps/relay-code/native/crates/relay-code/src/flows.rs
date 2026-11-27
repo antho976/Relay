@@ -1288,3 +1288,119 @@ fn an_edge_swipe_under_a_sheet_does_not_open_the_drawer() {
     frames(&mut a, &mut clock, 20);
     assert!(a.st.drawer.open);
 }
+
+/// How long a Terminal frame takes with a full 200-row, 120-column screen of box drawing and
+/// marks: `cargo test --release terminal_frame_cost -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn terminal_frame_cost() {
+    let mut a = app("bench-terminal");
+    a.open("bold-puffin");
+    a.push(Route::Terminal("bold-puffin".into()));
+    crate::terminal::sample(&mut a, "bold-puffin");
+    let row = format!("│ ❯ {} ✔ │", "Opus 5.5 for complex tasks · Sonnet 5.5 for daily coding ".repeat(2));
+    let screen: Vec<String> = (0..200).map(|i| if i % 10 == 0 { format!("╭{}╮", "─".repeat(118)) } else { row.clone() }).collect();
+    crate::terminal::set_text(&mut a, &screen.join("\n"));
+    let mut clock = 1_000_000_000;
+    frames(&mut a, &mut clock, 5);
+    let n = 200;
+    let t = std::time::Instant::now();
+    frames(&mut a, &mut clock, n);
+    println!("terminal frame: {:.0} µs", t.elapsed().as_secs_f64() * 1e6 / n as f64);
+}
+
+// D22: spry-falcon's review of D's area.
+
+#[test]
+fn later_while_downloading_stops_it_and_nothing_installs() {
+    let mut a = app("later-stops");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    crate::update::sample(&mut a, crate::update::BUILD + 1, Some(7_300_000));
+    frames(&mut a, &mut clock, 5);
+    let y = update_sheet_keys_y(&mut a);
+    tap(&mut a, &mut clock, 80.0, y);
+    assert!(!a.st.update.open && !a.st.update.downloading);
+    assert!(crate::update::stopped(&a), "the download thread is told to stop");
+    // Whatever it ends with is never installed.
+    crate::update::finish_download(&mut a, Ok(std::path::PathBuf::from("/tmp/x.apk")));
+    frames(&mut a, &mut clock, 3);
+    assert!(a.st.update.ready.is_none());
+    // Back while downloading does the same.
+    crate::update::sample(&mut a, crate::update::BUILD + 1, Some(1_000));
+    assert!(a.back());
+    assert!(!a.st.update.open && !a.st.update.downloading && crate::update::stopped(&a));
+}
+
+#[test]
+fn forget_this_pc_leaves_nothing_of_it_but_the_phones_own_choices() {
+    let mut a = app("forget-all");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    frames(&mut a, &mut clock, 2);
+    a.set_text_size(2);
+    a.set_notifies(crate::settings::Notify::Done, false);
+    a.st.terminal.size = 13.0;
+    a.holds = 3;
+    crate::update::sample(&mut a, crate::update::BUILD + 1, None);
+    assert!(!a.st.board.tasks.is_empty() && !a.earlier.is_empty() && a.repo.is_some());
+    a.unpair();
+    assert_eq!(a.route(), &Route::Pair);
+    assert!(a.repo.is_none() && a.agents.is_empty() && a.earlier.is_empty() && a.projects.is_empty());
+    assert!(a.st.board.tasks.is_empty(), "the board's tasks were the old PC's");
+    assert!(a.st.update.latest.is_none() && !a.st.update.open, "its update offer too");
+    assert_eq!(a.holds, 0);
+    assert!(a.screens.is_empty() && a.convos.is_empty());
+    // The phone's own choices stay.
+    assert_eq!(a.text_size(), 2);
+    assert!(!a.notifies(crate::settings::Notify::Done));
+    assert_eq!(a.st.terminal.size, 13.0);
+}
+
+#[test]
+fn switching_repo_leaves_another_repos_terminal() {
+    let mut a = app("repo-terminal");
+    let mut clock = 1_000_000_000;
+    a.open("bold-puffin");
+    a.push(Route::Terminal("bold-puffin".into()));
+    frames(&mut a, &mut clock, 2);
+    a.set_repo(2);
+    assert_eq!(a.route(), &Route::Home, "its keys would type into the old repo's agent");
+    // The same repo keeps you there.
+    a.set_repo(1);
+    a.open("bold-puffin");
+    a.push(Route::Terminal("bold-puffin".into()));
+    a.set_repo(1);
+    assert_eq!(a.route(), &Route::Terminal("bold-puffin".into()));
+}
+
+#[test]
+fn with_notifications_off_in_android_the_switches_read_off_and_lead_there() {
+    struct Blocked(PathBuf, std::sync::atomic::AtomicUsize);
+    impl Host for Blocked {
+        fn data_dir(&self) -> PathBuf {
+            self.0.clone()
+        }
+        fn log(&self, _text: &str) {}
+        fn can_notify(&self) -> Option<bool> {
+            Some(false)
+        }
+        fn open_notification_settings(&self) {
+            self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("relay-code-flow-blocked-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let host = Arc::new(Blocked(dir, std::sync::atomic::AtomicUsize::new(0)));
+    let mut a = App::new(host.clone(), 1_000_000_000);
+    a.resize(390.0, 844.0, 0.0, 0.0);
+    a.sample();
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    a.push(Route::Settings);
+    frames(&mut a, &mut clock, 3);
+    // The first switch row sits under the row that says they are off.
+    tap(&mut a, &mut clock, 200.0, NOTIFY_TOP + 64.0 + 26.0);
+    assert_eq!(host.1.load(std::sync::atomic::Ordering::SeqCst), 1, "a switch leads to Android's settings");
+    assert!(a.notifies(crate::settings::Notify::Asks), "and changes nothing here");
+}
