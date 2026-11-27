@@ -59,6 +59,8 @@ pub struct State {
     keys: Rc<Vec<String>>,
     /// The question card last answered (its agent, the card, when): held until its terminal moves on.
     answered: Option<(String, crate::screen::Ask, u64)>,
+    /// Items shown beyond the newest [`SHOWN`], once you scrolled up to the oldest shown.
+    extra: usize,
     /// Items measured (not drawn) so far: what a new message costs, for tests.
     measured: usize,
     pub model_sheet: bool,
@@ -1208,7 +1210,7 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
             Item::Did { calls, .. } => calls.iter().rev().find(|c| c.is_todos()).map(|c| data::todos(c.detail.as_deref().unwrap_or_default())),
             _ => None,
         });
-        let base = items.len().saturating_sub(SHOWN);
+        let base = items.len().saturating_sub(SHOWN + app.st.chat.extra);
         items.drain(..base);
         times.drain(..base);
         keys.drain(..base);
@@ -1232,6 +1234,11 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
             });
         }
         drop(old_at);
+        // Older ones came in above what you were reading: the view stays on it.
+        if let Some(p) = old_keys.first().and_then(|k0| keys.iter().position(|k| k == k0)).filter(|p| *p > 0 && same_log) {
+            let above: f32 = hs[..p].iter().sum();
+            app.scroll().off += above;
+        }
         app.st.chat.items = Rc::new(items);
         app.st.chat.heights = Rc::new(hs);
         app.st.chat.shown_from = from;
@@ -1299,6 +1306,21 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     let off = sc.off;
     app.st.chat.unstuck = off < max - 24.0;
     app.canvas.dy = -off;
+    // Scrolled up near the oldest shown: show more of what the phone holds, then read the page
+    // older than that from the PC.
+    let mut loading = false;
+    if app.st.chat.unstuck && off < 400.0 && !items.is_empty() {
+        if app.st.chat.base > 0 {
+            app.st.chat.extra += SHOWN;
+            // Read into items again on the next frame, as the same log (so the view is kept).
+            if let Some(f) = &mut app.st.chat.shown_from {
+                f.3.clear();
+            }
+            app.wake_at(app.now_ns);
+        } else {
+            loading = app.read_older(name);
+        }
+    }
 
     let mut y = page.top + lead;
     if items.is_empty() && waiting.is_empty() {
@@ -1361,6 +1383,16 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     {
         s.retry(i);
         app.outbox_changed();
+    }
+
+    if loading {
+        // Earlier messages on their way: a quiet line at the top of the page.
+        let st = Text::new(ty::SMALL, t::INK3).medium();
+        let words = "Loading earlier messages";
+        let w = app.canvas.measure(words, st) + 28.0;
+        let (lx, ly) = ((WIDTH - w) / 2.0, page.top + 8.0);
+        app.canvas.rect(lx, ly, w, 26.0, 13.0, t::S1);
+        app.canvas.text(words, WIDTH / 2.0, ly + (26.0 - st.lh()) / 2.0, st.center());
     }
 
     // Scrolled up: a key back to the newest, just above the message box.
@@ -2092,7 +2124,7 @@ mod tests {
         let at0 = a.st.chat.base + did;
         fold(&mut a, at0);
         frame(&mut a);
-        // Two more messages: the log keeps the newest 400, so every place moves by two.
+        // Two more messages: the 160 shown move along by their three items.
         let more = serde_json::json!({"messages": [msg(400), msg(401)], "cursor": 2, "reset": false, "found": true});
         a.convos.get_mut("bold-puffin").unwrap().take(&more);
         let before = a.st.chat.measured;
@@ -2102,6 +2134,40 @@ mod tests {
         let at = a.st.chat.keys.iter().position(|k| *k == did_key).unwrap();
         assert!(a.st.chat.open.contains(&a.st.chat.keys[at]), "the fold stayed with its message");
         assert!(matches!(a.st.chat.items[at], Item::Did { .. }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scrolled_to_the_top_earlier_messages_show_and_the_view_stays() {
+        let (mut a, dir) = fresh_app("older");
+        a.sample();
+        let msg = |i: usize| serde_json::json!({"id": format!("m{i}"), "role": "user", "created_at": "", "body": {"text": format!("message {i}")}});
+        let mut c = data::Convo::default();
+        c.take(&serde_json::json!({"messages": (0..300).map(msg).collect::<Vec<_>>(), "cursor": 1, "before": 50, "older": true, "reset": true, "found": true}));
+        a.convos.insert("bold-puffin".into(), c);
+        a.open("bold-puffin");
+        let mut clock = 1_000_000_000u64;
+        let mut frame = |a: &mut App| {
+            clock += 16_666_666;
+            a.frame(clock);
+        };
+        frame(&mut a);
+        let (base, first) = (a.st.chat.base, a.st.chat.keys[0].clone());
+        assert!(base > 0, "the newest 160 of 300 are shown");
+        // Up at the oldest shown: the next 160 the phone holds come in above it.
+        a.st.chat.unstuck = true;
+        a.scroll().off = 0.0;
+        frame(&mut a);
+        frame(&mut a);
+        assert!(a.st.chat.base < base, "more shown");
+        let at = a.st.chat.keys.iter().position(|k| *k == first).unwrap();
+        let above: f32 = a.st.chat.heights[..at].iter().sum();
+        assert!((a.scroll().off - above).abs() < 1.0, "the view stayed on what you were reading: {} vs {above}", a.scroll().off);
+        // A page from the PC goes on top too (here as its answer would land).
+        let page: Vec<_> = (300..340).map(|i| serde_json::json!({"id": format!("p{i}"), "role": "user", "created_at": "", "body": {"text": "older"}})).collect();
+        a.convos.get_mut("bold-puffin").unwrap().take_older(&serde_json::json!({"messages": page, "before": 0, "older": false}));
+        assert_eq!(a.convos["bold-puffin"].msgs[0].id, "p300");
+        assert!(!a.convos["bold-puffin"].older);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

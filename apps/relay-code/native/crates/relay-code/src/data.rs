@@ -238,6 +238,19 @@ pub struct Convo {
     /// What the PC has typed but not logged yet (`pending`), as of the last read.
     #[serde(default)]
     pub pending: Vec<PcPending>,
+    /// Where the page older than these messages ends (`before`), and whether there is one.
+    #[serde(default)]
+    pub before: Option<u64>,
+    #[serde(default)]
+    pub older: bool,
+    /// Messages read back by scrolling up: kept on top of the newest [`KEEP`].
+    #[serde(default)]
+    pub paged: usize,
+    /// Where some messages start in the log (the first of each read: an `after` read starts at
+    /// the cursor before it, a page back at its `before`), so the oldest are cut only where the
+    /// page older than what is left can still be asked for.
+    #[serde(default)]
+    pub starts: Vec<(String, u64)>,
 }
 
 /// The newest this many messages are kept.
@@ -250,11 +263,25 @@ impl Convo {
         self.take_sent(v).0
     }
 
+    /// A page older than these messages (`before`): it goes on top, and says where the next
+    /// one ends.
+    pub fn take_older(&mut self, v: &Value) {
+        let got: Vec<Msg> = messages(v).into_iter().filter(|m| !self.msgs.iter().any(|o| o.id == m.id)).collect();
+        self.paged += got.len();
+        self.before = v.get("before").and_then(Value::as_u64);
+        if let (Some(m), Some(b)) = (got.first(), self.before) {
+            self.starts.insert(0, (m.id.clone(), b));
+        }
+        self.msgs.splice(0..0, got);
+        self.older = v.get("older").and_then(Value::as_bool).unwrap_or(false);
+    }
+
     /// [`Convo::take`], also giving the ids your messages that came in were sent under
     /// (`chat.send`); the count is of those that came in without one (an older PC, or a message
     /// typed at the PC).
     pub fn take_sent(&mut self, v: &Value) -> (usize, Vec<String>) {
         let got = messages(v);
+        let cursor_before = self.cursor;
         if let Some(p) = v.get("pending").and_then(Value::as_array) {
             self.pending = p.iter().filter_map(|x| serde_json::from_value(x.clone()).ok()).collect();
         }
@@ -266,15 +293,33 @@ impl Convo {
         let users_before: std::collections::HashSet<String> = self.msgs.iter().filter(|m| m.role == "user").map(|m| m.id.clone()).collect();
         if reset {
             self.msgs = got;
+            self.paged = 0;
+            self.before = v.get("before").and_then(Value::as_u64);
+            self.older = v.get("older").and_then(Value::as_bool).unwrap_or(false);
+            self.starts = self.msgs.first().zip(self.before).map(|(m, b)| (m.id.clone(), b)).into_iter().collect();
         } else {
+            if let (Some(first), Some(at)) = (got.iter().find(|m| !self.msgs.iter().any(|o| o.id == m.id)), cursor_before) {
+                self.starts.push((first.id.clone(), at));
+            }
             for m in got {
                 if !self.msgs.iter().any(|o| o.id == m.id) {
                     self.msgs.push(m);
                 }
             }
         }
-        if self.msgs.len() > KEEP {
-            self.msgs.drain(..self.msgs.len() - KEEP);
+        if self.msgs.len() > KEEP + self.paged {
+            // Cut at the last known start that leaves at least the newest KEEP: what goes can be
+            // read back from there. Until one is that far in, nothing is cut (at most a read's
+            // worth more is kept).
+            let want = self.msgs.len() - KEEP - self.paged;
+            let at = self.msgs.iter().enumerate().take(want + 1).skip(1).rev().find_map(|(i, m)| self.starts.iter().find(|(id, _)| *id == m.id).map(|(_, b)| (i, *b)));
+            if let Some((cut, b)) = at {
+                self.msgs.drain(..cut);
+                self.before = Some(b);
+                self.older = true;
+                let kept: std::collections::HashSet<&str> = self.msgs.iter().map(|m| m.id.as_str()).collect();
+                self.starts.retain(|(id, _)| kept.contains(id.as_str()));
+            }
         }
         let new: Vec<&Msg> = self.msgs.iter().filter(|m| m.role == "user" && !users_before.contains(&m.id)).collect();
         let ids: Vec<String> = new.iter().filter_map(|m| m.client_id.clone()).collect();
@@ -1483,6 +1528,40 @@ mod tests {
         assert!(matches!(s.next_by(0, true), Some(Step::Send(..))));
         s.answered(Answer::Unsupported, 5);
         assert_eq!(s.next_by(5, false), Some(Step::Type("hi".into())), "at once, words then Enter");
+    }
+
+    #[test]
+    fn past_keep_the_oldest_are_cut_where_they_can_be_read_back() {
+        let m = |i: usize| json!({"id": format!("m{i}"), "role": "user", "body": {"text": "x"}, "created_at": ""});
+        let mut c = Convo::default();
+        c.take(&json!({"messages": (0..200).map(m).collect::<Vec<_>>(), "cursor": 2000, "before": 0, "older": false, "reset": true, "found": true}));
+        c.take(&json!({"messages": (200..400).map(m).collect::<Vec<_>>(), "cursor": 4000, "reset": false, "found": true}));
+        assert_eq!(c.msgs.len(), 400);
+        // 50 more: no known start that far in, so nothing is cut yet.
+        c.take(&json!({"messages": (400..450).map(m).collect::<Vec<_>>(), "cursor": 4500, "reset": false, "found": true}));
+        assert_eq!(c.msgs.len(), 450);
+        // 200 more: cut at the last start leaving at least 400 (m200, at 2000), never mid-read.
+        c.take(&json!({"messages": (450..650).map(m).collect::<Vec<_>>(), "cursor": 6500, "reset": false, "found": true}));
+        assert_eq!(c.msgs.first().map(|m| m.id.as_str()), Some("m200"));
+        assert!(c.msgs.len() >= KEEP);
+        assert_eq!((c.before, c.older), (Some(2000), true), "the page older than what is left");
+    }
+
+    #[test]
+    fn older_pages_go_on_top_and_stay() {
+        let m = |i: usize| json!({"id": format!("m{i}"), "role": "user", "body": {"text": "x"}, "created_at": ""});
+        let mut c = Convo::default();
+        c.take(&json!({"messages": (100..300).map(m).collect::<Vec<_>>(), "cursor": 9, "before": 100, "older": true, "reset": true, "found": true}));
+        assert_eq!((c.before, c.older), (Some(100), true));
+        c.take_older(&json!({"messages": (0..100).map(m).collect::<Vec<_>>(), "cursor": 9, "before": 0, "older": false, "reset": false, "found": true}));
+        assert_eq!(c.msgs.first().map(|m| m.id.as_str()), Some("m0"));
+        assert_eq!(c.msgs.len(), 300);
+        assert!(!c.older, "the start of the conversation");
+        // New messages after it: the page read back is not cut away under the reader.
+        assert!(c.starts.iter().any(|(id, at)| id == "m0" && *at == 0));
+        c.take(&json!({"messages": (300..500).map(m).collect::<Vec<_>>(), "cursor": 10, "reset": false, "found": true}));
+        assert_eq!(c.msgs.len(), KEEP + 100);
+        assert_eq!(c.msgs.first().map(|m| m.id.as_str()), Some("m0"));
     }
 
     #[test]
