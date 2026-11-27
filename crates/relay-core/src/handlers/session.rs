@@ -2544,10 +2544,13 @@ pub fn register(e: &mut Engine) {
         let path = s.provider_ref.as_deref().filter(|reference| crate::providers::is_provider_ref(reference))
             .and_then(|reference| crate::transcript::locate(s.provider, reference, worktree));
         let Some(path) = path else {
-            return Ok(TranscriptOut { messages: Vec::new(), cursor: 0, reset: false, found: false });
+            return Ok(TranscriptOut { messages: Vec::new(), cursor: 0, before: 0, older: false, reset: false, found: false });
         };
+        if p.after.is_some() && p.before.is_some() {
+            return Err(BusError::invalid("session.transcript_cursor", "after reads on and before reads back: one at a time"));
+        }
         let limit = p.limit.unwrap_or(200).clamp(1, 1000) as usize;
-        crate::transcript::read(s.provider, &path, worktree, p.after, limit)
+        crate::transcript::read(s.provider, &path, worktree, p.after, p.before, limit)
             .map_err(|e| BusError::unavailable("session.transcript_unreadable", format!("{}: {e}", path.display())))
     });
 

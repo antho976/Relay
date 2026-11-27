@@ -227,6 +227,9 @@ payload!(#[schemars(rename = "SessionTranscriptIn")] TranscriptIn {
     /// The `cursor` of the previous answer: only what the agent wrote since. Absent, the
     /// conversation's last `limit` messages.
     #[serde(default, skip_serializing_if = "Option::is_none")] pub after: Option<u64>,
+    /// The `before` of an earlier answer: the page of messages older than it (scrolling back),
+    /// its newest `limit`. Not with `after`.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub before: Option<u64>,
     /// At most this many messages, the newest kept (default 200, at most 1000).
     #[serde(default, skip_serializing_if = "Option::is_none")] pub limit: Option<u32>,
 });
@@ -243,8 +246,14 @@ result!(#[schemars(rename = "SessionTranscriptMessage")] TranscriptMessage {
 });
 result!(#[schemars(rename = "SessionTranscriptOut")] TranscriptOut {
     pub messages: Vec<TranscriptMessage>,
-    /// Pass it back as `after` for what comes next.
+    /// Pass it back as `after` for what comes next. A `before` page gives back its `before`.
     pub cursor: u64,
+    /// Pass it back as `before` for the page older than these messages.
+    #[serde(default)]
+    pub before: u64,
+    /// Whether the log holds anything older than `before`.
+    #[serde(default)]
+    pub older: bool,
     /// The messages replace everything read before: the conversation moved to another file
     /// (a resume, a new conversation) or `after` was past its end.
     pub reset: bool,
