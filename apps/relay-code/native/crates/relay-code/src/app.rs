@@ -895,6 +895,24 @@ impl App {
         self.shown();
     }
 
+    /// A notification about `name` was tapped: its chat, with nothing left over it (no sheet, menu,
+    /// drawer or keyboard). Not while pairing: there is no PC to read it from.
+    pub fn open_notified(&mut self, name: &str) {
+        if self.route() == &Route::Pair || name.is_empty() {
+            return;
+        }
+        self.finish_typing();
+        self.st.drawer.open = false;
+        self.st.drawer.repos = false;
+        self.st.newagent.open = false;
+        self.st.newagent.picking = false;
+        self.st.agents.menu = None;
+        self.st.agents.confirm = None;
+        self.st.update.open = false;
+        self.st.chat.model_sheet = false;
+        self.open(name);
+    }
+
     /// A PC was just paired: keep it, connect now, and go to its agents.
     pub fn paired(&mut self, p: &rc_link::Profile) {
         self.link.paired(p);
@@ -1125,6 +1143,10 @@ impl App {
         self.now_ns = now_ns;
         self.wake = None;
         self.take_answers();
+        // A tapped notification opens its agent's chat (D4), over whatever was open.
+        if let Some(name) = crate::background::take_opened() {
+            self.open_notified(&name);
+        }
         // What is on the screen: the chat open here does not notify (background.rs).
         crate::background::front(self.foreground, self.open_chat());
         self.focus.keyboard_up = self.keyboard_up;
