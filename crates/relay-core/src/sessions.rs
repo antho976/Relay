@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use relay_bus::error::BusError;
-use relay_bus::types::{Id, Provider, Role, Session, SessionState};
+use relay_bus::types::{Id, Provider, Role, Session, SessionState, Waiting};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::Value;
 
@@ -109,6 +109,15 @@ pub struct Row_ {
     pub launch_prompt: Option<String>,
 }
 
+/// Why a session waits, only while it is blocked: the column is left behind when it moves on.
+fn waiting(state: &str, column: Option<&str>) -> Option<Waiting> {
+    match (state, column) {
+        ("blocked", Some("prompt")) => Some(Waiting::Prompt),
+        ("blocked", Some("report")) => Some(Waiting::Report),
+        _ => None,
+    }
+}
+
 pub fn row(r: &Row) -> rusqlite::Result<Row_> {
     let usage: Option<String> = r.get("usage")?;
     Ok(Row_ {
@@ -129,6 +138,7 @@ pub fn row(r: &Row) -> rusqlite::Result<Row_> {
             allow_ui: r.get::<_, i64>("allow_ui")? != 0,
             use_api_key: r.get::<_, i64>("use_api_key")? != 0,
             state: parse_state(&r.get::<_, String>("state")?),
+            waiting: waiting(r.get::<_, String>("state")?.as_str(), r.get::<_, Option<String>>("waiting")?.as_deref()),
             pid: r.get("pid")?,
             exit_code: r.get("exit_code")?,
             provider_ref: r.get("provider_ref")?,

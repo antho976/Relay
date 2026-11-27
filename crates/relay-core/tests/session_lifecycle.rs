@@ -87,6 +87,43 @@ fn a_blocked_done_survives_its_trailing_tool_and_stop_reports() {
     assert_eq!(state(&f, &name), "running");
 }
 
+fn waiting(f: &Fixture, name: &str) -> Value {
+    let listed = ok(&f.engine, "session.list", json!({"project_id": 1}))["sessions"].clone();
+    let row = listed.as_array().unwrap().iter().find(|s| s["name"] == name).cloned().unwrap();
+    assert_eq!(row["waiting"], ok(&f.engine, "session.get", json!({"session": name}))["waiting"]);
+    row["waiting"].clone()
+}
+
+#[test]
+fn a_blocked_session_says_whether_it_waits_at_a_prompt_or_on_its_report() {
+    let f = fixture();
+    let a = task(&f, "work");
+    let (name, _) = session_with(&f, a, &[]);
+    report(&f, &name, "session_start");
+    assert_eq!(waiting(&f, &name), Value::Null, "running waits on nothing");
+    // A permission prompt: the person answers it in the terminal.
+    ok_as(&f.engine, Actor::agent(&name), "session.report",
+        json!({"session": name, "kind": "notification", "data": {"notification_type": "permission_prompt"}}));
+    assert_eq!((state(&f, &name), waiting(&f, &name)), ("blocked".into(), json!("prompt")));
+    report(&f, &name, "tool_use");
+    assert_eq!(waiting(&f, &name), Value::Null, "answered: running again");
+    // A blocked done: nothing to answer, through its trailing tool and Stop reports.
+    ok_as(&f.engine, Actor::agent(&name), "session.done",
+        json!({"session": name, "status": "partial", "blockers": ["needs a key"]}));
+    assert_eq!(waiting(&f, &name), json!("report"));
+    report(&f, &name, "tool_use");
+    report(&f, &name, "stop");
+    // Claude's idle_prompt a minute later asks nothing new.
+    ok_as(&f.engine, Actor::agent(&name), "session.report",
+        json!({"session": name, "kind": "notification", "data": {"notification_type": "idle_prompt"}}));
+    assert_eq!((state(&f, &name), waiting(&f, &name)), ("blocked".into(), json!("report")));
+    // The next turn moves on; a prompt in it is a prompt again.
+    report(&f, &name, "prompt");
+    assert_eq!(waiting(&f, &name), Value::Null);
+    report(&f, &name, "blocked");
+    assert_eq!(waiting(&f, &name), json!("prompt"));
+}
+
 #[test]
 fn a_late_hook_does_not_revive_a_parked_or_exited_session() {
     let f = fixture();

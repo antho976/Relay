@@ -113,6 +113,18 @@ pub enum SessionState {
     Closed,
 }
 
+/// Why a `blocked` session waits for the person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Waiting {
+    /// At a live prompt in its terminal: a permission, a question, a request for input
+    /// (the provider's hooks, `session.report`). Answering it lets the agent go on.
+    Prompt,
+    /// It ended its turn with `session.done` `blocked` or `partial`: there is nothing to answer
+    /// in the terminal; its blockers say what it needs.
+    Report,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HoldState {
@@ -594,6 +606,10 @@ pub struct Session {
     #[serde(default)]
     pub use_api_key: bool,
     pub state: SessionState,
+    /// Why a `blocked` session waits; null in every other state, and for a session blocked
+    /// before the engine recorded why (schema v37).
+    #[serde(default)]
+    pub waiting: Option<Waiting>,
     pub pid: Option<i64>,
     pub exit_code: Option<i64>,
     /// Provider's own resume handle.

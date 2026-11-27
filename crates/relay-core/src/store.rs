@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// The schema version this build knows. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: i64 = 36;
+pub const SCHEMA_VERSION: i64 = 37;
 
 /// Numbered migrations; index 0 brings a fresh DB to `user_version = 1`.
 pub const MIGRATIONS: &[&str] = &[
@@ -580,6 +580,11 @@ pub const MIGRATIONS: &[&str] = &[
     UPDATE video_renders SET replaced_by = (SELECT MAX(r.id) FROM video_renders r
         WHERE r.video_id = video_renders.video_id AND r.path = video_renders.path AND r.id > video_renders.id AND r.state = 'done')
     WHERE state = 'done' AND path IS NOT NULL;
+    "#,
+    // v37 - why a blocked session waits: at a live prompt in its terminal, or because it
+    // reported blocked or partial through session.done. Read only while state is 'blocked'.
+    r#"
+    ALTER TABLE sessions ADD COLUMN waiting TEXT CHECK (waiting IS NULL OR waiting IN ('prompt','report'));
     "#,
 ];
 
