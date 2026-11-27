@@ -26,7 +26,25 @@ struct Door {
     connections: Arc<AtomicUsize>,
 }
 
+/// Who a door is and how it behaves.
+#[derive(Clone)]
+struct Who {
+    instance: &'static str,
+    host_id: &'static str,
+    /// Whether it holds this phone's pairing.
+    knows_phone: bool,
+    ping_delay: Duration,
+    refuse_subscribe: bool,
+}
+
+/// The phone's own PC.
+const PC: Who = Who { instance: "test", host_id: "h1", knows_phone: true, ping_delay: Duration::ZERO, refuse_subscribe: false };
+
 fn door() -> Door {
+    door_as(PC)
+}
+
+fn door_as(who: Who) -> Door {
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
     let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     std_listener.set_nonblocking(true).unwrap();
@@ -39,13 +57,30 @@ fn door() -> Door {
         rt.block_on(async move {
             let listener = TcpListener::from_std(std_listener).unwrap();
             loop {
-                let (tcp, _) = listener.accept().await.unwrap();
-                let (d, f, c) = (d.clone(), f.clone(), c.clone());
+                let (mut tcp, _) = listener.accept().await.unwrap();
+                let (d, f, c, who) = (d.clone(), f.clone(), c.clone(), who.clone());
                 tokio::spawn(async move {
+                    // `GET /info` on the same port, as the real door answers it.
+                    let mut head = [0u8; 9];
+                    let mut n = 0;
+                    for _ in 0..50 {
+                        n = tcp.peek(&mut head).await.unwrap_or(0);
+                        if n >= head.len() {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    if &head[..n] == b"GET /info" {
+                        use tokio::io::AsyncWriteExt;
+                        let body = json!({"relay": "remote", "host": "desk", "host_id": who.host_id, "instance": who.instance}).to_string();
+                        let _ = tcp.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}").as_bytes()).await;
+                        let _ = tcp.shutdown().await;
+                        return;
+                    }
                     let Ok(mut ws) = tokio_tungstenite::accept_async(tcp).await else { return };
                     let n = c.fetch_add(1, Ordering::SeqCst);
                     let challenge = format!("ch-{n}");
-                    let greet = json!({"relay": "remote", "v": 1, "challenge": challenge, "instance": "test", "engine": "running", "host": "", "host_id": "", "version": ""});
+                    let greet = json!({"relay": "remote", "v": 1, "challenge": challenge, "instance": who.instance, "engine": "running", "host": "", "host_id": "", "version": ""});
                     if ws.send(Message::Text(greet.to_string().into())).await.is_err() {
                         return;
                     }
@@ -53,8 +88,8 @@ fn door() -> Door {
                     let hello: Value = serde_json::from_str(hello.as_str()).unwrap();
                     let welcome = if hello.get("pair").and_then(Value::as_str) == Some("CODE1234") {
                         json!({"ok": true, "device": DEVICE, "token": TOKEN, "host": "desk", "host_id": "h1", "ops": "phone"})
-                    } else if !f.load(Ordering::SeqCst) && hello["device"] == DEVICE && hello["proof"] == rc_link::wire::proof(&challenge, TOKEN) {
-                        json!({"ok": true, "host": "desk", "host_id": "h1", "version": "test", "ops": "phone"})
+                    } else if who.knows_phone && !f.load(Ordering::SeqCst) && hello["device"] == DEVICE && hello["proof"] == rc_link::wire::proof(&challenge, TOKEN) {
+                        json!({"ok": true, "host": "desk", "host_id": who.host_id, "version": "test", "ops": "phone"})
                     } else {
                         json!({"ok": false, "error": "auth.unknown_device"})
                     };
@@ -71,6 +106,9 @@ fn door() -> Door {
                         let Ok(msg) = msg else { continue };
                         let Some(Ok(Message::Text(line))) = msg else { return };
                         let req: Value = serde_json::from_str(line.as_str()).unwrap();
+                        if req["op"] == "bus.ping" && !who.ping_delay.is_zero() {
+                            tokio::time::sleep(who.ping_delay).await;
+                        }
                         let result = match req["op"].as_str() {
                             Some("session.list") => json!({"sessions": [{"name": "a-b", "project_id": 1, "provider": "claude", "state": "running"}]}),
                             Some("bus.subscribe") => json!({"subscribed": req["payload"]["events"]}),
@@ -80,7 +118,11 @@ fn door() -> Door {
                         // any other form comes back looking different, as from the real door.
                         let hexid: String = req["id"].as_str().unwrap_or_default().chars().filter(|c| *c != '-').collect();
                         let id = if hexid.len() == 32 { format!("{}-{}-{}-{}-{}", &hexid[..8], &hexid[8..12], &hexid[12..16], &hexid[16..20], &hexid[20..]) } else { String::new() };
-                        let res = json!({"v": 1, "id": id, "ok": true, "result": result});
+                        let res = if who.refuse_subscribe && req["op"] == "bus.subscribe" {
+                            json!({"v": 1, "id": id, "ok": false, "error": {"kind": "internal", "code": "bus.subscribe", "message": "no"}})
+                        } else {
+                            json!({"v": 1, "id": id, "ok": true, "result": result})
+                        };
                         if ws.send(Message::Text(res.to_string().into())).await.is_err() {
                             return;
                         }
@@ -216,4 +258,87 @@ fn a_listener_beside_the_app_hears_every_event_and_state_and_takes_none() {
     assert_eq!((e.ev.as_str(), e.payload["state"].as_str()), ("session.changed", Some("idle")));
     // The app's own buffer still has it.
     assert_eq!(link.take_events().iter().map(|e| e.ev.as_str()).collect::<Vec<_>>(), ["session.changed"]);
+}
+
+fn profile(routes: &[&Door], last: Option<&Door>) -> Profile {
+    Profile {
+        host_id: "h1".into(),
+        name: "desk".into(),
+        instance: "test".into(),
+        device: DEVICE.into(),
+        token: TOKEN.into(),
+        routes: routes.iter().map(|d| Route::new(&format!("ws://127.0.0.1:{}", d.port))).collect(),
+        last_route: last.map(|d| format!("ws://127.0.0.1:{}", d.port)),
+        paired_at_ms: 0,
+        version: String::new(),
+    }
+}
+
+/// Every state the link shows for `long`, polled.
+fn states_for(link: &Link, long: Duration) -> Vec<LinkState> {
+    let start = Instant::now();
+    let mut seen: Vec<LinkState> = Vec::new();
+    while start.elapsed() < long {
+        let s = link.state();
+        if seen.last() != Some(&s) {
+            seen.push(s);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    seen
+}
+
+#[test]
+fn a_wrong_door_on_the_way_is_passed_over_and_never_unpairs() {
+    let pc = door();
+    // The dev instance at the address that worked last, and another PC with the same instance
+    // name: neither knows this phone.
+    let dev = door_as(Who { instance: "dev", host_id: "h1", knows_phone: false, ..PC });
+    let other = door_as(Who { host_id: "h2", knows_phone: false, ..PC });
+    let store = Arc::new(Memory::default());
+    store.save(&profile(&[&dev, &other, &pc], Some(&dev)));
+    let link = Link::start(store.clone(), Arc::new(|| {}));
+    wait_for(&link, "online through the PC's own door", Duration::from_secs(10), LinkState::online);
+    let LinkState::Online { route, .. } = link.state() else { unreachable!() };
+    assert_eq!(route.url, format!("ws://127.0.0.1:{}", pc.port));
+    assert_eq!(store.load().unwrap().last_route.as_deref(), Some(route.url.as_str()), "the right door leads next time");
+
+    // Only another PC answers: offline, still paired, dialing again.
+    let store = Arc::new(Memory::default());
+    store.save(&profile(&[&other], None));
+    let link = Link::start(store, Arc::new(|| {}));
+    let seen = states_for(&link, Duration::from_secs(3));
+    assert!(!seen.iter().any(|s| matches!(s, LinkState::Revoked { .. } | LinkState::Online { .. })), "{seen:?}");
+    assert!(seen.iter().any(|s| matches!(s, LinkState::Offline { reason, .. } if reason.contains("Another PC"))), "{seen:?}");
+}
+
+#[test]
+fn pairing_again_mid_connect_drops_the_old_pairings_session() {
+    // The old PC's engine is slow to answer the first ping.
+    let old = door_as(Who { ping_delay: Duration::from_millis(1500), ..PC });
+    let new = door();
+    let store = Arc::new(Memory::default());
+    store.save(&profile(&[&old], None));
+    let link = Link::start(store, Arc::new(|| {}));
+    let start = Instant::now();
+    while old.connections.load(Ordering::SeqCst) == 0 && start.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    link.paired(&profile(&[&new], None));
+    let seen = states_for(&link, Duration::from_secs(4));
+    let to_old = format!("ws://127.0.0.1:{}", old.port);
+    assert!(!seen.iter().any(|s| matches!(s, LinkState::Online { route, .. } if route.url == to_old)), "the old PC never shows: {seen:?}");
+    assert!(matches!(link.state(), LinkState::Online { route, .. } if route.url == format!("ws://127.0.0.1:{}", new.port)), "{seen:?}");
+}
+
+#[test]
+fn a_subscribe_the_pc_refuses_is_a_reconnect_not_online() {
+    let d = door_as(Who { refuse_subscribe: true, ..PC });
+    let store = Arc::new(Memory::default());
+    store.save(&profile(&[&d], None));
+    let link = Link::start(store, Arc::new(|| {}));
+    let seen = states_for(&link, Duration::from_secs(3));
+    assert!(!seen.iter().any(LinkState::online), "{seen:?}");
+    assert!(d.connections.load(Ordering::SeqCst) >= 2, "it dials again");
 }
