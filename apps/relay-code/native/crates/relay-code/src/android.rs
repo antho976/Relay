@@ -105,14 +105,6 @@ impl Host for AndroidHost {
         with_activity(&self.app, |env, activity| env.call_method(activity, "haptic", "()V", &[]).map(|_| ()));
     }
 
-    fn notify(&self, id: i32, title: &str, body: &str) {
-        with_activity(&self.app, |env, activity| {
-            let t = env.new_string(title)?;
-            let b = env.new_string(body)?;
-            env.call_method(activity, "notify", "(ILjava/lang/String;Ljava/lang/String;)V", &[JValue::Int(id), JValue::Object(&t), JValue::Object(&b)]).map(|_| ())
-        });
-    }
-
 
 }
 
@@ -153,6 +145,86 @@ pub extern "system" fn Java_com_quietsoftware_relaycode_CodeActivity_nativePhoto
     let p: String = env.get_string(&path).map(Into::into).unwrap_or_default();
     if !p.is_empty() {
         crate::attach::picked(PathBuf::from(p));
+    }
+}
+
+/// Posts from the notifications' own thread (background.rs) through LinkService's static
+/// methods, with the application's Context: it works with no activity at all.
+struct ServiceNotifier {
+    vm: jni::JavaVM,
+    /// LinkService's class, found on a Java thread: a native thread's FindClass sees only the
+    /// system's classes.
+    class: jni::objects::GlobalRef,
+    context: jni::objects::GlobalRef,
+}
+
+impl ServiceNotifier {
+    fn with_env(&self, f: impl FnOnce(&mut JNIEnv) -> jni::errors::Result<()>) {
+        let Ok(mut env) = self.vm.attach_current_thread_permanently() else { return };
+        let out = env.with_local_frame(8, |env| f(env));
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_describe();
+            let _ = env.exception_clear();
+        }
+        if let Err(e) = out {
+            log(&format!("notify: {e}"));
+        }
+    }
+}
+
+impl crate::background::Notifier for ServiceNotifier {
+    fn alert(&self, id: i32, title: &str, body: &str, agent: &str) {
+        log(&format!("notify: {title}"));
+        self.with_env(|env| {
+            let (t, b, a) = (env.new_string(title)?, env.new_string(body)?, env.new_string(agent)?);
+            let class: &JClass = self.class.as_obj().into();
+            env.call_static_method(
+                class,
+                "alert",
+                "(Landroid/content/Context;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+                &[JValue::Object(self.context.as_obj()), JValue::Int(id), JValue::Object(&t), JValue::Object(&b), JValue::Object(&a)],
+            )
+            .map(|_| ())
+        });
+    }
+
+    fn line(&self, words: &str) {
+        self.with_env(|env| {
+            let w = env.new_string(words)?;
+            let class: &JClass = self.class.as_obj().into();
+            env.call_static_method(class, "words", "(Landroid/content/Context;Ljava/lang/String;)Z", &[JValue::Object(self.context.as_obj()), JValue::Object(&w)]).map(|_| ())
+        });
+    }
+}
+
+/// LinkService started (with or without the activity): the link and the notifications run for
+/// the process from now on.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_relaycode_LinkService_nativeStart<'local>(
+    mut env: JNIEnv<'local>,
+    class: JClass<'local>,
+    context: JObject<'local>,
+    data_dir: jni::objects::JString<'local>,
+) {
+    std::panic::set_hook(Box::new(|info| log(&format!("panic: {info}"))));
+    let data: String = env.get_string(&data_dir).map(Into::into).unwrap_or_default();
+    let (Ok(vm), Ok(class), Ok(context)) = (env.get_java_vm(), env.new_global_ref(&class), env.new_global_ref(&context)) else { return };
+    if data.is_empty() {
+        return;
+    }
+    crate::background::start(PathBuf::from(data), Arc::new(ServiceNotifier { vm, class, context }));
+}
+
+/// A notification about an agent was tapped: its chat opens (CodeActivity's `agent` extra).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_relaycode_CodeActivity_nativeOpen<'local>(mut env: JNIEnv<'local>, _class: JClass<'local>, agent: jni::objects::JString<'local>) {
+    if agent.is_null() {
+        return;
+    }
+    let a: String = env.get_string(&agent).map(Into::into).unwrap_or_default();
+    if !a.is_empty() {
+        log(&format!("opened from a notification: {a}"));
+        crate::background::opened(a);
     }
 }
 

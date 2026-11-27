@@ -404,6 +404,14 @@ impl LinkState {
 
 type Waker = Arc<dyn Fn() + Send + Sync>;
 
+/// What a listener beside the app hears ([`Link::listen`]): every event and every change of
+/// state, as they come. The app's own [`Link::take_events`] still gets every event.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Note {
+    Event(Event),
+    State(LinkState),
+}
+
 struct Inner {
     store: Arc<dyn Store>,
     state: Mutex<LinkState>,
@@ -413,15 +421,25 @@ struct Inner {
     waker: Waker,
     /// Bumped by [`Link::forget`]: a loop of an older generation stops.
     generation: Mutex<u64>,
+    listeners: Mutex<Vec<std::sync::mpsc::Sender<Note>>>,
 }
 
 impl Inner {
     fn show(&self, s: LinkState) {
         let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if *st != s {
-            *st = s;
+            *st = s.clone();
             drop(st);
+            self.tell(Note::State(s));
             (self.waker)();
+        }
+    }
+
+    /// Every listener hears it; one that went away is dropped.
+    fn tell(&self, n: Note) {
+        let mut ls = self.listeners.lock().unwrap_or_else(|e| e.into_inner());
+        if !ls.is_empty() {
+            ls.retain(|tx| tx.send(n.clone()).is_ok());
         }
     }
 }
@@ -448,6 +466,7 @@ impl Link {
             kick: Notify::new(),
             waker,
             generation: Mutex::new(0),
+            listeners: Mutex::new(Vec::new()),
         });
         let i2 = inner.clone();
         std::thread::Builder::new()
@@ -522,6 +541,14 @@ impl Link {
     /// Fire and forget, for keys: the answer is read and dropped.
     pub fn post(&self, op: &str, payload: Value) -> bool {
         self.session().is_some_and(|s| s.send(op, &payload, &wire::uuid_v4(), None))
+    }
+
+    /// Hear every event and change of state from now on, on another thread than the app's
+    /// (the notifications that work with no activity). Dropping the receiver stops it.
+    pub fn listen(&self) -> std::sync::mpsc::Receiver<Note> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.inner.listeners.lock().unwrap_or_else(|e| e.into_inner()).push(tx);
+        rx
     }
 
     /// Events since the last take, oldest first.
@@ -687,8 +714,9 @@ fn dispatch(inner: &Inner, s: &Session, line: &str) {
             if ev.len() >= 2000 {
                 ev.remove(0);
             }
-            ev.push(e);
+            ev.push(e.clone());
             drop(ev);
+            inner.tell(Note::Event(e));
             (inner.waker)();
         }
         _ => {}

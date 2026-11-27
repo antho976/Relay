@@ -26,7 +26,10 @@ import androidx.core.app.ServiceCompat;
  */
 public class LinkService extends Service {
     static final String WORDS = "words";
+    /** On a notification's tap: the agent whose chat opens. */
+    static final String AGENT = "agent";
     private static final String CHANNEL = "link";
+    private static final String ASKS = "asks";
     private static final int ID = 1;
 
     /** Whether librelaycode.so is loaded: only GameActivity loads it otherwise. */
@@ -41,24 +44,52 @@ public class LinkService extends Service {
         }
     }
 
-    /** The service while it runs, on the main thread only: its line is changed in place. */
-    private static LinkService running;
+    /** The service while it runs: its line is changed in place. */
+    private static volatile LinkService running;
 
     /** The network changed: Rust redials now. */
     static native void nativeNetwork();
+
+    /**
+     * The link and the notifications start for the process (Rust, background.rs), so they run
+     * with no activity too. Rust calls {@link #alert} and {@link #words} back from its own thread.
+     */
+    static native void nativeStart(Context context, String dataDir);
 
     private ConnectivityManager.NetworkCallback callback;
 
     /**
      * Changes the ongoing notification's line if the service runs, through NotificationManager
      * (starting a foreground service again from the background is refused on Android 12 and
-     * later). False when it is not running, so the caller starts it. Main thread only.
+     * later). False when it is not running, so the caller starts it. Any thread.
      */
     static boolean words(Context context, String words) {
         if (running == null) return false;
         NotificationManager nm = context.getSystemService(NotificationManager.class);
         if (nm != null) nm.notify(ID, notification(context, words));
         return true;
+    }
+
+    /**
+     * An agent asks you, finished, or has a command held: a notification whose tap opens its
+     * chat. One per agent ({@code id}): a newer one replaces the older. Any thread.
+     */
+    static void alert(Context context, int id, String title, String body, String agent) {
+        NotificationManager nm = context.getSystemService(NotificationManager.class);
+        if (nm == null) return;
+        nm.createNotificationChannel(new NotificationChannel(ASKS, "Agents that need you", NotificationManager.IMPORTANCE_HIGH));
+        Intent open = new Intent(context, CodeActivity.class)
+                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(AGENT, agent);
+        PendingIntent tap = PendingIntent.getActivity(context, id, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification n = new Notification.Builder(context, ASKS)
+                .setSmallIcon(R.drawable.ic_notify)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setContentIntent(tap)
+                .setAutoCancel(true)
+                .build();
+        nm.notify(id, n);
     }
 
     private static Notification notification(Context context, String words) {
@@ -78,6 +109,13 @@ public class LinkService extends Service {
     public void onCreate() {
         super.onCreate();
         running = this;
+        if (LOADED) {
+            try {
+                nativeStart(getApplicationContext(), getFilesDir().getAbsolutePath());
+            } catch (UnsatisfiedLinkError ignored) {
+                // A library without it: the activity's loop still notifies while it is open.
+            }
+        }
     }
 
     @Override

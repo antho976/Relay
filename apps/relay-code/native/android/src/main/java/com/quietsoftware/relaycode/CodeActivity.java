@@ -1,9 +1,5 @@
 package com.quietsoftware.relaycode;
 
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
@@ -27,12 +23,16 @@ import com.google.androidgamesdk.GameActivity;
  * The app is Rust (librelaycode.so); this class exists because
  * - Back: AndroidX's back dispatcher finishes the activity before the key reaches native code, so
  *   a callback here hands every Back to Rust, which closes a sheet, goes back a page or leaves;
- * - the clipboard, notifications and the foreground service are Java-only APIs.
+ * - a tapped notification names the agent whose chat opens (LinkService posts them);
+ * - the clipboard and starting the foreground service are Java-only APIs.
  * Nothing here decides anything: Rust says what to show and when.
  */
 public class CodeActivity extends GameActivity {
     /** The Back gesture or key, to Rust. */
     private static native void nativeBack();
+
+    /** A notification was tapped: the chat of {@code agent} opens. */
+    private static native void nativeOpen(String agent);
 
     /** A picked photo, shrunk and saved at {@code path}, to Rust. */
     private static native void nativePhoto(String path);
@@ -40,8 +40,6 @@ public class CodeActivity extends GameActivity {
     private static final int PICK_PHOTO = 0x5250;
     /** The longest side a photo is sent at: enough for an agent to read a screenshot. */
     private static final int MAX_SIDE = 2048;
-
-    static final String ASKS = "asks";
 
     @Override
     protected void onCreate(android.os.Bundle saved) {
@@ -57,6 +55,22 @@ public class CodeActivity extends GameActivity {
                 nativeBack();
             }
         });
+        opened(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        opened(intent);
+    }
+
+    /** A notification's tap names the agent whose chat opens (LinkService.alert); once. */
+    private void opened(Intent intent) {
+        String agent = intent != null ? intent.getStringExtra(LinkService.AGENT) : null;
+        if (agent == null || agent.isEmpty()) return;
+        intent.removeExtra(LinkService.AGENT);
+        nativeOpen(agent);
     }
 
     public void copyText(final String text) {
@@ -164,22 +178,5 @@ public class CodeActivity extends GameActivity {
                 // Unreadable: nothing comes back.
             }
         }).start();
-    }
-
-    /** An agent asks you something: a notice that opens the app. */
-    public void notify(final int id, final String title, final String body) {
-        NotificationManager nm = getSystemService(NotificationManager.class);
-        if (nm == null) return;
-        nm.createNotificationChannel(new NotificationChannel(ASKS, "Agents that ask you", NotificationManager.IMPORTANCE_HIGH));
-        Intent open = new Intent(this, CodeActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        PendingIntent tap = PendingIntent.getActivity(this, id, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        Notification n = new Notification.Builder(this, ASKS)
-                .setSmallIcon(R.drawable.ic_notify)
-                .setContentTitle(title)
-                .setContentText(body)
-                .setContentIntent(tap)
-                .setAutoCancel(true)
-                .build();
-        nm.notify(id, n);
     }
 }
