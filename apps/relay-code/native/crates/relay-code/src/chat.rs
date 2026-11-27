@@ -57,6 +57,8 @@ pub struct State {
     refolded: HashSet<String>,
     /// Each item's key ([`data::items_timed`]): folds and heights follow it, not its place.
     keys: Rc<Vec<String>>,
+    /// The question card last answered (its agent, the card, when): held until its terminal moves on.
+    answered: Option<(String, crate::screen::Ask, u64)>,
     /// Items measured (not drawn) so far: what a new message costs, for tests.
     measured: usize,
     pub model_sheet: bool,
@@ -533,6 +535,24 @@ fn effort_tick(app: &mut App, name: &str, agent: Option<&Agent>) -> Option<&'sta
         app.efforts.remove(name);
     }
     app.efforts.get(name).copied().or(real)
+}
+
+/// How long an answered card waits for its terminal to move on before it takes taps again.
+const ANSWER_LOCK_NS: u64 = 5_000_000_000;
+
+/// The card `q` for `name` was answered a moment ago and its terminal still shows it.
+fn answered(app: &App, name: &str, q: &crate::screen::Ask) -> bool {
+    app.st.chat.answered.as_ref().is_some_and(|(n, a, at)| n == name && a == q && app.now_ns.saturating_sub(*at) < ANSWER_LOCK_NS)
+}
+
+/// Answer card `q`: true when the answer may go (the first tap), and the card is held until the
+/// terminal shows something else.
+fn answer(app: &mut App, name: &str, q: &crate::screen::Ask) -> bool {
+    if answered(app, name, q) {
+        return false;
+    }
+    app.st.chat.answered = Some((name.to_string(), q.clone(), app.now_ns));
+    true
 }
 
 /// How an answer's words are set on its key.
@@ -1102,29 +1122,36 @@ fn picture(app: &mut App, path: &str, y: f32, draw: bool) -> f32 {
 
 /// Photos picked go to this agent's checkout; each path, once written, joins the message.
 fn attachments(app: &mut App, name: &str) {
-    for p in crate::attach::take_picked() {
-        crate::attach::upload(app.link.clone(), name.to_string(), p);
+    // A photo goes to the agent whose chat it was picked in, and its path into that agent's
+    // draft only, wherever you are when it lands.
+    for (agent, p) in crate::attach::take_picked() {
+        crate::attach::upload(app.link.clone(), agent.unwrap_or_else(|| name.to_string()), p);
         app.st.chat.uploading += 1;
     }
-    for r in crate::attach::take_done() {
+    for (agent, r) in crate::attach::take_done() {
         app.st.chat.uploading = app.st.chat.uploading.saturating_sub(1);
         match r {
-            Ok(path) => {
-                let typed = if app.focus.is(FIELD) { app.focus.text.clone() } else { app.draft(name) };
-                let joined = if typed.trim().is_empty() { path } else { format!("{}\n{path}", typed.trim_end()) };
-                if app.focus.is(FIELD) {
-                    app.focus.text = joined.clone();
-                    app.focus.sel = None;
-                    app.host.keyboard(true, &joined, Kb::Prose);
-                }
-                app.set_draft(name, &joined);
-            }
+            Ok(path) => place_upload(app, name, &agent, path),
             Err(e) => app.toast(&e),
         }
     }
     if app.st.chat.uploading > 0 {
         app.toast("Sending the picture…");
     }
+}
+
+/// An uploaded picture's path joins `agent`'s draft: the box being typed in when that is the open
+/// chat (`name`), else the draft kept for it.
+fn place_upload(app: &mut App, name: &str, agent: &str, path: String) {
+    let here = agent == name && app.focus.is(FIELD);
+    let typed = if here { app.focus.text.clone() } else { app.draft(agent) };
+    let joined = if typed.trim().is_empty() { path } else { format!("{}\n{path}", typed.trim_end()) };
+    if here {
+        app.focus.text = joined.clone();
+        app.focus.sel = None;
+        app.host.keyboard(true, &joined, Kb::Prose);
+    }
+    app.set_draft(agent, &joined);
 }
 
 pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
@@ -1385,7 +1412,11 @@ fn composer(
         let card_h = ask_h - 10.0;
         app.canvas.rect(x, y, w, card_h, 16.0, t::S1);
         app.canvas.outline(x, y, w, card_h, 16.0, 1.0, t::ACCENT.a(0.55));
-        app.canvas.text("WAITING FOR YOUR ANSWER", x + 14.0, y + 14.0, Text::new(ty::SMALL, t::ACCENT).semi());
+        // Answered already: the card waits for the terminal to move on, and a second tap types
+        // nothing into whatever comes next.
+        let locked = answered(app, name, q);
+        let head = if locked { "SENT · WAITING FOR IT" } else { "WAITING FOR YOUR ANSWER" };
+        app.canvas.text(head, x + 14.0, y + 14.0, Text::new(ty::SMALL, if locked { t::INK3 } else { t::ACCENT }).semi());
         let qh = question_words(app, &q.question, x + 14.0, y + 36.0, w - 28.0, true);
         let mut oy = y + 36.0 + qh + 10.0;
         let mut pick = None;
@@ -1409,11 +1440,11 @@ fn composer(
         if !q.options.iter().any(|(_, l)| l.ends_with("(esc)")) {
             let mut cx = crate::cx!(app);
             let ew = 92.0;
-            if kit::plain(&mut cx, x + w - 10.0 - ew, oy, ew, 30.0, "Esc", None) {
+            if kit::plain(&mut cx, x + w - 10.0 - ew, oy, ew, 30.0, "Esc", None) && answer(app, name, q) {
                 app.key(name, "\x1b");
             }
         }
-        if let Some((n, write)) = pick {
+        if let Some((n, write)) = pick.filter(|_| answer(app, name, q)) {
             app.key(name, &n);
             // "No, and tell Claude…", "Type something": your words go in the message box next.
             if write {
@@ -1543,6 +1574,7 @@ fn composer(
         cx.c.outline(px, ky, 34.0, 34.0, 17.0, 1.0, t::LINE);
         cx.c.icon("plus", px + 17.0, ky + 17.0, 15.0, t::INK2);
         if cx.tap(px - 4.0, ky - 6.0, 42.0, 46.0) {
+            crate::attach::pick_for(name);
             cx.host.pick_photo();
         }
     }
@@ -1592,9 +1624,10 @@ fn composer(
             app.focus.text.clear();
             app.focus.sel = None;
             app.set_draft(name, "");
-            app.host.keyboard(true, "", Kb::Prose);
-            if !app.focus.is(FIELD) {
-                app.focus.id = None;
+            // Typing on: the field keeps the keys. Sent from a box not being typed in, the
+            // keyboard stays down (raised with no field, it would drop what you type next).
+            if app.focus.is(FIELD) {
+                app.host.keyboard(true, "", Kb::Prose);
             }
             app.host.haptic();
             app.say(name, &text);
@@ -2066,6 +2099,78 @@ mod tests {
         a.open("bold-puffin");
         a.frame(2_000_000_000);
         assert!(a.st.chat.todos.is_none(), "last turn's list is not pinned on this one");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audit_a_card_takes_one_answer_until_its_terminal_moves_on() {
+        let (mut a, dir) = fresh_app("audit-card");
+        let q = crate::screen::read("Proceed?\n❯ 1. Yes\n  2. No").ask.unwrap();
+        assert!(answer(&mut a, "x", &q), "the first tap answers");
+        assert!(!answer(&mut a, "x", &q), "a second tap on the same card types nothing");
+        // The terminal moved on to another card: it takes its answer.
+        let next = crate::screen::read("Then this?\n❯ 1. Yes\n  2. No").ask.unwrap();
+        assert!(answer(&mut a, "x", &next));
+        // Or the same card is still up a while later (the answer was lost): it may go again.
+        a.now_ns += ANSWER_LOCK_NS + 1;
+        assert!(answer(&mut a, "x", &next));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audit_an_upload_goes_to_its_own_agents_draft() {
+        let (mut a, dir) = fresh_app("audit-upload");
+        a.set_draft("b", "see this");
+        a.focus.id = Some(FIELD);
+        a.focus.text = "typing to a".into();
+        // Picked in b's chat, landed while a's is open and being typed in.
+        place_upload(&mut a, "a", "b", "/wt/.relay/uploads/x.png".into());
+        assert_eq!(a.draft("b"), "see this\n/wt/.relay/uploads/x.png");
+        assert_eq!(a.focus.text, "typing to a", "a's box is untouched");
+        assert_eq!(a.draft("a"), "");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn audit_send_with_the_keyboard_down_leaves_it_down() {
+        struct KbHost(std::path::PathBuf, std::sync::Mutex<Vec<bool>>);
+        impl crate::app::Host for KbHost {
+            fn data_dir(&self) -> std::path::PathBuf {
+                self.0.clone()
+            }
+            fn log(&self, _text: &str) {}
+            fn keyboard(&self, show: bool, _text: &str, _kind: Kb) {
+                self.1.lock().unwrap().push(show);
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("relay-code-audit-send-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let host = std::sync::Arc::new(KbHost(dir.clone(), Default::default()));
+        let mut a = App::new(host.clone(), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        a.open("swift-ocelot");
+        a.set_draft("swift-ocelot", "ship it");
+        let mut clock = 1_000_000_000u64;
+        for _ in 0..3 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        host.1.lock().unwrap().clear();
+        // The send key: at the box's right, on the row under the words.
+        let lh = Text::new(ty::BODY, t::INK).line(1.4).lh();
+        let ky = a.st.chat.box_top + 14.0 + lh + 10.0;
+        let (x, y) = (12.0 + (WIDTH - 24.0) - 10.0 - 17.0, ky + 17.0);
+        a.touch(crate::ui::Touch { id: 1, phase: crate::ui::Phase::Down, x, y, t_ns: clock });
+        clock += 16_666_666;
+        a.frame(clock);
+        a.touch(crate::ui::Touch { id: 1, phase: crate::ui::Phase::Up, x, y, t_ns: clock + 30_000_000 });
+        for _ in 0..2 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        assert_eq!(a.sending["swift-ocelot"].waiting.last().map(|p| p.text.as_str()), Some("ship it"), "it was sent");
+        assert!(!host.1.lock().unwrap().contains(&true), "the keyboard was not raised with no field to take its keys");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
