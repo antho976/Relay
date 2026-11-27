@@ -50,13 +50,20 @@ impl Host for AndroidHost {
         self.keyboard_at.store(now_ns(), Ordering::SeqCst);
         self.keyboard_shown.store(show, Ordering::SeqCst);
         if show {
-            let kind = match kind {
-                Kb::Text => InputType::TYPE_CLASS_TEXT,
+            let (kind, action, options) = match kind {
+                Kb::Text => (InputType::TYPE_CLASS_TEXT, TextInputAction::Done, ImeOptions::empty()),
+                // Enter is a new line, not the keyboard's action: GameTextInput keeps the
+                // newline only for a multi-line field, and Gboard shows a return key without one.
+                Kb::Prose => (
+                    InputType::TYPE_CLASS_TEXT | InputType::TYPE_TEXT_FLAG_MULTI_LINE | InputType::TYPE_TEXT_FLAG_CAP_SENTENCES | InputType::TYPE_TEXT_FLAG_AUTO_CORRECT,
+                    TextInputAction::None,
+                    ImeOptions::IME_FLAG_NO_ENTER_ACTION,
+                ),
                 // A web address: no capitals, no autocorrect, no suggestions.
-                Kb::Url => InputType::TYPE_CLASS_TEXT | InputType::TYPE_TEXT_VARIATION_URI | InputType::TYPE_TEXT_FLAG_NO_SUGGESTIONS,
-                Kb::Secret => InputType::TYPE_CLASS_TEXT | InputType::TYPE_TEXT_VARIATION_VISIBLE_PASSWORD | InputType::TYPE_TEXT_FLAG_NO_SUGGESTIONS,
+                Kb::Url => (InputType::TYPE_CLASS_TEXT | InputType::TYPE_TEXT_VARIATION_URI | InputType::TYPE_TEXT_FLAG_NO_SUGGESTIONS, TextInputAction::Done, ImeOptions::empty()),
+                Kb::Secret => (InputType::TYPE_CLASS_TEXT | InputType::TYPE_TEXT_VARIATION_VISIBLE_PASSWORD | InputType::TYPE_TEXT_FLAG_NO_SUGGESTIONS, TextInputAction::Done, ImeOptions::empty()),
             };
-            self.app.set_ime_editor_info(kind, TextInputAction::Done, ImeOptions::empty());
+            self.app.set_ime_editor_info(kind, action, options);
             // The caret after the last character, counted in UTF-16 units as Java does.
             let end: usize = text.chars().map(char::len_utf16).sum();
             self.app.set_text_input_state(TextInputState { text: text.to_string(), selection: TextSpan { start: end, end }, compose_region: None });
