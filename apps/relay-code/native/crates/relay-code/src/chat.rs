@@ -638,7 +638,7 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
         let online = app.link_state.online();
         let (words, ink) = if p.failed {
             ("Not sent · tap to send again", t::DANGER)
-        } else if p.stage == Stage::Queued && !online {
+        } else if p.stage < Stage::Entered && !online {
             ("Waiting for your PC", t::INK3)
         } else if p.stage < Stage::Entered {
             ("Sending…", t::INK3)
