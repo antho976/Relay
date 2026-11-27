@@ -111,9 +111,26 @@ pub struct Text {
     pub line: f32,
 }
 
+thread_local! {
+    /// The text size chosen in Settings (D9), as a scale on every [`Text`] made from here on. Per
+    /// thread: the app draws on one, and parallel tests don't see each other's choice.
+    static TEXT_SCALE: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+}
+
+/// Scale every [`Text`] made on this thread from here on (1.0 is Default).
+pub fn set_text_scale(s: f32) {
+    TEXT_SCALE.with(|c| c.set(s.clamp(0.5, 2.0)));
+}
+
+pub fn text_scale() -> f32 {
+    TEXT_SCALE.with(|c| c.get())
+}
+
 impl Text {
+    /// `size` at the text size chosen in Settings ([`set_text_scale`]), so every size, measure and
+    /// line height follows it with no call site knowing.
     pub fn new(size: f32, color: Rgba) -> Text {
-        Text { size, weight: Weight::Regular, color, align: Align::Left, line: 1.3 }
+        Text { size: size * TEXT_SCALE.with(|s| s.get()), weight: Weight::Regular, color, align: Align::Left, line: 1.3 }
     }
     pub fn medium(mut self) -> Text {
         self.weight = Weight::Medium;
@@ -307,6 +324,10 @@ pub struct Canvas {
     pub px_h: f32,
     /// Pixels per unit.
     pub u: f32,
+    /// The most pixels per unit: a phone's look for this screen's density, so a tablet or a
+    /// window keeps a phone-sized column, centred, rather than scaling it up (D9). Unbounded
+    /// when the density is unknown.
+    pub max_u: f32,
     /// Layout height in units (the width is always [`WIDTH`]).
     pub h: f32,
     /// Space at the top and bottom that the system draws over (status bar, gesture bar), in units.
@@ -343,6 +364,7 @@ impl Canvas {
             px_w: 1.0,
             px_h: 1.0,
             u: 1.0,
+            max_u: f32::INFINITY,
             h: 844.0,
             inset_top: 0.0,
             inset_bottom: 0.0,
@@ -360,7 +382,7 @@ impl Canvas {
         self.clips.clear();
         self.px_w = px_w;
         self.px_h = px_h;
-        self.u = (px_w / WIDTH).min(px_h / 700.0).max(0.1);
+        self.u = (px_w / WIDTH).min(px_h / 700.0).min(self.max_u).max(0.1);
         self.h = px_h / self.u;
         self.inset_top = inset_top / self.u;
         self.inset_bottom = inset_bottom / self.u;

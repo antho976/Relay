@@ -534,7 +534,9 @@ fn the_drawers_list_scrolls_to_earlier_under_its_links() {
 
 /// Settings' rows on a 390 × 844 screen with sample data (no profile, so no version line).
 const NOTIFY_TOP: f32 = 56.0 + 52.0 + 30.0 + 36.0 + 24.0 + 22.0 + 30.0;
-const FORGET_TOP: f32 = NOTIFY_TOP + 3.0 * 52.0 + 22.0 + 30.0 + 64.0;
+/// Under the switches: the text size row (its label, the choices and their room), then the app.
+const TEXT_TOP: f32 = NOTIFY_TOP + 3.0 * 52.0 + 22.0;
+const FORGET_TOP: f32 = TEXT_TOP + 30.0 + 36.0 + 8.0 + 22.0 + 30.0 + 64.0;
 
 #[test]
 fn a_notification_row_switches_it_and_the_choice_is_kept() {
@@ -847,4 +849,54 @@ fn a_tap_outside_the_branch_picker_closes_it_and_reaches_nothing() {
     assert!(!a.st.changes.picking);
     assert!(!a.st.drawer.open, "the menu key under the veil took no tap");
     assert_eq!(a.route(), &Route::Changes);
+}
+
+// D9: text size and wide screens.
+
+#[test]
+fn the_text_size_scales_every_text_and_the_chat_measures_again() {
+    let mut a = app("text-size");
+    let mut clock = 1_000_000_000;
+    a.open("bold-puffin");
+    frames(&mut a, &mut clock, 5);
+    let body = crate::draw::Text::new(crate::theme::ty::BODY, crate::theme::INK).size;
+    let page_default = a.nav.last().unwrap().1.max;
+    a.set_text_size(2);
+    frames(&mut a, &mut clock, 5);
+    assert_eq!(crate::draw::text_scale(), crate::settings::TEXT_SCALES[2]);
+    let large = crate::draw::Text::new(crate::theme::ty::BODY, crate::theme::INK).size;
+    assert!((large - body * 1.12).abs() < 0.01, "{body} → {large}");
+    assert!(a.nav.last().unwrap().1.max > page_default, "the conversation measured again, taller");
+    // Back to Default: exactly today's sizes.
+    a.set_text_size(1);
+    frames(&mut a, &mut clock, 2);
+    assert_eq!(crate::draw::Text::new(crate::theme::ty::BODY, crate::theme::INK).size, body);
+}
+
+#[test]
+fn a_tablet_keeps_a_phone_sized_column_centred() {
+    struct Tablet(PathBuf);
+    impl Host for Tablet {
+        fn data_dir(&self) -> PathBuf {
+            self.0.clone()
+        }
+        fn log(&self, _text: &str) {}
+        fn density(&self) -> f32 {
+            2.0
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("relay-code-flow-tablet-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut a = App::new(Arc::new(Tablet(dir)), 1_000_000_000);
+    a.sample();
+    a.resize(1600.0, 2560.0, 0.0, 0.0);
+    let mut clock = 1_000_000_000;
+    frames(&mut a, &mut clock, 2);
+    // Without the cap: 2560 / 700 = 3.66 px per unit. A phone's look at 2 px per dp is about 2.3.
+    assert!(a.canvas.u < 2.4 && a.canvas.u > 2.2, "{}", a.canvas.u);
+    // A phone is drawn as before: 1080 wide at 2.625 px per dp fills its width.
+    let mut p = app("phone-scale");
+    p.resize(1080.0, 2340.0, 0.0, 0.0);
+    frames(&mut p, &mut clock, 2);
+    assert!((p.canvas.u - 1080.0 / 390.0).abs() < 0.01);
 }

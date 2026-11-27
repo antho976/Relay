@@ -105,6 +105,10 @@ impl Host for AndroidHost {
         with_activity(&self.app, |env, activity| env.call_method(activity, "haptic", "()V", &[]).map(|_| ()));
     }
 
+    fn density(&self) -> f32 {
+        self.app.config().density().map_or(0.0, |dpi| dpi as f32 / 160.0)
+    }
+
     fn can_install(&self) -> bool {
         with_activity(&self.app, |env, activity| env.call_method(activity, "canInstall", "()Z", &[])?.z()).unwrap_or(false)
     }

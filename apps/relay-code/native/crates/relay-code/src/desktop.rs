@@ -25,9 +25,15 @@ use crate::ui::{Phase, Touch};
 
 struct DesktopHost {
     data: PathBuf,
+    /// Pixels per dp a shot pretends to have (`--density`), 0 for a window.
+    density: f32,
 }
 
 impl Host for DesktopHost {
+    fn density(&self) -> f32 {
+        self.density
+    }
+
     fn data_dir(&self) -> PathBuf {
         self.data.clone()
     }
@@ -108,10 +114,17 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
     let _ = std::fs::remove_dir_all(&dir);
     let mut gfx = Gfx::headless()?;
     let mut clock = 1_000_000_000u64;
-    let mut app = App::new(Arc::new(DesktopHost { data: dir.clone() }), clock);
+    // `--density 2` is a tablet's 320 dpi; `--text small|large` the Settings choice (D9).
+    let density = arg(args, "--density").and_then(|d| d.parse().ok()).unwrap_or(0.0);
+    let mut app = App::new(Arc::new(DesktopHost { data: dir.clone(), density }), clock);
     app.canvas.set_images_size(gfx.images_size());
     // Roughly a phone's status bar and gesture bar.
     app.resize(w as f32, h as f32, w as f32 * 0.085, w as f32 * 0.04);
+    match arg(args, "--text").as_deref() {
+        Some("small") => app.set_text_size(0),
+        Some("large") => app.set_text_size(2),
+        _ => {}
+    }
     if !screen.starts_with("first-run") && !screen.starts_with("pair-") {
         app.sample();
     } else {
@@ -308,7 +321,7 @@ impl ApplicationHandler<()> for Windowed {
         let window = Arc::new(event_loop.create_window(attributes).expect("a window"));
         let size = window.inner_size();
         let (gfx, screen) = Gfx::with_surface(window.clone(), size.width, size.height).expect("graphics");
-        let mut app = App::new(Arc::new(DesktopHost { data: self.data.clone() }), now_ns());
+        let mut app = App::new(Arc::new(DesktopHost { data: self.data.clone(), density: 0.0 }), now_ns());
         app.canvas.set_images_size(gfx.images_size());
         app.resize(size.width as f32, size.height as f32, 0.0, 0.0);
         self.app = Some(app);

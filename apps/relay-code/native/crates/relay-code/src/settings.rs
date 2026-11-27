@@ -25,6 +25,10 @@ pub enum Notify {
     Holds,
 }
 
+/// The text sizes, and how much each scales the type.
+pub const TEXT_SIZES: [&str; 3] = ["Small", "Default", "Large"];
+pub const TEXT_SCALES: [f32; 3] = [0.92, 1.0, 1.12];
+
 pub const NOTIFY: [(Notify, &str); 3] =
     [(Notify::Asks, "When an agent asks you"), (Notify::Done, "When an agent finishes"), (Notify::Holds, "When a command is held for you")];
 
@@ -116,6 +120,18 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         y += h;
     }
     y += 22.0;
+
+    // Text size: every word in the app, the agent's and code's included, steps with it.
+    y += label(app, y, "TEXT SIZE");
+    let on = app.text_size();
+    let mut cx = crate::cx!(app);
+    if let Some(i) = kit::segmented(&mut cx, t::PAD, y + 4.0, WIDTH - 2.0 * t::PAD, &TEXT_SIZES, on)
+        && i != on
+    {
+        app.host.haptic();
+        app.set_text_size(i);
+    }
+    y += 36.0 + 8.0 + 22.0;
 
     // The app, and forgetting the PC.
     y += label(app, y, "THIS APP");
