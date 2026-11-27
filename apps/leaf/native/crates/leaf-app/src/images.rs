@@ -262,6 +262,8 @@ pub struct Images {
     decoded: HashMap<(i64, u32), PageImg>,
     /// Pages that would not load when they were to be shown: drawn with a Retry.
     failed: HashMap<(i64, u32), String>,
+    /// Chapters saved on this phone found broken ([`SAVED_BROKEN`]), for the app to drop.
+    broken_saved: std::collections::HashSet<i64>,
     /// Pages that would not load when only kept ahead on disk: not kept ahead again, but fetched
     /// when they come near, as any other (the server tries another source for them meanwhile).
     ahead_failed: HashSet<(i64, u32)>,
@@ -335,6 +337,7 @@ impl Images {
             sizes: HashMap::new(),
             decoded: HashMap::new(),
             failed: HashMap::new(),
+            broken_saved: Default::default(),
             ahead_failed: HashSet::new(),
             soft: HashSet::new(),
             last_firm: 0,
@@ -667,6 +670,9 @@ impl Images {
                         Ok(Fetched::Skip) => {
                             self.skipped.insert(k);
                         }
+                        Err(e) if e == SAVED_BROKEN => {
+                            self.broken_saved.insert(chapter);
+                        }
                         Err(e) if decode && !self.soft.contains(&k) => {
                             self.failed.insert(k, e);
                         }
@@ -835,6 +841,11 @@ impl Images {
     #[cfg(test)]
     pub fn fake_skip(&mut self, chapter: i64, n: u32) {
         self.skipped.insert((chapter, n));
+    }
+
+    /// The chapters saved on this phone found broken since last asked.
+    pub fn take_broken_saved(&mut self) -> Vec<i64> {
+        self.broken_saved.drain().collect()
     }
 
     /// Why a page could not be had, if it could not.
@@ -1232,12 +1243,17 @@ fn page(client: &Client, server: Option<&Server>, data: &Path, chapter: i64, n: 
     if !promo && mark.is_file() && !file.is_file() {
         return Ok(Fetched::Skip);
     }
-    // Downloaded to this phone: read from there, with no network at all.
+    // Downloaded to this phone: read from there, with no network at all. A saved page that is
+    // blank or won't decode (a source that sent zeros, saved before that was caught, 2026-11-26)
+    // means the copy is broken: the app drops it and reads the chapter from the server.
     let saved = crate::offline::chapter_dir(data, chapter);
     if let Ok(b) = std::fs::read(saved.join(n.to_string()))
         && !b.is_empty()
     {
-        return if decode { decode_page(&b, trim).map(|p| Fetched::Img(Some(p))) } else { Ok(Fetched::Img(None)) };
+        if blank(&b) {
+            return Err(SAVED_BROKEN.into());
+        }
+        return if decode { decode_page(&b, trim).map(|p| Fetched::Img(Some(p))).map_err(|_| SAVED_BROKEN.into()) } else { Ok(Fetched::Img(None)) };
     }
     if !promo && saved.join(format!("{n}.skip")).is_file() {
         return Ok(Fetched::Skip);
@@ -1301,6 +1317,14 @@ fn made_up_page(chapter: i64, n: u32) -> PageImg {
     let row = (w * 4) as usize;
     let tiles = crate::logic::tile_rows(h).into_iter().map(|(y, th)| raw[y as usize * row..(y + th) as usize * row].to_vec()).collect();
     PageImg { w, h, tiles }
+}
+
+/// A page saved on this phone that is blank or won't decode: the saved chapter is dropped.
+pub const SAVED_BROKEN: &str = "This chapter was saved broken on this phone";
+
+/// A picture that is only zeros at its start: what a source that failed leaves in its place.
+pub fn blank(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && bytes.iter().take(4096).all(|b| *b == 0)
 }
 
 /// The most one page's decode may allocate: a 1600 × 30000 webtoon strip fits, a malformed

@@ -58,6 +58,9 @@ pub(crate) const WEBTOONS: &str = "Webtoons.com";
 /// At most this many Webtoon list pages read for one search's paid warnings.
 const PAID_LOOKS: usize = 4;
 
+/// A page past the end of the chapter's list: the phone's count is out of date.
+pub const NO_SUCH_PAGE: &str = "no such page";
+
 /// A chapter's page addresses, the source they come from, and whether they are served from
 /// Suwayomi's downloads (so asking for one reaches no site).
 #[derive(Clone, Debug)]
@@ -1013,11 +1016,12 @@ impl Ctx {
 
     /// The same chapter number from the work's other copies, preferred sources first: a source
     /// that refuses (rate limits, a Cloudflare check, a site down) doesn't stop the reading.
-    fn pages_elsewhere(&self, chapter_id: i64) -> Option<PageList> {
+    fn pages_elsewhere(&self, chapter_id: i64, prefer: Option<&str>) -> Option<PageList> {
         let (manga_id, number) = self.suwa.chapter_place(chapter_id).ok()?;
         let work = self.store().work_of_any(manga_id)?;
         let mut copies: Vec<Manga> = std::iter::once(work.manga_id).chain(self.store().links(work.id)).filter(|id| *id != manga_id).filter_map(|id| self.suwa.manga(id).ok()).collect();
-        copies.sort_by_key(|m| rank(&m.source_name, &self.prefs));
+        // The source the chapter already moved to first: its pages stay one source's.
+        copies.sort_by_key(|m| (prefer != Some(m.source_name.as_str()), rank(&m.source_name, &self.prefs)));
         for m in copies {
             for c in m.chapters.iter().filter(|c| c.number == number) {
                 if let Ok(p) = self.ask_as(&m.source_name, Lane::Fore, Kind::Pages, || self.suwa.pages(c.id))
@@ -1035,8 +1039,8 @@ impl Ctx {
     /// chapter is read from another copy of the work, the reader's request (one source asked, in
     /// the phone's lane), from now on. Answers the new page count.
     pub fn read_elsewhere(&self, chapter_id: i64) -> Result<u32, String> {
-        let p = self.pages_elsewhere(chapter_id).ok_or("No other source has this chapter")?;
-        self.store().set(&format!("elsewhere:{chapter_id}"), "1");
+        let p = self.pages_elsewhere(chapter_id, None).ok_or("No other source has this chapter")?;
+        self.store().set(&format!("elsewhere:{chapter_id}"), &p.source);
         let n = p.urls.len() as u32;
         self.pages.lock().unwrap_or_else(|p| p.into_inner()).insert(chapter_id, p);
         Ok(n)
@@ -1084,9 +1088,11 @@ impl Ctx {
         if let Some(p) = cached {
             return Ok(p);
         }
-        // A chapter you said was broken here reads from another copy first.
-        let moved = self.store().get(&format!("elsewhere:{chapter_id}")).is_some();
-        if moved && let Some(p) = self.pages_elsewhere(chapter_id) {
+        // A chapter you said was broken here reads from another copy first: the one it moved to.
+        let moved = self.store().get(&format!("elsewhere:{chapter_id}"));
+        if let Some(to) = moved
+            && let Some(p) = self.pages_elsewhere(chapter_id, Some(&to))
+        {
             self.pages.lock().unwrap_or_else(|p| p.into_inner()).insert(chapter_id, p.clone());
             return Ok(p);
         }
@@ -1096,7 +1102,7 @@ impl Ctx {
             Ok(urls) => PageList { urls, source: info.source, local: info.downloaded },
             Err(e) => {
                 log(&format!("chapter {chapter_id}: {e}; trying its other sources"));
-                self.pages_elsewhere(chapter_id).ok_or(e)?
+                self.pages_elsewhere(chapter_id, None).ok_or(e)?
             }
         };
         let mut cache = self.pages.lock().unwrap_or_else(|p| p.into_inner());
@@ -1110,7 +1116,7 @@ impl Ctx {
     /// One page's picture; counted against its source unless served from the downloads.
     pub fn page(&self, chapter_id: i64, n: usize) -> Result<(Vec<u8>, String), String> {
         let list = self.pages(chapter_id)?;
-        let url = list.urls.get(n).ok_or("no such page")?;
+        let url = list.urls.get(n).ok_or(NO_SUCH_PAGE)?;
         if list.local { self.suwa.bytes(url) } else { self.ask_as(&list.source, Lane::Fore, Kind::Images, || self.suwa.bytes(url)) }
     }
 

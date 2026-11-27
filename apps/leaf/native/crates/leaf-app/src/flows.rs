@@ -577,6 +577,44 @@ fn an_update_sheet_holds_the_page_and_later_puts_that_build_off() {
 }
 
 #[test]
+fn a_chapter_saved_blank_on_the_phone_is_dropped_and_read_from_the_server() {
+    let (mut app, mut t, dir) = app("saved-blank");
+    let d = detail(1, 3);
+    let c = d.chapters[1].clone();
+    // MangaFire's chapter 58 as the phone saved it (2026-11-26): every page zeros. Written once
+    // the saver has read its folder (it clears half-done ones).
+    for _ in 0..200 {
+        if app.saver.scanned() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let folder = crate::offline::chapter_dir(&app.data, c.id);
+    std::fs::create_dir_all(&folder).unwrap();
+    for n in 0..5 {
+        std::fs::write(folder.join(n.to_string()), vec![0u8; 5000]).unwrap();
+    }
+    let m = crate::offline::Manifest { series: 1, title: "Series 1".into(), chapter: c.clone(), pages: 5, skipped: vec![], bytes: 25_000, saved_at: 0 };
+    std::fs::write(folder.join("manifest.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+    app.saver.shot_saved(vec![m]);
+    app.open_chapter(&d, 1, 0);
+    let mut dropped = false;
+    for _ in 0..40 {
+        step(&mut app, &mut t);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        if app.saver.manifest(c.id).is_none() {
+            dropped = true;
+            break;
+        }
+    }
+    assert!(dropped, "the broken copy is dropped");
+    assert!(!folder.exists(), "its folder goes at once");
+    assert_eq!(app.toast_words(), Some("The copy saved on this phone was broken: reading it from your server"));
+    assert!(app.images.failed(c.id, 0).is_none_or(|w| !w.contains("decode")), "no page says it didn't decode");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn a_page_that_did_not_load_offers_another_source_beside_retry() {
     let (mut app, mut t, dir) = app("blank-page");
     let d = detail(1, 3);

@@ -385,6 +385,15 @@ impl Reader {
     }
 
     /// A chapter's length came (or did not, at `now_ns`).
+    /// Forget a chapter's length, so it is asked of the server again (its saved copy dropped).
+    pub fn recount(&mut self, chapter: i64) {
+        if let Some(i) = self.chapters.iter().position(|c| c.id == chapter) {
+            self.counts[i] = None;
+            self.counts_asked.remove(&i);
+            self.count_failed.remove(&i);
+        }
+    }
+
     pub fn page_count(&mut self, chapter: i64, count: Option<u32>, now_ns: u64) {
         if let Some(i) = self.chapters.iter().position(|c| c.id == chapter) {
             match count {

@@ -61,7 +61,7 @@ use leaf_proto::{AnilistToken, AppLatest, Bell, ChapterRead, DownloadIds, Follow
 use serde::Serialize;
 use tiny_http::{Header, Method, Request, Response};
 
-use crate::autopilot::{Ctx, Scope, log};
+use crate::autopilot::{Ctx, NO_SUCH_PAGE, Scope, log};
 use crate::promo::PageOut;
 
 pub struct Api {
@@ -361,9 +361,13 @@ impl Api {
                 let (Some(c), Some(n)) = (id(2), id(4)) else { return fail(400, "bad page") };
                 let skip = query_param(url, "promo").as_deref() != Some("1");
                 let got = ctx.page_out(c, n.max(0) as u32, skip);
-                if got.is_err() {
-                    // The phone asks again; the list is fetched afresh, from another source if
-                    // this one keeps refusing.
+                // The phone asks again; the list is fetched afresh, from another source if this one
+                // keeps refusing. Not for a page past the list's end: that is the phone's count out
+                // of date, and asking the sites again for it turned one chapter over between three
+                // of them, page by page (2026-11-26).
+                if let Err(e) = &got
+                    && e != NO_SUCH_PAGE
+                {
                     ctx.forget_pages(c);
                 }
                 got.map(|p| match p {

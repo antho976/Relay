@@ -895,7 +895,24 @@ impl App {
     }
 
     /// This page is broken: the chapter is read from another source from now on.
+    /// A chapter saved on this phone dropped (broken, or read from another source now), and its
+    /// length asked of the server again. The folder goes at once, so the length isn't read from
+    /// its manifest meanwhile.
+    pub fn drop_saved(&mut self, chapter: i64) {
+        if self.saver.manifest(chapter).is_none() {
+            return;
+        }
+        let _ = std::fs::remove_dir_all(crate::offline::chapter_dir(&self.data, chapter));
+        self.saver.delete(&[chapter]);
+        self.images.forget_chapter(&mut self.canvas, chapter);
+        if let Some(rd) = &mut self.reader {
+            rd.recount(chapter);
+        }
+    }
+
     pub fn read_elsewhere(&mut self, chapter: i64) {
+        // The phone's own copy is the old source's: it goes, or the reader would keep reading it.
+        self.drop_saved(chapter);
         self.toast("Looking for this chapter on another source");
         self.ask(Job::Elsewhere(chapter));
     }
@@ -2596,6 +2613,10 @@ impl App {
         self.focus.at = None;
         kit::ground(&mut self.canvas);
         let arrived = self.images.drain(&mut self.canvas, now_ns);
+        for chapter in self.images.take_broken_saved() {
+            self.drop_saved(chapter);
+            self.toast("The copy saved on this phone was broken: reading it from your server");
+        }
         let route = self.route().clone();
         // Out of reach: the server is tried again now and then, and the prompt shows once a spell.
         crate::online::probe(self, false);

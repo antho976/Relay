@@ -654,6 +654,7 @@ fn save(sh: &Arc<Shared>, client: &Client, s: &Server, item: &Item, promo: bool,
         // Read lately: the page cache has it already.
         if let Ok(b) = std::fs::read(cache.join(n.to_string()))
             && !b.is_empty()
+            && !crate::images::blank(&b)
         {
             if write_atomic(&file, &b).is_err() {
                 return End::Failed("This phone couldn't keep it".into());
@@ -664,6 +665,8 @@ fn save(sh: &Arc<Shared>, client: &Client, s: &Server, item: &Item, promo: bool,
         let mut tries = 0;
         loop {
             match client.get_page(s, &path) {
+                // A page sent blank (zeros) is not a page: nothing saved, the chapter failed.
+                Ok(Some(b)) if crate::images::blank(&b) => return End::Failed(format!("Page {} came blank from its source", n + 1)),
                 Ok(Some(b)) => {
                     if write_atomic(&file, &b).is_err() {
                         return End::Failed("This phone couldn't keep it".into());
