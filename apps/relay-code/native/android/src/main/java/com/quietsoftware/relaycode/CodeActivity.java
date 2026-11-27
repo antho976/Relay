@@ -34,6 +34,9 @@ public class CodeActivity extends GameActivity {
     /** A notification was tapped: the chat of {@code agent} opens. */
     private static native void nativeOpen(String agent);
 
+    /** The smoke run's sample screen ({@code --es screen chat}), debuggable builds only. */
+    private static native void nativeSample(String screen);
+
     /** A picked photo, shrunk and saved at {@code path}, to Rust. */
     private static native void nativePhoto(String path);
 
@@ -56,6 +59,14 @@ public class CodeActivity extends GameActivity {
             }
         });
         opened(getIntent());
+        sample(getIntent());
+    }
+
+    /** A sample screen for the smoke run: a release build ignores the extra. */
+    private void sample(Intent intent) {
+        if (intent == null || (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) == 0) return;
+        String screen = intent.getStringExtra("screen");
+        if (screen != null && !screen.isEmpty()) nativeSample(screen);
     }
 
     @Override
@@ -63,6 +74,7 @@ public class CodeActivity extends GameActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         opened(intent);
+        sample(intent);
     }
 
     /** A notification's tap names the agent whose chat opens (LinkService.alert); once. */

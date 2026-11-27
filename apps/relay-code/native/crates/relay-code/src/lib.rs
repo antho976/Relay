@@ -31,6 +31,7 @@ pub mod pair;
 pub mod sample;
 pub mod screen;
 pub mod settings;
+pub mod smoke;
 pub mod terminal;
 pub mod theme;
 pub mod ui;
