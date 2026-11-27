@@ -70,6 +70,9 @@ fn start_server(app: &mut App, server: String) {
         send(Msg::Asked(asked.clone()));
         let link = wait_for_link(|| s.claim(&asked), || std::thread::sleep(Duration::from_secs(2)), &stop, || send(Msg::Allowed));
         match link {
+            // Cancelled while the claim was out: the link is not used, so the PC mints no pairing
+            // the phone would throw away.
+            Some(Ok(_)) if stop.load(std::sync::atomic::Ordering::SeqCst) => {}
             Some(Ok(link)) => {
                 let Some(pl) = PairLink::parse(&link) else { return send(Msg::Failed("Your server's link did not read".into())) };
                 send(match rc_link::link::pair(&pl, DEVICE) {
@@ -97,6 +100,10 @@ fn wait_for_link(mut claim: impl FnMut() -> Reply, mut pause: impl FnMut(), stop
             return None;
         }
         pause();
+        // Cancelled during the pause: no claim, so an Allow that just landed pairs nothing (D21).
+        if stop.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
         let reply = claim();
         troubles = if matches!(reply, Reply::Trouble(_)) { troubles + 1 } else { 0 };
         match reply {
@@ -336,5 +343,23 @@ mod tests {
         let (out, asked) = run(vec![trouble(), trouble(), trouble(), trouble(), Reply::Ready("x".into())]);
         assert_eq!((out, asked), (Some(Err("Your server could not be reached.".into())), 4), "a fourth in a row ends it");
         assert_eq!(run(vec![Reply::Denied]).0, Some(Err("Declined on Discord.".into())), "a refusal is never asked again");
+    }
+
+    #[test]
+    fn cancel_during_the_pause_claims_nothing() {
+        // The owner allows it on Discord just as the person taps Cancel, during the two seconds'
+        // pause: the claim that would answer Ready is never made.
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let mut asked = 0;
+        let out = wait_for_link(
+            || {
+                asked += 1;
+                Reply::Ready("relay://pair?v=1".into())
+            },
+            || stop.store(true, std::sync::atomic::Ordering::SeqCst),
+            &stop,
+            || {},
+        );
+        assert_eq!((out, asked), (None, 0));
     }
 }
