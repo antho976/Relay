@@ -560,3 +560,16 @@ fn forget_this_pc_asks_first_and_a_tap_outside_keeps_it() {
     assert!(!crate::settings::confirming(&a));
     assert_eq!(a.route(), &Route::Settings, "nothing under the dialog took the tap");
 }
+
+#[test]
+fn the_rows_say_working_when_the_terminal_does_as_the_header_does() {
+    let mut a = app("words");
+    let ocelot = a.agent("swift-ocelot").cloned().expect("sample agent");
+    // Its output is a minute old, so the list alone reads it as ready.
+    assert_eq!(a.agent_words(&ocelot), "ready");
+    a.screens.insert("swift-ocelot".into(), crate::screen::read("· Pondering… (3s · thought for 1s)\n────\n❯ \n────\n  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt"));
+    assert_eq!(a.agent_words(&ocelot), "working");
+    // One that asks says so, whatever its terminal shows.
+    let zebra = a.agent("umber-zebra").cloned().expect("sample agent");
+    assert_eq!(a.agent_words(&zebra), "asks you");
+}

@@ -60,13 +60,18 @@ pub struct NewAgent {
 
 /// An agent's badge: two letters on its own colour, and its lamp.
 pub fn badge(c: &mut Canvas, a: &Agent, x: f32, y: f32, size: f32) {
+    badge_lit(c, a, x, y, size, a.working());
+}
+
+/// [`badge`], its green lamp lit when `working` says so (the rows pass [`App::busy`]).
+pub fn badge_lit(c: &mut Canvas, a: &Agent, x: f32, y: f32, size: f32, working: bool) {
     let col = t::BADGES[a.colour()];
     c.rect(x, y, size, size, size * 0.3, col.a(0.2));
     let tt = Text::new(size * 0.38, col).semi().center();
     c.text(&a.initials(), x + size / 2.0, y + (size - tt.lh()) / 2.0, tt);
     let lamp = if a.needs_you() {
         Some(t::WARN)
-    } else if a.working() {
+    } else if working {
         Some(t::OK)
     } else {
         None
@@ -81,11 +86,13 @@ pub fn badge(c: &mut Canvas, a: &Agent, x: f32, y: f32, size: f32) {
 /// when tapped.
 pub fn agent_row(app: &mut App, a: &Agent, x: f32, y: f32, w: f32, now_ms: u64) -> bool {
     let h = 60.0;
+    let working = app.busy(&a.name);
+    let words = app.agent_words(a);
     let mut cx = crate::cx!(app);
     if cx.pressed(x, y, w, h) {
         cx.c.rect(x + 6.0, y + 2.0, w - 12.0, h - 4.0, 10.0, t::WASH);
     }
-    badge(cx.c, a, x + t::PAD, y + 14.0, 32.0);
+    badge_lit(cx.c, a, x + t::PAD, y + 14.0, 32.0, working);
     let tx = x + t::PAD + 32.0 + 12.0;
     // TODO(D5): once session.list carries `waiting` (B's "prompt" or "report"), say "asks you"
     // only for "prompt" and "stopped · blocked" for "report", here and in the chat header.
@@ -93,7 +100,7 @@ pub fn agent_row(app: &mut App, a: &Agent, x: f32, y: f32, w: f32, now_ms: u64) 
     let wt = Text::new(ty::SMALL, t::INK3);
     let ww = if when.is_empty() { 0.0 } else { cx.c.measure(&when, wt) + 8.0 };
     cx.c.text_fit(a.title(), tx, y + 11.0, x + w - tx - t::PAD - ww, Text::new(ty::BODY, t::INK).semi());
-    let sub = format!("{} · {}", a.name, a.state_words());
+    let sub = format!("{} · {words}", a.name);
     cx.c.text_fit(&sub, tx, y + 32.0, x + w - tx - t::PAD, Text::new(ty::CAPTION, if a.needs_you() { t::WARN } else { t::INK3 }));
     if !when.is_empty() {
         cx.c.text(&when, x + w - t::PAD, y + 13.0, wt.right());

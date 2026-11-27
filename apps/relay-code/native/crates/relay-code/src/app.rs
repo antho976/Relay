@@ -449,6 +449,12 @@ impl App {
         a.working()
     }
 
+    /// An agent's state in words, as its chat header says it: "working" while its terminal says
+    /// so ([`App::busy`]), which the list's freshness can lag.
+    pub fn agent_words(&self, a: &Agent) -> &'static str {
+        if a.alive() && !a.needs_you() && self.busy(&a.name) { "working" } else { a.state_words() }
+    }
+
     /// The link is up: pages may ask the PC.
     pub fn online(&self) -> bool {
         self.link_state.online() && !self.shot
