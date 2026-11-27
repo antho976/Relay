@@ -26,6 +26,8 @@ struct Door {
     connections: Arc<AtomicUsize>,
     /// bus.ping requests answered.
     pings: Arc<AtomicUsize>,
+    /// What the phone told the door its keep-alive was, in order.
+    told: Arc<std::sync::Mutex<Vec<u64>>>,
 }
 
 /// Who a door is and how it behaves.
@@ -55,13 +57,14 @@ fn door_as(who: Who) -> Door {
     let forget = Arc::new(AtomicBool::new(false));
     let connections = Arc::new(AtomicUsize::new(0));
     let pings = Arc::new(AtomicUsize::new(0));
-    let (d, f, c, pc) = (drop_all.clone(), forget.clone(), connections.clone(), pings.clone());
+    let told: Arc<std::sync::Mutex<Vec<u64>>> = Arc::default();
+    let (d, f, c, pc, tl) = (drop_all.clone(), forget.clone(), connections.clone(), pings.clone(), told.clone());
     std::thread::spawn(move || {
         rt.block_on(async move {
             let listener = TcpListener::from_std(std_listener).unwrap();
             loop {
                 let (mut tcp, _) = listener.accept().await.unwrap();
-                let (d, f, c, who, pc) = (d.clone(), f.clone(), c.clone(), who.clone(), pc.clone());
+                let (d, f, c, who, pc, told) = (d.clone(), f.clone(), c.clone(), who.clone(), pc.clone(), tl.clone());
                 tokio::spawn(async move {
                     // `GET /info` on the same port, as the real door answers it.
                     let mut head = [0u8; 9];
@@ -112,6 +115,9 @@ fn door_as(who: Who) -> Door {
                         if req["op"] == "bus.ping" {
                             pc.fetch_add(1, Ordering::SeqCst);
                         }
+                        if req["op"] == "door.keepalive" {
+                            told.lock().unwrap().push(req["payload"]["ms"].as_u64().unwrap_or(0));
+                        }
                         if req["op"] == "bus.ping" && !who.ping_delay.is_zero() {
                             tokio::time::sleep(who.ping_delay).await;
                         }
@@ -144,7 +150,7 @@ fn door_as(who: Who) -> Door {
             }
         });
     });
-    Door { port, drop_all, forget, connections, pings }
+    Door { port, drop_all, forget, connections, pings, told }
 }
 
 #[derive(Default)]
@@ -426,4 +432,6 @@ fn the_keepalive_follows_the_interval_set() {
     std::thread::sleep(Duration::from_millis(1000));
     let slow = d.pings.load(Ordering::SeqCst) - b;
     assert!((3..=6).contains(&fast) && slow == 0, "pings in a second: {fast} at 200 ms, {slow} at 3 min");
+    // The door heard each pace: the one on connecting, then each change.
+    assert_eq!(*d.told.lock().unwrap(), [25_000, 200, 180_000]);
 }

@@ -1444,3 +1444,22 @@ async fn a_proxy_address_never_counts_against_the_phones_behind_it() {
     let _two = join_from(addr, room.clone(), "203.0.113.7, 10.0.0.2").await.unwrap();
     assert!(join_from(addr, room.clone(), "203.0.113.7, 10.0.0.2").await.is_err(), "a third quiet join from one phone's address");
 }
+
+/// Relay Code tells the door how often it pings (`door.keepalive`): the door answers it itself, as
+/// the engine would refuse an op it does not know and the gate one not in PHONE_OPS, and the bus
+/// goes on as before. A phone that never says it (the Kotlin app) is paced as always
+/// (`direct::pace_tests`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_phone_tells_the_door_its_keepalive_and_the_door_answers_it() {
+    let h = harness().await;
+    let door = DirectServer::bind(h.ctx.clone(), "127.0.0.1:0".parse::<SocketAddr>().unwrap())
+        .await
+        .unwrap();
+    let url = format!("ws://{}", door.local_addr);
+    let (device, token, _) = pair(&url, &pair_code(&h.ctx)).await;
+    let mut ws = admit(&url, &device, &token).await;
+    let told = call(&mut ws, relay_remote::direct::KEEPALIVE_OP, json!({"ms": 180_000})).await;
+    assert_eq!((told["ok"].as_bool(), told["result"].clone()), (Some(true), json!({})), "{told}");
+    let pong = call(&mut ws, "bus.ping", json!({})).await;
+    assert_eq!(pong["ok"], true, "{pong}");
+}

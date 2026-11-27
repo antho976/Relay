@@ -33,6 +33,10 @@ pub const PAIR_WELCOME_TIMEOUT: Duration = Duration::from_secs(90);
 /// How long to give one route before also trying the next ("happy eyeballs").
 pub const STAGGER: Duration = Duration::from_millis(400);
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// The door's own op for this phone's keep-alive (relay-remote `direct::KEEPALIVE_OP`): with it the
+/// door pings the phone only when it has gone quiet, not every 30 s.
+pub const KEEPALIVE_OP: &str = "door.keepalive";
+
 /// How often the link pings the PC while the app is in front ([`Link::set_keepalive`] changes it).
 pub const KEEPALIVE: Duration = Duration::from_secs(25);
 pub const PING_TIMEOUT: Duration = Duration::from_secs(10);
@@ -626,6 +630,8 @@ impl Link {
         let ms = every.as_millis().max(1) as u64;
         if self.inner.keepalive_ms.swap(ms, Ordering::SeqCst) != ms {
             self.inner.retime.notify_one();
+            // The door paces its own pings by ours: tell it.
+            self.post(KEEPALIVE_OP, json!({ "ms": ms }));
         }
     }
 
@@ -808,6 +814,9 @@ async fn run(inner: Arc<Inner>) {
             continue;
         }
         *inner.session.lock().unwrap_or_else(|e| e.into_inner()) = Some(session.clone());
+        // How often this phone pings, so the door spares its own pings (an older door refuses
+        // the op, and nothing changes).
+        session.send(KEEPALIVE_OP, &json!({ "ms": inner.keepalive_ms.load(Ordering::SeqCst) }), &wire::uuid_v4(), None);
         inner.show(LinkState::Online { host, route });
         (inner.waker)();
         let began = tokio::time::Instant::now();

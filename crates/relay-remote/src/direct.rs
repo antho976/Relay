@@ -45,11 +45,79 @@ const MAX_MESSAGE: usize = 8 << 20;
 
 /// A live phone sends `bus.ping` every 25 s, and answers the door's own pings even when its
 /// app is asleep. A connection silent for this long is a phone that dropped off without a FIN;
-/// closing it frees its slot and its engine connection instead of waiting out TCP retries.
+/// closing it frees its slot and its engine connection instead of waiting out TCP retries. A
+/// phone that told its keep-alive ([`Pace`]) gets longer.
 const PHONE_SILENCE: Duration = Duration::from_secs(90);
 
 /// How often the door pings the phone, so a dead link is noticed from this side too.
 pub(crate) const PING_EVERY: Duration = Duration::from_secs(30);
+
+/// The longest silence a told door waits out (a phone that pings every few minutes with its
+/// screen off): past it, the phone is gone.
+const TOLD_SILENCE_MAX: Duration = Duration::from_secs(600);
+
+/// The op a phone tells its keep-alive with (`{"ms": n}`), answered by the door itself and never
+/// sent on to the engine: Relay Code sends it after subscribing and whenever its pace changes.
+pub const KEEPALIVE_OP: &str = "door.keepalive";
+
+/// How the door paces one phone's connection. A phone that says nothing (the Kotlin app, older
+/// builds) gets the door's ping every 30 s and is dropped after 90 s of silence, as always. A phone
+/// that told its keep-alive is not pinged while it is heard within that interval, which spares
+/// its radio, and is dropped after three intervals of silence (90 s at least, 10 min at most).
+#[derive(Debug, Default)]
+pub struct Pace {
+    /// The phone's keep-alive, in ms; 0 until it says.
+    told_ms: std::sync::atomic::AtomicU64,
+    /// When the phone was last heard, in ms on [`Pace::clock`].
+    heard_ms: std::sync::atomic::AtomicU64,
+    start: std::sync::OnceLock<std::time::Instant>,
+}
+
+impl Pace {
+    /// Ms since this connection began: the pace's own clock.
+    pub fn clock(&self) -> u64 {
+        self.start.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
+    }
+
+    pub fn told(&self, ms: u64) {
+        self.told_ms.store(ms, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn heard(&self, now_ms: u64) {
+        self.heard_ms.store(now_ms, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// How long the phone may be silent before the door lets it go.
+    pub fn silence(&self) -> Duration {
+        match self.told_ms.load(std::sync::atomic::Ordering::SeqCst) {
+            0 => PHONE_SILENCE,
+            ms => (Duration::from_millis(ms) * 3).clamp(PHONE_SILENCE, TOLD_SILENCE_MAX),
+        }
+    }
+
+    /// Whether the door's own ping goes out at this tick.
+    pub fn ping_due(&self, now_ms: u64) -> bool {
+        match self.told_ms.load(std::sync::atomic::Ordering::SeqCst) {
+            0 => true,
+            ms => now_ms.saturating_sub(self.heard_ms.load(std::sync::atomic::Ordering::SeqCst)) >= ms,
+        }
+    }
+
+    /// The phone's line, if it is the door's own keep-alive op: the answer to send it back.
+    pub fn take_told(&self, line: &str) -> Option<String> {
+        if !line.contains(KEEPALIVE_OP) {
+            return None;
+        }
+        let value: serde_json::Value = serde_json::from_str(line).ok()?;
+        if value.get("op").and_then(|o| o.as_str()) != Some(KEEPALIVE_OP) {
+            return None;
+        }
+        let ms = value.pointer("/payload/ms").and_then(|m| m.as_u64()).unwrap_or(0);
+        self.told(ms.min(TOLD_SILENCE_MAX.as_millis() as u64));
+        let id = value.get("id").cloned().unwrap_or(serde_json::Value::Null);
+        Some(serde_json::json!({"v": 1, "id": id, "ok": true, "result": {}}).to_string())
+    }
+}
 
 pub struct DirectServer {
     pub local_addr: SocketAddr,
@@ -209,7 +277,10 @@ async fn handle(ctx: Arc<Ctx>, stream: TcpStream, unproven: UnprovenSlot, peer: 
     let (mut sink, mut source) = ws.split();
     let (in_tx, in_rx) = mpsc::channel::<String>(64);
     let (out_tx, mut out_rx) = mpsc::channel::<String>(OUTBOUND_QUEUE);
+    let pace = Arc::new(Pace::default());
+    pace.heard(pace.clock());
 
+    let ping_pace = pace.clone();
     let writer = tokio::spawn(async move {
         let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + PING_EVERY, PING_EVERY);
         loop {
@@ -218,7 +289,12 @@ async fn handle(ctx: Arc<Ctx>, stream: TcpStream, unproven: UnprovenSlot, peer: 
                     Some(line) => Message::text(line),
                     None => break,
                 },
-                _ = ping.tick() => Message::Ping(Vec::new().into()),
+                _ = ping.tick() => {
+                    if !ping_pace.ping_due(ping_pace.clock()) {
+                        continue;
+                    }
+                    Message::Ping(Vec::new().into())
+                }
             };
             if sink.send(msg).await.is_err() {
                 break;
@@ -226,10 +302,19 @@ async fn handle(ctx: Arc<Ctx>, stream: TcpStream, unproven: UnprovenSlot, peer: 
         }
         let _ = sink.close().await;
     });
+    let answers = out_tx.clone();
     let reader = tokio::spawn(async move {
-        while let Ok(Some(msg)) = tokio::time::timeout(PHONE_SILENCE, source.next()).await {
+        while let Ok(Some(msg)) = tokio::time::timeout(pace.silence(), source.next()).await {
+            pace.heard(pace.clock());
             match msg {
                 Ok(Message::Text(text)) => {
+                    // The phone's keep-alive is the door's to hear: answered here, not sent on.
+                    if let Some(answer) = pace.take_told(&text) {
+                        if answers.send(answer).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
                     if in_tx.send(text.to_string()).await.is_err() {
                         break;
                     }
@@ -316,5 +401,51 @@ mod tailnet_tests {
         assert!(!is_tailnet("100.63.0.1".parse().unwrap()));
         assert!(!is_tailnet("100.128.0.1".parse().unwrap()));
         assert!(!is_tailnet("192.168.1.20".parse().unwrap()));
+    }
+}
+
+#[cfg(test)]
+mod pace_tests {
+    use super::*;
+
+    /// An hour of the writer's 30 s ticks, with the phone heard every `every` ms: the pings sent.
+    fn pings_in_an_hour(pace: &Pace, every: u64) -> usize {
+        let tick = PING_EVERY.as_millis() as u64;
+        let mut sent = 0;
+        for t in (tick..=3_600_000).step_by(tick as usize) {
+            if let Some(n) = t.checked_div(every) {
+                pace.heard(n * every);
+            }
+            if pace.ping_due(t) {
+                sent += 1;
+            }
+        }
+        sent
+    }
+
+    #[test]
+    fn a_phone_that_says_nothing_is_paced_as_always() {
+        let pace = Pace::default();
+        assert_eq!(pace.silence(), PHONE_SILENCE);
+        assert_eq!(pings_in_an_hour(&pace, 25_000), 120, "the door's 30 s ping, every tick");
+        assert_eq!(pace.take_told(r#"{"v":1,"id":"a","op":"bus.ping","payload":{}}"#), None, "other lines go on");
+    }
+
+    #[test]
+    fn a_told_phone_is_pinged_only_when_it_goes_quiet() {
+        let pace = Pace::default();
+        let answer = pace.take_told(r#"{"v":1,"id":"k1","op":"door.keepalive","payload":{"ms":180000}}"#).expect("answered by the door");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&answer).unwrap(), serde_json::json!({"v": 1, "id": "k1", "ok": true, "result": {}}));
+        assert_eq!(pace.silence(), Duration::from_secs(540));
+        assert_eq!(pings_in_an_hour(&pace, 180_000), 0, "heard every 3 min: never pinged");
+        // Never heard again: pinged on every tick once its interval has passed (a live phone
+        // answers, and so is pinged at most once an interval).
+        pace.heard(0);
+        assert_eq!(pings_in_an_hour(&pace, 0), 115, "quiet: pinged again once 3 min passed");
+        // In front: 25 s, still 90 s of silence at least; a long interval is capped.
+        pace.told(25_000);
+        assert_eq!(pace.silence(), PHONE_SILENCE);
+        pace.told(3_600_000);
+        assert_eq!(pace.silence(), TOLD_SILENCE_MAX);
     }
 }
