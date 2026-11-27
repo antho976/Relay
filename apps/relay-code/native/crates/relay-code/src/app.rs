@@ -528,10 +528,18 @@ impl App {
                 }
                 (Ask::Input(name) | Ask::Enter(name), r) => {
                     let now = rc_link::link::now_ms();
+                    let answer = match &r {
+                        Ok(_) => data::Answer::Ok,
+                        Err(e) if e.transient() => data::Answer::Dropped,
+                        Err(_) => data::Answer::Refused,
+                    };
                     if let Some(s) = self.sending.get_mut(&name) {
-                        s.answered(r.is_ok(), now);
+                        s.answered(answer, now);
                     }
-                    if let Err(e) = r {
+                    // A drop is sent again by itself; only a refusal is the person's to retry.
+                    if let Err(e) = r
+                        && answer == data::Answer::Refused
+                    {
                         self.toast(&format!("Not sent: {}", e.message));
                     }
                 }

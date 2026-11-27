@@ -287,14 +287,30 @@ pub struct Pending {
     pub text: String,
     /// When it was written, then when its words went (Enter waits [`ENTER_AFTER_MS`] after them).
     pub sent_ms: u64,
-    /// The PC refused (or the link dropped) at [`Pending::stage`]: tap to send again from there.
+    /// The PC refused it at [`Pending::stage`]: tap to send again from there.
     pub failed: bool,
     pub stage: Stage,
+    /// The link dropped under it: it goes again by itself, not before this time.
+    pub not_before_ms: u64,
 }
 
 /// Enter goes as its own write at least this long after the words, so the program does not take
 /// both as one paste.
 pub const ENTER_AFTER_MS: u64 = 90;
+
+/// How long a message the link dropped waits before it goes again (the link is back by then, or
+/// the PC no longer busy).
+pub const RESEND_AFTER_MS: u64 = 1_000;
+
+/// How the PC answered a write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Answer {
+    Ok,
+    /// The link dropped or the PC was busy for a moment (`BusError::transient`): sent again by itself.
+    Dropped,
+    /// The PC said no: it waits for a tap.
+    Refused,
+}
 
 /// What the queue wants sent next for one agent.
 #[derive(Clone, Debug, PartialEq)]
@@ -303,54 +319,60 @@ pub enum Step {
     Type(String),
     /// Press Enter after the words already typed.
     Enter,
-    /// Enter is due in this many milliseconds.
+    /// Something is due in this many milliseconds.
     Wait(u64),
 }
 
 impl Sending {
     pub fn push(&mut self, text: &str, now_ms: u64) {
-        self.waiting.push(Pending { text: text.to_string(), sent_ms: now_ms, failed: false, stage: Stage::Queued });
+        self.waiting.push(Pending { text: text.to_string(), sent_ms: now_ms, failed: false, stage: Stage::Queued, not_before_ms: 0 });
     }
 
     /// What to send now, if anything; the caller sends it and reports with [`Sending::answered`].
     /// One message at a time, oldest first: nothing goes while a write is out, and a message is
-    /// typed only once the one before it was entered (or failed).
+    /// typed only once the one before it was entered. A refused message whose words were typed
+    /// holds the ones after it: typed behind those words, one Enter would send both as one.
     pub fn next(&mut self, now_ms: u64) -> Option<Step> {
         if self.waiting.iter().any(|p| !p.failed && matches!(p.stage, Stage::Typing | Stage::Entering)) {
             return None;
         }
-        let p = self.waiting.iter_mut().find(|p| !p.failed && matches!(p.stage, Stage::Queued | Stage::Typed))?;
-        match p.stage {
-            Stage::Queued => {
-                p.stage = Stage::Typing;
-                p.sent_ms = now_ms;
-                Some(Step::Type(p.text.clone()))
-            }
-            _ => {
-                let due = p.sent_ms + ENTER_AFTER_MS;
-                if now_ms < due {
-                    return Some(Step::Wait(due - now_ms));
-                }
-                p.stage = Stage::Entering;
-                Some(Step::Enter)
-            }
+        let p = self.waiting.iter_mut().find(|p| (p.failed && p.stage >= Stage::Typed) || (!p.failed && matches!(p.stage, Stage::Queued | Stage::Typed)))?;
+        if p.failed {
+            return None;
+        }
+        let due = p.not_before_ms.max(if p.stage == Stage::Typed { p.sent_ms + ENTER_AFTER_MS } else { 0 });
+        if now_ms < due {
+            return Some(Step::Wait(due - now_ms));
+        }
+        if p.stage == Stage::Queued {
+            p.stage = Stage::Typing;
+            p.sent_ms = now_ms;
+            Some(Step::Type(p.text.clone()))
+        } else {
+            p.stage = Stage::Entering;
+            Some(Step::Enter)
         }
     }
 
-    /// The PC answered the write that was out: on success the message moves on, on failure it
-    /// stops where it was, to be sent again by a tap ([`Sending::retry`]).
-    pub fn answered(&mut self, ok: bool, now_ms: u64) {
+    /// The PC answered the write that was out: on success the message moves on; when the link
+    /// dropped it goes again by itself ([`RESEND_AFTER_MS`] on, while the link is up); when the PC
+    /// refused it stops where it was, to be sent again by a tap ([`Sending::retry`]).
+    pub fn answered(&mut self, a: Answer, now_ms: u64) {
         let Some(p) = self.waiting.iter_mut().find(|p| !p.failed && matches!(p.stage, Stage::Typing | Stage::Entering)) else { return };
-        if !ok {
-            p.failed = true;
-            return;
-        }
-        if p.stage == Stage::Typing {
-            p.stage = Stage::Typed;
-        } else {
-            p.stage = Stage::Entered;
-            // Slash commands the log never shows are let go this long after they went in.
-            p.sent_ms = now_ms;
+        match (a, p.stage) {
+            (Answer::Refused, _) => p.failed = true,
+            (Answer::Dropped, s) => {
+                // Its words again if they may not have gone (a drop answers before the write
+                // left far more often than after), else Enter again.
+                p.stage = if s == Stage::Typing { Stage::Queued } else { Stage::Typed };
+                p.not_before_ms = now_ms + RESEND_AFTER_MS;
+            }
+            (Answer::Ok, Stage::Typing) => p.stage = Stage::Typed,
+            (Answer::Ok, _) => {
+                p.stage = Stage::Entered;
+                // Slash commands the log never shows are let go this long after they went in.
+                p.sent_ms = now_ms;
+            }
         }
     }
 
@@ -732,7 +754,7 @@ mod tests {
                 Step::Wait(ms) => now += ms,
                 step => {
                     sent.push(step);
-                    s.answered(true, now);
+                    s.answered(Answer::Ok, now);
                 }
             }
         }
@@ -749,12 +771,12 @@ mod tests {
         // Back online: the first one's words, and nothing more while they are out.
         assert_eq!(s.next(5_000), Some(Step::Type("fix the test".into())));
         assert_eq!(s.next(5_001), None, "one write at a time");
-        s.answered(true, 5_020);
+        s.answered(Answer::Ok, 5_020);
         // Enter waits for the PC's yes and then its moment, never a timer of its own.
         assert_eq!(s.next(5_020), Some(Step::Wait(5_000 + ENTER_AFTER_MS - 5_020)));
         assert_eq!(s.next(5_000 + ENTER_AFTER_MS), Some(Step::Enter));
         assert_eq!(s.next(5_200), None, "the second waits for the first's Enter");
-        s.answered(true, 5_200);
+        s.answered(Answer::Ok, 5_200);
         assert_eq!(s.waiting[0].stage, Stage::Entered);
         let (rest, _) = send_all(&mut s, 5_200);
         assert_eq!(rest, [Step::Type("then push".into()), Step::Enter]);
@@ -768,18 +790,56 @@ mod tests {
         let mut s = Sending::default();
         s.push("a", 0);
         assert_eq!(s.next(0), Some(Step::Type("a".into())));
-        s.answered(false, 10);
+        s.answered(Answer::Refused, 10);
         assert!(s.waiting[0].failed);
         assert_eq!(s.next(10), None, "a failed one does not go by itself");
         s.retry(0);
         assert_eq!(s.next(20), Some(Step::Type("a".into())), "its words never went: typed again");
-        s.answered(true, 30);
+        s.answered(Answer::Ok, 30);
         assert_eq!(s.next(200), Some(Step::Enter));
-        s.answered(false, 210);
+        s.answered(Answer::Refused, 210);
         s.retry(0);
         assert_eq!(s.next(400), Some(Step::Enter), "its words were typed: only Enter again");
-        s.answered(true, 410);
+        s.answered(Answer::Ok, 410);
         assert_eq!(s.waiting[0].stage, Stage::Entered);
+    }
+
+    #[test]
+    fn messages_wait_behind_one_whose_words_sit_in_the_prompt() {
+        let mut s = Sending::default();
+        s.push("first", 0);
+        assert_eq!(s.next(0), Some(Step::Type("first".into())));
+        s.answered(Answer::Ok, 10);
+        assert_eq!(s.next(ENTER_AFTER_MS), Some(Step::Enter));
+        // The link drops under its Enter; a second message is written meanwhile.
+        s.answered(Answer::Dropped, 100);
+        s.push("second", 150);
+        // Back online: Enter for the first by itself, then the second's words; never the second
+        // typed after the first's.
+        assert_eq!(s.next(500), Some(Step::Wait(100 + RESEND_AFTER_MS - 500)));
+        assert_eq!(s.next(100 + RESEND_AFTER_MS), Some(Step::Enter));
+        s.answered(Answer::Ok, 1_200);
+        assert_eq!(s.next(1_200), Some(Step::Type("second".into())));
+        // Refused at Enter: its words are in the prompt, so the next one waits for the tap.
+        s.answered(Answer::Ok, 1_210);
+        assert_eq!(s.next(1_400), Some(Step::Enter));
+        s.answered(Answer::Refused, 1_410);
+        s.push("third", 1_500);
+        assert_eq!(s.next(5_000), None, "held behind the refused one");
+        s.retry(1);
+        assert_eq!(s.next(5_000), Some(Step::Enter));
+        s.answered(Answer::Ok, 5_010);
+        assert_eq!(s.next(5_010), Some(Step::Type("third".into())));
+    }
+
+    #[test]
+    fn a_refused_message_whose_words_never_went_holds_nothing() {
+        let mut s = Sending::default();
+        s.push("a", 0);
+        s.push("b", 0);
+        assert_eq!(s.next(0), Some(Step::Type("a".into())));
+        s.answered(Answer::Refused, 10);
+        assert_eq!(s.next(10), Some(Step::Type("b".into())));
     }
 
     #[test]
@@ -788,9 +848,9 @@ mod tests {
         s.push("one", 0);
         s.push("two", 0);
         assert_eq!(s.next(0), Some(Step::Type("one".into())));
-        s.answered(true, 0);
+        s.answered(Answer::Ok, 0);
         assert_eq!(s.next(ENTER_AFTER_MS), Some(Step::Enter));
-        s.answered(true, ENTER_AFTER_MS);
+        s.answered(Answer::Ok, ENTER_AFTER_MS);
         // Two messages of yours come into the log (one typed at the PC): only "one" can be there.
         s.seen(2);
         assert_eq!(s.waiting.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["two"]);
