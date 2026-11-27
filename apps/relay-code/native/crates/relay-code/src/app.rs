@@ -62,6 +62,8 @@ pub const FONTS: [&[u8]; crate::draw::FACES] = [
     include_bytes!("../assets/fonts/literata_400.ttf"),
     include_bytes!("../assets/fonts/geist_mono_400.ttf"),
     include_bytes!("../assets/fonts/literata_600.ttf"),
+    // Literata italic (the same OFL family, as Leaf ships it): emphasis in the agent's words.
+    include_bytes!("../assets/fonts/literata_400i.ttf"),
 ];
 
 /// The most a field holds, in characters.
@@ -180,6 +182,10 @@ pub struct App {
     pub repo: Option<i64>,
     pub convos: HashMap<String, Convo>,
     pub sending: HashMap<String, Sending>,
+    /// What you started writing to each agent, kept across agents and restarts.
+    pub drafts: HashMap<String, String>,
+    /// The drafts or a send queue changed at this time (ns): written to the phone a second later.
+    outbox_at: Option<u64>,
     /// What each agent's terminal shows at its foot (status, mode, question), and when it was read.
     pub screens: HashMap<String, crate::screen::Screen>,
     /// The effort last sent to each agent from the model picker (`/effort`), to tick it there.
@@ -285,6 +291,9 @@ impl App {
             nav.push((Route::Chat(name), Scroll::default()));
         }
         let repo = config.repo.or_else(|| projects.first().map(|p| p.id));
+        let outbox: data::Outbox = read_json(data.join("cache/outbox.json")).unwrap_or_default();
+        let drafts = outbox.drafts.clone();
+        let sending = outbox.sending();
         let app = App {
             canvas: Canvas::new(FONTS),
             ui: Ui::default(),
@@ -300,7 +309,9 @@ impl App {
             restorable: HashMap::new(),
             repo,
             convos,
-            sending: HashMap::new(),
+            sending,
+            drafts,
+            outbox_at: None,
             screens: HashMap::new(),
             efforts: HashMap::new(),
             busy_since: HashMap::new(),
@@ -493,8 +504,34 @@ impl App {
         }
         let now = rc_link::link::now_ms();
         self.sending.entry(name.to_string()).or_default().push(text, now);
+        self.outbox_changed();
         self.send_queued();
         self.reread_at = self.now_ns + 600_000_000;
+    }
+
+    /// What you started writing to `name`.
+    pub fn draft(&self, name: &str) -> String {
+        self.drafts.get(name).cloned().unwrap_or_default()
+    }
+
+    pub fn set_draft(&mut self, name: &str, text: &str) {
+        if self.drafts.get(name).map_or(text.is_empty(), |d| d == text) {
+            return;
+        }
+        self.drafts.insert(name.to_string(), text.to_string());
+        self.outbox_changed();
+    }
+
+    /// A draft or a send queue changed: keep it on the phone soon.
+    pub fn outbox_changed(&mut self) {
+        self.outbox_at.get_or_insert(self.now_ns);
+    }
+
+    /// Write the drafts and the send queues, off the UI thread.
+    fn save_outbox(&mut self) {
+        if self.outbox_at.take().is_some() && !self.shot {
+            write_owned(self.data.join("cache/outbox.json"), data::Outbox::of(&self.drafts, &self.sending));
+        }
     }
 
     /// Send what each agent's queue holds next, while the link is up. Enter goes only after the
@@ -511,6 +548,9 @@ impl App {
                 continue;
             }
             let Some(step) = self.sending.get_mut(&name).and_then(|s| s.next(now)) else { continue };
+            if !matches!(step, data::Step::Wait(_)) {
+                self.outbox_changed();
+            }
             match step {
                 data::Step::Type(text) => {
                     let mut p = json!({"session": name, "data": text});
@@ -618,6 +658,9 @@ impl App {
                     if let Some(s) = self.sending.get_mut(&name) {
                         s.seen(seen);
                     }
+                    if seen > 0 {
+                        self.outbox_changed();
+                    }
                     // Kept for the next start only when something came in; written (and turned
                     // into JSON) off the UI thread.
                     if changed {
@@ -634,6 +677,7 @@ impl App {
                     if let Some(s) = self.sending.get_mut(&name) {
                         s.answered(answer, now);
                     }
+                    self.outbox_changed();
                     // A drop is sent again by itself; only a refusal is the person's to retry.
                     if let Err(e) = r
                         && answer == data::Answer::Refused
@@ -711,6 +755,15 @@ impl App {
         }
         // What waited for the link, or for the write before it, goes now.
         self.send_queued();
+        // Drafts and queues are written a second after they last changed, not on each key.
+        if let Some(t) = self.outbox_at {
+            let due = t + 1_000_000_000;
+            if self.now_ns >= due {
+                self.save_outbox();
+            } else {
+                self.wake_at(due);
+            }
+        }
         // The lists say who works and who waits by how fresh each agent's output is: read them
         // again every five seconds while the app is in front.
         if self.link_state.online() && self.foreground && self.now_ns >= self.list_at {
@@ -854,6 +907,9 @@ impl App {
         self.agents.clear();
         self.projects.clear();
         self.convos.clear();
+        self.drafts.clear();
+        self.sending.clear();
+        self.outbox_at = None;
         self.config = Config::default();
         self.save_config();
         let _ = std::fs::remove_dir_all(self.data.join("cache"));
@@ -873,6 +929,8 @@ impl App {
 
     pub fn paused(&mut self) {
         self.foreground = false;
+        // Android may stop the process once it is away: what you wrote is kept now.
+        self.save_outbox();
     }
 
     /// In the background: take what the link brought (an agent that now asks you is a

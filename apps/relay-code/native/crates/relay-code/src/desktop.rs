@@ -158,6 +158,11 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.st.agents.query = "leaf".into();
         }
         // A3: what it did, call by call.
+        "markdown" => {
+            crate::sample::markdown(&mut app);
+            app.open("swift-ocelot");
+            app.scroll().off = 0.0;
+        }
         "plan" | "tools" => {
             crate::sample::tools(&mut app, screen == "plan");
             app.open("swift-ocelot");

@@ -129,3 +129,19 @@ pub fn tools(app: &mut App, plan: bool) {
     };
     app.screens.insert("swift-ocelot".into(), crate::screen::read(screen));
 }
+
+/// The agent's words with every inline mark, a table wider than the screen, and a code block
+/// longer than its fold (A4). On swift-ocelot.
+pub fn markdown(app: &mut App) {
+    let code = (1..=52).map(|i| format!("    let step_{i} = queue.next(now + {i});")).collect::<Vec<_>>().join("\n");
+    let text = format!(
+        "## What changed\n\nThe queue is **one place** now: `say()` only *writes* the message, and `send_queued` sends it. See [the review](https://github.com/antho976/Relay/pull/209) or https://example.org/notes.\n\n| Stage | Sent | When it fails | What a tap does |\n|---|---|---|---|\n| Queued | nothing | never | nothing |\n| Typing | the words | the PC refused | types them again |\n| Entering | Enter | the link dropped | Enter alone, by itself |\n\n- a refused message *holds* the ones after it\n- a dropped one goes again by itself\n\n```rust\n{code}\n```\n\nThat is all of it."
+    );
+    let mut c = Convo::default();
+    c.take(&json!({"messages": [
+        {"id": "m0", "role": "user", "body": {"text": "What changed in the queue?"}, "created_at": ""},
+        {"id": "m1", "role": "assistant", "body": {"blocks": [{"type": "text", "text": text}]}, "created_at": ""},
+    ], "cursor": 1, "reset": true, "found": true}));
+    app.convos.insert("swift-ocelot".into(), c);
+    app.screens.insert("swift-ocelot".into(), crate::screen::read("────\n❯ \n────\n  ? for shortcuts"));
+}
