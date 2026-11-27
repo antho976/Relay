@@ -16,7 +16,13 @@ result!(#[schemars(rename = "FileTreeOut")] TreeOut {
     pub truncated: std::collections::BTreeMap<String, u32>,
 });
 op!(Tree, "file.tree", TreeIn => TreeOut, OpMeta::query(Scope::Project, 8, "Directory listing with git badges"));
-payload!(#[schemars(rename = "FileReadIn")] ReadIn { pub project_id: Id, pub worktree: Option<String>, pub path: String, pub max_bytes: Option<u64> });
+payload!(#[schemars(rename = "FileReadIn")] ReadIn {
+    pub project_id: Id, pub worktree: Option<String>, pub path: String, pub max_bytes: Option<u64>,
+    /// The file as it was at this revision (a commit, a branch, `HEAD`), from git, in place of
+    /// the one on disk: what a change's "before" side shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+});
 result!(#[schemars(rename = "FileReadOut")] ReadOut { pub text: Option<String>, pub bytes_b64: Option<String>, pub mime: String, pub size: u64, pub truncated: bool });
 op!(Read, "file.read", ReadIn => ReadOut, OpMeta::query(Scope::Project, 8, "Read a file (text or base64)"));
 payload!(#[schemars(rename = "FileWriteIn")] WriteIn { pub project_id: Id, pub worktree: Option<String>, pub path: String, pub text: String, pub expected_sha256: Option<String> });

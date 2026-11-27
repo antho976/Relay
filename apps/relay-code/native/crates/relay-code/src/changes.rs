@@ -89,6 +89,8 @@ pub struct State {
     branch_loaded: bool,
     open: Option<(Group, String)>,
     diff: Diff,
+    /// The open picture's sides, when the open file is a changed picture.
+    pub pic: Option<PicDiff>,
     /// The commit opened in the list, and what `git.show` said of it: its body and files.
     open_commit: Option<String>,
     shown: Option<(String, String, Vec<File>)>,
@@ -225,6 +227,98 @@ pub enum Diff {
     Lines(Vec<Line>, Vec<Row>),
     /// Why there are no lines to show: binary, too large, a folder, only the mode.
     Note(String),
+    /// A changed picture: its before and after, side by side (`State::pic`).
+    Pictures,
+}
+
+/// A side decoded (width, height, premultiplied RGBA), or why it could not be.
+pub type Decoded = Result<(u32, u32, Vec<u8>), String>;
+
+/// One side of a changed picture: on its way from the PC, being decoded on a thread of its own,
+/// decoded and waiting for the canvas, drawn, or why not.
+pub enum PicSide {
+    /// The side does not exist: a new picture has no before, a deleted one no after.
+    Absent,
+    Reading(Call),
+    Decoding(std::sync::mpsc::Receiver<Decoded>),
+    Decoded(u32, u32, Vec<u8>),
+    Ready { key: String, w: u32, h: u32 },
+    Failed(String),
+}
+
+/// The open picture's two sides.
+pub struct PicDiff {
+    pub path: String,
+    pub before: PicSide,
+    pub after: PicSide,
+}
+
+/// The kinds of picture a change shows as pictures (C9's decoder reads them).
+pub fn is_picture(path: &str) -> bool {
+    path.rsplit_once('.').is_some_and(|(_, e)| matches!(e.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif"))
+}
+
+/// The most of a picture the phone reads for a change: past it, it says so.
+const PIC_BYTES: u64 = 8 << 20;
+/// The size a side is decoded to cover: half the phone's width at 3×, a tall picture's height.
+const PIC_WANT: (u32, u32) = (540, 1200);
+
+/// Decode a side's bytes (on its own thread) with C9's limits, to pixels a canvas takes.
+pub fn decode_side(bytes: &[u8]) -> Decoded {
+    use crate::design_paint::pictures::{self as pics, Why};
+    match pics::decode(bytes, PIC_WANT) {
+        Ok(p) => Ok(p.into_rgba()),
+        Err(Why::TooBig) => Err("Too large to show on the phone.".into()),
+        Err(Why::Unsupported) => Err("This kind of picture can't be shown on the phone.".into()),
+        Err(_) => Err("The picture would not open.".into()),
+    }
+}
+
+/// A side's answer: its bytes go to a thread to decode, or it says why it can't show.
+fn side_answer(r: Result<Value, rc_link::BusError>) -> PicSide {
+    let v = match r {
+        Ok(v) => v,
+        Err(e) => return PicSide::Failed(crate::errors::words(&e)),
+    };
+    if v.get("truncated").and_then(Value::as_bool) == Some(true) {
+        return PicSide::Failed("Too large to show here: over 8 MB.".into());
+    }
+    let Some(bytes) = v.get("bytes_b64").and_then(Value::as_str).and_then(crate::design_paint::pictures::base64_decode) else {
+        return PicSide::Failed("The picture would not open.".into());
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("change-picture".into()).spawn(move || {
+        let r = std::panic::catch_unwind(|| decode_side(&bytes)).unwrap_or_else(|_| Err("The picture would not open.".into()));
+        let _ = tx.send(r);
+        crate::wake::wake();
+    });
+    match spawned {
+        Ok(_) => PicSide::Decoding(rx),
+        Err(_) => PicSide::Failed("The picture would not open.".into()),
+    }
+}
+
+impl PicSide {
+    /// Move on with whatever came: an answer, a decoded picture.
+    fn step(&mut self) {
+        let next = match self {
+            PicSide::Reading(c) => c.poll().map(side_answer),
+            PicSide::Decoding(rx) => match rx.try_recv() {
+                Ok(Ok((w, h, data))) => Some(PicSide::Decoded(w, h, data)),
+                Ok(Err(why)) => Some(PicSide::Failed(why)),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(PicSide::Failed("The picture would not open.".into())),
+            },
+            _ => None,
+        };
+        if let Some(n) = next {
+            *self = n;
+        }
+    }
+
+    fn busy(&self) -> bool {
+        matches!(self, PicSide::Reading(_) | PicSide::Decoding(_) | PicSide::Decoded(..))
+    }
 }
 
 /// One line of a unified diff: `@` for a hunk's header, `+`, `-`, ` `, or `\` for git's notes.
@@ -532,6 +626,7 @@ impl State {
         self.loaded = false;
         self.open = None;
         self.diff = Diff::Reading;
+        self.pic = None;
         self.expanded.clear();
         self.kept_scroll = None;
         self.branch.clear();
@@ -973,7 +1068,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     } else if app.st.changes.merging.is_some() {
         confirm_merge(app);
     }
-    page.moving || !app.st.changes.pending.is_empty() && !crate::wake::has()
+    page.moving || (!app.st.changes.pending.is_empty() || app.st.changes.pic.as_ref().is_some_and(|p| p.before.busy() || p.after.busy())) && !crate::wake::has()
 }
 
 fn plural(n: usize, word: &str) -> String {
@@ -1227,7 +1322,22 @@ fn open_file(app: &mut App, key: (Group, String)) {
     let list = if group == Group::Branch { &st.branch_files } else { &st.files };
     let file = list.iter().find(|f| f.path == p).cloned();
     st.diff = file.as_ref().and_then(no_lines).map_or(Diff::Reading, Diff::Note);
+    st.pic = None;
     let Some(repo) = app.repo else { return };
+    // A changed picture: its two sides, read whole (C9's decoder shrinks them off this thread).
+    if let Some(f) = file.as_ref().filter(|f| f.binary && is_picture(&f.path)) {
+        st.diff = Diff::Pictures;
+        let w = wt(st);
+        let new = matches!(f.index.as_str(), "?" | "A");
+        let gone = f.index == "D" || f.wt == "D";
+        let since = if group == Group::Branch { st.since() } else { "HEAD".to_string() };
+        let old = f.old_path.clone().unwrap_or_else(|| f.path.clone());
+        let read = |payload: Value| PicSide::Reading(app.link.call("file.read", payload));
+        let before = if new { PicSide::Absent } else { read(json!({"project_id": repo, "worktree": w, "path": old, "rev": since, "max_bytes": PIC_BYTES})) };
+        let after = if gone { PicSide::Absent } else { read(json!({"project_id": repo, "worktree": w, "path": f.path, "max_bytes": PIC_BYTES})) };
+        app.st.changes.pic = Some(PicDiff { path: f.path.clone(), before, after });
+        return;
+    }
     if st.diff != Diff::Reading {
         return;
     }
@@ -1329,6 +1439,7 @@ fn hunks(app: &mut App, y: f32, page: &crate::app::Page) -> f32 {
     let h = match &mut diff {
         Diff::Reading => note(app, "Reading the diff…"),
         Diff::Note(words) => note(app, words),
+        Diff::Pictures => pictures(app, y),
         Diff::Lines(lines, rows) => {
             let digit = app.canvas.measure("0", st);
             let most = lines.iter().filter_map(|l| l.num).max().unwrap_or(1);
@@ -1364,6 +1475,56 @@ fn hunks(app: &mut App, y: f32, page: &crate::app::Page) -> f32 {
     };
     app.st.changes.diff = diff;
     h
+}
+
+/// A changed picture's before and after, side by side, each fitted to its half. Returns its
+/// height.
+fn pictures(app: &mut App, y: f32) -> f32 {
+    let Some(mut pd) = app.st.changes.pic.take() else { return 0.0 };
+    let (x, w) = (t::PAD, WIDTH - 2.0 * t::PAD);
+    let cw = (w - 12.0) / 2.0;
+    let max_h = 320.0;
+    let small = Text::new(ty::SMALL, t::INK3);
+    let mut tallest: f32 = 0.0;
+    let path = pd.path.clone();
+    for (i, (label, side)) in [("Before", &mut pd.before), ("After", &mut pd.after)].into_iter().enumerate() {
+        side.step();
+        // Decoded: onto the canvas, under a key of its own.
+        if let PicSide::Decoded(pw, ph, data) = side {
+            let key = format!("change-pic:{path}:{i}:{}", rc_link::link::now_ms());
+            let (pw, ph) = (*pw, *ph);
+            *side = if app.canvas.add_image(&key, pw, ph, std::mem::take(data)) { PicSide::Ready { key, w: pw, h: ph } } else { PicSide::Failed("Too large to show on the phone.".into()) };
+        }
+        let bx = x + i as f32 * (cw + 12.0);
+        let label = match (&*side, i) {
+            (PicSide::Absent, 0) => "Before: new here",
+            (PicSide::Absent, _) => "After: deleted",
+            _ => label,
+        };
+        app.canvas.text(label, bx, y + 2.0, small.semi());
+        let top = y + 24.0;
+        match &*side {
+            PicSide::Ready { key, w: pw, h: ph } => {
+                let s = (cw / *pw as f32).min(max_h / *ph as f32).min(1.5);
+                let (dw, dh) = (*pw as f32 * s, *ph as f32 * s);
+                app.canvas.rect(bx, top, cw, dh.max(40.0), 8.0, t::CODE);
+                app.canvas.image_cover(key, bx + (cw - dw) / 2.0, top, dw, dh, 6.0, Rgba::WHITE);
+                tallest = tallest.max(dh.max(40.0));
+            }
+            other => {
+                let words = match other {
+                    PicSide::Absent => "",
+                    PicSide::Failed(why) => why.as_str(),
+                    _ => "Reading…",
+                };
+                app.canvas.rect(bx, top, cw, 120.0, 8.0, t::CODE);
+                app.canvas.para(words, bx + 10.0, top + 12.0, cw - 20.0, small.line(1.4), 4);
+                tallest = tallest.max(120.0);
+            }
+        }
+    }
+    app.st.changes.pic = Some(pd);
+    24.0 + tallest + 14.0
 }
 
 /// The lines as rows of at most `w` wide, the number on each line's first row only. The font is
@@ -2564,6 +2725,37 @@ mod tests {
         let raw = rc_link::BusError { kind: "invalid".into(), code: "git.path".into(), message: "git.diff.file refused: path must be worktree-relative and contain no ..".into(), hint: None };
         answered(&mut a, Job::File(Group::Work, "x.rs".into()), 1, Some("/w/b".into()), Err(raw));
         assert!(matches!(&a.st.changes.diff, Diff::Note(w) if w == "Path must be worktree-relative and contain no .."), "{:?}", a.st.changes.diff);
+    }
+
+    #[test]
+    fn a_changed_picture_reads_both_sides_and_decodes_off_the_thread() {
+        assert!(is_picture("res/icon.PNG") && is_picture("a/b.webp") && !is_picture("a.svg") && !is_picture("README"));
+        let (w, h, data) = decode_side(crate::designs::SAMPLE_PICTURE).expect("the sample decodes");
+        assert!(w <= PIC_WANT.0 * 2 && h > 0 && data.len() == (w * h * 4) as usize);
+        assert_eq!(decode_side(b"not a picture"), Err("This kind of picture can't be shown on the phone.".to_string()));
+        // Opening a changed picture asks for both sides; a new one has no before.
+        let mut a = app_on_b("pic");
+        a.st.changes.files = vec![
+            File { path: "res/icon.png".into(), index: "M".into(), wt: " ".into(), binary: true, ..File::default() },
+            File { path: "res/new.png".into(), index: "?".into(), wt: "?".into(), binary: true, ..File::default() },
+        ];
+        open_file(&mut a, (Group::Work, "res/icon.png".into()));
+        assert_eq!(a.st.changes.diff, Diff::Pictures);
+        let pd = a.st.changes.pic.as_ref().unwrap();
+        assert!(matches!(pd.before, PicSide::Reading(_)) && matches!(pd.after, PicSide::Reading(_)));
+        open_file(&mut a, (Group::Work, "res/new.png".into()));
+        let pd = a.st.changes.pic.as_ref().unwrap();
+        assert!(matches!(pd.before, PicSide::Absent) && matches!(pd.after, PicSide::Reading(_)));
+        // A side's decode comes back on its channel.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut side = PicSide::Decoding(rx);
+        side.step();
+        assert!(side.busy());
+        tx.send(Ok((2, 2, vec![0; 16]))).unwrap();
+        side.step();
+        assert!(matches!(side, PicSide::Decoded(2, 2, _)));
+        // Too big to read whole: said so, nothing decoded.
+        assert!(matches!(side_answer(Ok(json!({"truncated": true, "size": 30000000}))), PicSide::Failed(w) if w.contains("Too large")));
     }
 
     #[test]

@@ -123,6 +123,24 @@ fn a_tree_lists_an_unreadable_folder_and_a_missing_file_is_not_found() {
     assert_eq!(err(&missing).code, "file.not_found");
 }
 
+/// `file.read` with `rev` reads the file as a commit holds it, not as it is on disk: a change's
+/// before side. A path the commit lacks, or a revision that is none, says so.
+#[test]
+fn a_file_reads_as_it_was_at_a_revision() {
+    let (e, _ws, repo) = project();
+    std::fs::write(repo.join("README.md"), "# Relay, edited\n").unwrap();
+    std::fs::write(repo.join("new.txt"), "new\n").unwrap();
+    assert_eq!(ok(&e, "file.read", json!({"project_id": 1, "path": "README.md"}))["text"], "# Relay, edited\n");
+    let before = ok(&e, "file.read", json!({"project_id": 1, "path": "README.md", "rev": "HEAD"}));
+    assert_eq!((before["text"].as_str(), before["size"].as_u64(), before["truncated"].as_bool()), (Some("# Relay\n"), Some(8), Some(false)));
+    let cut = ok(&e, "file.read", json!({"project_id": 1, "path": "README.md", "rev": "main", "max_bytes": 3}));
+    assert_eq!((cut["text"].as_str(), cut["truncated"].as_bool()), (Some("# R"), Some(true)));
+    assert_eq!(err(&call(&e, "file.read", json!({"project_id": 1, "path": "new.txt", "rev": "HEAD"}))).code, "file.not_found");
+    assert_eq!(err(&call(&e, "file.read", json!({"project_id": 1, "path": "README.md", "rev": "no-such-branch"}))).code, "file.rev");
+    // The same path rules as on disk: nothing outside the checkout.
+    assert!(call(&e, "file.read", json!({"project_id": 1, "path": "../README.md", "rev": "HEAD"})).into_result().is_err());
+}
+
 /// `file.write` reads the file it replaces under the store lock, so it reads only a regular file:
 /// `fs::read_to_string` on a FIFO there never returned, and every request queued behind it.
 #[test]
