@@ -33,6 +33,7 @@ pub const PAIR_WELCOME_TIMEOUT: Duration = Duration::from_secs(90);
 /// How long to give one route before also trying the next ("happy eyeballs").
 pub const STAGGER: Duration = Duration::from_millis(400);
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// How often the link pings the PC while the app is in front ([`Link::set_keepalive`] changes it).
 pub const KEEPALIVE: Duration = Duration::from_secs(25);
 pub const PING_TIMEOUT: Duration = Duration::from_secs(10);
 pub const ENGINE_START_TIMEOUT: Duration = Duration::from_secs(45);
@@ -517,6 +518,11 @@ struct Inner {
     session: Mutex<Option<Arc<Session>>>,
     events: Mutex<VecDeque<Event>>,
     kick: Notify,
+    /// The keep-alive's interval now, in ms, and a nudge for the wait already running.
+    keepalive_ms: std::sync::atomic::AtomicU64,
+    retime: Notify,
+    /// The network changed under an open session: it is shut and dialed again at once.
+    switched: AtomicBool,
     waker: Waker,
     /// Bumped by [`Link::forget`] and [`Link::paired`]: a loop of an older generation stops.
     generation: Mutex<u64>,
@@ -563,6 +569,9 @@ impl Link {
             session: Mutex::new(None),
             events: Mutex::new(VecDeque::new()),
             kick: Notify::new(),
+            keepalive_ms: std::sync::atomic::AtomicU64::new(KEEPALIVE.as_millis() as u64),
+            retime: Notify::new(),
+            switched: AtomicBool::new(false),
             waker,
             generation: Mutex::new(0),
             listeners: Mutex::new(Vec::new()),
@@ -587,6 +596,27 @@ impl Link {
     /// changed, a PC was just paired.
     pub fn kick(&self) {
         self.inner.kick.notify_one();
+    }
+
+    /// The phone moved to another network (Wi-Fi to mobile data, another Wi-Fi): an open session
+    /// rode on the old address and is dead, whatever its socket says, so it is shut and the PC
+    /// dialed again at once, instead of a ping on the dead path finding out in tens of seconds.
+    pub fn network_switched(&self) {
+        let open = self.session();
+        if let Some(s) = open {
+            self.inner.switched.store(true, Ordering::SeqCst);
+            s.shut();
+        }
+        self.kick();
+    }
+
+    /// How often to ping the PC while connected: often in front, rarely away with the screen off
+    /// (each ping wakes the phone's radio). Takes effect on the wait already running.
+    pub fn set_keepalive(&self, every: Duration) {
+        let ms = every.as_millis().max(1) as u64;
+        if self.inner.keepalive_ms.swap(ms, Ordering::SeqCst) != ms {
+            self.inner.retime.notify_one();
+        }
     }
 
     /// A PC was paired: keep it and connect to it now. A connection still being made for the
@@ -775,6 +805,12 @@ async fn run(inner: Arc<Inner>) {
         if !current() {
             continue;
         }
+        // Shut for a new network: dial at once, the backoff from the start.
+        if inner.switched.swap(false, Ordering::SeqCst) {
+            backoff = RECONNECT_MIN;
+            attempt = 0;
+            continue;
+        }
         if began.elapsed() < STABLE {
             backoff = wait_out(&inner, "Connection lost, reconnecting", backoff).await;
         } else {
@@ -889,10 +925,13 @@ async fn ask(s: &Arc<Session>, op: &str, payload: Value, timeout: Duration) -> R
 async fn keep_alive(inner: &Inner, s: &Arc<Session>) {
     let mut missed = 0;
     while s.open.load(Ordering::SeqCst) {
+        let every = Duration::from_millis(inner.keepalive_ms.load(Ordering::SeqCst));
         tokio::select! {
             _ = s.ended.notified() => break,
             _ = inner.kick.notified() => {}
-            _ = tokio::time::sleep(KEEPALIVE) => {}
+            _ = tokio::time::sleep(every) => {}
+            // A new interval: wait again with it, no ping now.
+            _ = inner.retime.notified() => continue,
         }
         if !s.open.load(Ordering::SeqCst) {
             break;

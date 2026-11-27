@@ -303,8 +303,8 @@ pub extern "system" fn Java_com_quietsoftware_relaycode_CodeActivity_nativeOpen<
 /// The network changed (LinkService's callback): the process's link redials now, from this thread,
 /// whether or not an activity's loop is running to hear of it.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_quietsoftware_relaycode_LinkService_nativeNetwork<'local>(_env: JNIEnv<'local>, _class: JClass<'local>) {
-    crate::background::network_changed();
+pub extern "system" fn Java_com_quietsoftware_relaycode_LinkService_nativeNetwork<'local>(_env: JNIEnv<'local>, _class: JClass<'local>, network: jni::sys::jlong) {
+    crate::background::network_changed(network);
 }
 
 /// Something was done from a notification in the shade (ActionReceiver): a reply's words, or a
