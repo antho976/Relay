@@ -68,31 +68,52 @@ fn start_server(app: &mut App, server: String) {
             Err(e) => return send(Msg::Failed(e)),
         };
         send(Msg::Asked(asked.clone()));
-        // Ten minutes for the owner to answer, asked every two seconds.
-        for _ in 0..300 {
-            if stop.load(std::sync::atomic::Ordering::SeqCst) {
-                return;
+        let link = wait_for_link(|| s.claim(&asked), || std::thread::sleep(Duration::from_secs(2)), &stop, || send(Msg::Allowed));
+        match link {
+            Some(Ok(link)) => {
+                let Some(pl) = PairLink::parse(&link) else { return send(Msg::Failed("Your server's link did not read".into())) };
+                send(match rc_link::link::pair(&pl, DEVICE) {
+                    Ok(p) => Msg::Paired(Box::new(p)),
+                    Err(r) => Msg::Failed(r.text()),
+                });
             }
-            std::thread::sleep(Duration::from_secs(2));
-            match s.claim(&asked) {
-                Reply::Waiting => {}
-                Reply::WaitingPc => send(Msg::Allowed),
-                Reply::Ready(link) => {
-                    let Some(pl) = PairLink::parse(&link) else { return send(Msg::Failed("Your server's link did not read".into())) };
-                    send(Msg::Allowed);
-                    return send(match rc_link::link::pair(&pl, DEVICE) {
-                        Ok(p) => Msg::Paired(Box::new(p)),
-                        Err(r) => Msg::Failed(r.text()),
-                    });
-                }
-                Reply::Denied => return send(Msg::Failed("Declined on Discord.".into())),
-                Reply::Expired => return send(Msg::Failed("Nobody answered in time. Ask again.".into())),
-                Reply::Spent => return send(Msg::Failed("That request was used already. Ask again.".into())),
-                Reply::Trouble(e) => return send(Msg::Failed(e)),
-            }
+            Some(Err(e)) => send(Msg::Failed(e)),
+            None => {}
         }
-        send(Msg::Failed("Nobody answered in time. Ask again.".into()));
     });
+}
+
+/// How many troubles in a row (the server out of reach, an answer that did not read) are waited
+/// out before pairing gives up: a phone between networks, a server waking up.
+const TROUBLES: u32 = 3;
+
+/// Ask the server every two seconds, for ten minutes, until the owner answered: the link once
+/// the PC opened its window, the words to show if not, none when stopped. `allowed` runs each
+/// time the owner has allowed it and the PC is still opening.
+fn wait_for_link(mut claim: impl FnMut() -> Reply, mut pause: impl FnMut(), stop: &std::sync::atomic::AtomicBool, mut allowed: impl FnMut()) -> Option<Result<String, String>> {
+    let mut troubles = 0;
+    for _ in 0..300 {
+        if stop.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
+        pause();
+        let reply = claim();
+        troubles = if matches!(reply, Reply::Trouble(_)) { troubles + 1 } else { 0 };
+        match reply {
+            Reply::Waiting => {}
+            Reply::WaitingPc => allowed(),
+            Reply::Ready(link) => {
+                allowed();
+                return Some(Ok(link));
+            }
+            Reply::Denied => return Some(Err("Declined on Discord.".into())),
+            Reply::Expired => return Some(Err("Nobody answered in time. Ask again.".into())),
+            Reply::Spent => return Some(Err("That request was used already. Ask again.".into())),
+            Reply::Trouble(e) if troubles > TROUBLES => return Some(Err(e)),
+            Reply::Trouble(_) => {}
+        }
+    }
+    Some(Err("Nobody answered in time. Ask again.".into()))
 }
 
 fn start_link(app: &mut App, pl: PairLink) {
@@ -285,4 +306,35 @@ pub fn sample_waiting(app: &mut App, allowed: bool) {
     app.st.pair.code = Some("K7QF".into());
     app.st.pair.allowed = allowed;
     app.st.pair.busy = true;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(replies: Vec<Reply>) -> (Option<Result<String, String>>, usize) {
+        let mut replies = replies.into_iter();
+        let mut asked = 0;
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let out = wait_for_link(
+            || {
+                asked += 1;
+                replies.next().unwrap_or(Reply::Waiting)
+            },
+            || {},
+            &stop,
+            || {},
+        );
+        (out, asked)
+    }
+
+    #[test]
+    fn a_passing_trouble_is_waited_out_and_a_lasting_one_ends_it() {
+        let trouble = || Reply::Trouble("Your server could not be reached.".into());
+        let (out, _) = run(vec![trouble(), trouble(), Reply::Waiting, trouble(), trouble(), trouble(), Reply::Ready("relay://pair?v=1".into())]);
+        assert_eq!(out, Some(Ok("relay://pair?v=1".into())), "three in a row are waited out, and the count starts over");
+        let (out, asked) = run(vec![trouble(), trouble(), trouble(), trouble(), Reply::Ready("x".into())]);
+        assert_eq!((out, asked), (Some(Err("Your server could not be reached.".into())), 4), "a fourth in a row ends it");
+        assert_eq!(run(vec![Reply::Denied]).0, Some(Err("Declined on Discord.".into())), "a refusal is never asked again");
+    }
 }
