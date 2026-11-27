@@ -184,6 +184,7 @@ pub struct States {
     pub agents: crate::agents::State,
     pub commands: crate::commands::State,
     pub update: crate::update::State,
+    pub news: crate::news::State,
 }
 
 pub struct App {
@@ -284,7 +285,7 @@ fn write_owned<T: Serialize + Send + 'static>(p: PathBuf, v: T) {
     });
 }
 
-fn chat_file(data: &std::path::Path, name: &str) -> PathBuf {
+pub(crate) fn chat_file(data: &std::path::Path, name: &str) -> PathBuf {
     let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
     data.join("cache").join(format!("chat-{safe}.json"))
 }
@@ -1230,6 +1231,10 @@ impl App {
                 crate::agents::keep_up(self);
             }
             crate::agents::draw_over(self);
+        }
+        // What you have seen of each agent, and its rows' previews (D12).
+        if route != Route::Pair {
+            crate::news::keep_up(self);
         }
         // App updates from the PC (D10): asked for while in front, offered over any page but pairing.
         if route != Route::Pair && !self.shot {

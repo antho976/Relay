@@ -24,6 +24,7 @@ pub mod gfx;
 pub mod glyphs;
 pub mod home;
 pub mod kit;
+pub mod news;
 pub mod pair;
 pub mod sample;
 pub mod screen;

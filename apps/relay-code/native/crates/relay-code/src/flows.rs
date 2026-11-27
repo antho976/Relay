@@ -354,7 +354,8 @@ fn an_earlier_agent_on_home_opens_its_chat_read_only() {
     a.reset_to(Route::Home);
     frames(&mut a, &mut clock, 3);
     // Under NEEDS YOU (one row) and AGENTS (three), EARLIER's first row: keen-newt, stopped.
-    let earlier = 56.0 + 4.0 + (34.0 + 60.0 + 8.0) + (34.0 + 3.0 * 60.0 + 8.0) + 32.0;
+    let row = crate::drawer::AGENT_ROW_H;
+    let earlier = 56.0 + 4.0 + (34.0 + row + 8.0) + (34.0 + 3.0 * row + 8.0) + 32.0;
     tap(&mut a, &mut clock, 150.0, earlier + 30.0);
     assert_eq!(a.route(), &Route::Chat("keen-newt".into()));
     // No message box: a tap where it would be gives no keyboard.
@@ -900,4 +901,44 @@ fn a_tablet_keeps_a_phone_sized_column_centred() {
     p.resize(1080.0, 2340.0, 0.0, 0.0);
     frames(&mut p, &mut clock, 2);
     assert!((p.canvas.u - 1080.0 / 390.0).abs() < 0.01);
+}
+
+// D12: rows that tell you what happened.
+
+#[test]
+fn an_agent_that_finished_since_you_looked_gets_a_dot_until_you_open_it() {
+    let mut a = app("news");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    frames(&mut a, &mut clock, 3);
+    let now = rc_link::link::now_ms();
+    // vivid-ferret wrote a minute ago and waits at its prompt; you last looked ten minutes ago.
+    let ferret = a.agents.iter().position(|x| x.name == "vivid-ferret").unwrap();
+    a.agents[ferret].last_output_at = a.agents.iter().find(|x| x.name == "swift-ocelot").unwrap().last_output_at.clone();
+    crate::news::set_seen(&mut a, "vivid-ferret", now - 10 * 60_000);
+    let f = a.agents[ferret].clone();
+    assert!(crate::news::unseen(&a, &f), "finished since you looked");
+    // One still at work has no dot, however long since you looked.
+    crate::news::set_seen(&mut a, "bold-puffin", now - 60 * 60_000);
+    let puffin = a.agent("bold-puffin").cloned().unwrap();
+    assert!(!crate::news::unseen(&a, &puffin), "at work: nothing to see yet");
+    // Open its chat, come back: the dot is gone.
+    a.open("vivid-ferret");
+    frames(&mut a, &mut clock, 3);
+    assert!(a.back());
+    frames(&mut a, &mut clock, 3);
+    assert!(!crate::news::unseen(&a, &f));
+    // Its row shows its latest words, from the conversation in memory.
+    assert_eq!(crate::news::preview(&mut a, "vivid-ferret").as_deref(), Some("All five review findings are fixed, with a test each."));
+}
+
+#[test]
+fn a_first_seen_agent_starts_seen() {
+    let mut a = app("news-first");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    frames(&mut a, &mut clock, 3);
+    // Every sample agent is new to this phone but two the sample marked: no old news lights up.
+    let lit: Vec<String> = a.agents.clone().iter().filter(|x| crate::news::unseen(&a, x)).map(|x| x.name.clone()).collect();
+    assert_eq!(lit, ["umber-zebra", "swift-ocelot"]);
 }

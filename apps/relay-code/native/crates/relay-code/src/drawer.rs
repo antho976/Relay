@@ -82,31 +82,47 @@ pub fn badge_lit(c: &mut Canvas, a: &Agent, x: f32, y: f32, size: f32, working: 
     }
 }
 
+/// An agent row's height: its title, its latest words, its name and state.
+pub const AGENT_ROW_H: f32 = 72.0;
+
 /// An agent as a row: badge, what it is doing, its name and state, and when it last spoke. True
 /// when tapped.
 pub fn agent_row(app: &mut App, a: &Agent, x: f32, y: f32, w: f32, now_ms: u64) -> bool {
-    let h = 60.0;
+    let h = AGENT_ROW_H;
     let working = app.busy(&a.name);
     let words = app.agent_words(a);
+    // D12: its latest words, and a dot for news since you last had its chat open.
+    let preview = crate::news::preview(app, &a.name);
+    let news = crate::news::unseen(app, a);
     let mut cx = crate::cx!(app);
     if cx.pressed(x, y, w, h) {
         cx.c.rect(x + 6.0, y + 2.0, w - 12.0, h - 4.0, 10.0, t::WASH);
     }
-    badge_lit(cx.c, a, x + t::PAD, y + 14.0, 32.0, working);
+    badge_lit(cx.c, a, x + t::PAD, y + (h - 32.0) / 2.0, 32.0, working);
     let tx = x + t::PAD + 32.0 + 12.0;
     // "asks you" only for a question in its terminal; an agent that stopped blocked says so
     // (state_words reads session.list's `waiting`).
     let when = a.last_output_at.as_deref().or(Some(a.updated_at.as_str()).filter(|s| !s.is_empty())).map(|s| crate::data::ago(s, now_ms)).unwrap_or_default();
     let wt = Text::new(ty::SMALL, t::INK3);
     let ww = if when.is_empty() { 0.0 } else { cx.c.measure(&when, wt) + 8.0 };
-    // The two lines centred on the row by their own heights, so a larger text size keeps them apart.
-    let (tt, st) = (Text::new(ty::BODY, t::INK).semi(), Text::new(ty::CAPTION, if a.needs_you() { t::WARN } else { t::INK3 }));
-    let ty0 = y + (h - (tt.lh() + 1.5 + st.lh())) / 2.0;
+    // Its lines centred on the row by their own heights, so a larger text size keeps them apart:
+    // the title, its latest words when the phone has them, then its name and state.
+    let (tt, pt, st) = (Text::new(ty::BODY, t::INK).semi(), Text::new(ty::UI, t::INK2), Text::new(ty::CAPTION, if a.needs_you() { t::WARN } else { t::INK3 }));
+    let block = tt.lh() + 1.5 + if preview.is_some() { pt.lh() + 1.0 } else { 0.0 } + st.lh();
+    let ty0 = y + (h - block) / 2.0;
     cx.c.text_fit(a.title(), tx, ty0, x + w - tx - t::PAD - ww, tt);
+    let mut ly = ty0 + tt.lh() + 1.5;
+    if let Some(p) = &preview {
+        cx.c.text_fit(p, tx, ly, x + w - tx - t::PAD - 16.0, pt);
+        ly += pt.lh() + 1.0;
+    }
     let sub = format!("{} · {words}", a.name);
-    cx.c.text_fit(&sub, tx, ty0 + tt.lh() + 1.5, x + w - tx - t::PAD, st);
+    cx.c.text_fit(&sub, tx, ly, x + w - tx - t::PAD - 16.0, st);
     if !when.is_empty() {
         cx.c.text(&when, x + w - t::PAD, ty0 + (tt.lh() - wt.lh()) / 2.0, wt.right());
+    }
+    if news {
+        cx.c.circle(x + w - t::PAD - 4.0, ty0 + tt.lh() + 1.5 + pt.lh() / 2.0, 4.5, t::ACCENT);
     }
     cx.tap(x, y, w, h)
 }
