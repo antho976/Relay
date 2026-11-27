@@ -264,6 +264,13 @@ fn panel(app: &mut App, pos: f32) -> bool {
     let viewport = [x0, list_top, W, list_bottom - list_top];
     let moving = app.st.drawer.scroll.update(&app.ui, viewport, dt);
     app.canvas.push_clip(x0, list_top, W, list_bottom - list_top);
+    // Only a tap inside the list's window reaches its rows. A row scrolled under the links is
+    // clipped, not gone: it took their tap and dropped it, so Changes, Designs, Board and Inbox
+    // did nothing (or opened the agent under them).
+    let held = app.ui.tap.filter(|&(_, py)| py < list_top || py >= list_bottom);
+    if held.is_some() {
+        app.ui.tap = None;
+    }
     let mut y = list_top - app.st.drawer.scroll.off;
     let mut open: Option<String> = None;
     let window = Some((list_top, list_bottom));
@@ -295,6 +302,9 @@ fn panel(app: &mut App, pos: f32) -> bool {
         app.canvas.rect_grad(x0, list_bottom - 32.0, W, 32.0, 0.0, t::PANEL.a(0.0), t::PANEL);
     }
     app.canvas.pop_clip();
+    if held.is_some() {
+        app.ui.tap = held;
+    }
     app.st.drawer.scroll.max = y + app.st.drawer.scroll.off - list_bottom + 12.0;
 
     // The rest of the repo, one tap each (route A).

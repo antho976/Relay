@@ -1423,3 +1423,19 @@ fn a_poll_with_nothing_new_waits_longer_and_a_touch_brings_it_back() {
     assert_eq!(a.rest, Rest::default());
     assert!(a.reread_at <= clock + 4_000_000_000, "the chat reads again soon");
 }
+
+#[test]
+fn the_drawers_links_open_their_pages() {
+    // Changes, Designs, Board and Inbox under the list, above the foot (58) on 390 × 844.
+    let first = 844.0 - 58.0 - (4.0 * 44.0 + 12.0) + 6.0;
+    for (i, want) in [Route::Changes, Route::Designs, Route::Board, Route::Inbox].into_iter().enumerate() {
+        let mut a = app(&format!("drawer-link-{i}"));
+        let mut clock = 1_000_000_000;
+        a.reset_to(Route::Home);
+        a.st.drawer.open = true;
+        frames(&mut a, &mut clock, 30);
+        tap(&mut a, &mut clock, 150.0, first + 44.0 * i as f32 + 22.0);
+        assert!(!a.st.drawer.open, "{want:?}: the drawer closed");
+        assert_eq!(a.route(), &want);
+    }
+}
