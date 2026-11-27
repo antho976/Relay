@@ -47,6 +47,10 @@ pub struct State {
     dt: f32,
     /// A table still coasts: draw again.
     moving: bool,
+    /// The item being drawn (its place in the whole list), for a fold inside it.
+    drawing: usize,
+    /// Items whose fold changed: only they are measured again, on the next frame.
+    refolded: HashSet<usize>,
     pub model_sheet: bool,
     /// Where the message box starts on screen, for the model picker above it.
     pub box_top: f32,
@@ -135,6 +139,7 @@ fn header(app: &mut App, a: Option<&Agent>, name: &str) {
 
 /// Heights and drawing share one walk: `draw` false only measures.
 fn item(app: &mut App, it: &Item, index: usize, y: f32, draw: bool) -> f32 {
+    app.st.chat.drawing = index;
     let c_w = WIDTH - 2.0 * t::PAD;
     match it {
         Item::You(text) => bubble(app, text, y, draw),
@@ -158,10 +163,7 @@ fn item(app: &mut App, it: &Item, index: usize, y: f32, draw: bool) -> f32 {
                 if folded {
                     cx.c.icon(if open { "chevron-up" } else { "chevron-down" }, WIDTH - t::PAD - 8.0, y + 16.0, 12.0, t::INK3);
                     if cx.tap(0.0, y, WIDTH, 32.0) {
-                        if !app.st.chat.open.remove(&index) {
-                            app.st.chat.open.insert(index);
-                        }
-                        app.st.chat.heights = Rc::default();
+                        fold(app, index);
                     }
                 }
             }
@@ -195,10 +197,10 @@ fn item(app: &mut App, it: &Item, index: usize, y: f32, draw: bool) -> f32 {
                     if cx.tap(0.0, y, WIDTH, body + 28.0) {
                         if open {
                             app.st.chat.open.remove(&index);
-                            app.st.chat.heights = Rc::default();
+                            refold(app);
                         } else {
                             app.st.chat.open.insert(index);
-                            app.st.chat.heights = Rc::default();
+                            refold(app);
                         }
                     }
                 }
@@ -315,7 +317,7 @@ fn code_block(app: &mut App, code: &str, x: f32, y: f32, w: f32, draw: bool) -> 
                 if !app.st.chat.open_code.remove(&key) {
                     app.st.chat.open_code.insert(key);
                 }
-                app.st.chat.heights = Rc::default();
+                refold(app);
             }
         }
     }
@@ -460,6 +462,9 @@ fn copy_words(it: &Item) -> Option<String> {
 /// The live line while it works, as the terminal shows it: the mark breathing, Claude Code's own
 /// word for what it is doing, how long, and the tokens. Without the terminal's foot (an older PC),
 /// how long since your last message.
+/// How often the live line is drawn again while the agent works.
+const LIVE_NS: u64 = 83_000_000;
+
 fn live_status(app: &mut App, name: &str, status: Option<&crate::screen::Status>, y: f32) {
     let now = app.now_ns;
     let t_s = now as f32 / 1e9;
@@ -487,18 +492,34 @@ fn live_status(app: &mut App, name: &str, status: Option<&crate::screen::Status>
     if !details.is_empty() {
         app.canvas.text_fit(&details, t::PAD + 36.0 + vw, y + 11.0, WIDTH - t::PAD - (t::PAD + 36.0 + vw), Text::new(ty::CAPTION, t::INK3));
     }
-    // It moves while it works: about 30 frames a second, only on this page, only while working.
-    app.wake_at(now + 33_000_000);
+    // It moves while it works: 12 frames a second (the mark turns slowly; more is battery spent
+    // on nothing a person sees), only on this page, only while working.
+    app.wake_at(now + LIVE_NS);
 }
 
 /// An edit's change: the file, then its `-` and `+` lines on red and green, the first dozen
 /// shown and the rest a tap away. Returns its height.
+/// A fold in the item being drawn opened or closed: its height is measured again.
+fn refold(app: &mut App) {
+    let i = app.st.chat.drawing;
+    app.st.chat.refolded.insert(i);
+}
+
+/// Open or close the folded line of item `index` (its calls), as a tap on it does.
+fn fold(app: &mut App, index: usize) {
+    if !app.st.chat.open.remove(&index) {
+        app.st.chat.open.insert(index);
+    }
+    app.st.chat.drawing = index;
+    refold(app);
+}
+
 /// Flip a call's fold from how it starts.
 fn toggle(app: &mut App, key: (usize, usize)) {
     if !app.st.chat.toggled.remove(&key) {
         app.st.chat.toggled.insert(key);
     }
-    app.st.chat.heights = Rc::default();
+    refold(app);
 }
 
 /// Lines of output shown before "show all": the tail, where a command says how it ended.
@@ -727,10 +748,10 @@ fn diff(app: &mut App, c: &data::ToolCall, key: usize, y: f32, draw: bool) -> f3
             if cx.tap(x, y, w, h) {
                 if open {
                     app.st.chat.open_diffs.remove(&key);
-                    app.st.chat.heights = Rc::default();
+                    refold(app);
                 } else {
                     app.st.chat.open_diffs.insert(key);
-                    app.st.chat.heights = Rc::default();
+                    refold(app);
                 }
             }
         }
@@ -855,6 +876,16 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     let base = app.st.chat.base;
     if app.st.chat.heights.len() != items.len() {
         let hs: Vec<f32> = items.iter().enumerate().map(|(i, it)| item(app, it, base + i, 0.0, false)).collect();
+        app.st.chat.heights = Rc::new(hs);
+    }
+    // A fold opened or closed: that item alone is measured again (a whole long chat took ~15 ms).
+    if !app.st.chat.refolded.is_empty() {
+        let mut hs = (*app.st.chat.heights).clone();
+        for i in std::mem::take(&mut app.st.chat.refolded) {
+            if let Some(j) = i.checked_sub(base).filter(|&j| j < items.len() && j < hs.len()) {
+                hs[j] = item(app, &items[j], i, 0.0, false);
+            }
+        }
         app.st.chat.heights = Rc::new(hs);
     }
     let heights = app.st.chat.heights.clone();
@@ -1414,6 +1445,84 @@ mod tests {
         }
         let b = App::new(std::sync::Arc::new(Host(dir.clone())), 1_000_000_000);
         assert_eq!(b.draft("bold-puffin"), "half a thought");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_fold_measures_its_item_again_and_only_it() {
+        let dir = std::env::temp_dir().join(format!("relay-code-refold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(Host(dir.clone())), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        crate::sample::tools(&mut a, false);
+        a.open("swift-ocelot");
+        let mut clock = 1_000_000_000u64;
+        let mut frame = |a: &mut App| {
+            clock += 16_666_666;
+            a.frame(clock);
+        };
+        frame(&mut a);
+        frame(&mut a);
+        let j = a.st.chat.items.iter().rposition(|it| matches!(it, Item::Did { .. })).unwrap();
+        let before = a.st.chat.heights[j];
+        let at = a.st.chat.base + j;
+        fold(&mut a, at);
+        frame(&mut a);
+        let (items, base) = (a.st.chat.items.clone(), a.st.chat.base);
+        let fresh: Vec<f32> = items.iter().enumerate().map(|(i, it)| item(&mut a, it, base + i, 0.0, false)).collect();
+        assert_eq!(*a.st.chat.heights, fresh, "the heights kept agree with measuring everything");
+        assert!(a.st.chat.heights[j] > before, "the opened item grew");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Opening a fold in a long conversation (400 messages, each with thinking, a 60-line diff
+    /// and prose): the frame after the tap, release build on this machine's CPU:
+    /// `cargo test --release fold_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn fold_cost() {
+        let dir = std::env::temp_dir().join(format!("relay-code-fold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(Host(dir.clone())), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        let long = "The phone matched its own copy to the log by the words, and a queued message is logged differently, so the match missed and both stayed. ".repeat(3);
+        let diff = (0..30).map(|i| format!("-    let old_{i} = users.any {{ it.clientId == mine.id }}\n+    let new_{i} = users.any {{ it.id == mine.id }}")).collect::<Vec<_>>().join("\n");
+        let msgs: Vec<serde_json::Value> = (0..400)
+            .map(|i| {
+                if i % 2 == 0 {
+                    serde_json::json!({"id": i.to_string(), "role": "user", "created_at": "", "body": {"text": format!("Message {i}: push it when the tests pass.")}})
+                } else {
+                    serde_json::json!({"id": i.to_string(), "role": "assistant", "created_at": "", "body": {"blocks": [
+                        {"type": "thinking", "text": long},
+                        {"type": "tool_use", "id": format!("c{i}"), "name": "Bash", "summary": "cargo test"},
+                        {"type": "tool_use", "id": format!("e{i}"), "name": "Edit", "summary": "data/SessionChat.kt", "detail": diff},
+                        {"type": "text", "text": long},
+                    ]}})
+                }
+            })
+            .collect();
+        let mut c = crate::data::Convo::default();
+        c.take(&serde_json::json!({"cursor": 1, "reset": true, "found": true, "messages": msgs}));
+        a.convos.insert("bold-puffin".into(), c);
+        a.open("bold-puffin");
+        let mut clock = 1_000_000_000u64;
+        for _ in 0..5 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        let did = a.st.chat.base + a.st.chat.items.iter().rposition(|it| matches!(it, Item::Did { .. })).unwrap();
+        let mut times = Vec::new();
+        for _ in 0..41 {
+            fold(&mut a, did);
+            clock += 16_666_666;
+            let t = std::time::Instant::now();
+            a.frame(clock);
+            times.push(t.elapsed().as_secs_f64() * 1e6);
+        }
+        times.sort_by(f64::total_cmp);
+        println!("frame after a fold: p50 {:.0} µs, p95 {:.0} µs, max {:.0} µs ({} runs)", times[20], times[38], times[40], times.len());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
