@@ -115,13 +115,25 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
     app.canvas.set_images_size(gfx.images_size());
     // Roughly a phone's status bar and gesture bar.
     app.resize(w as f32, h as f32, w as f32 * 0.085, w as f32 * 0.04);
-    if screen != "first-run" {
+    if !screen.starts_with("first-run") && !screen.starts_with("pair-") {
         app.sample();
     } else {
         app.shot = true;
     }
     match screen.as_str() {
         "first-run" => app.reset_to(Route::Pair),
+        // D8: the pairing screen waiting on Discord, allowed, by link, and with an error.
+        "pair-waiting" | "pair-allowed" | "pair-link" | "pair-error" => {
+            app.reset_to(Route::Pair);
+            match screen.as_str() {
+                "pair-waiting" | "pair-allowed" => crate::pair::sample_waiting(&mut app, screen == "pair-allowed"),
+                "pair-link" => app.st.pair.by_link = true,
+                _ => {
+                    app.st.pair.server = Some("example.org".into());
+                    app.st.pair.error = Some("Your server could not be reached. Check the connection, then try again.".into());
+                }
+            }
+        }
         "home" => app.reset_to(Route::Home),
         "drawer" | "repos" => {
             app.open("bold-puffin");
