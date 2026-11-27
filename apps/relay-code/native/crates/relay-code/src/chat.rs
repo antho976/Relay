@@ -900,55 +900,117 @@ fn pinned(app: &mut App, y: f32, h: f32) {
 
 fn diff(app: &mut App, c: &data::ToolCall, key: usize, y: f32, draw: bool) -> f32 {
     const SHOWN: usize = 14;
-    let detail = c.detail.clone().unwrap_or_default();
-    let st = Text::new(ty::SMALL, t::INK2).face(Weight::Mono).line(1.5);
+    let lines = data::diff_lines(c.detail.as_deref().unwrap_or_default());
+    let lang = data::lang_of(&c.summary);
+    let st = Text::new(ty::SMALL, t::INK).face(Weight::Mono).line(1.5);
+    let lh = st.lh();
     let (x, w) = (t::PAD, WIDTH - 2.0 * t::PAD);
-    // Each line wrapped, never cut: the whole change shows, on its own red or green.
-    let mut rows: Vec<(Option<crate::draw::Rgba>, crate::draw::Rgba, String)> = Vec::new();
-    for l in detail.lines() {
-        let (bg, ink) = match l.chars().next() {
-            Some('+') => (Some(t::OK.a(0.12)), t::OK),
-            Some('-') => (Some(t::DANGER.a(0.12)), t::DANGER),
-            _ => (None, t::INK3),
+    // The gutter: each line's number when the change says where it is, then its mark.
+    let digits = lines.iter().filter_map(|l| l.num).max().map(|n| n.to_string().len());
+    let num_w = digits.map_or(0.0, |d| app.canvas.measure(&"0".repeat(d), st.color(t::INK3)) + 8.0);
+    let cx0 = x + 10.0 + num_w + 14.0;
+    let cw = x + w - 10.0 - cx0;
+    // Each line wrapped, never cut, as runs coloured by what they are.
+    let mut laid: Vec<(usize, Vec<crate::draw::Run>, f32, usize)> = Vec::new();
+    let mut rows = 0;
+    for (i, l) in lines.iter().enumerate() {
+        let n = match l.kind {
+            data::DiffKind::Hunk | data::DiffKind::File => 1,
+            _ => {
+                let body = l.text.trim_start_matches(' ');
+                let indent = app.canvas.measure(&l.text[..l.text.len() - body.len()], st);
+                let ink = if l.kind == data::DiffKind::Del { t::INK2 } else { t::INK };
+                let runs: Vec<crate::draw::Run> = match lang {
+                    Some(lg) => data::tokens(body, lg).into_iter().map(|(k, text)| crate::draw::Run { text, style: st.color(tok_ink(k, ink)), chip: None, underline: false }).collect(),
+                    None => vec![crate::draw::Run { text: body.to_string(), style: st.color(ink), chip: None, underline: false }],
+                };
+                let n = if body.is_empty() { 1 } else { app.canvas.rich_lines(&runs, (cw - indent).max(40.0)).len().max(1) };
+                laid.push((i, runs, indent, n));
+                n
+            }
         };
-        for seg in app.canvas.wrap(l, w - 24.0, st, 8) {
-            rows.push((bg, ink, seg));
+        rows += n;
+        if !draw && rows > 600 {
+            break;
         }
     }
     let open = app.st.chat.open_diffs.contains(&key);
-    let n = if open { rows.len().min(600) } else { rows.len().min(SHOWN) };
+    // Folded, whole lines up to SHOWN rows.
+    let mut shown_rows = 0;
+    let mut shown_lines = 0;
+    while shown_lines < lines.len() {
+        let n = laid.iter().find(|(i, ..)| *i == shown_lines).map_or(1, |(.., n)| *n);
+        if !open && shown_rows + n > SHOWN && shown_rows > 0 {
+            break;
+        }
+        shown_rows += n;
+        shown_lines += 1;
+    }
+    let more = shown_lines < lines.len() || open && rows > SHOWN;
     let head = 26.0;
-    let more = rows.len() > SHOWN;
-    let h = head + n as f32 * st.lh() + if more { 26.0 } else { 8.0 };
+    let h = head + shown_rows as f32 * lh + if more { 26.0 } else { 8.0 };
     if draw {
         app.canvas.rect(x, y + 2.0, w, h, 10.0, t::CODE);
         app.canvas.outline(x, y + 2.0, w, h, 10.0, 1.0, t::LINE);
         app.canvas.icon("edit", x + 14.0, y + 15.0, 12.0, t::INK3);
         app.canvas.text_fit(&c.summary, x + 26.0, y + 7.0, w - 40.0, Text::new(ty::SMALL, t::INK2).medium());
         let mut ly = y + 2.0 + head;
-        for (bg, ink, seg) in &rows[..n] {
-            if let Some(bg) = bg {
-                app.canvas.rect(x + 1.0, ly, w - 2.0, st.lh(), 0.0, *bg);
+        for (i, l) in lines.iter().enumerate().take(shown_lines) {
+            match l.kind {
+                data::DiffKind::Hunk => {
+                    // Lines left out between two hunks: a quiet break.
+                    app.canvas.rect(x + 10.0, ly + lh / 2.0, w - 20.0, 1.0, 0.0, t::LINE);
+                    ly += lh;
+                }
+                data::DiffKind::File => {
+                    app.canvas.text_fit(&l.text, x + 12.0, ly, w - 24.0, Text::new(ty::SMALL, t::INK2).medium().line(1.5));
+                    ly += lh;
+                }
+                kind => {
+                    let Some((_, runs, indent, n)) = laid.iter().find(|(j, ..)| *j == i) else { continue };
+                    let (bg, mark, mark_ink) = match kind {
+                        data::DiffKind::Add => (Some(t::OK.a(0.10)), "+", t::OK),
+                        data::DiffKind::Del => (Some(t::DANGER.a(0.10)), "-", t::DANGER),
+                        _ => (None, "", t::INK3),
+                    };
+                    let bh = *n as f32 * lh;
+                    if let Some(bg) = bg {
+                        app.canvas.rect(x + 1.0, ly, w - 2.0, bh, 0.0, bg);
+                    }
+                    if let Some(num) = l.num {
+                        app.canvas.text(&num.to_string(), x + 10.0 + num_w - 8.0, ly, st.color(t::INK3).right());
+                    }
+                    app.canvas.text(mark, x + 10.0 + num_w, ly, st.color(mark_ink));
+                    app.canvas.rich(runs, cx0 + indent, ly, (cw - indent).max(40.0), lh, *n, true);
+                    ly += bh;
+                }
             }
-            app.canvas.text(seg, x + 12.0, ly, st.color(*ink));
-            ly += st.lh();
         }
         if more {
-            let words = if open { "Show less".to_string() } else { format!("{} more lines", rows.len() - SHOWN) };
+            let hidden = rows.saturating_sub(shown_rows);
+            let words = if open { "Show less".to_string() } else { format!("{hidden} more lines") };
             app.canvas.text(&words, x + 12.0, ly + 4.0, Text::new(ty::SMALL, t::INK3).medium());
             let mut cx = crate::cx!(app);
             if cx.tap(x, y, w, h) {
-                if open {
-                    app.st.chat.open_diffs.remove(&key);
-                    refold(app);
-                } else {
+                if !app.st.chat.open_diffs.remove(&key) {
                     app.st.chat.open_diffs.insert(key);
-                    refold(app);
                 }
+                refold(app);
             }
         }
     }
     h + 8.0
+}
+
+/// A piece of code's colour: few, quiet, and the line's own ink for the rest.
+fn tok_ink(k: data::Tok, plain: crate::draw::Rgba) -> crate::draw::Rgba {
+    match k {
+        data::Tok::Plain => plain,
+        data::Tok::Keyword => t::BADGES[1],
+        data::Tok::Str => crate::draw::Rgba::hex(0xD9B77E),
+        data::Tok::Number => t::BADGES[4],
+        data::Tok::Comment => t::INK3,
+    }
 }
 
 /// Your words, right-aligned in a bubble. Returns its height.
@@ -1777,6 +1839,18 @@ mod tests {
         }
         times.sort_by(f64::total_cmp);
         println!("frame after a fold: p50 {:.0} µs, p95 {:.0} µs, max {:.0} µs ({} runs)", times[20], times[38], times[40], times.len());
+        // Measuring every message shown, as opening the chat does.
+        let (items, base) = (a.st.chat.items.clone(), a.st.chat.base);
+        let mut all = Vec::new();
+        for _ in 0..11 {
+            let t = std::time::Instant::now();
+            for (i, it) in items.iter().enumerate() {
+                item(&mut a, it, base + i, 0.0, false);
+            }
+            all.push(t.elapsed().as_secs_f64() * 1e3);
+        }
+        all.sort_by(f64::total_cmp);
+        println!("measuring all {} items: p50 {:.1} ms, max {:.1} ms (11 runs)", items.len(), all[5], all[10]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
