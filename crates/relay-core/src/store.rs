@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// The schema version this build knows. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: i64 = 37;
+pub const SCHEMA_VERSION: i64 = 38;
 
 /// Numbered migrations; index 0 brings a fresh DB to `user_version = 1`.
 pub const MIGRATIONS: &[&str] = &[
@@ -585,6 +585,20 @@ pub const MIGRATIONS: &[&str] = &[
     // reported blocked or partial through session.done. Read only while state is 'blocked'.
     r#"
     ALTER TABLE sessions ADD COLUMN waiting TEXT CHECK (waiting IS NULL OR waiting IN ('prompt','report'));
+    "#,
+    // v38 - a person's message sent with chat.send, under the sender's id, and where the agent's
+    // log stood when it was typed: the transcript gives it back with that id once it is logged.
+    r#"
+    CREATE TABLE chat_sends (
+      id INTEGER PRIMARY KEY,
+      session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      client_id TEXT NOT NULL,
+      text TEXT NOT NULL,
+      log_tag INTEGER,
+      log_offset INTEGER,
+      sent_at TEXT NOT NULL,
+      UNIQUE(session_id, client_id)
+    );
     "#,
 ];
 

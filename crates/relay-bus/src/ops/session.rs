@@ -243,6 +243,16 @@ result!(#[schemars(rename = "SessionTranscriptMessage")] TranscriptMessage {
     pub role: String,
     pub body: Value,
     pub created_at: String,
+    /// On a person's message sent with `chat.send`: the sender's id for it, on this one message
+    /// only, so the sender draws it once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+});
+result!(#[schemars(rename = "SessionTranscriptPending")] TranscriptPending {
+    /// The id it was sent with.
+    pub client_id: String,
+    pub text: String,
+    pub sent_at: String,
 });
 result!(#[schemars(rename = "SessionTranscriptOut")] TranscriptOut {
     pub messages: Vec<TranscriptMessage>,
@@ -259,7 +269,26 @@ result!(#[schemars(rename = "SessionTranscriptOut")] TranscriptOut {
     pub reset: bool,
     /// Whether the provider's conversation was found; false before its first hook names it.
     pub found: bool,
+    /// Messages sent with `chat.send` in the last hour that the log does not hold yet, oldest
+    /// first: typed, not yet taken (or never shown, as some slash commands). Not on a page back.
+    #[serde(default)]
+    pub pending: Vec<TranscriptPending>,
 });
+payload!(#[schemars(rename = "ChatSendIn")] ChatSendIn {
+    pub session: String,
+    /// What the person wrote: typed into the agent's terminal as one paste, then Enter.
+    pub text: String,
+    /// The sender's own id for this message (letters, digits, `-` and `_`, at most 64): sending
+    /// it again types nothing twice, and `session.transcript` gives the message back with it.
+    pub client_id: String,
+});
+result!(#[schemars(rename = "ChatSendOut")] ChatSendOut {
+    pub client_id: String,
+    /// False when this id was sent before: nothing was typed again.
+    pub typed: bool,
+});
+op!(ChatSend, "chat.send", ChatSendIn => ChatSendOut,
+    OpMeta::mutation(Scope::Session, 3, "A person's message to an agent: typed as one paste and Enter, kept under the sender's id").audit(Audit::AgentOnly).actors(Actors::UserOnly));
 op!(Transcript, "session.transcript", TranscriptIn => TranscriptOut, OpMeta::query(Scope::Session, 3, "The agent's conversation as messages, read from the provider's own log, from a cursor"));
 payload!(#[schemars(rename = "SessionUploadIn")] UploadIn {
     pub session: String,
@@ -378,6 +407,7 @@ entries!(
     Scrollback,
     Screen,
     Transcript,
+    ChatSend,
     Upload,
     RestorableList,
     DiscardRestorable,
