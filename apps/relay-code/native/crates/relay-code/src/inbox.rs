@@ -83,7 +83,7 @@ pub struct State {
     pub review: Vec<crate::board::Task>,
     review_call: Option<Call>,
     /// The hold being denied, and the reason being written for it.
-    denying: Option<i64>,
+    pub denying: Option<i64>,
     pub reason: String,
 }
 
@@ -155,10 +155,12 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let page = app.page_begin(dt, crate::home::TOP_H, 0.0);
     let mut y = page.top + 4.0;
     let now_ms = rc_link::link::now_ms();
-    let asking: Vec<crate::data::Agent> = app.agents.iter().filter(|a| a.needs_you()).cloned().collect();
+    // Blocked at a prompt asks you; blocked because it reported so has stopped, with nothing to
+    // answer: a quieter list, last.
+    let (asking, stopped) = split_blocked(&app.agents);
     let holds = app.st.inbox.holds.clone();
     let review = app.st.inbox.review.clone();
-    if asking.is_empty() && holds.is_empty() && review.is_empty() {
+    if asking.is_empty() && holds.is_empty() && review.is_empty() && stopped.is_empty() {
         let (title, body) = if app.online() { ("Nothing needs you", "Agents that ask you something and commands held for you show here.") } else { ("Waiting for your PC", "What needs you shows here as soon as the PC answers.") };
         let (h, _) = kit::notice(&mut crate::cx!(app), 32.0, y + 120.0, WIDTH - 64.0, title, Some(body), None);
         y += 120.0 + h;
@@ -248,6 +250,16 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             y += 48.0;
         }
     }
+    if !stopped.is_empty() {
+        app.canvas.text("STOPPED", t::PAD, y + 12.0, Text::new(ty::SMALL, t::INK3).semi());
+        y += 34.0;
+        for a in &stopped {
+            if crate::drawer::agent_row(app, a, 0.0, y, WIDTH, now_ms) {
+                open = Some(a.name.clone());
+            }
+            y += 60.0;
+        }
+    }
     app.page_end(&page, y);
     crate::home::top(app, "Inbox");
     match answer {
@@ -272,6 +284,12 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         app.push(Route::Task(id));
     }
     page.moving
+}
+
+/// Blocked agents: those at a prompt (asking you), and those that stopped and reported blocked.
+/// No `waiting` is an older PC, which only blocked at prompts.
+pub fn split_blocked(agents: &[crate::data::Agent]) -> (Vec<crate::data::Agent>, Vec<crate::data::Agent>) {
+    agents.iter().filter(|a| a.needs_you()).cloned().partition(|a| a.waiting.as_deref() != Some("report"))
 }
 
 enum Answer {
@@ -403,6 +421,15 @@ mod tests {
         press(&mut a, &mut clock, 200.0, 150.0);
         assert_eq!(a.st.inbox.denying, None);
         assert!(a.st.inbox.act.is_none() && a.st.inbox.holds.len() == 2);
+    }
+
+    #[test]
+    fn agents_that_reported_blocked_are_stopped_not_asking() {
+        let ag = |n: &str, state: &str, w: Option<&str>| crate::data::Agent { name: n.into(), state: state.into(), waiting: w.map(str::to_string), ..crate::data::Agent::default() };
+        let list = [ag("a", "blocked", Some("prompt")), ag("b", "blocked", Some("report")), ag("c", "blocked", None), ag("d", "running", None)];
+        let (asking, stopped) = split_blocked(&list);
+        assert_eq!(asking.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["a", "c"]);
+        assert_eq!(stopped.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["b"]);
     }
 
     #[test]
