@@ -1,0 +1,140 @@
+name: Relay Code
+
+# Everything that must be true before Relay Code (apps/relay-code: the phone app in Rust and wgpu,
+# design 44) is installable. Its Cargo workspace is apps/relay-code/native, apart from the root one,
+# so the root CI never builds it. It builds on crates/relay-client through a path dependency, so a
+# change there runs here too. Every `run:` step works from apps/relay-code or its native/ folder
+# (defaults below); paths given to actions start at the repository root.
+#
+# Cheapest first, each gating the next:
+#
+#   guard     ~30s  Wrapper checksum, no signing material, no build output in the tree.
+#   test      ~8m   cargo test (the link against a fake door, the chat's rules, the notifications'
+#                   rules, flows: no tap falls through) and clippy.
+#   apk       ~10m  The library for arm64 and the APK around it: CodeActivity and LinkService (Java)
+#                   are compiled nowhere else.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/relay-code/**"
+      - "!apps/relay-code/**.md"
+      - "crates/relay-client/**"
+      - ".github/workflows/relay-code.yml"
+  pull_request:
+    paths:
+      - "apps/relay-code/**"
+      - "crates/relay-client/**"
+      - ".github/workflows/relay-code.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  guard:
+    name: Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        # git ls-files from here lists only Relay Code's files, so the checks below stay its own.
+        working-directory: apps/relay-code
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Validate Gradle wrapper checksum
+        uses: gradle/actions/wrapper-validation@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
+
+      - name: No signing material in the tree
+        run: |
+          found=$(git ls-files -- '*.jks' '*.keystore' '*.p12' 'keystore.properties' '**/keystore.properties' | grep -v '\.example$' || true)
+          if [ -n "$found" ]; then
+            echo "::error::Signing material is committed:"; echo "$found"; exit 1
+          fi
+          echo "No keystores."
+
+      - name: No build output in the tree
+        run: |
+          found=$(git ls-files | grep -E '(^|/)(build|\.gradle|target|jniLibs)/|\.so$' || true)
+          if [ -n "$found" ]; then
+            echo "::error::Build output is committed:"; echo "$found"; exit 1
+          fi
+          echo "Clean."
+
+  test:
+    name: Test (host)
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/relay-code/native
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal -c clippy && rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: apps/relay-code/native
+      - name: Tests
+        run: cargo test --locked
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+  apk:
+    name: APK (arm64 library and the Java shell)
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: apps/relay-code
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal -t aarch64-linux-android && rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: apps/relay-code/native
+          key: android
+      - name: The library (as tools/build-lib.sh builds it)
+        working-directory: apps/relay-code/native
+        run: |
+          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$bin/aarch64-linux-android26-clang"
+          export CXX_aarch64_linux_android="$bin/aarch64-linux-android26-clang++"
+          export AR_aarch64_linux_android="$bin/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$bin/aarch64-linux-android26-clang"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"
+          cargo build --locked --release -p relay-code --lib --target aarch64-linux-android
+          mkdir -p android/src/main/jniLibs/arm64-v8a
+          cp target/aarch64-linux-android/release/librelaycode.so android/src/main/jniLibs/arm64-v8a/
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
+        with:
+          cache-read-only: ${{ github.ref_name != github.event.repository.default_branch }}
+      - name: Install the Android platform (configuration needs it)
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$sdkmanager" "platforms;android-37.0" > /dev/null
+      - name: Assemble
+        run: ./gradlew :app:assembleDebug
