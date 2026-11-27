@@ -89,7 +89,8 @@ pub const AGENT_ROW_H: f32 = 72.0;
 /// when tapped.
 pub fn agent_row(app: &mut App, a: &Agent, x: f32, y: f32, w: f32, now_ms: u64) -> bool {
     let h = AGENT_ROW_H;
-    let working = app.busy(&a.name);
+    // Away from the PC its terminal's last word is old news: no lamp says it works.
+    let working = app.link_state.online() && app.busy(&a.name);
     let words = app.agent_words(a);
     // D12: its latest words, and a dot for news since you last had its chat open.
     let preview = crate::news::preview(app, &a.name);

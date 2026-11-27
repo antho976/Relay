@@ -140,7 +140,17 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     let title = app.agent(name).map_or(name.to_string(), |a| a.title().to_string());
     app.canvas.text_fit(&title, x, y, w, Text::new(ty::BODY, t::INK).semi());
     y += 22.0;
-    app.canvas.text_fit(&format!("{name}'s terminal · the keys below go to it"), x, y, w, Text::new(ty::CAPTION, t::INK3));
+    // Away from the PC the screen is the last one read, and says so.
+    let stale = app.st.terminal.text.is_some();
+    match crate::home::reach(app).filter(|_| stale) {
+        Some((dot, words)) => {
+            app.canvas.circle(x + 3.0, y + 8.5, 3.0, dot);
+            app.canvas.text_fit(&format!("{words} · the screen as it was"), x + 11.0, y, w - 11.0, Text::new(ty::CAPTION, t::INK3));
+        }
+        None => {
+            app.canvas.text_fit(&format!("{name}'s terminal · the keys below go to it"), x, y, w, Text::new(ty::CAPTION, t::INK3));
+        }
+    }
     y += 26.0;
 
     let st = &app.st.terminal;
@@ -152,7 +162,7 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
             y += 60.0 + h;
         }
         (None, None) => {
-            let words = if app.online() { "Reading its terminal…" } else { "Your PC is out of reach. Its terminal shows once it is back." };
+            let words = if app.online() { "Reading its terminal…" } else { "Its terminal shows once your PC answers." };
             app.canvas.para(words, x, y + 60.0, w, Text::new(ty::UI, t::INK3).center().line(1.45), 3);
             y += 120.0;
         }

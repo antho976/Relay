@@ -1124,3 +1124,27 @@ fn a_wide_screen_scrolls_sideways_and_the_drawer_stays_shut() {
     assert!(crate::terminal::sideways(&a).0 < 50.0);
     assert_eq!(a.route(), &Route::Terminal("bold-puffin".into()));
 }
+
+// D14: every state says what it is.
+
+#[test]
+fn away_from_the_pc_the_pages_say_so_and_no_row_claims_work() {
+    let mut a = app("reach");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    frames(&mut a, &mut clock, 2);
+    assert!(crate::home::reach(&a).is_none(), "nothing to say while it answers");
+    a.screens.insert("swift-ocelot".into(), crate::screen::read("· Crunching… (1m 6s · ↓ 6.3k tokens · thought for 2s)\n────\n❯ \n────\n  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt"));
+    // Its chat open, its terminal's foot is trusted: it works.
+    a.open("swift-ocelot");
+    let ocelot = a.agent("swift-ocelot").cloned().unwrap();
+    assert_eq!(a.agent_words(&ocelot), "working");
+    a.set_link_state(rc_link::LinkState::Offline { reason: "No route".into(), retry_at_ms: 0 });
+    frames(&mut a, &mut clock, 2);
+    assert_eq!(crate::home::reach(&a).map(|r| r.1).as_deref(), Some("PC out of reach"));
+    assert_eq!(a.agent_words(&ocelot), "ready", "its terminal's last word is old news");
+    a.set_link_state(rc_link::LinkState::Connecting { attempt: 1 });
+    a.agents.clear();
+    a.projects.clear();
+    assert_eq!(crate::home::reach(&a).map(|r| r.1).as_deref(), Some("Connecting…"));
+}

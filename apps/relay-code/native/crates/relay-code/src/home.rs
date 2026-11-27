@@ -19,7 +19,35 @@ pub fn top(app: &mut App, title: &str) {
         app.st.drawer.open = true;
     }
     let cw = crate::drawer::repo_chip(app, WIDTH - 12.0, y + 5.0);
-    app.canvas.text_fit(title, 56.0, y + (44.0 - 22.0) / 2.0, WIDTH - 56.0 - cw - 24.0, Text::new(ty::SECTION + 1.0, t::INK).semi());
+    let tw = WIDTH - 56.0 - cw - 24.0;
+    let tt = Text::new(ty::SECTION + 1.0, t::INK).semi();
+    match reach(app) {
+        // Away from the PC: the title and, under it, that what shows is what was kept (D14).
+        Some((dot, words)) => {
+            let ct = Text::new(ty::SMALL, t::INK3);
+            let ty0 = y + (44.0 - (tt.lh() + ct.lh())) / 2.0;
+            app.canvas.text_fit(title, 56.0, ty0, tw, tt);
+            app.canvas.circle(56.0 + 3.0, ty0 + tt.lh() + ct.lh() / 2.0, 3.0, dot);
+            app.canvas.text_fit(&words, 56.0 + 11.0, ty0 + tt.lh(), tw - 11.0, ct);
+        }
+        None => {
+            app.canvas.text_fit(title, 56.0, y + (44.0 - tt.lh()) / 2.0, tw, tt);
+        }
+    }
+}
+
+/// While the PC is not answering: its dot and a few words, for under a page's title. None while
+/// it answers (and while pairing, which says so itself).
+pub fn reach(app: &App) -> Option<(crate::draw::Rgba, String)> {
+    use rc_link::LinkState;
+    let kept = !app.agents.is_empty() || !app.projects.is_empty();
+    match &app.link_state {
+        LinkState::Online { .. } | LinkState::Unpaired | LinkState::Revoked { .. } => None,
+        LinkState::Starting { .. } => Some((t::WARN, "Starting Relay on your PC…".into())),
+        LinkState::Connecting { .. } if !kept => Some((t::WARN, "Connecting…".into())),
+        _ if kept => Some((t::INK3, "PC out of reach".into())),
+        _ => Some((t::INK3, "PC out of reach".into())),
+    }
 }
 
 /// The foot's height: a box to start an agent, as Claude's app opens on one.
@@ -78,15 +106,20 @@ fn start_box(app: &mut App) {
     app.canvas.rect(band[0], band[1], band[2], band[3], 0.0, t::BG);
     let (x, y, w, h) = (12.0, top + 10.0, WIDTH - 24.0, 50.0);
     let repo = app.repo_name();
+    // Without a repo yet (the PC has not answered) it says what it waits on, and takes no tap.
+    let ready = app.repo.is_some();
+    let words = if ready { format!("Start an agent in {repo}") } else { "Agents start here once your PC answers".to_string() };
     let mut cx = crate::cx!(app);
-    let pressed = cx.pressed(x, y, w, h);
+    let pressed = ready && cx.pressed(x, y, w, h);
     cx.c.rect(x, y, w, h, 22.0, if pressed { t::S2 } else { t::S1 });
     cx.c.outline(x, y, w, h, 22.0, 1.0, t::LINE);
     let st = Text::new(ty::BODY, t::INK3);
-    cx.c.text_fit(&format!("Start an agent in {repo}"), x + 18.0, y + (h - st.lh()) / 2.0, w - 70.0, st);
-    cx.c.circle(x + w - 25.0, y + h / 2.0, 17.0, t::S2);
-    cx.c.icon("plus", x + w - 25.0, y + h / 2.0, 15.0, t::INK2);
-    if cx.tap(x, y, w, h) && app.repo.is_some() {
+    cx.c.text_fit(&words, x + 18.0, y + (h - st.lh()) / 2.0, w - 70.0, st);
+    if ready {
+        cx.c.circle(x + w - 25.0, y + h / 2.0, 17.0, t::S2);
+        cx.c.icon("plus", x + w - 25.0, y + h / 2.0, 15.0, t::INK2);
+    }
+    if cx.tap(x, y, w, h) && ready {
         app.st.newagent.open = true;
         let task = app.st.newagent.task.clone();
         app.focus.id = Some("new-agent");
