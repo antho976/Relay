@@ -80,7 +80,7 @@ pub fn agent_row(app: &mut App, a: &Agent, x: f32, y: f32, w: f32, now_ms: u64) 
     }
     badge(cx.c, a, x + t::PAD, y + 14.0, 32.0);
     let tx = x + t::PAD + 32.0 + 12.0;
-    let when = a.last_output_at.as_deref().map(|s| crate::data::ago(s, now_ms)).unwrap_or_default();
+    let when = a.last_output_at.as_deref().or(Some(a.updated_at.as_str()).filter(|s| !s.is_empty())).map(|s| crate::data::ago(s, now_ms)).unwrap_or_default();
     let wt = Text::new(ty::SMALL, t::INK3);
     let ww = if when.is_empty() { 0.0 } else { cx.c.measure(&when, wt) + 8.0 };
     cx.c.text_fit(a.title(), tx, y + 11.0, x + w - tx - t::PAD - ww, Text::new(ty::BODY, t::INK).semi());
@@ -160,7 +160,6 @@ fn panel(app: &mut App, pos: f32) -> bool {
     }
     app.canvas.rect(x0 - 40.0, 0.0, W + 40.0, screen, 24.0, t::PANEL);
     let top = app.canvas.inset_top + 8.0;
-    let now_ms = rc_link::link::now_ms();
 
     // The repo
     let (rx, ry, rw, rh) = (x0 + 10.0, top, W - 20.0, 56.0);
@@ -195,10 +194,14 @@ fn panel(app: &mut App, pos: f32) -> bool {
         }
     }
 
+    // Search, by name and intent, live and earlier (D1).
+    let sy = ky + 46.0 + 10.0;
+    search(app, x0 + 16.0, sy, W - 32.0);
+
     // The agents, scrolling between the keys and the foot.
     let foot_h = 58.0 + app.canvas.inset_bottom;
     let links_h = 4.0 * 44.0 + 12.0;
-    let list_top = ky + 46.0 + 12.0;
+    let list_top = sy + SEARCH_H + 8.0;
     let list_bottom = screen - foot_h - links_h;
     let dt = 0.016;
     let viewport = [x0, list_top, W, list_bottom - list_top];
@@ -206,24 +209,24 @@ fn panel(app: &mut App, pos: f32) -> bool {
     app.canvas.push_clip(x0, list_top, W, list_bottom - list_top);
     let mut y = list_top - app.st.drawer.scroll.off;
     let mut open: Option<String> = None;
-    let (needs, rest): (Vec<&Agent>, Vec<&Agent>) = agents.iter().partition(|a| a.needs_you());
-    for (label, list) in [("NEEDS YOU", needs), ("AGENTS", rest)] {
-        if list.is_empty() {
-            continue;
-        }
-        app.canvas.text(label, x0 + t::PAD, y + 10.0, Text::new(ty::SMALL, t::INK3).semi());
-        y += 32.0;
-        for a in list {
-            // Rows outside the list's window take no tap.
-            let visible = y + 60.0 > list_top && y < list_bottom;
-            if agent_row(app, a, x0, y, W, now_ms) && visible {
-                open = Some(a.name.clone());
-            }
+    let window = Some((list_top, list_bottom));
+    let query = if app.focus.is(crate::agents::SEARCH) { app.focus.text.clone() } else { app.st.agents.query.clone() };
+    if !query.trim().is_empty() {
+        let found = crate::agents::found(app, &query);
+        open = crate::agents::section(app, "FOUND", &found, x0, &mut y, W, window);
+        if found.is_empty() {
+            let tt = Text::new(ty::UI, t::INK3).line(1.45);
+            app.canvas.para(&format!("No agent here is called or doing \"{}\".", query.trim()), x0 + t::PAD, y + 12.0, W - 2.0 * t::PAD, tt, 3);
             y += 60.0;
         }
-        y += 4.0;
+    } else {
+        let (needs, rest): (Vec<Agent>, Vec<Agent>) = agents.iter().cloned().partition(|a| a.needs_you());
+        for (label, list) in [("NEEDS YOU", needs), ("AGENTS", rest)] {
+            open = open.or(crate::agents::section(app, label, &list, x0, &mut y, W, window));
+        }
+        open = open.or(crate::agents::earlier_section(app, x0, &mut y, W, window));
     }
-    if agents.is_empty() {
+    if agents.is_empty() && query.trim().is_empty() {
         let tt = Text::new(ty::UI, t::INK3).line(1.45);
         app.canvas.para("No agents in this repo yet. New agent starts one.", x0 + t::PAD, y + 12.0, W - 2.0 * t::PAD, tt, 3);
         y += 60.0;
@@ -285,6 +288,40 @@ fn panel(app: &mut App, pos: f32) -> bool {
     }
     app.canvas.dy = saved;
     moving
+}
+
+/// The search field's height.
+const SEARCH_H: f32 = 40.0;
+
+/// The drawer's search: a quiet field with a glass, and a key to clear it.
+fn search(app: &mut App, x: f32, y: f32, w: f32) {
+    let focused = app.focus.is(crate::agents::SEARCH);
+    app.canvas.rect(x, y, w, SEARCH_H, 10.0, t::S1);
+    if focused {
+        app.canvas.outline(x, y, w, SEARCH_H, 10.0, 1.0, t::INK3);
+    }
+    app.canvas.icon("search", x + 18.0, y + SEARCH_H / 2.0, 15.0, t::INK3);
+    let mut q = app.st.agents.query.clone();
+    let has = !(if focused { app.focus.text.is_empty() } else { q.is_empty() });
+    let fw = w - 36.0 - if has { 40.0 } else { 12.0 };
+    let mut cx = crate::cx!(app);
+    kit::inline(&mut cx, crate::agents::SEARCH, x + 36.0, y, fw, SEARCH_H, "Search agents", &mut q, Kb::Text, Text::new(ty::UI, t::INK));
+    if has {
+        let (kx, ky) = (x + w - 40.0, y);
+        if cx.pressed(kx, ky, 40.0, SEARCH_H) {
+            cx.c.circle(kx + 20.0, ky + SEARCH_H / 2.0, 16.0, t::WASH);
+        }
+        cx.c.icon("close", kx + 20.0, ky + SEARCH_H / 2.0, 13.0, t::INK3);
+        if cx.tap(kx, ky, 40.0, SEARCH_H) {
+            q.clear();
+            if focused {
+                cx.focus.text.clear();
+                cx.focus.sel = None;
+                cx.host.keyboard(true, "", Kb::Text);
+            }
+        }
+    }
+    app.st.agents.query = q;
 }
 
 /// The link in a few words, and its dot.

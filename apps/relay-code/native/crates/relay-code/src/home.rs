@@ -57,6 +57,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         }
         y += 8.0;
     }
+    // What stopped or finished, newest first; each opens its conversation, with Resume (D1).
+    let earlier = crate::agents::earlier_section(app, 0.0, &mut y, WIDTH, None);
+    open = open.or(earlier);
     app.page_end(&page, y);
     top(app, "Agents");
     start_box(app);

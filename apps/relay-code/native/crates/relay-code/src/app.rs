@@ -100,6 +100,14 @@ pub enum Ask {
     Spawn(String),
     /// The rendered foot of an agent's terminal (`session.screen`).
     Screen(String),
+    /// The repo's agents with closed ones, for Earlier (D1).
+    Earlier,
+    /// Why each stopped agent stopped (`session.restorable`).
+    Restorable,
+    /// Resume or Wake a stopped agent; Pause (park) or Close a live one.
+    Resume(String),
+    Park(String),
+    Close(String),
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -121,6 +129,7 @@ pub struct States {
     pub board: crate::board::State,
     pub inbox: crate::inbox::State,
     pub designs: crate::designs::State,
+    pub agents: crate::agents::State,
 }
 
 pub struct App {
@@ -136,6 +145,11 @@ pub struct App {
     pub link_state: LinkState,
     pub projects: Vec<Project>,
     pub agents: Vec<Agent>,
+    /// The repo's stopped and closed agents, as last read for Earlier (D1).
+    pub earlier: Vec<Agent>,
+    /// Why each restorable agent stopped (`crash`, `app_restart`) and whether its checkout has
+    /// uncommitted changes, by name.
+    pub restorable: HashMap<String, (String, bool)>,
     /// The repo every list shows (design 44, D5): one switch, remembered.
     pub repo: Option<i64>,
     pub convos: HashMap<String, Convo>,
@@ -256,6 +270,8 @@ impl App {
             link_state,
             projects,
             agents,
+            earlier: Vec::new(),
+            restorable: HashMap::new(),
             repo,
             convos,
             sending: HashMap::new(),
@@ -452,6 +468,13 @@ impl App {
             }
             if e.ev.starts_with("session.") {
                 self.agents_stale = true;
+                // Earlier is read again only when an agent stops, closes or comes back: a live
+                // agent's intent and state change all the time, and Earlier is a big read.
+                let name = e.payload.get("name").and_then(Value::as_str);
+                let stopped = e.payload.get("state").and_then(Value::as_str).is_some_and(|s| !matches!(s, "created" | "spawning" | "running" | "idle" | "blocked"));
+                if stopped || name.is_some_and(|n| self.earlier.iter().any(|a| a.name == n) || self.agents.iter().any(|a| a.name == n && !crate::agents::live(a))) {
+                    self.st.agents.stale = true;
+                }
                 // The open agent started or stopped: read its words and its foot now, not at the
                 // next poll, so the phone keeps up with the PC.
                 let open = self.open_chat();
@@ -533,7 +556,55 @@ impl App {
                         self.no_screen = true;
                     }
                 }
-                (Ask::Create | Ask::Spawn(_), Err(e)) => self.toast(&e.message),
+                (Ask::Earlier, Ok(v)) => {
+                    let mut all = data::agents(&v);
+                    all.retain(|a| !crate::agents::live(a));
+                    all.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                    all.truncate(200);
+                    self.earlier = all;
+                }
+                (Ask::Restorable, Ok(v)) => {
+                    self.restorable = v
+                        .get("sessions")
+                        .and_then(Value::as_array)
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|r| {
+                                    let name = r.pointer("/session/name")?.as_str()?.to_string();
+                                    let reason = r.get("reason").and_then(Value::as_str).unwrap_or_default().to_string();
+                                    Some((name, (reason, r.get("worktree_dirty").and_then(Value::as_bool).unwrap_or(false))))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                }
+                (Ask::Resume(name), Ok(_)) => {
+                    self.agents_stale = true;
+                    self.st.agents.stale = true;
+                    if self.open_chat().as_deref() == Some(name.as_str()) {
+                        self.reread_at = 0;
+                        self.screen_at = 0;
+                    }
+                }
+                (Ask::Park(name), Ok(_)) => {
+                    self.agents_stale = true;
+                    self.st.agents.stale = true;
+                    self.toast(&format!("{name} is paused"));
+                }
+                (Ask::Close(name), Ok(_)) => {
+                    self.agents_stale = true;
+                    self.st.agents.stale = true;
+                    // Kept as closed until the lists say so, so its chat turns read-only at once.
+                    if let Some(a) = self.agents.iter().find(|a| a.name == name).cloned() {
+                        self.agents.retain(|b| b.name != name);
+                        self.earlier.insert(0, Agent { state: "closed".into(), ..a });
+                    }
+                    self.toast(&format!("{name} is closed"));
+                }
+                (Ask::Close(name), Err(e)) if e.code == "worktree.dirty" => {
+                    self.st.agents.confirm = Some((name, crate::agents::Confirm::Discard));
+                }
+                (Ask::Create | Ask::Spawn(_) | Ask::Resume(_) | Ask::Park(_) | Ask::Close(_), Err(e)) => self.toast(&e.message),
                 (_, Err(e)) => self.host.log(&format!("{}: {}", e.code, e.message)),
                 (Ask::Input(_), Ok(_)) => {}
             }
@@ -560,7 +631,7 @@ impl App {
                 self.reread_at = self.now_ns + if busy { 700_000_000 } else { 4_000_000_000 };
             }
             // The terminal's foot: the live status, the mode, a question.
-            if !self.no_screen && self.now_ns >= self.screen_at && !self.asking(&Ask::Screen(name.clone())) {
+            if !self.no_screen && self.now_ns >= self.screen_at && !self.asking(&Ask::Screen(name.clone())) && self.live(&name) {
                 self.ask(Ask::Screen(name.clone()), "session.screen", json!({"session": name, "rows": 16}));
                 self.screen_at = self.now_ns + if busy { 700_000_000 } else { 3_000_000_000 };
             }
@@ -620,8 +691,19 @@ impl App {
         }
     }
 
+    /// The repo's live agents: stopped and closed ones are under Earlier.
     pub fn repo_agents(&self) -> Vec<&Agent> {
-        self.agents.iter().filter(|a| Some(a.project_id) == self.repo && a.alive()).collect()
+        self.agents.iter().filter(|a| Some(a.project_id) == self.repo && crate::agents::live(a)).collect()
+    }
+
+    /// An agent by name, live or earlier.
+    pub fn agent(&self, name: &str) -> Option<&Agent> {
+        self.agents.iter().find(|a| a.name == name).or_else(|| self.earlier.iter().find(|a| a.name == name))
+    }
+
+    /// The agent has a terminal running (or starting), so it takes messages.
+    pub fn live(&self, name: &str) -> bool {
+        self.agents.iter().find(|a| a.name == name).is_some_and(crate::agents::live)
     }
 
     /// Open an agent's conversation over Home.
@@ -631,7 +713,7 @@ impl App {
         {
             self.convos.insert(name.to_string(), c);
         }
-        if let Some(a) = self.agents.iter().find(|a| a.name == name)
+        if let Some(a) = self.agent(name)
             && Some(a.project_id) != self.repo
         {
             self.repo = Some(a.project_id);
@@ -766,7 +848,8 @@ impl App {
             self.finish_typing();
             return true;
         }
-        if self.st.drawer.close_over()
+        if self.st.agents.close_over()
+            || self.st.drawer.close_over()
             || self.st.chat.close_over()
             || self.st.newagent.open
             || matches!(self.route(), Route::Design(_)) && self.st.designs.close_over()
@@ -896,11 +979,16 @@ impl App {
         self.changed.remove("*");
         if route != Route::Pair && route != Route::Settings {
             moving |= crate::drawer::draw(self, dt);
-            // The drawer has no field: typing stops and the keyboard goes as it opens.
-            if self.st.drawer.open && self.focus.id.is_some() {
+            // The drawer's one field is its search: anything else typed stops as it opens.
+            if self.st.drawer.open && self.focus.id.is_some_and(|f| f != crate::agents::SEARCH) {
                 self.finish_typing();
             }
             moving |= crate::drawer::draw_new_agent(self);
+            // Earlier (D1) is read while the drawer or Home shows it.
+            if self.st.drawer.open || route == Route::Home {
+                crate::agents::keep_up(self);
+            }
+            crate::agents::draw_over(self);
         }
         if let Some((words, until)) = self.toast.clone() {
             if now_ns < until {
