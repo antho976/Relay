@@ -50,8 +50,9 @@ pub struct State {
     behind: i64,
     /// The repo's pull requests (`git.pr.list`): the open branch's is shown and opened.
     prs: Vec<Pr>,
-    /// The sheet that opens a pull request, with its title and body.
-    pr_sheet: bool,
+    /// The sheet that opens a pull request, with its title and body (pub, as `picking`, for
+    /// flows.rs: no tap falls through either).
+    pub pr_sheet: bool,
     pub pr_title: String,
     pub pr_body: String,
     pub files: Vec<File>,
@@ -73,7 +74,7 @@ pub struct State {
     open_commit: Option<String>,
     shown: Option<(String, String, Vec<File>)>,
     pub message: String,
-    picking: bool,
+    pub picking: bool,
     pending: Vec<Pending>,
 }
 
