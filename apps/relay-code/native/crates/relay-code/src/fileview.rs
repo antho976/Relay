@@ -87,6 +87,10 @@ pub struct State {
     text: Vec<String>,
     truncated: bool,
     rows: Vec<Row>,
+    /// How many lines are wrapped into `rows` so far, and the width and text size they were
+    /// wrapped for: another width or size wraps them again.
+    wrapped: usize,
+    wrapped_for: Option<(f32, f32)>,
     /// The row each line starts on, to open at a line.
     starts: Vec<usize>,
     jumped: bool,
@@ -172,6 +176,8 @@ fn got(app: &mut App, r: Result<Value, rc_link::BusError>) {
                 Some(text) => {
                     st.text = text.lines().take(MAX_LINES).map(str::to_string).collect();
                     st.rows.clear();
+                    st.starts.clear();
+                    st.wrapped = 0;
                     st.stage = Stage::Ready;
                 }
                 None => {
@@ -205,13 +211,24 @@ fn tok_ink(k: Tok) -> Rgba {
 
 /// The text as rows `w` wide (mono, `col` a column): each line's indent kept (a tab as four, at
 /// most a third of the width), its number on its first row.
-fn wrap(app: &mut App, w: f32, col: f32, st: Text) {
+/// The most time one frame spends wrapping: a 20 000-line file took 120 ms in one go, the page
+/// frozen; in pieces it shows from its top at once and the rest follows within a few frames.
+const WRAP_BUDGET: std::time::Duration = std::time::Duration::from_millis(4);
+
+/// Wrap the next lines into rows `w` wide (mono, `col` a column), within [`WRAP_BUDGET`]: each
+/// line's indent kept (a tab as four, at most a third of the width), its number on its first row.
+/// True while lines are left.
+fn wrap_more(app: &mut App, w: f32, col: f32, st: Text) -> bool {
     let lang: Option<Lang> = data::lang_of(&app.st.fileview.rel);
     let text = std::mem::take(&mut app.st.fileview.text);
+    let mut rows = std::mem::take(&mut app.st.fileview.rows);
+    let mut starts = std::mem::take(&mut app.st.fileview.starts);
     let most = ((w / 3.0) / col.max(1.0)) as u16;
-    let mut rows = Vec::new();
-    let mut starts = Vec::with_capacity(text.len());
-    for (i, l) in text.iter().enumerate() {
+    let from = app.st.fileview.wrapped;
+    let started = std::time::Instant::now();
+    let mut i = from;
+    while i < text.len() {
+        let l = &text[i];
         starts.push(rows.len());
         let body = l.trim_start_matches([' ', '\t']);
         let lead = &l[..l.len() - body.len()];
@@ -224,11 +241,19 @@ fn wrap(app: &mut App, w: f32, col: f32, st: Text) {
             };
             rows.push(Row { num: (k == 0).then_some(i + 1), indent, pieces });
         }
+        i += 1;
+        // The time asked only every 64 lines: asking costs too.
+        if (i - from).is_multiple_of(64) && started.elapsed() >= WRAP_BUDGET {
+            break;
+        }
     }
     let fv = &mut app.st.fileview;
+    fv.wrapped = i;
+    let left = i < text.len();
     fv.text = text;
     fv.rows = rows;
     fv.starts = starts;
+    left
 }
 
 pub fn draw(app: &mut App, repo: i64, worktree: Option<String>, path: &str, dt: f32) -> bool {
@@ -256,13 +281,24 @@ pub fn draw(app: &mut App, repo: i64, worktree: Option<String>, path: &str, dt: 
     }
     y += 10.0;
     let st = Text::new(ty::SMALL, t::INK2).face(Weight::Mono).line(1.5);
+    let mut wrapping = false;
     match &app.st.fileview.stage {
         Stage::Ready => {
             let digit = app.canvas.measure("0", st);
             let n = app.st.fileview.text.len().max(1);
             let gutter = digit * (n.to_string().len() as f32) + 12.0;
-            if app.st.fileview.rows.is_empty() && !app.st.fileview.text.is_empty() {
-                wrap(app, w - 24.0 - gutter, digit, st);
+            // Another width or text size: wrapped again, from the top.
+            let wrap_w = w - 24.0 - gutter;
+            let stamp = (wrap_w, crate::draw::text_scale());
+            let fv = &mut app.st.fileview;
+            if fv.wrapped_for != Some(stamp) {
+                fv.wrapped_for = Some(stamp);
+                fv.rows.clear();
+                fv.starts.clear();
+                fv.wrapped = 0;
+            }
+            if fv.wrapped < fv.text.len() {
+                wrapping = wrap_more(app, wrap_w, digit, st);
             }
             y = code(app, &page, x, y, w, gutter, digit, st);
         }
@@ -276,8 +312,9 @@ pub fn draw(app: &mut App, repo: i64, worktree: Option<String>, path: &str, dt: 
             let online = app.online();
             let (h, retry) = kit::problem(&mut crate::cx!(app), y - kit::EMPTY_GAP + 24.0, "The file didn't load", &words, online);
             y += h - kit::EMPTY_GAP + 24.0;
+            // From the top: the worktree lookup too, when that is what failed.
             if retry {
-                read(app, repo);
+                app.st.fileview.key = None;
             }
         }
         _ => {
@@ -288,7 +325,7 @@ pub fn draw(app: &mut App, repo: i64, worktree: Option<String>, path: &str, dt: 
     }
     app.page_end(&page, y + 12.0);
     crate::board::back_bar(app, "");
-    page.moving || app.st.fileview.busy() && !crate::wake::has()
+    page.moving || wrapping || app.st.fileview.busy() && !crate::wake::has()
 }
 
 /// The code on its dark ground, the rows on screen only. Returns where it ends.
@@ -392,6 +429,27 @@ mod tests {
         a
     }
 
+    /// The first frame of a file of `n` lines, its wrap included:
+    /// `cargo test --release fileview_first_frame -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn fileview_first_frame() {
+        for n in [3000usize, 20_000] {
+            let mut a = bench_app("first");
+            let text: Vec<String> = (1..=n).map(|i| format!("    let value_{i} = compute(&input[{i}..], \"{i}\"); // line {i} of a long file")).collect();
+            a.st.fileview = State { key: Some((1, None, "src/big.rs".into())), rel: "src/big.rs".into(), stage: Stage::Ready, text, ..State::default() };
+            open(&mut a, 1, None, "src/big.rs");
+            let t = std::time::Instant::now();
+            a.frame(2_000_000_000);
+            let first = t.elapsed().as_secs_f64() * 1e3;
+            let t = std::time::Instant::now();
+            for i in 0..10 {
+                a.frame(2_100_000_000 + i * 16_666_666);
+            }
+            println!("file view, {n} lines: first frame {first:.1} ms, then {:.2} ms a frame", t.elapsed().as_secs_f64() * 1e3 / 10.0);
+        }
+    }
+
     /// A 3000-line file open, at rest:
     /// `cargo test --release fileview_frame_cost -- --ignored --nocapture`.
     #[test]
@@ -402,6 +460,30 @@ mod tests {
         a.st.fileview = State { key: Some((1, None, "src/big.rs".into())), rel: "src/big.rs".into(), stage: Stage::Ready, text, ..State::default() };
         open(&mut a, 1, None, "src/big.rs");
         println!("file view frame, 3000 lines: {:.0} µs", frame_cost(&mut a, 10, 200));
+    }
+
+    #[test]
+    fn another_text_size_wraps_again_and_try_again_starts_from_the_lookup() {
+        let (mut a, mut clock) = app("rewrap");
+        a.st.fileview = State { key: Some((1, None, "src/a.rs".into())), rel: "src/a.rs".into(), stage: Stage::Ready, text: vec!["fn a() {}".into(); 10], ..State::default() };
+        open(&mut a, 1, None, "src/a.rs");
+        clock += 16_666_666;
+        a.frame(clock);
+        let first = a.st.fileview.wrapped_for;
+        assert!(first.is_some() && a.st.fileview.wrapped == 10);
+        // Large text, chosen in Settings: the stamp differs, so the lines wrap again.
+        a.set_text_size(2);
+        clock += 16_666_666;
+        a.frame(clock);
+        assert_ne!(a.st.fileview.wrapped_for, first);
+        assert_eq!(a.st.fileview.wrapped, 10);
+        a.set_text_size(1);
+        // A failed lookup's Try again forgets the route's key, so the next frame begins again.
+        a.st.fileview.stage = Stage::Failed("x".into());
+        a.st.fileview.key = None;
+        clock += 16_666_666;
+        a.frame(clock);
+        assert!(a.st.fileview.key.is_some(), "begun again from the route");
     }
 
     #[test]
@@ -454,12 +536,20 @@ mod tests {
             ..State::default()
         };
         open(&mut a, 1, None, "src/big.rs:2000");
-        for _ in 0..3 {
+        // Wrapped a few milliseconds a frame: the first frame shows its top, the rest follows.
+        clock += 16_666_666;
+        a.frame(clock);
+        assert!(!a.st.fileview.rows.is_empty(), "the top shows at once");
+        let mut frames = 1;
+        while a.st.fileview.wrapped < 3000 && frames < 1000 {
             clock += 16_666_666;
             a.frame(clock);
+            frames += 1;
         }
+        clock += 16_666_666;
+        a.frame(clock);
         let fv = &a.st.fileview;
-        assert!(fv.rows.len() >= 3000 && fv.jumped);
+        assert!(fv.rows.len() >= 3000 && fv.jumped, "{frames} frames");
         let row = fv.starts[1999] as f32;
         let off = a.scroll().off;
         assert!(off > row * 15.0, "opened down at line 2000: {off}");
