@@ -48,6 +48,11 @@ pub trait Host: Send + Sync {
     fn density(&self) -> f32 {
         0.0
     }
+    /// The phone's own text size setting (Android's font scale; 1.0 is its default), which the
+    /// app's Default text size follows (D20). Read when the app comes to the front.
+    fn font_scale(&self) -> f32 {
+        1.0
+    }
     /// This app may hand an APK to the system's installer (Android; never the desktop).
     fn can_install(&self) -> bool {
         false
@@ -282,6 +287,8 @@ pub struct App {
     toast: Option<(String, u64)>,
     pub typed_done: Option<&'static str>,
     pub keyboard_up: bool,
+    /// Android's font scale when the app last came to the front (D20).
+    pub font_scale: f32,
     /// Screenshots: nothing is sent to the PC.
     pub shot: bool,
     size: (f32, f32),
@@ -397,6 +404,7 @@ impl App {
             toast: None,
             typed_done: None,
             keyboard_up: false,
+            font_scale: 1.0,
             shot: false,
             size: (1080.0, 2340.0),
             insets: (0.0, 0.0),
@@ -405,6 +413,8 @@ impl App {
             wake: None,
         };
         app.service();
+        let mut app = app;
+        app.font_scale = app.host.font_scale();
         app
     }
 
@@ -1160,6 +1170,8 @@ impl App {
 
     /// The app came to the front: check the link at once, read the open page again.
     pub fn resumed(&mut self) {
+        // Android's text size may have changed while away (it is set in its own Settings).
+        self.font_scale = self.host.font_scale();
         self.foreground = true;
         self.fresh = true;
         self.link.kick();
@@ -1380,7 +1392,7 @@ impl App {
         self.take_answers();
         // The text size chosen in Settings (D9): every Text made this frame takes it, and the
         // chat measures again when it changed.
-        let scale = crate::settings::TEXT_SCALES[self.text_size()];
+        let scale = crate::settings::text_scale(self.text_size(), self.font_scale);
         if scale != crate::draw::text_scale() {
             crate::draw::set_text_scale(scale);
             self.st.chat.relayout();

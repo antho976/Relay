@@ -2075,13 +2075,16 @@ fn composer(
     if let Some(m) = mode {
         let words = m.words();
         let ox = mx + mw + 8.0;
-        let ow = app.canvas.measure(words, mt) + 28.0;
+        // No wider than the room before the key strip's toggle: at a large text size its words
+        // are cut rather than run under it (D20).
+        let room = bx + bw - 10.0 - 34.0 - 8.0 - 34.0 - 8.0 - ox;
+        let ow = (app.canvas.measure(words, mt) + 28.0).min(room.max(44.0));
         let mut cx = crate::cx!(app);
         if cx.pressed(ox, ky, ow, 34.0) {
             cx.c.rect(ox, ky, ow, 34.0, 17.0, t::WASH);
         }
         cx.c.outline(ox, ky, ow, 34.0, 17.0, 1.0, t::LINE);
-        cx.c.text(words, ox + 14.0, ky + (34.0 - mt.lh()) / 2.0, mt);
+        cx.c.text_fit(words, ox + 14.0, ky + (34.0 - mt.lh()) / 2.0, ow - 28.0, mt);
         if cx.tap(ox - 4.0, ky - 6.0, ow + 8.0, 46.0) {
             app.key(name, "\x1b[Z");
         }

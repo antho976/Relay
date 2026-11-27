@@ -85,10 +85,16 @@ pub fn badge_lit(c: &mut Canvas, a: &Agent, x: f32, y: f32, size: f32, working: 
 /// An agent row's height: its title, its latest words, its name and state.
 pub const AGENT_ROW_H: f32 = 72.0;
 
+/// An agent row's height at the text size in use: 72 up to Default, taller with larger type so its
+/// three lines never touch (D20).
+pub fn agent_row_h() -> f32 {
+    AGENT_ROW_H * crate::draw::text_scale().max(1.0)
+}
+
 /// An agent as a row: badge, what it is doing, its name and state, and when it last spoke. True
 /// when tapped.
 pub fn agent_row(app: &mut App, a: &Agent, x: f32, y: f32, w: f32, now_ms: u64) -> bool {
-    let h = AGENT_ROW_H;
+    let h = agent_row_h();
     // Away from the PC its terminal's last word is old news: no lamp says it works.
     let working = app.link_state.online() && app.busy(&a.name);
     let words = app.agent_words(a);

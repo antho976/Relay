@@ -112,6 +112,16 @@ impl Host for AndroidHost {
         with_activity(&self.app, |env, activity| env.call_method(activity, "haptic", "()V", &[]).map(|_| ()));
     }
 
+    fn font_scale(&self) -> f32 {
+        // Resources.getConfiguration().fontScale: the NDK's configuration does not carry it.
+        with_activity(&self.app, |env, activity| {
+            let res = env.call_method(activity, "getResources", "()Landroid/content/res/Resources;", &[])?.l()?;
+            let conf = env.call_method(&res, "getConfiguration", "()Landroid/content/res/Configuration;", &[])?.l()?;
+            env.get_field(&conf, "fontScale", "F")?.f()
+        })
+        .unwrap_or(1.0)
+    }
+
     fn density(&self) -> f32 {
         self.app.config().density().map_or(0.0, |dpi| dpi as f32 / 160.0)
     }
