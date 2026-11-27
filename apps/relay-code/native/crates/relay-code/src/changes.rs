@@ -206,7 +206,15 @@ enum Job {
     Fetch,
 }
 
+/// How long a commit, a push, a pull request or a fetch may take: the PC's own limit for a push.
+const LONG_CALL: std::time::Duration = std::time::Duration::from_secs(600);
+
 impl Job {
+    /// Runs git on the PC, network and hooks included.
+    fn long(&self) -> bool {
+        matches!(self, Job::Commit { .. } | Job::Push | Job::Pr | Job::Fetch)
+    }
+
     /// About the repo, not the open worktree: its answer is kept across a branch switch.
     fn repo_wide(&self) -> bool {
         matches!(self, Job::Worktrees | Job::Prs | Job::Fetch)
@@ -410,7 +418,25 @@ impl State {
         if self.pending.iter().any(|p| p.job == job && p.repo == repo && p.worktree == worktree) {
             return;
         }
-        self.pending.push(Pending { job, repo, worktree, call: link.call(op, payload) });
+        // What runs git on the PC (and its hooks: RelayV4's pre-push takes minutes) waits as long
+        // as the PC lets it run: given up on at the link's 30 s, a second tap began a second push.
+        let call = if job.long() { link.call_with(op, payload, LONG_CALL) } else { link.call(op, payload) };
+        self.pending.push(Pending { job, repo, worktree, call });
+    }
+
+    /// Back: the top one of this page's overlays closes (the discard dialog, the foot's menu, the
+    /// pull request sheet, the branch picker). False when none was open.
+    pub fn close_over(&mut self) -> bool {
+        if self.discard.take().is_some() {
+            return true;
+        }
+        if std::mem::take(&mut self.menu) {
+            return true;
+        }
+        if std::mem::take(&mut self.pr_sheet) {
+            return true;
+        }
+        std::mem::take(&mut self.picking)
     }
 
     /// What the foot says while a commit, a push, a pull request or a message for the open
@@ -693,7 +719,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         pending.retain(|p| p.job.acts());
         app.st.changes = State { repo: app.repo, pending, ..State::default() };
     }
-    if app.fresh || app.take_changed("git") || app.take_changed("worktree") {
+    let changed = app.take_changed("git") | app.take_changed("worktree");
+    if app.fresh || changed {
         reload(app);
     }
     let foot_h = 132.0 + message_extra(app);
@@ -1337,7 +1364,7 @@ fn prose_text(app: &App, id: &str, value: &str) -> String {
 }
 
 /// How much taller than one line a box of writing `w` wide is: up to five lines show.
-fn prose_extra(app: &mut App, id: &str, value: &str, w: f32) -> f32 {
+pub(crate) fn prose_extra(app: &mut App, id: &str, value: &str, w: f32) -> f32 {
     let text = prose_text(app, id, value);
     if text.is_empty() {
         return 0.0;
@@ -1354,7 +1381,7 @@ fn message_extra(app: &mut App) -> f32 {
     prose_extra(app, "commit-message", &message, WIDTH - 2.0 * t::PAD - 60.0)
 }
 
-fn message_box(app: &mut App, x: f32, y: f32, w: f32, h: f32, value: &mut String) {
+pub(crate) fn message_box(app: &mut App, x: f32, y: f32, w: f32, h: f32, value: &mut String) {
     prose_box(app, "commit-message", "Commit message", x, y, w, h, value);
 }
 
@@ -1362,7 +1389,7 @@ fn message_box(app: &mut App, x: f32, y: f32, w: f32, h: f32, value: &mut String
 /// with the caret at its end while typing, on the writing keyboard (Enter is a new line). A tap
 /// gives it the keyboard, as kit::inline does.
 #[allow(clippy::too_many_arguments)]
-fn prose_box(app: &mut App, id: &'static str, placeholder: &str, x: f32, y: f32, w: f32, h: f32, value: &mut String) {
+pub(crate) fn prose_box(app: &mut App, id: &'static str, placeholder: &str, x: f32, y: f32, w: f32, h: f32, value: &mut String) {
     let mut cx = crate::cx!(app);
     let focused = cx.focus.is(id);
     if focused {
@@ -2124,6 +2151,27 @@ mod tests {
         let w = WIDTH - 2.0 * t::PAD - 28.0;
         assert_eq!(prose_extra(&mut a, "pr-body", "", w), 0.0);
         assert!(prose_extra(&mut a, "pr-body", "What it does.\n\nWhy.\nHow to check it.", w) > 2.5 * message_style().lh());
+    }
+
+    #[test]
+    fn what_runs_git_waits_as_long_as_the_pc_lets_it() {
+        for j in [Job::Commit { push: true, set_upstream: false }, Job::Push, Job::Pr, Job::Fetch] {
+            assert!(j.long(), "{j:?}");
+        }
+        for j in [Job::Status, Job::Diff, Job::Stage("a".into()), Job::Suggest, Job::Prs] {
+            assert!(!j.long(), "{j:?}");
+        }
+        assert_eq!(LONG_CALL.as_secs(), 600);
+    }
+
+    #[test]
+    fn back_closes_the_top_overlay_first() {
+        let mut st = State { picking: true, pr_sheet: true, menu: true, discard: Some(File::default()), ..State::default() };
+        assert!(st.close_over() && st.discard.is_none() && st.menu);
+        assert!(st.close_over() && !st.menu && st.pr_sheet);
+        assert!(st.close_over() && !st.pr_sheet && st.picking);
+        assert!(st.close_over() && !st.picking);
+        assert!(!st.close_over(), "nothing left: Back goes on to the page");
     }
 
     #[test]

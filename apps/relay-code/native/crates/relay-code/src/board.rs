@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::app::{App, Ask, Route};
 use crate::draw::{Text, WIDTH};
-use crate::kit::{self, Kb};
+use crate::kit;
 use crate::theme::{self as t, ty};
 
 pub const COLUMNS: [(&str, &str); 5] = [("backlog", "Backlog"), ("ready", "Ready"), ("active", "Active"), ("in_review", "In review"), ("done", "Done")];
@@ -238,7 +238,8 @@ fn prepare(app: &mut App) {
     if app.st.board.repo != app.repo {
         app.st.board = State { repo: app.repo, column: 2, ..State::default() };
     }
-    if app.fresh || app.take_changed("task") {
+    let changed = app.take_changed("task");
+    if app.fresh || changed {
         reload(app);
         if let Route::Task(id) = *app.route() {
             reload_task(app, id);
@@ -328,7 +329,11 @@ pub fn draw_task(app: &mut App, id: i64, dt: f32) -> bool {
         back_bar(app, "");
         return page.moving;
     };
-    let foot_h = 124.0;
+    // The comment's box grows with what is written, up to five lines.
+    let comment_w = WIDTH - 2.0 * t::PAD - 60.0;
+    let draft = app.st.board.comment.clone();
+    let extra = crate::changes::prose_extra(app, "task-comment", &draft, comment_w);
+    let foot_h = 124.0 + extra;
     let page = app.page_begin(dt, 56.0, foot_h);
     let (x, w) = (t::PAD, WIDTH - 2.0 * t::PAD);
     let mut y = page.top + 8.0;
@@ -377,9 +382,10 @@ pub fn draw_task(app: &mut App, id: i64, dt: f32) -> bool {
     app.canvas.rect(-1000.0, top, WIDTH + 2000.0, foot_h + app.canvas.inset_bottom + 2.0, 0.0, t::BG);
     app.canvas.rect(-1000.0, top, WIDTH + 2000.0, 1.0, 0.0, t::LINE);
     let my = top + 12.0;
-    app.canvas.rect(x, my, w, 44.0, 12.0, t::S1);
+    let box_h = 44.0 + extra;
+    app.canvas.rect(x, my, w, box_h, 12.0, t::S1);
     let mut comment = app.st.board.comment.clone();
-    kit::inline(&mut crate::cx!(app), "task-comment", x + 14.0, my, w - 60.0, 44.0, "Comment", &mut comment, Kb::Text, Text::new(ty::UI, t::INK));
+    crate::changes::prose_box(app, "task-comment", "Comment", x + 14.0, my - 1.0, comment_w, box_h, &mut comment);
     app.st.board.comment = comment.clone();
     let sending = app.st.board.open.sending.is_some();
     let send = {
@@ -390,7 +396,7 @@ pub fn draw_task(app: &mut App, id: i64, dt: f32) -> bool {
         app.finish_typing();
         app.st.board.open.sending = Some(app.link.call("task.comment", json!({"task_id": id, "body": comment.trim()})));
     }
-    let ky = my + 44.0 + 12.0;
+    let ky = my + box_h + 12.0;
     let busy = app.st.board.act.is_some();
     let next = next(&tk.column);
     let agent_w = if tk.sessions.is_empty() && tk.column != "done" { 150.0 } else { 0.0 };

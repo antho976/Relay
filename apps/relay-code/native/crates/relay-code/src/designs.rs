@@ -866,7 +866,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         o.view = None;
         o.whole = false;
     }
-    if app.fresh || app.take_changed("design") {
+    let changed = app.take_changed("design");
+    if app.fresh || changed {
         reload(app);
     }
     take(app);
@@ -989,7 +990,8 @@ pub fn draw_design(app: &mut App, id: i64, dt: f32) -> bool {
         return true;
     }
     ensure_open(app, id);
-    if app.fresh || app.take_changed("design") {
+    let changed = app.take_changed("design");
+    if app.fresh || changed {
         reload_open(app);
     }
     take(app);
