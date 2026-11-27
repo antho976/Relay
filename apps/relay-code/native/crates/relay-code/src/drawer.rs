@@ -94,8 +94,8 @@ pub fn agent_row(app: &mut App, a: &Agent, x: f32, y: f32, w: f32, now_ms: u64) 
     }
     badge_lit(cx.c, a, x + t::PAD, y + 14.0, 32.0, working);
     let tx = x + t::PAD + 32.0 + 12.0;
-    // TODO(D5): once session.list carries `waiting` (B's "prompt" or "report"), say "asks you"
-    // only for "prompt" and "stopped · blocked" for "report", here and in the chat header.
+    // "asks you" only for a question in its terminal; an agent that stopped blocked says so
+    // (state_words reads session.list's `waiting`).
     let when = a.last_output_at.as_deref().or(Some(a.updated_at.as_str()).filter(|s| !s.is_empty())).map(|s| crate::data::ago(s, now_ms)).unwrap_or_default();
     let wt = Text::new(ty::SMALL, t::INK3);
     let ww = if when.is_empty() { 0.0 } else { cx.c.measure(&when, wt) + 8.0 };
