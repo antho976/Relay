@@ -878,6 +878,8 @@ impl App {
         if self.online() {
             crate::inbox::keep_up(self);
         }
+        // A commit's push goes out from here, whatever page is open.
+        crate::changes::keep_up(self);
         // Layers keep each tap on the surface it landed on (ui.rs): the page first, on the bottom.
         self.ui.layer = crate::ui::layer::CONTENT;
         let mut moving = match &route {
