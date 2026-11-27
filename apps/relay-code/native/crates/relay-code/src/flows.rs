@@ -1144,7 +1144,7 @@ fn away_from_the_pc_the_pages_say_so_and_no_row_claims_work() {
     assert_eq!(a.agent_words(&ocelot), "working");
     a.set_link_state(rc_link::LinkState::Offline { reason: "No route".into(), retry_at_ms: 0 });
     frames(&mut a, &mut clock, 2);
-    assert_eq!(crate::home::reach(&a).map(|r| r.1).as_deref(), Some("PC out of reach"));
+    assert_eq!(crate::home::reach(&a).map(|r| r.1).as_deref(), Some("Out of reach · trying now"));
     assert_eq!(a.agent_words(&ocelot), "ready", "its terminal's last word is old news");
     a.set_link_state(rc_link::LinkState::Connecting { attempt: 1 });
     a.agents.clear();

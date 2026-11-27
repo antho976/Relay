@@ -1462,6 +1462,13 @@ impl App {
         self.now_ns = now_ns;
         self.wake = None;
         self.take_answers();
+        // Out of reach, the top says when it tries again, to the second: drawn again as it ticks.
+        if let LinkState::Offline { retry_at_ms, .. } = self.link_state {
+            let now_ms = rc_link::link::now_ms();
+            if retry_at_ms > now_ms {
+                self.wake_at(now_ns + ((retry_at_ms - now_ms) % 1000).max(1) * 1_000_000);
+            }
+        }
         // The text size chosen in Settings (D9): every Text made this frame takes it, and the
         // chat measures again when it changed.
         let scale = crate::settings::text_scale(self.text_size(), self.font_scale);

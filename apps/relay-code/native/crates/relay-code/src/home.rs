@@ -41,12 +41,18 @@ pub fn top(app: &mut App, title: &str) {
 pub fn reach(app: &App) -> Option<(crate::draw::Rgba, String)> {
     use rc_link::LinkState;
     let kept = !app.agents.is_empty() || !app.projects.is_empty();
+    let name = app.link.pc_name();
+    let pc = if name.is_empty() { "your PC" } else { name.as_str() };
     match &app.link_state {
         LinkState::Online { .. } | LinkState::Unpaired | LinkState::Revoked { .. } => None,
-        LinkState::Starting { .. } => Some((t::WARN, "Starting Relay on your PC…".into())),
+        LinkState::Starting { .. } => Some((t::WARN, format!("Starting Relay on {pc}…"))),
         LinkState::Connecting { .. } if !kept => Some((t::WARN, "Connecting…".into())),
-        _ if kept => Some((t::INK3, "PC out of reach".into())),
-        _ => Some((t::INK3, "PC out of reach".into())),
+        LinkState::Connecting { .. } => Some((t::INK3, format!("Reconnecting to {pc}…"))),
+        // It dials again by itself: when, to the second (the app draws once a second for it).
+        LinkState::Offline { retry_at_ms, .. } => Some((t::INK3, match retry_at_ms.saturating_sub(rc_link::link::now_ms()).div_ceil(1000) {
+            0 => "Out of reach · trying now".into(),
+            left => format!("Out of reach · retry in {left} s"),
+        })),
     }
 }
 

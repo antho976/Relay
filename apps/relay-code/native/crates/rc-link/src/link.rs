@@ -523,6 +523,8 @@ struct Inner {
     retime: Notify,
     /// The network changed under an open session: it is shut and dialed again at once.
     switched: AtomicBool,
+    /// The paired PC's name, kept here: the profile is a file read.
+    pc: Mutex<String>,
     waker: Waker,
     /// Bumped by [`Link::forget`] and [`Link::paired`]: a loop of an older generation stops.
     generation: Mutex<u64>,
@@ -562,7 +564,9 @@ impl Link {
     pub fn start(store: Arc<dyn Store>, waker: Waker) -> Link {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a tokio runtime");
         let handle = rt.handle().clone();
-        let state = if store.load().is_some() { LinkState::Connecting { attempt: 0 } } else { LinkState::Unpaired };
+        let kept = store.load();
+        let state = if kept.is_some() { LinkState::Connecting { attempt: 0 } } else { LinkState::Unpaired };
+        let pc = Mutex::new(kept.map(|p| p.name).unwrap_or_default());
         let inner = Arc::new(Inner {
             store,
             state: Mutex::new(state),
@@ -572,6 +576,7 @@ impl Link {
             keepalive_ms: std::sync::atomic::AtomicU64::new(KEEPALIVE.as_millis() as u64),
             retime: Notify::new(),
             switched: AtomicBool::new(false),
+            pc,
             waker,
             generation: Mutex::new(0),
             listeners: Mutex::new(Vec::new()),
@@ -590,6 +595,11 @@ impl Link {
 
     pub fn profile(&self) -> Option<Profile> {
         self.inner.store.load()
+    }
+
+    /// The paired PC's name ("" when none is paired), without reading the profile: for every frame.
+    pub fn pc_name(&self) -> String {
+        self.inner.pc.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Dial now instead of waiting out the backoff: the app came to the foreground, the network
@@ -624,6 +634,7 @@ impl Link {
     pub fn paired(&self, p: &Profile) {
         *self.inner.generation.lock().unwrap_or_else(|e| e.into_inner()) += 1;
         self.inner.store.save(p);
+        *self.inner.pc.lock().unwrap_or_else(|e| e.into_inner()) = p.name.clone();
         if let Some(s) = self.inner.session.lock().unwrap_or_else(|e| e.into_inner()).take() {
             s.shut();
         }
@@ -635,6 +646,7 @@ impl Link {
     pub fn forget(&self) {
         *self.inner.generation.lock().unwrap_or_else(|e| e.into_inner()) += 1;
         self.inner.store.forget();
+        self.inner.pc.lock().unwrap_or_else(|e| e.into_inner()).clear();
         if let Some(s) = self.inner.session.lock().unwrap_or_else(|e| e.into_inner()).take() {
             s.shut();
         }
@@ -768,6 +780,7 @@ async fn run(inner: Arc<Inner>) {
         p.version = greeting.version.clone();
         if p != profile {
             inner.store.save(&p);
+            *inner.pc.lock().unwrap_or_else(|e| e.into_inner()) = p.name.clone();
         }
         let route = g.route.clone();
         let session = open(&inner, g.conn);

@@ -2756,7 +2756,7 @@ mod tests {
         assert!(a.busy("bold-puffin"), "the sample's foot says Crunching");
         a.set_link_state(rc_link::LinkState::Offline { reason: "gone".into(), retry_at_ms: 0 });
         assert!(!a.busy("bold-puffin"), "out of reach, the last foot is old news");
-        assert!(crate::home::reach(&a).is_some_and(|(_, w)| w == "PC out of reach"));
+        assert!(crate::home::reach(&a).is_some_and(|(_, w)| w.starts_with("Out of reach")));
         // Away, nothing animates: no wake is asked for the live line.
         let next = a.frame(2_100_000_000);
         assert!(!matches!(next, crate::app::Next::At(t) if t < 2_100_000_000 + 1_000_000_000), "{next:?}");
