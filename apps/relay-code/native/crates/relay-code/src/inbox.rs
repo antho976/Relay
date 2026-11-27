@@ -170,8 +170,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let review = app.st.inbox.review.clone();
     if asking.is_empty() && holds.is_empty() && review.is_empty() && stopped.is_empty() {
         let (title, body) = if app.online() { ("Nothing needs you", "Agents that ask you something and commands held for you show here.") } else { ("Waiting for your PC", "What needs you shows here as soon as the PC answers.") };
-        let (h, _) = kit::notice(&mut crate::cx!(app), 32.0, y + 120.0, WIDTH - 64.0, title, Some(body), None);
-        y += 120.0 + h;
+        let (h, _) = kit::empty(&mut crate::cx!(app), y, title, Some(body), None);
+        y += h;
     }
     let mut open = None;
     if !asking.is_empty() {

@@ -878,19 +878,21 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let mut open = None;
     if list.is_empty() {
         let st = &app.st.designs;
-        let (title, body) = if !app.online() && !st.loaded {
-            ("Waiting for your PC", "Designs show here once the PC answers.".to_string())
+        // One shape for every page's empty and problem states (kit::empty, kit::problem).
+        let (h, retry) = if !app.online() && !st.loaded {
+            kit::empty(&mut crate::cx!(app), y, "Waiting for your PC", Some("Designs show here once the PC answers."), None)
         } else if !st.loaded {
-            match &st.error {
-                Some(e) => ("Designs didn't load", e.clone()),
-                None => ("Reading designs…", String::new()),
+            match st.error.clone() {
+                Some(e) => kit::problem(&mut crate::cx!(app), y, "Designs didn't load", &e, true),
+                None => kit::empty(&mut crate::cx!(app), y, "Reading designs…", None, None),
             }
         } else {
-            ("No designs in this repo", "Designs an agent draws for this repo show here, newest first.".to_string())
+            kit::empty(&mut crate::cx!(app), y, "No designs in this repo", Some("Designs an agent draws for this repo show here, newest first."), None)
         };
-        let body = (!body.is_empty()).then_some(body);
-        let (h, _) = kit::notice(&mut crate::cx!(app), 32.0, y + 120.0, WIDTH - 64.0, title, body.as_deref(), None);
-        y += 120.0 + h;
+        if retry {
+            reload(app);
+        }
+        y += h;
     }
     let (x, w) = (t::PAD, WIDTH - 2.0 * t::PAD);
     for item in &list {

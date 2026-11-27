@@ -158,13 +158,21 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     let mut moving = page.moving;
     match (&text, &error) {
         (_, Some(e)) => {
-            let (h, _) = kit::notice(&mut crate::cx!(app), x, y + 60.0, w, e, None, None);
-            y += 60.0 + h;
+            let can = app.online();
+            let (h, retry) = kit::problem(&mut crate::cx!(app), y, "Its terminal didn't read", e, can);
+            if retry {
+                app.st.terminal.error = None;
+                app.st.terminal.at = 0;
+            }
+            y += h;
         }
         (None, None) => {
-            let words = if app.online() { "Reading its terminal…" } else { "Its terminal shows once your PC answers." };
-            app.canvas.para(words, x, y + 60.0, w, Text::new(ty::UI, t::INK3).center().line(1.45), 3);
-            y += 120.0;
+            let (h, _) = if app.online() {
+                kit::empty(&mut crate::cx!(app), y, "Reading its terminal…", None, None)
+            } else {
+                kit::empty(&mut crate::cx!(app), y, "Waiting for your PC", Some("Its terminal shows once the PC answers."), None)
+            };
+            y += h;
         }
         (Some(text), None) => {
             let style = mono(app);

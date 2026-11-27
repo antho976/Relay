@@ -67,8 +67,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         } else {
             ("No agents in this repo yet", "Start one from the box below.")
         };
-        let (h, _) = kit::notice(&mut crate::cx!(app), 32.0, y + 120.0, WIDTH - 64.0, title, Some(body), None);
-        y += 120.0 + h;
+        let (h, _) = kit::empty(&mut crate::cx!(app), y, title, Some(body), None);
+        y += h;
     }
     let (needs, rest): (Vec<&Agent>, Vec<&Agent>) = agents.iter().partition(|a| a.needs_you());
     for (label, list) in [("NEEDS YOU", needs), ("AGENTS", rest)] {
