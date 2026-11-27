@@ -201,6 +201,31 @@ fn a_tap_on_a_fixed_top_never_reaches_what_scrolled_under_it() {
 }
 
 #[test]
+fn settings_is_an_index_whose_rows_open_their_pages_and_back_returns_to_it() {
+    let (mut app, mut t, dir) = app("settings");
+    nowhere(&mut app);
+    app.push(Route::Connect);
+    step(&mut app, &mut t);
+    step(&mut app, &mut t);
+    // The server's card first, then the groups: This phone (3 rows), Your server (3).
+    let top = app.canvas.inset_top + 56.0 + 8.0;
+    tap(&mut app, &mut t, 200.0, top + 36.0);
+    assert_eq!(app.route(), &Route::Setting(crate::settings::Part::Server), "the server's card");
+    app.back();
+    step(&mut app, &mut t);
+    assert_eq!(app.route(), &Route::Connect, "Back returns to the index");
+    let group2 = top + 72.0 + 26.0 + 26.0 + 3.0 * 56.0 + 4.0 + 26.0 + 26.0;
+    tap(&mut app, &mut t, 200.0, group2 + 58.0 + 28.0);
+    assert_eq!(app.route(), &Route::Setting(crate::settings::Part::Anilist), "the second row of Your server");
+    // The page's own Back key.
+    let inset = app.canvas.inset_top;
+    tap(&mut app, &mut t, 28.0, inset + 28.0);
+    assert_eq!(app.route(), &Route::Connect);
+    assert_eq!(app.nav.len(), 2);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn the_spotlight_cannot_be_dragged_and_a_vertical_drag_on_it_scrolls_the_page() {
     let (mut app, mut t, dir) = app_with("swipe", 12, 2340.0);
     // Picks under it, so the page is long enough to scroll.

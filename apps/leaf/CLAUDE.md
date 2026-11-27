@@ -199,11 +199,13 @@ them breaks both builds. The phone reads `paid` and `thumb` beside the structs, 
   press for Move to top / Remove, ⋯ for Home, Rename, Delete. The sheets are drawn over any page
   (`lists::draw_sheet`, as the update sheet). A merge carries a series' place on lists over; a
   series removed leaves them. The five tab names shrink a step only when they don't fit.
-- Settings is one page (the owner, 2026-11-26), in this order: Reading, Downloads (this phone's),
-  Notifications, Server (its address in a row with Change, which folds out the address and token;
-  the pass, the line and the room), Sources, AniList (setup steps folded behind Set up), Backups
-  (the nightly one, the PC copy, export, your books), the build last. The full Connect form is the
-  first run's alone (`connect.rs`).
+- Settings is an index like a phone's settings page (the owner, 2026-11-26, pointing at Claude's
+  app; it replaced one long page the same day): the server on a card at the top (address, how it
+  answered), then rows in groups, each opening its own page (`Route::Setting(Part)`): This phone
+  (Reading, Downloads, Notifications), Your server (Sources with "9 working"/"1 failing", AniList
+  "Connected"/"Off", Backups with when the last was made); the build last. The Server page holds
+  the address with Change (folding out the address and token) and the pass, line and room. The
+  full Connect form is the first run's alone (`connect.rs`).
 - Notices: "finished" (a belled series the source now calls completed) and "blocked" (no source
   answers) post on their own; new chapters of one series carry Read now and Download keys
   (`LeafChaptersJob`, `App::launched`). No source's name in either.

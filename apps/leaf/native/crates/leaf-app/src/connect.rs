@@ -1,6 +1,6 @@
 //! Connect: the server's address and its token, checked against `/v1/status`. The first screen of
-//! a first run; after that this route is Settings ([`crate::settings`]), one page where the
-//! address and token fold out of the Server section's Change.
+//! a first run; after that this route is Settings' index ([`crate::settings`]), and
+//! `Route::Setting` its pages; the address and token fold out of the Server page's Change.
 
 use leaf_proto::Status;
 
@@ -10,6 +10,7 @@ use crate::draw::{Text, WIDTH};
 use crate::kit::{self, Kb};
 use crate::logic;
 use crate::net::{Job, Server};
+use crate::settings::Part;
 use crate::theme::{self as t, PAD, ty};
 
 #[derive(Default)]
@@ -55,18 +56,40 @@ impl State {
     }
 }
 
-pub fn draw(app: &mut App, dt: f32) -> bool {
-    let first_run = app.nav.len() == 1;
-    // Settings: what the server says of itself (AniList) and of its sources, asked again each time.
+pub fn draw(app: &mut App, dt: f32, part: Option<Part>) -> bool {
+    let first_run = part.is_none() && app.nav.len() == 1;
+    // Settings: what the server says of itself (AniList) and of its sources, asked again each time
+    // the index or a page that shows it opens.
     if app.fresh
         && !first_run
         && let Some(s) = app.server.clone()
     {
-        app.status.loading = true;
-        app.jobs.send(Some(&s), Job::Status(s.clone()));
-        app.ask(Job::Health);
-        app.ask(Job::HiddenPages);
-        app.ask(Job::ServerInfo);
+        let (status, health, info) = match part {
+            None => (true, true, true),
+            Some(Part::Server) => (true, false, true),
+            Some(Part::Sources) => (false, true, false),
+            Some(Part::Anilist) => (true, false, false),
+            Some(Part::Backups) => (false, false, true),
+            Some(_) => (false, false, false),
+        };
+        if status {
+            app.status.loading = true;
+            app.jobs.send(Some(&s), Job::Status(s.clone()));
+        }
+        if health {
+            app.ask(Job::Health);
+        }
+        if info {
+            app.ask(Job::ServerInfo);
+        }
+        if part == Some(Part::Reading) {
+            app.ask(Job::HiddenPages);
+        }
+        // A page opens with its folds closed (a shot sets them on purpose).
+        if part.is_some() && !app.shot {
+            app.st.connect.editing = false;
+            app.st.connect.anilist_open = false;
+        }
     }
     let pg = app.page_begin(dt, 56.0);
     if let Some(s) = app.st.connect.answered_ok.take() {
@@ -87,13 +110,14 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let was_editing = app.st.connect.editing;
     let mut connect = false;
     let mut open_library = false;
+    let mut open_part = None;
     let st = &mut app.st.connect;
     let mut cx = cx!(app);
     let x = PAD;
     let w = WIDTH - PAD * 2.0;
     let mut y = pg.top + 8.0;
     let mut acts = Vec::new();
-    if first_run || app.server.is_none() {
+    if part.is_none() && (first_run || app.server.is_none()) {
         cx.c.text("Connect to your server", x, y, Text::new(ty::HEADING, t::INK).brand());
         y += 34.0;
         y += cx.c.para("Leaf reads the comics your server fetches. Type the address it listens on, and its token if it has one.", x, y, w, Text::new(ty::UI, t::INK2).line(1.45), 4) + 24.0;
@@ -147,7 +171,12 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             }
             None => {}
         }
-    } else {
+    } else if part.is_none() {
+        let ix = crate::settings::Index { label: &label, status: &app.status, health: &app.health, server: &app.server_info, now_ms: crate::shelf::now_ms() };
+        let (end, open) = crate::settings::index(&mut cx, ix, x, y, w, app.now_ns);
+        y = end + 32.0;
+        open_part = open;
+    } else if let Some(part) = part {
         let failed = match &st.result {
             Some(Err(why)) if !st.checking => Some(why.as_str()),
             _ => None,
@@ -184,7 +213,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             },
             now_ms: crate::shelf::now_ms(),
         };
-        let (end, a) = crate::settings::draw(&mut cx, parts, x, y, w, app.now_ns);
+        let (end, a) = crate::settings::draw(&mut cx, parts, part, x, y, w, app.now_ns);
         y = end + 32.0;
         acts = a;
     }
@@ -199,7 +228,7 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         if first_run {
             cx.c.text("Leaf", PAD, top + 12.0, Text::new(24.0, t::INK).brand());
         } else {
-            let (b, _, _) = kit::top_bar(&mut cx, top + 6.0, "Settings", &[]);
+            let (b, _, _) = kit::top_bar(&mut cx, top + 6.0, part.map_or("Settings", Part::title), &[]);
             back = b;
         }
         cx.c.dy = dy;
@@ -272,6 +301,9 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     }
     if open_library {
         app.reset_to(Route::Home);
+    }
+    if let Some(p) = open_part {
+        app.push(Route::Setting(p));
     }
     if back {
         app.pop();

@@ -167,6 +167,8 @@ pub enum Route {
     List(i64),
     /// Series to put on a list, picked from your library.
     ListAdd(i64),
+    /// A page of Settings, opened from its row on the index ([`crate::settings::Part`]).
+    Setting(crate::settings::Part),
 }
 
 /// A title not added yet, shown on its own page under its preview id (`-manga_id` of its first
@@ -2610,7 +2612,8 @@ impl App {
             None
         };
         let mut moving = match route {
-            Route::Connect => crate::connect::draw(self, dt),
+            Route::Connect => crate::connect::draw(self, dt, None),
+            Route::Setting(part) => crate::connect::draw(self, dt, Some(part)),
             Route::Home => crate::home::draw(self, dt),
             Route::Search => crate::search::draw(self, dt),
             Route::Space => crate::space::draw(self, dt),

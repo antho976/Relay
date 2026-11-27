@@ -915,6 +915,30 @@ fn own_glyph(name: &str) -> Option<&'static glyphs::Glyph> {
                 Shape { d: "M14.3 10.9A3 3 0 0 0 11.6 6.6h-1.15A4.6 4.6 0 0 0 6.7 3.45", fill: false, stroke: true, rotate: 0.0 },
             ],
         }),
+        // Settings' rows: an open book (Reading), the server's two units, a backup box.
+        "book-open" => Some(&Glyph {
+            scale: 1.0,
+            shapes: &[
+                Shape { d: "M8 4.25C6.75 3.25 4.75 2.75 1.75 2.75v9.75c3 0 5 .5 6.25 1.5 1.25-1 3.25-1.5 6.25-1.5V2.75c-3 0-5 .5-6.25 1.5z", fill: false, stroke: true, rotate: 0.0 },
+                Shape { d: "M8 4.25V14", fill: false, stroke: true, rotate: 0.0 },
+            ],
+        }),
+        "server" => Some(&Glyph {
+            scale: 1.0,
+            shapes: &[
+                Shape { d: "M3.25 2.25h9.5a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1z", fill: false, stroke: true, rotate: 0.0 },
+                Shape { d: "M3.25 8.75h9.5a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1z", fill: false, stroke: true, rotate: 0.0 },
+                Shape { d: "M5 4.75h.5M5 11.25h.5", fill: false, stroke: true, rotate: 0.0 },
+            ],
+        }),
+        "archive" => Some(&Glyph {
+            scale: 1.0,
+            shapes: &[
+                Shape { d: "M1.75 2.75h12.5v3H1.75z", fill: false, stroke: true, rotate: 0.0 },
+                Shape { d: "M2.75 5.75v7.5h10.5v-7.5", fill: false, stroke: true, rotate: 0.0 },
+                Shape { d: "M6.25 8.5h3.5", fill: false, stroke: true, rotate: 0.0 },
+            ],
+        }),
         _ => None,
     }
 }

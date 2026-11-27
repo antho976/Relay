@@ -19,7 +19,8 @@
 //!   down the strip; `--overlay 1`; `--auto 1` auto-scroll on; `--dim 0..0.85`; `--fake-pages 1`
 //!   draws made-up pages instead of asking the server for any; `--sheet hide` the long press's
 //!   sheet on the page at the top), `settings` (the
-//!   Settings page, `--scroll UNITS`, `--backup 1` to export the latest backup, `--fold server,anilist` the address and AniList steps
+//!   Settings page, `--scroll UNITS`, `--backup 1` to export the latest backup, `--part reading|downloads|notifications|server|sources|anilist|backups` one of its pages,
+//!   `--fold server,anilist` the address and AniList steps
 //!   folded out).
 //!   `--fake-recs 1` makes Home's picks (and a series' Readers also like) from the library, for the
 //!   days the server has none (covers are the series' own, fetched once into `--data`);
@@ -557,6 +558,10 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
             app.set_server(server);
             app.reset_to(Route::Home);
             app.push(Route::Connect);
+            // `--part server`: one of its pages instead of the index.
+            if let Some(part) = arg(args, "--part").and_then(|p| crate::settings::Part::named(&p)) {
+                app.push(Route::Setting(part));
+            }
             app.st.connect.load(app.server.as_ref());
             // `--fold server,anilist`: the server's fields and AniList's steps folded out.
             let fold = arg(args, "--fold").unwrap_or_default();

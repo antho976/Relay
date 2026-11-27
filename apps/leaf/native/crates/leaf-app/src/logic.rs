@@ -124,10 +124,18 @@ pub fn status_word(status: &str) -> Option<String> {
 }
 
 /// A chapter's own title, without the number its row already shows: "Overgeared" from
-/// "Chapter 1 - Overgeared"; none from "Ch.1" or "Chapter 1".
+/// "Chapter 1 - Overgeared"; none from "Ch.1" or "Chapter 1". Webtoon's "(ch. 2)" after its own
+/// name goes too: "Dungeons and Dragons" from "Ep. 2 - Dungeons and Dragons (ch. 2)", none from
+/// "Episode 1 (ch. 1)".
 pub fn chapter_title(name: &str, number: f64) -> Option<String> {
     let n = num(number);
     let mut t = name.trim();
+    if let Some(open) = t.rfind("(ch.")
+        && t.ends_with(')')
+        && t[open + 4..t.len() - 1].trim().parse::<f64>().is_ok()
+    {
+        t = t[..open].trim_end();
+    }
     for lead in ["Chapter", "Chap.", "Ch.", "Ch", "Episode", "Ep."] {
         if let Some(rest) = t.strip_prefix(lead) {
             let rest = rest.trim_start();
@@ -1343,6 +1351,8 @@ mod tests {
         assert_eq!(chapter_title("Chapter 0 - Prologue", 0.0).as_deref(), Some("Prologue"));
         assert_eq!(chapter_title("Vol.2 Ch.12", 12.0).as_deref(), Some("Vol.2 Ch.12"));
         assert_eq!(chapter_title("Chapter 12.5: Side story", 12.5).as_deref(), Some("Side story"));
+        assert_eq!(chapter_title("Episode 1 (ch. 1)", 1.0), None);
+        assert_eq!(chapter_title("Ep. 2 - Dungeons and Dragons (ch. 2)", 2.0).as_deref(), Some("Dungeons and Dragons"));
     }
 
     #[test]
