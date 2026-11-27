@@ -1797,12 +1797,20 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
         // was kept; with nothing kept the page itself says it, above).
         let st = Text::new(ty::SMALL, t::INK2);
         let w = WIDTH - 2.0 * t::PAD;
-        let h = app.canvas.para_h(&why, w - 40.0, st, 3) + 34.0;
+        let h = app.canvas.para_h(&why, w - 40.0, st, 3) + 34.0 + 40.0;
         let (lx, ly) = (t::PAD, page.top + 8.0);
+        // Over the page: a tap on it reaches nothing under it.
+        kit::above(&mut crate::cx!(app), crate::ui::layer::CHROME, [lx, ly, w, h]);
         app.canvas.rect(lx, ly, w, h, 12.0, t::S1);
         app.canvas.circle(lx + 16.0, ly + 17.0, 4.0, t::DANGER);
         app.canvas.text("The PC could not read this conversation", lx + 28.0, ly + 9.0, Text::new(ty::SMALL, t::INK).medium());
-        app.canvas.para(&why, lx + 28.0, ly + 27.0, w - 40.0, st, 3);
+        let ph = app.canvas.para(&why, lx + 28.0, ly + 27.0, w - 40.0, st, 3);
+        // Try again: read it now (the same as the empty page's).
+        let mut cx = crate::cx!(app);
+        if kit::plain(&mut cx, lx + 20.0, ly + 27.0 + ph + 4.0, 110.0, 32.0, "Try again", None) {
+            app.chat_errors.remove(name);
+            app.reread_at = 0;
+        }
     } else if loading {
         // Earlier messages on their way: a quiet line at the top of the page.
         let st = Text::new(ty::SMALL, t::INK3).medium();
