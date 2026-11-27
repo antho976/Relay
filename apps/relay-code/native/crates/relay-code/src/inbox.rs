@@ -87,6 +87,13 @@ pub struct State {
     pub reason: String,
 }
 
+impl State {
+    /// Back: the deny sheet closes. False when it was not open.
+    pub fn close_over(&mut self) -> bool {
+        self.denying.take().is_some()
+    }
+}
+
 /// The holds that show under `repo`: its own, and those that belong to no repo.
 pub fn for_repo(all: &[Hold], repo: Option<i64>) -> Vec<Hold> {
     all.iter().filter(|h| h.project_id.is_none() || repo.is_none() || h.project_id == repo).cloned().collect()
@@ -144,7 +151,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         reload(app);
     }
     // In review: the repo's own, read here, not whatever the board last read.
-    if (app.fresh || moved || app.take_changed("task"))
+    let changed = app.take_changed("task");
+    if (app.fresh || moved || changed)
         && app.online()
         && let Some(repo) = app.repo
         && app.st.inbox.review_call.is_none()
