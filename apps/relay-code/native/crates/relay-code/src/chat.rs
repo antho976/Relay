@@ -32,6 +32,13 @@ pub struct State {
     open: HashSet<usize>,
     /// Diffs shown whole.
     open_diffs: HashSet<usize>,
+    /// Calls whose fold (a command's output, a plan) was flipped from how it starts, by their
+    /// item's place in the list and their own in it.
+    toggled: HashSet<(usize, usize)>,
+    /// The newest to-do list in the conversation, pinned above the message box while it works.
+    todos: Option<Vec<(data::Todo, String)>>,
+    /// That pinned list opened whole.
+    todos_open: bool,
     pub model_sheet: bool,
     pub typed: String,
     /// Where the message box starts on screen, for the model picker above it.
@@ -141,46 +148,37 @@ fn item(app: &mut App, it: &Item, index: usize, y: f32, draw: bool) -> f32 {
         }
         Item::Did { line, failed, calls } => {
             let open = app.st.chat.open.contains(&index);
-            let others: Vec<&data::ToolCall> = calls.iter().filter(|c| !c.is_edit()).collect();
-            let dst = Text::new(ty::SMALL, t::INK2).face(Weight::Mono).line(1.45);
+            // Plans and edits show under the line by themselves; the rest open with it.
+            let folded = calls.iter().any(|c| !c.is_edit() && !c.is_plan());
             let mut h = 32.0;
             if draw {
                 let mut cx = crate::cx!(app);
-                if cx.pressed(0.0, y, WIDTH, 32.0) {
+                if folded && cx.pressed(0.0, y, WIDTH, 32.0) {
                     cx.c.rect(8.0, y, WIDTH - 16.0, 32.0, 8.0, t::WASH);
                 }
                 let (g, ink) = if *failed { ("close", t::DANGER) } else { ("check", t::INK3) };
                 cx.c.icon(g, t::PAD + 7.0, y + 16.0, 13.0, ink);
                 cx.c.text_fit(line, t::PAD + 24.0, y + 7.0, c_w - 50.0, Text::new(ty::CAPTION, t::INK2));
-                if !others.is_empty() {
+                if folded {
                     cx.c.icon(if open { "chevron-up" } else { "chevron-down" }, WIDTH - t::PAD - 8.0, y + 16.0, 12.0, t::INK3);
                     if cx.tap(0.0, y, WIDTH, 32.0) {
-                        if open {
-                            app.st.chat.open.remove(&index);
-                            app.st.chat.heights = Rc::default();
-                        } else {
+                        if !app.st.chat.open.remove(&index) {
                             app.st.chat.open.insert(index);
-                            app.st.chat.heights = Rc::default();
                         }
+                        app.st.chat.heights = Rc::default();
                     }
                 }
             }
-            // The commands and reads, when opened.
-            if open {
-                for c in &others {
-                    let s = format!("{} {}", c.name, c.summary);
-                    let ph = app.canvas.para_h(&s, c_w - 28.0, dst, 3);
-                    if draw {
-                        app.canvas.para(&s, t::PAD + 24.0, y + h, c_w - 28.0, dst, 3);
-                    }
-                    h += ph + 2.0;
+            // In the order it made them: every edit's change (the owner: "I don't see the code
+            // change"), a plan, and, opened or failed, what each call ran and what it answered.
+            for (k, c) in calls.iter().enumerate() {
+                if c.is_edit() {
+                    h += diff(app, c, index * 64 + k, y + h, draw);
+                } else if c.is_plan() {
+                    h += plan(app, c, (index, k), y + h, draw);
+                } else if open || c.failed {
+                    h += call(app, c, (index, k), y + h, draw);
                 }
-                h += 4.0;
-            }
-            // Every edit's change, under the line: what the code became (the owner: "I don't see
-            // the code change").
-            for (k, c) in calls.iter().enumerate().filter(|(_, c)| c.is_edit()) {
-                h += diff(app, c, index * 64 + k, y + h, draw);
             }
             h + 2.0
         }
@@ -421,6 +419,198 @@ fn live_status(app: &mut App, name: &str, status: Option<&crate::screen::Status>
 
 /// An edit's change: the file, then its `-` and `+` lines on red and green, the first dozen
 /// shown and the rest a tap away. Returns its height.
+/// Flip a call's fold from how it starts.
+fn toggle(app: &mut App, key: (usize, usize)) {
+    if !app.st.chat.toggled.remove(&key) {
+        app.st.chat.toggled.insert(key);
+    }
+    app.st.chat.heights = Rc::default();
+}
+
+/// Lines of output shown before "show all": the tail, where a command says how it ended.
+const TAIL: usize = 12;
+
+/// One call, opened: what it ran or asked in full, then what it answered. Returns the height.
+fn call(app: &mut App, c: &data::ToolCall, key: (usize, usize), y: f32, draw: bool) -> f32 {
+    let (x, w) = (t::PAD + 24.0, WIDTH - 2.0 * t::PAD - 24.0);
+    let mono = Text::new(ty::SMALL, t::INK2).face(Weight::Mono).line(1.45);
+    let caption = Text::new(ty::CAPTION, t::INK2).line(1.45);
+    let mut h = 0.0;
+    let put = |app: &mut App, s: &str, st: Text, lines: usize, h: &mut f32| {
+        *h += if draw { app.canvas.para(s, x, y + *h, w, st, lines) } else { app.canvas.para_h(s, w, st, lines) };
+    };
+    let detail = c.detail.as_deref().unwrap_or_default();
+    if c.is_shell() {
+        // The whole command (the summary is its first line), under what it said it is for.
+        let whole = if detail.trim().is_empty() { c.summary.as_str() } else { detail };
+        let (about, cmd) = match whole.strip_prefix("# ").and_then(|r| r.split_once('\n')) {
+            Some((a, cmd)) => (Some(a), cmd),
+            None => (None, whole),
+        };
+        if let Some(a) = about {
+            put(app, a, caption.color(t::INK3), 2, &mut h);
+            h += 2.0;
+        }
+        put(app, &format!("$ {cmd}"), mono.color(t::INK), 40, &mut h);
+    } else if c.is_todos() {
+        h += checklist(app, &data::todos(detail), x, y + h, w, draw);
+    } else {
+        put(app, &format!("{} {}", c.name, c.summary), mono, 3, &mut h);
+        // Questions and their choices, a sub-agent's brief: the words it sent, in prose.
+        if !detail.trim().is_empty() {
+            h += 2.0;
+            let lines = if c.name == "AskUserQuestion" { 40 } else { 6 };
+            put(app, detail, caption, lines, &mut h);
+        }
+    }
+    if let Some(out) = c.output.as_deref().filter(|o| !o.trim().is_empty()) {
+        h += 6.0 + output(app, c, out, key, x, y + h + 6.0, w, draw);
+    }
+    h + 10.0
+}
+
+/// What a call answered, on code ground. A command's or a failure's tail shows ([`TAIL`] lines);
+/// other answers (a file read, a search) fold to one line. A tap shows all or folds.
+#[allow(clippy::too_many_arguments)]
+fn output(app: &mut App, c: &data::ToolCall, out: &str, key: (usize, usize), x: f32, y: f32, w: f32, draw: bool) -> f32 {
+    let ink = if c.failed { t::DANGER } else { t::INK2 };
+    let st = Text::new(ty::SMALL, ink).face(Weight::Mono).line(1.45);
+    let mut rows: Vec<String> = Vec::new();
+    for l in out.trim_end().lines() {
+        rows.extend(app.canvas.wrap(l, w - 24.0, st, 4));
+        if rows.len() >= 400 {
+            break;
+        }
+    }
+    let flipped = app.st.chat.toggled.contains(&key);
+    // A failure shows its tail even when the call is folded, where its error is.
+    let tail = if c.failed || c.is_shell() { TAIL } else { 0 };
+    let shown = if flipped { rows.len() } else { rows.len().min(tail) };
+    let hidden = rows.len() - shown;
+    let note = if hidden > 0 {
+        Some(if shown == 0 { format!("Output · {} lines", rows.len()) } else { format!("{hidden} earlier lines") })
+    } else if flipped && rows.len() > tail {
+        Some("Show less".to_string())
+    } else {
+        None
+    };
+    let note_h = if note.is_some() { 22.0 } else { 0.0 };
+    let h = 8.0 + note_h + shown as f32 * st.lh() + if shown > 0 { 8.0 } else { 0.0 };
+    if draw {
+        app.canvas.rect(x, y, w, h, 8.0, t::CODE);
+        let mut ly = y + 8.0;
+        if let Some(n) = &note {
+            app.canvas.text(n, x + 12.0, ly, Text::new(ty::SMALL, t::INK3).medium());
+            ly += note_h;
+        }
+        for r in &rows[rows.len() - shown..] {
+            app.canvas.text(r, x + 12.0, ly, st);
+            ly += st.lh();
+        }
+        if note.is_some() {
+            let mut cx = crate::cx!(app);
+            if cx.tap(x, y, w, h) {
+                toggle(app, key);
+            }
+        }
+    }
+    h
+}
+
+/// A to-do list: done ones ticked and dimmed, the one under way marked in the accent.
+fn checklist(app: &mut App, list: &[(data::Todo, String)], x: f32, y: f32, w: f32, draw: bool) -> f32 {
+    let mut h = 0.0;
+    for (state, words) in list {
+        let (st, mark) = match state {
+            data::Todo::Done => (Text::new(ty::CAPTION, t::INK3).line(1.45), 0),
+            data::Todo::Doing => (Text::new(ty::CAPTION, t::INK).medium().line(1.45), 1),
+            data::Todo::Open => (Text::new(ty::CAPTION, t::INK2).line(1.45), 2),
+        };
+        let lh = if draw { app.canvas.para(words, x + 22.0, y + h + 2.0, w - 22.0, st, 3) } else { app.canvas.para_h(words, w - 22.0, st, 3) };
+        if draw {
+            let (cx, cy) = (x + 7.0, y + h + 2.0 + st.lh() * 0.5);
+            match mark {
+                0 => app.canvas.icon("check", cx, cy, 12.0, t::OK),
+                1 => app.canvas.circle(cx, cy, 4.0, t::ACCENT),
+                _ => app.canvas.outline(cx - 5.0, cy - 5.0, 10.0, 10.0, 5.0, 1.25, t::INK3),
+            }
+        }
+        h += lh + 4.0;
+    }
+    h
+}
+
+/// A plan put to you, as Markdown on its own card: open while it waits for your answer (it has no
+/// answer until you give one), folded to its title once answered. A tap on its head flips that.
+fn plan(app: &mut App, c: &data::ToolCall, key: (usize, usize), y: f32, draw: bool) -> f32 {
+    let awaiting = c.output.is_none();
+    let open = awaiting != app.st.chat.toggled.contains(&key);
+    let (x, w) = (t::PAD, WIDTH - 2.0 * t::PAD);
+    let md = c.detail.as_deref().unwrap_or_default();
+    let prose = Text::new(ty::BODY, t::INK).line(1.5);
+    let head = 42.0;
+    let body = if open { markdown(app, md, x + 16.0, 0.0, w - 32.0, prose, false) + 4.0 } else { 0.0 };
+    let h = head + body;
+    if draw {
+        let top = y + 4.0;
+        app.canvas.rect(x, top, w, h, 12.0, t::S1);
+        if awaiting {
+            app.canvas.outline(x, top, w, h, 12.0, 1.0, t::ACCENT.a(0.55));
+        }
+        app.canvas.icon("list", x + 22.0, top + 21.0, 14.0, t::INK2);
+        let tw = app.canvas.text("Plan", x + 38.0, top + 12.0, Text::new(ty::UI, t::INK).semi());
+        if awaiting {
+            app.canvas.text("· waiting for your answer", x + 44.0 + tw, top + 12.0, Text::new(ty::UI, t::ACCENT));
+        }
+        let mut cx = crate::cx!(app);
+        if cx.pressed(x, top, w, head) {
+            cx.c.rect(x, top, w, head, 12.0, t::WASH);
+        }
+        cx.c.icon(if open { "chevron-up" } else { "chevron-down" }, x + w - 18.0, top + 21.0, 12.0, t::INK3);
+        if cx.tap(x, top, w, head) {
+            toggle(app, key);
+        }
+        if open {
+            markdown(app, md, x + 16.0, top + head, w - 32.0, prose, true);
+        }
+    }
+    h + 12.0
+}
+
+/// The pinned to-do list's height: one line folded, the whole list open.
+fn pinned_h(app: &mut App) -> f32 {
+    let Some(list) = app.st.chat.todos.clone() else { return 0.0 };
+    if app.st.chat.todos_open {
+        44.0 + checklist(app, &list, 0.0, 0.0, WIDTH - 2.0 * t::PAD - 28.0, false) + 6.0
+    } else {
+        44.0
+    }
+}
+
+/// The newest to-do list, pinned above the message box while the agent works, as Claude's app
+/// does: folded to the step under way and the count; a tap opens the whole list.
+fn pinned(app: &mut App, y: f32, h: f32) {
+    let Some(list) = app.st.chat.todos.clone() else { return };
+    let (x, w) = (12.0, WIDTH - 24.0);
+    let done = list.iter().filter(|(s, _)| *s == data::Todo::Done).count();
+    let now = list.iter().find(|(s, _)| *s == data::Todo::Doing).or_else(|| list.iter().find(|(s, _)| *s == data::Todo::Open)).map_or("All done", |(_, w)| w.as_str());
+    app.canvas.rect(x, y, w, h - 6.0, 14.0, t::S1);
+    let count = format!("{done} of {}", list.len());
+    let ct = Text::new(ty::SMALL, t::INK3).medium();
+    let cw = app.canvas.measure(&count, ct);
+    app.canvas.circle(x + 18.0, y + 19.0, 4.0, t::ACCENT);
+    app.canvas.text_fit(now, x + 32.0, y + 10.0, w - 32.0 - cw - 44.0, Text::new(ty::CAPTION, t::INK).medium());
+    app.canvas.text(&count, x + w - 36.0 - cw, y + 12.0, ct);
+    let mut cx = crate::cx!(app);
+    cx.c.icon(if app.st.chat.todos_open { "chevron-down" } else { "chevron-up" }, x + w - 18.0, y + 19.0, 12.0, t::INK3);
+    if cx.tap(x, y, w, 38.0) {
+        app.st.chat.todos_open = !app.st.chat.todos_open;
+    }
+    if app.st.chat.todos_open {
+        checklist(app, &list, x + 16.0, y + 40.0, w - 28.0, true);
+    }
+}
+
 fn diff(app: &mut App, c: &data::ToolCall, key: usize, y: f32, draw: bool) -> f32 {
     const SHOWN: usize = 14;
     let detail = c.detail.clone().unwrap_or_default();
@@ -547,7 +737,10 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
         None if asking && app.screens.contains_key(name) => 30.0,
         None => 0.0,
     };
-    let foot_h = if stopped.is_some() { crate::agents::STOPPED_H } else { box_h + 20.0 + ask_h };
+    // The newest to-do list, pinned while it works with nothing to ask (needs the list read: the
+    // log is read into items below, so this frame uses the last frame's list).
+    let pin_h = if working && question.is_none() && stopped.is_none() { pinned_h(app) } else { 0.0 };
+    let foot_h = if stopped.is_some() { crate::agents::STOPPED_H } else { box_h + 20.0 + ask_h + pin_h };
 
     let page = app.page_begin(dt, TOP_H, foot_h);
     // The log is read into items and measured only when it or a fold changed: a long
@@ -559,6 +752,10 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     if app.st.chat.shown_from != from {
         let msgs = app.convos.get(name).map(|c| c.msgs.as_slice()).unwrap_or_default();
         let mut items = data::items(msgs);
+        app.st.chat.todos = items.iter().rev().find_map(|it| match it {
+            Item::Did { calls, .. } => calls.iter().rev().find(|c| c.is_todos()).map(|c| data::todos(c.detail.as_deref().unwrap_or_default())),
+            _ => None,
+        });
         let base = items.len().saturating_sub(SHOWN);
         items.drain(..base);
         app.st.chat.last_said_ms = msgs.iter().rev().find(|m| m.role == "user").and_then(|m| data::parse_ms(&m.created_at));
@@ -724,6 +921,12 @@ fn composer(
     kit::above(&mut crate::cx!(app), crate::ui::layer::CHROME, band);
     app.canvas.rect(-1000.0, top, WIDTH + 2000.0, foot_h + app.canvas.inset_bottom + 2.0, 0.0, t::BG);
     let mut y = top + 6.0;
+    // The pinned to-do list, when the foot was made taller for it.
+    let pin_h = foot_h - (box_h + 20.0 + ask_h);
+    if pin_h > 1.0 {
+        pinned(app, y, pin_h);
+        y += pin_h;
+    }
 
     // A question read off its terminal: each answer a key, the first the accent (design 44, C4).
     if let Some(q) = question {

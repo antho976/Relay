@@ -810,6 +810,19 @@ impl Canvas {
                     lines.push(std::mem::take(&mut line));
                     line = word.to_string();
                 }
+                // A word wider than the box (a path, a test's name, a link) breaks by characters
+                // rather than running out of it.
+                while self.measure(&line, style) > max_w && line.chars().count() > 1 {
+                    let mut end = line.char_indices().nth(1).map_or(line.len(), |(i, _)| i);
+                    for (i, c) in line.char_indices().skip(1) {
+                        if self.measure(&line[..i + c.len_utf8()], style) > max_w {
+                            break;
+                        }
+                        end = i + c.len_utf8();
+                    }
+                    let rest = line.split_off(end);
+                    lines.push(std::mem::replace(&mut line, rest));
+                }
             }
             lines.push(line);
         }
@@ -1025,6 +1038,17 @@ pub fn ease_out(t: f32) -> f32 {
 mod tests {
     use super::{Canvas, ImageAtlas, Rgba, Text, GLYPHS_START_OVER};
     use crate::gfx::ATLAS_SIZE;
+
+    #[test]
+    fn a_word_wider_than_the_box_breaks_by_characters() {
+        let mut c = Canvas::new(crate::app::FONTS);
+        let st = Text::new(12.0, Rgba::WHITE).face(super::Weight::Mono);
+        let word = "data::tests::a_failed_send_is_tapped_to_go_again_from_where_it_stopped";
+        let lines = c.wrap(&format!("test {word} ... FAILED"), 200.0, st, 50);
+        assert!(lines.len() > 2, "{lines:?}");
+        assert!(lines.iter().all(|l| c.measure(l, st) <= 200.0), "every line fits: {lines:?}");
+        assert_eq!(lines.concat().replace(' ', ""), format!("test{word}...FAILED"), "no character lost");
+    }
 
     #[test]
     fn a_filling_glyph_atlas_starts_over_between_frames() {
