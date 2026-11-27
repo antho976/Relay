@@ -125,6 +125,8 @@ pub enum Ask {
     Projects,
     Agents,
     Transcript(String),
+    /// A page older than what the phone holds of a conversation (scrolled to its top).
+    Older(String),
     /// Words typed into an agent's terminal (a message's words, from its send queue).
     Input(String),
     /// Enter after them, once the PC said it typed them.
@@ -572,6 +574,21 @@ impl App {
         self.ask(Ask::Transcript(name.to_string()), "session.transcript", p);
     }
 
+    /// Read the page older than what the phone holds of `name`'s conversation, when there is one.
+    /// True while it is being read (or was just asked for).
+    pub fn read_older(&mut self, name: &str) -> bool {
+        let ask = Ask::Older(name.to_string());
+        if self.asking(&ask) {
+            return true;
+        }
+        let Some(before) = self.convos.get(name).filter(|c| c.older).and_then(|c| c.before) else { return false };
+        if !self.online() {
+            return false;
+        }
+        self.ask(ask, "session.transcript", json!({"session": name, "before": before, "limit": PAGE}));
+        true
+    }
+
     /// Send a message to an agent: it joins the agent's send queue ([`data::Sending`]), which types
     /// the words and then Enter into its terminal, as the old app and the PC's own composer do,
     /// now or once the link is back. Several lines go as one paste.
@@ -792,6 +809,12 @@ impl App {
                     }
                 }
                 (Ask::Transcript(name), Ok(v)) => self.took_transcript(&name, &v),
+                (Ask::Older(name), Ok(v)) => {
+                    if let Some(c) = self.convos.get_mut(&name) {
+                        c.take_older(&v);
+                        write_owned(chat_file(&self.data, &name), c.clone());
+                    }
+                }
                 (Ask::Input(name) | Ask::Enter(name), r) => {
                     let now = rc_link::link::now_ms();
                     let answer = match &r {
