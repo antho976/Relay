@@ -99,11 +99,14 @@ pub fn agent_row(app: &mut App, a: &Agent, x: f32, y: f32, w: f32, now_ms: u64) 
     let when = a.last_output_at.as_deref().or(Some(a.updated_at.as_str()).filter(|s| !s.is_empty())).map(|s| crate::data::ago(s, now_ms)).unwrap_or_default();
     let wt = Text::new(ty::SMALL, t::INK3);
     let ww = if when.is_empty() { 0.0 } else { cx.c.measure(&when, wt) + 8.0 };
-    cx.c.text_fit(a.title(), tx, y + 11.0, x + w - tx - t::PAD - ww, Text::new(ty::BODY, t::INK).semi());
+    // The two lines centred on the row by their own heights, so a larger text size keeps them apart.
+    let (tt, st) = (Text::new(ty::BODY, t::INK).semi(), Text::new(ty::CAPTION, if a.needs_you() { t::WARN } else { t::INK3 }));
+    let ty0 = y + (h - (tt.lh() + 1.5 + st.lh())) / 2.0;
+    cx.c.text_fit(a.title(), tx, ty0, x + w - tx - t::PAD - ww, tt);
     let sub = format!("{} · {words}", a.name);
-    cx.c.text_fit(&sub, tx, y + 32.0, x + w - tx - t::PAD, Text::new(ty::CAPTION, if a.needs_you() { t::WARN } else { t::INK3 }));
+    cx.c.text_fit(&sub, tx, ty0 + tt.lh() + 1.5, x + w - tx - t::PAD, st);
     if !when.is_empty() {
-        cx.c.text(&when, x + w - t::PAD, y + 13.0, wt.right());
+        cx.c.text(&when, x + w - t::PAD, ty0 + (tt.lh() - wt.lh()) / 2.0, wt.right());
     }
     cx.tap(x, y, w, h)
 }

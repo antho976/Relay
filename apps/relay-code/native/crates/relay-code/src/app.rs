@@ -43,6 +43,11 @@ pub trait Host: Send + Sync {
     /// A light tick under the finger (Android's `performHapticFeedback`): on send, on a long press
     /// that copies, on a switch.
     fn haptic(&self) {}
+    /// The screen's pixels per density-independent unit (Android's density / 160); 0 when unknown.
+    /// The canvas never scales past a phone's look for it, so a tablet keeps a phone-sized column.
+    fn density(&self) -> f32 {
+        0.0
+    }
     /// This app may hand an APK to the system's installer (Android; never the desktop).
     fn can_install(&self) -> bool {
         false
@@ -74,6 +79,10 @@ pub const FONTS: [&[u8]; crate::draw::FACES] = [
     // Literata italic (the same OFL family, as Leaf ships it): emphasis in the agent's words.
     include_bytes!("../assets/fonts/literata_400i.ttf"),
 ];
+
+/// A typical phone's width in Android's dp: its 390-unit column is drawn at density × 411 / 390
+/// pixels per unit, which the canvas never goes past (with a tenth to spare for wider phones).
+const WIDTH_DP: f32 = 411.0;
 
 /// The most a field holds, in characters.
 const MAX_TYPED: usize = 8000;
@@ -136,6 +145,9 @@ struct Config {
     model: Option<String>,
     #[serde(default)]
     effort: Option<String>,
+    /// Text size (D9): "small" or "large"; Default when none.
+    #[serde(default)]
+    text_size: Option<String>,
     /// "Later" on an update: that build stays hidden until then (ms).
     #[serde(default)]
     update_later: Option<(u32, u64)>,
@@ -388,6 +400,24 @@ impl App {
             self.ask(Ask::Spawn(name.clone()), "session.spawn", json!({"session": name}));
             self.open(&name);
         }
+    }
+
+    /// The text size chosen in Settings: 0 Small, 1 Default, 2 Large.
+    pub fn text_size(&self) -> usize {
+        match self.config.text_size.as_deref() {
+            Some("small") => 0,
+            Some("large") => 2,
+            _ => 1,
+        }
+    }
+
+    pub fn set_text_size(&mut self, i: usize) {
+        self.config.text_size = match i {
+            0 => Some("small".into()),
+            2 => Some("large".into()),
+            _ => None,
+        };
+        self.save_config();
     }
 
     /// The build "Later" put off, and until when (ms).
@@ -1143,6 +1173,16 @@ impl App {
         self.now_ns = now_ns;
         self.wake = None;
         self.take_answers();
+        // The text size chosen in Settings (D9): every Text made this frame takes it, and the
+        // chat measures again when it changed.
+        let scale = crate::settings::TEXT_SCALES[self.text_size()];
+        if scale != crate::draw::text_scale() {
+            crate::draw::set_text_scale(scale);
+            self.st.chat.relayout();
+        }
+        // A phone's scale for this screen's density at most: a tablet keeps the phone's column.
+        let d = self.host.density();
+        self.canvas.max_u = if d > 0.0 { d * (WIDTH_DP / WIDTH) * 1.1 } else { f32::INFINITY };
         // A tapped notification opens its agent's chat (D4), over whatever was open.
         if let Some(name) = crate::background::take_opened() {
             self.open_notified(&name);

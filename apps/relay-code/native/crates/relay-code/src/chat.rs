@@ -84,6 +84,13 @@ impl State {
         }
     }
 
+    /// Measure every item again on the next frame (the text size changed): what is kept by
+    /// content alone would keep its old height.
+    pub fn relayout(&mut self) {
+        self.shown_from = None;
+        self.heights = Rc::default();
+    }
+
     pub fn close_over(&mut self) -> bool {
         std::mem::take(&mut self.model_sheet) | self.menu.take().is_some()
     }
@@ -519,7 +526,10 @@ fn effort_tick(app: &mut App, name: &str, agent: Option<&Agent>) -> Option<&'sta
 }
 
 /// How an answer's words are set on its key.
-const OPTION: Text = Text { size: ty::UI, weight: Weight::Medium, color: t::INK, align: crate::draw::Align::Left, line: 1.35 };
+/// A question's option, at the chosen text size (a fn, as a const would not follow it).
+fn option_style() -> Text {
+    Text::new(ty::UI, t::INK).medium().line(1.35)
+}
 
 /// An answer's words as its key shows them: "(esc)" is the Esc key's job, so the words drop it.
 fn option_words(label: &str) -> &str {
@@ -529,7 +539,7 @@ fn option_words(label: &str) -> &str {
 /// An answer's key height: its words wrapped, up to four lines.
 fn option_h(app: &mut App, label: &str) -> f32 {
     let w = WIDTH - 2.0 * t::PAD - 48.0;
-    (app.canvas.para_h(option_words(label), w, OPTION, 4) + 22.0).max(40.0)
+    (app.canvas.para_h(option_words(label), w, option_style(), 4) + 22.0).max(40.0)
 }
 
 /// An answer that is followed by your own words ("No, and tell Claude what to do differently",
@@ -1362,7 +1372,7 @@ fn composer(
                 cx.c.outline(x + 10.0, oy, w - 20.0, oh, t::KEY_R, 1.0, t::ACCENT);
             }
             // A long answer wraps, never cut: its key grows with it.
-            cx.c.para(option_words(label), x + 24.0, oy + 11.0, w - 48.0, OPTION, 4);
+            cx.c.para(option_words(label), x + 24.0, oy + 11.0, w - 48.0, option_style(), 4);
             if cx.tap(x + 10.0, oy, w - 20.0, oh) {
                 pick = Some((n.clone(), writes(label)));
             }
