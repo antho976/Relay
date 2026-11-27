@@ -89,7 +89,8 @@ pub const AGENT_ROW_H: f32 = 72.0;
 /// when tapped.
 pub fn agent_row(app: &mut App, a: &Agent, x: f32, y: f32, w: f32, now_ms: u64) -> bool {
     let h = AGENT_ROW_H;
-    let working = app.busy(&a.name);
+    // Away from the PC its terminal's last word is old news: no lamp says it works.
+    let working = app.link_state.online() && app.busy(&a.name);
     let words = app.agent_words(a);
     // D12: its latest words, and a dot for news since you last had its chat open.
     let preview = crate::news::preview(app, &a.name);
@@ -152,9 +153,9 @@ pub fn repo_chip(app: &mut App, right: f32, y: f32) -> f32 {
 pub fn draw(app: &mut App, dt: f32) -> bool {
     // A swipe from the left edge opens it; one to the left closes it.
     if app.ui.horizontal
-        && let Some((fx, _)) = app.ui.drag_from
+        && let Some((fx, fy)) = app.ui.drag_from
     {
-        if !app.st.drawer.open && fx < EDGE && app.ui.drag_dx > 0.0 {
+        if !app.st.drawer.open && fx < EDGE && app.ui.drag_dx > 0.0 && !app.ui.in_hzone(fx, fy) {
             app.st.drawer.swiping = true;
             app.st.drawer.open = true;
         } else if app.st.drawer.open && app.ui.drag_dx < -2.0 {

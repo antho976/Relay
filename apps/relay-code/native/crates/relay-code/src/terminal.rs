@@ -18,9 +18,10 @@ use crate::theme::{self as t, ty};
 const TOP_H: f32 = 56.0;
 /// The most rows asked for: the PC answers the terminal's own height when it is less.
 const ROWS: u32 = 200;
-/// The screen's text at most this big, and at least this small to fit its columns.
-const MONO_MAX: f32 = 12.5;
-const MONO_MIN: f32 = 8.0;
+/// The screen's text: 11 unless A− / A+ changed it, and within these.
+const MONO_DEFAULT: f32 = 11.0;
+const MONO_LEAST: f32 = 9.0;
+const MONO_MOST: f32 = 16.0;
 
 #[derive(Default)]
 pub struct State {
@@ -36,12 +37,18 @@ pub struct State {
     unstuck: bool,
     /// Which characters the mono face draws.
     faces: std::collections::HashMap<char, bool>,
+    /// Sideways, for a screen wider than the page; and the screen it was last placed for.
+    side: crate::ui::HScroll,
+    marked_for: Option<String>,
+    /// The screen's text size (A− / A+); 0 for the default. Kept across visits.
+    pub size: f32,
 }
 
 /// Read the screen when it is time, and take the answer.
 fn keep_up(app: &mut App, name: &str) {
     if app.st.terminal.name != name {
-        app.st.terminal = State { name: name.to_string(), ..State::default() };
+        let size = app.st.terminal.size;
+        app.st.terminal = State { name: name.to_string(), size, ..State::default() };
     }
     if let Some(call) = &app.st.terminal.call
         && let Some(r) = call.poll()
@@ -72,13 +79,10 @@ pub fn soon(app: &mut App) {
     app.st.terminal.at = app.st.terminal.at.min(app.now_ns + 250_000_000);
 }
 
-/// The screen's text style: mono, as big as fits its columns across the page, within bounds.
-fn mono(app: &mut App, cols: u16, w: f32) -> Text {
-    let base = Text::new(MONO_MAX, t::INK).face(Weight::Mono).line(1.25);
-    let adv = app.canvas.measure("M", base).max(0.1);
-    let fit = if cols > 0 { MONO_MAX * w / (adv * cols as f32) } else { MONO_MAX };
-    let size = (fit * 0.995).clamp(MONO_MIN * crate::draw::text_scale(), MONO_MAX * crate::draw::text_scale());
-    Text { size, ..base }
+/// The screen's text style: mono at the size chosen here (A− / A+), at the app's text size.
+fn mono(app: &App) -> Text {
+    let size = if app.st.terminal.size > 0.0 { app.st.terminal.size } else { MONO_DEFAULT };
+    Text::new(size, t::INK).face(Weight::Mono).line(1.3)
 }
 
 /// A character of the screen as the app's mono face can draw it, one column wide whatever it is:
@@ -91,7 +95,7 @@ fn drawable(app: &mut App, c: char) -> char {
     let has = match app.st.terminal.faces.get(&c) {
         Some(h) => *h,
         None => {
-            let h = app.canvas.measure(&c.to_string(), Text::new(MONO_MAX, t::INK).face(Weight::Mono)) > 0.0;
+            let h = app.canvas.measure(&c.to_string(), Text::new(MONO_DEFAULT, t::INK).face(Weight::Mono)) > 0.0;
             app.st.terminal.faces.insert(c, h);
             h
         }
@@ -112,13 +116,15 @@ fn drawable(app: &mut App, c: char) -> char {
     }
 }
 
-/// A screen row cut into the lines that fit `per` characters (a wide screen on a narrow phone).
-fn pieces(row: &str, per: usize) -> Vec<String> {
-    let chars: Vec<char> = row.chars().collect();
-    if chars.is_empty() {
-        return vec![String::new()];
-    }
-    chars.chunks(per.max(1)).map(|c| c.iter().collect()).collect()
+
+/// The column of the row a TUI marks as chosen (`❯`, `>` at a row's start) or, failing that, of
+/// the prompt: kept in view when a wide screen scrolls sideways.
+fn marked(rows: &[String]) -> Option<usize> {
+    rows.iter().rev().find_map(|r| {
+        let lead = r.chars().take_while(|c| matches!(c, ' ' | '|' | '+')).count();
+        let c = r.chars().nth(lead)?;
+        (c == '>').then_some(lead)
+    })
 }
 
 pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
@@ -129,45 +135,85 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
     let page = app.page_begin(dt, TOP_H, foot_h);
     let x = t::PAD;
     let w = WIDTH - 2.0 * t::PAD;
-    let mut y = page.top + 4.0;
-    // Whose terminal, in the page (the bar above holds only Back).
+    let mut y = page.top + 2.0;
+    // Whose terminal, in the page (the bar above holds only Back and the text size).
     let title = app.agent(name).map_or(name.to_string(), |a| a.title().to_string());
-    app.canvas.text_fit(&title, x, y, w, Text::new(ty::SECTION, t::INK).semi());
-    y += 24.0;
-    app.canvas.text_fit(&format!("{name}'s terminal · the keys below go to it"), x, y, w, Text::new(ty::CAPTION, t::INK3));
-    y += 30.0;
+    app.canvas.text_fit(&title, x, y, w, Text::new(ty::BODY, t::INK).semi());
+    y += 22.0;
+    // Away from the PC the screen is the last one read, and says so.
+    let stale = app.st.terminal.text.is_some();
+    match crate::home::reach(app).filter(|_| stale) {
+        Some((dot, words)) => {
+            app.canvas.circle(x + 3.0, y + 8.5, 3.0, dot);
+            app.canvas.text_fit(&format!("{words} · the screen as it was"), x + 11.0, y, w - 11.0, Text::new(ty::CAPTION, t::INK3));
+        }
+        None => {
+            app.canvas.text_fit(&format!("{name}'s terminal · the keys below go to it"), x, y, w, Text::new(ty::CAPTION, t::INK3));
+        }
+    }
+    y += 26.0;
 
     let st = &app.st.terminal;
-    let (text, cols, error) = (st.text.clone(), st.cols, st.error.clone());
+    let (text, error) = (st.text.clone(), st.error.clone());
+    let mut moving = page.moving;
     match (&text, &error) {
         (_, Some(e)) => {
             let (h, _) = kit::notice(&mut crate::cx!(app), x, y + 60.0, w, e, None, None);
             y += 60.0 + h;
         }
         (None, None) => {
-            let words = if app.online() { "Reading its terminal…" } else { "Your PC is out of reach. Its terminal shows once it is back." };
+            let words = if app.online() { "Reading its terminal…" } else { "Its terminal shows once your PC answers." };
             app.canvas.para(words, x, y + 60.0, w, Text::new(ty::UI, t::INK3).center().line(1.45), 3);
             y += 120.0;
         }
         (Some(text), None) => {
-            // Sized to the longest row really drawn (the PC trims each row's trailing spaces),
-            // not the terminal's whole width.
-            let shown: Vec<String> = text.split('\n').map(|r| r.chars().map(|c| drawable(app, c)).collect()).collect();
-            let used = shown.iter().map(|r| r.chars().count()).max().unwrap_or(0).min(cols.max(1) as usize).max(1) as u16;
-            let style = mono(app, used, w - 20.0);
+            let style = mono(app);
             let adv = app.canvas.measure("M", style).max(0.1);
-            let per = ((w - 20.0) / adv).floor() as usize;
             let lh = style.lh();
-            let rows: Vec<String> = shown.iter().flat_map(|r| pieces(r, per)).collect();
-            let h = rows.len() as f32 * lh + 20.0;
-            // The screen on the code ground, every row as drawn; only what is in view is set.
-            app.canvas.rect(x - 6.0, y, w + 12.0, h, 12.0, t::CODE);
-            let off = -app.canvas.dy;
-            for (i, r) in rows.iter().enumerate() {
-                let ry = y + 10.0 + i as f32 * lh;
-                if ry + lh >= page.top + off && ry <= page.bottom + off && !r.is_empty() {
-                    app.canvas.text(r, x + 4.0, ry, style);
+            let rows: Vec<String> = text.split('\n').map(|r| r.chars().map(|c| drawable(app, c)).collect()).collect();
+            let longest = rows.iter().map(|r| r.chars().count()).max().unwrap_or(0) as f32;
+            // The block fills the page down to the keys, the newest rows at its foot, as a
+            // terminal shows them; a longer screen scrolls up.
+            let (bx, bw) = (x - 6.0, w + 12.0);
+            let inner = rows.len() as f32 * lh + 20.0;
+            // Exactly to the page's end when the screen is short, so the page does not scroll.
+            let h = inner.max(page.bottom - 16.0 - y);
+            app.canvas.rect(bx, y, bw, h, 12.0, t::CODE);
+            // Wider than the page: it scrolls sideways, keeping the chosen row's start in view
+            // whenever the screen changes.
+            let text_w = bw - 20.0;
+            let wide = longest * adv > text_w;
+            let mut off = 0.0;
+            if wide {
+                let area = [bx, y + app.canvas.dy, bw, h];
+                app.ui.claim_h(area);
+                let ts = &mut app.st.terminal;
+                ts.side.max = longest * adv - text_w;
+                if ts.marked_for.as_deref() != Some(text.as_str()) {
+                    ts.marked_for = Some(text.clone());
+                    if let Some(col) = marked(&rows) {
+                        let cx = col as f32 * adv;
+                        if cx < ts.side.off || cx > ts.side.off + text_w - 6.0 * adv {
+                            ts.side.off = (cx - 2.0 * adv).clamp(0.0, ts.side.max.max(0.0));
+                        }
+                    }
                 }
+                moving |= ts.side.update(&app.ui, area, dt);
+                off = app.st.terminal.side.off;
+                app.canvas.push_clip(bx, y + app.canvas.dy, bw, h);
+            } else {
+                app.st.terminal.side = Default::default();
+            }
+            let top = y + h - inner + 10.0;
+            let view = -app.canvas.dy;
+            for (i, r) in rows.iter().enumerate() {
+                let ry = top + i as f32 * lh;
+                if ry + lh >= page.top + view && ry <= page.bottom + view && !r.is_empty() {
+                    app.canvas.text(r, bx + 10.0 - off, ry, style);
+                }
+            }
+            if wide {
+                app.canvas.pop_clip();
             }
             y += h;
         }
@@ -193,11 +239,26 @@ pub fn draw(app: &mut App, name: &str, dt: f32) -> bool {
 
     app.top_band(TOP_H);
     let ty_ = app.canvas.inset_top + 6.0;
-    let (back, _, _) = kit::top_bar(&mut crate::cx!(app), ty_, "", &[]);
+    let (back, key, _) = kit::top_bar(&mut crate::cx!(app), ty_, "", &["minus", "plus"]);
     if back {
         app.pop();
     }
-    page.moving
+    // A− / A+: the screen's text size, one step at a time, kept for the next visit.
+    if let Some(k) = key {
+        let now = mono(app).size;
+        let step = if k == 0 { -1.0 } else { 1.0 };
+        let next = (now + step).clamp(MONO_LEAST * crate::draw::text_scale(), MONO_MOST * crate::draw::text_scale());
+        app.st.terminal.size = next;
+        app.st.terminal.marked_for = None;
+        app.host.haptic();
+    }
+    moving
+}
+
+/// How far a wide screen is scrolled sideways, and the most it may go: tests.
+#[cfg(test)]
+pub fn sideways(app: &App) -> (f32, f32) {
+    (app.st.terminal.side.off, app.st.terminal.side.max)
 }
 
 /// When the screen is read next (ns): tests.
@@ -206,29 +267,25 @@ pub fn next_read(app: &App) -> u64 {
     app.st.terminal.at
 }
 
-/// Screenshots: a terminal showing Claude Code's model menu.
+/// Screenshots: a 100-column terminal showing Claude Code's model menu.
 pub fn sample(app: &mut App, name: &str) {
-    app.st.terminal = State {
-        name: name.to_string(),
-        text: Some(
-            [
-                "╭───────────────────────────────────────────────────────────╮",
-                "│ Select model                                              │",
-                "│ Switch between Claude models. Applies to this session.    │",
-                "│                                                           │",
-                "│   1. Default (recommended)  Opus 5.5 for complex tasks    │",
-                "│ ❯ 2. Opus                   Opus 5.5                    ✔ │",
-                "│   3. Sonnet                 Sonnet 5.5 for daily coding   │",
-                "│   4. Haiku                  Haiku 5.5 for simple tasks    │",
-                "│                                                           │",
-                "╰───────────────────────────────────────────────────────────╯",
-                "   Enter to confirm · Esc to exit",
-            ]
-            .join("\n"),
-        ),
-        cols: 64,
-        ..State::default()
-    };
+    let w = 98;
+    let line = |s: &str| format!("│ {s:<w$} │", w = w - 4);
+    let rows = [
+        format!("╭{}╮", "─".repeat(w - 2)),
+        line("Select model"),
+        line("Switch between Claude models. Applies to this session and future Claude Code sessions."),
+        line(""),
+        line("  1. Default (recommended)  Opus 5.5 for complex tasks · Sonnet 5.5 when the limit is near"),
+        line("❯ 2. Opus                   Opus 5.5 for complex tasks                                  ✔"),
+        line("  3. Sonnet                 Sonnet 5.5 for daily coding"),
+        line("  4. Haiku                  Haiku 5.5 for simple tasks"),
+        line(""),
+        format!("╰{}╯", "─".repeat(w - 2)),
+        "   Enter to confirm · Esc to exit".to_string(),
+    ];
+    let size = app.st.terminal.size;
+    app.st.terminal = State { name: name.to_string(), text: Some(rows.join("\n")), cols: w as u16, size, ..State::default() };
 }
 
 #[cfg(test)]
@@ -236,9 +293,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_wide_row_is_cut_into_lines_that_fit() {
-        assert_eq!(pieces("abcdefg", 3), ["abc", "def", "g"]);
-        assert_eq!(pieces("", 3), [""]);
-        assert_eq!(pieces("│ ❯ 2", 10), ["│ ❯ 2"]);
+    fn the_chosen_row_is_found_after_its_border() {
+        let rows: Vec<String> = ["+------+", "|   1. Default", "| > 2. Opus", "|   3. Sonnet"].map(String::from).to_vec();
+        assert_eq!(marked(&rows), Some(2));
+        let prompt: Vec<String> = ["Done.", "> "].map(String::from).to_vec();
+        assert_eq!(marked(&prompt), Some(0));
+        assert_eq!(marked(&["plain".to_string()]), None);
     }
 }

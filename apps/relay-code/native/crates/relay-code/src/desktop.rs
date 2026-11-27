@@ -303,6 +303,33 @@ fn shot(args: &[String], out: &str) -> Result<(), String> {
         }
         other => return Err(format!("unknown screen: {other}")),
     }
+    // D14's states, over any screen: `--state offline` (the PC out of reach, what was kept still
+    // shown), `connecting` (a first start: nothing kept yet), `empty` (a repo with nothing in it).
+    let state = arg(args, "--state");
+    if let Some(st) = state.as_deref() {
+        if st == "offline" {
+            app.set_link_state(rc_link::LinkState::Offline { reason: "No route to the PC".into(), retry_at_ms: 0 });
+        }
+        if st == "connecting" || st == "empty" {
+            app.agents.clear();
+            app.earlier.clear();
+            app.convos.clear();
+            app.sending.clear();
+            app.screens.clear();
+            app.holds = 0;
+            app.st.changes = Default::default();
+            app.st.board = Default::default();
+            app.st.inbox = Default::default();
+            app.st.designs = Default::default();
+            app.st.fileview = Default::default();
+            app.st.terminal = Default::default();
+        }
+        if st == "connecting" {
+            app.projects.clear();
+            app.repo = None;
+            app.set_link_state(rc_link::LinkState::Connecting { attempt: 2 });
+        }
+    }
     settle(&mut app, &gfx, &mut clock);
     clock += 16_666_666;
     app.frame(clock);

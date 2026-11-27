@@ -1060,3 +1060,91 @@ fn the_chat_menu_opens_the_terminal_and_back_comes_back() {
     assert!(a.back());
     assert_eq!(a.route(), &Route::Chat("bold-puffin".into()));
 }
+
+// D15: a terminal you can read.
+
+fn terminal_open(name: &str) -> (App, u64) {
+    let mut a = app(name);
+    let mut clock = 1_000_000_000;
+    a.open("bold-puffin");
+    a.push(Route::Terminal("bold-puffin".into()));
+    crate::terminal::sample(&mut a, "bold-puffin");
+    frames(&mut a, &mut clock, 5);
+    (a, clock)
+}
+
+#[test]
+fn the_terminal_text_is_readable_and_a_minus_a_plus_size_it() {
+    let (mut a, mut clock) = terminal_open("term-size");
+    let size = |a: &App| if a.st.terminal.size > 0.0 { a.st.terminal.size } else { 11.0 };
+    assert!(size(&a) >= 11.0, "11 at least, unless made smaller");
+    // A+ is the bar's last key, A− the one before it.
+    tap(&mut a, &mut clock, 390.0 - 6.0 - 22.0, 6.0 + 22.0);
+    assert_eq!(size(&a), 12.0);
+    for _ in 0..10 {
+        tap(&mut a, &mut clock, 390.0 - 6.0 - 44.0 - 22.0, 6.0 + 22.0);
+    }
+    assert_eq!(size(&a), 9.0, "no smaller than 9");
+    assert_eq!(a.route(), &Route::Terminal("bold-puffin".into()));
+}
+
+#[test]
+fn a_wide_screen_scrolls_sideways_and_the_drawer_stays_shut() {
+    let (mut a, mut clock) = terminal_open("term-side");
+    let (off, max) = crate::terminal::sideways(&a);
+    assert!(max > 0.0 && off == 0.0, "100 columns are wider than the page: {max}");
+    // A sideways drag on the screen, from near the left edge.
+    let (y, from) = (700.0, 20.0);
+    clock += 16_666_666;
+    a.touch(Touch { id: 1, phase: Phase::Down, x: from + 200.0, y, t_ns: clock });
+    frames(&mut a, &mut clock, 1);
+    for i in 1..=10 {
+        clock += 16_666_666;
+        a.touch(Touch { id: 1, phase: Phase::Move, x: from + 200.0 - 15.0 * i as f32, y, t_ns: clock });
+        frames(&mut a, &mut clock, 1);
+    }
+    clock += 100_000_000;
+    a.touch(Touch { id: 1, phase: Phase::Up, x: from + 50.0, y, t_ns: clock });
+    frames(&mut a, &mut clock, 20);
+    assert!(crate::terminal::sideways(&a).0 > 50.0, "it scrolled: {:?}", crate::terminal::sideways(&a));
+    assert!(!a.st.drawer.open);
+    // From the very edge, rightwards: the screen's, not the drawer's.
+    clock += 16_666_666;
+    a.touch(Touch { id: 2, phase: Phase::Down, x: 18.0, y, t_ns: clock });
+    frames(&mut a, &mut clock, 1);
+    for i in 1..=10 {
+        clock += 16_666_666;
+        a.touch(Touch { id: 2, phase: Phase::Move, x: 18.0 + 15.0 * i as f32, y, t_ns: clock });
+        frames(&mut a, &mut clock, 1);
+    }
+    clock += 100_000_000;
+    a.touch(Touch { id: 2, phase: Phase::Up, x: 168.0, y, t_ns: clock });
+    frames(&mut a, &mut clock, 20);
+    assert!(!a.st.drawer.open, "an edge swipe on the screen scrolls it back");
+    assert!(crate::terminal::sideways(&a).0 < 50.0);
+    assert_eq!(a.route(), &Route::Terminal("bold-puffin".into()));
+}
+
+// D14: every state says what it is.
+
+#[test]
+fn away_from_the_pc_the_pages_say_so_and_no_row_claims_work() {
+    let mut a = app("reach");
+    let mut clock = 1_000_000_000;
+    a.reset_to(Route::Home);
+    frames(&mut a, &mut clock, 2);
+    assert!(crate::home::reach(&a).is_none(), "nothing to say while it answers");
+    a.screens.insert("swift-ocelot".into(), crate::screen::read("· Crunching… (1m 6s · ↓ 6.3k tokens · thought for 2s)\n────\n❯ \n────\n  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt"));
+    // Its chat open, its terminal's foot is trusted: it works.
+    a.open("swift-ocelot");
+    let ocelot = a.agent("swift-ocelot").cloned().unwrap();
+    assert_eq!(a.agent_words(&ocelot), "working");
+    a.set_link_state(rc_link::LinkState::Offline { reason: "No route".into(), retry_at_ms: 0 });
+    frames(&mut a, &mut clock, 2);
+    assert_eq!(crate::home::reach(&a).map(|r| r.1).as_deref(), Some("PC out of reach"));
+    assert_eq!(a.agent_words(&ocelot), "ready", "its terminal's last word is old news");
+    a.set_link_state(rc_link::LinkState::Connecting { attempt: 1 });
+    a.agents.clear();
+    a.projects.clear();
+    assert_eq!(crate::home::reach(&a).map(|r| r.1).as_deref(), Some("Connecting…"));
+}
