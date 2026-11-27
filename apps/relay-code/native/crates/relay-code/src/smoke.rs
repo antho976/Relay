@@ -12,6 +12,11 @@ pub fn show(app: &mut App, screen: &str) {
     app.sample();
     match screen {
         "chat" => app.open("bold-puffin"),
+        // A19: a 400-message chat to fling on a phone, its frames timed (android.rs, PERF).
+        "chat400" => {
+            crate::sample::long_chat(app);
+            app.open("bold-puffin");
+        }
         "changes" => {
             app.reset_to(Route::Home);
             app.push(Route::Changes);

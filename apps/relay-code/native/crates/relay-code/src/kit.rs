@@ -46,10 +46,12 @@ impl Ctx<'_> {
 
 /// The ground, edge to edge.
 pub fn ground(c: &mut Canvas) {
-    let dy = c.dy;
-    c.dy = 0.0;
-    c.rect(-1000.0, 0.0, WIDTH + 2000.0, c.h, 0.0, t::BG);
-    c.dy = dy;
+    // The frame is cleared to the ground's colour (`App::clear_colour`, the whole surface, the
+    // side margins too), so it is not painted again: a full-screen rect each frame was pure
+    // overdraw, half the frame time on a phone drawing in software (A19: flings on the emulator,
+    // frame gaps p50 ≈47 ms with it, ≈25 ms without). If BG becomes a setting, clear_colour must
+    // follow it.
+    let _ = c;
 }
 
 // Layers
