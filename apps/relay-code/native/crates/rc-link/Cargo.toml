@@ -1,0 +1,24 @@
+[package]
+name = "rc-link"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Relay Code's link to the PC's phone door (crates/relay-remote): pairing, the handshake, the bus envelopes, and a link that connects by itself and stays connected. No UI."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+getrandom = "0.3"
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"] }
+# The door's WebSockets. Mozilla's roots, not the system's: Android has no file rustls could read.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+# tokio-tungstenite builds rustls with no crypto provider; exactly one, as relay-remote does.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# The owner's server's HTTP API (pairing through the server, server.rs).
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros"] }

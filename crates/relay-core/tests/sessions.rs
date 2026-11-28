@@ -443,6 +443,8 @@ async fn session_lifecycle_over_socket() {
     assert!(r.ok, "{:?}", r.error);
     let r = c.call(&Request::new(Actor::agent(&name), "session.scrollback", json!({"session": other["name"]})).with_token(&token), |_| {}).await.unwrap();
     assert_eq!(code(r), "actor.scope", "a peer's scrollback stays private");
+    let r = c.call(&Request::new(Actor::agent(&name), "session.screen", json!({"session": other["name"]})).with_token(&token), |_| {}).await.unwrap();
+    assert_eq!(code(r), "actor.scope", "a peer's screen stays private");
     let r = c.call(&Request::new(Actor::agent(&name), "session.brief", json!({"session": other["name"]})).with_token(&token), |_| {}).await.unwrap();
     assert_eq!(code(r), "actor.scope", "a peer's brief stays private");
     // ...nor close one (user-only)
@@ -476,6 +478,11 @@ async fn session_lifecycle_over_socket() {
     assert!(sb["text"].as_str().unwrap().contains("echo:ping"));
     assert_eq!(sb["epoch"], 1);
     assert!(sb["seq"].as_u64().unwrap() >= last_seq);
+    // the same output as drawn, at the PTY's size
+    let screen = ok(&e, "session.screen", json!({"session": name, "rows": 50}));
+    assert_eq!((screen["cols"].as_u64(), screen["rows"].as_u64(), screen["alternate"].as_bool()), (Some(200), Some(50), Some(false)));
+    assert!(screen["text"].as_str().unwrap().lines().any(|l| l.contains("echo:ping")), "{screen}");
+    assert_eq!(screen["epoch"], 1);
     // a second attach from (epoch, seq) replays only what came after
     let mut term2 = Client::connect(&server.path).await.unwrap();
     term2.call(&Request::new(Actor::User, "session.attach", json!({"session": name, "epoch": epoch, "from_seq": sb["seq"]})), |_| {}).await.unwrap();

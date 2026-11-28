@@ -161,6 +161,27 @@ impl Ring {
         let (_, start, mark) = self.frames[at];
         (self.bytes_from(start), Some(mark))
     }
+    /// The whole ring as a replay a fresh emulator can start from (`session.screen`). A ring
+    /// that has dropped its start begins on the first clean frame boundary it still indexes,
+    /// with the modes in force there restored on a cleared screen: the bytes before it are gone,
+    /// and so is the switch to the alternate screen a TUI made once at start-up.
+    fn replay_all(&self) -> Vec<u8> {
+        if self.base == 0 {
+            return self.bytes_from(0);
+        }
+        let mut at = self.frames.partition_point(|(_, offset, _)| *offset < self.base);
+        if let Some(clean) = self.frames.range(at..).take(64).position(|(_, _, mark)| mark.clean) {
+            at += clean;
+        }
+        match self.frames.get(at) {
+            None => self.bytes_from(self.base),
+            Some(&(_, start, mark)) => {
+                let mut out = mark.modes.prelude();
+                out.extend_from_slice(&self.bytes_from(start));
+                out
+            }
+        }
+    }
     /// The bytes covering the last `lines` newline-terminated lines, so reading a short tail
     /// out of an 8 MiB ring costs the tail rather than the ring.
     fn tail_lines(&self, lines: usize) -> Vec<u8> {
@@ -444,6 +465,16 @@ pub struct Attached {
     pub rx: broadcast::Receiver<Arc<Frame>>,
 }
 
+/// What [`Pty::output_since`] read: bytes up to absolute offset `end`, which is `seq` in `epoch`.
+pub struct Output {
+    pub epoch: u64,
+    pub seq: u64,
+    pub end: u64,
+    pub bytes: Vec<u8>,
+    /// The bytes replay the whole ring, not just what followed the offset asked for.
+    pub whole: bool,
+}
+
 impl Pty {
     /// Spawn `spec` on a fresh PTY. `on_exit` runs on a detached thread once the child is
     /// reaped (with its exit code, `None` if killed by signal). A `cwd` that is not a directory
@@ -685,6 +716,21 @@ impl Pty {
             None => text,
         };
         (text, self.shared.epoch, self.seq())
+    }
+
+    /// The output after absolute byte offset `from`, for a reader that keeps its own emulator
+    /// in step with this terminal (`session.screen`). With no offset, or one the ring no longer
+    /// holds, it is the whole ring ([`Output::whole`]) and the reader must start over.
+    pub fn output_since(&self, from: Option<u64>) -> Output {
+        let ring = self.shared.ring.lock().unwrap();
+        // Under the ring lock, as the reader numbers frames: `seq` and `end` describe the same bytes.
+        let (seq, end) = (self.seq(), ring.end());
+        let (bytes, whole) = match from {
+            Some(from) if from >= ring.base && from <= end => (ring.bytes_from(from), false),
+            _ => (ring.replay_all(), true),
+        };
+        drop(ring);
+        Output { epoch: self.shared.epoch, seq, end, bytes, whole }
     }
 
     /// Kill the child (SIGTERM to its process group, then SIGKILL after `grace`; a shell is hung

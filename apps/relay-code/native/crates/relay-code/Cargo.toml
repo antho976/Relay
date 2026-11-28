@@ -1,0 +1,47 @@
+[package]
+name = "relay-code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Relay Code, the phone app: Relay's agents, their chat, changes and designs, coding only (design 44). Drawn with wgpu on Leaf's and Tally RS's renderer, for Android and the desktop."
+
+[lib]
+name = "relaycode"
+crate-type = ["lib", "cdylib"]
+
+[[bin]]
+name = "relay-code"
+path = "src/main.rs"
+
+[dependencies]
+rc-link = { path = "../rc-link" }
+# Designs are laid out by the PC's own rules (design 44, D11): relay-client's design module, GTK-free.
+relay-client = { path = "../../../../../crates/relay-client" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wgpu = "30"
+bytemuck = { version = "1", features = ["derive"] }
+fontdue = "0.9"
+zeno = "0.3"
+# Icon paths go through svgtypes first: zeno's own parser stops early on some compact arcs.
+svgtypes = "0.16"
+pollster = "0.4"
+raw-window-handle = "0.6"
+libc = "0.2"
+# Reading the agent's terminal screen (its status line, mode and questions) from session.scrollback.
+vt100 = "0.16"
+# Pictures on designs (design_paint::pictures), pure Rust: PNG; JPEG (jpeg-decoder, for its
+# scaled IDCT: a 4000 px photo decodes straight to 1000 or 500 px); WebP; a GIF's first frame.
+png = "0.17"
+jpeg-decoder = { version = "0.3", default-features = false }
+image-webp = "0.2"
+gif = { version = "0.14", default-features = false, features = ["std"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+winit = "0.30"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["game-activity"] }
+ndk = "0.9"
+jni = "0.21"

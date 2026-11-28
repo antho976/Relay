@@ -986,10 +986,10 @@ mod tests {
                         // Update mode: the bank's own token, and no products to add.
                         assert_eq!(body["access_token"], "access-1");
                         assert!(body.get("products").is_none() && body.get("transactions").is_none());
-                        return Ok(json!({"link_token": "link-fix", "expiration": "2026-11-19T12:30:00Z", "hosted_link_url": "https://hosted.plaid.com/link/fix"}));
+                        return Ok(json!({"link_token": "link-fix", "expiration": "2099-11-19T12:30:00Z", "hosted_link_url": "https://hosted.plaid.com/link/fix"}));
                     }
                     assert_eq!(body["transactions"]["days_requested"], 730);
-                    Ok(json!({"link_token": if hosted { "link-hosted" } else { "link-sdk" }, "expiration": "2026-11-19T12:30:00Z",
+                    Ok(json!({"link_token": if hosted { "link-hosted" } else { "link-sdk" }, "expiration": "2099-11-19T12:30:00Z",
                               "hosted_link_url": if hosted { json!("https://hosted.plaid.com/link/abc") } else { Value::Null }}))
                 }
                 "/item/public_token/exchange" => {

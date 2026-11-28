@@ -2511,6 +2511,21 @@ pub fn register(e: &mut Engine) {
         };
         Ok(ScrollbackOut { text, epoch, seq, cols: size.map(|s| s.0), rows: size.map(|s| s.1) })
     });
+    // The screen a person would see, from an emulator kept per PTY (`screen`): fed only what the
+    // PTY wrote since the last read, or the whole 8 MiB ring on the first. The store is taken only
+    // to resolve the row; the parse runs with nothing locked but that terminal's emulator.
+    e.register_unlocked::<Screen>(|ctx, p| {
+        let row = read_own_or_pair(ctx, &p.session)?;
+        refuse_shell_to_thread(ctx.thread(), &row.session)?;
+        let pty = ctx.engine().pty(row.session.id).ok_or_else(|| {
+            BusError::conflict(
+                "session.not_spawned",
+                format!("session {} has no PTY (state {})", row.session.name, sessions::state_str(row.session.state)),
+            )
+        })?;
+        let shown = ctx.engine().screens.render(row.session.id, &pty, p.rows);
+        Ok(ScreenOut { text: shown.text, cols: shown.cols, rows: shown.rows, alternate: shown.alternate, epoch: shown.epoch, seq: shown.seq })
+    });
     // A file read of up to 8 MiB, and for Codex a walk to find the file: never under the lock.
     e.register_unlocked::<Transcript>(|ctx, p| {
         let row = read_own_or_pair(ctx, &p.session)?;

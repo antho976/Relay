@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 442,
+  "op_count": 443,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -2167,6 +2167,24 @@
       },
       "result": {
         "$ref": "#/$defs/SessionScrollbackOut"
+      }
+    },
+    "session.screen": {
+      "summary": "The bottom rows of the live terminal as rendered, plain text, and the (epoch, seq) they stand at",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "session",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 3,
+      "payload": {
+        "$ref": "#/$defs/SessionScreenIn"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionScreenOut"
       }
     },
     "session.transcript": {
@@ -14226,6 +14244,73 @@
       },
       "required": [
         "text",
+        "epoch",
+        "seq"
+      ]
+    },
+    "SessionScreenIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "rows": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "How many rows from the bottom of what is drawn (default 12, at most the PTY's rows)."
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "SessionScreenOut": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The last `rows` rows of the screen as a terminal would show it, plain text: blank rows\nat the bottom dropped first, then each row's trailing spaces, joined with `\\n`."
+        },
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "The PTY's size the screen was rendered at."
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "alternate": {
+          "type": "boolean",
+          "description": "The program is on the alternate screen (a full-screen TUI such as vim or less)."
+        },
+        "epoch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Where in the output the screen stands, as `session.scrollback` and `session.attach` count it."
+        },
+        "seq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "text",
+        "cols",
+        "rows",
+        "alternate",
         "epoch",
         "seq"
       ]
