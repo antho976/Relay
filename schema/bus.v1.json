@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 443,
+  "op_count": 449,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -2205,6 +2205,24 @@
         "$ref": "#/$defs/SessionTranscriptOut"
       }
     },
+    "chat.send": {
+      "summary": "A person's message to an agent: typed as one paste and Enter, kept under the sender's id",
+      "kind": "mutation",
+      "audit": "agent_only",
+      "undo": "none",
+      "scope": "session",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 3,
+      "payload": {
+        "$ref": "#/$defs/ChatSendIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ChatSendOut"
+      }
+    },
     "session.upload": {
       "summary": "A picture for the agent, into its checkout's .relay/attachments (out of git); returns the path to name in a message",
       "kind": "mutation",
@@ -3033,6 +3051,26 @@
         "$ref": "#/$defs/Empty"
       }
     },
+    "git.pull": {
+      "summary": "Fast-forward the branch to its upstream (git pull --ff-only); refused when it cannot simply move forward",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "git.changed"
+      ],
+      "since": "1.0",
+      "phase": 8,
+      "payload": {
+        "$ref": "#/$defs/GitWtIn"
+      },
+      "result": {
+        "$ref": "#/$defs/GitPullOut"
+      }
+    },
     "git.pr.list": {
       "summary": "Open pull requests for the project, and the 100 most recently updated closed or merged ones; cached for a minute unless refresh, failures too",
       "kind": "query",
@@ -3067,6 +3105,44 @@
       },
       "result": {
         "$ref": "#/$defs/GitPrOpenOut"
+      }
+    },
+    "git.pr.checks": {
+      "summary": "A pull request's checks (gh pr checks): each one's state, link and whether it is required; cached 20 s unless refresh",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 8,
+      "payload": {
+        "$ref": "#/$defs/GitPrChecksIn"
+      },
+      "result": {
+        "$ref": "#/$defs/GitPrChecksOut"
+      }
+    },
+    "git.pr.merge": {
+      "summary": "Merge a pull request on GitHub (gh pr merge); refused while a required check fails",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "project",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "git.changed"
+      ],
+      "since": "1.0",
+      "phase": 8,
+      "payload": {
+        "$ref": "#/$defs/GitPrMergeIn"
+      },
+      "result": {
+        "$ref": "#/$defs/GitPrMergeOut"
       }
     },
     "git.branch.clean_merged": {
@@ -8531,6 +8607,49 @@
       "result": {
         "$ref": "#/$defs/ClipYoutube"
       }
+    },
+    "phone.app.latest": {
+      "summary": "The phone app build the PC holds for its paired phone, or null when none is published",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PhoneAppLatest"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "phone.app.apk": {
+      "summary": "The published phone app's APK, in pieces of at most 3 MiB from offset",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/PhoneAppApkIn"
+      },
+      "result": {
+        "$ref": "#/$defs/PhoneAppApkOut"
+      }
     }
   },
   "$defs": {
@@ -12232,6 +12351,18 @@
         "state": {
           "$ref": "#/$defs/SessionState"
         },
+        "waiting": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Waiting"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why a `blocked` session waits; null in every other state, and for a session blocked\nbefore the engine recorded why (schema v37).",
+          "default": null
+        },
         "pid": {
           "type": [
             "integer",
@@ -12309,6 +12440,21 @@
         "exited",
         "closed"
       ]
+    },
+    "Waiting": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "prompt",
+          "description": "At a live prompt in its terminal: a permission, a question, a request for input\n(the provider's hooks, `session.report`). Answering it lets the agent go on."
+        },
+        {
+          "type": "string",
+          "const": "report",
+          "description": "It ended its turn with `session.done` `blocked` or `partial`: there is nothing to answer\nin the terminal; its blockers say what it needs."
+        }
+      ],
+      "description": "Why a `blocked` session waits for the person."
     },
     "TaskDispatched": {
       "type": "object",
@@ -14331,6 +14477,15 @@
           "minimum": 0,
           "description": "The `cursor` of the previous answer: only what the agent wrote since. Absent, the\nconversation's last `limit` messages."
         },
+        "before": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The `before` of an earlier answer: the page of messages older than it (scrolling back),\nits newest `limit`. Not with `after`."
+        },
         "limit": {
           "type": [
             "integer",
@@ -14339,6 +14494,13 @@
           "format": "uint32",
           "minimum": 0,
           "description": "At most this many messages, the newest kept (default 200, at most 1000)."
+        },
+        "task": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The id of a Task (sub-agent) call in this conversation: the helper's own steps, from the\nlog Claude Code keeps for it, instead of the conversation. `found` false while it has none."
         }
       },
       "required": [
@@ -14358,7 +14520,19 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0,
-          "description": "Pass it back as `after` for what comes next."
+          "description": "Pass it back as `after` for what comes next. A `before` page gives back its `before`."
+        },
+        "before": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Pass it back as `before` for the page older than these messages.",
+          "default": 0
+        },
+        "older": {
+          "type": "boolean",
+          "description": "Whether the log holds anything older than `before`.",
+          "default": false
         },
         "reset": {
           "type": "boolean",
@@ -14367,6 +14541,14 @@
         "found": {
           "type": "boolean",
           "description": "Whether the provider's conversation was found; false before its first hook names it."
+        },
+        "pending": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionTranscriptPending"
+          },
+          "description": "Messages sent with `chat.send` in the last hour that the log does not hold yet, oldest\nfirst: typed, not yet taken (or never shown, as some slash commands). Not on a page back.",
+          "default": []
         }
       },
       "required": [
@@ -14390,6 +14572,13 @@
         "body": true,
         "created_at": {
           "type": "string"
+        },
+        "client_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "On a person's message sent with `chat.send`: the sender's id for it, on this one message\nonly, so the sender draws it once."
         }
       },
       "required": [
@@ -14397,6 +14586,64 @@
         "role",
         "body",
         "created_at"
+      ]
+    },
+    "SessionTranscriptPending": {
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string",
+          "description": "The id it was sent with."
+        },
+        "text": {
+          "type": "string"
+        },
+        "sent_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "client_id",
+        "text",
+        "sent_at"
+      ]
+    },
+    "ChatSendIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string",
+          "description": "What the person wrote: typed into the agent's terminal as one paste, then Enter."
+        },
+        "client_id": {
+          "type": "string",
+          "description": "The sender's own id for this message (letters, digits, `-` and `_`, at most 64): sending\nit again types nothing twice, and `session.transcript` gives the message back with it."
+        }
+      },
+      "required": [
+        "session",
+        "text",
+        "client_id"
+      ]
+    },
+    "ChatSendOut": {
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "typed": {
+          "type": "boolean",
+          "description": "False when this id was sent before: nothing was typed again."
+        }
+      },
+      "required": [
+        "client_id",
+        "typed"
       ]
     },
     "SessionUploadIn": {
@@ -16160,6 +16407,13 @@
           "minimum": 0,
           "description": "How many entries git reported, `files` included; more than `files.len()` when truncated.",
           "default": 0
+        },
+        "operation": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What the checkout is in the middle of, when anything: `merge`, `rebase` (or `git am`),\n`cherry_pick` or `revert`, from the files git keeps in its git dir while it waits."
         }
       },
       "required": [
@@ -16832,6 +17086,18 @@
         "project_id"
       ]
     },
+    "GitPullOut": {
+      "type": "object",
+      "properties": {
+        "up_to_date": {
+          "type": "boolean",
+          "description": "Already level with its upstream: nothing moved."
+        }
+      },
+      "required": [
+        "up_to_date"
+      ]
+    },
     "GitPrListIn": {
       "type": "object",
       "additionalProperties": false,
@@ -16947,6 +17213,141 @@
       },
       "required": [
         "url"
+      ]
+    },
+    "GitPrChecksIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "project_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "number": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "refresh": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Ask GitHub now instead of answering from the last reading (kept 20 s)."
+        }
+      },
+      "required": [
+        "project_id",
+        "number"
+      ]
+    },
+    "GitPrChecksOut": {
+      "type": "object",
+      "properties": {
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GitPrCheck"
+          }
+        }
+      },
+      "required": [
+        "checks"
+      ]
+    },
+    "GitPrCheck": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "description": "As `gh pr checks` buckets it: `pass`, `fail`, `pending`, `skipping` or `cancel`."
+        },
+        "link": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The check's page (its run on GitHub), when it has one."
+        },
+        "required": {
+          "type": "boolean",
+          "description": "Branch protection requires it to pass before the pull request may merge."
+        }
+      },
+      "required": [
+        "name",
+        "state",
+        "required"
+      ]
+    },
+    "GitPrMergeIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "project_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "number": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "method": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitPrMergeMethod"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default `squash`."
+        }
+      },
+      "required": [
+        "project_id",
+        "number"
+      ]
+    },
+    "GitPrMergeMethod": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "squash",
+          "description": "One commit on the base (the default)."
+        },
+        {
+          "type": "string",
+          "const": "merge",
+          "description": "A merge commit."
+        },
+        {
+          "type": "string",
+          "const": "rebase",
+          "description": "Each commit replayed on the base."
+        }
+      ],
+      "description": "How a pull request's commits land on its base."
+    },
+    "GitPrMergeOut": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "method": {
+          "$ref": "#/$defs/GitPrMergeMethod"
+        }
+      },
+      "required": [
+        "number",
+        "method"
       ]
     },
     "GitCleanMergedIn": {
@@ -17399,6 +17800,13 @@
           ],
           "format": "uint64",
           "minimum": 0
+        },
+        "rev": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The file as it was at this revision (a commit, a branch, `HEAD`), from git, in place of\nthe one on disk: what a change's \"before\" side shows."
         }
       },
       "required": [
@@ -39666,6 +40074,98 @@
       },
       "required": [
         "url"
+      ]
+    },
+    "PhoneAppLatest": {
+      "type": "object",
+      "properties": {
+        "build": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The build: the commit count the APK was built at (Gradle's `versionCode`)."
+        },
+        "version": {
+          "type": "string",
+          "description": "What the build is called (`0.312`)."
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The APK's length in bytes."
+        },
+        "sha256": {
+          "type": "string",
+          "description": "Its SHA-256, lowercase hex: the phone checks the download against it."
+        },
+        "made_at": {
+          "type": "integer",
+          "format": "int64",
+          "description": "When it was published, ms since the epoch."
+        }
+      },
+      "required": [
+        "build",
+        "version",
+        "size",
+        "sha256",
+        "made_at"
+      ]
+    },
+    "PhoneAppApkIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "offset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Where this piece starts, in bytes (default 0)."
+        },
+        "len": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "At most this many bytes (default and most 3 MiB)."
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The `sha256` of the build being downloaded (`phone.app.latest`'s): a newer one published\nsince is refused (`phone.app_changed`) rather than read into the middle of the older."
+        }
+      }
+    },
+    "PhoneAppApkOut": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The whole APK's length in bytes."
+        },
+        "bytes_b64": {
+          "type": "string",
+          "description": "This piece, base64."
+        },
+        "eof": {
+          "type": "boolean",
+          "description": "This piece ends the file."
+        }
+      },
+      "required": [
+        "size",
+        "bytes_b64",
+        "eof"
       ]
     }
   }

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the FileProvider lends: updates/ in the app's files, where an app update Relay Code
+     downloaded from the PC and checked waits for Android's installer (update.rs). -->
+<paths>
+    <files-path name="updates" path="updates/" />
+</paths>

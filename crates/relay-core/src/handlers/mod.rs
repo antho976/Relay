@@ -22,6 +22,7 @@ pub mod thread;
 pub mod notes;
 pub mod notify;
 pub mod overlap;
+pub mod phone;
 pub mod picture;
 pub mod provider;
 pub mod session;
@@ -60,6 +61,7 @@ pub fn register_all(e: &mut Engine) {
     gym::register(e);
     aide::register(e);
     clips::register(e);
+    phone::register(e);
     thread::register(e);
     guardrail::register(e);
 }

@@ -64,7 +64,7 @@ cd apps/relay-code/native
 cargo test                                         # the link (with a stand-in door) and the app's rules and flows
 cargo clippy --all-targets -- -D warnings
 cargo run                                          # a phone-shaped window that pairs and connects like the phone
-cargo run -- --shot out.png --screen chat          # first-run, home, drawer, repos, chat, models, commands, asks, new-agent, settings, changes, board, task, inbox (sample data)
+cargo run -- --shot out.png --screen chat          # first-run, home, drawer, repos, chat, models, commands, asks, new-agent, settings, changes, board, task, inbox, update (sample data)
 tools/build-lib.sh                                 # librelaycode.so for arm64 (add x86_64 for the emulator)
 cd .. && ./gradlew :app:assembleDebug              # native/android/build/outputs/apk/debug/app-debug.apk
 ```
@@ -74,13 +74,71 @@ Shots run capped, as Leaf's: `systemd-run --user --scope -q -p MemoryMax=3G -p M
 The personal build fills in the owner's server so the first screen needs one tap:
 `RELAY_CODE_SERVER=<server> tools/build-lib.sh` (read at build time; blank in every other build).
 
-### Testing against a real door
+### First install on your phone
 
-`tests/live_door.rs` pairs and connects against a throwaway engine. Pairing is the owner's to do
-(agents may not run `relay remote pair`), so run it yourself:
+Once, by cable; every build after that comes from the PC (below).
+
+1. **The personal library**, with your server so the first screen needs one tap, from `native/`:
+   `RELAY_CODE_SERVER=<your server> tools/build-lib.sh` (arm64; it also sets the build number,
+   `RELAY_CODE_BUILD`, the commit count).
+2. **The APK**: `cd .. && ./gradlew :app:assembleDebug`, which writes
+   `native/android/build/outputs/apk/debug/app-debug.apk` (about 20 MB; 19.7 MB at build 2826, versionCode
+   and versionName `0.2826` from the commit count), signed with this PC's debug key.
+3. **Install** with the phone on USB debugging: `adb install -r native/android/build/outputs/apk/debug/app-debug.apk`.
+4. **Pair**: open Relay Code, Pair through my server, then Allow on Discord. It connects by itself
+   from then on.
+5. **Notifications**: allow them when Android asks, so an agent that asks you, finishes or has a
+   command held reaches you (Settings has a switch for each).
+6. **Installs for updates**: the first update opens Android's "Install unknown apps" page for
+   Relay Code. Allow it, come back, and tap Install.
+7. **Every later build**: `tools/publish-apk.sh <apk> <instance>`. The phone offers it within 15
+   minutes, or at once from Settings › Check for updates now. Updates install only over a build
+   signed with the same key, so publish debug builds from this PC.
+
+### Updates from the PC
+
+The phone updates from the PC it is paired with, as Leaf does from its server (`update.rs`). It
+knows its build (`RELAY_CODE_BUILD`, the commit count `tools/build-lib.sh` builds at; Gradle's
+`versionCode` takes the same number), asks the PC's `phone.app.latest` when it opens, when it comes
+back to the front and every 15 minutes while in front, and offers a newer build in a sheet: Update
+downloads `phone.app.apk` in 3 MiB pieces, checks its SHA-256 and hands it to Android's installer
+(Later hides that build for a day). To publish a build to the phone:
 
 ```fish
-relay --instance test remote serve --bind 127.0.0.1:7431 --start-engine &
-set -x RELAY_E2E_LINK (relay --instance test remote pair --no-confirm | string match -r 'relay://pair\S+')
-cd apps/relay-code/native && cargo test -p rc-link --test live_door -- --nocapture
+tools/build-lib.sh && cd .. && ./gradlew :app:assembleDebug
+tools/publish-apk.sh native/android/build/outputs/apk/debug/app-debug.apk dev   # or stable
 ```
+
+`publish-apk.sh` copies the APK and its `latest.json` into the instance's data folder
+(`~/.local/share/relay-v4/<instance>/phone/`), where the engine reads them. Nothing to deploy or
+restart. Android installs an update only over a build signed with the same key, so publish the
+kind of build the phone has.
+
+### A smoke run on an emulator
+
+```fish
+tools/smoke.sh            # builds for x86_64, installs, screenshots Home, a chat, Changes and Settings
+```
+
+It runs on an emulator only (one already running, else it boots `$AVD` headless and closes it
+after), under a Relay device lease, on sample data: the debug build's `screen` extra
+(`smoke.rs`), so it needs no PC and no pairing. It writes the shots and `startup.tsv` to
+`smoke-out/`: `am start -W`'s TotalTime and the app's own "first frame N ms after start", each
+from a cold start. First run, 2026-11-27, Tally_API36 (x86_64, Android 16) on the desktop:
+
+| Screen | TotalTime | First frame |
+|---|---|---|
+| Home | 661 ms | 463 ms |
+| Chat | 812 ms | 424 ms |
+| Changes | 766 ms | 502 ms |
+| Settings | 936 ms | 444 ms |
+
+### Testing against a real door
+
+`tests/live_door.rs` pairs, connects, and tries what the app is new to (`chat.send` once under one
+id, `session.transcript` with `before`, `phone.app.latest` and `.apk`) against a throwaway `test`
+engine on this PC. Pairing is the owner's to do, so the owner runs it, in a terminal of their own:
+
+1. `apps/relay-code/tools/live-check.sh` starts the test engine, its door on loopback, a scratch project and a fake APK.
+2. It prints one pairing command: run it, as it is, in a second terminal.
+3. It runs the live test, prints `Live check passed.`, and stops what it started.

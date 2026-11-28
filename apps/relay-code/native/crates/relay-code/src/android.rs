@@ -50,13 +50,20 @@ impl Host for AndroidHost {
         self.keyboard_at.store(now_ns(), Ordering::SeqCst);
         self.keyboard_shown.store(show, Ordering::SeqCst);
         if show {
-            let kind = match kind {
-                Kb::Text => InputType::TYPE_CLASS_TEXT,
+            let (kind, action, options) = match kind {
+                Kb::Text => (InputType::TYPE_CLASS_TEXT, TextInputAction::Done, ImeOptions::empty()),
+                // Enter is a new line, not the keyboard's action: GameTextInput keeps the
+                // newline only for a multi-line field, and Gboard shows a return key without one.
+                Kb::Prose => (
+                    InputType::TYPE_CLASS_TEXT | InputType::TYPE_TEXT_FLAG_MULTI_LINE | InputType::TYPE_TEXT_FLAG_CAP_SENTENCES | InputType::TYPE_TEXT_FLAG_AUTO_CORRECT,
+                    TextInputAction::None,
+                    ImeOptions::IME_FLAG_NO_ENTER_ACTION,
+                ),
                 // A web address: no capitals, no autocorrect, no suggestions.
-                Kb::Url => InputType::TYPE_CLASS_TEXT | InputType::TYPE_TEXT_VARIATION_URI | InputType::TYPE_TEXT_FLAG_NO_SUGGESTIONS,
-                Kb::Secret => InputType::TYPE_CLASS_TEXT | InputType::TYPE_TEXT_VARIATION_VISIBLE_PASSWORD | InputType::TYPE_TEXT_FLAG_NO_SUGGESTIONS,
+                Kb::Url => (InputType::TYPE_CLASS_TEXT | InputType::TYPE_TEXT_VARIATION_URI | InputType::TYPE_TEXT_FLAG_NO_SUGGESTIONS, TextInputAction::Done, ImeOptions::empty()),
+                Kb::Secret => (InputType::TYPE_CLASS_TEXT | InputType::TYPE_TEXT_VARIATION_VISIBLE_PASSWORD | InputType::TYPE_TEXT_FLAG_NO_SUGGESTIONS, TextInputAction::Done, ImeOptions::empty()),
             };
-            self.app.set_ime_editor_info(kind, TextInputAction::Done, ImeOptions::empty());
+            self.app.set_ime_editor_info(kind, action, options);
             // The caret after the last character, counted in UTF-16 units as Java does.
             let end: usize = text.chars().map(char::len_utf16).sum();
             self.app.set_text_input_state(TextInputState { text: text.to_string(), selection: TextSpan { start: end, end }, compose_region: None });
@@ -90,6 +97,17 @@ impl Host for AndroidHost {
         });
     }
 
+    fn share(&self, text: &str) {
+        with_activity(&self.app, |env, activity| {
+            let t = env.new_string(text)?;
+            env.call_method(activity, "share", "(Ljava/lang/String;)V", &[JValue::Object(&t)]).map(|_| ())
+        });
+    }
+
+    fn can_share(&self) -> bool {
+        true
+    }
+
     fn link_service(&self, on: bool, words: &str) {
         with_activity(&self.app, |env, activity| {
             let w = env.new_string(words)?;
@@ -101,12 +119,46 @@ impl Host for AndroidHost {
         with_activity(&self.app, |env, activity| env.call_method(activity, "pickPhoto", "()V", &[]).map(|_| ()));
     }
 
-    fn notify(&self, id: i32, title: &str, body: &str) {
+    fn haptic(&self) {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "haptic", "()V", &[]).map(|_| ()));
+    }
+
+    fn can_notify(&self) -> Option<bool> {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "canNotify", "()Z", &[])?.z())
+    }
+
+    fn open_notification_settings(&self) {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "openNotificationSettings", "()V", &[]).map(|_| ()));
+    }
+
+    fn font_scale(&self) -> f32 {
+        // Resources.getConfiguration().fontScale: the NDK's configuration does not carry it.
         with_activity(&self.app, |env, activity| {
-            let t = env.new_string(title)?;
-            let b = env.new_string(body)?;
-            env.call_method(activity, "notify", "(ILjava/lang/String;Ljava/lang/String;)V", &[JValue::Int(id), JValue::Object(&t), JValue::Object(&b)]).map(|_| ())
+            let res = env.call_method(activity, "getResources", "()Landroid/content/res/Resources;", &[])?.l()?;
+            let conf = env.call_method(&res, "getConfiguration", "()Landroid/content/res/Configuration;", &[])?.l()?;
+            env.get_field(&conf, "fontScale", "F")?.f()
+        })
+        .unwrap_or(1.0)
+    }
+
+    fn density(&self) -> f32 {
+        self.app.config().density().map_or(0.0, |dpi| dpi as f32 / 160.0)
+    }
+
+    fn can_install(&self) -> bool {
+        with_activity(&self.app, |env, activity| env.call_method(activity, "canInstall", "()Z", &[])?.z()).unwrap_or(false)
+    }
+
+    fn install_apk(&self, path: &std::path::Path) -> crate::update::Install {
+        let r = with_activity(&self.app, |env, activity| {
+            let p = env.new_string(path.to_string_lossy())?;
+            env.call_method(activity, "installApk", "(Ljava/lang/String;)I", &[JValue::Object(&p)])?.i()
         });
+        match r {
+            Some(1) => crate::update::Install::Started,
+            Some(0) => crate::update::Install::NeedsLeave,
+            _ => crate::update::Install::Failed,
+        }
     }
 
 
@@ -152,13 +204,212 @@ pub extern "system" fn Java_com_quietsoftware_relaycode_CodeActivity_nativePhoto
     }
 }
 
-/// The network changed (LinkService's callback): the link redials now.
-static NETWORK: AtomicBool = AtomicBool::new(false);
+/// Posts from the notifications' own thread (background.rs) through LinkService's static
+/// methods, with the application's Context: it works with no activity at all.
+struct ServiceNotifier {
+    vm: jni::JavaVM,
+    /// LinkService's class, found on a Java thread: a native thread's FindClass sees only the
+    /// system's classes.
+    class: jni::objects::GlobalRef,
+    context: jni::objects::GlobalRef,
+}
+
+impl ServiceNotifier {
+    fn with_env(&self, f: impl FnOnce(&mut JNIEnv) -> jni::errors::Result<()>) {
+        let Ok(mut env) = self.vm.attach_current_thread_permanently() else { return };
+        let out = env.with_local_frame(8, |env| f(env));
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_describe();
+            let _ = env.exception_clear();
+        }
+        if let Err(e) = out {
+            log(&format!("notify: {e}"));
+        }
+    }
+}
+
+impl crate::background::Notifier for ServiceNotifier {
+    fn alert(&self, id: i32, title: &str, body: &str, agent: &str, actions: crate::background::Actions) {
+        use crate::background::Actions;
+        log(&format!("notify: {title}"));
+        // LinkService.alert's kinds: 0 open, 1 reply, 2 a hold (with its id), 3 quiet.
+        let (kind, hold) = match actions {
+            Actions::Open => (0, 0),
+            Actions::Reply => (1, 0),
+            Actions::Hold(h) => (2, h),
+            Actions::Quiet => (3, 0),
+        };
+        self.with_env(|env| {
+            let (t, b, a) = (env.new_string(title)?, env.new_string(body)?, env.new_string(agent)?);
+            let class: &JClass = self.class.as_obj().into();
+            env.call_static_method(
+                class,
+                "alert",
+                "(Landroid/content/Context;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;IJ)V",
+                &[
+                    JValue::Object(self.context.as_obj()),
+                    JValue::Int(id),
+                    JValue::Object(&t),
+                    JValue::Object(&b),
+                    JValue::Object(&a),
+                    JValue::Int(kind),
+                    JValue::Long(hold),
+                ],
+            )
+            .map(|_| ())
+        });
+    }
+
+    fn clear(&self, id: i32) {
+        self.with_env(|env| {
+            let class: &JClass = self.class.as_obj().into();
+            env.call_static_method(class, "clear", "(Landroid/content/Context;I)V", &[JValue::Object(self.context.as_obj()), JValue::Int(id)]).map(|_| ())
+        });
+    }
+
+    fn line(&self, words: &str) {
+        log(&format!("link: {words}"));
+        self.with_env(|env| {
+            let w = env.new_string(words)?;
+            let class: &JClass = self.class.as_obj().into();
+            env.call_static_method(class, "words", "(Landroid/content/Context;Ljava/lang/String;)Z", &[JValue::Object(self.context.as_obj()), JValue::Object(&w)]).map(|_| ())
+        });
+    }
+}
+
+/// LinkService started (with or without the activity): the link and the notifications run for
+/// the process from now on.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_relaycode_LinkService_nativeStart<'local>(
+    mut env: JNIEnv<'local>,
+    class: JClass<'local>,
+    context: JObject<'local>,
+    data_dir: jni::objects::JString<'local>,
+) {
+    std::panic::set_hook(Box::new(|info| log(&format!("panic: {info}"))));
+    let data: String = env.get_string(&data_dir).map(Into::into).unwrap_or_default();
+    let (Ok(vm), Ok(class), Ok(context)) = (env.get_java_vm(), env.new_global_ref(&class), env.new_global_ref(&context)) else { return };
+    if data.is_empty() {
+        return;
+    }
+    crate::background::start(PathBuf::from(data), Arc::new(ServiceNotifier { vm, class, context }));
+}
+
+/// A notification about an agent was tapped: its chat opens (CodeActivity's `agent` extra).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_relaycode_CodeActivity_nativeOpen<'local>(mut env: JNIEnv<'local>, _class: JClass<'local>, agent: jni::objects::JString<'local>) {
+    if agent.is_null() {
+        return;
+    }
+    let a: String = env.get_string(&agent).map(Into::into).unwrap_or_default();
+    if !a.is_empty() {
+        log(&format!("opened from a notification: {a}"));
+        crate::background::opened(a);
+    }
+}
+
+/// The network changed (LinkService's callback): the process's link redials now, from this thread,
+/// whether or not an activity's loop is running to hear of it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_relaycode_LinkService_nativeNetwork<'local>(_env: JNIEnv<'local>, _class: JClass<'local>, network: jni::sys::jlong) {
+    crate::background::network_changed(network);
+}
+
+/// Something was done from a notification in the shade (ActionReceiver): a reply's words, or a
+/// held command allowed once or denied (D18). Handed to the loop, which asks the PC.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_relaycode_LinkService_nativeAct<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    kind: jni::objects::JString<'local>,
+    agent: jni::objects::JString<'local>,
+    hold: jni::sys::jlong,
+    text: jni::objects::JString<'local>,
+) {
+    let mut read = |s: &jni::objects::JString<'local>| -> String { if s.is_null() { String::new() } else { env.get_string(s).map(Into::into).unwrap_or_default() } };
+    let (kind, agent, text) = (read(&kind), read(&agent), read(&text));
+    if let Some(a) = crate::background::Act::read(&kind, &agent, hold, &text) {
+        crate::background::act(a);
+    }
+}
+
+/// The screen went on or off (LinkService's receiver): off, the notifications read nothing on a
+/// timer.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_quietsoftware_relaycode_LinkService_nativeScreen<'local>(_env: JNIEnv<'local>, _class: JClass<'local>, on: jni::sys::jboolean) {
+    crate::background::screen(on != 0);
+}
+
+/// A sample screen to show (the smoke run's `screen` extra; CodeActivity passes it only in a
+/// debuggable build).
+static SAMPLE: Mutex<Option<String>> = Mutex::new(None);
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_quietsoftware_relaycode_LinkService_nativeNetwork<'local>(_env: JNIEnv<'local>, _class: JClass<'local>) {
-    NETWORK.store(true, Ordering::SeqCst);
-    wake();
+pub extern "system" fn Java_com_quietsoftware_relaycode_CodeActivity_nativeSample<'local>(mut env: JNIEnv<'local>, _class: JClass<'local>, name: jni::objects::JString<'local>) {
+    if name.is_null() {
+        return;
+    }
+    let n: String = env.get_string(&name).map(Into::into).unwrap_or_default();
+    PERF.store(n == "chat400", Ordering::SeqCst);
+    if !n.is_empty() {
+        *SAMPLE.lock().unwrap_or_else(|e| e.into_inner()) = Some(n);
+        wake();
+    }
+}
+
+/// Frames timed into the log (`RelayCodePerf`), for the long-chat sample only (A19).
+static PERF: AtomicBool = AtomicBool::new(false);
+
+/// What the frame-time log keeps between reports: each frame's build (app.frame) and present
+/// (s.frame) times and the gap since the frame before it while frames run back to back, and when
+/// typed text came in.
+#[derive(Default)]
+struct Perf {
+    build: Vec<u64>,
+    present: Vec<u64>,
+    gaps: Vec<u64>,
+    last: Option<u64>,
+    text_at: Option<u64>,
+}
+
+impl Perf {
+    fn frame(&mut self, start: u64, built: u64, shown: u64) {
+        self.build.push(built - start);
+        self.present.push(shown - built);
+        // Back to back: a fling or an animation, not a frame after a pause.
+        if let Some(l) = self.last.filter(|l| start - l < 70_000_000) {
+            self.gaps.push(start - l);
+        }
+        self.last = Some(start);
+        if let Some(t) = self.text_at.take() {
+            log(&format!("RelayCodePerf text in to glyph shown {:.1} ms", (shown - t) as f64 / 1e6));
+        }
+        if self.build.len() >= 120 {
+            let pct = |v: &mut Vec<u64>, p: f64| {
+                v.sort_unstable();
+                v.get(((v.len() as f64 - 1.0) * p).round() as usize).map_or(0.0, |x| *x as f64 / 1e6)
+            };
+            let over = self.gaps.iter().filter(|g| **g > 16_700_000 + 4_000_000).count();
+            let n_gaps = self.gaps.len();
+            log(&format!(
+                "RelayCodePerf frames {} build p50 {:.2} p95 {:.2} max {:.2} ms | present p50 {:.2} p95 {:.2} ms | gaps {} p50 {:.2} p95 {:.2} max {:.2} ms, over 20.7 ms {}",
+                self.build.len(),
+                pct(&mut self.build, 0.5),
+                pct(&mut self.build, 0.95),
+                pct(&mut self.build, 1.0),
+                pct(&mut self.present, 0.5),
+                pct(&mut self.present, 0.95),
+                n_gaps,
+                pct(&mut self.gaps, 0.5),
+                pct(&mut self.gaps, 0.95),
+                pct(&mut self.gaps, 1.0),
+                over
+            ));
+            self.build.clear();
+            self.present.clear();
+            self.gaps.clear();
+        }
+    }
 }
 
 /// Back, from CodeActivity's back callback.
@@ -267,6 +518,9 @@ const RETRY_NS: u64 = 16_000_000;
 
 #[unsafe(no_mangle)]
 fn android_main(android: AndroidApp) {
+    let started = now_ns();
+    let mut first_frame = true;
+    let mut perf = Perf::default();
     std::panic::set_hook(Box::new(|info| log(&format!("panic: {info}"))));
     *WAKER.lock().unwrap_or_else(|e| e.into_inner()) = Some(android.create_waker());
     crate::wake::set(Box::new(wake));
@@ -283,6 +537,8 @@ fn android_main(android: AndroidApp) {
     let mut last_insets = (0.0, 0.0, 0.0);
     let mut insets_api: Option<InsetsApi> = None;
     let mut watch_until = 0u64;
+    // In the background: when the app has something due (a message's Enter, a write).
+    let mut away_due: Option<u64> = None;
 
     while !quit {
         let drawing = screen.is_some() && foreground;
@@ -292,7 +548,7 @@ fn android_main(android: AndroidApp) {
         }
         watch_until = watch_until.max(host.keyboard_at.load(Ordering::SeqCst).saturating_add(KEYBOARD_SETTLE_NS));
         let timeout = if !drawing {
-            None
+            away_due.map(|at| Duration::from_nanos(at.saturating_sub(now)))
         } else if dirty || matches!(next, Next::Now) {
             Some(Duration::ZERO)
         } else {
@@ -396,12 +652,11 @@ fn android_main(android: AndroidApp) {
             }
         }
 
-        if NETWORK.swap(false, Ordering::SeqCst) {
-            app.link.kick();
-        }
         // In the background the link's news is still read: a question becomes a notification.
-        if woken && !foreground {
-            app.tick(now_ns());
+        if foreground {
+            away_due = None;
+        } else if woken || away_due.is_some_and(|at| now_ns() >= at) {
+            away_due = app.tick(now_ns());
         }
         let mut go_back = BACK.swap(false, Ordering::SeqCst);
         let mut text: Option<(String, (usize, usize))> = None;
@@ -463,6 +718,9 @@ fn android_main(android: AndroidApp) {
         if let Some((t, sel)) = text {
             app.set_text_sel(&t, Some(sel));
             dirty = true;
+            if PERF.load(Ordering::Relaxed) {
+                perf.text_at = Some(now_ns());
+            }
         }
         if done_typing || (go_back && app.focus.id.is_some()) {
             app.done_typing();
@@ -476,21 +734,36 @@ fn android_main(android: AndroidApp) {
             }
         }
 
+        // A sample screen asked for by the smoke run (debuggable builds only), before it is drawn.
+        if let Some(name) = SAMPLE.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            crate::smoke::show(&mut app, &name);
+            dirty = true;
+        }
         let due = dirty || matches!(next, Next::Now) || matches!(next, Next::At(at) if now_ns() >= at);
         if foreground
             && due
             && let (Some(g), Some(s)) = (&mut gfx, &mut screen)
         {
             dirty = false;
-            next = app.frame(now_ns());
+            let frame_start = now_ns();
+            next = app.frame(frame_start);
             if app.canvas.take_late_pictures() {
                 next = Next::Now;
             }
             g.upload_glyphs(&mut app.canvas.uploads);
             g.upload_images(&mut app.canvas.image_uploads);
             let (globals, clear) = (app.canvas.globals, app.clear_colour());
-            if !s.frame(g, &globals, clear, &app.canvas.insts, &app.canvas.batches) {
+            let built = now_ns();
+            let shown_ok = s.frame(g, &globals, clear, &app.canvas.insts, &app.canvas.batches);
+            if PERF.load(Ordering::Relaxed) {
+                perf.frame(frame_start, built, now_ns());
+            }
+            if !shown_ok {
                 next = Next::At(now_ns() + RETRY_NS);
+            } else if first_frame {
+                // Read by the smoke run beside `am start -W`'s TotalTime.
+                first_frame = false;
+                log(&format!("first frame {} ms after start", (now_ns() - started) / 1_000_000));
             }
         }
     }

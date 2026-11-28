@@ -5,8 +5,10 @@
 //! (tested); the link to the PC is the `rc-link` crate. `draw` and `gfx` are the canvas and the GPU
 //! (Leaf's and Tally RS's renderer); `desktop` and `android` the two front ends.
 
+pub mod agents;
 pub mod app;
 pub mod attach;
+pub mod background;
 pub mod board;
 pub mod changes;
 pub mod design_paint;
@@ -14,19 +16,27 @@ pub mod designs;
 pub mod inbox;
 pub mod chat;
 pub mod clock;
+pub mod commands;
 pub mod data;
 pub mod draw;
 pub mod drawer;
+pub mod errors;
+pub mod fileview;
 pub mod gfx;
 pub mod glyphs;
 pub mod home;
+pub mod keys;
 pub mod kit;
+pub mod news;
 pub mod pair;
 pub mod sample;
 pub mod screen;
 pub mod settings;
+pub mod smoke;
+pub mod terminal;
 pub mod theme;
 pub mod ui;
+pub mod update;
 pub mod wake;
 
 #[cfg(test)]

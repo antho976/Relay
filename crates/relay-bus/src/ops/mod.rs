@@ -55,6 +55,7 @@ pub mod picture;
 pub mod video;
 pub mod aide;
 pub mod clips;
+pub mod phone;
 
 /// Every op, in catalogue order.
 pub fn all() -> Vec<crate::registry::OpEntry> {
@@ -84,5 +85,6 @@ pub fn all() -> Vec<crate::registry::OpEntry> {
     v.extend(video::entries());
     v.extend(aide::entries());
     v.extend(clips::entries());
+    v.extend(phone::entries());
     v
 }

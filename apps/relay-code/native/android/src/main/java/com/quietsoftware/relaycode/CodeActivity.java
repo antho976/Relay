@@ -1,9 +1,5 @@
 package com.quietsoftware.relaycode;
 
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
@@ -27,12 +23,19 @@ import com.google.androidgamesdk.GameActivity;
  * The app is Rust (librelaycode.so); this class exists because
  * - Back: AndroidX's back dispatcher finishes the activity before the key reaches native code, so
  *   a callback here hands every Back to Rust, which closes a sheet, goes back a page or leaves;
- * - the clipboard, notifications and the foreground service are Java-only APIs.
+ * - a tapped notification names the agent whose chat opens (LinkService posts them);
+ * - the clipboard and starting the foreground service are Java-only APIs.
  * Nothing here decides anything: Rust says what to show and when.
  */
 public class CodeActivity extends GameActivity {
     /** The Back gesture or key, to Rust. */
     private static native void nativeBack();
+
+    /** A notification was tapped: the chat of {@code agent} opens. */
+    private static native void nativeOpen(String agent);
+
+    /** The smoke run's sample screen ({@code --es screen chat}), debuggable builds only. */
+    private static native void nativeSample(String screen);
 
     /** A picked photo, shrunk and saved at {@code path}, to Rust. */
     private static native void nativePhoto(String path);
@@ -40,8 +43,6 @@ public class CodeActivity extends GameActivity {
     private static final int PICK_PHOTO = 0x5250;
     /** The longest side a photo is sent at: enough for an agent to read a screenshot. */
     private static final int MAX_SIDE = 2048;
-
-    static final String ASKS = "asks";
 
     @Override
     protected void onCreate(android.os.Bundle saved) {
@@ -57,12 +58,49 @@ public class CodeActivity extends GameActivity {
                 nativeBack();
             }
         });
+        opened(getIntent());
+        sample(getIntent());
+    }
+
+    /** A sample screen for the smoke run: a release build ignores the extra. */
+    private void sample(Intent intent) {
+        if (intent == null || (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) == 0) return;
+        String screen = intent.getStringExtra("screen");
+        if (screen != null && !screen.isEmpty()) nativeSample(screen);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        opened(intent);
+        sample(intent);
+    }
+
+    /** A notification's tap names the agent whose chat opens (LinkService.alert); once. */
+    private void opened(Intent intent) {
+        String agent = intent != null ? intent.getStringExtra(LinkService.AGENT) : null;
+        if (agent == null || agent.isEmpty()) return;
+        intent.removeExtra(LinkService.AGENT);
+        nativeOpen(agent);
     }
 
     public void copyText(final String text) {
         runOnUiThread(() -> {
             ClipboardManager cm = getSystemService(ClipboardManager.class);
             if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("Relay Code", text));
+        });
+    }
+
+    /** Hands {@code text} to another app (the system's share sheet). */
+    public void share(final String text) {
+        runOnUiThread(() -> {
+            Intent send = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text);
+            try {
+                startActivity(Intent.createChooser(send, null));
+            } catch (android.content.ActivityNotFoundException ignored) {
+                // Nothing to share with: nothing opens.
+            }
         });
     }
 
@@ -91,11 +129,16 @@ public class CodeActivity extends GameActivity {
         });
     }
 
-    /** Starts or stops {@link LinkService}; {@code words} is its ongoing notification's line. */
+    /**
+     * Starts or stops {@link LinkService}; {@code words} is its ongoing notification's line. A
+     * running service only has its line changed: starting it again from the background (the link
+     * dropped while the app was away) is refused on Android 12 and later.
+     */
     public void linkService(final boolean on, final String words) {
         runOnUiThread(() -> {
             Intent i = new Intent(this, LinkService.class).putExtra(LinkService.WORDS, words);
             if (on) {
+                if (LinkService.words(this, words)) return;
                 try {
                     ContextCompat.startForegroundService(this, i);
                 } catch (RuntimeException ignored) {
@@ -105,6 +148,70 @@ public class CodeActivity extends GameActivity {
                 stopService(i);
             }
         });
+    }
+
+    /** Android lets this app post notifications (Settings' switches read it, D22). */
+    public boolean canNotify() {
+        android.app.NotificationManager nm = getSystemService(android.app.NotificationManager.class);
+        return nm == null || nm.areNotificationsEnabled();
+    }
+
+    /** Android's notification settings for this app, where they are turned back on. */
+    public void openNotificationSettings() {
+        runOnUiThread(() -> {
+            Intent i = new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, getPackageName());
+            try {
+                startActivity(i);
+            } catch (android.content.ActivityNotFoundException ignored) {
+                // No such page here: the row still says what to turn on.
+            }
+        });
+    }
+
+    /** Android lets this app install others (always below Android 8). */
+    public boolean canInstall() {
+        return android.os.Build.VERSION.SDK_INT < 26 || getPackageManager().canRequestPackageInstalls();
+    }
+
+    /**
+     * Hands the APK Rust downloaded from the PC (files/updates/, checked against its SHA-256) to
+     * Android's installer: 1 when it opened, 0 when the app may not install apps yet (Android's
+     * "Install unknown apps" page for it opens instead), -1 when it failed.
+     */
+    public int installApk(final String path) {
+        if (!canInstall()) {
+            runOnUiThread(() -> {
+                Intent allow = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()));
+                try {
+                    startActivity(allow);
+                } catch (android.content.ActivityNotFoundException ignored) {
+                    // No such page on this phone: the sheet still says what to allow.
+                }
+            });
+            return 0;
+        }
+        try {
+            Uri uri = androidx.core.content.FileProvider.getUriForFile(this, getPackageName() + ".files", new File(path));
+            Intent install = new Intent(Intent.ACTION_VIEW);
+            install.setDataAndType(uri, "application/vnd.android.package-archive");
+            install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            runOnUiThread(() -> {
+                try {
+                    startActivity(install);
+                } catch (android.content.ActivityNotFoundException ignored) {
+                    // No installer: nothing opens.
+                }
+            });
+            return 1;
+        } catch (Throwable e) {
+            return -1;
+        }
+    }
+
+    /** A light tick under the finger: on send, on a long press that copies, on a switch (Rust's Host::haptic). */
+    public void haptic() {
+        runOnUiThread(() -> getWindow().getDecorView().performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK));
     }
 
     /** The system's picker, for one photo or screenshot. */
@@ -154,22 +261,5 @@ public class CodeActivity extends GameActivity {
                 // Unreadable: nothing comes back.
             }
         }).start();
-    }
-
-    /** An agent asks you something: a notice that opens the app. */
-    public void notify(final int id, final String title, final String body) {
-        NotificationManager nm = getSystemService(NotificationManager.class);
-        if (nm == null) return;
-        nm.createNotificationChannel(new NotificationChannel(ASKS, "Agents that ask you", NotificationManager.IMPORTANCE_HIGH));
-        Intent open = new Intent(this, CodeActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        PendingIntent tap = PendingIntent.getActivity(this, id, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        Notification n = new Notification.Builder(this, ASKS)
-                .setSmallIcon(R.drawable.ic_notify)
-                .setContentTitle(title)
-                .setContentText(body)
-                .setContentIntent(tap)
-                .setAutoCancel(true)
-                .build();
-        nm.notify(id, n);
     }
 }

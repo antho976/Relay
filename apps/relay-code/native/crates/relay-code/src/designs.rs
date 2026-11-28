@@ -15,7 +15,8 @@
 //! (`Plan::pictures_mark`), so one coming makes the pictures it is on painted again, the old
 //! ones shown until the new ones are ready.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
@@ -152,8 +153,11 @@ enum Done {
     Paint(String, Pix),
     /// Painting this picture failed (the painter tripped on the page): it is not asked again.
     Unpainted(String),
-    /// A fetch ended, the picture in the keep or not (`pictures::status` says).
-    Fetched,
+    /// A fetch ended (or was merged into one queued, or dropped as the page was left), the picture
+    /// in the keep or not (`pictures::status` says): for the page's visit it was asked in.
+    Fetched(u64),
+    /// Not painted: a newer part of the same artboard was asked for after it (a pan went on).
+    Dropped(String),
 }
 
 /// A picture to fetch and decode, `soon` for the open design's.
@@ -163,19 +167,25 @@ struct Fetch {
     src: String,
     want: (u32, u32),
     soon: bool,
+    /// The visit it was asked in: one from before leaving Designs (or changing repo) is not fetched.
+    visit: u64,
 }
 
 /// Read picture `src` of `design` from the PC, every piece, and decode it to cover `want` px.
 /// Blocks: the fetch thread only.
-fn fetch(link: &Link, design: i64, src: &str, want: (u32, u32)) -> Result<dp::pictures::Picture, pictures::Why> {
+fn fetch(link: &Link, design: i64, src: &str, want: (u32, u32), stop: &dyn Fn() -> bool) -> Result<dp::pictures::Picture, pictures::Why> {
     use pictures::Why;
     let mut bytes = Vec::new();
     let mut offset = 0u64;
     loop {
+        // The page was left between pieces: no more of it is read (up to 20 MB, in the background).
+        if stop() {
+            return Err(Why::Link("left".into()));
+        }
         let v = link
             .call_with("design.asset.get", json!({"design_id": design, "src": src, "offset": offset}), PIECE_WAIT)
             .wait(PIECE_WAIT + Duration::from_secs(5))
-            .map_err(|e| if e.code.starts_with("link.") { Why::Link(e.message) } else { Why::Refused(e.message) })?;
+            .map_err(|e| if e.code.starts_with("link.") { Why::Link(crate::errors::words(&e)) } else { Why::Refused(crate::errors::words(&e)) })?;
         if v.get("size").and_then(Value::as_u64).is_some_and(|n| n > pictures::MAX_FILE as u64) {
             return Err(Why::TooBig);
         }
@@ -195,34 +205,59 @@ fn fetch(link: &Link, design: i64, src: &str, want: (u32, u32)) -> Result<dp::pi
 
 /// The fetch thread: one picture at a time, the open design's (`soon`) first. It ends with the
 /// worker; what it had not fetched yet may be asked for again.
-fn fetch_loop(asks: Receiver<Fetch>, done: Sender<Done>) {
+fn fetch_loop(asks: Receiver<Fetch>, done: Sender<Done>, visit: Arc<AtomicU64>) {
     let mut queue: Vec<Fetch> = Vec::new();
+    // An ask for a picture already queued merges into it, and is answered at once: every ask the
+    // page counted gets its Fetched, or `fetching` would stay above nought for ever.
     let take = |queue: &mut Vec<Fetch>, f: Fetch| match queue.iter_mut().find(|q| q.src == f.src) {
-        Some(q) => q.soon |= f.soon,
-        None => queue.push(f),
+        Some(q) => {
+            q.soon |= f.soon;
+            q.visit = q.visit.max(f.visit);
+            done.send(Done::Fetched(f.visit)).is_ok()
+        }
+        None => {
+            queue.push(f);
+            true
+        }
     };
     loop {
         if queue.is_empty() {
             match asks.recv() {
-                Ok(f) => take(&mut queue, f),
+                Ok(f) => {
+                    if !take(&mut queue, f) {
+                        break;
+                    }
+                }
                 Err(_) => break,
             }
         }
         while let Ok(f) = asks.try_recv() {
-            take(&mut queue, f);
+            if !take(&mut queue, f) {
+                return;
+            }
         }
-        let f = queue.remove(queue.iter().position(|f| f.soon).unwrap_or(0));
-        // Asked twice while it was on its way: it is here now.
-        if pictures::status(&f.src) != pictures::Status::Loading {
-            if done.send(Done::Fetched).is_err() {
+        let Some(i) = queue.iter().position(|f| f.soon).or((!queue.is_empty()).then_some(0)) else { continue };
+        let f = queue.remove(i);
+        let current = || visit.load(Ordering::Relaxed) == f.visit;
+        // From a visit since left, or asked twice while it was on its way and here now.
+        if !current() || pictures::status(&f.src) != pictures::Status::Loading {
+            if !current() {
+                pictures::forget(&f.src);
+            }
+            if done.send(Done::Fetched(f.visit)).is_err() {
                 break;
             }
             continue;
         }
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fetch(&f.link, f.design, &f.src, f.want)))
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fetch(&f.link, f.design, &f.src, f.want, &|| !current())))
             .unwrap_or_else(|_| Err(pictures::Why::Broken("the decoder tripped on it".into())));
-        pictures::put(&f.src, r);
-        if done.send(Done::Fetched).is_err() {
+        // Left while it came: not kept as failed, asked again on the next visit.
+        if current() {
+            pictures::put(&f.src, r);
+        } else {
+            pictures::forget(&f.src);
+        }
+        if done.send(Done::Fetched(f.visit)).is_err() {
             break;
         }
         crate::wake::wake();
@@ -262,28 +297,66 @@ fn run(job: Job) -> Done {
     }
 }
 
+/// The next job to run, in the order asked, and the keys of those skipped: a part of an artboard
+/// (a zoomed view, still for a moment) is skipped when a newer part of the same artboard waits
+/// behind it, so after a pan only where it stopped is painted.
+fn next_job(queue: &mut VecDeque<(u64, Job)>, now: u64) -> (Option<Job>, Vec<String>) {
+    let mut dropped = Vec::new();
+    while let Some((visit, job)) = queue.pop_front() {
+        let superseded = match &job {
+            // Asked on a visit to Designs since left: nobody waits for it.
+            Job::Paint { .. } if visit != now => true,
+            Job::Paint { what: What::Region(root, _), .. } => queue.iter().any(|(_, q)| matches!(q, Job::Paint { what: What::Region(r, _), .. } if r == root)),
+            _ => false,
+        };
+        if !superseded {
+            return (Some(job), dropped);
+        }
+        if let Job::Paint { key, .. } = job {
+            dropped.push(key);
+        }
+    }
+    (None, dropped)
+}
+
 /// One thread for this screen's slow work, in the order it was asked for. It ends with the state.
 struct Worker {
-    tx: Sender<Job>,
+    tx: Sender<(u64, Job)>,
     fetch: Sender<Fetch>,
     rx: Receiver<Done>,
 }
 
 impl Worker {
-    fn new() -> Worker {
-        let (tx, jobs) = mpsc::channel::<Job>();
+    fn new(visit: Arc<AtomicU64>) -> Worker {
+        let (tx, jobs) = mpsc::channel::<(u64, Job)>();
         let (fetch, asks) = mpsc::channel::<Fetch>();
         let (done, rx) = mpsc::channel();
         let fetched = done.clone();
+        let fetch_visit = visit.clone();
         let _ = std::thread::Builder::new().name("designs".into()).spawn(move || {
-            for job in jobs {
+            let mut queue: VecDeque<(u64, Job)> = VecDeque::new();
+            loop {
+                if queue.is_empty() {
+                    match jobs.recv() {
+                        Ok(j) => queue.push_back(j),
+                        Err(_) => break,
+                    }
+                }
+                queue.extend(jobs.try_iter());
+                let (job, dropped) = next_job(&mut queue, visit.load(Ordering::Relaxed));
+                for key in dropped {
+                    if done.send(Done::Dropped(key)).is_err() {
+                        return;
+                    }
+                }
+                let Some(job) = job else { continue };
                 if done.send(run_safe(job)).is_err() {
                     break;
                 }
                 crate::wake::wake();
             }
         });
-        let _ = std::thread::Builder::new().name("design-pictures".into()).spawn(move || fetch_loop(asks, fetched));
+        let _ = std::thread::Builder::new().name("design-pictures".into()).spawn(move || fetch_loop(asks, fetched, fetch_visit));
         Worker { tx, fetch, rx }
     }
 }
@@ -331,6 +404,8 @@ pub struct View {
 #[derive(Default)]
 pub struct Open {
     pub id: i64,
+    /// The repo it was opened in: the chip moving to another leaves it.
+    pub repo: Option<i64>,
     pub title: String,
     pub session: Option<String>,
     pub updated_at: String,
@@ -375,6 +450,11 @@ pub struct State {
     tries: HashMap<String, u8>,
     soon: HashSet<String>,
     worker: Option<Worker>,
+    /// Which visit to Designs this is: leaving (or another repo) moves it on, and work queued for an
+    /// older visit (pictures to fetch, pieces to paint) is dropped by the threads.
+    visit: Arc<AtomicU64>,
+    /// A Designs page was drawn last frame.
+    here: bool,
     /// Do the slow work in the frame (screenshots, which draw a few frames with no waker).
     inline: bool,
 }
@@ -395,8 +475,10 @@ impl State {
             self.handle(d);
             return;
         }
-        let w = self.worker.get_or_insert_with(Worker::new);
-        if let Err(mpsc::SendError(job)) = w.tx.send(job) {
+        let visit = self.visit.load(Ordering::Relaxed);
+        let g = self.visit.clone();
+        let w = self.worker.get_or_insert_with(|| Worker::new(g));
+        if let Err(mpsc::SendError(job)) = w.tx.send((visit, job)) {
             // The thread is gone (it panicked on a page): start another.
             self.new_worker();
             if let Some(w) = &self.worker {
@@ -405,10 +487,20 @@ impl State {
         }
     }
 
+    /// Designs was left, or the repo changed: what was queued for it is not wanted now. The
+    /// threads drop it; what was not fetched is asked for again next time.
+    fn leave(&mut self) {
+        self.visit.fetch_add(1, Ordering::Relaxed);
+        self.fetching = 0;
+        self.asked.clear();
+        self.soon.clear();
+        self.wanted.clear();
+    }
+
     /// A new worker and fetch thread; the old fetch thread ends, what it had not fetched
     /// forgotten so it is asked for again.
     fn new_worker(&mut self) {
-        self.worker = Some(Worker::new());
+        self.worker = Some(Worker::new(self.visit.clone()));
         self.fetching = 0;
         self.wanted.clear();
     }
@@ -455,7 +547,7 @@ impl State {
             if self.worker.is_none() {
                 self.new_worker();
             }
-            let f = Fetch { link: link.clone(), design: plan.design, src: w.src.clone(), want: (w.w, w.h), soon };
+            let f = Fetch { link: link.clone(), design: plan.design, src: w.src.clone(), want: (w.w, w.h), soon, visit: self.visit.load(Ordering::Relaxed) };
             let sent = self.worker.as_ref().is_some_and(|wk| wk.fetch.send(f).is_ok());
             if sent {
                 self.fetching += 1;
@@ -507,8 +599,11 @@ impl State {
                 if let Ok(p) = &r {
                     self.keep_plan(p.clone());
                 }
-                if let Some(o) = self.open.as_mut().filter(|o| o.id == id && o.page.as_deref() == Some(page.as_str())) {
+                // Its layout is in, whatever page shows now: busy() must not wait on it for ever.
+                if let Some(o) = self.open.as_mut().filter(|o| o.id == id && o.planning.as_deref() == Some(page.as_str())) {
                     o.planning = None;
+                }
+                if let Some(o) = self.open.as_mut().filter(|o| o.id == id && o.page.as_deref() == Some(page.as_str())) {
                     match r {
                         Ok(p) => {
                             if let Some(v) = &mut o.view {
@@ -521,7 +616,15 @@ impl State {
                     }
                 }
             }
-            Done::Fetched => self.fetching = self.fetching.saturating_sub(1),
+            // Only this visit's: one from a visit since left was counted then, and reset since.
+            Done::Fetched(visit) => {
+                if visit == self.visit.load(Ordering::Relaxed) {
+                    self.fetching = self.fetching.saturating_sub(1);
+                }
+            }
+            Done::Dropped(key) => {
+                self.asked.remove(&key);
+            }
             Done::Unpainted(key) => {
                 // Left in `asked`'s place so it is not painted again; a tile shows instead.
                 self.asked.remove(&key);
@@ -536,6 +639,20 @@ impl State {
                     total -= self.pics.remove(0).1.data.len();
                 }
             }
+        }
+    }
+
+    /// A thumbnail scrolled far away: its layout leaves memory (here and in the plans kept). Its
+    /// last strip stays to show when it comes back; with none, it is read again then.
+    fn let_go(&mut self, id: i64) {
+        let Some(th) = self.thumbs.get_mut(&id) else { return };
+        let Some(p) = th.plan.take() else { return };
+        if th.key.is_none() && matches!(th.stage, Stage::Ready) {
+            th.stage = Stage::Idle;
+        }
+        let open = self.open.as_ref().and_then(|o| o.plan.as_ref());
+        if !open.is_some_and(|o| Arc::ptr_eq(o, &p)) {
+            self.plans.retain(|q| !Arc::ptr_eq(q, &p));
         }
     }
 
@@ -563,6 +680,22 @@ impl State {
 
 // Taking answers
 
+/// Every frame, on any page: what the threads finished is taken (handle() keeps it within its
+/// caps), so painted pictures never pile up in the channel while Designs is away; and leaving
+/// Designs drops what was queued for it.
+pub fn keep_up(app: &mut App) {
+    let here = matches!(app.route(), crate::app::Route::Designs | crate::app::Route::Design(_));
+    let st = &mut app.st.designs;
+    if st.here && !here {
+        st.leave();
+    }
+    st.here = here;
+    let done: Vec<Done> = st.worker.as_ref().map(|w| w.rx.try_iter().collect()).unwrap_or_default();
+    for d in done {
+        st.handle(d);
+    }
+}
+
 fn take(app: &mut App) {
     let link = app.link.clone();
     let st = &mut app.st.designs;
@@ -574,7 +707,7 @@ fn take(app: &mut App) {
                 st.loaded = true;
                 st.error = None;
             }
-            Err(e) => st.error = Some(e.message),
+            Err(e) => st.error = Some(crate::errors::words(&e)),
         }
     }
     let mut jobs = Vec::new();
@@ -619,7 +752,7 @@ fn take(app: &mut App) {
                     load_page(st, &link, &p);
                 }
             }
-            Err(e) => o.error = Some(e.message),
+            Err(e) => o.error = Some(crate::errors::words(&e)),
         }
     }
     if let Some(o) = st.open.as_mut()
@@ -632,7 +765,7 @@ fn take(app: &mut App) {
                 let id = o.id;
                 st.submit(Job::Plan { tag: Tag::Open(id, page), design: id, value: v });
             }
-            Err(e) => o.error = Some(e.message),
+            Err(e) => o.error = Some(crate::errors::words(&e)),
         }
     }
     let done: Vec<Done> = st.worker.as_ref().map(|w| w.rx.try_iter().collect()).unwrap_or_default();
@@ -735,6 +868,7 @@ fn reload(app: &mut App) {
 fn same_repo(app: &mut App) {
     if app.st.designs.repo != app.repo {
         let st = &mut app.st.designs;
+        st.leave();
         st.repo = app.repo;
         st.list.clear();
         st.loaded = false;
@@ -807,7 +941,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
         o.view = None;
         o.whole = false;
     }
-    if app.fresh || app.take_changed("design") {
+    let changed = app.take_changed("design");
+    if app.fresh || changed {
         reload(app);
     }
     take(app);
@@ -818,19 +953,22 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
     let mut open = None;
     if list.is_empty() {
         let st = &app.st.designs;
-        let (title, body) = if !app.online() && !st.loaded {
-            ("Waiting for your PC", "Designs show here once the PC answers.".to_string())
+        // One shape for every page's empty and problem states (kit::empty, kit::problem).
+        // Why it failed first: it is the news, whether or not the PC is in reach now.
+        let online = app.online();
+        let (h, retry) = if let (false, Some(e)) = (st.loaded, st.error.clone()) {
+            kit::problem(&mut crate::cx!(app), y, "Designs didn't load", &e, online)
+        } else if !online && !st.loaded {
+            kit::empty(&mut crate::cx!(app), y, "Waiting for your PC", Some("Designs show here once the PC answers."), None)
         } else if !st.loaded {
-            match &st.error {
-                Some(e) => ("Designs didn't load", e.clone()),
-                None => ("Reading designs…", String::new()),
-            }
+            kit::empty(&mut crate::cx!(app), y, "Reading designs…", None, None)
         } else {
-            ("No designs in this repo", "Designs an agent draws for this repo show here, newest first.".to_string())
+            kit::empty(&mut crate::cx!(app), y, "No designs in this repo", Some("Designs an agent draws for this repo show here, newest first."), None)
         };
-        let body = (!body.is_empty()).then_some(body);
-        let (h, _) = kit::notice(&mut crate::cx!(app), 32.0, y + 120.0, WIDTH - 64.0, title, body.as_deref(), None);
-        y += 120.0 + h;
+        if retry {
+            reload(app);
+        }
+        y += h;
     }
     let (x, w) = (t::PAD, WIDTH - 2.0 * t::PAD);
     for item in &list {
@@ -841,6 +979,8 @@ pub fn draw(app: &mut App, dt: f32) -> bool {
             if !thumb(app, item.id, x, y, w, THUMB_H) {
                 app.canvas.rect(x, y, w, THUMB_H, 12.0, t::S1);
             }
+        } else {
+            app.st.designs.let_go(item.id);
         }
         let mut cx = crate::cx!(app);
         if cx.pressed(0.0, y, WIDTH, row_h - 12.0) {
@@ -870,6 +1010,7 @@ fn ensure_open(app: &mut App, id: i64) {
     let item = app.st.designs.list.iter().find(|i| i.id == id).cloned();
     app.st.designs.open = Some(Open {
         id,
+        repo: app.repo,
         title: item.as_ref().map_or_else(|| "Design".into(), |i| i.title.clone()),
         session: item.as_ref().and_then(|i| i.session.clone()),
         updated_at: item.as_ref().map(|i| i.updated_at.clone()).unwrap_or_default(),
@@ -891,6 +1032,19 @@ fn reload_open(app: &mut App) {
     }
 }
 
+/// From a design page to the Designs list: back to it when it is under this page, else in place.
+fn leave_for_list(app: &mut App) {
+    let n = app.nav.len();
+    if n >= 2 && app.nav[n - 2].0 == crate::app::Route::Designs {
+        app.pop();
+    } else if n >= 2 {
+        app.pop();
+        app.push(crate::app::Route::Designs);
+    } else {
+        app.reset_to(crate::app::Route::Designs);
+    }
+}
+
 /// The top bar of a design and of an artboard: a key at the left, a title over a line, and a
 /// key at the right. Returns which was tapped.
 fn bar(app: &mut App, left: &'static str, title: &str, sub: &str, right: Option<&'static str>) -> (bool, bool) {
@@ -906,8 +1060,16 @@ fn bar(app: &mut App, left: &'static str, title: &str, sub: &str, right: Option<
 }
 
 pub fn draw_design(app: &mut App, id: i64, dt: f32) -> bool {
+    // Another repo picked on the chip: this design is the old one's, so its list shows instead,
+    // the same kind of page (route A).
+    if app.st.designs.open.as_ref().is_some_and(|o| o.id == id && o.repo != app.repo) {
+        app.st.designs.open = None;
+        leave_for_list(app);
+        return true;
+    }
     ensure_open(app, id);
-    if app.fresh || app.take_changed("design") {
+    let changed = app.take_changed("design");
+    if app.fresh || changed {
         reload_open(app);
     }
     take(app);
@@ -1248,6 +1410,18 @@ pub fn sample_page() -> Value {
 
 /// Sample designs for the shots (`--shot`): the list (E1), design 44 open (E3); see
 /// [`sample_view`] for E4. Everything is painted in the frame (`inline`).
+/// Errors on Designs for the shot tool (`--state error`): the list, and an open design.
+pub fn sample_error(app: &mut App) {
+    let st = &mut app.st.designs;
+    st.list.clear();
+    st.loaded = false;
+    st.error = Some(crate::errors::words(&rc_link::BusError { kind: "unavailable".into(), code: "design.list_failed".into(), message: "design.list failed: the PC's store is busy; try again in a moment".into(), hint: None }));
+    if let Some(o) = st.open.as_mut() {
+        o.plan = None;
+        o.error = Some("This page could not be laid out on the phone".into());
+    }
+}
+
 pub fn sample(app: &mut App) {
     if pictures::status(SAMPLE_SRC) != pictures::Status::Ready {
         pictures::put(SAMPLE_SRC, pictures::decode(SAMPLE_PICTURE, (0, 0)));
@@ -1281,6 +1455,7 @@ pub fn sample(app: &mut App) {
     }
     st.list = list;
     st.open = Some(Open {
+        repo: app.repo,
         id: 44,
         title: "Relay Code · phone app rewrite in Rust".into(),
         session: Some("bold-puffin".into()),
@@ -1305,6 +1480,53 @@ pub fn sample_view(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Frames drawn at rest on `route`, after `warm` to settle: µs a frame (release, this machine).
+    fn frame_cost(a: &mut App, warm: usize, n: usize) -> f64 {
+        let mut clock = 2_000_000_000u64;
+        for _ in 0..warm {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        let t = std::time::Instant::now();
+        for _ in 0..n {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        t.elapsed().as_secs_f64() * 1e6 / n as f64
+    }
+
+    fn bench_app(name: &str) -> App {
+        struct NoHost(std::path::PathBuf);
+        impl crate::app::Host for NoHost {
+            fn data_dir(&self) -> std::path::PathBuf {
+                self.0.clone()
+            }
+            fn log(&self, _text: &str) {}
+        }
+        let dir = std::env::temp_dir().join(format!("relay-code-bench-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(std::sync::Arc::new(NoHost(dir)), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        a
+    }
+
+    /// The Designs list with 40 designs, at rest:
+    /// `cargo test --release designs_frame_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn designs_frame_cost() {
+        let mut a = bench_app("designs");
+        let plan = a.st.designs.thumbs.values().find_map(|t| t.plan.clone()).expect("a sample plan");
+        let list: Vec<Item> = (0..40).map(|i| Item { id: 1000 + i, title: format!("Design {i} · a page of the app"), rev: 1, pages: 3, session: Some("bold-puffin".into()), updated_at: String::new() }).collect();
+        for i in &list {
+            a.st.designs.thumbs.insert(i.id, Thumb { rev: 1, stage: Stage::Ready, plan: Some(plan.clone()), key: None });
+        }
+        a.st.designs.list = list;
+        a.push(crate::app::Route::Designs);
+        println!("designs frame, 40 designs: {:.0} µs", frame_cost(&mut a, 20, 200));
+    }
 
     #[test]
     fn designs_list_newest_first_without_the_deleted() {
@@ -1381,6 +1603,138 @@ mod tests {
         assert!(st.asked.is_empty());
         assert_eq!(st.pics.len(), 1);
         assert_eq!(st.pics[0].1.data.len(), 120 * 50 * 4);
+    }
+
+    #[test]
+    fn after_a_pan_only_the_newest_part_of_an_artboard_paints() {
+        let plan = Arc::new(dp::plan(44, sample_page()).expect("plans"));
+        let region = |k: &str, root: &str| Job::Paint { key: k.into(), plan: plan.clone(), what: What::Region(Some(root.into()), Rect::new(0.0, 0.0, 10.0, 10.0)), w: 10, h: 10 };
+        let board = Job::Paint { key: "board".into(), plan: plan.clone(), what: What::Board("a".into()), w: 10, h: 10 };
+        let mut q: VecDeque<(u64, Job)> = [region("a1", "a"), board, region("a2", "a"), region("b1", "b"), region("a3", "a")].map(|j| (0, j)).into();
+        let key = |j: Option<Job>| match j {
+            Some(Job::Paint { key, .. }) => key,
+            _ => String::new(),
+        };
+        let (j, dropped) = next_job(&mut q, 0);
+        assert_eq!((key(j), dropped), ("board".to_string(), vec!["a1".to_string()]));
+        let (j, dropped) = next_job(&mut q, 0);
+        assert_eq!((key(j), dropped), ("b1".to_string(), vec!["a2".to_string()]));
+        let (j, dropped) = next_job(&mut q, 0);
+        assert_eq!((key(j), dropped), ("a3".to_string(), vec![]));
+        // A skipped part may be asked for again.
+        let mut st = State::default();
+        st.asked.insert("a1".into());
+        st.handle(Done::Dropped("a1".into()));
+        assert!(st.asked.is_empty() && st.failed.is_empty());
+    }
+
+    #[test]
+    fn leaving_designs_drops_its_queue_and_its_old_answers_count_for_nothing() {
+        let plan = Arc::new(dp::plan(44, sample_page()).expect("plans"));
+        let paint = |k: &str| Job::Paint { key: k.into(), plan: plan.clone(), what: What::Board("a".into()), w: 10, h: 10 };
+        // A paint asked on visit 0, run on visit 1: dropped, its key freed.
+        let mut q: VecDeque<(u64, Job)> = [(0, paint("old")), (1, paint("new"))].into();
+        let (j, dropped) = next_job(&mut q, 1);
+        assert_eq!(dropped, ["old"]);
+        assert!(matches!(j, Some(Job::Paint { key, .. }) if key == "new"));
+        // Leaving: the visit moves on, what was counted and asked is forgotten.
+        let mut st = State { fetching: 3, ..State::default() };
+        st.asked.insert("k".into());
+        st.leave();
+        assert_eq!((st.fetching, st.asked.len(), st.visit.load(Ordering::Relaxed)), (0, 0, 1));
+        // A fetch of the visit left ends: it counts for nothing now.
+        st.fetching = 1;
+        st.handle(Done::Fetched(0));
+        assert_eq!(st.fetching, 1);
+        st.handle(Done::Fetched(1));
+        assert_eq!(st.fetching, 0);
+    }
+
+    #[test]
+    fn every_ask_for_a_picture_gets_its_answer_merged_or_dropped() {
+        struct NoHost(std::path::PathBuf);
+        impl crate::app::Host for NoHost {
+            fn data_dir(&self) -> std::path::PathBuf {
+                self.0.clone()
+            }
+            fn log(&self, _text: &str) {}
+        }
+        let dir = std::env::temp_dir().join(format!("relay-code-fetch-{}", std::process::id()));
+        let a = App::new(Arc::new(NoHost(dir)), 1_000_000_000);
+        let visit = Arc::new(AtomicU64::new(5));
+        let (asks_tx, asks) = mpsc::channel::<Fetch>();
+        let (done, rx) = mpsc::channel::<Done>();
+        let v = visit.clone();
+        let t = std::thread::spawn(move || fetch_loop(asks, done, v));
+        // Two asks of the same picture from a visit since left, and one more: three answers.
+        for _ in 0..3 {
+            asks_tx.send(Fetch { link: a.link.clone(), design: 1, src: "fetch-test.png".into(), want: (10, 10), soon: false, visit: 4 }).unwrap();
+        }
+        let mut answers = Vec::new();
+        while answers.len() < 3 {
+            match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                Ok(Done::Fetched(g)) => answers.push(g),
+                Ok(_) => {}
+                Err(_) => panic!("only {} answers came", answers.len()),
+            }
+        }
+        assert_eq!(answers, [4, 4, 4]);
+        drop(asks_tx);
+        t.join().unwrap();
+    }
+
+    #[test]
+    fn a_page_left_while_it_was_laid_out_does_not_keep_the_screen_busy() {
+        let mut st = State { open: Some(Open { id: 7, page: Some("b".into()), planning: Some("a".into()), ..Open::default() }), ..State::default() };
+        assert!(st.busy());
+        st.handle(Done::Plan(Tag::Open(7, "a".into()), Err("no".into())));
+        let o = st.open.as_ref().unwrap();
+        assert!(o.planning.is_none() && o.error.is_none(), "page a's answer clears its own wait, and says nothing over page b");
+        assert!(!st.busy());
+    }
+
+    #[test]
+    fn a_thumbnail_scrolled_away_lets_its_layout_go() {
+        let mut st = State::default();
+        let plan = Arc::new(dp::plan(44, sample_page()).expect("plans"));
+        st.thumbs.insert(44, Thumb { rev: 12, stage: Stage::Ready, plan: Some(plan.clone()), key: None });
+        st.keep_plan(plan.clone());
+        st.let_go(44);
+        assert!(st.thumbs[&44].plan.is_none() && st.plans.is_empty());
+        assert_eq!(Arc::strong_count(&plan), 1, "nothing holds it but this test");
+        // With no strip painted it is read again when it shows.
+        assert!(matches!(st.thumbs[&44].stage, Stage::Idle));
+    }
+
+    #[test]
+    fn picking_another_repo_on_a_design_leaves_for_the_list() {
+        struct NoHost(std::path::PathBuf);
+        impl crate::app::Host for NoHost {
+            fn data_dir(&self) -> std::path::PathBuf {
+                self.0.clone()
+            }
+            fn log(&self, _text: &str) {}
+        }
+        let dir = std::env::temp_dir().join(format!("relay-code-design-repo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = App::new(Arc::new(NoHost(dir)), 1_000_000_000);
+        a.resize(390.0, 844.0, 0.0, 0.0);
+        a.sample();
+        a.push(crate::app::Route::Designs);
+        a.push(crate::app::Route::Design(44));
+        let mut clock = 2_000_000_000u64;
+        for _ in 0..2 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        assert_eq!(*a.route(), crate::app::Route::Design(44));
+        a.repo = Some(2);
+        for _ in 0..2 {
+            clock += 16_666_666;
+            a.frame(clock);
+        }
+        assert_eq!(*a.route(), crate::app::Route::Designs);
+        assert!(a.st.designs.open.is_none());
     }
 
     /// The screens drawn by the GPU from sample data, as `--shot` draws them:

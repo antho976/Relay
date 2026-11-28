@@ -8,6 +8,6 @@ pub mod pairlink;
 pub mod server;
 pub mod wire;
 
-pub use link::{Call, FileStore, Link, LinkState, Profile, Refusal, Store};
+pub use link::{Call, FileStore, Link, LinkState, Note, Profile, Refusal, Store};
 pub use pairlink::{PairLink, Route, RouteKind};
 pub use wire::{BusError, Event};

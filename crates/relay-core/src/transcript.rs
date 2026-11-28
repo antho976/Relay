@@ -47,6 +47,28 @@ pub fn locate(provider: Provider, reference: &str, worktree: &Path) -> Option<Pa
     }
 }
 
+/// The log Claude Code keeps for the helper a Task call `tool_use_id` started: beside the
+/// session's log, `<session>/subagents/agent-<id>.jsonl`, named in its `.meta.json` by the call.
+pub fn locate_task(session_log: &Path, tool_use_id: &str) -> Option<PathBuf> {
+    let dir = session_log.with_extension("").join("subagents");
+    for entry in fs::read_dir(&dir).ok()?.flatten() {
+        let path = entry.path();
+        let Some(stem) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".meta.json")) else { continue };
+        let Ok(bytes) = fs::read(&path) else { continue };
+        let Ok(meta) = serde_json::from_slice::<Value>(&bytes) else { continue };
+        if meta.get("toolUseId").and_then(Value::as_str) == Some(tool_use_id) {
+            let log = dir.join(format!("{stem}.jsonl"));
+            return log.is_file().then_some(log);
+        }
+    }
+    None
+}
+
+/// A helper's own log (`subagents/`): its turns are all sidechain ones, and they are what is read.
+fn is_helper_log(path: &Path) -> bool {
+    path.parent().and_then(Path::file_name).is_some_and(|n| n == "subagents")
+}
+
 fn locate_claude(reference: &str, worktree: &Path) -> Option<PathBuf> {
     let file = format!("{reference}.jsonl");
     // Its config folder, and `~/.claude` too: an agent started without the variable wrote there.
@@ -104,15 +126,42 @@ fn file_tag(path: &Path) -> u64 {
     hash & 0xfff
 }
 
-/// The messages in `path` after `after` (a cursor this function returned), or its last `limit`.
-pub fn read(provider: Provider, path: &Path, worktree: &Path, after: Option<u64>, limit: usize) -> std::io::Result<TranscriptOut> {
+/// A person's message sent with `chat.send`, and where the agent's log stood when it was typed.
+#[derive(Clone, Debug)]
+pub struct Sent {
+    pub client_id: String,
+    pub text: String,
+    /// [`position`] when it was typed; none when the log was not found yet.
+    pub log_tag: Option<u64>,
+    pub log_offset: Option<u64>,
+    pub sent_at: String,
+}
+
+/// Where a log stands now (its file's tag and length), for a message about to be typed: its
+/// line comes after.
+pub fn position(path: &Path) -> Option<(u64, u64)> {
+    Some((file_tag(path), fs::metadata(path).ok()?.len()))
+}
+
+/// The messages in `path` after `after` (a cursor this function returned), the newest `limit`
+/// before `before` (one too: a page further back), or its last `limit`. A person's message that
+/// `sends` holds comes back with its `client_id`; the sends the log does not hold yet come back
+/// as `pending` (not on a page back).
+pub fn read(provider: Provider, path: &Path, worktree: &Path, after: Option<u64>, before: Option<u64>, limit: usize, sends: &[Sent]) -> std::io::Result<TranscriptOut> {
     let tag = file_tag(path);
+    let helper = is_helper_log(path);
     let mut file = File::open(path)?;
     let len = file.metadata()?.len();
-    let resumed = after.filter(|cursor| cursor >> OFFSET_BITS == tag).map(|cursor| cursor & ((1 << OFFSET_BITS) - 1)).filter(|offset| *offset <= len);
-    let reset = after.is_some() && resumed.is_none();
-    let start = resumed.unwrap_or_else(|| len.saturating_sub(MAX_READ));
-    let end = len.min(start + MAX_READ);
+    let in_file = |cursor: u64| (cursor >> OFFSET_BITS == tag).then_some(cursor & ((1 << OFFSET_BITS) - 1)).filter(|offset| *offset <= len);
+    let resumed = after.and_then(in_file);
+    // A page back ends where an earlier answer began, which is always a line's start.
+    let back = if resumed.is_none() { before.and_then(in_file) } else { None };
+    let reset = (after.is_some() && resumed.is_none()) || (before.is_some() && after.is_none() && back.is_none());
+    let (start, end) = match (resumed, back) {
+        (Some(r), _) => (r, len.min(r + MAX_READ)),
+        (None, Some(b)) => (b.saturating_sub(MAX_READ), b),
+        (None, None) => (len.saturating_sub(MAX_READ), len),
+    };
     file.seek(SeekFrom::Start(start))?;
     let mut bytes = Vec::with_capacity((end - start) as usize);
     file.by_ref().take(end - start).read_to_end(&mut bytes)?;
@@ -126,12 +175,14 @@ pub fn read(provider: Provider, path: &Path, worktree: &Path, after: Option<u64>
         // One line longer than a whole read (a tool result of many images, logged as base64
         // twice): passed over once it ends, or every later read would read it again for nothing.
         if let Some(past) = line_end(&mut file, end)? {
-            messages.push(TranscriptMessage { id: format!("o{start}"), role: "note".into(), body: json!({"text": "A long entry was skipped", "kind": "skipped"}), created_at: String::new() });
-            return Ok(TranscriptOut { messages, cursor: (tag << OFFSET_BITS) | past, reset, found: true });
+            messages.push(TranscriptMessage { id: format!("o{start}"), role: "note".into(), body: json!({"text": "A long entry was skipped", "kind": "skipped"}), created_at: String::new(), client_id: None });
+            return Ok(TranscriptOut { messages, cursor: (tag << OFFSET_BITS) | past, before: (tag << OFFSET_BITS) | start, older: start > 0, reset, found: true, pending: Vec::new() });
         }
     }
     let mut offset = start + first as u64;
     let mut cursor = start + last as u64;
+    // Where each line's messages begin, and the line's offset: a page back starts at a line.
+    let mut lines: Vec<(usize, u64)> = Vec::new();
     for line in bytes[first..last].split(|b| *b == b'\n') {
         let at = offset;
         offset += line.len() as u64 + 1;
@@ -142,14 +193,137 @@ pub fn read(provider: Provider, path: &Path, worktree: &Path, after: Option<u64>
             break;
         }
         let Ok(record) = serde_json::from_slice::<Value>(line) else { continue };
+        let had = messages.len();
         match provider {
-            Provider::Claude => claude_record(&record, at, worktree, &mut messages),
+            Provider::Claude => claude_record(&record, at, worktree, helper, &mut messages),
             Provider::Codex => codex_record(&record, at, &mut messages),
             Provider::Shell => {}
         }
+        if messages.len() > had { lines.push((had, at)); }
     }
-    if messages.len() > limit && resumed.is_none() { messages.drain(..messages.len() - limit); }
-    Ok(TranscriptOut { messages, cursor: (tag << OFFSET_BITS) | cursor, reset, found: true })
+    let pending = sent_messages(provider, &mut file, worktree, tag, start + first as u64, &mut messages, &lines, sends)?;
+    let pending = if back.is_some() { Vec::new() } else { pending };
+    let mut head = start + first as u64;
+    if let Some(&(_, at)) = lines.first() { head = at; }
+    if messages.len() > limit && resumed.is_none() {
+        // The newest `limit`, from the start of the line that holds the oldest of them, so a
+        // page back never splits one line's messages.
+        let oldest = messages.len() - limit;
+        if let Some(&(from, at)) = lines.iter().rev().find(|(from, _)| *from <= oldest) {
+            messages.drain(..from);
+            head = at;
+        }
+    }
+    // A page back keeps the live cursor where the reader has it.
+    let cursor = match (back, before) { (Some(_), Some(b)) => b, _ => (tag << OFFSET_BITS) | cursor };
+    Ok(TranscriptOut { messages, cursor, before: (tag << OFFSET_BITS) | head, older: head > 0, reset, found: true, pending })
+}
+
+/// Which person's message each send was matched to, by log (its tag) and the send's id: the line
+/// it is on, and whether by its words. A send matched once stays matched without reading back to
+/// it, so a read goes back only to the oldest send not matched yet, however far the log has grown.
+type SentMatches = std::collections::HashMap<(u64, String), (u64, bool)>;
+static SENT_MATCHES: Mutex<Option<SentMatches>> = Mutex::new(None);
+/// Matches kept at most; sends are an hour's, so this is never reached in use.
+const SENT_MATCHES_MAX: usize = 20_000;
+
+/// Give each send the first person's message with its words logged after it was typed, oldest
+/// send first, so two sends of the same words take two messages; that message comes back with the
+/// send's id. A send whose words the log holds otherwise (Claude Code logs some differently) takes
+/// the first person's message after it that no send claims by its words, and is no longer pending,
+/// so it never shows twice. The sends left over are returned: typed, not logged yet.
+#[allow(clippy::too_many_arguments)]
+fn sent_messages(
+    provider: Provider, file: &mut File, worktree: &Path, tag: u64, from: u64, messages: &mut [TranscriptMessage],
+    lines: &[(usize, u64)], sends: &[Sent],
+) -> std::io::Result<Vec<relay_bus::ops::session::TranscriptPending>> {
+    if sends.is_empty() { return Ok(Vec::new()); }
+    let since = |s: &Sent| if s.log_tag == Some(tag) { s.log_offset.unwrap_or(0) } else { 0 };
+    let mut live: Vec<&Sent> = sends.iter().collect();
+    live.sort_by_key(|s| since(s));
+    // The sends matched by an earlier read: their lines are taken, and are given their ids here.
+    let known: Vec<Option<(u64, bool)>> = {
+        let matches = SENT_MATCHES.lock().unwrap_or_else(|e| e.into_inner());
+        live.iter().map(|s| matches.as_ref().and_then(|m| m.get(&(tag, s.client_id.clone())).copied())).collect()
+    };
+    // The person's words in the log from the oldest unmatched send on: (line, words, index here).
+    let mut said: Vec<(u64, String, Option<usize>)> = Vec::new();
+    let oldest = live.iter().zip(&known).filter(|(_, k)| k.is_none()).map(|(s, _)| since(s)).min();
+    if let Some(lo) = oldest.filter(|lo| *lo < from) {
+        let mut bytes = Vec::with_capacity((from - lo) as usize + 1);
+        file.seek(SeekFrom::Start(lo.saturating_sub(1)))?;
+        file.by_ref().take(from - lo.saturating_sub(1)).read_to_end(&mut bytes)?;
+        crate::redact::Redactor::default().redact(&mut bytes);
+        // `lo` was the log's length when the send was typed, so normally a line's start.
+        let skip = if lo == 0 || bytes.first() == Some(&b'\n') { usize::from(lo > 0) } else { bytes.iter().position(|b| *b == b'\n').map_or(bytes.len(), |i| i + 1) };
+        let mut at = lo.saturating_sub(1) + skip as u64;
+        for line in bytes[skip..].split(|b| *b == b'\n') {
+            let line_at = at;
+            at += line.len() as u64 + 1;
+            let Ok(record) = serde_json::from_slice::<Value>(line) else { continue };
+            let mut found = Vec::new();
+            match provider {
+                Provider::Claude => claude_record(&record, line_at, worktree, false, &mut found),
+                Provider::Codex => codex_record(&record, line_at, &mut found),
+                Provider::Shell => {}
+            }
+            said.extend(found.iter().filter(|m| m.role == "user").map(|m| (line_at, words(&m.body), None)));
+        }
+    }
+    for (i, &(first, at)) in lines.iter().enumerate() {
+        let end = lines.get(i + 1).map_or(messages.len(), |next| next.0);
+        said.extend((first..end).filter(|k| messages[*k].role == "user").map(|k| (at, words(&messages[k].body), Some(k))));
+    }
+    let mut taken: Vec<bool> = said.iter().map(|(at, _, _)| known.iter().flatten().any(|(line, _)| line == at)).collect();
+    // Matched before: by its words, its message here carries its id again.
+    for (s, k) in live.iter().zip(&known) {
+        if let Some((line, true)) = k {
+            if let Some((_, _, Some(idx))) = said.iter().find(|(at, _, _)| at == line) {
+                messages[*idx].client_id = Some(s.client_id.clone());
+            }
+        }
+    }
+    let unmatched: Vec<&Sent> = live.iter().zip(&known).filter(|(_, k)| k.is_none()).map(|(s, _)| *s).collect();
+    let mut found: Vec<(String, u64, bool)> = Vec::new();
+    // By words first, for every send, so a send whose words were logged keeps its own message.
+    let mut left = Vec::new();
+    for s in unmatched {
+        // The log is redacted before anyone reads it: the words are compared as it holds them.
+        let mut sent = s.text.trim().as_bytes().to_vec();
+        crate::redact::Redactor::default().redact(&mut sent);
+        let sent = String::from_utf8_lossy(&sent);
+        let hit = said.iter().enumerate().find(|(j, (at, text, _))| !taken[*j] && *at >= since(s) && text.trim() == sent.trim()).map(|(j, (at, _, k))| (j, *at, *k));
+        match hit {
+            Some((j, at, k)) => {
+                taken[j] = true;
+                if let Some(k) = k { messages[k].client_id = Some(s.client_id.clone()); }
+                found.push((s.client_id.clone(), at, true));
+            }
+            None => left.push(s),
+        }
+    }
+    let mut pending = Vec::new();
+    for s in left {
+        match said.iter().enumerate().find(|(j, (at, _, _))| !taken[*j] && *at >= since(s)).map(|(j, (at, _, _))| (j, *at)) {
+            Some((j, at)) => {
+                taken[j] = true;
+                found.push((s.client_id.clone(), at, false));
+            }
+            None => pending.push(relay_bus::ops::session::TranscriptPending { client_id: s.client_id.clone(), text: s.text.clone(), sent_at: s.sent_at.clone() }),
+        }
+    }
+    if !found.is_empty() {
+        let mut matches = SENT_MATCHES.lock().unwrap_or_else(|e| e.into_inner());
+        let m = matches.get_or_insert_with(Default::default);
+        if m.len() + found.len() > SENT_MATCHES_MAX { m.clear(); }
+        for (id, at, exact) in found { m.insert((tag, id), (at, exact)); }
+    }
+    Ok(pending)
+}
+
+/// A person's message's words.
+fn words(body: &Value) -> String {
+    body.get("text").and_then(Value::as_str).unwrap_or_default().to_string()
 }
 
 /// The offset just past the first newline at or after `from`, or `None` when the file ends first
@@ -172,7 +346,7 @@ fn line_end(file: &mut File, from: u64) -> std::io::Result<Option<u64>> {
 
 fn message(id: String, role: &str, body: Value, record: &Value) -> TranscriptMessage {
     let created_at = record.get("timestamp").and_then(Value::as_str).unwrap_or_default().to_string();
-    TranscriptMessage { id, role: role.to_string(), body, created_at }
+    TranscriptMessage { id, role: role.to_string(), body, created_at, client_id: None }
 }
 
 fn cut(text: &str, max: usize) -> String {
@@ -188,9 +362,11 @@ fn line_of(text: &str) -> String { cut(text.trim().lines().next().unwrap_or_defa
 
 // ---- Claude Code ----
 
-fn claude_record(record: &Value, at: u64, worktree: &Path, out: &mut Vec<TranscriptMessage>) {
-    // A subagent's own turns, and the context Claude Code adds for the model, are not the conversation.
-    if record.get("isSidechain").and_then(Value::as_bool) == Some(true) || record.get("isMeta").and_then(Value::as_bool) == Some(true) {
+fn claude_record(record: &Value, at: u64, worktree: &Path, helper: bool, out: &mut Vec<TranscriptMessage>) {
+    // A subagent's own turns (unless this is its own log), and the context Claude Code adds for
+    // the model, are not the conversation.
+    let sidechain = record.get("isSidechain").and_then(Value::as_bool) == Some(true);
+    if (sidechain && !helper) || record.get("isMeta").and_then(Value::as_bool) == Some(true) {
         return;
     }
     let id = record.get("uuid").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| format!("o{at}"));
@@ -668,6 +844,37 @@ mod tests {
     }
 
     #[test]
+    fn a_task_reads_its_helpers_own_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = dir.path().join("c5201e10.jsonl");
+        let wt = Path::new("/wt");
+        fs::write(&session, lines(&[
+            json!({"type": "assistant", "uuid": "a1", "message": {"content": [{"type": "tool_use", "id": "toolu_01", "name": "Task", "input": {"description": "Map the roots", "prompt": "Find where guardrail roots are set"}}]}}),
+        ])).unwrap();
+        let helpers = dir.path().join("c5201e10").join("subagents");
+        fs::create_dir_all(&helpers).unwrap();
+        fs::write(helpers.join("agent-a2d3.meta.json"), r#"{"agentType":"Explore","description":"Map the roots","toolUseId":"toolu_01","finished":true}"#).unwrap();
+        fs::write(helpers.join("agent-zzzz.meta.json"), r#"{"toolUseId":"toolu_other"}"#).unwrap();
+        // As this Claude Code writes it: every turn a sidechain one, its brief first.
+        fs::write(helpers.join("agent-a2d3.jsonl"), lines(&[
+            json!({"type": "user", "uuid": "h0", "isSidechain": true, "agentId": "a2d3", "message": {"role": "user", "content": "Find where guardrail roots are set"}}),
+            json!({"type": "user", "uuid": "hm", "isSidechain": true, "isMeta": true, "message": {"content": "context"}}),
+            json!({"type": "assistant", "uuid": "h1", "isSidechain": true, "message": {"content": [{"type": "tool_use", "id": "g1", "name": "Grep", "input": {"pattern": "write_roots"}}]}}),
+            json!({"type": "user", "uuid": "h2", "isSidechain": true, "message": {"content": [{"type": "tool_result", "tool_use_id": "g1", "content": "crates/relay-core/src/guardrails.rs:40"}]}}),
+            json!({"type": "assistant", "uuid": "h3", "isSidechain": true, "message": {"content": [{"type": "text", "text": "They are set in guardrails.rs."}]}}),
+        ])).unwrap();
+        let log = locate_task(&session, "toolu_01").unwrap();
+        assert_eq!(log, helpers.join("agent-a2d3.jsonl"));
+        assert_eq!(locate_task(&session, "toolu_nope"), None);
+        let out = read(Provider::Claude, &log, wt, None, None, 200, &[]).unwrap();
+        let got: Vec<(&str, &str)> = out.messages.iter().map(|m| (m.id.as_str(), m.role.as_str())).collect();
+        assert_eq!(got, [("h0", "user"), ("h1", "assistant"), ("h2:0", "tool"), ("h3", "assistant")], "its own turns, its context left out");
+        // The session's own log still leaves a helper's turns out.
+        let main = read(Provider::Claude, &session, wt, None, None, 200, &[]).unwrap();
+        assert_eq!(main.messages.len(), 1);
+    }
+
+    #[test]
     fn claude_conversation_reads_as_a_thread() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("c.jsonl");
@@ -684,7 +891,7 @@ mod tests {
             json!({"type": "user", "uuid": "u3", "message": {"content": "<command-name>/compact</command-name>\n<command-args></command-args>"}}),
             json!({"type": "user", "uuid": "u4", "message": {"content": [{"type": "text", "text": "[Request interrupted by user]"}]}}),
         ])).unwrap();
-        let out = read(Provider::Claude, &path, wt, None, 200).unwrap();
+        let out = read(Provider::Claude, &path, wt, None, None, 200, &[]).unwrap();
         let got: Vec<(&str, &str)> = out.messages.iter().map(|m| (m.id.as_str(), m.role.as_str())).collect();
         assert_eq!(got, [("u1", "user"), ("a1", "assistant"), ("a2", "assistant"), ("u2:0", "tool"), ("a3", "assistant"), ("u3", "user"), ("u4:0", "note")]);
         assert_eq!(out.messages[0].body["text"], "fix the build");
@@ -713,7 +920,7 @@ mod tests {
             json!({"type": "attachment", "uuid": "q3", "attachment": {"type": "queued_command", "prompt": "<task-notification>…</task-notification>"}}),
             json!({"type": "attachment", "uuid": "d", "attachment": {"type": "deferred_tools_record", "entries": []}}),
         ])).unwrap();
-        let out = read(Provider::Claude, &path, Path::new("/wt"), None, 200).unwrap();
+        let out = read(Provider::Claude, &path, Path::new("/wt"), None, None, 200, &[]).unwrap();
         let got: Vec<(&str, &str, &str)> = out.messages.iter().map(|m| (m.id.as_str(), m.role.as_str(), m.body["text"].as_str().unwrap_or_default())).collect();
         assert_eq!(got, [("u1", "user", "1. one\n2. two"), ("q1", "user", "make it slower"), ("q2", "user", "this? [Image #11]\n\n[image]")]);
         assert_eq!(out.messages[1].created_at, "2026-11-23T03:32:16Z");
@@ -733,7 +940,7 @@ mod tests {
             json!({"type": "system", "subtype": "compact_boundary", "uuid": "b2", "compactMetadata": {"trigger": "manual", "preTokens": 1_260_000, "postTokens": 900}}),
             json!({"type": "user", "uuid": "s2", "isCompactSummary": true, "message": {"content": [{"type": "text", "text": "Just this."}]}}),
         ])).unwrap();
-        let out = read(Provider::Claude, &path, Path::new("/wt"), None, 200).unwrap();
+        let out = read(Provider::Claude, &path, Path::new("/wt"), None, None, 200, &[]).unwrap();
         let roles: Vec<(&str, &str)> = out.messages.iter().map(|m| (m.id.as_str(), m.role.as_str())).collect();
         assert_eq!(roles, [("u1", "user"), ("b1", "note"), ("s1", "note"), ("b2", "note"), ("s2", "note")]);
         assert_eq!(out.messages[1].body, json!({"text": "Context full, compacted automatically · 973k → 28k tokens", "kind": "compact"}));
@@ -770,20 +977,124 @@ mod tests {
         let say = |n: usize| json!({"type": "user", "uuid": format!("u{n}"), "message": {"content": format!("message {n}")}});
         fs::write(&path, lines(&[say(0)])).unwrap();
         let wt = Path::new("/wt");
-        let first = read(Provider::Claude, &path, wt, None, 2).unwrap();
+        let first = read(Provider::Claude, &path, wt, None, None, 2, &[]).unwrap();
         let more: Vec<Value> = (1..=5).map(say).collect();
         fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(lines(&more).as_bytes()).unwrap();
         let (mut cursor, mut seen) = (first.cursor, Vec::new());
         for _ in 0..4 {
-            let out = read(Provider::Claude, &path, wt, Some(cursor), 2).unwrap();
+            let out = read(Provider::Claude, &path, wt, Some(cursor), None, 2, &[]).unwrap();
             assert!(!out.reset && out.messages.len() <= 2);
             seen.extend(out.messages.into_iter().map(|m| m.id));
             cursor = out.cursor;
         }
         assert_eq!(seen, ["u1", "u2", "u3", "u4", "u5"]);
         // A tail read still takes the newest.
-        let tail = read(Provider::Claude, &path, wt, None, 2).unwrap();
+        let tail = read(Provider::Claude, &path, wt, None, None, 2, &[]).unwrap();
         assert_eq!(tail.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["u4", "u5"]);
+    }
+
+    /// Scrolling back: each page's `before` asks for the one older than it, until none is left,
+    /// with every message once, and the live cursor untouched.
+    #[test]
+    fn pages_back_read_the_whole_conversation_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("c.jsonl");
+        let say = |n: usize| json!({"type": "user", "uuid": format!("u{n}"), "message": {"content": format!("message {n}")}});
+        fs::write(&path, lines(&(0..7).map(say).collect::<Vec<_>>())).unwrap();
+        let wt = Path::new("/wt");
+        let tail = read(Provider::Claude, &path, wt, None, None, 3, &[]).unwrap();
+        assert_eq!(tail.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["u4", "u5", "u6"]);
+        assert!(tail.older);
+        let (mut before, mut pages) = (tail.before, Vec::new());
+        loop {
+            let page = read(Provider::Claude, &path, wt, None, Some(before), 3, &[]).unwrap();
+            assert!(!page.reset);
+            assert_eq!(page.cursor, before, "a page back leaves the live cursor alone");
+            pages.push(page.messages.iter().map(|m| m.id.clone()).collect::<Vec<_>>());
+            if !page.older {
+                break;
+            }
+            before = page.before;
+        }
+        assert_eq!(pages, [vec!["u1", "u2", "u3"], vec!["u0"]]);
+        // The live read goes on from the tail's cursor as before.
+        fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(lines(&[say(7)]).as_bytes()).unwrap();
+        let on = read(Provider::Claude, &path, wt, Some(tail.cursor), None, 3, &[]).unwrap();
+        assert_eq!(on.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["u7"]);
+        // A page back from another file's cursor starts over.
+        let other = dir.path().join("d.jsonl");
+        fs::write(&other, lines(&[say(9)])).unwrap();
+        assert!(read(Provider::Claude, &other, wt, None, Some(tail.before), 3, &[]).unwrap().reset);
+    }
+
+    /// chat.send's messages come back under their ids: pending until logged, then on their own
+    /// message only, once; the same words sent twice take two messages; the same words said
+    /// before the send are not taken for it.
+    #[test]
+    fn a_sent_message_comes_back_under_its_id_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("c.jsonl");
+        let say = |n: usize, text: &str| json!({"type": "user", "uuid": format!("u{n}"), "message": {"content": text}});
+        fs::write(&path, lines(&[say(0, "yes")])).unwrap();
+        let wt = Path::new("/wt");
+        let (tag, len) = position(&path).unwrap();
+        let sent = |id: &str, text: &str| Sent { client_id: id.into(), text: text.into(), log_tag: Some(tag), log_offset: Some(len), sent_at: "t".into() };
+        let sends = [sent("a", "yes"), sent("b", "yes"), sent("c", "go on\nplease")];
+        let ids = |out: &TranscriptOut| out.messages.iter().map(|m| (m.id.clone(), m.client_id.clone())).collect::<Vec<_>>();
+        let first = read(Provider::Claude, &path, wt, None, None, 50, &sends).unwrap();
+        assert_eq!(ids(&first), [("u0".to_string(), None)], "said before the sends");
+        assert_eq!(first.pending.iter().map(|p| p.client_id.as_str()).collect::<Vec<_>>(), ["a", "b", "c"]);
+        // The first is logged (as Claude Code logs a paste).
+        let pasted = "<pasted_content id=\"x\">go on\nplease</pasted_content id=\"x\">";
+        fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(lines(&[say(1, "yes"), say(2, pasted)]).as_bytes()).unwrap();
+        let next = read(Provider::Claude, &path, wt, Some(first.cursor), None, 50, &sends).unwrap();
+        assert_eq!(ids(&next), [("u1".to_string(), Some("a".to_string())), ("u2".to_string(), Some("c".to_string()))]);
+        assert_eq!(next.pending.iter().map(|p| p.client_id.as_str()).collect::<Vec<_>>(), ["b"]);
+        // The second "yes": its own message, and "a" is not given twice.
+        fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(lines(&[say(3, "yes")]).as_bytes()).unwrap();
+        let last = read(Provider::Claude, &path, wt, Some(next.cursor), None, 50, &sends).unwrap();
+        assert_eq!(ids(&last), [("u3".to_string(), Some("b".to_string()))]);
+        assert!(last.pending.is_empty());
+        // A fresh read from the tail gives each its id again, and a page back no pending.
+        let tail = read(Provider::Claude, &path, wt, None, None, 50, &sends).unwrap();
+        assert_eq!(tail.messages.iter().filter_map(|m| m.client_id.as_deref()).collect::<Vec<_>>(), ["a", "c", "b"]);
+        let back = read(Provider::Claude, &path, wt, None, Some(last.cursor), 50, &sends).unwrap();
+        assert!(back.pending.is_empty());
+    }
+
+    /// A send made mid-turn while the agent writes megabytes stays pending until its message is
+    /// logged, however far back it was typed; one whose words are logged otherwise stops showing
+    /// as pending once a person's message is logged after it, and its id goes on no message.
+    #[test]
+    fn a_send_far_back_or_logged_in_other_words_shows_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("far.jsonl");
+        let say = |n: usize, text: &str| json!({"type": "user", "uuid": format!("far{n}"), "message": {"content": text}});
+        let filler = |n: usize| json!({"type": "assistant", "uuid": format!("fill{n}"), "message": {"content": [{"type": "text", "text": "x".repeat(4000)}]}});
+        fs::write(&path, lines(&[say(0, "start")])).unwrap();
+        let wt = Path::new("/wt");
+        let (tag, len) = position(&path).unwrap();
+        let sent = |id: &str, text: &str| Sent { client_id: id.into(), text: text.into(), log_tag: Some(tag), log_offset: Some(len), sent_at: "t".into() };
+        let sends = [sent("far-a", "keep going"), sent("far-b", "and fix the test")];
+        let mut cursor = read(Provider::Claude, &path, wt, None, None, 50, &sends).unwrap().cursor;
+        let append = |records: &[Value]| fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(lines(records).as_bytes()).unwrap();
+        // The agent writes 1.6 MB before either is taken.
+        for chunk in 0..4 {
+            append(&(0..100).map(|n| filler(chunk * 100 + n)).collect::<Vec<_>>());
+            let out = read(Provider::Claude, &path, wt, Some(cursor), None, 1000, &sends).unwrap();
+            assert_eq!(out.pending.len(), 2, "still pending after {} KB", (chunk + 1) * 400);
+            cursor = out.cursor;
+        }
+        // The first is logged by its words, the second as Claude Code wrote it otherwise.
+        append(&[say(1, "keep going"), say(2, "and fix the test, please")]);
+        let out = read(Provider::Claude, &path, wt, Some(cursor), None, 1000, &sends).unwrap();
+        let ids: Vec<_> = out.messages.iter().filter(|m| m.role == "user").map(|m| (m.id.as_str(), m.client_id.as_deref())).collect();
+        assert_eq!(ids, [("far1", Some("far-a")), ("far2", None)]);
+        assert!(out.pending.is_empty(), "{:?}", out.pending);
+        // And so on later reads: matched once, never pending again.
+        let tail = read(Provider::Claude, &path, wt, None, None, 1000, &sends).unwrap();
+        assert!(tail.pending.is_empty());
+        assert_eq!(tail.messages.iter().filter_map(|m| m.client_id.as_deref()).collect::<Vec<_>>(), ["far-a"]);
     }
 
     /// One line longer than a whole read is passed over with a note, once it has ended; before
@@ -794,18 +1105,18 @@ mod tests {
         let path = dir.path().join("c.jsonl");
         let wt = Path::new("/wt");
         fs::write(&path, lines(&[json!({"type": "user", "uuid": "u0", "message": {"content": "before"}})])).unwrap();
-        let cursor = read(Provider::Claude, &path, wt, None, 50).unwrap().cursor;
+        let cursor = read(Provider::Claude, &path, wt, None, None, 50, &[]).unwrap().cursor;
         let huge = format!("{{\"type\":\"user\",\"uuid\":\"big\",\"message\":{{\"content\":\"{}\"}}}}", "x".repeat(MAX_READ as usize + 10));
         fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(huge.as_bytes()).unwrap();
-        let waiting = read(Provider::Claude, &path, wt, Some(cursor), 50).unwrap();
+        let waiting = read(Provider::Claude, &path, wt, Some(cursor), None, 50, &[]).unwrap();
         assert!(waiting.messages.is_empty());
         assert_eq!(waiting.cursor, cursor, "the line is still being written");
         let after = lines(&[json!({"type": "user", "uuid": "u1", "message": {"content": "after"}})]);
         fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(format!("\n{after}").as_bytes()).unwrap();
-        let skipped = read(Provider::Claude, &path, wt, Some(cursor), 50).unwrap();
+        let skipped = read(Provider::Claude, &path, wt, Some(cursor), None, 50, &[]).unwrap();
         assert_eq!(skipped.messages.len(), 1);
         assert_eq!((skipped.messages[0].role.as_str(), &skipped.messages[0].body["text"]), ("note", &json!("A long entry was skipped")));
-        let next = read(Provider::Claude, &path, wt, Some(skipped.cursor), 50).unwrap();
+        let next = read(Provider::Claude, &path, wt, Some(skipped.cursor), None, 50, &[]).unwrap();
         assert_eq!(next.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["u1"]);
     }
 
@@ -834,22 +1145,22 @@ mod tests {
         let first = json!({"type": "user", "uuid": "u1", "message": {"content": "one"}});
         fs::write(&path, lines(&[first])).unwrap();
         let wt = Path::new("/wt");
-        let out = read(Provider::Claude, &path, wt, None, 200).unwrap();
+        let out = read(Provider::Claude, &path, wt, None, None, 200, &[]).unwrap();
         assert_eq!(out.messages.len(), 1);
         // Half a line: nothing yet, and the cursor stays put.
         let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
         let second = json!({"type": "user", "uuid": "u2", "message": {"content": "two"}}).to_string();
         file.write_all(&second.as_bytes()[..10]).unwrap();
-        let mid = read(Provider::Claude, &path, wt, Some(out.cursor), 200).unwrap();
+        let mid = read(Provider::Claude, &path, wt, Some(out.cursor), None, 200, &[]).unwrap();
         assert!(mid.messages.is_empty());
         assert_eq!(mid.cursor, out.cursor);
         file.write_all(format!("{}\n", &second[10..]).as_bytes()).unwrap();
-        let next = read(Provider::Claude, &path, wt, Some(mid.cursor), 200).unwrap();
+        let next = read(Provider::Claude, &path, wt, Some(mid.cursor), None, 200, &[]).unwrap();
         assert_eq!(next.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["u2"]);
         // A cursor from another file starts again.
         let other = dir.path().join("d.jsonl");
         fs::write(&other, lines(&[json!({"type": "user", "uuid": "x", "message": {"content": "x"}})])).unwrap();
-        let moved = read(Provider::Claude, &other, wt, Some(next.cursor), 200).unwrap();
+        let moved = read(Provider::Claude, &other, wt, Some(next.cursor), None, 200, &[]).unwrap();
         assert!(moved.reset);
         assert_eq!(moved.messages.len(), 1);
     }
@@ -860,7 +1171,7 @@ mod tests {
         let path = dir.path().join("c.jsonl");
         let records: Vec<Value> = (0..5).map(|i| json!({"type": "user", "uuid": format!("u{i}"), "message": {"content": format!("m{i}")}})).collect();
         fs::write(&path, lines(&records)).unwrap();
-        let out = read(Provider::Claude, &path, Path::new("/wt"), None, 2).unwrap();
+        let out = read(Provider::Claude, &path, Path::new("/wt"), None, None, 2, &[]).unwrap();
         assert_eq!(out.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["u3", "u4"]);
     }
 
@@ -883,7 +1194,7 @@ mod tests {
             json!({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Added."}]}}),
             json!({"type": "compacted", "payload": {"message": "", "replacement_history": []}}),
         ])).unwrap();
-        let out = read(Provider::Codex, &path, Path::new("/wt"), None, 200).unwrap();
+        let out = read(Provider::Codex, &path, Path::new("/wt"), None, None, 200, &[]).unwrap();
         let roles: Vec<&str> = out.messages.iter().map(|m| m.role.as_str()).collect();
         assert_eq!(roles, ["user", "assistant", "tool", "assistant", "assistant", "tool", "assistant", "assistant", "note"]);
         assert_eq!(out.messages[8].body, json!({"text": "Context compacted", "kind": "compact"}));

@@ -31,6 +31,36 @@ pub fn fill(app: &mut App) {
         {"name": "vivid-ferret", "project_id": 1, "provider": "claude", "role": "reviewer", "state": "idle", "intent": "Leaf review fixes", "branch": "relay/vivid-ferret", "last_output_at": at(190)},
         {"name": "calm-heron", "project_id": 2, "provider": "claude", "role": "builder", "state": "idle", "intent": "Hit windows on fast songs", "branch": "relay/calm-heron", "last_output_at": at(600)},
     ]}));
+    // Stopped and closed ones, for Earlier (D1).
+    app.agents.extend(data::agents(&json!({"sessions": [
+        {"name": "keen-newt", "project_id": 1, "provider": "claude", "role": "builder", "state": "restorable", "intent": "Video plugin round two", "branch": "relay/keen-newt", "last_output_at": at(300), "updated_at": at(240)},
+    ]})));
+    app.restorable.insert("keen-newt".into(), ("app_restart".into(), false));
+    app.earlier = data::agents(&json!({"sessions": [
+        {"name": "vivid-dingo", "project_id": 1, "provider": "claude", "role": "builder", "state": "closed", "intent": "Design canvas round two", "branch": "relay/vivid-dingo", "updated_at": at(1500)},
+        {"name": "jade-ibis", "project_id": 1, "provider": "claude", "role": "builder", "state": "closed", "intent": "Polish Clips, Notes and Board", "branch": "relay/jade-ibis", "updated_at": at(3000)},
+        {"name": "lucky-gecko", "project_id": 1, "provider": "claude", "role": "reviewer", "state": "closed", "intent": "Read-only audit, ten sessions", "branch": "relay/lucky-gecko", "updated_at": at(4400)},
+        {"name": "coral-osprey", "project_id": 1, "provider": "claude", "role": "builder", "state": "closed", "intent": "Assistant round two", "branch": "relay/coral-osprey", "updated_at": at(6000)},
+        {"name": "lucky-jackal", "project_id": 1, "provider": "claude", "role": "builder", "state": "exited", "intent": "Threads v2 readings", "branch": "relay/lucky-jackal", "updated_at": at(9000)},
+    ]}));
+    let mut k = Convo::default();
+    k.take(&json!({"cursor": 40, "reset": true, "found": true, "messages": [
+        {"id": "k1", "role": "user", "created_at": at(320), "body": {"text": "Add the timeline to the video preview."}},
+        {"id": "k2", "role": "assistant", "created_at": at(300), "body": {"blocks": [{"type": "text", "text": "The timeline is in: clips, sound and captions on three tracks, scrubbed with a finger. Tests pass."}]}},
+    ]}));
+    app.convos.insert("keen-newt".into(), k);
+    // D12: the rows' latest words, and news you have not seen on two of them.
+    for (name, words) in [
+        ("umber-zebra", "Tests pass. Push relay/umber-zebra to origin?"),
+        ("swift-ocelot", "The autopilot now moves a series when its source stops answering."),
+        ("vivid-ferret", "All five review findings are fixed, with a test each."),
+    ] {
+        let mut c = Convo::default();
+        c.take(&json!({"cursor": 1, "reset": true, "found": true, "messages": [{"id": "1", "role": "assistant", "created_at": at(3), "body": {"blocks": [{"type": "text", "text": words}]}}]}));
+        app.convos.insert(name.into(), c);
+    }
+    crate::news::set_seen(app, "umber-zebra", now.saturating_sub(20 * 60_000));
+    crate::news::set_seen(app, "swift-ocelot", now.saturating_sub(20 * 60_000));
     let mut c = Convo::default();
     c.take(&json!({"cursor": 900, "reset": true, "found": true, "messages": [
         {"id": "1", "role": "user", "created_at": at(9), "body": {"text": "Bubbles duplicate when I send while it's working. Fix it?"}},
@@ -53,6 +83,7 @@ pub fn fill(app: &mut App) {
     crate::board::sample(app);
     crate::inbox::sample(app);
     crate::designs::sample(app);
+    crate::commands::sample(app);
     let mut s = data::Sending::default();
     s.push("Good. Push it when the tests pass", now);
     app.sending.insert("bold-puffin".into(), s);
@@ -70,4 +101,133 @@ fn civil(z: i64) -> (i64, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// What an agent did, call by call (A3): a to-do list, a failing test with its output, an edit,
+/// the passing run, and, with `plan`, a plan put to you that waits for your answer. On swift-ocelot.
+pub fn tools(app: &mut App, plan: bool) {
+    let fail = (1..=18).map(|i| format!("test flows::case_{i:02} ... ok")).chain([
+        "test data::tests::a_failed_send_is_tapped_to_go_again ... FAILED".to_string(),
+        "".into(),
+        "failures:".into(),
+        "---- data::tests::a_failed_send_is_tapped_to_go_again stdout ----".into(),
+        "assertion `left == right` failed: its words never went: typed again".into(),
+        "  left: None".into(),
+        " right: Some(Type(\"a\"))".into(),
+        "test result: FAILED. 84 passed; 1 failed; 3 ignored".into(),
+    ]).collect::<Vec<_>>().join("\n");
+    let pass = (1..=30).map(|i| format!("test screen::tests::case_{i:02} ... ok")).chain(["test result: ok. 85 passed; 0 failed; 3 ignored".to_string()]).collect::<Vec<_>>().join("\n");
+    let mut msgs = vec![
+        json!({"id": "t0", "role": "user", "body": {"text": "Make a failed send retry from where it stopped"}, "created_at": ""}),
+        json!({"id": "t1", "role": "assistant", "body": {"blocks": [{"type": "tool_use", "id": "c1", "name": "TodoWrite", "summary": "3 to-dos", "detail": "[x] Read how Sending moves a message\n[~] Retry from the stage it failed at\n[ ] Run the tests and commit"}]}, "created_at": ""}),
+        json!({"id": "t1r", "role": "tool", "body": {"tool_use_id": "c1", "is_error": false, "text": "Todos have been modified successfully"}, "created_at": ""}),
+        json!({"id": "t2", "role": "assistant", "body": {"blocks": [{"type": "tool_use", "id": "c2", "name": "Bash", "summary": "cd apps/relay-code/native && cargo test --locked -p relay-code", "detail": "# Run the app's tests\ncd apps/relay-code/native && cargo test --locked -p relay-code 2>&1 | tail -40"}]}, "created_at": ""}),
+        json!({"id": "t2r", "role": "tool", "body": {"tool_use_id": "c2", "is_error": true, "text": fail}, "created_at": ""}),
+        json!({"id": "t3", "role": "assistant", "body": {"blocks": [{"type": "text", "text": "The retry went back to `Typed` for a send whose words never went. Fixing `retry`."}]}, "created_at": ""}),
+        json!({"id": "t4", "role": "assistant", "body": {"blocks": [{"type": "tool_use", "id": "c4", "name": "Edit", "summary": "src/data.rs", "detail": "-                Stage::Typing => Stage::Typed,\n+                Stage::Typing => Stage::Queued,"}]}, "created_at": ""}),
+        json!({"id": "t4r", "role": "tool", "body": {"tool_use_id": "c4", "is_error": false, "text": "The file was updated"}, "created_at": ""}),
+        json!({"id": "t5", "role": "assistant", "body": {"blocks": [{"type": "tool_use", "id": "c5", "name": "Bash", "summary": "cargo test --locked -p relay-code"}]}, "created_at": ""}),
+        json!({"id": "t5r", "role": "tool", "body": {"tool_use_id": "c5", "is_error": false, "text": pass}, "created_at": ""}),
+    ];
+    if plan {
+        msgs.push(json!({"id": "t6", "role": "assistant", "body": {"blocks": [{"type": "tool_use", "id": "c6", "name": "ExitPlanMode", "summary": "", "detail": "## Retry from where it stopped\n\n1. `retry` puts a send back at the stage it failed at\n2. **Enter alone** when its words were typed\n3. A test for each stage\n\nNothing else in the queue changes."}]}, "created_at": ""}));
+    }
+    let mut c = Convo::default();
+    c.take(&json!({"messages": msgs, "cursor": 1, "reset": true, "found": true}));
+    app.convos.insert("swift-ocelot".into(), c);
+    let screen = if plan {
+        "Would you like to proceed?\n\n❯ 1. Yes, and auto-accept edits\n  2. Yes, and manually approve edits\n  3. No, keep planning\n\nctrl-g to edit in your editor"
+    } else {
+        "· Pondering… (42s · ↓ 1.9k tokens)\n────\n❯ \n────\n  ⏵⏵ auto mode on (shift+tab to cycle)"
+    };
+    app.screens.insert("swift-ocelot".into(), crate::screen::read(screen));
+}
+
+/// The agent's words with every inline mark, a table wider than the screen, and a code block
+/// longer than its fold (A4). On swift-ocelot.
+pub fn markdown(app: &mut App) {
+    let code = (1..=52).map(|i| format!("    let step_{i} = queue.next(now + {i});")).collect::<Vec<_>>().join("\n");
+    let text = format!(
+        "## What changed\n\nThe queue is **one place** now: `say()` only *writes* the message, and `send_queued` sends it. See [the review](https://github.com/antho976/Relay/pull/209) or https://example.org/notes.\n\n| Stage | Sent | When it fails | What a tap does |\n|---|---|---|---|\n| Queued | nothing | never | nothing |\n| Typing | the words | the PC refused | types them again |\n| Entering | Enter | the link dropped | Enter alone, by itself |\n\n- a refused message *holds* the ones after it\n- a dropped one goes again by itself\n\n```rust\n{code}\n```\n\nThat is all of it."
+    );
+    let mut c = Convo::default();
+    c.take(&json!({"messages": [
+        {"id": "m0", "role": "user", "body": {"text": "What changed in the queue?"}, "created_at": ""},
+        {"id": "m1", "role": "assistant", "body": {"blocks": [{"type": "text", "text": text}]}, "created_at": ""},
+    ], "cursor": 1, "reset": true, "found": true}));
+    app.convos.insert("swift-ocelot".into(), c);
+    app.screens.insert("swift-ocelot".into(), crate::screen::read("────\n❯ \n────\n  ? for shortcuts"));
+}
+
+/// A conversation over three days, for day names and the long press's menu (A9). On swift-ocelot.
+pub fn days(app: &mut App) {
+    let now = rc_link::link::now_ms();
+    let at = |ago_ms: u64| {
+        let s = (now - ago_ms) / 1000;
+        let (y, m, d) = civil((s / 86_400) as i64);
+        let r = s % 86_400;
+        format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", r / 3600, r / 60 % 60, r % 60)
+    };
+    let day = 86_400_000;
+    let mut c = Convo::default();
+    c.take(&json!({"messages": [
+        {"id": "d1", "role": "user", "body": {"text": "Start on the drafts"}, "created_at": at(3 * day)},
+        {"id": "d2", "role": "assistant", "body": {"blocks": [{"type": "text", "text": "Each agent keeps its own draft now."}]}, "created_at": at(3 * day - 60_000)},
+        {"id": "d3", "role": "user", "body": {"text": "And across restarts?"}, "created_at": at(day + 600_000)},
+        {"id": "d4", "role": "assistant", "body": {"blocks": [{"type": "text", "text": "Yes: they are written a second after they change, and when the app goes away."}]}, "created_at": at(day)},
+        {"id": "d5", "role": "user", "body": {"text": "Ship it"}, "created_at": at(120_000)},
+        {"id": "d6", "role": "assistant", "body": {"blocks": [{"type": "text", "text": "Committed and reported."}]}, "created_at": at(60_000)},
+    ], "cursor": 1, "reset": true, "found": true}));
+    app.convos.insert("swift-ocelot".into(), c);
+    app.screens.insert("swift-ocelot".into(), crate::screen::read("────\n❯ \n────\n  ? for shortcuts"));
+}
+
+/// A Task call and what its helper did (A18). On swift-ocelot.
+pub fn helper(app: &mut App) {
+    let mut c = Convo::default();
+    c.take(&json!({"messages": [
+        {"id": "h0", "role": "user", "body": {"text": "Where are the guardrail roots set?"}, "created_at": ""},
+        {"id": "h1", "role": "assistant", "body": {"blocks": [{"type": "tool_use", "id": "toolu_map", "name": "Task", "summary": "Map the guardrail roots", "detail": "Find where write_roots are set and who reads them."}]}, "created_at": ""},
+        {"id": "h1r", "role": "tool", "body": {"tool_use_id": "toolu_map", "is_error": false, "text": "They are set in guardrails.rs from the worktree and its memory folders."}, "created_at": ""},
+        {"id": "h2", "role": "assistant", "body": {"blocks": [{"type": "text", "text": "They come from `guardrails.rs`: the worktree, then the memory folders."}]}, "created_at": ""},
+    ], "cursor": 1, "reset": true, "found": true}));
+    app.convos.insert("swift-ocelot".into(), c);
+    let steps = json!({"messages": [
+        {"id": "s0", "role": "user", "body": {"text": "Find where write_roots are set"}, "created_at": ""},
+        {"id": "s1", "role": "assistant", "body": {"blocks": [{"type": "tool_use", "id": "g1", "name": "Grep", "summary": "write_roots"}, {"type": "tool_use", "id": "r1", "name": "Read", "summary": "crates/relay-core/src/guardrails.rs"}, {"type": "tool_use", "id": "r2", "name": "Read", "summary": "crates/relay-core/src/handlers/session.rs"}]}, "created_at": ""},
+        {"id": "s2", "role": "assistant", "body": {"blocks": [{"type": "text", "text": "Set in **guardrails.rs** from the worktree and memory folders; the session handler reads them."}]}, "created_at": ""},
+    ]});
+    app.helpers.insert(("swift-ocelot".into(), "toolu_map".into()), crate::app::Helper { items: data::items(&data::messages(&steps)), found: true, at: u64::MAX / 2 });
+    app.screens.insert("swift-ocelot".into(), crate::screen::read("────\n❯ \n────\n  ? for shortcuts"));
+}
+
+/// A long conversation for measuring on a phone (A19): 400 messages, as the chat bench's, with
+/// thinking, a command, a 60-line diff and prose in each answer. On bold-puffin.
+pub fn long_chat(app: &mut App) {
+    let long = "The phone matched its own copy to the log by the words, and a queued message is logged differently, so the match missed and both stayed. ".repeat(3);
+    let diff = (0..30).map(|i| format!("-    let old_{i} = users.any {{ it.clientId == mine.id }}\n+    let new_{i} = users.any {{ it.id == mine.id && it.text == mine.text }}")).collect::<Vec<_>>().join("\n");
+    let now = rc_link::link::now_ms();
+    let at = |i: u64| {
+        let s = (now / 1000).saturating_sub((400 - i) * 90);
+        let (y, m, d) = civil((s / 86_400) as i64);
+        let r = s % 86_400;
+        format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", r / 3600, r / 60 % 60, r % 60)
+    };
+    let msgs: Vec<serde_json::Value> = (0..400u64)
+        .map(|i| {
+            if i % 2 == 0 {
+                json!({"id": format!("l{i}"), "role": "user", "created_at": at(i), "body": {"text": format!("Message {i}: push it when the tests pass, and check the board.")}})
+            } else {
+                json!({"id": format!("l{i}"), "role": "assistant", "created_at": at(i), "body": {"blocks": [
+                    {"type": "thinking", "text": long},
+                    {"type": "tool_use", "id": format!("b{i}"), "name": "Bash", "summary": "cargo test --locked"},
+                    {"type": "tool_use", "id": format!("e{i}"), "name": "Edit", "summary": "data/SessionChat.kt", "detail": diff},
+                    {"type": "text", "text": format!("{long}\n\n- **Matched by count**, never by words\n- `cargo test` passes ({i})")},
+                ]}})
+            }
+        })
+        .collect();
+    let mut c = Convo::default();
+    c.take(&json!({"messages": msgs, "cursor": 1, "reset": true, "found": true}));
+    app.convos.insert("bold-puffin".into(), c);
 }

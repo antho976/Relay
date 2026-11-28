@@ -33,6 +33,11 @@ pub const PAIR_WELCOME_TIMEOUT: Duration = Duration::from_secs(90);
 /// How long to give one route before also trying the next ("happy eyeballs").
 pub const STAGGER: Duration = Duration::from_millis(400);
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// The door's own op for this phone's keep-alive (relay-remote `direct::KEEPALIVE_OP`): with it the
+/// door pings the phone only when it has gone quiet, not every 30 s.
+pub const KEEPALIVE_OP: &str = "door.keepalive";
+
+/// How often the link pings the PC while the app is in front ([`Link::set_keepalive`] changes it).
 pub const KEEPALIVE: Duration = Duration::from_secs(25);
 pub const PING_TIMEOUT: Duration = Duration::from_secs(10);
 pub const ENGINE_START_TIMEOUT: Duration = Duration::from_secs(45);
@@ -109,6 +114,9 @@ pub enum Refusal {
     HostOffline,
     /// That door is the server's copy, not a PC.
     WrongDoor,
+    /// Every door that answered is another PC or another Relay (a stale home address, the dev
+    /// instance), never this phone's PC.
+    OtherPc,
     Denied { code: String, text: String },
 }
 
@@ -128,6 +136,7 @@ impl Refusal {
             Refusal::Unreachable => "The PC did not answer".into(),
             Refusal::HostOffline => "Your server answered, but the PC is not connected to it".into(),
             Refusal::WrongDoor => "That is your server's copy, not a PC".into(),
+            Refusal::OtherPc => "Another PC answered at your PC's address".into(),
             Refusal::Denied { text, .. } => text.clone(),
         }
     }
@@ -264,6 +273,85 @@ pub async fn prove(g: &mut Greeted, device: &str, token: &str) -> Result<wire::W
     Ok(w)
 }
 
+/// Both say who they are, and differ.
+fn differs(paired: &str, said: &str) -> bool {
+    !paired.is_empty() && !said.is_empty() && paired != said
+}
+
+/// Dial the pairing's routes until a door that is this phone's PC admits it. A door that is
+/// another PC, another Relay on it (the dev instance) or the server's copy is passed over for the
+/// next route, and never told this phone's proof when its greeting already says so.
+pub async fn reach(profile: &Profile) -> Result<(Greeted, wire::Welcome), Refusal> {
+    let mut left = order_routes(&profile.routes, profile.last_route.as_deref());
+    let mut passed: Option<Refusal> = None;
+    while !left.is_empty() {
+        let mut g = match greet(&left).await {
+            Ok(g) => g,
+            Err(r) => return Err(passed.unwrap_or(r)),
+        };
+        left.retain(|r| r.url != g.route.url);
+        if differs(&profile.instance, &g.greeting.instance) {
+            g.conn.close().await;
+            passed = Some(Refusal::OtherPc);
+            continue;
+        }
+        match prove(&mut g, &profile.device, &profile.token).await {
+            Ok(w) if !differs(&profile.host_id, w.host_id.as_deref().unwrap_or_default()) => return Ok((g, w)),
+            Ok(_) => passed = Some(Refusal::OtherPc),
+            // Only this PC forgetting the phone means pair again.
+            Err(Refusal::Unpaired) if is_this_pc(profile, &g).await => {
+                g.conn.close().await;
+                return Err(Refusal::Unpaired);
+            }
+            Err(Refusal::Unpaired) => passed = Some(Refusal::OtherPc),
+            Err(Refusal::WrongDoor) => passed = Some(Refusal::WrongDoor),
+            Err(r) => {
+                g.conn.close().await;
+                return Err(r);
+            }
+        }
+        g.conn.close().await;
+    }
+    Err(passed.unwrap_or(Refusal::Unreachable))
+}
+
+/// Whether a door that refused this phone is its PC, before calling the pairing gone. Its
+/// greeting names only the Relay instance, which another PC may share: a direct route is asked
+/// `GET /info` for the PC's id. The server's room is this PC's own.
+async fn is_this_pc(profile: &Profile, g: &Greeted) -> bool {
+    if differs(&profile.instance, &g.greeting.instance) {
+        return false;
+    }
+    if profile.host_id.is_empty() || g.route.kind == crate::pairlink::RouteKind::Rendezvous {
+        return true;
+    }
+    match info(&g.route.url).await {
+        Some(i) => i.get("host_id").and_then(Value::as_str).is_some_and(|h| h.is_empty() || h == profile.host_id),
+        None => false,
+    }
+}
+
+/// A direct door's `GET /info` (plain HTTP on the same port): who the PC is. Only `ws://`.
+async fn info(url: &str) -> Option<Value> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let authority = url.strip_prefix("ws://")?.split('/').next()?.to_string();
+    let wait = Duration::from_secs(3);
+    let mut tcp = tokio::time::timeout(wait, TcpStream::connect(&authority)).await.ok()?.ok()?;
+    let ask = format!("GET /info HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n");
+    tcp.write_all(ask.as_bytes()).await.ok()?;
+    let mut body = Vec::new();
+    let mut chunk = [0u8; 2048];
+    while body.len() < 16 * 1024 {
+        match tokio::time::timeout(wait, tcp.read(&mut chunk)).await.ok()?.ok()? {
+            0 => break,
+            n => body.extend_from_slice(&chunk[..n]),
+        }
+    }
+    let text = String::from_utf8_lossy(&body);
+    let (_, json) = text.split_once("\r\n\r\n")?;
+    serde_json::from_str(json.trim()).ok()
+}
+
 /// Present a pairing code. The code is spent the moment it is sent, so once one route has greeted
 /// no other is tried.
 pub async fn pair_async(link: &PairLink, device_name: &str) -> Result<Profile, Refusal> {
@@ -314,7 +402,9 @@ pub fn now_ms() -> u64 {
 
 // The session
 
-type Answer = std::sync::mpsc::Sender<Result<Value, BusError>>;
+/// Where an answer goes, and whether its coming wakes the app (a call of the app's own) or not
+/// (the link's pings, the background's reads: the activity sleeps through them).
+type Answer = (Box<dyn FnOnce(Result<Value, BusError>) + Send>, bool);
 
 struct Session {
     tx: mpsc::UnboundedSender<String>,
@@ -329,8 +419,8 @@ impl Session {
     fn shut(&self) {
         if self.open.swap(false, Ordering::SeqCst) {
             let down = BusError::link("link.down", "The link to the PC closed");
-            for (_, a) in self.pending.lock().unwrap_or_else(|e| e.into_inner()).drain() {
-                let _ = a.send(Err(down.clone()));
+            for (_, (a, _)) in self.pending.lock().unwrap_or_else(|e| e.into_inner()).drain() {
+                a(Err(down.clone()));
             }
             self.ended.notify_waiters();
             self.ended.notify_one();
@@ -344,7 +434,13 @@ impl Session {
             return false;
         }
         if let Some(a) = answer {
-            self.pending.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), a);
+            let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+            // Looked at again under the lock shut drains with: shut between the look above and
+            // this would otherwise leave the call unanswered until its timeout.
+            if !self.open.load(Ordering::SeqCst) {
+                return false;
+            }
+            pending.insert(id.to_string(), a);
         }
         if self.tx.send(wire::request(op, payload, id)).is_err() {
             self.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
@@ -357,6 +453,8 @@ impl Session {
 /// An answer on its way. Poll it each frame.
 pub struct Call {
     rx: std::sync::mpsc::Receiver<Result<Value, BusError>>,
+    /// Held by [`Call::never`] so its answer never comes.
+    _never: Option<std::sync::mpsc::Sender<Result<Value, BusError>>>,
 }
 
 impl Call {
@@ -377,7 +475,13 @@ impl Call {
     fn failed(e: BusError) -> Call {
         let (tx, rx) = std::sync::mpsc::channel();
         let _ = tx.send(Err(e));
-        Call { rx }
+        Call { rx, _never: None }
+    }
+
+    /// A call whose answer never comes, for tests of what shows while one is on its way.
+    pub fn never() -> Call {
+        let (tx, rx) = std::sync::mpsc::channel();
+        Call { rx, _never: Some(tx) }
     }
 }
 
@@ -404,24 +508,51 @@ impl LinkState {
 
 type Waker = Arc<dyn Fn() + Send + Sync>;
 
+/// What a listener beside the app hears ([`Link::listen`]): every event and every change of
+/// state, as they come. The app's own [`Link::take_events`] still gets every event.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Note {
+    Event(Event),
+    State(LinkState),
+}
+
 struct Inner {
     store: Arc<dyn Store>,
     state: Mutex<LinkState>,
     session: Mutex<Option<Arc<Session>>>,
-    events: Mutex<Vec<Event>>,
+    events: Mutex<VecDeque<Event>>,
     kick: Notify,
+    /// The keep-alive's interval now, in ms, and a nudge for the wait already running.
+    keepalive_ms: std::sync::atomic::AtomicU64,
+    retime: Notify,
+    /// The network changed under an open session: it is shut and dialed again at once.
+    switched: AtomicBool,
+    /// The paired PC's name, kept here: the profile is a file read.
+    pc: Mutex<String>,
+    /// Pings the door sent this phone, all sessions together.
+    door_pings: std::sync::atomic::AtomicU64,
     waker: Waker,
-    /// Bumped by [`Link::forget`]: a loop of an older generation stops.
+    /// Bumped by [`Link::forget`] and [`Link::paired`]: a loop of an older generation stops.
     generation: Mutex<u64>,
+    listeners: Mutex<Vec<std::sync::mpsc::Sender<Note>>>,
 }
 
 impl Inner {
     fn show(&self, s: LinkState) {
         let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if *st != s {
-            *st = s;
+            *st = s.clone();
             drop(st);
+            self.tell(Note::State(s));
             (self.waker)();
+        }
+    }
+
+    /// Every listener hears it; one that went away is dropped.
+    fn tell(&self, n: Note) {
+        let mut ls = self.listeners.lock().unwrap_or_else(|e| e.into_inner());
+        if !ls.is_empty() {
+            ls.retain(|tx| tx.send(n.clone()).is_ok());
         }
     }
 }
@@ -439,15 +570,23 @@ impl Link {
     pub fn start(store: Arc<dyn Store>, waker: Waker) -> Link {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a tokio runtime");
         let handle = rt.handle().clone();
-        let state = if store.load().is_some() { LinkState::Connecting { attempt: 0 } } else { LinkState::Unpaired };
+        let kept = store.load();
+        let state = if kept.is_some() { LinkState::Connecting { attempt: 0 } } else { LinkState::Unpaired };
+        let pc = Mutex::new(kept.map(|p| p.name).unwrap_or_default());
         let inner = Arc::new(Inner {
             store,
             state: Mutex::new(state),
             session: Mutex::new(None),
-            events: Mutex::new(Vec::new()),
+            events: Mutex::new(VecDeque::new()),
             kick: Notify::new(),
+            keepalive_ms: std::sync::atomic::AtomicU64::new(KEEPALIVE.as_millis() as u64),
+            retime: Notify::new(),
+            switched: AtomicBool::new(false),
+            pc,
+            door_pings: std::sync::atomic::AtomicU64::new(0),
             waker,
             generation: Mutex::new(0),
+            listeners: Mutex::new(Vec::new()),
         });
         let i2 = inner.clone();
         std::thread::Builder::new()
@@ -465,15 +604,51 @@ impl Link {
         self.inner.store.load()
     }
 
+    /// How many pings the door has sent this phone (it spares them once told the keep-alive).
+    pub fn door_pings(&self) -> u64 {
+        self.inner.door_pings.load(Ordering::SeqCst)
+    }
+
+    /// The paired PC's name ("" when none is paired), without reading the profile: for every frame.
+    pub fn pc_name(&self) -> String {
+        self.inner.pc.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     /// Dial now instead of waiting out the backoff: the app came to the foreground, the network
     /// changed, a PC was just paired.
     pub fn kick(&self) {
         self.inner.kick.notify_one();
     }
 
-    /// A PC was paired: keep it and connect to it now.
+    /// The phone moved to another network (Wi-Fi to mobile data, another Wi-Fi): an open session
+    /// rode on the old address and is dead, whatever its socket says, so it is shut and the PC
+    /// dialed again at once, instead of a ping on the dead path finding out in tens of seconds.
+    pub fn network_switched(&self) {
+        let open = self.session();
+        if let Some(s) = open {
+            self.inner.switched.store(true, Ordering::SeqCst);
+            s.shut();
+        }
+        self.kick();
+    }
+
+    /// How often to ping the PC while connected: often in front, rarely away with the screen off
+    /// (each ping wakes the phone's radio). Takes effect on the wait already running.
+    pub fn set_keepalive(&self, every: Duration) {
+        let ms = every.as_millis().max(1) as u64;
+        if self.inner.keepalive_ms.swap(ms, Ordering::SeqCst) != ms {
+            self.inner.retime.notify_one();
+            // The door paces its own pings by ours: tell it.
+            self.post(KEEPALIVE_OP, json!({ "ms": ms }));
+        }
+    }
+
+    /// A PC was paired: keep it and connect to it now. A connection still being made for the
+    /// pairing before is dropped (`generation`).
     pub fn paired(&self, p: &Profile) {
+        *self.inner.generation.lock().unwrap_or_else(|e| e.into_inner()) += 1;
         self.inner.store.save(p);
+        *self.inner.pc.lock().unwrap_or_else(|e| e.into_inner()) = p.name.clone();
         if let Some(s) = self.inner.session.lock().unwrap_or_else(|e| e.into_inner()).take() {
             s.shut();
         }
@@ -485,6 +660,7 @@ impl Link {
     pub fn forget(&self) {
         *self.inner.generation.lock().unwrap_or_else(|e| e.into_inner()) += 1;
         self.inner.store.forget();
+        self.inner.pc.lock().unwrap_or_else(|e| e.into_inner()).clear();
         if let Some(s) = self.inner.session.lock().unwrap_or_else(|e| e.into_inner()).take() {
             s.shut();
         }
@@ -499,24 +675,46 @@ impl Link {
     }
 
     pub fn call_with(&self, op: &str, payload: Value, timeout: Duration) -> Call {
+        self.call_as(op, payload, timeout, true)
+    }
+
+    /// [`Link::call_with`] whose answer does not wake the app: for a reader beside it (the
+    /// notifications), so an app asleep in the background stays asleep.
+    pub fn call_quiet(&self, op: &str, payload: Value, timeout: Duration) -> Call {
+        self.call_as(op, payload, timeout, false)
+    }
+
+    fn call_as(&self, op: &str, payload: Value, timeout: Duration, wake: bool) -> Call {
         let Some(s) = self.session() else {
             return Call::failed(BusError::link("link.down", "Not connected to the PC"));
         };
         let id = wire::uuid_v4();
         let (tx, rx) = std::sync::mpsc::channel();
-        if !s.send(op, &payload, &id, Some(tx)) {
+        // The answer also ends the call's timer, so an answered call leaves nothing waiting.
+        let (answered, timer_ends) = tokio::sync::oneshot::channel::<()>();
+        let deliver = Box::new(move |r| {
+            let _ = tx.send(r);
+            let _ = answered.send(());
+        });
+        if !s.send(op, &payload, &id, Some((deliver, wake))) {
             return Call::failed(BusError::link("link.down", "Not connected to the PC"));
         }
         let (s2, waker, op) = (s.clone(), self.inner.waker.clone(), op.to_string());
         self.handle.spawn(async move {
-            tokio::time::sleep(timeout).await;
-            let gone = s2.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-            if let Some(a) = gone {
-                let _ = a.send(Err(BusError::link("link.timeout", &format!("The PC did not answer {op} in time"))));
-                waker();
+            tokio::select! {
+                _ = tokio::time::sleep(timeout) => {
+                    let gone = s2.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+                    if let Some((a, wake)) = gone {
+                        a(Err(BusError::link("link.timeout", &format!("The PC did not answer {op} in time"))));
+                        if wake {
+                            waker();
+                        }
+                    }
+                }
+                _ = timer_ends => {}
             }
         });
-        Call { rx }
+        Call { rx, _never: None }
     }
 
     /// Fire and forget, for keys: the answer is read and dropped.
@@ -524,9 +722,23 @@ impl Link {
         self.session().is_some_and(|s| s.send(op, &payload, &wire::uuid_v4(), None))
     }
 
+    /// Hear every event and change of state from now on, on another thread than the app's
+    /// (the notifications that work with no activity). Dropping the receiver stops it.
+    pub fn listen(&self) -> std::sync::mpsc::Receiver<Note> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.inner.listeners.lock().unwrap_or_else(|e| e.into_inner()).push(tx);
+        rx
+    }
+
+    /// How many tasks the link's runtime holds now (its socket halves, call timers): tests keep
+    /// them from piling up.
+    pub fn tasks(&self) -> usize {
+        self.handle.metrics().num_alive_tasks()
+    }
+
     /// Events since the last take, oldest first.
     pub fn take_events(&self) -> Vec<Event> {
-        std::mem::take(&mut *self.inner.events.lock().unwrap_or_else(|e| e.into_inner()))
+        std::mem::take(&mut *self.inner.events.lock().unwrap_or_else(|e| e.into_inner())).into()
     }
 
     fn session(&self) -> Option<Arc<Session>> {
@@ -553,17 +765,12 @@ async fn run(inner: Arc<Inner>) {
         }
         attempt += 1;
         inner.show(LinkState::Connecting { attempt });
-        let routes = order_routes(&profile.routes, profile.last_route.as_deref());
-        let mut g = match greet(&routes).await {
-            Ok(g) => g,
-            Err(r) => {
-                backoff = wait_out(&inner, &r.text(), backoff).await;
-                continue;
-            }
-        };
-        let welcome = match prove(&mut g, &profile.device, &profile.token).await {
-            Ok(w) => w,
-            Err(r @ (Refusal::Unpaired | Refusal::WrongDoor)) => {
+        let current = || *inner.generation.lock().unwrap_or_else(|e| e.into_inner()) == generation;
+        let (g, welcome) = match reach(&profile).await {
+            Ok(r) => r,
+            // Paired again or forgotten meanwhile: what this pairing heard says nothing now.
+            Err(_) if !current() => continue,
+            Err(r @ Refusal::Unpaired) => {
                 inner.show(LinkState::Revoked { reason: r.text() });
                 continue;
             }
@@ -572,7 +779,7 @@ async fn run(inner: Arc<Inner>) {
                 continue;
             }
         };
-        if *inner.generation.lock().unwrap_or_else(|e| e.into_inner()) != generation {
+        if !current() {
             g.conn.close().await;
             continue;
         }
@@ -587,6 +794,7 @@ async fn run(inner: Arc<Inner>) {
         p.version = greeting.version.clone();
         if p != profile {
             inner.store.save(&p);
+            *inner.pc.lock().unwrap_or_else(|e| e.into_inner()) = p.name.clone();
         }
         let route = g.route.clone();
         let session = open(&inner, g.conn);
@@ -602,14 +810,37 @@ async fn run(inner: Arc<Inner>) {
             continue;
         }
         let events: Vec<Value> = SUBSCRIBE.iter().map(|e| json!(e)).collect();
-        let _ = ask(&session, "bus.subscribe", json!({ "events": events }), CALL_TIMEOUT).await;
+        // Online with no events would show agents that never change: connect again instead.
+        if ask(&session, "bus.subscribe", json!({ "events": events }), CALL_TIMEOUT).await.is_err() {
+            session.shut();
+            backoff = wait_out(&inner, "The PC did not send its news", backoff).await;
+            continue;
+        }
+        // Paired again or forgotten during the ping: this session is the old pairing's.
+        if !current() {
+            session.shut();
+            continue;
+        }
         *inner.session.lock().unwrap_or_else(|e| e.into_inner()) = Some(session.clone());
+        // How often this phone pings, so the door spares its own pings (an older door refuses
+        // the op, and nothing changes).
+        session.send(KEEPALIVE_OP, &json!({ "ms": inner.keepalive_ms.load(Ordering::SeqCst) }), &wire::uuid_v4(), None);
         inner.show(LinkState::Online { host, route });
         (inner.waker)();
         let began = tokio::time::Instant::now();
         keep_alive(&inner, &session).await;
         session.shut();
         inner.session.lock().unwrap_or_else(|e| e.into_inner()).take();
+        // Forgotten or paired again meanwhile: what they showed stands, not "Connection lost".
+        if !current() {
+            continue;
+        }
+        // Shut for a new network: dial at once, the backoff from the start.
+        if inner.switched.swap(false, Ordering::SeqCst) {
+            backoff = RECONNECT_MIN;
+            attempt = 0;
+            continue;
+        }
         if began.elapsed() < STABLE {
             backoff = wait_out(&inner, "Connection lost, reconnecting", backoff).await;
         } else {
@@ -653,6 +884,10 @@ fn open(inner: &Arc<Inner>, conn: Conn) -> Arc<Session> {
                         dispatch(&inner, &s, l);
                     }
                 }
+                // The door's own pings (answered by the socket by itself): counted, for the live check.
+                Message::Ping(_) => {
+                    inner.door_pings.fetch_add(1, Ordering::SeqCst);
+                }
                 Message::Close(_) => break,
                 _ => {}
             }
@@ -671,24 +906,27 @@ fn dispatch(inner: &Inner, s: &Session, line: &str) {
         Some(Incoming::Res(r)) => {
             let Some(id) = r.id else { return };
             let a = s.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-            if let Some(a) = a {
+            if let Some((a, wake)) = a {
                 let out = if r.ok {
                     Ok(r.result)
                 } else {
                     Err(r.error.unwrap_or_else(|| BusError { kind: "internal".into(), code: "bus.no_error".into(), message: "The PC refused without saying why".into(), hint: None }))
                 };
-                let _ = a.send(out);
-                (inner.waker)();
+                a(out);
+                if wake {
+                    (inner.waker)();
+                }
             }
         }
         Some(Incoming::Ev(e)) => {
             let mut ev = inner.events.lock().unwrap_or_else(|e| e.into_inner());
             // A phone that stopped drawing (asleep) keeps the newest 2000.
             if ev.len() >= 2000 {
-                ev.remove(0);
+                ev.pop_front();
             }
-            ev.push(e);
+            ev.push_back(e.clone());
             drop(ev);
+            inner.tell(Note::Event(e));
             (inner.waker)();
         }
         _ => {}
@@ -698,22 +936,21 @@ fn dispatch(inner: &Inner, s: &Session, line: &str) {
 /// A call from inside the link's own thread.
 async fn ask(s: &Arc<Session>, op: &str, payload: Value, timeout: Duration) -> Result<Value, BusError> {
     let id = wire::uuid_v4();
-    let (tx, rx) = std::sync::mpsc::channel();
-    if !s.send(op, &payload, &id, Some(tx)) {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let deliver = Box::new(move |r| {
+        let _ = tx.send(r);
+    });
+    if !s.send(op, &payload, &id, Some((deliver, false))) {
         return Err(BusError::link("link.down", "Not connected to the PC"));
     }
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        match rx.try_recv() {
-            Ok(r) => return r,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => return Err(BusError::link("link.down", "The link to the PC closed")),
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-        }
-        if tokio::time::Instant::now() >= deadline || !s.open.load(Ordering::SeqCst) {
+    // Woken by the answer itself, or by the session shutting (which answers link.down).
+    match tokio::time::timeout(timeout, rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) => Err(BusError::link("link.down", "The link to the PC closed")),
+        Err(_) => {
             s.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-            return Err(BusError::link("link.timeout", &format!("The PC did not answer {op} in time")));
+            Err(BusError::link("link.timeout", &format!("The PC did not answer {op} in time")))
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -722,10 +959,13 @@ async fn ask(s: &Arc<Session>, op: &str, payload: Value, timeout: Duration) -> R
 async fn keep_alive(inner: &Inner, s: &Arc<Session>) {
     let mut missed = 0;
     while s.open.load(Ordering::SeqCst) {
+        let every = Duration::from_millis(inner.keepalive_ms.load(Ordering::SeqCst));
         tokio::select! {
             _ = s.ended.notified() => break,
             _ = inner.kick.notified() => {}
-            _ = tokio::time::sleep(KEEPALIVE) => {}
+            _ = tokio::time::sleep(every) => {}
+            // A new interval: wait again with it, no ping now.
+            _ = inner.retime.notified() => continue,
         }
         if !s.open.load(Ordering::SeqCst) {
             break;

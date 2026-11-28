@@ -116,6 +116,8 @@ mod phase7;
 mod phase8;
 #[path = "phase9.rs"]
 mod phase9;
+#[path = "phone_app.rs"]
+mod phone_app;
 #[path = "pictures.rs"]
 mod pictures;
 #[path = "project_relink_restore.rs"]

@@ -146,6 +146,8 @@ pub const PHONE_OPS: &[&str] = &[
     "arbiter.strategy.get", "arbiter.summary",
     "avd.boot", "avd.list",
     "bus.ping", "bus.subscribe", "bus.unsubscribe",
+    // A person's message to an agent, kept under the phone's id (Relay Code's chat).
+    "chat.send",
     "dashboard.get",
     // A project's design canvases, to list, open and draw with their pictures
     // (docs/DESIGN-CANVAS.md).
@@ -154,8 +156,8 @@ pub const PHONE_OPS: &[&str] = &[
     "file.create", "file.delete", "file.move", "file.read", "file.rename", "file.restore",
     "file.restore_head", "file.search", "file.trash.list", "file.tree", "file.write",
     "git.branch.clean_merged", "git.branch.create", "git.branch.delete", "git.branch.switch",
-    "git.branches", "git.commit", "git.diff", "git.diff.file", "git.fetch", "git.log", "git.pr.list",
-    "git.pr.open", "git.push", "git.show", "git.stage", "git.status", "git.suggest_message",
+    "git.branches", "git.commit", "git.diff", "git.diff.file", "git.fetch", "git.log", "git.pr.checks",
+    "git.pr.list", "git.pr.merge", "git.pr.open", "git.pull", "git.push", "git.show", "git.stage", "git.status", "git.suggest_message",
     "git.unstage",
     "github.connect", "github.repo.list", "github.status",
     "guardrail.config.get", "guardrail.config.layers", "guardrail.config.set", "guardrail.confirm",
@@ -179,6 +181,8 @@ pub const PHONE_OPS: &[&str] = &[
     "notes.restore", "notes.update",
     "notify.ack", "notify.ack_all", "notify.list", "notify.settings.get", "notify.settings.set",
     "overlap.list",
+    // Relay Code's updates, served by this PC (phone.app.*, read-only)
+    "phone.app.apk", "phone.app.latest",
     "plugin.enable", "plugin.get", "plugin.list",
     "project.add", "project.clone", "project.list", "project.remove", "project.update",
     "provider.list", "provider.refresh", "provider.update",

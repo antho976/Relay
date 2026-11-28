@@ -55,6 +55,10 @@ result!(#[schemars(rename = "GitStatusOut")] StatusOut {
     /// How many entries git reported, `files` included; more than `files.len()` when truncated.
     #[serde(default)]
     pub total: u64,
+    /// What the checkout is in the middle of, when anything: `merge`, `rebase` (or `git am`),
+    /// `cherry_pick` or `revert`, from the files git keeps in its git dir while it waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
 });
 op!(Status, "git.status", WtIn => StatusOut, OpMeta::query(Scope::Project, 8, "Working tree status (gix)"));
 payload!(#[schemars(rename = "GitDiffIn")] DiffIn { pub project_id: Id, pub worktree: Option<String>, pub base: Option<String>, pub staged: Option<bool> });
@@ -138,6 +142,11 @@ result!(#[schemars(rename = "GitFetchOut")] FetchOut { pub ahead: Option<i64>, p
 op!(Fetch, "git.fetch", ProjectIn => FetchOut, OpMeta::mutation(Scope::Project, 8, "Fetch upstream").audit(Audit::AgentOnly).emits(&["git.changed"]));
 payload!(#[schemars(rename = "GitPushIn")] PushIn { pub project_id: Id, pub worktree: Option<String>, pub set_upstream: Option<bool> });
 op!(Push, "git.push", PushIn => Empty, OpMeta::mutation(Scope::Project, 8, "Push (system git)").emits(&["git.changed"]));
+result!(#[schemars(rename = "GitPullOut")] PullOut {
+    /// Already level with its upstream: nothing moved.
+    pub up_to_date: bool,
+});
+op!(Pull, "git.pull", WtIn => PullOut, OpMeta::mutation(Scope::Project, 8, "Fast-forward the branch to its upstream (git pull --ff-only); refused when it cannot simply move forward").emits(&["git.changed"]));
 result!(#[schemars(rename = "GitPullRequest")] PullRequest {
     pub number: u64,
     pub branch: String,
@@ -158,6 +167,45 @@ op!(PrList, "git.pr.list", PrListIn => PrListOut, OpMeta::query(Scope::Project, 
 payload!(#[schemars(rename = "GitPrOpenIn")] PrOpenIn { pub project_id: Id, pub worktree: Option<String>, pub title: Option<String>, pub body: Option<String> });
 result!(#[schemars(rename = "GitPrOpenOut")] PrOpenOut { pub url: String });
 op!(PrOpen, "git.pr.open", PrOpenIn => PrOpenOut, OpMeta::mutation(Scope::Project, 8, "Open a PR for the branch"));
+result!(#[schemars(rename = "GitPrCheck")] PrCheck {
+    pub name: String,
+    /// As `gh pr checks` buckets it: `pass`, `fail`, `pending`, `skipping` or `cancel`.
+    pub state: String,
+    /// The check's page (its run on GitHub), when it has one.
+    pub link: Option<String>,
+    /// Branch protection requires it to pass before the pull request may merge.
+    pub required: bool,
+});
+payload!(#[schemars(rename = "GitPrChecksIn")] PrChecksIn {
+    pub project_id: Id,
+    pub number: u64,
+    /// Ask GitHub now instead of answering from the last reading (kept 20 s).
+    pub refresh: Option<bool>,
+});
+result!(#[schemars(rename = "GitPrChecksOut")] PrChecksOut { pub checks: Vec<PrCheck> });
+op!(PrChecks, "git.pr.checks", PrChecksIn => PrChecksOut, OpMeta::query(Scope::Project, 8, "A pull request's checks (gh pr checks): each one's state, link and whether it is required; cached 20 s unless refresh"));
+
+/// How a pull request's commits land on its base.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "GitPrMergeMethod")]
+pub enum PrMergeMethod {
+    /// One commit on the base (the default).
+    Squash,
+    /// A merge commit.
+    Merge,
+    /// Each commit replayed on the base.
+    Rebase,
+}
+payload!(#[schemars(rename = "GitPrMergeIn")] PrMergeIn {
+    pub project_id: Id,
+    pub number: u64,
+    /// Default `squash`.
+    pub method: Option<PrMergeMethod>,
+});
+result!(#[schemars(rename = "GitPrMergeOut")] PrMergeOut { pub number: u64, pub method: PrMergeMethod });
+op!(PrMerge, "git.pr.merge", PrMergeIn => PrMergeOut,
+    OpMeta::mutation(Scope::Project, 8, "Merge a pull request on GitHub (gh pr merge); refused while a required check fails").actors(Actors::UserOnly).emits(&["git.changed"]));
 payload!(#[schemars(rename = "GitCleanMergedIn")] CleanMergedIn { pub project_id: Id, pub dry_run: Option<bool> });
 result!(#[schemars(rename = "GitCleanMergedFailed")] CleanMergedFailed { pub branch: String, pub reason: String });
 result!(#[schemars(rename = "GitCleanMergedOut")] CleanMergedOut {
@@ -224,8 +272,11 @@ entries!(
     CommitOp,
     Fetch,
     Push,
+    Pull,
     PrList,
     PrOpen,
+    PrChecks,
+    PrMerge,
     CleanMerged,
     BranchCleanup,
     SuggestMessage,

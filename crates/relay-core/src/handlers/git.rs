@@ -97,6 +97,34 @@ const PR_LIST_RECENT: u32 = 100;
 /// timeout, so the engine reports a timeout before the client gives up on its own.
 const PR_OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 
+/// How long one reading of a pull request's checks answers `git.pr.checks`: a phone asks each
+/// time the branch's page shows, and every reading is two GitHub round trips.
+const PR_CHECKS_TTL: std::time::Duration = std::time::Duration::from_secs(20);
+/// `gh pr merge` is a few GitHub round trips; GitHub may take a while on a big repository.
+const PR_MERGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+type PrChecked = Result<PrChecksOut, BusError>;
+type ChecksCache = HashMap<(PathBuf, u64), (std::time::Instant, PrChecked)>;
+static PR_CHECKS: std::sync::Mutex<Option<ChecksCache>> = std::sync::Mutex::new(None);
+
+fn cached_checks(repo: &Path, number: u64) -> Option<PrChecked> {
+    let cache = PR_CHECKS.lock().unwrap_or_else(|p| p.into_inner());
+    cache.as_ref()?.get(&(repo.to_path_buf(), number)).filter(|(at, _)| at.elapsed() < PR_CHECKS_TTL).map(|(_, c)| c.clone())
+}
+
+fn remember_checks(repo: &Path, number: u64, checked: &PrChecked) {
+    let mut cache = PR_CHECKS.lock().unwrap_or_else(|p| p.into_inner());
+    let cache = cache.get_or_insert_with(Default::default);
+    cache.retain(|_, (at, _)| at.elapsed() < PR_CHECKS_TTL);
+    cache.insert((repo.to_path_buf(), number), (std::time::Instant::now(), checked.clone()));
+}
+
+fn forget_checks(repo: &Path, number: u64) {
+    if let Some(cache) = PR_CHECKS.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+        cache.remove(&(repo.to_path_buf(), number));
+    }
+}
+
 type PrListed = Result<PrListOut, BusError>;
 type PrCache = std::collections::HashMap<PathBuf, (std::time::Instant, PrListed)>;
 static PR_LISTS: std::sync::Mutex<Option<PrCache>> = std::sync::Mutex::new(None);
@@ -246,6 +274,7 @@ pub fn register(e: &mut Engine) {
             truncated: (files.len() as u64) < total,
             total,
             files,
+            operation: operation_in(repo.git_dir()),
         })
     });
     e.register_unlocked::<Diff>(|ctx, p| {
@@ -751,6 +780,28 @@ pub fn register(e: &mut Engine) {
             Ok(relay_bus::Empty {})
         },
     );
+    // `git pull --ff-only`: network and hooks, never under the store lock.
+    e.register_staged::<Pull, _>(
+        |ctx, p| {
+            let (project, root) = resolve_root_unlocked(ctx, p.project_id, p.worktree.as_deref())?;
+            let repo = gix::open(&root).map_err(gix_err("git.open_failed"))?;
+            if repo.head_name().ok().flatten().is_none() {
+                return Err(BusError::conflict("git.detached", "a detached HEAD has no branch to pull into"));
+            }
+            let mut command = push_command(&root, &["pull", "--ff-only"]);
+            // Its refusals are told apart by their English text, which gettext would translate.
+            command.env("LC_ALL", "C").env("LANGUAGE", "C");
+            let out = crate::proc::output_with_timeout(&mut command, std::time::Duration::from_secs(600))
+                .map_err(|error| BusError::unavailable("git.pull_failed", error.to_string()))?
+                .ok_or_else(|| BusError::unavailable("git.pull_failed", "git pull did not finish within 10 minutes; check the branch before pulling again"))?;
+            let up_to_date = pull_outcome(out.status.success(), &String::from_utf8_lossy(&out.stdout), &String::from_utf8_lossy(&out.stderr))?;
+            Ok((project, root, up_to_date))
+        },
+        |ctx: &mut Ctx, _p, (project, root, up_to_date)| {
+            changed(ctx, project.id, &root);
+            Ok(PullOut { up_to_date })
+        },
+    );
     e.register_unlocked::<PrList>(|ctx, p| {
         let project = ctx.read(|conn| get_project(conn, p.project_id))?;
         let repo = Path::new(&project.path);
@@ -825,6 +876,66 @@ pub fn register(e: &mut Engine) {
         |ctx: &mut Ctx, _p, (project, root, url)| {
             changed(ctx, project.id, &root);
             Ok(PrOpenOut { url })
+        },
+    );
+    // Two `gh pr checks` calls (all, and the required ones): network, so never under the lock.
+    e.register_unlocked::<PrChecks>(|ctx, p| {
+        let project = ctx.read(|conn| get_project(conn, p.project_id))?;
+        let repo = Path::new(&project.path);
+        if !p.refresh.unwrap_or(false) {
+            if let Some(checked) = cached_checks(repo, p.number) {
+                return checked;
+            }
+        }
+        let gh = crate::github::gh_path()?;
+        let checked = pr_checks(&gh, repo, p.number);
+        remember_checks(repo, p.number, &checked);
+        checked
+    });
+    // `gh pr merge` changes GitHub for good: the person's alone, its checks read fresh first, and
+    // all of it before the store lock.
+    e.register_staged::<PrMerge, _>(
+        |ctx, p| {
+            if p.number == 0 {
+                return Err(BusError::invalid("git.pr_number", "number must be a pull request's number"));
+            }
+            let project = ctx.read(|conn| get_project(conn, p.project_id))?;
+            let repo = PathBuf::from(&project.path);
+            let gh = crate::github::gh_path()?;
+            let (checks, required_known) = pr_checks_read(&gh, &repo, p.number)?;
+            let failing = holding_merge(&checks, required_known);
+            if !failing.is_empty() {
+                let why = if required_known {
+                    format!("#{} cannot merge while a required check fails: {}", p.number, failing.join(", "))
+                } else {
+                    format!("#{} cannot merge: GitHub did not say which checks are required, and these failed: {}", p.number, failing.join(", "))
+                };
+                return Err(BusError::conflict("git.pr_checks_failing", why).with_hint("fix the check (or re-run it), then merge"));
+            }
+            let method = p.method.unwrap_or(PrMergeMethod::Squash);
+            let flag = match method {
+                PrMergeMethod::Squash => "--squash",
+                PrMergeMethod::Merge => "--merge",
+                PrMergeMethod::Rebase => "--rebase",
+            };
+            let mut cmd = std::process::Command::new(gh);
+            cmd.current_dir(&repo).env("GH_PROMPT_DISABLED", "1").args(["pr", "merge", &p.number.to_string(), flag]);
+            let out = crate::proc::output_with_timeout(&mut cmd, PR_MERGE_TIMEOUT)
+                .map_err(|e| BusError::unavailable("git.gh_unavailable", e.to_string()))?
+                .ok_or_else(|| BusError::unavailable(
+                    "git.pr_merge_timeout",
+                    format!("gh did not finish within {}s; the pull request may or may not have merged", PR_MERGE_TIMEOUT.as_secs()),
+                ).with_hint("check the pull request on GitHub before merging again"))?;
+            forget_prs(&repo);
+            forget_checks(&repo, p.number);
+            if !out.status.success() {
+                return Err(BusError::conflict("git.pr_merge_failed", String::from_utf8_lossy(&out.stderr).trim().to_string()));
+            }
+            Ok((project.id, repo, method))
+        },
+        |ctx: &mut Ctx, p, (project_id, repo, method)| {
+            changed(ctx, project_id, &repo);
+            Ok(PrMergeOut { number: p.number, method })
         },
     );
     // The older name for git.branch.cleanup, kept for the clients that call it. It had rules of
@@ -942,6 +1053,49 @@ impl Pending {
     fn read(root: &Path, git_dir: &Path) -> Pending {
         Pending { merge: read_merge_head(git_dir), pick: ref_oid(root, "CHERRY_PICK_HEAD"), revert: ref_oid(root, "REVERT_HEAD") }
     }
+}
+
+/// What a pull came to: up to date or moved forward, or why it could not, in words a person can
+/// act on.
+fn pull_outcome(ok: bool, stdout: &str, stderr: &str) -> Result<bool, BusError> {
+    if ok {
+        return Ok(stdout.contains("Already up to date") || stdout.contains("Already up-to-date"));
+    }
+    let lower = stderr.to_lowercase();
+    if lower.contains("not possible to fast-forward") || lower.contains("diverging branches") {
+        return Err(BusError::conflict(
+            "git.pull_not_fast_forward",
+            "This branch and its upstream have both moved, so it cannot simply move forward. Merge or rebase it on the PC.",
+        ));
+    }
+    if lower.contains("no tracking information") {
+        return Err(BusError::conflict("git.pull_no_upstream", "This branch has no upstream to pull from. Push it first."));
+    }
+    if lower.contains("would be overwritten") {
+        return Err(BusError::conflict(
+            "git.pull_would_overwrite",
+            "The pull would overwrite changes not committed here. Commit them or put them aside first.",
+        ));
+    }
+    Err(BusError::conflict("git.pull_failed", format!("git pull failed: {}", stderr.trim())))
+}
+
+/// What a checkout is in the middle of, from what git leaves in its own git dir meanwhile. Files
+/// only: no process for a query asked on every refresh. (A reftable repository keeps
+/// CHERRY_PICK_HEAD and REVERT_HEAD in its tables, so those two read as none there.)
+fn operation_in(git_dir: &Path) -> Option<String> {
+    let op = if git_dir.join("rebase-merge").is_dir() || git_dir.join("rebase-apply").is_dir() {
+        "rebase"
+    } else if git_dir.join("MERGE_HEAD").is_file() {
+        "merge"
+    } else if git_dir.join("CHERRY_PICK_HEAD").is_file() {
+        "cherry_pick"
+    } else if git_dir.join("REVERT_HEAD").is_file() {
+        "revert"
+    } else {
+        return None;
+    };
+    Some(op.to_string())
 }
 
 fn read_merge_head(git_dir: &Path) -> Option<String> {
@@ -1940,6 +2094,85 @@ fn pull_request(row: GhPullRequest) -> PullRequest {
     }
 }
 
+/// One check as `gh pr checks --json name,bucket,link` writes it.
+#[derive(Deserialize)]
+struct GhCheck {
+    name: String,
+    #[serde(default)]
+    bucket: String,
+    #[serde(default)]
+    link: String,
+}
+
+/// A pull request's checks, all of them, each marked required or not: the two readings asked
+/// of GitHub at once.
+fn pr_checks(gh: &Path, root: &Path, number: u64) -> Result<PrChecksOut, BusError> {
+    Ok(PrChecksOut { checks: pr_checks_read(gh, root, number)?.0 })
+}
+
+/// [`pr_checks`], and whether the required reading came back: without it every check shows,
+/// none marked required, and a merge must not take that for "none required".
+fn pr_checks_read(gh: &Path, root: &Path, number: u64) -> Result<(Vec<PrCheck>, bool), BusError> {
+    let (all, required) = std::thread::scope(|scope| {
+        let required = scope.spawn(|| gh_checks(gh, root, number, true));
+        let all = gh_checks(gh, root, number, false);
+        (all, required.join().unwrap_or_else(|_| Err(BusError::internal("gh checks thread panicked"))))
+    });
+    let known = required.is_ok();
+    let required: Vec<String> = required.map(|r| r.into_iter().map(|c| c.name).collect()).unwrap_or_default();
+    Ok((checks_from(all?, &required), known))
+}
+
+/// What holds a merge back: the required checks that failed, or, when which are required could
+/// not be read, every check that failed.
+fn holding_merge(checks: &[PrCheck], required_known: bool) -> Vec<String> {
+    if required_known {
+        failing_required(checks)
+    } else {
+        checks.iter().filter(|c| matches!(c.state.as_str(), "fail" | "cancel")).map(|c| c.name.clone()).collect()
+    }
+}
+
+fn checks_from(all: Vec<GhCheck>, required: &[String]) -> Vec<PrCheck> {
+    all.into_iter()
+        .map(|c| PrCheck {
+            required: required.contains(&c.name),
+            name: c.name,
+            state: if c.bucket.is_empty() { "pending".into() } else { c.bucket },
+            link: (!c.link.is_empty()).then_some(c.link),
+        })
+        .collect()
+}
+
+/// The required checks that failed (or were cancelled), by name: what keeps a merge back.
+fn failing_required(checks: &[PrCheck]) -> Vec<String> {
+    checks.iter().filter(|c| c.required && matches!(c.state.as_str(), "fail" | "cancel")).map(|c| c.name.clone()).collect()
+}
+
+/// One `gh pr checks` reading, bounded by [`PR_LIST_TIMEOUT`]. gh exits 8 while checks run and 1
+/// when one fails, with the JSON on stdout either way; "no checks reported" is no checks.
+fn gh_checks(gh: &Path, root: &Path, number: u64, required: bool) -> Result<Vec<GhCheck>, BusError> {
+    let mut cmd = std::process::Command::new(gh);
+    cmd.current_dir(root).env("GH_PROMPT_DISABLED", "1").args(["pr", "checks", &number.to_string(), "--json", "name,bucket,link"]);
+    if required {
+        cmd.arg("--required");
+    }
+    let out = crate::proc::output_with_timeout(&mut cmd, PR_LIST_TIMEOUT)
+        .map_err(|e| BusError::unavailable("git.pr_checks_failed", e.to_string()))?
+        .ok_or_else(|| BusError::unavailable("git.pr_checks_timeout", format!("gh did not answer within {}s", PR_LIST_TIMEOUT.as_secs())))?;
+    decode_checks(&out.stdout, &String::from_utf8_lossy(&out.stderr))
+}
+
+fn decode_checks(stdout: &[u8], stderr: &str) -> Result<Vec<GhCheck>, BusError> {
+    if let Ok(list) = serde_json::from_slice::<Vec<GhCheck>>(stdout) {
+        return Ok(list);
+    }
+    if stderr.contains("no checks reported") || stderr.contains("no required checks reported") {
+        return Ok(Vec::new());
+    }
+    Err(BusError::unavailable("git.pr_checks_failed", stderr.trim().to_string()))
+}
+
 fn commit_diff_files(
     repo: &gix::Repository,
     commit: &gix::Commit<'_>,
@@ -2394,6 +2627,55 @@ fn branches_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pull_says_plainly_why_it_could_not_move_forward() {
+        assert!(pull_outcome(true, "Already up to date.\n", "").unwrap());
+        assert!(!pull_outcome(true, "Updating 1a2b..3c4d\nFast-forward\n", "").unwrap());
+        let code = |stderr: &str| pull_outcome(false, "", stderr).unwrap_err().code;
+        assert_eq!(code("hint: Diverging branches can't be fast-forwarded\nfatal: Not possible to fast-forward, aborting.\n"), "git.pull_not_fast_forward");
+        assert_eq!(code("There is no tracking information for the current branch.\n"), "git.pull_no_upstream");
+        assert_eq!(code("error: Your local changes to the following files would be overwritten by merge:\n\ta.rs\n"), "git.pull_would_overwrite");
+        assert_eq!(code("fatal: unable to access 'https://x/': Could not resolve host"), "git.pull_failed");
+    }
+
+    #[test]
+    fn a_checkout_in_the_middle_of_something_says_what() {
+        let dir = tempfile::tempdir().unwrap();
+        let g = dir.path();
+        assert_eq!(operation_in(g), None);
+        std::fs::write(g.join("MERGE_HEAD"), "abc\n").unwrap();
+        assert_eq!(operation_in(g).as_deref(), Some("merge"));
+        std::fs::create_dir(g.join("rebase-merge")).unwrap();
+        assert_eq!(operation_in(g).as_deref(), Some("rebase"), "a rebase stopped on a merge is a rebase");
+        std::fs::remove_dir(g.join("rebase-merge")).unwrap();
+        std::fs::remove_file(g.join("MERGE_HEAD")).unwrap();
+        std::fs::write(g.join("CHERRY_PICK_HEAD"), "abc\n").unwrap();
+        assert_eq!(operation_in(g).as_deref(), Some("cherry_pick"));
+    }
+
+    #[test]
+    fn checks_read_as_gh_writes_them_and_only_a_failed_required_one_holds_a_merge() {
+        // gh pr checks --json name,bucket,link, as PR 209 gave it.
+        let all = br#"[{"bucket":"pass","link":"https://x/1","name":"engine, bus and CLI"},{"bucket":"fail","link":"https://x/2","name":"native client (GTK)"},{"bucket":"pending","link":"","name":"cargo deny"}]"#;
+        let all = decode_checks(all, "").unwrap();
+        // With no branch protection: gh says so on stderr, and nothing is required.
+        assert!(decode_checks(b"", "no required checks reported on the 'relay/x' branch\n").unwrap().is_empty());
+        assert!(decode_checks(b"", "no checks reported on the 'relay/x' branch\n").unwrap().is_empty());
+        assert!(decode_checks(b"", "HTTP 401: Bad credentials").is_err());
+        let checks = checks_from(all, &[]);
+        assert_eq!(checks[2].link, None);
+        assert_eq!(checks.iter().map(|c| c.state.as_str()).collect::<Vec<_>>(), ["pass", "fail", "pending"]);
+        assert!(failing_required(&checks).is_empty(), "a failed check that is not required does not hold a merge");
+        let all = decode_checks(br#"[{"bucket":"fail","link":"","name":"native client (GTK)"},{"bucket":"pending","link":"","name":"cargo deny"}]"#, "").unwrap();
+        let checks = checks_from(all, &["native client (GTK)".to_string(), "cargo deny".to_string()]);
+        assert_eq!(failing_required(&checks), ["native client (GTK)"], "a pending required one is GitHub's to hold");
+        // Which are required could not be read: any failed check holds the merge, never none.
+        let unknown = checks_from(decode_checks(br#"[{"bucket":"fail","link":"","name":"gtk"},{"bucket":"pass","link":"","name":"engine"}]"#, "").unwrap(), &[]);
+        assert!(failing_required(&unknown).is_empty());
+        assert_eq!(holding_merge(&unknown, false), ["gtk"]);
+        assert!(holding_merge(&unknown, true).is_empty(), "known: nothing required failed");
+    }
 
     /// A fetch (every session.create runs one) and a push never wait for a person: no terminal
     /// prompt, no askpass window, no Credential Manager dialog, and a stalled transfer gives up.

@@ -67,10 +67,38 @@ pub enum Weight {
     Serif = 4,
     Mono = 5,
     SerifBold = 6,
+    /// Literata italic: emphasis in the agent's words.
+    SerifItalic = 7,
 }
 
 /// How many faces the canvas holds ([`Weight`]).
-pub const FACES: usize = 7;
+pub const FACES: usize = 8;
+
+/// Room each side of a chip's words (inline code).
+pub const CHIP_PAD: f32 = 4.0;
+
+/// One run of a rich paragraph ([`Canvas::rich`]): its words, how they are set, a chip behind
+/// them (inline code), an underline (a link).
+#[derive(Clone, Debug)]
+pub struct Run {
+    pub text: String,
+    pub style: Text,
+    pub chip: Option<Rgba>,
+    pub underline: bool,
+}
+
+/// Runs' words with no space between them, laid out as one word: a space before it, and each
+/// run's part.
+type Word = (bool, Vec<(usize, String)>);
+
+/// A run's words on one line, `x` from the paragraph's left.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Part {
+    pub run: usize,
+    pub x: f32,
+    pub w: f32,
+    pub text: String,
+}
 
 /// How a run of text is set. Text is placed by the top of its line box (`size` × `line`).
 #[derive(Clone, Copy, Debug)]
@@ -83,9 +111,26 @@ pub struct Text {
     pub line: f32,
 }
 
+thread_local! {
+    /// The text size chosen in Settings (D9), as a scale on every [`Text`] made from here on. Per
+    /// thread: the app draws on one, and parallel tests don't see each other's choice.
+    static TEXT_SCALE: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+}
+
+/// Scale every [`Text`] made on this thread from here on (1.0 is Default).
+pub fn set_text_scale(s: f32) {
+    TEXT_SCALE.with(|c| c.set(s.clamp(0.5, 2.0)));
+}
+
+pub fn text_scale() -> f32 {
+    TEXT_SCALE.with(|c| c.get())
+}
+
 impl Text {
+    /// `size` at the text size chosen in Settings ([`set_text_scale`]), so every size, measure and
+    /// line height follows it with no call site knowing.
     pub fn new(size: f32, color: Rgba) -> Text {
-        Text { size, weight: Weight::Regular, color, align: Align::Left, line: 1.3 }
+        Text { size: size * TEXT_SCALE.with(|s| s.get()), weight: Weight::Regular, color, align: Align::Left, line: 1.3 }
     }
     pub fn medium(mut self) -> Text {
         self.weight = Weight::Medium;
@@ -279,6 +324,10 @@ pub struct Canvas {
     pub px_h: f32,
     /// Pixels per unit.
     pub u: f32,
+    /// The most pixels per unit: a phone's look for this screen's density, so a tablet or a
+    /// window keeps a phone-sized column, centred, rather than scaling it up (D9). Unbounded
+    /// when the density is unknown.
+    pub max_u: f32,
     /// Layout height in units (the width is always [`WIDTH`]).
     pub h: f32,
     /// Space at the top and bottom that the system draws over (status bar, gesture bar), in units.
@@ -315,6 +364,7 @@ impl Canvas {
             px_w: 1.0,
             px_h: 1.0,
             u: 1.0,
+            max_u: f32::INFINITY,
             h: 844.0,
             inset_top: 0.0,
             inset_bottom: 0.0,
@@ -332,7 +382,7 @@ impl Canvas {
         self.clips.clear();
         self.px_w = px_w;
         self.px_h = px_h;
-        self.u = (px_w / WIDTH).min(px_h / 700.0).max(0.1);
+        self.u = (px_w / WIDTH).min(px_h / 700.0).min(self.max_u).max(0.1);
         self.h = px_h / self.u;
         self.inset_top = inset_top / self.u;
         self.inset_bottom = inset_bottom / self.u;
@@ -801,14 +851,29 @@ impl Canvas {
         let mut lines: Vec<String> = Vec::new();
         // A line break in the words is a line break on screen; an empty line stays empty.
         for hard in s.split('\n') {
-            let mut line = String::new();
-            for word in hard.split(' ') {
-                let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-                if line.is_empty() || self.measure(&cand, style) <= max_w {
+            // A line's indent is kept (code), on its first row.
+            let body = hard.trim_start_matches(' ');
+            let mut line = " ".repeat(hard.len() - body.len());
+            for (k, word) in body.split(' ').enumerate() {
+                let cand = if k == 0 || line.is_empty() { format!("{line}{word}") } else { format!("{line} {word}") };
+                if k == 0 || line.is_empty() || self.measure(&cand, style) <= max_w {
                     line = cand;
                 } else {
                     lines.push(std::mem::take(&mut line));
                     line = word.to_string();
+                }
+                // A word wider than the box (a path, a test's name, a link) breaks by characters
+                // rather than running out of it.
+                while self.measure(&line, style) > max_w && line.chars().count() > 1 {
+                    let mut end = line.char_indices().nth(1).map_or(line.len(), |(i, _)| i);
+                    for (i, c) in line.char_indices().skip(1) {
+                        if self.measure(&line[..i + c.len_utf8()], style) > max_w {
+                            break;
+                        }
+                        end = i + c.len_utf8();
+                    }
+                    let rest = line.split_off(end);
+                    lines.push(std::mem::replace(&mut line, rest));
                 }
             }
             lines.push(line);
@@ -868,6 +933,146 @@ impl Canvas {
             at = he + 1;
         }
         out
+    }
+
+    /// Lay out runs of differently set words as one paragraph `max_w` wide: for each line, its
+    /// parts as (run, x from the left, width, words). Words break at spaces; a chip's run (code)
+    /// stays whole unless it is wider than the box, and anything wider breaks by characters.
+    pub fn rich_lines(&mut self, runs: &[Run], max_w: f32) -> Vec<Vec<Part>> {
+        // Atoms: (run, words, a space before it); None is a line break.
+        let mut atoms: Vec<Option<(usize, String, bool)>> = Vec::new();
+        let mut space = false;
+        for (r, run) in runs.iter().enumerate() {
+            for (k, hard) in run.text.split('\n').enumerate() {
+                if k > 0 {
+                    atoms.push(None);
+                    space = false;
+                }
+                if run.chip.is_some() {
+                    if !hard.is_empty() {
+                        atoms.push(Some((r, hard.to_string(), space)));
+                        space = false;
+                    }
+                    continue;
+                }
+                for (m, w) in hard.split(' ').enumerate() {
+                    if m > 0 {
+                        space = true;
+                    }
+                    if !w.is_empty() {
+                        atoms.push(Some((r, w.to_string(), space)));
+                        space = false;
+                    }
+                }
+            }
+        }
+        // Atoms with no space between them (a link and the bracket after it) are one word: a line
+        // breaks only where there is a space.
+        let mut words: Vec<Option<Word>> = Vec::new();
+        for a in atoms {
+            match a {
+                None => words.push(None),
+                Some((r, w, sp)) => match words.last_mut() {
+                    Some(Some((_, parts))) if !sp => parts.push((r, w)),
+                    _ => words.push(Some((sp, vec![(r, w)]))),
+                },
+            }
+        }
+        let mut lines: Vec<Vec<Part>> = vec![Vec::new()];
+        let mut pen = 0.0f32;
+        for word in words {
+            let Some((sp_before, parts)) = word else {
+                lines.push(Vec::new());
+                pen = 0.0;
+                continue;
+            };
+            let pad = |r: usize| if runs[r].chip.is_some() { CHIP_PAD } else { 0.0 };
+            let ww: f32 = parts.iter().map(|(r, t)| self.measure(t, runs[*r].style) + 2.0 * pad(*r)).sum();
+            let mut sp = if sp_before && pen > 0.0 { self.measure(" ", runs[parts[0].0].style) } else { 0.0 };
+            if pen > 0.0 && pen + sp + ww > max_w {
+                lines.push(Vec::new());
+                pen = 0.0;
+                sp = 0.0;
+            }
+            for (k, (r, text)) in parts.into_iter().enumerate() {
+                let st = runs[r].style;
+                let p = pad(r);
+                let aw = self.measure(&text, st) + 2.0 * p;
+                let gap = if k == 0 { sp } else { 0.0 };
+                if pen + gap + aw > max_w {
+                    if pen > 0.0 {
+                        lines.push(Vec::new());
+                        pen = 0.0;
+                    }
+                    if aw > max_w {
+                        // Wider than the box on its own: as many characters as fit, line by line.
+                        for (i, chunk) in self.wrap(&text, max_w - 2.0 * p, st, usize::MAX).into_iter().enumerate() {
+                            if i > 0 {
+                                lines.push(Vec::new());
+                            }
+                            let w = self.measure(&chunk, st) + 2.0 * p;
+                            lines.last_mut().expect("a line").push(Part { run: r, x: 0.0, w, text: chunk });
+                            pen = w;
+                        }
+                        continue;
+                    }
+                }
+                let gap = if pen > 0.0 { gap } else { 0.0 };
+                let line = lines.last_mut().expect("a line");
+                match line.last_mut() {
+                    // Words of one plain run on one line are one part.
+                    Some(last) if last.run == r && p == 0.0 => {
+                        if gap > 0.0 {
+                            last.text.push(' ');
+                        }
+                        last.text.push_str(&text);
+                        last.w = self.measure(&last.text, st);
+                        pen = last.x + last.w;
+                    }
+                    _ => {
+                        line.push(Part { run: r, x: pen + gap, w: aw, text });
+                        pen += gap + aw;
+                    }
+                }
+            }
+        }
+        while lines.len() > 1 && lines.last().is_some_and(Vec::is_empty) {
+            lines.pop();
+        }
+        lines
+    }
+
+    /// Runs drawn as one paragraph from `top`, each line `lh` tall: chips behind their words,
+    /// underlines under theirs. Returns the height and where each run's words landed (for taps).
+    /// `draw` false only measures, so heights agree with the drawing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rich(&mut self, runs: &[Run], x: f32, top: f32, max_w: f32, lh: f32, max_lines: usize, draw: bool) -> (f32, Vec<(usize, [f32; 4])>) {
+        let mut lines = self.rich_lines(runs, max_w);
+        lines.truncate(max_lines.max(1));
+        let mut boxes = Vec::new();
+        if draw {
+            for (i, line) in lines.iter().enumerate() {
+                let ly = top + i as f32 * lh;
+                for p in line {
+                    let run = &runs[p.run];
+                    // Every run's line box is `lh` tall, so all of them share a baseline's middle.
+                    let st = Text { align: Align::Left, line: lh / run.style.size.max(1.0), ..run.style };
+                    let px = x + p.x;
+                    if let Some(c) = run.chip {
+                        let ch = (run.style.size * 1.45).min(lh);
+                        self.rect(px, ly + (lh - ch) * 0.5, p.w, ch, 4.0, c);
+                        self.text(&p.text, px + CHIP_PAD, ly, st);
+                    } else {
+                        self.text(&p.text, px, ly, st);
+                    }
+                    if run.underline {
+                        self.rect(px, ly + lh * 0.5 + run.style.size * 0.62, p.w, 1.0, 0.0, run.style.color.a(0.6));
+                    }
+                    boxes.push((p.run, [px, ly, p.w, lh]));
+                }
+            }
+        }
+        (lines.len() as f32 * lh, boxes)
     }
 
     /// A wrapped paragraph from `top`. Returns its height.
@@ -1025,6 +1230,34 @@ pub fn ease_out(t: f32) -> f32 {
 mod tests {
     use super::{Canvas, ImageAtlas, Rgba, Text, GLYPHS_START_OVER};
     use crate::gfx::ATLAS_SIZE;
+
+    #[test]
+    fn runs_that_touch_break_together() {
+        use super::Run;
+        let mut c = Canvas::new(crate::app::FONTS);
+        let st = Text::new(15.0, Rgba::WHITE);
+        let run = |t: &str| Run { text: t.into(), style: st, chip: None, underline: false };
+        let runs = [run("never by words ("), Run { underline: true, ..run("PR #206") }, run(")")];
+        let full = c.measure("never by words (PR #206)", st);
+        // Just too narrow for the bracket: it goes down with the word it touches, never alone.
+        let lines = c.rich_lines(&runs, full - 2.0);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[1].iter().map(|p| p.text.as_str()).collect::<String>(), "#206)", "the bracket stays with the link's last word");
+        // Measuring and drawing agree.
+        let (h, _) = c.rich(&runs, 0.0, 0.0, full - 2.0, 20.0, 10, false);
+        assert_eq!(h, 40.0);
+    }
+
+    #[test]
+    fn a_word_wider_than_the_box_breaks_by_characters() {
+        let mut c = Canvas::new(crate::app::FONTS);
+        let st = Text::new(12.0, Rgba::WHITE).face(super::Weight::Mono);
+        let word = "data::tests::a_failed_send_is_tapped_to_go_again_from_where_it_stopped";
+        let lines = c.wrap(&format!("test {word} ... FAILED"), 200.0, st, 50);
+        assert!(lines.len() > 2, "{lines:?}");
+        assert!(lines.iter().all(|l| c.measure(l, st) <= 200.0), "every line fits: {lines:?}");
+        assert_eq!(lines.concat().replace(' ', ""), format!("test{word}...FAILED"), "no character lost");
+    }
 
     #[test]
     fn a_filling_glyph_atlas_starts_over_between_frames() {

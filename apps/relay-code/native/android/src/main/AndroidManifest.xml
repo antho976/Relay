@@ -11,6 +11,8 @@
     <!-- LinkService keeps the link to the paired PC open in the background (design 44, Q2). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Updates come from the paired PC (phone.app.*) and are handed to Android's installer. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Plain ws:// is allowed: the PC's door on the home network has no certificate. -->
     <application
@@ -44,5 +46,19 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps the owner's link to their own PC open, so their coding agents can reach them" />
         </service>
+        <!-- What is done from a notification in the shade: a reply, Allow once or Deny (D18). -->
+        <receiver
+            android:name="com.quietsoftware.relaycode.ActionReceiver"
+            android:exported="false" />
+        <!-- Lends a downloaded update (files/updates/) to Android's installer. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

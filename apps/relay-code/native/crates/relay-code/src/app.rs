@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rc_link::{Call, FileStore, Link, LinkState};
+use rc_link::{Call, Link, LinkState};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -29,6 +29,12 @@ pub trait Host: Send + Sync {
     /// Show the soft keyboard for a field holding `text`, or hide it.
     fn keyboard(&self, _show: bool, _text: &str, _kind: Kb) {}
     fn copy_text(&self, _text: &str) {}
+    /// Hand words to another app (Android's share sheet).
+    fn share(&self, _text: &str) {}
+    /// Whether [`Host::share`] reaches anything here: the menu offers Share only then.
+    fn can_share(&self) -> bool {
+        false
+    }
     /// Tell the keyboard where the caret is (characters): after a tap in the field.
     fn caret(&self, _text: &str, _start: usize, _end: usize) {}
     /// Open a web address in the phone's browser (or the app that handles it).
@@ -38,10 +44,35 @@ pub trait Host: Send + Sync {
     /// Keep the app alive in the background while a PC is paired (Android's `LinkService`), its
     /// ongoing notification saying `words`; off when none is.
     fn link_service(&self, _on: bool, _words: &str) {}
-    /// A notification: an agent asks you something while the app is in the background.
-    fn notify(&self, _id: i32, _title: &str, _body: &str) {}
     /// Ask the person for a photo or screenshot; it comes back through [`crate::attach::picked`].
     fn pick_photo(&self) {}
+    /// A light tick under the finger (Android's `performHapticFeedback`): on send, on a long press
+    /// that copies, on a switch.
+    fn haptic(&self) {}
+    /// The screen's pixels per density-independent unit (Android's density / 160); 0 when unknown.
+    /// The canvas never scales past a phone's look for it, so a tablet keeps a phone-sized column.
+    fn density(&self) -> f32 {
+        0.0
+    }
+    /// Whether the platform lets this app post notifications; none when it cannot say.
+    fn can_notify(&self) -> Option<bool> {
+        None
+    }
+    /// Open the platform's notification settings for this app.
+    fn open_notification_settings(&self) {}
+    /// The phone's own text size setting (Android's font scale; 1.0 is its default), which the
+    /// app's Default text size follows (D20). Read when the app comes to the front.
+    fn font_scale(&self) -> f32 {
+        1.0
+    }
+    /// This app may hand an APK to the system's installer (Android; never the desktop).
+    fn can_install(&self) -> bool {
+        false
+    }
+    /// Hand a downloaded and checked APK to the system's installer (`update.rs`).
+    fn install_apk(&self, _path: &std::path::Path) -> crate::update::Install {
+        crate::update::Install::Failed
+    }
 }
 
 /// When the next frame is wanted.
@@ -62,7 +93,19 @@ pub const FONTS: [&[u8]; crate::draw::FACES] = [
     include_bytes!("../assets/fonts/literata_400.ttf"),
     include_bytes!("../assets/fonts/geist_mono_400.ttf"),
     include_bytes!("../assets/fonts/literata_600.ttf"),
+    // Literata italic (the same OFL family, as Leaf ships it): emphasis in the agent's words.
+    include_bytes!("../assets/fonts/literata_400i.ttf"),
 ];
+
+/// A typical phone's width in Android's dp: its 390-unit column is drawn at density × 411 / 390
+/// pixels per unit, which the canvas never goes past (with a tenth to spare for wider phones).
+const WIDTH_DP: f32 = 411.0;
+
+/// How long a terminal's foot read for a chat no longer open still says whether it works.
+const SCREEN_FRESH_NS: u64 = 10_000_000_000;
+
+/// Messages asked for in one transcript read.
+const PAGE: usize = 200;
 
 /// The most a field holds, in characters.
 const MAX_TYPED: usize = 8000;
@@ -84,8 +127,23 @@ pub enum Route {
     /// The repo's board, and one task.
     Board,
     Task(i64),
+    /// A file, read only (`fileview`): in `worktree` (the repo's own checkout when None), `path`
+    /// as given (relative or absolute, maybe ending in `:line`).
+    File { repo: i64, worktree: Option<String>, path: String },
     /// What needs you: held commands, agents that ask, finished work.
     Inbox,
+    /// One agent's whole terminal screen, read-only, with the key strip (D13).
+    Terminal(String),
+}
+
+/// What a Task call's helper did, as last read.
+#[derive(Clone, Debug, Default)]
+pub struct Helper {
+    pub items: Vec<crate::data::Item>,
+    /// The PC keeps a log for it.
+    pub found: bool,
+    /// When it was read (ns).
+    pub at: u64,
 }
 
 /// What a request was for, so its answer lands in the right place.
@@ -94,12 +152,28 @@ pub enum Ask {
     Projects,
     Agents,
     Transcript(String),
-    /// Words typed into an agent's terminal.
+    /// A page older than what the phone holds of a conversation (scrolled to its top).
+    Older(String),
+    /// What a Task call's helper did: the agent and the call.
+    Helper(String, String),
+    /// Words typed into an agent's terminal (a message's words, from its send queue).
     Input(String),
+    /// Enter after them, once the PC said it typed them.
+    Enter(String),
     Create,
     Spawn(String),
+    /// The repo's tasks, to link a new agent to one.
+    Tasks,
     /// The rendered foot of an agent's terminal (`session.screen`).
     Screen(String),
+    /// The repo's agents with closed ones, for Earlier (D1).
+    Earlier,
+    /// Why each stopped agent stopped (`session.restorable`).
+    Restorable,
+    /// Resume or Wake a stopped agent; Pause (park) or Close a live one.
+    Resume(String),
+    Park(String),
+    Close(String),
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -108,6 +182,54 @@ struct Config {
     last_chat: Option<String>,
     #[serde(default)]
     asked_notifications: bool,
+    /// The model and effort New agent last started one with (None: Claude Code's default).
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    effort: Option<String>,
+    /// Text size (D9): "small" or "large"; Default when none.
+    #[serde(default)]
+    text_size: Option<String>,
+    /// "Later" on an update: that build stays hidden until then (ms).
+    #[serde(default)]
+    update_later: Option<(u32, u64)>,
+    /// Notifications switched off in Settings (D6): each kind is on until then.
+    #[serde(default)]
+    quiet: Vec<String>,
+}
+
+fn quiet_key(n: crate::settings::Notify) -> &'static str {
+    match n {
+        crate::settings::Notify::Asks => "asks",
+        crate::settings::Notify::Done => "done",
+        crate::settings::Notify::Holds => "holds",
+    }
+}
+
+/// Whether this kind of notification is on, read from the app's settings in `data` (the host's
+/// data dir): for code that posts notifications without an [`App`], as the background loop does.
+/// How many answers in a row each poll got with nothing new in them (B14).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Rest {
+    pub list: u32,
+    pub chat: u32,
+    pub screen: u32,
+}
+
+/// A poll's wait after `level` answers with nothing new: `base`, doubled for each, at most `cap`.
+pub fn rested(base: u64, level: u32, cap: u64) -> u64 {
+    base.saturating_mul(1 << level.min(8)).min(cap)
+}
+
+const LIST_EVERY: u64 = 5_000_000_000;
+const LIST_REST: u64 = 60_000_000_000;
+const CHAT_EVERY: u64 = 4_000_000_000;
+const CHAT_REST: u64 = 30_000_000_000;
+const SCREEN_EVERY: u64 = 3_000_000_000;
+const SCREEN_REST: u64 = 20_000_000_000;
+
+pub fn notifies_in(data: &std::path::Path, n: crate::settings::Notify) -> bool {
+    read_json::<Config>(data.join("config.json")).is_none_or(|c| !c.quiet.iter().any(|q| q == quiet_key(n)))
 }
 
 #[derive(Default)]
@@ -119,8 +241,15 @@ pub struct States {
     pub settings: crate::settings::State,
     pub changes: crate::changes::State,
     pub board: crate::board::State,
+    pub fileview: crate::fileview::State,
     pub inbox: crate::inbox::State,
     pub designs: crate::designs::State,
+    pub agents: crate::agents::State,
+    pub commands: crate::commands::State,
+    pub update: crate::update::State,
+    pub news: crate::news::State,
+    pub keys: crate::keys::State,
+    pub terminal: crate::terminal::State,
 }
 
 pub struct App {
@@ -136,10 +265,27 @@ pub struct App {
     pub link_state: LinkState,
     pub projects: Vec<Project>,
     pub agents: Vec<Agent>,
+    /// The repo's stopped and closed agents, as last read for Earlier (D1).
+    pub earlier: Vec<Agent>,
+    /// Why each restorable agent stopped (`crash`, `app_restart`) and whether its checkout has
+    /// uncommitted changes, by name.
+    pub restorable: HashMap<String, (String, bool)>,
     /// The repo every list shows (design 44, D5): one switch, remembered.
     pub repo: Option<i64>,
     pub convos: HashMap<String, Convo>,
     pub sending: HashMap<String, Sending>,
+    /// What each Task call's helper did, by agent and call, and when it was read.
+    pub helpers: HashMap<(String, String), Helper>,
+    /// Why the PC could not read a conversation, until it next can.
+    pub chat_errors: HashMap<String, String>,
+    /// When each terminal's foot was read (ns).
+    screens_at: HashMap<String, u64>,
+    /// Chats' copies being read off the UI thread ([`App::open`]).
+    opening: Vec<(String, std::sync::mpsc::Receiver<Option<Convo>>)>,
+    /// What you started writing to each agent, kept across agents and restarts.
+    pub drafts: HashMap<String, String>,
+    /// The drafts or a send queue changed at this time (ns): written to the phone a second later.
+    outbox_at: Option<u64>,
     /// What each agent's terminal shows at its foot (status, mode, question), and when it was read.
     pub screens: HashMap<String, crate::screen::Screen>,
     /// The effort last sent to each agent from the model picker (`/effort`), to tick it there.
@@ -152,6 +298,8 @@ pub struct App {
     list_at: u64,
     /// The PC's Relay is older than `session.screen`: the chat makes do without the terminal's foot.
     pub no_screen: bool,
+    /// The PC's Relay is older than `chat.send`: messages go the old way (`session.input`).
+    pub no_chat_send: bool,
     /// Held commands waiting on you (the inbox counts them with agents that ask).
     pub holds: usize,
     screen_at: u64,
@@ -159,20 +307,30 @@ pub struct App {
     calls: Vec<(Ask, Call)>,
     /// The agents' list is read again once this passes (an event said it changed).
     agents_stale: bool,
+    /// Acts that change an agent's state from here (close, pause, resume, create), counted; and
+    /// the count when the list now on its way was asked for. A list asked before the latest act
+    /// is dropped and asked again.
+    acts: u64,
+    agents_asked: u64,
     /// The open conversation is read again at this time.
     pub reread_at: u64,
+    /// How long each poll has found nothing new: each answer the same as the last doubles its
+    /// wait, up to a cap; anything new, an event or a touch brings it back to fast.
+    pub rest: Rest,
     /// Kinds of thing the PC said changed since a page last looked (`git`, `design`, `task`,
     /// `guardrail`, `notify`, ...): the first part of each event's name. A page takes its own with
     /// [`App::take_changed`] and reads again.
     changed: std::collections::HashSet<String>,
-    /// Agents that asked you something, already told about.
-    told: std::collections::HashSet<String>,
     pub foreground: bool,
     pub data: PathBuf,
     config: Config,
     toast: Option<(String, u64)>,
     pub typed_done: Option<&'static str>,
     pub keyboard_up: bool,
+    /// Android's font scale when the app last came to the front (D20).
+    pub font_scale: f32,
+    /// Whether Android lets this app post notifications, read when it comes to the front (D22).
+    pub can_notify: Option<bool>,
     /// Screenshots: nothing is sent to the PC.
     pub shot: bool,
     size: (f32, f32),
@@ -182,12 +340,12 @@ pub struct App {
     wake: Option<u64>,
 }
 
-fn read_json<T: for<'a> Deserialize<'a>>(p: PathBuf) -> Option<T> {
+pub(crate) fn read_json<T: for<'a> Deserialize<'a>>(p: PathBuf) -> Option<T> {
     serde_json::from_slice(&std::fs::read(p).ok()?).ok()
 }
 
 /// Write a copy off the UI thread.
-fn write_json<T: Serialize>(p: PathBuf, v: &T) {
+pub(crate) fn write_json<T: Serialize>(p: PathBuf, v: &T) {
     let Ok(bytes) = serde_json::to_vec(v) else { return };
     let _ = std::thread::Builder::new().name("rc-save".into()).spawn(move || {
         if let Some(dir) = p.parent() {
@@ -214,7 +372,7 @@ fn write_owned<T: Serialize + Send + 'static>(p: PathBuf, v: T) {
     });
 }
 
-fn chat_file(data: &std::path::Path, name: &str) -> PathBuf {
+pub(crate) fn chat_file(data: &std::path::Path, name: &str) -> PathBuf {
     let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
     data.join("cache").join(format!("chat-{safe}.json"))
 }
@@ -226,10 +384,8 @@ impl App {
         let config: Config = read_json(data.join("config.json")).unwrap_or_default();
         let projects: Vec<Project> = read_json(data.join("cache/projects.json")).unwrap_or_default();
         let agents: Vec<Agent> = read_json(data.join("cache/agents.json")).unwrap_or_default();
-        // One link for the process: Android starts the app's loop again for each new activity
-        // while LinkService keeps the process (and the link) alive between them.
-        static LINK: std::sync::OnceLock<Link> = std::sync::OnceLock::new();
-        let link = LINK.get_or_init(|| Link::start(Arc::new(FileStore(data.join("pc.json"))), Arc::new(crate::wake::wake))).clone();
+        // One link for the process, which LinkService may have made already (background.rs).
+        let link = crate::background::link(&data);
         let link_state = link.state();
         let mut convos = HashMap::new();
         // The last conversation, from the phone's copy: drawn on the first frame (D3).
@@ -245,6 +401,9 @@ impl App {
             nav.push((Route::Chat(name), Scroll::default()));
         }
         let repo = config.repo.or_else(|| projects.first().map(|p| p.id));
+        let outbox: data::Outbox = read_json(data.join("cache/outbox.json")).unwrap_or_default();
+        let drafts = outbox.drafts.clone();
+        let sending = outbox.sending();
         let app = App {
             canvas: Canvas::new(FONTS),
             ui: Ui::default(),
@@ -256,22 +415,33 @@ impl App {
             link_state,
             projects,
             agents,
+            earlier: Vec::new(),
+            restorable: HashMap::new(),
             repo,
             convos,
-            sending: HashMap::new(),
+            sending,
+            drafts,
+            outbox_at: None,
+            opening: Vec::new(),
+            screens_at: HashMap::new(),
+            chat_errors: HashMap::new(),
+            helpers: HashMap::new(),
             screens: HashMap::new(),
             efforts: HashMap::new(),
             busy_since: HashMap::new(),
             agents_at: 0,
             list_at: 0,
             no_screen: false,
+            no_chat_send: false,
             holds: 0,
             screen_at: 0,
             st: States::default(),
             calls: Vec::new(),
             agents_stale: true,
+            acts: 0,
+            agents_asked: 0,
             reread_at: 0,
-            told: Default::default(),
+            rest: Rest::default(),
             changed: Default::default(),
             foreground: true,
             data,
@@ -279,6 +449,8 @@ impl App {
             toast: None,
             typed_done: None,
             keyboard_up: false,
+            font_scale: 1.0,
+            can_notify: None,
             shot: false,
             size: (1080.0, 2340.0),
             insets: (0.0, 0.0),
@@ -287,6 +459,9 @@ impl App {
             wake: None,
         };
         app.service();
+        let mut app = app;
+        app.font_scale = app.host.font_scale();
+        app.can_notify = app.host.can_notify();
         app
     }
 
@@ -303,8 +478,94 @@ impl App {
         }
     }
 
+    /// The toast up now: tests.
+    #[cfg(test)]
+    pub fn toast_words(&self) -> Option<&str> {
+        self.toast.as_ref().map(|t| t.0.as_str())
+    }
+
     pub fn toast(&mut self, words: &str) {
         self.toast = Some((words.to_string(), self.now_ns + 2_500_000_000));
+    }
+
+    /// The PC made the agent New agent asked for: its chat opens now, starting, while the PC
+    /// starts it.
+    pub fn created(&mut self, v: &Value) {
+        let name = v.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
+        if name.is_empty() {
+            self.toast("The PC made no agent");
+        } else {
+            // Its chat opens now, starting, while the PC starts it.
+            self.acts += 1;
+        if let Some(mut a) = data::agents(&json!({"sessions": [v.clone()]})).pop() {
+                a.state = "spawning".into();
+                self.agents.retain(|b| b.name != name);
+                self.agents.push(a);
+            }
+            self.st.newagent.open = false;
+            self.st.newagent.task.clear();
+            self.st.newagent.linked = None;
+            self.ask(Ask::Spawn(name.clone()), "session.spawn", json!({"session": name}));
+            self.open(&name);
+        }
+    }
+
+    /// The text size chosen in Settings: 0 Small, 1 Default, 2 Large.
+    pub fn text_size(&self) -> usize {
+        match self.config.text_size.as_deref() {
+            Some("small") => 0,
+            Some("large") => 2,
+            _ => 1,
+        }
+    }
+
+    pub fn set_text_size(&mut self, i: usize) {
+        self.config.text_size = match i {
+            0 => Some("small".into()),
+            2 => Some("large".into()),
+            _ => None,
+        };
+        self.save_config();
+    }
+
+    /// The build "Later" put off, and until when (ms).
+    pub fn update_later(&self) -> Option<(u32, u64)> {
+        self.config.update_later
+    }
+
+    pub fn clear_update_later(&mut self) {
+        if self.config.update_later.take().is_some() {
+            self.save_config();
+        }
+    }
+
+    pub fn set_update_later(&mut self, build: u32, until_ms: u64) {
+        self.config.update_later = Some((build, until_ms));
+        self.save_config();
+    }
+
+    /// Whether this kind of notification is on (Settings).
+    pub fn notifies(&self, n: crate::settings::Notify) -> bool {
+        !self.config.quiet.iter().any(|q| q == quiet_key(n))
+    }
+
+    pub fn set_notifies(&mut self, n: crate::settings::Notify, on: bool) {
+        self.config.quiet.retain(|q| q != quiet_key(n));
+        if !on {
+            self.config.quiet.push(quiet_key(n).to_string());
+        }
+        self.save_config();
+    }
+
+    /// The model and effort New agent offers first: the last ones used.
+    pub fn last_choice(&self) -> (Option<String>, Option<String>) {
+        (self.config.model.clone(), self.config.effort.clone())
+    }
+
+    pub fn set_choice(&mut self, model: Option<&str>, effort: Option<&str>) {
+        self.config.model = model.map(str::to_string);
+        self.config.effort = effort.map(str::to_string);
+        self.save_config();
     }
 
     pub fn save_config(&self) {
@@ -318,8 +579,11 @@ impl App {
         if self.shot || !self.link_state.online() {
             return;
         }
-        if !matches!(ask, Ask::Input(_)) && self.calls.iter().any(|(a, _)| *a == ask) {
+        if self.calls.iter().any(|(a, _)| *a == ask) {
             return;
+        }
+        if ask == Ask::Agents {
+            self.agents_asked = self.acts;
         }
         let call = self.link.call(op, payload);
         self.calls.push((ask, call));
@@ -354,12 +618,27 @@ impl App {
         if a.needs_you() {
             return false;
         }
+        // The terminal's foot is read only for the open chat: trusted there, or for a few seconds
+        // after a read elsewhere. Past that it is stale (an agent last seen working would show
+        // working for ever).
+        let fresh = self.open_chat().as_deref() == Some(name) || self.screens_at.get(name).is_some_and(|t| self.now_ns.saturating_sub(*t) < SCREEN_FRESH_NS);
+        // Out of reach, the last foot read is old news: no live line from it.
+        if !self.link_state.online() {
+            return false;
+        }
         if !self.no_screen
+            && fresh
             && let Some(s) = self.screens.get(name)
         {
             return s.status.is_some();
         }
         a.working()
+    }
+
+    /// An agent's state in words, as its chat header says it: "working" while its terminal says
+    /// so ([`App::busy`]), which the list's freshness can lag.
+    pub fn agent_words(&self, a: &Agent) -> &'static str {
+        if self.link_state.online() && a.alive() && !a.needs_you() && self.busy(&a.name) { "working" } else { a.state_words() }
     }
 
     /// The link is up: pages may ask the PC.
@@ -383,37 +662,178 @@ impl App {
     /// Read what the agent wrote since the last read.
     pub fn read_chat(&mut self, name: &str) {
         let after = self.convos.get(name).and_then(|c| c.cursor);
-        let mut p = json!({"session": name, "limit": 200});
+        let mut p = json!({"session": name, "limit": PAGE});
         if let Some(a) = after {
             p["after"] = json!(a);
         }
         self.ask(Ask::Transcript(name.to_string()), "session.transcript", p);
     }
 
-    /// Type a message into an agent's terminal: the words, then Enter, as the old app and the
-    /// PC's own composer do. Several lines go as one paste.
+    /// Read what the helper of `name`'s Task call `call` did (its own log on the PC).
+    pub fn read_helper(&mut self, name: &str, call: &str) {
+        if self.online() {
+            self.ask(Ask::Helper(name.to_string(), call.to_string()), "session.transcript", json!({"session": name, "task": call, "limit": PAGE}));
+        }
+    }
+
+    /// Read the page older than what the phone holds of `name`'s conversation, when there is one.
+    /// True while it is being read (or was just asked for).
+    pub fn read_older(&mut self, name: &str) -> bool {
+        let ask = Ask::Older(name.to_string());
+        if self.asking(&ask) {
+            return true;
+        }
+        let Some(before) = self.convos.get(name).filter(|c| c.older).and_then(|c| c.before) else { return false };
+        if !self.online() {
+            return false;
+        }
+        self.ask(ask, "session.transcript", json!({"session": name, "before": before, "limit": PAGE}));
+        true
+    }
+
+    /// Send a message to an agent: it joins the agent's send queue ([`data::Sending`]), which types
+    /// the words and then Enter into its terminal, as the old app and the PC's own composer do,
+    /// now or once the link is back. Several lines go as one paste.
     pub fn say(&mut self, name: &str, text: &str) {
         let text = text.trim_end();
         if text.is_empty() {
             return;
         }
+        // A shell command heads this agent's `!` list next time (D3).
+        crate::commands::remember(self, name, text);
         let now = rc_link::link::now_ms();
         self.sending.entry(name.to_string()).or_default().push(text, now);
-        let mut p = json!({"session": name, "data": text});
-        if text.contains('\n') {
-            p["paste"] = json!(true);
-        }
-        self.ask(Ask::Input(name.to_string()), "session.input", p);
-        // Enter as its own write a moment later, so the program does not take both as a paste.
-        let link = self.link.clone();
-        let n = name.to_string();
-        if !self.shot {
-            let _ = std::thread::Builder::new().name("rc-enter".into()).spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(90));
-                link.post("session.input", json!({"session": n, "data": "\r"}));
-            });
-        }
+        self.outbox_changed();
+        self.send_queued();
         self.reread_at = self.now_ns + 600_000_000;
+    }
+
+    /// An answer of `session.transcript` for `name`: what came in joins its conversation, and what
+    /// you sent that it now holds stops waiting.
+    pub fn took_transcript(&mut self, name: &str, v: &Value) {
+        self.chat_errors.remove(name);
+        let c = self.convos.entry(name.to_string()).or_default();
+        let before = (c.msgs.len(), c.msgs.last().map(|m| m.id.clone()), c.cursor);
+        // A reset (a first read, `/clear`, a new log) holds every message of yours already
+        // entered: none of them may wait on to be drawn a second time.
+        let reset = v.get("reset").and_then(Value::as_bool) == Some(true) || before.2.is_none();
+        let full = v.get("messages").and_then(Value::as_array).is_some_and(|m| m.len() >= PAGE);
+        let (seen, ids) = c.take_sent(v);
+        let changed = before != (c.msgs.len(), c.msgs.last().map(|m| m.id.clone()), c.cursor);
+        self.rest.chat = if changed { 0 } else { self.rest.chat.saturating_add(1) };
+        // Your messages come back by their ids (chat.send); one with none (an older PC, or typed
+        // at the PC) takes the oldest entered bubble, never both for one message.
+        if let Some(s) = self.sending.get_mut(name) {
+            s.seen_ids(&ids);
+            if reset {
+                s.reset();
+            }
+            s.seen(seen);
+        }
+        if !ids.is_empty() {
+            self.outbox_changed();
+        }
+        if reset {
+            self.outbox_changed();
+        }
+        // A full page means more came after it (away a while): read on at once.
+        if full && !reset {
+            self.reread_at = 0;
+        }
+        if seen > 0 {
+            self.outbox_changed();
+        }
+        // Kept for the next start only when something came in; written (and turned
+        // into JSON) off the UI thread.
+        if changed {
+            write_owned(chat_file(&self.data, name), self.convos[name].clone());
+        }
+    }
+
+    /// The link came back: every page reads again, and a PC that could not send the terminal's
+    /// foot (an older one) is asked again, since it may have been updated.
+    pub(crate) fn came_online(&mut self) {
+        self.no_screen = false;
+        self.no_chat_send = false;
+        self.changed.insert("*".into());
+        self.refresh();
+    }
+
+    /// How long ago `name`'s terminal foot was read (ms), when it was.
+    pub fn screen_age_ms(&self, name: &str) -> Option<u64> {
+        self.screens_at.get(name).map(|t| self.now_ns.saturating_sub(*t) / 1_000_000)
+    }
+
+    /// What `name`'s terminal shows at its foot, read now.
+    pub fn put_screen(&mut self, name: &str, s: crate::screen::Screen) {
+        self.screens.insert(name.to_string(), s);
+        self.screens_at.insert(name.to_string(), self.now_ns);
+    }
+
+    /// What you started writing to `name`.
+    pub fn draft(&self, name: &str) -> String {
+        self.drafts.get(name).cloned().unwrap_or_default()
+    }
+
+    pub fn set_draft(&mut self, name: &str, text: &str) {
+        if self.drafts.get(name).map_or(text.is_empty(), |d| d == text) {
+            return;
+        }
+        self.drafts.insert(name.to_string(), text.to_string());
+        self.outbox_changed();
+    }
+
+    /// A draft or a send queue changed: keep it on the phone soon.
+    pub fn outbox_changed(&mut self) {
+        self.outbox_at.get_or_insert(self.now_ns);
+    }
+
+    /// Write the drafts and the send queues, off the UI thread.
+    fn save_outbox(&mut self) {
+        if self.outbox_at.take().is_some() && !self.shot {
+            write_owned(self.data.join("cache/outbox.json"), data::Outbox::of(&self.drafts, &self.sending));
+        }
+    }
+
+    /// Send what each agent's queue holds next, while the link is up. Enter goes only after the
+    /// PC answered that it typed the words (and [`data::ENTER_AFTER_MS`] after them), never from a
+    /// timer of its own, so it cannot land alone or ahead of the words.
+    fn send_queued(&mut self) {
+        if self.shot || !self.link_state.online() {
+            return;
+        }
+        let now = rc_link::link::now_ms();
+        let names: Vec<String> = self.sending.keys().cloned().collect();
+        for name in names {
+            if self.asking(&Ask::Input(name.clone())) || self.asking(&Ask::Enter(name.clone())) {
+                continue;
+            }
+            let chat = !self.no_chat_send;
+            let Some(step) = self.sending.get_mut(&name).and_then(|s| s.next_by(now, chat)) else { continue };
+            if !matches!(step, data::Step::Wait(_)) {
+                self.outbox_changed();
+            }
+            match step {
+                data::Step::Type(text) => {
+                    let mut p = json!({"session": name, "data": text});
+                    if text.contains('\n') {
+                        p["paste"] = json!(true);
+                    }
+                    let call = self.link.call("session.input", p);
+                    self.calls.push((Ask::Input(name), call));
+                }
+                data::Step::Enter => {
+                    let call = self.link.call("session.input", json!({"session": name, "data": "\r"}));
+                    self.calls.push((Ask::Enter(name), call));
+                }
+                data::Step::Send(text, client_id) => {
+                    // The PC types the words and Enter, once per id however often it is sent.
+                    let call = self.link.call("chat.send", json!({"session": name, "text": text, "client_id": client_id}));
+                    self.calls.push((Ask::Input(name), call));
+                }
+                data::Step::Wait(ms) => self.wake_at(self.now_ns + ms * 1_000_000),
+            }
+        }
     }
 
     /// Raw keys (Esc, Shift-Tab, a menu's number), unanswered. The screen is read again soon
@@ -434,11 +854,7 @@ impl App {
             self.link_state = state.clone();
             self.service();
             match &state {
-                LinkState::Online { .. } if !was_online => {
-                    // Back online: every page reads again.
-                    self.changed.insert("*".into());
-                    self.refresh();
-                }
+                LinkState::Online { .. } if !was_online => self.came_online(),
                 LinkState::Unpaired | LinkState::Revoked { .. } if self.route() != &Route::Pair => {
                     self.nav = vec![(Route::Pair, Scroll::default())];
                     self.shown();
@@ -446,12 +862,23 @@ impl App {
                 _ => {}
             }
         }
-        for e in self.link.take_events() {
+        let events = self.link.take_events();
+        if !events.is_empty() {
+            self.stir();
+        }
+        for e in events {
             if let Some((domain, _)) = e.ev.split_once('.') {
                 self.changed.insert(domain.to_string());
             }
             if e.ev.starts_with("session.") {
                 self.agents_stale = true;
+                // Earlier is read again only when an agent stops, closes or comes back: a live
+                // agent's intent and state change all the time, and Earlier is a big read.
+                let name = e.payload.get("name").and_then(Value::as_str);
+                let stopped = e.payload.get("state").and_then(Value::as_str).is_some_and(|s| !matches!(s, "created" | "spawning" | "running" | "idle" | "blocked"));
+                if stopped || name.is_some_and(|n| self.earlier.iter().any(|a| a.name == n) || self.agents.iter().any(|a| a.name == n && !crate::agents::live(a))) {
+                    self.st.agents.stale = true;
+                }
                 // The open agent started or stopped: read its words and its foot now, not at the
                 // next poll, so the phone keeps up with the PC.
                 let open = self.open_chat();
@@ -464,7 +891,8 @@ impl App {
                 self.ask(Ask::Projects, "project.list", json!({}));
             }
         }
-        if self.agents_stale && self.link_state.online() && !self.asking(&Ask::Agents) {
+        // Away, the notifications' loop reads the list (background.rs): asked once, not twice.
+        if self.agents_stale && self.foreground && self.link_state.online() && !self.asking(&Ask::Agents) {
             self.agents_stale = false;
             self.ask(Ask::Agents, "session.list", json!({}));
         }
@@ -485,64 +913,169 @@ impl App {
                     }
                     write_json(self.data.join("cache/projects.json"), &self.projects);
                 }
-                (Ask::Agents, Ok(v)) => {
-                    self.agents = data::agents(&v);
-                    self.tell_new_questions();
-                    write_json(self.data.join("cache/agents.json"), &self.agents);
-                }
-                (Ask::Transcript(name), Ok(v)) => {
-                    let c = self.convos.entry(name.clone()).or_default();
-                    let before = (c.msgs.len(), c.msgs.last().map(|m| m.id.clone()), c.cursor);
-                    let seen = c.take(&v);
-                    let changed = before != (c.msgs.len(), c.msgs.last().map(|m| m.id.clone()), c.cursor);
-                    if let Some(s) = self.sending.get_mut(&name) {
-                        s.seen(seen);
-                    }
-                    // Kept for the next start only when something came in; written (and turned
-                    // into JSON) off the UI thread.
-                    if changed {
-                        write_owned(chat_file(&self.data, &name), self.convos[&name].clone());
-                    }
-                }
-                (Ask::Input(name), Err(e)) => {
-                    if let Some(s) = self.sending.get_mut(&name)
-                        && let Some(p) = s.waiting.iter_mut().rev().find(|p| !p.failed)
-                    {
-                        p.failed = true;
-                    }
-                    self.toast(&format!("Not sent: {}", e.message));
-                }
-                (Ask::Create, Ok(v)) => {
-                    let name = v.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-                    if name.is_empty() {
-                        self.toast("The PC made no agent");
-                    } else {
-                        self.ask(Ask::Spawn(name.clone()), "session.spawn", json!({"session": name}));
-                    }
-                }
-                (Ask::Spawn(name), Ok(_)) => {
+                // A list asked before the latest act (a close, a pause, a resume, a new agent) may
+                // still hold the agent as it was: it would undo what the phone just showed. Asked
+                // again instead (D22).
+                (Ask::Agents, Ok(_)) if self.agents_asked < self.acts => {
                     self.agents_stale = true;
-                    self.open(&name);
+                }
+                (Ask::Agents, Ok(v)) => {
+                    crate::background::listed(&v);
+                    let agents = data::agents(&v);
+                    if agents != self.agents {
+                        self.agents = agents;
+                        write_json(self.data.join("cache/agents.json"), &self.agents);
+                        self.rest.list = 0;
+                    } else {
+                        self.rest.list = self.rest.list.saturating_add(1);
+                    }
+                }
+                (Ask::Transcript(name), Ok(v)) => self.took_transcript(&name, &v),
+                (Ask::Helper(name, call), Ok(v)) => {
+                    let found = v.get("found").and_then(Value::as_bool).unwrap_or(false);
+                    let items = data::items(&data::messages(&v));
+                    let changed = self.helpers.get(&(name.clone(), call.clone())).is_none_or(|h| h.items != items || h.found != found);
+                    self.helpers.insert((name, call.clone()), Helper { items, found, at: self.now_ns });
+                    if changed {
+                        crate::chat::helper_came(self, &call);
+                    }
+                }
+                (Ask::Older(name), Ok(v)) => {
+                    if let Some(c) = self.convos.get_mut(&name) {
+                        c.take_older(&v);
+                        write_owned(chat_file(&self.data, &name), c.clone());
+                    }
+                }
+                (Ask::Input(name) | Ask::Enter(name), r) => {
+                    let now = rc_link::link::now_ms();
+                    let answer = match &r {
+                        Ok(_) => data::Answer::Ok,
+                        Err(e) if e.transient() => data::Answer::Dropped,
+                        // An older Relay has no chat.send: from now on the old way.
+                        Err(e) if !self.no_chat_send && (e.code == "remote.op" || e.code.contains("unknown")) => {
+                            self.no_chat_send = true;
+                            data::Answer::Unsupported
+                        }
+                        Err(_) => data::Answer::Refused,
+                    };
+                    if let Some(s) = self.sending.get_mut(&name) {
+                        s.answered(answer, now);
+                    }
+                    self.outbox_changed();
+                    // A drop is sent again by itself; only a refusal is the person's to retry.
+                    if let Err(e) = r
+                        && answer == data::Answer::Refused
+                    {
+                        self.toast(&format!("Not sent. {}", crate::errors::words(&e)));
+                    }
+                }
+                (Ask::Create, Ok(v)) => self.created(&v),
+                (Ask::Spawn(_), Ok(_)) => {
+                    self.agents_stale = true;
+                }
+                (Ask::Tasks, Ok(v)) => {
+                    self.st.newagent.tasks = crate::board::tasks(&v);
                 }
                 (Ask::Screen(name), Ok(v)) => {
                     let text = v.get("text").and_then(Value::as_str).unwrap_or_default();
-                    self.screens.insert(name, crate::screen::read(text));
+                    let scr = crate::screen::read(text);
+                    self.rest.screen = if self.screens.get(&name) == Some(&scr) { self.rest.screen.saturating_add(1) } else { 0 };
+                    self.put_screen(&name, scr);
                 }
                 (Ask::Screen(_), Err(e)) => {
                     if e.code == "remote.op" || e.code.contains("unknown") {
                         self.no_screen = true;
                     }
                 }
-                (Ask::Create | Ask::Spawn(_), Err(e)) => self.toast(&e.message),
+                (Ask::Earlier, Ok(v)) => {
+                    let mut all = data::agents(&v);
+                    all.retain(|a| !crate::agents::live(a));
+                    all.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                    all.truncate(200);
+                    self.earlier = all;
+                }
+                (Ask::Restorable, Ok(v)) => {
+                    self.restorable = v
+                        .get("sessions")
+                        .and_then(Value::as_array)
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|r| {
+                                    let name = r.pointer("/session/name")?.as_str()?.to_string();
+                                    let reason = r.get("reason").and_then(Value::as_str).unwrap_or_default().to_string();
+                                    Some((name, (reason, r.get("worktree_dirty").and_then(Value::as_bool).unwrap_or(false))))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                }
+                (Ask::Resume(name), Ok(_)) => {
+                    self.acts += 1;
+                    self.agents_stale = true;
+                    self.st.agents.stale = true;
+                    if self.open_chat().as_deref() == Some(name.as_str()) {
+                        self.reread_at = 0;
+                        self.screen_at = 0;
+                    }
+                }
+                (Ask::Park(name), Ok(_)) => {
+                    self.acts += 1;
+                    self.agents_stale = true;
+                    self.st.agents.stale = true;
+                    self.toast(&format!("{name} is paused"));
+                }
+                (Ask::Close(name), Ok(_)) => {
+                    self.acts += 1;
+                    self.agents_stale = true;
+                    self.st.agents.stale = true;
+                    // Kept as closed until the lists say so, so its chat turns read-only at once.
+                    if let Some(a) = self.agents.iter().find(|a| a.name == name).cloned() {
+                        self.agents.retain(|b| b.name != name);
+                        self.earlier.insert(0, Agent { state: "closed".into(), ..a });
+                    }
+                    self.toast(&format!("{name} is closed"));
+                }
+                (Ask::Close(name), Err(e)) if e.code == "worktree.dirty" => {
+                    self.st.agents.confirm = Some((name, crate::agents::Confirm::Discard));
+                }
+                (Ask::Create | Ask::Spawn(_) | Ask::Resume(_) | Ask::Park(_) | Ask::Close(_), Err(e)) => self.toast(&crate::errors::words(&e)),
+                // A conversation the PC could not read (not a dropped link): the chat says so.
+                (Ask::Transcript(name), Err(e)) if !e.transient() => {
+                    self.chat_errors.insert(name, crate::errors::words(&e));
+                }
                 (_, Err(e)) => self.host.log(&format!("{}: {}", e.code, e.message)),
-                (Ask::Input(_), Ok(_)) => {}
+            }
+        }
+        // Chats' copies read off the UI thread: kept unless the PC's answer came first.
+        let convos = &mut self.convos;
+        self.opening.retain(|(name, rx)| match rx.try_recv() {
+            Ok(c) => {
+                if let Some(c) = c
+                    && !convos.contains_key(name)
+                {
+                    convos.insert(name.clone(), c);
+                }
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(_) => false,
+        });
+        // What waited for the link, or for the write before it, goes now.
+        self.send_queued();
+        // Drafts and queues are written a second after they last changed, not on each key.
+        if let Some(t) = self.outbox_at {
+            let due = t + 1_000_000_000;
+            if self.now_ns >= due {
+                self.save_outbox();
+            } else {
+                self.wake_at(due);
             }
         }
         // The lists say who works and who waits by how fresh each agent's output is: read them
         // again every five seconds while the app is in front.
         if self.link_state.online() && self.foreground && self.now_ns >= self.list_at {
             self.agents_stale = true;
-            self.list_at = self.now_ns + 5_000_000_000;
+            self.list_at = self.now_ns + rested(LIST_EVERY, self.rest.list, LIST_REST);
         }
         if self.link_state.online() && self.foreground {
             self.wake_at(self.list_at);
@@ -557,12 +1090,12 @@ impl App {
             if self.now_ns >= self.reread_at && !self.asking(&Ask::Transcript(name.clone())) {
                 self.read_chat(&name);
                 // Close behind the PC while it works; slower once it waits.
-                self.reread_at = self.now_ns + if busy { 700_000_000 } else { 4_000_000_000 };
+                self.reread_at = self.now_ns + if busy { 700_000_000 } else { rested(CHAT_EVERY, self.rest.chat, CHAT_REST) };
             }
             // The terminal's foot: the live status, the mode, a question.
-            if !self.no_screen && self.now_ns >= self.screen_at && !self.asking(&Ask::Screen(name.clone())) {
+            if !self.no_screen && self.now_ns >= self.screen_at && !self.asking(&Ask::Screen(name.clone())) && self.live(&name) {
                 self.ask(Ask::Screen(name.clone()), "session.screen", json!({"session": name, "rows": 16}));
-                self.screen_at = self.now_ns + if busy { 700_000_000 } else { 3_000_000_000 };
+                self.screen_at = self.now_ns + if busy { 700_000_000 } else { rested(SCREEN_EVERY, self.rest.screen, SCREEN_REST) };
             }
             // Without the terminal's foot, how fresh its output is tells working from waiting:
             // the agent list (which carries it) is read every two seconds while a chat is open.
@@ -589,18 +1122,6 @@ impl App {
         }
     }
 
-    /// Agents that just started asking you something get a notification while the app is away.
-    fn tell_new_questions(&mut self) {
-        let asking: std::collections::HashSet<String> = self.agents.iter().filter(|a| a.needs_you()).map(|a| a.name.clone()).collect();
-        for a in self.agents.iter().filter(|a| a.needs_you() && !self.told.contains(&a.name)) {
-            if !self.foreground && !self.shot {
-                let id = a.name.bytes().fold(7i32, |h, b| h.wrapping_mul(31).wrapping_add(b as i32));
-                self.host.notify(id, &format!("{} asks you", a.name), a.title());
-            }
-        }
-        self.told = asking;
-    }
-
     // Repos
 
     pub fn repo_name(&self) -> String {
@@ -612,26 +1133,47 @@ impl App {
         self.repo = Some(id);
         self.config.repo = Some(id);
         self.save_config();
-        if let Some(name) = self.open_chat()
-            && self.agents.iter().find(|a| a.name == name).is_some_and(|a| a.project_id != id)
-        {
+        // An agent's chat or Terminal of another repo, open or under the page, goes: back to Home,
+        // as Back from a chat goes (D22: the Terminal's keys would type into the old repo's agent).
+        let other = |r: &Route| match r {
+            Route::Chat(n) | Route::Terminal(n) => self.agent(n).is_some_and(|a| a.project_id != id),
+            _ => false,
+        };
+        if self.nav.iter().any(|(r, _)| other(r)) {
             self.nav.truncate(1);
             self.shown();
         }
     }
 
+    /// The repo's live agents: stopped and closed ones are under Earlier.
     pub fn repo_agents(&self) -> Vec<&Agent> {
-        self.agents.iter().filter(|a| Some(a.project_id) == self.repo && a.alive()).collect()
+        self.agents.iter().filter(|a| Some(a.project_id) == self.repo && crate::agents::live(a)).collect()
+    }
+
+    /// An agent by name, live or earlier.
+    pub fn agent(&self, name: &str) -> Option<&Agent> {
+        self.agents.iter().find(|a| a.name == name).or_else(|| self.earlier.iter().find(|a| a.name == name))
+    }
+
+    /// The agent has a terminal running (or starting), so it takes messages.
+    pub fn live(&self, name: &str) -> bool {
+        self.agents.iter().find(|a| a.name == name).is_some_and(crate::agents::live)
     }
 
     /// Open an agent's conversation over Home.
     pub fn open(&mut self, name: &str) {
-        if !self.convos.contains_key(name)
-            && let Some(c) = read_json::<Convo>(chat_file(&self.data, name))
-        {
-            self.convos.insert(name.to_string(), c);
+        // The phone's copy is read and parsed off the UI thread (a long chat is megabytes of JSON);
+        // it shows as soon as it is in, unless the PC answered first.
+        if !self.convos.contains_key(name) && !self.shot {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (file, n) = (chat_file(&self.data, name), name.to_string());
+            let _ = std::thread::Builder::new().name("rc-open".into()).spawn(move || {
+                let _ = tx.send(read_json::<Convo>(file));
+                crate::wake::wake();
+            });
+            self.opening.push((n, rx));
         }
-        if let Some(a) = self.agents.iter().find(|a| a.name == name)
+        if let Some(a) = self.agent(name)
             && Some(a.project_id) != self.repo
         {
             self.repo = Some(a.project_id);
@@ -648,6 +1190,24 @@ impl App {
         self.screen_at = 0;
         self.st.chat = Default::default();
         self.shown();
+    }
+
+    /// A notification about `name` was tapped: its chat, with nothing left over it (no sheet, menu,
+    /// drawer or keyboard). Not while pairing: there is no PC to read it from.
+    pub fn open_notified(&mut self, name: &str) {
+        if self.route() == &Route::Pair || name.is_empty() {
+            return;
+        }
+        self.finish_typing();
+        self.st.drawer.open = false;
+        self.st.drawer.repos = false;
+        self.st.newagent.open = false;
+        self.st.newagent.picking = false;
+        self.st.agents.menu = None;
+        self.st.agents.confirm = None;
+        self.st.update.open = false;
+        self.st.chat.model_sheet = false;
+        self.open(name);
     }
 
     /// A PC was just paired: keep it, connect now, and go to its agents.
@@ -667,12 +1227,46 @@ impl App {
         self.link.forget();
         self.link_state = LinkState::Unpaired;
         self.service();
+        // Everything the old PC said goes, so a new pairing starts clean (D22): repo ids start at 1
+        // on every PC, so a kept page would show the old PC's branch, files, tasks or holds, and a
+        // kept update offer would install its build.
         self.agents.clear();
+        self.earlier.clear();
+        self.restorable.clear();
         self.projects.clear();
+        self.repo = None;
         self.convos.clear();
-        self.config = Config::default();
+        self.helpers.clear();
+        self.chat_errors.clear();
+        self.screens.clear();
+        self.screens_at.clear();
+        self.opening.clear();
+        self.efforts.clear();
+        self.busy_since.clear();
+        self.drafts.clear();
+        self.sending.clear();
+        self.outbox_at = None;
+        self.holds = 0;
+        self.no_screen = false;
+        self.no_chat_send = false;
+        self.changed.clear();
+        // The old PC's answers still on their way land nowhere.
+        self.calls.clear();
+        // Every page's state, but the phone's own choices: the terminal's text size.
+        let terminal_size = self.st.terminal.size;
+        self.st = States::default();
+        self.st.terminal.size = terminal_size;
+        // What was the PC's goes; what is the phone's (text size, notification switches, the
+        // one-time ask for notifications) stays.
+        self.config = Config {
+            text_size: self.config.text_size.take(),
+            quiet: std::mem::take(&mut self.config.quiet),
+            asked_notifications: self.config.asked_notifications,
+            ..Config::default()
+        };
         self.save_config();
         let _ = std::fs::remove_dir_all(self.data.join("cache"));
+        let _ = std::fs::remove_dir_all(self.data.join("updates"));
         self.reset_to(Route::Pair);
     }
 
@@ -680,6 +1274,9 @@ impl App {
 
     /// The app came to the front: check the link at once, read the open page again.
     pub fn resumed(&mut self) {
+        // Android's text size may have changed while away (it is set in its own Settings).
+        self.font_scale = self.host.font_scale();
+        self.can_notify = self.host.can_notify();
         self.foreground = true;
         self.fresh = true;
         self.link.kick();
@@ -689,13 +1286,22 @@ impl App {
 
     pub fn paused(&mut self) {
         self.foreground = false;
+        // Android may stop the process once it is away: what you wrote is kept now.
+        self.save_outbox();
+        crate::background::front(false, None);
     }
 
-    /// In the background: take what the link brought (an agent that now asks you is a
-    /// notification) without drawing.
-    pub fn tick(&mut self, now_ns: u64) {
+    /// In the background: take what the link brought without drawing (notifications are
+    /// background.rs's, which runs with no activity too).
+    ///
+    /// A commit's push still goes out, and a message's Enter its moment after the words: the
+    /// answer is when to tick again, if anything is due.
+    pub fn tick(&mut self, now_ns: u64) -> Option<u64> {
         self.now_ns = now_ns;
+        self.wake = None;
         self.take_answers();
+        crate::changes::keep_up(self);
+        self.wake
     }
 
     pub fn tabbed(&self) -> bool {
@@ -716,7 +1322,20 @@ impl App {
         self.insets = (inset_top, inset_bottom);
     }
 
+    /// Something happened (an event, a touch): the polls that had slowed down go back to fast,
+    /// from now.
+    pub fn stir(&mut self) {
+        if self.rest == Rest::default() {
+            return;
+        }
+        self.rest = Rest::default();
+        self.list_at = self.list_at.min(self.now_ns + LIST_EVERY);
+        self.reread_at = self.reread_at.min(self.now_ns + CHAT_EVERY);
+        self.screen_at = self.screen_at.min(self.now_ns + SCREEN_EVERY);
+    }
+
     pub fn touch(&mut self, t: Touch) {
+        self.stir();
         let u = self.canvas.u.max(0.01);
         let x0 = ((self.size.0 - WIDTH * u) * 0.5).max(0.0);
         self.ui.touch(t, (t.x - x0) / u, t.y / u);
@@ -732,6 +1351,14 @@ impl App {
     fn shown(&mut self) {
         self.fresh = true;
         self.ui.reset();
+        // A page is shown clean (D11): what was open over the last one, a confirm, a sheet or a
+        // menu, does not wait for the next visit ("Discard changes to X?" on opening Changes).
+        while self.st.changes.close_over() {}
+        while self.st.inbox.close_over() {}
+        // The Send back sheet (Task, Inbox): kept while it sends, when take_answers closes it.
+        self.st.board.close_over();
+        self.st.settings.close_over();
+        while self.st.agents.close_over() {}
         if self.focus.id.take().is_some() {
             self.host.keyboard(false, "", Kb::Text);
         }
@@ -766,10 +1393,24 @@ impl App {
             self.finish_typing();
             return true;
         }
-        if self.st.drawer.close_over()
+        // The task list goes back to New agent, not past it.
+        if std::mem::take(&mut self.st.newagent.picking) {
+            self.ui.reset();
+            return true;
+        }
+        // What is over the page closes first, the top one first; a page's own overlays only on
+        // that page, so a flag left elsewhere never takes a Back (D11).
+        let route = self.route().clone();
+        if self.st.update.close_over()
+            || self.st.agents.close_over()
+            || self.st.drawer.close_over()
             || self.st.chat.close_over()
             || self.st.newagent.open
-            || matches!(self.route(), Route::Design(_)) && self.st.designs.close_over()
+            || matches!(route, Route::Design(_)) && self.st.designs.close_over()
+            || route == Route::Changes && self.st.changes.close_over()
+            || route == Route::Inbox && self.st.inbox.close_over()
+            || matches!(route, Route::Task(_) | Route::Inbox) && self.st.board.close_over()
+            || route == Route::Settings && self.st.settings.close_over()
         {
             self.st.newagent.open = false;
             self.ui.reset();
@@ -867,6 +1508,29 @@ impl App {
         self.now_ns = now_ns;
         self.wake = None;
         self.take_answers();
+        // Out of reach, the top says when it tries again, to the second: drawn again as it ticks.
+        if let LinkState::Offline { retry_at_ms, .. } = self.link_state {
+            let now_ms = rc_link::link::now_ms();
+            if retry_at_ms > now_ms {
+                self.wake_at(now_ns + ((retry_at_ms - now_ms) % 1000).max(1) * 1_000_000);
+            }
+        }
+        // The text size chosen in Settings (D9): every Text made this frame takes it, and the
+        // chat measures again when it changed.
+        let scale = crate::settings::text_scale(self.text_size(), self.font_scale);
+        if scale != crate::draw::text_scale() {
+            crate::draw::set_text_scale(scale);
+            self.st.chat.relayout();
+        }
+        // A phone's scale for this screen's density at most: a tablet keeps the phone's column.
+        let d = self.host.density();
+        self.canvas.max_u = if d > 0.0 { d * (WIDTH_DP / WIDTH) * 1.1 } else { f32::INFINITY };
+        // A tapped notification opens its agent's chat (D4), over whatever was open.
+        if let Some(name) = crate::background::take_opened() {
+            self.open_notified(&name);
+        }
+        // What is on the screen: the chat open here does not notify (background.rs).
+        crate::background::front(self.foreground, self.open_chat());
         self.focus.keyboard_up = self.keyboard_up;
         let tapped = self.ui.tap.is_some();
         let (w, h) = self.size;
@@ -878,6 +1542,13 @@ impl App {
         if self.online() {
             crate::inbox::keep_up(self);
         }
+        // A send-back (or an approval) already on its way finishes on any page, online or not: a
+        // call the link dropped fails at once and frees its key (C18; it starts nothing new).
+        crate::board::take_answers(self);
+        // A commit's push goes out from here, whatever page is open.
+        crate::changes::keep_up(self);
+        // Designs' finished paints are taken (never left to pile up), and leaving drops its queue.
+        crate::designs::keep_up(self);
         // Layers keep each tap on the surface it landed on (ui.rs): the page first, on the bottom.
         self.ui.layer = crate::ui::layer::CONTENT;
         let mut moving = match &route {
@@ -890,18 +1561,34 @@ impl App {
             Route::Design(id) => crate::designs::draw_design(self, *id, dt),
             Route::Board => crate::board::draw(self, dt),
             Route::Task(id) => crate::board::draw_task(self, *id, dt),
+            Route::File { repo, worktree, path } => crate::fileview::draw(self, *repo, worktree.clone(), path, dt),
             Route::Inbox => crate::inbox::draw(self, dt),
+            Route::Terminal(name) => crate::terminal::draw(self, &name.clone(), dt),
         };
         // "*" (the link came back) has been seen by every page drawn this frame.
         self.changed.remove("*");
         if route != Route::Pair && route != Route::Settings {
             moving |= crate::drawer::draw(self, dt);
-            // The drawer has no field: typing stops and the keyboard goes as it opens.
-            if self.st.drawer.open && self.focus.id.is_some() {
+            // The drawer's one field is its search: anything else typed stops as it opens.
+            if self.st.drawer.open && self.focus.id.is_some_and(|f| f != crate::agents::SEARCH) {
                 self.finish_typing();
             }
             moving |= crate::drawer::draw_new_agent(self);
+            // Earlier (D1) is read while the drawer or Home shows it.
+            if self.st.drawer.open || route == Route::Home {
+                crate::agents::keep_up(self);
+            }
+            crate::agents::draw_over(self);
         }
+        // What you have seen of each agent, and its rows' previews (D12).
+        if route != Route::Pair {
+            crate::news::keep_up(self);
+        }
+        // App updates from the PC (D10): asked for while in front, offered over any page but pairing.
+        if route != Route::Pair && !self.shot {
+            crate::update::keep_up(self);
+        }
+        moving |= crate::update::draw(self);
         if let Some((words, until)) = self.toast.clone() {
             if now_ns < until {
                 let bottom = self.canvas.h - self.canvas.inset_bottom - 96.0;

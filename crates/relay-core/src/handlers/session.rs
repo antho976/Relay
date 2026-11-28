@@ -275,6 +275,22 @@ fn owns(
 /// Where `session.upload` puts pictures, from a session's checkout: inside `.relay/`, which
 /// Relay keeps out of git in every checkout it manages.
 const ATTACHMENTS: &str = ".relay/attachments";
+/// Enter goes as its own write this long after a chat.send's words, so the program does not take
+/// both as one paste (the phone's `ENTER_AFTER_MS`).
+const CHAT_ENTER_AFTER: std::time::Duration = std::time::Duration::from_millis(90);
+
+/// The typing lock of a terminal, for chat.send: held across a message's words, the wait and its
+/// Enter, so two sends a moment apart are two messages, never "A B" and two Enters. It keeps the
+/// ids it typed lately, so a resend racing the first answer types nothing. Keyed by the PTY, held
+/// weakly: a terminal gone takes its lock with it.
+fn typing_lock(pty: &Arc<Pty>) -> Arc<std::sync::Mutex<std::collections::VecDeque<String>>> {
+    type Lock = Arc<std::sync::Mutex<std::collections::VecDeque<String>>>;
+    type Locks = std::collections::HashMap<usize, (std::sync::Weak<Pty>, Lock)>;
+    static LOCKS: std::sync::LazyLock<std::sync::Mutex<Locks>> = std::sync::LazyLock::new(Default::default);
+    let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    locks.retain(|_, (pty, _)| pty.strong_count() > 0);
+    locks.entry(Arc::as_ptr(pty) as usize).or_insert_with(|| (Arc::downgrade(pty), Lock::default())).1.clone()
+}
 
 /// `.relay/attachments` in `worktree`, made if missing. The agent owns its checkout, so either
 /// folder may be a link it planted: a link is refused rather than written through.
@@ -1917,9 +1933,11 @@ pub fn register(e: &mut Engine) {
         if status == "completed" {
             release_claims(ctx, s)?;
         }
+        // A blocked or partial done waits on its blockers, not on a prompt (`Waiting::Report`).
+        let waiting = (session_state == "blocked").then_some("report");
         ctx.tx().execute(
-            "UPDATE sessions SET state=?1, last_output_at=?2, updated_at=?2 WHERE id=?3",
-            params![session_state, ctx.now, s.id],
+            "UPDATE sessions SET state=?1, waiting=?4, last_output_at=?2, updated_at=?2 WHERE id=?3",
+            params![session_state, ctx.now, s.id, waiting],
         ).bus()?;
         note_pty_state(ctx, s.id, session_state);
         let reported = p.summary.as_deref().map(str::trim).filter(|v| !v.is_empty());
@@ -2096,15 +2114,21 @@ pub fn register(e: &mut Engine) {
             return Err(BusError::invalid("session.provider_ref", format!("{value:?} is not a provider session id"))
                 .with_hint("provider_ref is the provider's own conversation id: letters, digits, '-' and '_', starting with a letter or digit"));
         }
+        // The hook itself says the agent waits at a prompt (`Waiting::Prompt`).
+        let mut prompts = false;
         let state = match p.kind.as_str() {
             "session_start" | "tool_use" | "prompt" => "running",
             "stop" | "idle" => "idle",
-            "blocked" => "blocked",
+            "blocked" => {
+                prompts = true;
+                "blocked"
+            }
             "notification" => {
                 let type_ = data.get("notification_type").or_else(|| data.get("type")).and_then(Value::as_str).unwrap_or("");
                 // Claude's `idle_prompt` ("waiting for your input") follows every finished turn a
                 // minute later: the turn's Stop already said so, and it needs nothing new.
-                if matches!(type_, "permission_prompt" | "elicitation_dialog" | "agent_needs_input" | "blocked") { "blocked" } else { sessions::state_str(s.state) }
+                prompts = matches!(type_, "permission_prompt" | "elicitation_dialog" | "agent_needs_input" | "blocked");
+                if prompts { "blocked" } else { sessions::state_str(s.state) }
             }
             _ => return Err(BusError::invalid("session.report_kind", "kind must be session_start, tool_use, prompt, stop, notification, idle, or blocked")),
         };
@@ -2122,20 +2146,21 @@ pub fn register(e: &mut Engine) {
         // `session.done` decided how this turn ends. The tool events that trail it in the same
         // turn — the done call's own PostToolUse among them — and the turn's Stop keep that
         // outcome: a blocked done stays blocked.
-        let state = match (done, p.kind.as_str()) {
-            (Some(_), "tool_use" | "prompt" | "idle") => sessions::state_str(s.state),
-            (Some(_), "stop") if s.state == SessionState::Blocked => "blocked",
-            _ => state,
-        };
+        let kept = matches!((done, p.kind.as_str()), (Some(_), "tool_use" | "prompt" | "idle"))
+            || (done.is_some() && p.kind == "stop" && s.state == SessionState::Blocked);
+        let state = if kept { sessions::state_str(s.state) } else { state };
+        // A hook that blocks is a live prompt; anything else keeps the reason it had.
+        let waiting = (state == "blocked" && prompts && !kept).then_some("prompt");
         let state_changed = state != sessions::state_str(s.state);
         // A Stop ends the turn a pending done belonged to. A fresh provider session starts no
         // turn a done could belong to; an assignment still waiting for a Stop keeps waiting.
         ctx.tx().prepare_cached(
             "UPDATE sessions SET state=?1, provider_ref=COALESCE(?2, provider_ref), last_output_at=?3, updated_at=?3,
+             waiting=CASE WHEN ?1='blocked' THEN COALESCE(?7, waiting) ELSE NULL END,
              done_pending_stop=CASE WHEN ?5='stop' THEN NULL WHEN ?5='session_start' AND done_pending_stop!=?6 THEN NULL
                                     ELSE done_pending_stop END
              WHERE id=?4",
-        ).bus()?.execute(params![state, provider_ref, ctx.now, s.id, p.kind, ASSIGNMENT_AT_STOP]).bus()?;
+        ).bus()?.execute(params![state, provider_ref, ctx.now, s.id, p.kind, ASSIGNMENT_AT_STOP, waiting]).bus()?;
         note_pty_state(ctx, s.id, state);
         if matches!(p.kind.as_str(), "tool_use" | "stop" | "prompt") {
             // The command behind a device lease has finished; keep the lease only briefly. A new
@@ -2534,12 +2559,83 @@ pub fn register(e: &mut Engine) {
         let worktree = Path::new(&s.worktree);
         let path = s.provider_ref.as_deref().filter(|reference| crate::providers::is_provider_ref(reference))
             .and_then(|reference| crate::transcript::locate(s.provider, reference, worktree));
-        let Some(path) = path else {
-            return Ok(TranscriptOut { messages: Vec::new(), cursor: 0, reset: false, found: false });
+        // A Task call's helper: its own log beside the session's, read the same way.
+        let path = match (&p.task, path) {
+            (Some(task), Some(log)) => crate::transcript::locate_task(&log, task),
+            (None, path) => path,
+            (Some(_), None) => None,
         };
+        let Some(path) = path else {
+            return Ok(TranscriptOut { messages: Vec::new(), cursor: 0, before: 0, older: false, reset: false, found: false, pending: Vec::new() });
+        };
+        if p.after.is_some() && p.before.is_some() {
+            return Err(BusError::invalid("session.transcript_cursor", "after reads on and before reads back: one at a time"));
+        }
         let limit = p.limit.unwrap_or(200).clamp(1, 1000) as usize;
-        crate::transcript::read(s.provider, &path, worktree, p.after, limit)
+        // What the person sent with chat.send in the last hour, to give back under its id.
+        let hour_ago = jiff::Timestamp::now().checked_sub(jiff::SignedDuration::from_hours(1)).map(crate::time::stamp).unwrap_or_default();
+        let sends = ctx.read(|conn| {
+            let mut st = conn.prepare_cached(
+                "SELECT client_id, text, log_tag, log_offset, sent_at FROM chat_sends WHERE session_id=?1 AND sent_at>=?2 ORDER BY id",
+            ).bus()?;
+            let rows = st.query_map(params![s.id, hour_ago], |r| Ok(crate::transcript::Sent {
+                client_id: r.get(0)?, text: r.get(1)?,
+                log_tag: r.get::<_, Option<i64>>(2)?.map(|t| t as u64), log_offset: r.get::<_, Option<i64>>(3)?.map(|o| o as u64),
+                sent_at: r.get(4)?,
+            })).bus()?;
+            rows.collect::<Result<Vec<_>, _>>().bus()
+        })?;
+        let sends = if p.task.is_some() { Vec::new() } else { sends };
+        crate::transcript::read(s.provider, &path, worktree, p.after, p.before, limit, &sends)
             .map_err(|e| BusError::unavailable("session.transcript_unreadable", format!("{}: {e}", path.display())))
+    });
+
+    // A person's message, kept under the sender's id so it is drawn once: the log is found and
+    // measured, and the words typed (Enter on its own a moment later, as the phone did), with the
+    // store unlocked; the send is then recorded in the transaction.
+    e.register_staged::<ChatSend, _>(|ctx, p| {
+        let ok_id = !p.client_id.is_empty() && p.client_id.len() <= 64 && p.client_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        if !ok_id {
+            return Err(BusError::invalid("chat.client_id", "client_id is letters, digits, - and _, at most 64"));
+        }
+        if p.text.trim().is_empty() || p.text.len() > 256 * 1024 {
+            return Err(BusError::invalid("chat.text", "text is the words to send: not empty, at most 256 KiB"));
+        }
+        let (id, pty) = live_pty(ctx, &p.session)?;
+        let row = ctx.read(|conn| sessions::by_id(conn, id)?.ok_or_else(|| BusError::not_found("session.not_found", format!("session {} not found", p.session))))?;
+        let s = &row.session;
+        let at = s.provider_ref.as_deref().filter(|reference| crate::providers::is_provider_ref(reference))
+            .and_then(|reference| crate::transcript::locate(s.provider, reference, Path::new(&s.worktree)))
+            .and_then(|path| crate::transcript::position(&path));
+        // Typed before the answer, with nothing locked but this terminal: `typed` is then true
+        // only of words that went in, and a write that fails refuses with no send kept.
+        let lock = typing_lock(&pty);
+        let mut recent = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let sent_before = recent.contains(&p.client_id) || ctx.read(|conn| {
+            conn.prepare_cached("SELECT 1 FROM chat_sends WHERE session_id=?1 AND client_id=?2").bus()?
+                .exists(params![id, p.client_id]).bus()
+        })?;
+        if !sent_before {
+            crate::engine::write_input(&pty, &p.text, true)?;
+            std::thread::sleep(CHAT_ENTER_AFTER);
+            crate::engine::write_input(&pty, "\r", false)?;
+            recent.push_back(p.client_id.clone());
+            if recent.len() > 64 {
+                recent.pop_front();
+            }
+        }
+        Ok((id, at, !sent_before))
+    }, |ctx: &mut Ctx, p, (id, at, typed): (Id, Option<(u64, u64)>, bool)| {
+        if !typed {
+            // Sent before (a retry after a lost answer): typed once only.
+            return Ok(ChatSendOut { client_id: p.client_id, typed: false });
+        }
+        let added = ctx.tx().prepare_cached(
+            "INSERT OR IGNORE INTO chat_sends(session_id, client_id, text, log_tag, log_offset, sent_at) VALUES (?1,?2,?3,?4,?5,?6)",
+        ).bus()?.execute(params![id, p.client_id, p.text, at.map(|a| a.0 as i64), at.map(|a| a.1 as i64), ctx.now]).bus()?;
+        ctx.tx().prepare_cached("DELETE FROM chat_sends WHERE session_id=?1 AND sent_at<?2").bus()?
+            .execute(params![id, crate::time::days_ago(1)]).bus()?;
+        Ok(ChatSendOut { client_id: p.client_id, typed: added > 0 })
     });
 
     // A picture from the phone for the agent: decoded and written with the store lock released;

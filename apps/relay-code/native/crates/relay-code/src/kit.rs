@@ -46,10 +46,12 @@ impl Ctx<'_> {
 
 /// The ground, edge to edge.
 pub fn ground(c: &mut Canvas) {
-    let dy = c.dy;
-    c.dy = 0.0;
-    c.rect(-1000.0, 0.0, WIDTH + 2000.0, c.h, 0.0, t::BG);
-    c.dy = dy;
+    // The frame is cleared to the ground's colour (`App::clear_colour`, the whole surface, the
+    // side margins too), so it is not painted again: a full-screen rect each frame was pure
+    // overdraw, half the frame time on a phone drawing in software (A19: flings on the emulator,
+    // frame gaps p50 ≈47 ms with it, ≈25 ms without). If BG becomes a setting, clear_colour must
+    // follow it.
+    let _ = c;
 }
 
 // Layers
@@ -163,6 +165,26 @@ pub fn notice(cx: &mut Ctx, x: f32, y: f32, w: f32, title: &str, body: Option<&s
     (h, tapped)
 }
 
+// Every page's empty and problem states (D16): one shape, centred under the top, as Home has it.
+
+/// The room above an empty or problem state, under a page's top.
+pub const EMPTY_GAP: f32 = 96.0;
+
+/// What an empty page says: a title, a line under it, and an action when there is one to take
+/// ("Start an agent"). From `y`, the room above included. Returns its height (with room under
+/// it) and whether the action was tapped.
+pub fn empty(cx: &mut Ctx, y: f32, title: &str, body: Option<&str>, action: Option<&str>) -> (f32, bool) {
+    let (h, tapped) = notice(cx, 32.0, y + EMPTY_GAP, WIDTH - 64.0, title, body, action);
+    (EMPTY_GAP + h + 24.0, tapped)
+}
+
+/// What went wrong, in words, with Try again when trying again can help: the same place and
+/// size as [`empty`], its title the problem, its line what to do. Returns its height and
+/// whether Try again was tapped.
+pub fn problem(cx: &mut Ctx, y: f32, title: &str, words: &str, retry: bool) -> (f32, bool) {
+    empty(cx, y, title, Some(words), retry.then_some("Try again"))
+}
+
 /// A small label on a surface ("MangaDex").
 pub fn tag(c: &mut Canvas, x: f32, y: f32, words: &str) -> f32 {
     let tt = Text::new(ty::SMALL, t::INK2).medium();
@@ -180,6 +202,8 @@ pub fn tag(c: &mut Canvas, x: f32, y: f32, words: &str) -> f32 {
 pub enum Kb {
     #[default]
     Text,
+    /// Writing: several lines (Enter puts a new line), sentences capitalised, corrections.
+    Prose,
     Url,
     /// A secret: no suggestions, shown as dots.
     Secret,
@@ -372,8 +396,13 @@ pub fn menu(cx: &mut Ctx, top: f32, items: &[&str]) -> Option<usize> {
 /// Choices side by side on a quiet track, the one on raised (Spacing: Tight, Normal, Loose).
 /// Returns the one tapped.
 pub fn segmented(cx: &mut Ctx, x: f32, y: f32, w: f32, items: &[&str], on: usize) -> Option<usize> {
+    segmented_on(cx, x, y, w, items, on, t::S1)
+}
+
+/// [`segmented`] on a `track` of its own colour: S2 on a sheet, which is S1 itself.
+pub fn segmented_on(cx: &mut Ctx, x: f32, y: f32, w: f32, items: &[&str], on: usize, track: Rgba) -> Option<usize> {
     let h = 36.0;
-    cx.c.rect(x, y, w, h, 9.0, t::S1);
+    cx.c.rect(x, y, w, h, 9.0, track);
     let iw = w / items.len().max(1) as f32;
     let mut hit = None;
     for (i, item) in items.iter().enumerate() {
@@ -385,7 +414,8 @@ pub fn segmented(cx: &mut Ctx, x: f32, y: f32, w: f32, items: &[&str], on: usize
         }
         let tt = Text::new(ty::UI, if i == on { t::INK } else { t::INK2 }).medium().center();
         cx.c.text_fit(item, ix + iw / 2.0, y + (h - tt.lh()) / 2.0, iw - 8.0, tt);
-        if cx.tap(ix, y, iw, h) {
+        // 44 units tall to the finger, though 36 to the eye.
+        if cx.tap(ix, y - 4.0, iw, h + 8.0) {
             hit = Some(i);
         }
     }
@@ -448,7 +478,7 @@ pub fn sheet(cx: &mut Ctx, h: f32) -> (f32, bool) {
     let screen = cx.c.h;
     // The veil covers everything: no tap reaches what is under a sheet.
     above(cx, crate::ui::layer::SHEET, [-1000.0, 0.0, WIDTH + 2000.0, screen]);
-    cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, screen, 0.0, t::SCRIM.a(0.6));
+    cx.c.rect(-1000.0, 0.0, WIDTH + 2000.0, screen, 0.0, t::SCRIM);
     let full = h + cx.c.inset_bottom;
     let top = (screen - full).max(cx.c.inset_top + 24.0);
     cx.c.rect(0.0, top, WIDTH, screen - top + 40.0, 18.0, t::S1);

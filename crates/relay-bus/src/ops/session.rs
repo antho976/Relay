@@ -227,8 +227,14 @@ payload!(#[schemars(rename = "SessionTranscriptIn")] TranscriptIn {
     /// The `cursor` of the previous answer: only what the agent wrote since. Absent, the
     /// conversation's last `limit` messages.
     #[serde(default, skip_serializing_if = "Option::is_none")] pub after: Option<u64>,
+    /// The `before` of an earlier answer: the page of messages older than it (scrolling back),
+    /// its newest `limit`. Not with `after`.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub before: Option<u64>,
     /// At most this many messages, the newest kept (default 200, at most 1000).
     #[serde(default, skip_serializing_if = "Option::is_none")] pub limit: Option<u32>,
+    /// The id of a Task (sub-agent) call in this conversation: the helper's own steps, from the
+    /// log Claude Code keeps for it, instead of the conversation. `found` false while it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub task: Option<String>,
 });
 result!(#[schemars(rename = "SessionTranscriptMessage")] TranscriptMessage {
     /// Stable across reads: the provider's own id for the record, or its byte offset.
@@ -240,17 +246,52 @@ result!(#[schemars(rename = "SessionTranscriptMessage")] TranscriptMessage {
     pub role: String,
     pub body: Value,
     pub created_at: String,
+    /// On a person's message sent with `chat.send`: the sender's id for it, on this one message
+    /// only, so the sender draws it once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+});
+result!(#[schemars(rename = "SessionTranscriptPending")] TranscriptPending {
+    /// The id it was sent with.
+    pub client_id: String,
+    pub text: String,
+    pub sent_at: String,
 });
 result!(#[schemars(rename = "SessionTranscriptOut")] TranscriptOut {
     pub messages: Vec<TranscriptMessage>,
-    /// Pass it back as `after` for what comes next.
+    /// Pass it back as `after` for what comes next. A `before` page gives back its `before`.
     pub cursor: u64,
+    /// Pass it back as `before` for the page older than these messages.
+    #[serde(default)]
+    pub before: u64,
+    /// Whether the log holds anything older than `before`.
+    #[serde(default)]
+    pub older: bool,
     /// The messages replace everything read before: the conversation moved to another file
     /// (a resume, a new conversation) or `after` was past its end.
     pub reset: bool,
     /// Whether the provider's conversation was found; false before its first hook names it.
     pub found: bool,
+    /// Messages sent with `chat.send` in the last hour that the log does not hold yet, oldest
+    /// first: typed, not yet taken (or never shown, as some slash commands). Not on a page back.
+    #[serde(default)]
+    pub pending: Vec<TranscriptPending>,
 });
+payload!(#[schemars(rename = "ChatSendIn")] ChatSendIn {
+    pub session: String,
+    /// What the person wrote: typed into the agent's terminal as one paste, then Enter.
+    pub text: String,
+    /// The sender's own id for this message (letters, digits, `-` and `_`, at most 64): sending
+    /// it again types nothing twice, and `session.transcript` gives the message back with it.
+    pub client_id: String,
+});
+result!(#[schemars(rename = "ChatSendOut")] ChatSendOut {
+    pub client_id: String,
+    /// False when this id was sent before: nothing was typed again.
+    pub typed: bool,
+});
+op!(ChatSend, "chat.send", ChatSendIn => ChatSendOut,
+    OpMeta::mutation(Scope::Session, 3, "A person's message to an agent: typed as one paste and Enter, kept under the sender's id").audit(Audit::AgentOnly).actors(Actors::UserOnly));
 op!(Transcript, "session.transcript", TranscriptIn => TranscriptOut, OpMeta::query(Scope::Session, 3, "The agent's conversation as messages, read from the provider's own log, from a cursor"));
 payload!(#[schemars(rename = "SessionUploadIn")] UploadIn {
     pub session: String,
@@ -369,6 +410,7 @@ entries!(
     Scrollback,
     Screen,
     Transcript,
+    ChatSend,
     Upload,
     RestorableList,
     DiscardRestorable,
